@@ -124,6 +124,8 @@ async function makeHarness(
     docFile?: string
     userToolSkill?: boolean
     routingSkill?: { id: string; tool: string }
+    /** More ingested documents in the same chat scope, one text each (#641's multi-document hint case). */
+    extraDocs?: string[]
   } = {}
 ): Promise<Harness> {
   const w = makeSkillsWorld('ragskill', {
@@ -147,6 +149,10 @@ async function makeHarness(
   const docId = await ingestTextFile(w, opts.docFile ?? 'statement.txt', opts.text ?? CLEAN, {
     fullyChunked: opts.fullyChunked
   })
+  const extraIds: string[] = []
+  for (const [i, text] of (opts.extraDocs ?? []).entries()) {
+    extraIds.push(await ingestTextFile(w, `note-${i + 1}.txt`, text, { fullyChunked: opts.fullyChunked }))
+  }
 
   // A runtime that records whether it was ever asked to generate (the Phase-3 template/refuse outcomes must
   // make ZERO model calls) AND captures the messages it was handed, so a W4 grounded-data turn can assert
@@ -159,7 +165,7 @@ async function makeHarness(
   registerRagIpc(ctx)
   const conv = createConversation(db, {
     mode: 'documents',
-    scope: { collectionIds: [], documentIds: [docId] }
+    scope: { collectionIds: [], documentIds: [docId, ...extraIds] }
   })
   return { db, conversationId: conv.id, docId, runtime, audit }
 }
@@ -247,7 +253,7 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     }
   )
 
-  it('relevance path is byte-unchanged for an off-topic question (no handler fire)', async () => {
+  it('an off-topic question takes the ordinary grounded path (no handler fire)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -258,9 +264,12 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     )
     const msg = result as Message
 
-    // The analysis handler did NOT fire: the relevance path ran (D72 stamps `relevance` coverage —
-    // NOT the extract/whole-document breadth an analysis handler would stamp), and no bank figures.
-    expect(msg.coverage?.mode).toBe('relevance')
+    // The analysis handler did NOT fire: the ordinary grounded path ran — not the extract breadth an
+    // analysis handler would stamp — and no bank figures. #643: that path reads this short statement
+    // whole (one grounded turn, labelled excerpts) instead of top-k.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.labelledExcerpts).toBe(true)
+    expect(h.runtime.calls).toBe(1)
     expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
     // And no whole-document tool was auto-run.
     const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
@@ -647,7 +656,11 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
     expect(msg.skillId).toBe(BANK_INSTALL_ID)
   })
 
-  it('plausibility gate: a zero-row read on a NON-statement falls through to the grounded path (LLM answers)', async () => {
+  // #649: a total over the fall-through's whole read leads with the arithmetic heads-up, as on the ordinary path.
+  it.each([
+    { question: 'summarize this agreement', headsUp: false },
+    { question: 'How much did I pay in total?', headsUp: true }
+  ])('plausibility gate: a zero-row read on a NON-statement falls through to the grounded path (LLM answers) — $question', async ({ question, headsUp }) => {
     const h = await makeMultiHarness({
       docs: [
         {
@@ -659,23 +672,19 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
         }
       ]
     })
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'summarize this agreement',
-      BANK_INSTALL_ID
-    )
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, BANK_INSTALL_ID)
     const msg = result as Message
 
     // NOT the misleading "I read the whole statement but couldn't find any transactions" template…
     expect(msg.content).not.toBe(t('en', 'skills.bankAnalysis.empty'))
     expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 0 }))
     // …instead the ordinary grounded path answered the actual question (the model WAS consulted).
-    expect(msg.content).toContain('Model answer.')
+    expect(msg.content).toBe(headsUp ? `${t('en', 'analysis.wholeReadSumHint')}\n\nModel answer.` : 'Model answer.')
     expect(h.runtime.calls).toBe(1)
-    // Grounded relevance path ⇒ no `extract` breadth claim.
-    expect(msg.coverage?.mode).not.toBe('extract')
+    // The ordinary grounded path ⇒ no `extract` breadth claim. #643: it reads this short agreement
+    // whole, as the ordinary document path does.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.labelledExcerpts).toBe(true)
   })
 
   it('narrows for a grounded-whole-doc skill too: streams the model answer over the one matched contract, notice prepended', async () => {
@@ -762,12 +771,14 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
     expect(assistantRows).toHaveLength(0)
   })
 
+  // #582: the English request that used to fall through to a top-k answer under the compare fence.
   it('what-changed at ≠ 2 docs answers "select exactly two" deterministically (1 doc and 3 docs)', async () => {
+    const ask = 'summarize the differences'
     const one = await makeMultiHarness({
       docs: [{ file: 'draft-v1.txt', text: 'first version text' }],
       installWhatChanged: true
     })
-    const r1 = (await invoke(handlers, IPC.askDocuments, one.conversationId, 'what changed?', 'app:what-changed'))
+    const r1 = (await invoke(handlers, IPC.askDocuments, one.conversationId, ask, 'app:what-changed'))
       .result as Message
     expect(r1.content).toBe(t('en', 'skills.analysis.selectTwo', { count: 1 }))
     expect(one.runtime.calls).toBe(0)
@@ -780,7 +791,7 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
       ],
       installWhatChanged: true
     })
-    const r3 = (await invoke(handlers, IPC.askDocuments, three.conversationId, 'what changed?', 'app:what-changed'))
+    const r3 = (await invoke(handlers, IPC.askDocuments, three.conversationId, ask, 'app:what-changed'))
       .result as Message
     expect(r3.content).toBe(t('en', 'skills.analysis.selectTwo', { count: 3 }))
     expect(three.runtime.calls).toBe(0)
@@ -866,8 +877,14 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
 describe('askDocuments — SEC-1 end-to-end (user kind:tool skill never reaches an analysis engine, T2)', () => {
   it('user tool skill + analysis: whole-doc + matching doc → the relevance path (no handler, no tool run)', async () => {
     // Teeth: honor `manifestAnalysisHandler` for kind:'tool' (drop its instruction-only guard AND the
-    // parser's analysisIgnoredForTool note) → the whole-doc engine would fire here → red.
-    const h = await makeHarness({ fullyChunked: true, userToolSkill: true })
+    // parser's analysisIgnoredForTool note) → the whole-doc engine would fire here → red. The statement
+    // is too long to read whole (#643): over a short one the ordinary path itself reads the document whole,
+    // which looks exactly like the whole-doc engine, so only an over-budget document tells them apart
+    // (the engine would run its chunk map-reduce — several model calls, `capped` — instead of top-k).
+    const long =
+      'Statement EUR\nOpening balance 2.000,00\n' +
+      Array.from({ length: 600 }, (_, i) => `2026-01-${String((i % 28) + 1).padStart(2, '0')} transaction Grocery -45,90 1.954,10`).join('\n')
+    const h = await makeHarness({ fullyChunked: true, userToolSkill: true, text: long })
     // Sanity: the worst case really is on the board — an ENABLED user TOOL skill that declared tools
     // (the manifest parser already stripped its `analysis: whole-doc`; that strip is one of the gates).
     const record = getSkill(h.db, 'user:imported-bank')!
@@ -941,8 +958,19 @@ describe('askDocuments — W6 multi-currency grounded-data (IPC pin, T2)', () =>
 // marked `fallback:'coverage'`, and askDocuments LEADS the answer with the actionable deep-index
 // hint instead of discarding the confidence (the pre-fix behaviour).
 describe('askDocuments — whole-document hint on the low-confidence coverage fallback (#37/#38)', () => {
+  // #641: the hint shows only when the answer read fewer sections than the scope holds, so the hint
+  // cases ask over a statement longer than one answer's retrieval budget (here 2 of its 7 sections).
+  // `lines` statement rows of ~5 tokens each; 110 rows make a two-section statement. Each test
+  // asserts the coverage premise it relies on, so a chunker change fails loudly, never silently.
+  const statement = (lines: number): string =>
+    [
+      'Ausgaben Statement EUR',
+      ...Array.from({ length: lines }, (_, i) => `2026-01-${String((i % 28) + 1).padStart(2, '0')} Ausgaben Miete -800,00 1.200,00`)
+    ].join('\n')
+  const LONG_STATEMENT = statement(600)
+
   it('the #37 aggregation question with NO skill leads with the deep-index hint over the relevance answer', async () => {
-    const h = await makeHarness({ fullyChunked: true })
+    const h = await makeHarness({ fullyChunked: true, text: LONG_STATEMENT })
     const { result } = await invoke(
       handlers,
       IPC.askDocuments,
@@ -952,6 +980,8 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     )
     const msg = result as Message
 
+    // The fixture's premise: the answer read only part of the statement.
+    expect(msg.coverage!.chunksCovered).toBeLessThan(msg.coverage!.chunksTotal)
     // Teeth: discard `decision.confidence` again (the pre-fix behaviour) → no hint → red.
     expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
     // The hint LEADS the ordinary relevance answer — it never replaces it.
@@ -965,7 +995,7 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     expect(msg.coverage?.mode).toBe('relevance')
   })
 
-  it('an ordinary question never carries the hint (byte-unchanged relevance)', async () => {
+  it('an ordinary question never carries the hint', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -1024,15 +1054,78 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   })
 
   it('the same German count question WITHOUT extract data leads with the deep-index hint (BE-3)', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+    const h = await makeHarness({ fullyChunked: true, text: LONG_STATEMENT })
     const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
     const msg = result as Message
+    expect(msg.coverage!.chunksCovered).toBeLessThan(msg.coverage!.chunksTotal)
     expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
     expect(msg.content).toContain('Model answer.')
     // #80: low-confidence fallback ⇒ classification (degrades on the prose reply) + the grounded
     // answer — 2 calls; the answer itself stays byte-unchanged.
     expect(h.runtime.calls).toBe(2)
     expect(msg.skillOffer).toBeUndefined()
+  })
+
+  // Issue #641 (second defect): the hint was decided from the question's wording alone, before
+  // retrieval. On a 2-page letter the answer had read both sections, yet the hint said it rested on
+  // "only the most relevant sections" and sent the user to build a deep index that made it worse.
+  // #643 now reads such a letter whole, so the case where top-k itself reads every section of the
+  // scope is a multi-document one: a two-section statement and a one-section statement.
+  it('#641: the same question over a scope whose answer read every section carries no hint', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: statement(110), extraDocs: [statement(20)] })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    // The premise: a top-k answer, over a multi-section scope, whose every section reached the prompt.
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(new Set(msg.citations!.map((c) => c.documentId)).size).toBe(2)
+    expect(msg.coverage!.chunksTotal).toBeGreaterThan(2)
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    // Teeth: gate the hint on the question alone again (the pre-fix behaviour) → hint → red.
+    expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+    expect(msg.content.startsWith('Model answer.')).toBe(true)
+    // The #80 classification still runs: its trigger is the routing decision, not the coverage.
+    expect(h.runtime.calls).toBe(2)
+  })
+
+  it('#641: a document in scope that the answer never read still counts — the hint shows', async () => {
+    // The two-section statement + five one-section notes without the query's words: more sections
+    // than `ragTopKFinal` (6), so at least one note is left out entirely.
+    const notes = Array.from({ length: 5 }, (_, i) => `Notiz ${i + 1}: Termin beim Steuerberater am Montag.`)
+    const h = await makeHarness({ fullyChunked: true, text: statement(110), extraDocs: notes })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    // The premise: every document the answer drew on was read whole (covered == their total) …
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    expect(new Set(msg.citations!.map((c) => c.documentId)).size).toBeLessThan(1 + notes.length)
+    // … yet a document in scope was never read. Teeth: compare against the documents drawn on
+    // (`coverage.chunksTotal`) instead of the whole scope → no hint → red.
+    expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
+  })
+
+  it('#641: a legacy, partly chunked document always counts as partly read', async () => {
+    // `fully_chunked` NULL: the stored sections are not the whole text, so reading all of THEM
+    // does not mean the answer read the document.
+    const h = await makeHarness({ fullyChunked: false, text: statement(110) })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    // Teeth: compare against the stored section count alone → no hint → red.
+    expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
+  })
+
+  // #641: a list question about something the deep index does not collect ("Buchungen" maps to no
+  // extract type) gets the honest label, but NOT the advice to build a deep index — the deep index
+  // would not list it either (it used to answer with the unrelated generic table).
+  it('#641: an untyped list question over a partly read document gets the label without the deep-index advice', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: LONG_STATEMENT })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Liste alle Buchungen auf', null)
+    const msg = result as Message
+    expect(msg.coverage!.chunksCovered).toBeLessThan(msg.coverage!.chunksTotal)
+    expect(msg.content.startsWith(t('en', 'analysis.partialAnswerHint'))).toBe(true)
+    expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+    expect(msg.content).toContain('Model answer.')
+    // A low-confidence fallback: the #80 classification runs, as it did before #641.
+    expect(h.runtime.calls).toBe(2)
   })
 
   // Issue #54 — the wrong-shape half of the #37 incident: WITH extract data the aggregation
@@ -1042,24 +1135,43 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   // Owner decision 2026-07-17: keep the honest listing, but LEAD it with the shape hint + the
   // bank-statement-skill pointer for amounts (option 1 of 3; auto-routing to the skill would
   // reverse the ratified default-off auto-fire posture, a bare redirect would withhold data).
-  it('#54: the aggregation question WITH extract data leads the listing with the shape hint + skill pointer', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
-    seedAmountExtract(h)
+  // #649 (owner calls): over ONE document that fits the window the same ask is read whole instead — the
+  // model sees every section and can add them up, which the listing cannot. The bank offer rides along, and
+  // the answer leads with the heads-up that the model did the arithmetic (a 4B summed a 1-page statement's
+  // four fees wrong twice), with or without extract data (design-guidelines §11.24). A grouping of anything
+  // but amounts adds nothing up, so it carries no heads-up.
+  const CATEGORIZE = 'kategorisiere alle transaktionen und erstelle eine summe pro kategorie' // the #54 repro
+  it.each([
+    { name: 'a statement too long to read whole keeps the listing, led by the shape hint + skill pointer', question: CATEGORIZE, text: LONG_STATEMENT, extract: true, read: 'listing', headsUp: false, offer: 'deterministic', calls: 0 },
+    { name: 'a statement that fits is read whole, led by the arithmetic heads-up, with the bank offer (#649)', question: CATEGORIZE, text: DE_STATEMENT, extract: true, read: 'whole', headsUp: true, offer: 'deterministic', calls: 1 },
+    { name: 'no extract data: a statement that fits is read whole, led by the arithmetic heads-up (#649)', question: CATEGORIZE, text: DE_STATEMENT, extract: false, read: 'whole', headsUp: true, offer: null, calls: 2 },
+    { name: 'a sum ask over a statement that fits is read whole the same way (#649)', question: 'Wie viel habe ich insgesamt ausgegeben?', text: DE_STATEMENT, extract: true, read: 'whole', headsUp: true, offer: 'deterministic', calls: 1 },
+    { name: 'a grouping of dates over a statement that fits is read whole, with no heads-up (#649)', question: 'Gruppiere die Buchungen nach Datum', text: DE_STATEMENT, extract: true, read: 'whole', headsUp: false, offer: null, calls: 2 }
+  ])('#54: the aggregation question — $name', async ({ question, text, extract, read, headsUp, offer, calls }) => {
+    const h = await makeHarness({ fullyChunked: true, text })
+    if (extract) seedAmountExtract(h)
 
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'kategorisiere alle transaktionen und erstelle eine summe pro kategorie',
-      null // the #54 configuration: no skill on the turn
-    )
+    // the #54 configuration: no skill on the turn
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, null)
     const msg = result as Message
 
-    // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
-    expect(h.runtime.calls).toBe(0)
-    expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
-    expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
-    expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+    // The deterministic #80 offer needs no model call; without it an aggregation ask pays the bounded
+    // classification (it degrades on the prose reply).
+    expect(h.runtime.calls).toBe(calls)
+    expect(listMessages(h.db, h.conversationId).at(-1)?.skillOffer?.source ?? null).toBe(offer)
+    if (read === 'listing') {
+      // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
+      expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
+      expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
+      expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+      expect(msg.content).not.toContain(t('en', 'analysis.wholeReadSumHint'))
+      return
+    }
+    // One grounded model turn over every section, no listing (pre-fix: the listing with extract data, the
+    // unlabelled whole read without).
+    expect(msg.coverage).toMatchObject({ mode: 'capped', truncated: false })
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    expect(msg.content).toBe(headsUp ? `${t('en', 'analysis.wholeReadSumHint')}\n\nModel answer.` : 'Model answer.')
   })
 
   it('the same #37 question WITH the bank skill takes the whole-document engine — no hint, no top-k', async () => {

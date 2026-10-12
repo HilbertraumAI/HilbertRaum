@@ -20,6 +20,7 @@ import { TranslateJobService } from '../../src/main/services/translation/jobs'
 import type { Translator } from '../../src/main/services/translation'
 import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { planTranslationWindows } from '../../src/main/services/doctasks/translation'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import { TRANSLATE_MAX_TEXT_CHARS } from '../../src/shared/types'
@@ -601,6 +602,33 @@ describe('#160 — TranslateJobService hardening', () => {
     const terminal = await waitForTerminal(event, job.jobId)
     expect(terminal.state).toBe('failed')
     expect(calls).toBe(2) // a fresh request against a wedged server IS a reasonable bet
+  })
+
+  it('#605: a hung sidecar keeps its one retry even after tokens flowed — the runtime stopped it, the retry runs on a fresh one', async () => {
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        if (calls === 1) {
+          o.onToken?.('Gu') // tokens flowed, then the decode clock ended the window
+          throw new RuntimeUnresponsiveError(120_000)
+        }
+        o.onToken?.('Good day.')
+        o.onFinal?.({ stopType: 'eos' })
+        return 'Good day.'
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, job.jobId)
+    expect(terminal.state).toBe('done')
+    expect(terminal.text).toBe('Good day.') // the failed attempt's 'Gu' rolled back (F-1)
+    expect(calls).toBe(2) // unlike BE-2's too-slow decode, which is not retried
   })
 
   it('BE-4: a terminal from run()\'s synchronous prefix emits strictly AFTER start() returned', async () => {

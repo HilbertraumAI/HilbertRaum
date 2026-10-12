@@ -886,10 +886,24 @@ export const de: Record<keyof typeof en, string> = {
   // Abdeckungsbruch allein („Basiert auf 5 von 25 Abschnitten") geht unter einer plausibel
   // aussehenden Summe zu leicht unter.
   // Anführungszeichen „…“ (CODE-25 — das :657-Präzedenz-Vorkommen, mitkorrigiert).
+  // #641: nur noch, wenn die Antwort wirklich Abschnitte ausgelassen hat, und sie verspricht nur,
+  // was der Tiefenindex einer Chat-Antwort hinzufügt — eine Liste aus allen Abschnitten, keine
+  // „vollständige Antwort“.
   'analysis.wholeDocHint':
-    '**Hinweis:** Das sieht nach einer Frage zum ganzen Dokument aus, aber diese Antwort ' +
-    'basiert nur auf den relevantesten Abschnitten. Für eine vollständige Antwort öffne ' +
-    '„Dokumente“, wähle „Tiefenindex erstellen“ für das Dokument und frage dann erneut.',
+    '**Hinweis:** Diese Antwort basiert nur auf den relevantesten Abschnitten und kann daher ' +
+    'Einträge übersehen. Für eine Liste aus allen Abschnitten öffne „Dokumente“, wähle ' +
+    '„Tiefenindex erstellen“ für das Dokument und frage dann erneut.',
+  // #641: dieselbe Ehrlichkeit für eine Frage nach „allen“ X, die auch der Tiefenindex nicht
+  // beantworten kann (eine Erklär-Bitte oder etwas, das er nicht erfasst) — daher kein Rat dazu.
+  'analysis.partialAnswerHint':
+    '**Hinweis:** Diese Antwort basiert nur auf den relevantesten Abschnitten und kann daher ' +
+    'Einträge übersehen.',
+  // #649: eine Summe aus einem ganz gelesenen Dokument rechnet das Modell selbst — und ein kleines Modell
+  // verrechnet sich dabei auch mit allen Abschnitten vor sich (design-guidelines §11.24). So formuliert,
+  // dass es auch stimmt, wenn das Dokument die Summe nennt und das Modell sie nur abliest.
+  'analysis.wholeReadSumHint':
+    '**Hinweis:** Summen rechnet das Modell selbst aus und kann dabei Posten übersehen oder sich ' +
+    'verrechnen. Prüfe jede Summe anhand der Quellen.',
 
   // ---- Kontoauszug-Auswertung (full-doc-skills Plan §3.1, Phase 2) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
@@ -2438,6 +2452,17 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb konnte dieses Dokument nicht indexiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — versuch es danach erneut.',
   'main.ingest.engineLibraryMissing': 'Die KI-Engine kann auf diesem Computer nicht laufen, weil die Systembibliothek {library} fehlt. Im Bereich „KI-Modell“ steht, wie du das behebst — versuch es danach erneut.',
   'main.ingest.voiceEngineCannotRun': 'Die Sprach-Engine kann auf diesem Computer nicht laufen, deshalb konnte diese Aufnahme nicht transkribiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — indexiere das Dokument danach neu.',
+  // #634: das Suchmodell (der E5-Embedder) ist ausgefallen — gewählt nach der Art des Fehlers, nie
+  // nach seinem Text (der Text eines Startfehlers nennt die Modelldatei mit absolutem Pfad).
+  'main.ingest.searchModelTimeout':
+    'Das Suchmodell hat nicht rechtzeitig geantwortet, deshalb konnte dieses Dokument nicht ' +
+    'indexiert werden. Versuch es noch einmal.',
+  'main.ingest.searchModelCannotStart':
+    'Das Suchmodell konnte nicht starten, deshalb konnte dieses Dokument nicht indexiert werden. ' +
+    'Wähle im Bereich „KI-Modell“ „Alle Modelldateien prüfen“ — versuch es danach erneut.',
+  'main.ingest.searchModelFailed':
+    'Beim Suchmodell ist ein Fehler aufgetreten, deshalb konnte dieses Dokument nicht indexiert ' +
+    'werden. Versuch es noch einmal.',
   'main.ingest.imageNeedsOcr':
     'Für den Foto-Import werden die Texterkennungs-Dateien (OCR) benötigt, die auf diesem ' +
     'Laufwerk fehlen.',
@@ -2627,6 +2652,17 @@ export const de: Record<keyof typeof en, string> = {
     'Das KI-Modell wurde beendet, bevor die Antwort fertig war. Schick deine Nachricht noch einmal — wenn das öfter passiert, starte das Modell im KI-Modell-Bereich neu.',
   'main.chat.streamError':
     'Beim KI-Modell ist ein Fehler aufgetreten, bevor die Antwort fertig war. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
+  // #634: der Suchschritt einer Dokumentfrage ist ausgefallen — das Suchmodell (der E5-Embedder),
+  // nicht das KI-Modell. Inhalts- und pfadfrei; der Rohgrund geht nur ins lokale Log.
+  'main.chat.searchModelTimeout':
+    'Das Suchmodell hat nicht rechtzeitig geantwortet, deshalb konnten deine Dokumente nicht ' +
+    'durchsucht werden. Versuch es noch einmal.',
+  'main.chat.searchModelCannotStart':
+    'Das Suchmodell konnte nicht starten, deshalb konnten deine Dokumente nicht durchsucht ' +
+    'werden. Wähle im Bereich „KI-Modell“ „Alle Modelldateien prüfen“ — versuch es danach erneut.',
+  'main.chat.searchModelFailed':
+    'Beim Suchmodell ist ein Fehler aufgetreten, deshalb konnten deine Dokumente nicht ' +
+    'durchsucht werden. Versuch es noch einmal.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
   // #613: „Noch einmal senden“ auf einer Frage, die nicht mehr die letzte Nachricht ist.
   'main.chat.nothingToResend':

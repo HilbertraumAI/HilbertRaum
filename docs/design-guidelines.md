@@ -816,7 +816,9 @@ matches the careful a11y already shipped for `ContextMeter`/`StreamAnnouncer` an
 `tests/renderer/SourcesProvenance.test.tsx` + `TranscriptA11y.test.tsx` (aria-controls resolves to the
 rendered region id when expanded). The **Sources** disclosure was also relabelled in the same pass for
 whole-document answers (provenance, not inline citations) — that honesty record lives in
-[`rag-design.md`](rag-design.md) §14.4 (FE-B / F11).
+[`rag-design.md`](rag-design.md) §14.4 (FE-B / F11). Since #643 a whole document read in one turn
+(`coverage.labelledExcerpts`) keeps the **Sources (N)** label and an `[Sn]` on every card, because its
+answer cites them inline; its card list is still capped at 24 (rag-design §14.4 "#643 amendment").
 
 ### 11.9 Conversation-memory meter — label a gauge, don't leave it a bare % (IMPLEMENTED 2026-07-07, beta-feedback #25 / D69)
 
@@ -933,7 +935,8 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
   "No direct source marker" / "Derived through whole-document analysis" notes are asserted
   BY EXACT KEY in tests — whole-document provenance is never worded as citations, and
   provenance cards render no `[Sn]` label (the SourcesDisclosure rule, reused via the
-  exported `PROVENANCE_CARD_CAP` + card markup idiom).
+  exported `PROVENANCE_CARD_CAP` + card markup idiom). A #643 labelled whole read is not
+  provenance: its sources are direct excerpts with their labels and the relevance caption.
 - **Deliberate deviation from spec §11.2:** no per-screen "Local · Offline" header indicator —
   the rail-foot indicator is THE single ambient privacy signal on every screen (§12.1 #2);
   duplicating it per screen is exactly what that record forbids.
@@ -1725,6 +1728,72 @@ hint is a `.hint` with `role="status"`; Restart is the card's primary action whi
 (en + de). **Tests:** `ModelsScreen.test.tsx` (#599), `ChatSendFailure.test.tsx` (#599),
 `runtime-ladder-exit-wiring.test.ts` (the notices), `chat-ipc.test.ts` / `doctasks.test.ts` (the
 starting copy).
+
+### 11.23 A search model that failed — design record (IMPLEMENTED 2026-10-07, #634)
+
+_What a document row and a document question say when the search model (the E5 embedder) fails.
+Engineering record: `rag-design.md` §12.4 "#634 amendment". Code cites this section as **§11.23**._
+
+**The problem.** The row and the banner showed the raw reason. A timeout read "The operation timed
+out." in a German UI too. A damaged weight file put llama-server's stderr on the row, a wall of log
+lines with the file's absolute path, on every document of the session.
+
+**Decisions** (owner, 2026-10-07).
+1. **Name the search model, not the AI model.** Users know the chat model as "the AI model"; this
+   is the other one, "the search model" (DE „das Suchmodell", the term the re-index copy already
+   uses). Each line says what failed, what it cost ("this document could not be indexed" / "your
+   documents could not be searched") and the next step.
+2. **A start failure points at the fix:** "On the AI Model screen, choose Check all model files —
+   then try again." (DE „Wähle im Bereich „KI-Modell“ „Alle Modelldateien prüfen“ — versuch es danach
+   erneut."; English names the button without quotes, German quotes its exact label, §11.17). The
+   check flags a damaged file and offers the download; after it, Try again works at once. A check
+   that finds the file intact re-arms the start too, so Try again is always a real attempt.
+3. **Timeout gets its own line; everything else shares one.** "did not respond in time" vs "ran
+   into a problem". An HTTP error, a malformed response and a crash have the same next step, so
+   they share the line; the detail goes to the local log.
+4. **A lock is not a failure.** A lock or quit that cut an import off shows the existing
+   "Ingestion was interrupted before it finished. Re-index to try again."
+5. **Try again stays offered** on every one of these rows (`isRetryableFailure`).
+
+**Copy:** `main.ingest.searchModel{Timeout,CannotStart,Failed}` (persist-canonical, display-mapped),
+`main.chat.searchModel{Timeout,CannotStart,Failed}` (en + de). **Tests:** `display-map.test.ts`
+(German round-trip), `chat-stream.test.ts`, `engine-health.test.ts` (#634).
+
+### 11.24 A total the AI model added up itself — design record (IMPLEMENTED 2026-10-12, #649)
+
+_What a document answer says when the AI model read a whole document and computed a sum or a grouping
+itself. Engineering record: `rag-design.md` §14.5 "#649". Code cites this section as **§11.24**._
+
+**The problem.** Since #649 a sum ask ("How much did I pay in fees?") over one document that fits the
+window is read whole, not answered with the list of every amount. The listing was exact but gave no
+total; the whole read gives a total that nothing checks. In the real-app run, qwen3-4b-instruct-q4
+summed a one-page statement's four fees wrong twice (5,45 and 8,35 EUR for 13,85), with every line in
+its prompt, and stated each total plainly. It added a lease's three monthly amounts up right.
+
+**Decision** (owner, 2026-10-12). Keep the whole read and say who did the arithmetic. Any whole-read
+answer to a question about a total (a sum, or a grouping of amounts) leads with one line, with or without
+a deep index:
+*"**Heads-up:** the model works out totals itself and can miss or miscount items. Check any total
+against the sources."* (DE *„**Hinweis:** Summen rechnet das Modell selbst aus und kann dabei Posten
+übersehen oder sich verrechnen. Prüfe jede Summe anhand der Quellen."*, the du-form of the other
+notices). It says what the model does with totals, not "added up these amounts". That stays true when
+the document states the total and the model only read it ("What is the total amount due on the
+invoice?").
+- **The same shape as the other answer notices** (the deep-index heads-up, the "may miss items"
+  label, the #54 shape hint). It is bold "Heads-up:" plus one sentence of fact and one of action,
+  streamed first, persisted with the answer, and placed after a scope notice. It leads the answer
+  because the risk is the number, and a reader who stops at the number should have seen it.
+- **No new advice.** The sources are already under the answer. For a bank statement, the
+  bank-statement offer (#80) rides along when that skill is enabled; the line does not repeat it.
+- **Only where a total is asked for and read whole** (`isTotalAsk`: a sum, an adding-up verb, or a
+  grouping of amounts). A top-k sum keeps #37's notices; a listing keeps the #54 hint. A lookup ("How
+  much is the monthly fee?") and a grouping of anything but amounts ("Gruppiere die Fristen nach Mieter")
+  get none. Every whole read carries it: the bank skill's plausibility fall-through (its extractor found
+  nothing, so the model reads the document), a whole-doc skill's read and a two-document compare.
+
+**Copy:** `analysis.wholeReadSumHint` (en + de). **Tests:** `rag-skill-analysis.test.ts` (the #54/#649
+table and the plausibility fall-through table), `rag-whole-doc-skill.test.ts`, `rag-whole-doc-compare.test.ts`,
+`rag-whole-read.test.ts` (a list ask read whole carries none).
 
 ---
 

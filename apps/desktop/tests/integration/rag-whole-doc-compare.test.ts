@@ -127,6 +127,20 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     expect(msg.autoFired).toBe(false)
   })
 
+  // #649: both documents are read whole, so a total asked of them leads with the arithmetic heads-up
+  // (design-guidelines §11.24); an ordinary compare (above) carries none.
+  it.each([
+    { question: 'what changed in the total fees between these two versions?', total: true },
+    { question: 'what changed between these two versions?', total: false }
+  ])('the arithmetic heads-up leads a compare of totals only — $question', async ({ question, total }) => {
+    const h = await makeHarness({ bothFullyChunked: true })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId([h.docA, h.docB]), question, WHAT_CHANGED_INSTALL_ID)
+    const msg = result as Message
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.skillId).toBe(WHAT_CHANGED_INSTALL_ID)
+    expect(msg.content.startsWith(t('en', 'analysis.wholeReadSumHint'))).toBe(total)
+  })
+
   it('labels the compare pair in deterministic import order — not DB insertion order (§5.1/§4.6)', async () => {
     const h = await makeHarness({ bothFullyChunked: true })
     // Insert two versions, then force created_at so import order is the REVERSE of insertion (rowid)
@@ -169,6 +183,8 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     expect(userTurn).toContain('textually identical')
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)
+    // #643: the diff shows the model change lines, not the sections — provenance, not labelled excerpts.
+    expect(msg.coverage?.labelledExcerpts).toBeUndefined()
   })
 
   it('a full rewrite (no shared wording) falls back to the labelled whole-doc-compare read', async () => {
@@ -193,6 +209,8 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     expect(userTurn).not.toContain('deterministic word-level comparison')
     expect(userTurn).not.toMatch(/old version|new version/i)
     expect(msg.coverage?.mode).toBe('capped')
+    // #643: both documents' sections were shown under their [Sn] labels.
+    expect(msg.coverage?.labelledExcerpts).toBe(true)
   })
 
   it('refuse path: a not-fully-chunked doc in the pair is refused — fixed message, no model call', async () => {

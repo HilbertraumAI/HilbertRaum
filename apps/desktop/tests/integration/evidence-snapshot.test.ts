@@ -229,6 +229,30 @@ describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
     expect(detail.items.every((i) => i.links.length === 0)).toBe(true)
   })
 
+  // #643: a document read whole in ONE grounded turn showed the model every section under its [Sn]
+  // label, so its citations are the relevance contract — labelled, and the answer's markers link.
+  it("mode:'capped' + labelledExcerpts → direct_excerpt sources, machine labels, marker auto-links", () => {
+    const db = freshDb()
+    const doc = seedDocument(db, { title: 'Letter.pdf', sha256: 'dd'.repeat(32) })
+    const { messageId } = seedAnswer(db, {
+      content: 'The letter names the patient. [S2]',
+      citations: [
+        { label: 'S1', sourceTitle: 'Letter.pdf', documentId: doc, chunkId: 'c1', snippet: 'first' },
+        { label: 'S2', sourceTitle: 'Letter.pdf', documentId: doc, chunkId: 'c2', snippet: 'second' }
+      ],
+      coverage: { mode: 'capped', chunksCovered: 2, chunksTotal: 2, truncated: false, labelledExcerpts: true }
+    })
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+    expect(detail.sources.map((s) => [s.kind, s.machineLabel])).toEqual([
+      ['direct_excerpt', 'S1'],
+      ['direct_excerpt', 'S2']
+    ])
+    const linked = detail.items.flatMap((i) => i.links)
+    expect(linked).toHaveLength(1)
+    expect(linked[0]!.origin).toBe('answer_marker')
+    expect(detail.generationSnapshot?.answerMode).toBe('capped')
+  })
+
   it("mode:'extract' → structured_record sources, zero auto-links", () => {
     const db = freshDb()
     const doc = seedDocument(db, { title: 'Invoices.pdf' })
@@ -254,6 +278,10 @@ describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
     // A PRESENT-but-unrecognized mode (a workspace written by a NEWER app — parseCoverage
     // accepts any string) maps to the WEAKEST claim, never to a citation class (FIX-1).
     expect(sourceKindForMode('hybrid' as CoverageInfo['mode'])).toBe('whole_document_provenance')
+    // #643: only a capped answer can carry labelled excerpts; on any other mode the flag mints nothing.
+    expect(sourceKindForMode('capped', true)).toBe('direct_excerpt')
+    expect(sourceKindForMode('tree', true)).toBe('whole_document_provenance')
+    expect(sourceKindForMode('hybrid' as CoverageInfo['mode'], true)).toBe('whole_document_provenance')
   })
 
   it("FIX-1: an unknown PRESENT mode (e.g. 'hybrid' from a newer app) → weakest kind, no labels, ZERO auto-links", () => {

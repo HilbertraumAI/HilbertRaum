@@ -57,7 +57,7 @@ const OUTPUT_CHAR_CAP = CLASSIFY_MAX_TOKENS * 8
  *       engine can list values but not group/sum them, so the answer is wrong-shaped; and
  *   (b) low-confidence relevance fallbacks (`confidence: 'low'` — the router PROVABLY could not
  *       serve the intent it detected: a coverage ask with no extract data, a compare without two
- *       documents).
+ *       documents, a #641 `partial` ask the listing cannot answer).
  * NEVER on the step-5 fallthrough: an ordinary high-confidence relevance question keeps 0 model
  * calls by construction — that is what protects trust in the suggestion surface. Pure, so the
  * golden-set tests pin the boundary directly.

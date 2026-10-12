@@ -408,6 +408,16 @@
       "note": "True positive (de) — 'Unterschiede' word + *entwurf* filename."
     },
     {
+      "id": "tp-whatchanged-en-03",
+      "question": "What differences are there between the two documents?",
+      "inScopeDocs": [
+        { "title": "draft1.pdf", "mimeType": "application/pdf" },
+        { "title": "draft2.pdf", "mimeType": "application/pdf" }
+      ],
+      "expected": "what-changed",
+      "note": "True positive — the English twin of tp-whatchanged-de-02: 'differences' word (#582) + *draft* filename. Before #582 the only offer keyword was the phrase 'differences between', which this word order misses, so nothing was offered."
+    },
+    {
       "id": "tp-whatchanged-kwonly-01",
       "question": "Show me a redline of the revision.",
       "inScopeDocs": [],

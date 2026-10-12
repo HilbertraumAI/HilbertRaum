@@ -53,6 +53,7 @@ import type { OcrEngine } from '../../src/main/services/ocr'
 import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
@@ -688,6 +689,35 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('failed')
     expect(calls).toBe(2) // a fresh request against a wedged server IS a reasonable bet
+  })
+
+  it('#605: a hung sidecar keeps its one retry even after tokens flowed — the runtime stopped it, the retry runs on a fresh one', async () => {
+    const docId = await importDoc(40) // one window
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'hung-translator',
+      contextWindow: () => 4096,
+      async translate(o) {
+        calls += 1
+        if (calls === 1) {
+          o.onToken?.('Gu') // tokens flowed, then the decode clock ended the window
+          throw new RuntimeUnresponsiveError(120_000)
+        }
+        o.onFinal?.({ stopType: 'eos' })
+        return 'Guten Tag.'
+      },
+      async stop() {}
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    expect(status.gaps).toBeUndefined() // no window marked failed
+    expect(calls).toBe(2) // unlike BE-2's too-slow decode, which is marked without a retry
   })
 
   // L12: the attribution line + failed-window notice are PERSISTED into the generated document,

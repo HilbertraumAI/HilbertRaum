@@ -378,13 +378,17 @@ const DEADLINE_OBLIGATION: VocabEntry[] = [
   route('müssen wir', 'de')
 ]
 
+// #582 (owner decision 2026-10-07): a request routes the same way in English and German. These routing
+// terms are only read at a document count other than two, and there a miss sends the turn to a top-k
+// answer under the compare fence, while a match gets "select exactly two". `skills-analysis-whole-doc.test.ts`
+// pins the pairs side by side; a term added for one language needs its counterpart in the other.
 const WHAT_CHANGED: VocabEntry[] = [
   both('what changed', 'en'),
   both('what has changed', 'en'),
   both('compare versions', 'en'),
   both('compare documents', 'en'),
   both('version difference', 'en'),
-  both('differences between', 'en'),
+  both('differences', 'en'), // #582: the bare plural, like `unterschiede` (offer + route)
   both('changed between', 'en'),
   both('redline', 'en'),
   both('revision', 'en'),
@@ -401,14 +405,42 @@ const WHAT_CHANGED: VocabEntry[] = [
   both('gegenüberstellung', 'de'),
   both('vertragsänderung', 'de'),
   both('aktualisierte bedingungen', 'de'),
-  // route-only — the bare compare imperatives, fired once what-changed is active over two docs.
-  route('compare the two', 'en'),
-  route('difference between', 'en'),
+  // route-only — the bare compare and change words, read only once what-changed is active at a document
+  // count other than two. Too generic to offer on. #582: the task router's `COMPARE_RE` reads `difference`,
+  // `versus`/`vs`, `diff`, `vergleich` and `unterschied` as a compare too, so they route here as well.
+  // `compare`, `difference` and `unterschied` replaced `compare these`, `compare the two`, `difference
+  // between` and `unterschied zwischen`.
+  route('compare', 'en'),
+  route('comparison', 'en'),
+  route('difference', 'en'),
+  route('versus', 'en'),
+  route('vs', 'en'),
+  route('diff', 'en'),
   route('old and new', 'en'),
-  route('compare these', 'en'),
-  route('unterschied zwischen', 'de'),
+  route('old version', 'en'),
+  route('new version', 'en'),
+  // The noun only: a bare `change` is mostly the verb ("How do I change my password?"), which German
+  // `ändere`/`ändern` does not route either.
+  route('the change', 'en'),
+  route('a change', 'en'),
+  route('changes', 'en'),
+  route('changed', 'en'),
+  // The German forms are words, each listed in its own right: a stem would also catch "unverändert"
+  // (unchanged), "unterschiedlich" (various) and "Vergleichs…" compounds (a legal settlement), none of
+  // which English routes. German puts the participle last, so `was hat sich geändert` misses "Was hat sich
+  // am Vertrag geändert?"; the participles route like English `changed`.
+  route('unterschied', 'de'),
+  route('vergleich', 'de'),
   route('vergleiche', 'de'),
-  route('vergleich', 'de')
+  route('vergleichen', 'de'),
+  route('geändert', 'de'),
+  route('geänderte', 'de'),
+  route('geänderten', 'de'),
+  route('verändert', 'de'),
+  route('veränderte', 'de'),
+  route('veränderten', 'de'),
+  route('veränderung', 'de'),
+  route('veränderungen', 'de')
 ]
 
 const DOCUMENT_REDACTION: VocabEntry[] = [

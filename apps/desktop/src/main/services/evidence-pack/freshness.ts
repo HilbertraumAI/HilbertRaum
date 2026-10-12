@@ -103,7 +103,10 @@ function canonicalCoverage(c: CoverageInfo | null): string {
     nodeIds: undefined,
     truncated: c.truncated ?? null,
     unparsedChunks: c.unparsedChunks ?? null,
-    fullyChunked: c.fullyChunked ?? null
+    fullyChunked: c.fullyChunked ?? null,
+    // #643: compared, but only when set — absent it is omitted, so every coverage stored before the
+    // field existed canonicalizes to the same bytes as before and no acknowledgement lapses.
+    labelledExcerpts: c.labelledExcerpts === true ? true : undefined
   } satisfies Record<keyof CoverageInfo, unknown>
   return JSON.stringify(canonical)
 }

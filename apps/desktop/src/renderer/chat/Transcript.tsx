@@ -470,12 +470,13 @@ const MessageBlock = memo(function MessageBlock({
         {m.citations && m.citations.length > 0 && (
           <>
             {/* The coverage mode tells the disclosure whether these are 1:1 inline-grounded
-                excerpts (relevance) or whole-document LEAF PROVENANCE (tree/capped/extract) —
-                FE-B / F11 renderer half. A NULL-coverage relevance turn passes undefined and
-                renders byte-identically to before. */}
+                excerpts (relevance, or a #643 labelled whole read) or whole-document LEAF
+                PROVENANCE (tree/capped/extract) — FE-B / F11 renderer half. A NULL-coverage
+                relevance turn passes undefined and renders byte-identically to before. */}
             <SourcesDisclosure
               citations={m.citations}
               mode={m.coverage?.mode}
+              labelled={m.coverage?.labelledExcerpts}
               onReview={openReview}
               reviewDisabled={actionsDisabled}
               onOpenArticle={onOpenArticle}

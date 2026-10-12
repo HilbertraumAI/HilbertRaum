@@ -1033,6 +1033,236 @@ reranks, no 500 fall-through), `embeddings.test.ts` (`decodeVector` truncated �
 scan skips the bad row), `doctasks-compare.test.ts` (a truncated stored vector → the compare
 completes, not a thrown task) — all teeth-verified.
 
+**#607 amendment (2026-10-07) — the embed request's deadline covers its body.** Each
+`/v1/embeddings` attempt runs under `combineSignals(caller, 120 s)` (`DEFAULT_REQUEST_TIMEOUT_MS`;
+REL-4 owns the timer so it is cleared once the request settles). The facts:
+- **A regression, not a design gap.** REL-4 (2026-06-29) cleared the timer after `res.json()`. The
+  context-overflow retry of 2026-06-30 (`dbfee90f`) rebuilt the loop per attempt and wrapped only
+  the `fetch` in the `try/finally`, so from then on the timer was cleared when the **headers**
+  arrived. The reranker, vision and translation kept their deadline over the whole request.
+- **What a stalled body did.** `clear()` also detaches the caller's signal, so neither the timeout
+  nor a user Stop reached `res.json()` / `res.text()` (measured: the read was still pending 10 s
+  after the Stop). Only undici's own idle limit ended it: 305.0 s in Electron 43.7.7 (undici
+  7.29.1), as `TypeError: terminated` (cause `UND_ERR_BODY_TIMEOUT`); a sidecar that trickles bytes
+  re-arms that limit. Meanwhile an import, a re-index or an article save held the import queue,
+  the document-work lease (a password change was refused) and `ingestionActive` (the #516 engine
+  update was refused), and a document question ignored Stop. Lock and quit kill the sidecar first,
+  so they always ended it.
+- **Abort after the headers works.** An abort of the request signal once the headers are in
+  rejects the body read with the signal's reason, in Electron's Node and in the test runner's Node
+  alike, and undici closes the connection.
+
+**As built.** The `try/finally` covers the `fetch` and the body read on both branches:
+`res.json()`, and on an error status `res.text()`. A stalled error body leaves only the status
+("Embedding request failed: HTTP 500"), the rule #594 set for the chat error body. A stall now
+ends like a stall before the headers always did, with the timeout's `TimeoutError` ("The
+operation timed out." on the document row, which offers Try again), and Stop ends a document
+question's query embedding at once.
+
+**Real sidecar** (2026-10-07, DesktopDiT, Electron 43.7.7's Node; the actual `E5Embedder` code,
+bundled from master and from the fix; E:'s b9849 `llama-server` with `multilingual-e5-small-q8`;
+a TCP proxy forwarded each stalled response's headers and first 2 body bytes and held the rest):
+- Both builds embedded 40 real texts in two batches (384 dims, norm 1.0000).
+- Master: the unattended embed and the one stopped 2.0 s in both ended only at undici's limit,
+  after 308.4 s, with `TypeError: terminated` (`UND_ERR_BODY_TIMEOUT`).
+- The fix: the unattended embed ended after 120.0 s with `TimeoutError`; the stopped one at the
+  Stop itself (issued 2.0 s in) with `AbortError`. Each closed its connection, and the next embed
+  answered.
+- The app on the fix (dev build over CDP, a scratch root with the same files and the 4B): a 59-chunk
+  import (two requests) indexed in 4.6 s, a document question's query embed found the passage it
+  asked about, a Stop 1.5 s into another question settled at once, and quit left no sidecar.
+
+**Tests.** `e5-embedder.test.ts` "a response body that stalls after the headers (#607)", on a real
+loopback socket with real `fetch`: an HTTP 200 and an HTTP 500 body that stall end at exactly
+120 s and close the connection, and a Stop ends a stalled body read at once. All three fail on the
+pre-fix code; a mutation that re-breaks only the error branch reddens only the HTTP 500 row.
+
+**Not changed.** The dev-only `HR_EMBED_COVERAGE=1` measurement's `/tokenize` reads carry no
+deadline and no signal (developer tooling, never on in a user's app). The document row's
+"The operation timed out." is the raw text of the timeout, unchanged by #607 and not localised
+(#634 since: see the next amendment).
+
+**#634 amendment (2026-10-07) — a search-model failure reaches the user as words, chosen by
+kind.** The facts:
+- **What the user saw.** `E5Embedder` threw untyped errors. A document row stored `err.message`
+  (`failureRowMessage` mapped only #530's `EngineCannotRunError`), and a document question's banner
+  showed it raw (`withChatStream` mapped only the chat runtime's errors). So a timeout read "The
+  operation timed out." in any UI language. A start failure stored llama-server's stderr tail,
+  which names the weight file by absolute path, three times over: the real b9849 given a truncated
+  e5 GGUF prints `failed to load model '<root>\models\embeddings\multilingual-e5-small-q8.gguf'`.
+  The start failure is latched, so every document imported in that session stored it.
+- **Where it surfaced.** Three `embed()` call sites (the question embed, `embedChunks`,
+  `ensureNodeEmbeddings`) serve seven user paths. Only `rag:ask` and the ingestion paths that write
+  the row (import, re-index and Retry all, the OCR re-ingest) showed the raw text. The chat-attachment
+  banner and the Translate screen's file import show that row through `localizeServerCopy`.
+  Compare, generated outputs and the article save already used generic copy.
+- **Three neighbours found in the analysis.**
+  - A lock mid-import ended the in-flight embed with the killed socket's "terminated", or with
+    "Embedder is suspending (workspace is locking)", stored on the row: `embedChunks` passes no
+    signal, so only the sidecar kill ends the request.
+  - A sidecar that crashed after its start stayed `this.server` (no `onUnexpectedExit`), so every
+    later embed failed "fetch failed" until a lock/unlock.
+  - A re-download of a damaged e5 file did not re-arm the failed-start latch.
+
+**Decisions (owner, 2026-10-07, each as recommended).**
+1. **The start failure points at the fix:** the AI Model screen's "Check all model files", which
+   flags a damaged e5 file and offers to download it again.
+2. **Old rows are rewritten once per session start,** like #530's, but only rows whose text only
+   the embedder can have written. The stored paths leave the database.
+3. **One generic line** covers an HTTP error, a malformed response and a crash. None of them has
+   a different next step.
+4. **In scope too:** a lock mid-import reads "interrupted"; a crashed sidecar is started again;
+   a re-download re-arms the latch.
+
+**As built.**
+- **`embeddings/errors.ts`:** `EmbedderError` with `kind` `timeout | start | failed | interrupted`.
+  Its message is a path-free English diagnostic; the raw detail (the stderr tail, undici's
+  socket error) is logged once where it happens. A caller's Stop passes through as its own
+  AbortError (a clean cancellation, never a failure), and #530's `EngineCannotRunError` keeps its
+  own copy.
+- **`E5Embedder`:**
+  - A start failure becomes `start`, its message keeping only the `failureSignature` class
+    (`exit:code 1`, `timeout`, `launch`, `integrity`), never the tail line. That is what the latch
+    holds and rethrows. A bind race is transient and never latched (F4), so it is typed `failed`:
+    a retry fixes it, and "check the model files" would send the user to the wrong place.
+  - A request ends `timeout` on our deadline and `failed` on anything else, the HTTP and
+    malformed-response guards included.
+  - A request ends `interrupted` when a lock or quit took its sidecar down. `retired`, a
+    `WeakSet` of the servers a teardown took down, tells that apart from a crash, since both null
+    `this.server`.
+  - `onUnexpectedExit` drops a sidecar that died on its own, so the next `embed()` starts a fresh
+    one. There is no crash latch: the embedder has no degraded mode, and a restart is cheap.
+- **Rows:** `failureRowMessage` stores `main.ingest.searchModelTimeout`, `searchModelCannotStart`,
+  `searchModelFailed`, or the existing `main.ingest.interrupted`. All are persist-canonical and in
+  `DISPLAY_MAP_KEYS`, and all stay retryable.
+- **Chat:** `withChatStream` maps the kinds to `main.chat.searchModel*`. An `interrupted` takes
+  the generic line; a lock's own abort normally ends the turn before any error.
+- **Heal:** `rewriteSearchModelFailureRows` runs in `healEngineLoadState` after
+  `rewriteEngineFailureRows`, and skips any row the #530 classifier claims. It reads every failed
+  row and rewrites, in one transaction, the exact "The operation timed out.", "terminated" and
+  "fetch failed", the embedder's own texts, and the llama-server start failures (by
+  `failureSignature`, the one definition of their shapes; a bind race maps to `failed`). These are attributable because ingestion's only network
+  request and only `llama-server` are the embedder's: OCR runs in-process and transcription is a
+  CLI.
+- **Re-arm**, so the copy's "then try again" is a real attempt:
+  - `onModelInstalled` calls `resetStartFailure()` when the installed model is the embedder's own
+    (the same manifest id; a mock embedder never matches): the repair for a damaged file.
+  - A completed full "Check all model files" (`listModels` without `lazyVerify`, not cancelled)
+    that does not find the embedder's file damaged calls it too. The start failure may have had
+    another cause (the health budget on a slow drive, a memory shortage, a file put back outside
+    the app), and the latch would otherwise hold until a lock/unlock (code review).
+- **One approximation:** a program that fails its pre-spawn integrity check also counts as
+  `start`, whose copy points at the model files. It is rare (a tampered engine), and the chat model
+  fails visibly on the same binary.
+
+**Tests.** Run against master's `e5.ts`, `engine-failure.ts`, `engine-health.ts` and
+`chat-stream.ts`, all 19 new or changed embedder, row and chat cases below fail; with the fix they
+pass.
+- `e5-embedder.test.ts`:
+  - the latched start failure is `start` and path-free (real b9849 stderr lines);
+  - the #607 stall rows are `timeout` / `failed`;
+  - a lock under an in-flight request and the REL-3 between-batches lock are `interrupted`;
+  - a crash fails the request it cut off, and the next embed starts a fresh sidecar (mutations:
+    dropping `onUnexpectedExit`, or classifying by `this.server !== server`, each turn it red);
+  - a Stop stays an AbortError.
+- `engine-health.test.ts`: the real `E5Embedder` behind `processDocument` stores the canonical start
+  text on every row, never the weight path; the kind-to-row table; the heal (attributable rows
+  rewritten, a #530 loader row and unrelated rows untouched, idempotent).
+- `chat-stream.test.ts`: the kind-to-copy table on both channels.
+- `core-model-ipc.test.ts`: a full check re-arms when the file is intact, not when it is damaged,
+  and an ordinary visit's lazy check never does (a mutation for each condition turns its row red).
+- `display-map.test.ts`: the persist-canonical set, which round-trips to German.
+
+**Real app** (2026-10-07, DesktopDiT, dev build, German UI, encrypted vault; a scratch root with
+E:'s b9849 runtime, the 4B and `multilingual-e5-small-q8`):
+- **Before** (master's code, a truncated e5 file): the row held the whole stderr tail with the
+  absolute weight path, and a document question rejected with the same text.
+- **After, on the same vault:**
+  - Unlock rewrote that row (`rewritten: 1`).
+  - A new import and a question both read „Das Suchmodell konnte nicht starten … Wähle im Bereich
+    „KI-Modell“ „Alle Modelldateien prüfen“ …“.
+  - The check flagged e5 `checksum_failed`. The in-app re-download verified, and "Erneut versuchen"
+    indexed at once, with no lock/unlock.
+  - With the sidecar frozen (`NtSuspendProcess`), an import and a question each ended after 120.1 s
+    with the German timeout copy, and the row kept „Erneut versuchen“; thawed, the retry indexed.
+  - A killed sidecar was replaced by a fresh one on the next import, which indexed.
+  - A lock during a held embed left „Die Indexierung wurde unterbrochen …“, and the retry indexed.
+  - A start failure latched on a damaged file; the intact file copied back outside the app; a retry
+    still failed at once (the latch); after "Check all model files" (e5 `installed`) the retry
+    indexed in 1.6 s.
+
+**Not changed by #634.** A Stop during the search model's cold start still waited for the start
+(#635, next amendment).
+
+**#635 amendment (2026-10-07) — a Stop ends the wait for a cold start, not the start.** The facts:
+- **What was wrong.** `embed()` awaited the shared lazy start before it read the caller's signal,
+  so a document question's Stop reached only the request after the start.
+  - The Stop already ended the turn cleanly: `withChatStream` checks `signal.aborted` before it maps
+    any error, and the question reads "Not answered — you stopped it". It ended late.
+  - Until the start settled, the turn stayed in `inFlightStreams`, and a new message in that
+    conversation was refused ("A response is already being generated").
+  - A normal e5 start takes 1.2 s; one that hangs runs to the 180 s health budget.
+- **The reranker, the next sidecar of the same question, had the same gap.** Its `callerSignal`
+  only classified a start abort (Wave 8 rule (iv)), and its GPU→CPU ladder can spend two health
+  windows. Vision and translation have the gap too (#637, since fixed: `architecture.md`
+  image-understanding record §6 "#637 amendment").
+- **A question and an import can share one start.** Nothing serialises `rag:ask` against
+  ingestion, and ingestion embeds with no signal. So the start must outlive a stopped question.
+
+**Decision (owner, 2026-10-07).** The embedder and the reranker now: one Stop button, one question.
+Vision and translation go to #637, because an abandoned start there also needs the idle timer
+armed when it lands (otherwise a ~10 GB translation model stays resident for nobody).
+
+**As built.**
+- **`waitUnlessAborted(start, signal)`** (`runtime/sidecar.ts`): the caller's wait ends at its
+  signal and rejects with `signal.reason`. That is the value the request's `fetch` rejects with via
+  `combineSignals`, so the chat sees the same Stop as before. The start is never cancelled, and a
+  start that fails after every waiter left stays a handled rejection. Only lock and quit cancel a
+  start (`startAbort`, #244). The precedent is kiwix-serve's `raceSignal` (`zim/index.ts`).
+- **Both `ensureStarted`s** (`E5Embedder`, `LlamaReranker`) race `this.starting` against the
+  caller's signal. A resident sidecar returns before any of this, so a warm request pays nothing.
+  `embed()` and `rerank()` check `signal.aborted` first, so a caller already stopped starts nothing
+  (the reranker also restarts nothing on a posture flip).
+- **The reranker's posture-mismatch restart** races its own teardown pass the same way (code
+  review). That wait was bounded (the aborted start settles within one health poll, then the 2 s
+  kill grace), but it was the same Stop.
+- A start that lands serves the next request. One that fails is latched as before (#634's `start`).
+- **The contract** is in `EmbedOptions.signal` / `RerankOptions.signal`, so a future backend
+  keeps it.
+
+**Tests.**
+- `e5-embedder.test.ts`:
+  - a Stop during a start that never gets healthy (`/health` 503) ends the question at once with
+    its own reason, and an import embed that shares the start embeds on it (one spawn);
+  - a caller stopped before the embed starts no sidecar.
+- `reranker.test.ts`: the same Stop for a rerank, and another ask sharing the start is scored.
+- `reranker-wave8.test.ts` rule (ii): a Stop during the posture restart's teardown ends the ask
+  with its own reason before the teardown escalates to SIGKILL (the end of its 2 s grace).
+- All four fail on master's `e5.ts` / `llama.ts`: the two cold-start rows by their hang detectors,
+  the stopped caller by its spawn, rule (ii) by the escalation that came first. A mutation that
+  cancels the start on Stop turns the two shared-start rows red: the import ends "interrupted", and
+  the other rerank "aborted by another operation".
+
+**Real app** (2026-10-07, DesktopDiT, dev build, German UI, a fresh encrypted vault; a scratch root
+with the b9849 runtime, the 4B, `multilingual-e5-small-q8` and `bge-reranker-v2-m3-f16` (GPU
+posture)). A watcher suspended the sidecar the moment it spawned (`NtSuspendProcess`): a cold
+start that never gets healthy. Stop was pressed 3–4 s into the question, and the sidecar was thawed
+20.9 s after the Stop.
+
+| Frozen start | Master: question settled after the Stop | Fix: question settled after the Stop |
+|---|---|---|
+| search model (e5) | 22,012 ms (after the thaw) | 1 ms |
+| reranker | 24,049 ms (after the thaw) | 1 ms |
+
+- **Both builds ended the question as a Stop:** an empty `chat:done`, no `chat:error`, and the
+  question marked `endedEarly: 'user'`.
+- **Master refused a second message during the wait:** „Für diese Unterhaltung wird bereits eine
+  Antwort erstellt.“
+- **On the fix, the shared start was unaffected.** An import started with the e5 question waited on
+  the same frozen start and indexed after the thaw. The abandoned reranker start landed 3 s after
+  its thaw, and the next question was answered correctly on it, with no second start.
+- **Re-run on the final code** (after the code-review changes above): the same, 1 ms for both.
+
 ## 13. Collection-scoped retrieval & composite scope — design record (document organization, Phases A–F)
 
 _The retrieval/scope half of the document-organization layer. The **data model, IPC, and audit**
@@ -1330,6 +1560,19 @@ keeping the full provenance persisted avoids a persisted-data semantics change (
 to the PreviewModal and future features). FE-D in the same pass wired `aria-controls`/`role="region"` onto
 this disclosure (and the live Thinking + SummaryMarker disclosures); see design-guidelines §11.3.
 
+**#643 amendment — a whole document read in one turn keeps its `[Sn]` (2026-10-12).** The provenance
+framing above assumed every `capped` answer was a map-reduce, whose prompt carries no labels. A
+single-turn whole read is not: `buildGroundedPrompt` shows the model every section under its `[Sn]`
+label (the A3 whole-doc skill read of a fitting document, the §14.5 #643 small-document read, the capped
+floor), and so does `buildCompareWholeDocPrompt`. Their answers cited `[S2]` inline while no card carried
+a marker, and the evidence review called the sources provenance and linked nothing. Those two branches of
+`generateGroundedAnswer` now stamp `CoverageInfo.labelledExcerpts: true`; `SourcesDisclosure` renders such
+an answer with the relevance framing ("Sources (N)", `[Sn]` on every card), still capped at 24 cards
+because a large window can read a few dozen sections; the meter keeps "Covers the whole document"; the
+evidence snapshot makes the sources direct excerpts (§16.1). The flag is honoured for `capped` only. The
+map-reduce rescues, the tree and the diff compare (which shows change lines, not sections) never set it,
+and answers persisted before #643 keep their provenance rendering (no migration).
+
 **Coverage fraction on the relevance path — AS BUILT (beta-feedback-2026-07 Phase 5, #24, D72).** A beta
 user couldn't tell, after an ordinary "ask my documents" answer, how much of the document it drew on — the
 relevance path stamped **no** `CoverageInfo`, so the meter showed only the flat honesty label *"Based on the
@@ -1421,7 +1664,9 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   `buildScopeFilter(scope, 'document_id')` (M3 — membership/id UNION + archived exclusion), **0** model calls;
   returns items+counts+source-chunk provenance + scanned/total/unparsed + `fullyChunked`.
 - **Router** ([`router.ts`](../apps/desktop/src/main/services/analysis/router.ts), pure): EN+DE
-  classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl, **plus the
+  classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl — since #641
+  only over a typed {X} and without an explain intent, since #644 a quantifier only at the head of
+  a request and never in a yes/no question, and since #649 no "how much" / "wie viel", see those bullets — **plus the
   #37 aggregation lexicon** `AGGREGATION_RE`: categorize/categorization/group(ed) by/breakdown/sum per/
   total per/per category/itemize/tally + the DE stems kategorisier/gruppier/summier/aufschlüssel/
   aufsummier and the phrases Summe pro/Gesamtsumme/pro Kategorie/nach Kategorie — an aggregation over a
@@ -1433,8 +1678,10 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   `rag:ask` wiring streams the deterministic listing
   ([`listing-answer.ts`](../apps/desktop/src/main/services/analysis/listing-answer.ts))
   for a mapped pre-extracted type; everything else falls through to the existing relevance path
-  **byte-unchanged**. An unmapped/ad-hoc "{X}" falls back to labelled relevance in v1 (no live full-scan —
-  deferred), so the 0-call completeness claim is only ever made for a mapped type. **v1 caveat, still
+  **byte-unchanged**. An unmapped/ad-hoc "{X}" falls back to relevance in v1 (no live full-scan —
+  deferred), so the 0-call completeness claim is only ever made for a mapped type. (That was the design
+  from Phase 3 on, but until #641 the code mapped an unmapped {X} to `generic` and served that table —
+  see the #641 bullet below.) **v1 caveat, still
   open (#37 suggestion 3):** the listing engine groups by `normalized_value` with **counts** — a
   user-defined categorization with per-category numeric **sums** is served exhaustively only by the
   bank-statement skill's category engine; the no-skill coverage-extract answer for such an ask is an
@@ -1443,8 +1690,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   `AGGREGATION_RE` lexicon fired (exposed as the pure `isAggregationShaped`, router.ts), a non-empty
   listing LEADS with `analysis.listing.aggregationHint` ("you asked for categories or sums, but this
   answer can only list the values found…") plus `analysis.listing.aggregationHintAmountSkill` for the
-  `amount` type (enable the bank-statement skill and re-ask). Plain list/count asks (`COVERAGE_RE`
-  only) stay byte-unchanged; the EMPTY branch keeps its #50 hint pair (never a double skill pointer).
+  `amount` type (enable the bank-statement skill and re-ask). Plain list/count asks (the list/count
+  triggers only, `COVERAGE_RE` until #644 split it) stay byte-unchanged; the EMPTY branch keeps its #50 hint pair (never a double skill pointer).
   The declined alternatives: auto-routing to the skill's category engine (reverses the ratified
   default-off auto-fire posture, S13b D4) and replacing the listing with a redirect (withholds data,
   over-trigger risk). The structural fix — no-skill tabular routing over a generic row extractor —
@@ -1457,7 +1704,344 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   doc is in scope. The hint rides the same `answerPrefix` seam as the W2 scope notice (streamed first,
   persisted with the content; both compose when present) and names the fix: build the deep index, ask
   again. The compare fallback keeps its existing selectTwo routing; ordinary high-confidence relevance
-  turns are byte-unchanged.
+  turns are byte-unchanged. **#641 amendment (2026-10-11):** the hint was decided from the question
+  alone, before retrieval, so a 2-section letter whose answer had read both sections was told it rested
+  on "only the most relevant sections". It now rides `GroundedAnswerOptions.partialCoverageNotice`
+  (`{ text, scopeChunkTotal }`): `rag:ask` counts the routable documents' sections in one query
+  (`scopeSectionTotals`, beside `documentsInScope` — the same document set) and `generateGroundedAnswer`
+  leads with the hint only when the distinct
+  document sections that reached the prompt are fewer. The comparison is with the whole scope, not with
+  the documents drawn on, so a document retrieval never reached still counts as missed; a scope with a
+  legacy, partly chunked document (`fully_chunked` NULL) passes `Infinity`, because its stored sections
+  are not its whole text. The wording now promises only what the deep index adds to a chat answer, a
+  list drawn from every section (EN *"…so it may miss items. For a list that covers every section, open
+  Documents…"*), not "a complete answer". The #80 classification keeps its decision-based trigger (it
+  runs before retrieval), so a coverage fallback over a fully read document still pays that one bounded
+  call.
+- **Explain requests and untyped list asks — AS BUILT (#641, 2026-10-11).** With a deep index built,
+  "Erkläre was in diesem Arztbrief steht inkl. aller Abkürzungen" got the listing engine's generic item
+  dump in ~30 ms instead of an explanation. Two causes: `COVERAGE_RE` reads any quantifier
+  (all/every/each/how many, alle/jede/wie viele) as a list request, and an unmapped {X} defaulted to the
+  `generic` table, the extract pass's "any other salient item" grab-bag, which is never a list of X.
+  Probing 21 realistic phrasings against a deep index, 15 landed on it, including needle questions
+  ("Wie viele Seiten hat der Brief?", "Does every employee get a bonus?"). Fix (owner calls, all as
+  recommended): (1) `EXPLAIN_RE` (explain/describe/clarify/interpret/"what does … mean/say"/"stand
+  for", erklären/erläutern/beschreiben/"was bedeutet"/"was steht"/"wofür steht"/"worum geht"/gemeint;
+  German forms word by word with letter lookarounds; verbs only, because a noun is usually a list column
+  or a document part: "every payment with its description", "die Erklärung des Vermieters") suppresses
+  the plain list trigger; (2) a plain list trigger counts only when the {X} maps to a typed extract
+  (date/amount/party/obligation), judged with the question words and modals among the synonyms
+  (who/when/must/shall, wer/wann/muss/müssen) set aside — they pick a list's type but name nothing to
+  list ("Welche Abkürzungen muss ich kennen? Liste alle auf"). Both fall back to LABELLED relevance,
+  the documented design for an unmapped {X}: `{ relevance, low, fallback: 'partial' }` (after the
+  tree-summary step). When retrieval left sections out, the answer leads with
+  `analysis.partialAnswerHint` (EN *"**Heads-up:** this answer is based only on the most relevant
+  sections, so it may miss items."*) — the same gate as the deep-index hint, without its advice, which
+  would not help. A `partial` decision is low confidence, so the #80 classification still runs, as it
+  did for these asks before #641 when no deep index existed. An aggregation ask (`AGGREGATION_RE`) keeps
+  the coverage route whatever its {X} or wording (#37: never a silent top-k sum; its #54 shape hint
+  already says what the list is). Router golden rows in `extract-router.test.ts` (each failed pre-fix).
+  Real app (4B, a fictional 2-page Arztbrief): master answered 5/5 untyped or explain asks with the same
+  16-item generic list after the deep index, and showed the hint at 2 of 2 sections; the fix answers them
+  with the model and shows no hint; over a 12-page report read 6 of 12, a typed list ask gets the
+  deep-index hint and an untyped or explain ask the label. Not done here, filed as follow-ups: a typed {X} in a needle question still lists
+  ("Gilt die Frist für alle Mieter?" lists every date — #644); a small document is still read top-k
+  rather than whole (#643); and the router's `tree-summary` decision has no consumer in `rag:ask` (a
+  summary question with a ready tree is answered by relevance — #642). #642–#644 are fixed: see the
+  next two bullets.
+- **One document read whole, and the tree-summary consumer — AS BUILT (#643 / #642, 2026-10-12).**
+  Top-k keeps at most `ragTopKFinal` (6) sections within `ragMaxContextTokens` (2,500) and only the
+  best-ranked section per PDF page (the §8 dedup), so even a short document could reach the prompt
+  incomplete: a 2-page PDF of 3 sections reads at most 2, and the #641 heads-up then truly says items
+  may be missing. `rag:ask`'s `wholeReadDocumentId` now sends a turn bound for top-k — the final
+  relevance call and the exhaustive handlers' fall-through, skill or not — over exactly ONE in-scope,
+  fully chunked document whose de-overlapped text fits `wholeDocumentFitBudgetTokens` (the launched
+  window's whole-document budget for this question and skill, the budget A3 already reads whole-doc
+  skill turns with) to `generateGroundedAnswer({ wholeDocument })`: one grounded turn, every section
+  in order under its `[Sn]` label, history replayed, `capped` untruncated coverage ("Covers the whole
+  document"). `documentFitsWholeRead` applies `retrieveWholeDocument`'s own fit test and stops reading
+  at the first section past the budget, so the per-question check on a long document stays cheap (the
+  A3 needle downgrade uses it too). The small-document read also charges every section its `[Sn] File: …`
+  line (`WHOLE_READ_SECTION_FRAMING_TOKENS`, the relevance path's 48 per excerpt through the same 1.5
+  divisor), which `retrieveWholeDocument` does not, so a deck of many short slides cannot pass on its text
+  alone and then crowd the window. The decision is made inside the chat slot, against the document as
+  the answer reads it.
+  Measured budgets (a 6-word question, no skill): a 4,096 window (the 4B's default) fits 1,816
+  estimated tokens (~3 pages), 8,192 (most catalog models) 4,546 (~7 pages), 16,384 10,008 and 32,768
+  20,930; top-k reads 1,624 at 4,096 and 2,500 above. (The issue's "a 10-page letter fits 8k" does
+  not hold under the 1.5 subword divisor.) **#642:** a summary ask the router sends to `tree-summary`
+  takes the same path when its one document is too large to read whole but has a ready deep index —
+  `generateGroundedAnswer` reaches `answerWholeDocFromTree` when the read would truncate (`tree`
+  coverage, leaf provenance). Without its own ready tree it stays top-k, never an unasked-for chunk
+  map-reduce: the document's own tree is re-checked with `answerWholeDocFromTree`'s gate
+  (`wholeDocTreeMaterial` — `ready` AND a usable summary), because the router counts ready trees over
+  the whole scope, a document being re-indexed keeps `ready` until its chunk transaction, and a
+  degenerate ready tree would make the tree decline.
+  Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
+  read (since #649, for list asks: an aggregation ask over one fitting document is read whole). **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
+  knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
+  (top-k answers it at zero model calls when nothing matches); a legacy, partly chunked document (its
+  sections are not its whole text). The #80 classification is unchanged (decided before retrieval); the
+  #641 notices are relevance-only — a whole read has every section in the prompt, so neither can be
+  true. The answer's sources keep their `[Sn]` (§14.4 "#643 amendment"). Owner calls, all as
+  recommended: every top-k turn, skill or not; the window's fit budget with no extra cap; the
+  `labelledExcerpts` flag; #642 wired for one document. **Costs, accepted:** the prompt grows up to
+  ~1.8× at 8k and 4–8× at 16k/32k, which is prefill time on a CPU; follow-up questions keep less
+  history (compaction absorbs it); an off-topic question gets the model's own "the document does not
+  say" under the grounding rules instead of the fixed no-context reply, which needs a model call.
+  The eval (`tests/manual/model-eval.test.ts`, `rag-quality.test.ts`) calls `generateGroundedAnswer`
+  and `retrieve` directly over a 16-document corpus and still measures top-k; no eval compares a whole
+  read with top-k on one document. Tests: `rag-whole-read.test.ts` (each gate mutation-checked).
+  Real app (dev build, qwen3-4b-instruct-q4 at its 4,096 window; a fictional 2-page medication plan whose
+  first page holds two sections; legs on a scratch root with b11146 and on the D: drive with its own
+  b9849, both alike): master read 2 of 3 sections, led with the heads-up and named 1 of 8 medications
+  (5.3 s); the fix read 3 of 3 and named all 8 (6.4 s), its evidence review linked the answer's marker. A
+  fictional 12-page report's summary read 6 of 12 sections on master, with and without a ready deep
+  index (pages 5–10); the fix answered from the tree, 12 of 12 (6.5 s). Tree answers stay abstractive:
+  one of the two runs gave the report's end date wrong, which the §14.4 depth caveat (L2) already covers.
+- **A quantifier asks for a list only at the head of a request; a yes/no question is a lookup — AS
+  BUILT (#644, 2026-10-12).** After #641 every quantifier (all/every/each, alle/jede/sämtliche) still
+  counted as a list request wherever it stood. Once a deep index with extract data existed, "Gilt die
+  Frist für alle Mieter?" got every date in the document at zero model calls. Without extract data,
+  the same question got the deep-index heads-up, which promised that list. Of ~110 probed EN/DE
+  phrasings, 44 changed decision; every probed list request and aggregation ask kept its route. Two
+  review passes probed ~120 more (fillers, polite forms, request verbs, claims, abbreviations,
+  compounds). Fix (owner calls, all as recommended; the type rule was revised once):
+  (1) `COVERAGE_RE` is split. A list/count verb (`LIST_VERB_RE`: list/enumerate/how many/how much/count,
+  liste/wie viele/auflist/aufzulist/aufzähl/zähl; #649 took out how much and wie viel) still asks for a list
+  wherever it stands. A quantifier
+  does so only at the HEAD of a request, after the words a request opens with (`REQUEST_OPENERS`, matched
+  longest first: give me / show me / tell me / find / extract / display / summarize / an overview of /
+  what are / who are / I need …, nenne / zeig mir / gib mir / extrahiere / ermittle / schreib / fasse /
+  listen Sie / sagen Sie / was sind / wie lauten / ich brauche …). Fillers (please / ok / and / thanks,
+  bitte / hallo / und / alles klar / danke …) are skipped wherever an opener may stand, and a sentence of
+  fillers alone asks nothing. Examples: "Alle Fristen?", "every deadline", "Bitte nenne mir sämtliche
+  Fristen", "What are all the deadlines?", "Fasse alle Fristen zusammen". When- and where-questions are no
+  requests ("When are all the payments due?" is labelled like "When is each payment due?"). A missing
+  request verb costs the listing: the request gets the labelled written answer, never the listing for a
+  question.
+  (2) A yes/no question is a lookup, even when it carries a list verb ("Does the contract list all the
+  deadlines?", "Zählt jede Zahlung zur Miete?"). It gets `{ relevance, high }`: an ordinary answer, no
+  notice and no #80 classification call. A yes/no question is recognised in three ways:
+  - its first word (after fillers, or after an opener: "Tell me, are all the payments on time?") is an EN
+    auxiliary or modal, or one of the common German finite verbs (`YES_NO_VERBS`). German puts any verb
+    first, so the list is closed: a missing verb gets the label, never the listing. "was" and "am" count
+    only before an English subject ("Was every payment on time?" against "Was sind alle Fristen?", "Was an
+    Gebühren …");
+  - a "whether"/"ob" at the head, or an "if" after an opener ("Tell me if …");
+  - a claim about the quantified items, asked or stated, in a sentence with no opener: a finite verb of
+    the quantifier's language, written in lower case, after the quantifier and before any comma or clause
+    word ("Jede Zahlung ist pünktlich eingegangen?", "Each payment is due on the 1st, right?", "Alle
+    Zahlungen sind am Ersten fällig."). German "die / das / welche …" count as clause words only before a
+    lower-case word, so "Jede Zahlung an die Vermieterin ist fällig?" is a claim while "Alle Zahlungen die
+    ich erhalten habe?", "Alle Fristen, die gelten?", "Every deadline that is binding?", "Alle Termine für
+    Treffen?" and "Show me every payment I have made" stay requests.
+
+  A polite request opens like a yes/no question but is not one (`politeOpenerAt`). Its verb is followed
+  by the one asked (you / du; Sie / ihr only after a plural verb, since "Kann sie …" is "can she") or, after
+  a modal, by the asker (I / we / man). And the sentence asks for something: a list verb, a request verb
+  right after that word or as its last word, or "mir / uns". Examples: "Can you show me every payment?",
+  "Do you have all the deadlines?", "Hast du eine Liste aller Fristen?", "Kann ich alle Fristen sehen?",
+  "Können Sie mir alle Fristen nennen?". Without one it is a yes/no question: "Can you deduct all the
+  fees?", "Können Sie alle Fristen einhalten?", "Kann ich alle Zahlungen zurückfordern?". The fixed
+  phrases count too ("Is it possible to …", "Do you know …", "Would you mind …", "Gibt es eine Liste …").
+  (3) A quantifier inside some other question ("When is each payment due?", "Welche Frist gilt für
+  alle Mieter?") gets #641's labelled relevance (`fallback: 'partial'`): the listing cannot pair or
+  filter, and the answer covers several items. So does a request whose quantifier follows a phrase
+  ("Kannst du mir ab dem 1. Mai alle Zahlungen zeigen?"); it is not at the head.
+  Each sentence is judged on its own ("Ich habe einen Mietvertrag. Gilt die Frist für alle Mieter?"). A
+  sentence ends at ? ! ; and at a period before a capital, except after a listed abbreviation ("lt.",
+  "inkl."), a single letter ("z. B.") or a day before a month ("15. Januar"); a colon ("bis 10:30",
+  "Liste: alle Fristen") or a line break ends none. A list request must name its typed thing in its own
+  sentence: "Gilt die Frist für alle Mieter? Liste alle Abkürzungen auf" is an untyped list request. A
+  request that names nothing refers back to the question ("Welche Fristen gelten? Liste alle auf", "What
+  are the deadlines? List all of them."), and any typed list request in the question counts.
+  (4) The issue's type-detection cases: the listing's type is the synonym that the typed list request
+  names first, otherwise the whole question's first synonym. It is no longer the first table row. Of
+  nouns written one after another the last names the thing ("payment deadlines" are deadlines); "due",
+  "when" and "who" head no such run ("payments due in May" are payments). Question words take part ("List
+  when every payment is due" lists dates, "List who paid each fee" lists parties). Modals
+  (must/shall/muss/müssen) decide only when nothing else is named ("How many tenants must pay a fee?"
+  lists amounts). So "List every expense and when it was paid" and "List all payments and their due
+  dates" list amounts, and "When was the lease signed? List all the fees" lists fees. "terms", "names" /
+  "Namen" and "Daten" left the synonym table ("medical terms", "names of the medications", data; "terms
+  and conditions" stays), so such an ask is untyped and labelled. The first draft also stripped question
+  words before mapping ("a named noun beats a question word"). That was redundant for the issue's case
+  and listed amounts for "List when every payment is due", so the owner took the sentence-scoped rule
+  instead.
+  Unchanged: explain asks, untyped asks, aggregation asks (including "Are all the costs broken down per
+  category?"), the IPC wiring, and the precedence. A demoted question over one fitting document gets
+  the #643 whole read like any other. Router golden rows in `extract-router.test.ts`: 57 fail on
+  master, and each review's rows failed on the commit before it (25, then 26). Of the 63 rule mutations,
+  62 turn the suite red; the longest-first sort of the openers changes no decision today (every pair
+  sharing a prefix is already listed longest first) and stays as a guard. One #641 pin moved ("Does
+  every employee get a bonus?": labelled → plain).
+  Real app (dev build, qwen3-4b-instruct-q4 at 4,096; a fictional 2-page lease with a deep index and
+  extract data; a scratch root with b11146 and the D: drive with its b9849, alike):
+  - On master, "Gilt die Frist für alle Mieter?", "Is each payment due on the first of the month?" and
+    "Welche Frist gilt für alle Mieter?" each got the same 4-date list (~40 ms). With the fix, all three
+    are answered from the whole document (2 of 2 sections, ~3.5 s; "Ja … [S2]").
+  - The 4B began the English answer with a wrong "Yes" and then stated the right due days. That is a
+    model error, not a routing one.
+  - "Liste alle Fristen auf" and "Kannst du mir alle Beträge nennen?" kept the listing.
+  - "List all payments and their due dates" now lists amounts instead of dates.
+  - Over the 12-page report without extract data (6 of 12 sections read), "Wurden alle Termine
+    eingehalten?" lost the deep-index heads-up and "Liegen alle LDL-Werte unter 100 mg/dl?" lost the
+    label.
+
+  **Residuals** (all recognised by closed word lists):
+  - Still listed: "Zählen alle Zahlungen zur Miete?" ("zählen" is also the request "Zählen Sie …"); an
+    elliptical claim with no verb ("Alle Zahlungen pünktlich eingegangen?"); "Can we have all the
+    payments refunded?" ("have" reads as a request).
+  - The labelled answer instead of the list: a request whose quantifier follows a phrase, a request verb
+    missing from the list, and a request after a line break ("Mietvertrag 2024\nAlle Fristen?").
+  - A listing still shows one type ("Liste alle Termine und Beträge auf" lists dates).
+  - Pre-existing and filed under #649, fixed there (next bullet): a "how much" lookup still listed every
+    amount ("How much is the monthly fee?"); "list"/"Liste" as a noun ("Welche Fristen stehen auf der
+    Liste?") and "zählt als" still listed; a sum with a quantifier inside ("Wie hoch ist die Summe aller
+    Zahlungen?") got the labelled answer, not the coverage route. "Zählen alle Zahlungen zur Miete?" is
+    a plain answer since #649.
+- **"How much" is a lookup or a sum; a list asked about and "zählt als" ask for no list — AS BUILT
+  (#649, 2026-10-12).** `LIST_VERB_RE` counted "how much" and "wie viel" as list verbs wherever they
+  stood. Once a deep index with extract data existed, "How much is the monthly fee?" got every amount in
+  the document at zero model calls; without one it got the deep-index heads-up. A sum got the same
+  listing with no total ("How much did I pay in fees?"), or since #644, with a quantifier inside, the
+  labelled top-k sum #37 rules out ("What is the total of all the payments?"). "What is the sum of the
+  fees?" and "Wie hoch ist der Gesamtbetrag?" carried no trigger and got a plain answer. "list"/"Liste" as
+  a noun ("Welche Fristen stehen auf der Liste?") and "zählen zu / zählt als" still listed. Of 219 probed
+  EN/DE phrasings, 112 changed decision; every probed list request, count, aggregation ask and #644
+  control kept its route. Two /code-review passes probed ~60 more phrasings and tightened the rules below:
+  present and passive pay verbs, polite reckoning requests, who/when questions, context statements,
+  measured nouns, summaries, which-questions, idioms, and "What is the list of …". Fix (owner calls 1–4 as
+  recommended, a fifth after the real-app run):
+  (1) "how much" / "wie viel" leave `LIST_VERB_RE` ("wie viele" stays). A lookup is an ordinary
+  question, like "What is the monthly fee?" or "Wie hoch ist die Kaution?": `{ relevance, high }`, a
+  plain answer with no #80 call. A quantifier inside it still gets #644's label ("How much is each
+  payment?").
+  (2) A sum ask (`isSumAsk`, per sentence) joins the aggregation route and lists amounts whatever it
+  names. A sum is recognised in three ways:
+  - a sum word: total, sum of, the sum, add up, Summe aller/der/von, die Summe, in Summe, Gesamtbetrag,
+    Gesamtkosten, Gesamtmiete …, addieren, zusammenrechnen, zusammenzählen, or "zusammen" (not "zusammen
+    mit") after a reckoning verb ("Rechne alles zusammen"). Idioms do not count ("total loss", "sum
+    insured", "lump sum");
+  - a totalling word (in total, altogether, together, combined, insgesamt, zusammen) beside a money word,
+    a currency sign or "how much" / "wie viel" ("Was kostet alles zusammen?", "How much are all the fees
+    together?", "Wie viel macht das zusammen?"). This shape does not count in a which-question ("Welche
+    Gebühren fallen insgesamt an?" asks for the fees). Alone, a totalling word is often no sum ("Wer
+    wohnt zusammen in der Wohnung?"). "zusammen mit", "together with" and "combined with" join two things.
+    "Fasse … zusammen", "Stelle … zusammen" and "put together" gather a list; with "insgesamt" those verbs
+    pay ("Wie viel Kosten muss der Mieter insgesamt tragen?");
+  - "how much" / "wie viel" with a pay or spend verb in the past ("How much did I pay in fees?", "How
+    much have I paid so far?", "Wie viel habe ich für Gebühren bezahlt?", "Wie viel zahlte ich im
+    Januar?"): what was paid adds up a history. The past is a past form, "did" with the base, or a
+    participle after a perfect or past auxiliary not preceded by "be". A participle alone, or a passive,
+    is the present: "Wie viel bezahlt der Mieter pro Monat?", "How much is paid per month?", "How much has
+    to be paid on signing?". A present pay verb asks what is paid, a lookup ("How much do I pay per
+    month?", "Wie viel Miete muss ich zahlen?").
+
+  None counts in these cases:
+  - with a count word (how many, wie viele, number of, total number, Anzahl);
+  - with an explain or summary verb ("Erkläre, wie sich die Gesamtmiete zusammensetzt", "Summarize the
+    lease, including the total rent" keeps its tree summary);
+  - without a money word beside a measure, or beside a noun "how much" measures ("How long is the lease
+    in total?", "What is the total area?", "How much space …", "Wie viel Urlaub habe ich insgesamt?"). The
+    noun is the word after "how much" / "wie viel" unless it is a verb or a function word; from a writer who
+    capitalises German nouns, only a capitalised word;
+  - in a who / when / where / why question, also after a polite opener, a request verb or a preposition
+    ("Who pays the total rent?", "Tell me who pays the total rent.", "Bis wann muss die Gesamtmiete
+    bezahlt sein?");
+  - in a statement that gives context: one led by a personal pronoun without a question mark or a
+    request opener ("I paid a total of 500 euros last year. Which payment was late?"; "I need the total of
+    all payments" and "We would like the total of all fees" stay requests), or any sentence without a
+    question mark in a question that asks one, unless it opens with a request opener or a reckoning
+    imperative ("The total rent is 1,175 euros. Is the deposit included?" against "Rechne alle Zahlungen
+    zusammen. Wie viel ist das?").
+
+  A yes/no question about a sum asks for a verdict (#644): "Is the total rent 1,175 euros?", "Kann ich die
+  Gesamtmiete steuerlich absetzen?" and the #80 near-miss "is the total correct on page 2?" stay plain. A
+  polite request is not a yes/no question when it asks to reckon (calculate / add / ausrechnen /
+  zusammenrechnen …): "Could you calculate how much I paid in total?", "Kannst du alle Zahlungen
+  zusammenrechnen?". `isAggregationShaped` includes sums, so a sum gets the #54 shape hint, the #80
+  classification and the deterministic bank-statement offer for amounts. A sum lists amounts unless a list
+  request in the same question names its own type ("List all the deadlines and the total rent" lists
+  dates).
+  (3) **IPC: an aggregation ask over ONE document that fits the window is read whole instead of
+  listed** (`registerRagIpc`, inside the chat slot, `wholeReadDocumentId`). This covers sums and
+  categorize asks: the model sees every section and can add them up, which the listing cannot (#54). The
+  offer rides along. A plain list ask keeps the listing, and so does a document too long to read whole
+  (the listing + #54 hint) or a multi-document scope. Without extract data, a fitting document was
+  already read whole since #643. So the #643 precedence above ("coverage-extract still wins over a model
+  read") now holds for list asks only. The listing is now computed only when it is the answer.
+  (4) "list" / "Liste" / "Aufzählung" / "Auflistung" after a definite article, a demonstrative or a
+  possessive, in a question that opens with a question word, asks about a list the document holds, not
+  for one. The question word may follow a preposition, a polite opener or a request verb ("Auf welcher
+  Seite der Liste …", "Kannst du mir sagen, was auf der Liste steht?", "Tell me what's on the list of
+  fees"; contractions such as "what's" count). "welcher Liste" / "which list" never asks for a list. Any
+  other "list" still asks: the list named after "is" ("What is the list of deadlines?", "Wie lautet die
+  Liste der Fristen?", "Wie lang ist die Liste der Fristen?"), "Zeig mir die Liste der Fristen", "Zeigst du
+  mir die Liste der Fristen?", "Could you send me the list of fees?", "Make a list of the payments", "Is
+  there a list of fees?". The issue's stricter rule (any article makes a noun, which then asks only at the
+  head of a recognised request) would have turned unlisted request verbs into plain answers.
+  "zählen zu / zum / zur / als" and "count as / toward(s) / among / against" mean "belong to". The
+  exceptions:
+  - "auf" ends the clause ("Welche Zahlungen zählt der Vertrag zur Miete auf?" is "aufzählen");
+  - an imperative is a request ("Zähle … zur Miete", and "Zählen Sie die Zahlungen bis zum 31. März" at
+    the head of the sentence). After a question word, "zählen Sie" is a question: "Was zählen Sie als
+    Zahlung?" means "belong to";
+  - a "zu" behind a comma belongs to the clause.
+
+  "Zähler…" (a meter, "Zählerstand") is no verb; "Zählung" is a count and still lists. "zählen" joins the
+  yes/no and plural verbs, so "Zählen alle Zahlungen zur Miete?" (a #644 residual) and "Zählen die Fristen
+  auch am Wochenende?" are verdicts, while "Zählen Sie alle Fristen auf(?)" stays a polite request. It
+  opens a yes/no question only with a question mark, and it is never a claim verb: "Zählen alle Zahlungen"
+  and "Alle Zahlungen zählen und auflisten" stay requests.
+  (5) **The arithmetic heads-up** (owner call after the real-app run, design-guidelines §11.24). A whole
+  read of a total leads with `analysis.wholeReadSumHint`, with or without extract data (EN
+  *"**Heads-up:** the model works out totals itself and can miss or miscount items. Check any total
+  against the sources."*). The wording stays true when the document states the total and the model only
+  read it. A total is `isTotalAsk`: a sum, an adding-up verb ("Summiere alle Buchungen", "sum per
+  category", "tally"), or an aggregation over amounts ("Kategorisiere alle Ausgaben"). A grouping of
+  anything else ("Gruppiere die Fristen nach Mieter") is read whole without it. It rides `answerPrefix`
+  after the W2 scope notice (`groundedPrefix`). That covers every whole read: the coverage branch and the
+  final path share one `groundedAnswer`. The tool skill's plausibility fall-through (a skill whose
+  extractor found nothing) leads with both too; before, that path dropped the W2 notice. So do a
+  whole-doc skill's read and a two-document compare. A top-k sum keeps #37's notices.
+  Tests:
+  - router golden rows in `extract-router.test.ts`: 86 fail on master, and 9 more pin the new `isTotalAsk`;
+  - the #54/#649 table in `rag-skill-analysis.test.ts`. The #54 pin moved to a statement too long to read
+    whole. The fitting statement is read whole behind the heads-up with and without extract data, and so
+    is a #649 sum phrasing; a dates grouping carries no heads-up;
+  - the plausibility fall-through table there, a whole-doc skill row in `rag-whole-doc-skill.test.ts` and
+    a compare row in `rag-whole-doc-compare.test.ts` carry the heads-up. 7 IPC rows fail on master.
+
+  Every one of the 84 rule mutations turns the suites red.
+  Real app (dev build, qwen3-4b-instruct-q4 at 4,096; a fictional 2-page lease and a fictional 1-page
+  bank statement, each with a deep index and extract data; a scratch root with b11146 and the D: drive
+  with its b9849, alike):
+  - On master all nine asks got the listing in ~30–50 ms: three lookups, four sums, "Welche Kosten zählen
+    zu den Nebenkosten?" and the control "Liste alle Beträge auf".
+  - With the fix, the lookups are answered from the whole document (5,00 / 45,00 / 6,90 EUR, 1.8–3.3 s),
+    and so is the "zählen zu" question.
+  - The lease's monthly sum was right in both languages (950 + 180 + 45 = 1.175 EUR).
+  - The statement's four fees (13,85 EUR) were summed wrong twice, with the whole statement in the prompt:
+    5,45 (two fees missed) and 8,35 (three listed, misadded). That run is why the heads-up exists.
+  - The control kept its listing.
+
+  **Residuals** (word lists again):
+  - A total with no sum word or past pay verb gets a plain answer ("What did I pay in fees?", "How much
+    do I pay per month?" over a lease whose three monthly amounts make the total). One fitting document
+    is read whole anyway.
+  - A question about a total the document states takes the sum route ("What is the total amount due on
+    the invoice?"): on a long document with extract data it gets the listing, not the stated total.
+  - The colloquial count "Wie viel Zahlungen gibt es?" gets a plain answer.
+  - All-lower-case German with a verb after "wie viel" that the function-word list lacks reads that verb as
+    a measured noun, so a total with no money word gets a plain answer.
+  - "the full list" / "price list", or a list noun before the question word ("In der Liste fehlt eine
+    Frist, welche?"), and "Ich habe eine Liste der Fristen. Welche fehlt?" still list.
+  - "Was zähle ich zu den Nebenkosten?" still lists (the first-person "zähle" reads as the imperative).
+  - A multi-document sum keeps the listing (there is no multi-document whole read).
+  - A whole-read total is still the model's arithmetic. The heads-up says so but does not check it; the
+    bank-statement skill is the exact path for a statement.
 - **Suggestion-only cascade — AS BUILT (issue #80, wave R80; STR-1 §5.2). Truth maintenance on the
   0-model-call claim:** the router itself stays pure and byte-unchanged, and every HAPPY path above
   still answers at 0 query-time model calls — but exactly two decision classes now additionally run
@@ -2025,6 +2609,7 @@ so the review can never claim more than the answer did.
 | `coverage.mode` | snapshot `kind` | `machineLabel` | auto-links |
 |---|---|---|---|
 | `relevance` | `direct_excerpt` | the `S{n}` label | YES — marker → citation |
+| `capped` + `labelledExcerpts` (#643) | `direct_excerpt` | the `S{n}` label | YES — marker → citation |
 | `tree` / `capped` | `whole_document_provenance` | **null** | **ZERO** (hard rule) |
 | `extract` | `structured_record` | **null** | ZERO in v1 |
 | *(none stamped)* | `direct_excerpt` | the `S{n}` label | YES |
@@ -2038,6 +2623,11 @@ so the review can never claim more than the answer did.
   never auto-links them — even a literal `[S1]` in a whole-doc answer's text links nothing
   (tested). Reviewer-made links exist but are always `origin: 'reviewer'` ("Reviewer
   linked"), and the IPC layer FORCES that origin regardless of payload.
+- The `capped` + `labelledExcerpts` row (#643, §14.4 "#643 amendment") is a whole document
+  read in ONE grounded turn, every section shown to the model under its `[Sn]` label: the
+  relevance contract, so its markers auto-link. The review caption is the relevance one
+  (`evidencePaneMode` → `relevance`: "the excerpts supplied to the local AI model"); the
+  coverage snapshot still says whole document. Only `capped` honours the flag.
 - The *(none stamped)* row is the pre-D48/D72 legacy population: the relevance path persisted
   NULL coverage before `mode:'relevance'` was stamped (§14.9), and the renderer has always
   read that NULL as the relevance badge (`SourcesDisclosure`'s `isProvenance = mode != null &&

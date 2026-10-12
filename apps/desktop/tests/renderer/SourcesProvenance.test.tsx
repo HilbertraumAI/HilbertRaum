@@ -152,6 +152,25 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
     ).not.toBeInTheDocument()
   })
 
+  // #643: a document read whole in ONE grounded turn showed the model every section under its [Sn]
+  // label, and the answer cites them inline — so its cards keep [Sn] and the "Sources (N)" framing.
+  // A long read is still capped like provenance; the flag means nothing on any other mode.
+  it('#643: a labelled whole read keeps "Sources (N)" and [Sn] on every card, capped at 24', () => {
+    const n = 30
+    const labelled: CoverageInfo = { mode: 'capped', chunksCovered: n, chunksTotal: n, truncated: false, labelledExcerpts: true }
+    const container = renderTranscript(message(cites(n), labelled))
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'chat.sources.toggle', { count: n }) }))
+    expect(container.querySelectorAll('.source-card').length).toBe(24)
+    expect(container.querySelectorAll('.cite-label').length).toBe(24)
+    expect(container.querySelector('.cite-label')?.textContent).toBe('[S1]')
+    expect(screen.queryByText(t('en', 'chat.sources.wholeDocCaption'))).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: tCount('en', 'chat.sources.more', n - 24) }))
+    expect(container.querySelectorAll('.cite-label').length).toBe(n)
+    cleanup()
+    renderTranscript(message(cites(3), { ...treeCoverage(3), labelledExcerpts: true }))
+    expect(screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 3) })).toBeInTheDocument()
+  })
+
   it('a NULL-coverage citation-bearing answer (pre-migration) stays "Sources (N)" 1:1', () => {
     const n = 40
     const container = renderTranscript(message(cites(n))) // no coverage at all → undefined mode

@@ -1,4 +1,10 @@
-import { LlamaServer, combineSignals, isStartAbortError, type LlamaServerOptions } from '../runtime/sidecar'
+import {
+  LlamaServer,
+  combineSignals,
+  isStartAbortError,
+  waitUnlessAborted,
+  type LlamaServerOptions
+} from '../runtime/sidecar'
 import { readChatSSE } from '../runtime/llama'
 import type { VisionErrorCode } from '../../../shared/types'
 
@@ -26,7 +32,8 @@ import type { VisionErrorCode } from '../../../shared/types'
 // timeout so it does not sit co-resident with the chat model + E5 embedder forever (PROD-1
 // bounds the WINDOW, not the active-use peak). The interlock is the heart of V4 —
 //   • every `ensureStarted()`/`analyze()` entry CANCELS the pending idle timer;
-//   • the timer is (re)armed only when the LAST in-flight analyze settles (inFlight===0);
+//   • the timer is (re)armed only when the LAST in-flight analyze settles (inFlight===0), or when
+//     a start lands after every analyze waiting for it was cancelled (#637);
 //   • the idle teardown is a SOFT teardown (unlike `stop()`): it kills the child but does NOT
 //     latch `stopped`, so the next `analyze()` re-pays a clean cold start;
 //   • the teardown is GUARDED against a `starting`/in-flight job (`this.starting`/`inFlight>0`)
@@ -176,7 +183,8 @@ export interface VisionAnalyzeOptions {
   imageBytes: Uint8Array
   mimeType: string
   question: string
-  /** A user "Stop" — combined with the per-request timeout (M-C5 pattern). */
+  /** A user "Stop" — combined with the per-request timeout (M-C5 pattern); it also ends the wait
+   *  for a cold start, without cancelling the start (#637). */
   signal?: AbortSignal
   /** Streamed answer-token sink (the STREAM.imgToken forwarder). */
   onToken?: (delta: string) => void
@@ -249,8 +257,10 @@ export class VisionRuntime {
     }
   }
 
-  /** Lazily spawn the vision sidecar (once). Concurrent callers share one start (single-flight). */
-  private async ensureStarted(): Promise<LlamaServer> {
+  /** Lazily spawn the vision sidecar (once). Concurrent callers share one start (single-flight).
+   *  `callerSignal` ends only this caller's wait for it (#637: before, a cancel during a start that
+   *  hung waited out the 180 s health budget), never the start: the next analyze may share it. */
+  private async ensureStarted(callerSignal?: AbortSignal): Promise<LlamaServer> {
     // Any use of the sidecar resets the idle clock (RUNTIME-4): a teardown must never fire
     // out from under an imminent request.
     this.cancelIdleTimer()
@@ -313,9 +323,13 @@ export class VisionRuntime {
         .finally(() => {
           this.starting = null
           if (this.startAbort === abort) this.startAbort = null
+          // #637: when every analyze that waited for this start was cancelled, each one's `finally`
+          // found `starting` set and armed nothing. Arm the idle clock here, or a start that lands
+          // keeps the sidecar resident until lock or quit. A no-op while an analyze still waits.
+          this.armIdleTimer()
         })
     }
-    await this.starting
+    await waitUnlessAborted(this.starting, callerSignal)
     if (!this.server) throw new Error('Vision server failed to start')
     return this.server
   }
@@ -323,9 +337,13 @@ export class VisionRuntime {
   /**
    * Analyze ONE image: base64-inline the bytes into an OpenAI `image_url` data-URL request
    * (no disk write), stream the answer through `onToken`, and return the full text. Honours
-   * `signal` (a user "Stop") combined with the per-request timeout.
+   * `signal` (a user "Stop") combined with the per-request timeout. The signal also ends this
+   * analyze's wait for a cold start, which keeps running for the next analyze (#637); an analyze
+   * already stopped starts nothing and rejects with the signal's reason.
    */
   async analyze(opts: VisionAnalyzeOptions): Promise<string> {
+    // #637: a caller already stopped starts nothing and leaves the idle clock alone.
+    opts.signal?.throwIfAborted()
     // RUNTIME-4: cancel the idle timer and mark a job in flight BEFORE the (possibly slow,
     // cold-start) `ensureStarted` await, so a teardown can't fire during the start either.
     this.cancelIdleTimer()
@@ -341,7 +359,7 @@ export class VisionRuntime {
   }
 
   private async runAnalyze(opts: VisionAnalyzeOptions): Promise<string> {
-    const server = await this.ensureStarted()
+    const server = await this.ensureStarted(opts.signal)
     const dataUrl = `data:${opts.mimeType};base64,${Buffer.from(opts.imageBytes).toString('base64')}`
     const body = JSON.stringify({
       model: this.modelId,

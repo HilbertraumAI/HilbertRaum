@@ -7,7 +7,7 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 from its first public `1.0.0` release onward.
 
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
-> since that day: **v0.1.50** was the first, **v0.1.62** is current. Versions stay in the
+> since that day: **v0.1.50** was the first, **v0.1.63** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
 > not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
 > page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
@@ -25,36 +25,18 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-### Security
+### Fixed
 
-- **The PDF reader that powers "Make searchable (OCR)" now runs fully inside the app's strict
-  content-security sandbox.** When a scanned PDF is prepared for text recognition, the component
-  that reads it previously ran in a helper that was not covered by the app's content-security
-  policy. It now runs under the same strict policy as the rest of the app, which blocks any
-  attempt to reach the network or run generated code. OCR and the text it produces are unchanged.
-- **The app's windows can no longer read other files on your computer.** The app's screens used to
-  be loaded as local files, and in that mode the browser engine behind them could read any file
-  your user account can open. Nothing in the app did so, but a future bug that let content run code
-  in a window could have used it. The screens now load from the app's own private address, which
-  reaches the app's bundled files and nothing else, and the app has given up that extra file access
-  altogether (#560).
-- **The app can no longer be used to run other programs' code, and it checks its own files.**
-  The HilbertRaum program could be started as a general-purpose script runner, or with a debugging
-  port, by anything that could already start programs on your computer. Both are switched off now.
-  On Windows and macOS the app also stops if its main program files have been changed since it
-  was built. Nothing changes in how you use the app (#562).
-- **Exporting an evidence pack as a PDF no longer puts a temporary copy of the pack next to the
-  exported file.** To print the PDF, the app used to save the pack's readable content as a temporary
-  file beside the one you chose, and remove it afterwards. If the app was closed mid-export, or
-  another program held that file open, the copy could stay behind. The app now prints the pack
-  straight from memory, so no such copy is ever written (#563).
-- **The app no longer contacts Google for a spelling dictionary, or the local network for proxy
-  settings.** Spell-checking has been off in the app for several versions, but the browser engine
-  inside it still downloaded a spelling dictionary from a Google server when the app started: on
-  Linux for every language, on Windows for a language Windows cannot spell-check itself. Nothing
-  from your workspace was sent, but the request told the server your computer's address and
-  language. On Windows the engine also asked the local network for proxy settings, which a hostile
-  network could answer. Both requests are gone now. Nothing changes in how you use the app (#567).
+- **The Translate screen now says how much of translation really runs on the graphics card.** It
+  said "runs on the graphics card" after every graphics-card start, even when the chat model had
+  left no room and translation actually ran at processor speed. The Performance screen now also
+  counts translation as being on the card when it is (#629).
+- **Translation gets the graphics card's memory when it starts.** A reranker sitting on the graphics
+  card now moves to the processor first, and returns to the card once translation is done. On a
+  computer with both a built-in and a separate graphics card, the faster draft mode of the largest
+  models is now judged by the separate card's free memory instead of the built-in one's (#473).
+
+## [0.1.63] — 2026-10-12
 
 ### Added
 
@@ -92,6 +74,12 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Questions about a short document now read the whole document.** When a chat answers from one
+  document that is short enough for the AI model to read at once (about 3 pages with the smallest
+  models, about 7 with most, more if you raise the context size), the app now gives the model the
+  whole document, in order, instead of the few passages that best match the question. Answers no
+  longer miss part of a short letter, and the line under the answer says **Covers the whole
+  document**. A chat with several documents, or with knowledge packs, works as before (#643).
 - **Some display preferences are reset once after this update.** Because the app's screens moved
   to their own address, the browser engine treats them as new and forgets four display
   preferences once: the unlock screen appears in your computer's language until you unlock (it
@@ -121,6 +109,33 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A "how much" question gets an answer, and a sum over a short document gets a total.** Once a
+  document had a deep index, "How much is the monthly fee?" was answered at once with every amount in
+  the document. "How much did I pay in fees?" got the same list, with no total. A question about one
+  amount now gets a written answer. A question that adds amounts up, over one document short enough to
+  read at once, is answered from the whole document with a total. That answer starts with a heads-up:
+  the AI model works out totals itself and can miss or miscount items, so check the total against the
+  sources. Over a longer document it still lists every amount, now with the note that the list cannot
+  add them up. "Welche Fristen stehen auf der Liste?" and "Welche Kosten zählen zu den Nebenkosten?"
+  get an answer instead of a list (#649).
+- **A yes/no question about your documents gets an answer, not a list.** Once a document had a deep
+  index, a question such as "Gilt die Frist für alle Mieter?" ("Does the deadline apply to all
+  tenants?") was answered at once with every date in the document, because any "all", "every" or
+  "each" counted as a request for a list. Without a deep index, the same question carried a heads-up
+  recommending one. Such questions now get a written answer from the document, with no heads-up.
+  "All" asks for the list when the request starts with it: "Alle Fristen?", "Kannst du mir alle
+  Fristen nennen?", "What are all the deadlines?". "List every deadline" and "How many payments are
+  there?" work as before. A list request about several kinds of things now lists the one it names
+  first: "List all payments and their due dates" lists the payments. "Terms", "names" and "Daten"
+  no longer pick a list ("List all the medical terms" gets a written answer) (#644).
+- **"Summarize this document" uses the deep index.** With one long document in the chat and its
+  deep index built, a summary question was still answered from a few matching passages. It now
+  draws on the deep index's summaries of every section and says it covers the whole document (#642).
+- **The source markers in an answer about a whole short document now match its sources.** When a
+  skill such as Contract brief read a short document whole, the answer cited markers like **[S2]**,
+  but its source cards showed none and an evidence review linked nothing to them. The cards now
+  carry their markers and a review links the answer's markers to them. Answers written before this
+  update keep their old display (#643).
 - **A frozen AI model no longer shows as "Running" and healthy.** The app now re-checks the model when
   a screen asks for its state, and when an answer on it times out. The AI Model screen then says
   **Not responding** and offers a one-click **Restart**; Diagnostics says it is unhealthy. The app never
@@ -198,6 +213,38 @@ from its first public `1.0.0` release onward.
   model stopped responding". If the engine goes completely silent instead, the chat ends after two
   minutes. A long question on a slow computer still gets the time it needs as long as the model keeps
   working through it (#598).
+- **A search model that stops partway through its reply no longer holds things up for five minutes.**
+  When the search model that prepares documents for questions started a reply and then went silent,
+  the app waited about five minutes before giving up with "terminated". Until then the rest of an
+  import waited behind it, a password change or an engine update was refused as busy, and Stop did
+  not end a document question that was waiting for it. The app now gives up after two minutes, as it
+  already did when the search model did not reply at all, and Stop ends the question at once (#607).
+- **Stop and Cancel no longer wait for a model that is still loading.** When you stopped a document
+  question, or cancelled an image analysis or a document translation, while the model it needed was
+  still starting, the app waited until that model had loaded: up to three minutes if loading got
+  stuck. Until then a new image analysis was refused as busy, and after a cancelled document
+  translation the chat stayed blocked. Stop and Cancel now take effect at once. The model goes on
+  loading so that your next question or job can use it; the image and translation models are
+  unloaded again after two minutes if nothing uses them (#635, #637).
+- **A translation whose model gets stuck now ends within minutes, and the next try starts on a fresh
+  model.** When the translation model stopped working partway through a text, the app waited 45
+  minutes or longer before giving up on that part. In a document translation every later part then
+  waited the same way, so the job could hold up chat and other document tasks for hours. The app now
+  watches the model's progress. It gives up on a part after two minutes without a new word, after
+  ten minutes without progress while the model reads the part, or after two to three minutes of
+  complete silence. It then restarts the translation model and tries that part once more. A slow
+  computer still gets the time it needs as long as the model keeps working (#605).
+- **Building a deep index no longer turns explanations into lists of unrelated items.** After "Build
+  deep index", a question such as "Erkläre was in diesem Arztbrief steht inkl. aller Abkürzungen",
+  "Liste alle Abkürzungen auf" or "How many pages does the letter have?" was answered at once with
+  a list of things found in the document. It was not an explanation, and not a list of the
+  abbreviations either. Questions that ask to explain or describe now get a written answer from
+  the document, and so do list and count questions about things the deep index does not collect.
+  List and count questions about dates, amounts, people and organisations, or obligations still
+  use the deep index. The "Heads-up" that recommends building a deep index now appears only when
+  the answer really left parts of your documents out. It also no longer promises "a complete
+  answer": what the deep index adds is a list that covers every section. When a deep index would
+  not help, a shorter heads-up only says that the answer may miss items (#641).
 - **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is
@@ -238,6 +285,14 @@ from its first public `1.0.0` release onward.
   sensitive data, such as "Please black out all sensitive data" or "bitte auf sensible Daten
   checken", no longer get a suggestion: pick Document Redaction or Share-Safe Review yourself there
   (#604).
+- **What Changed? treats English and German compare requests the same way.** With the What Changed?
+  skill selected and one document in scope (or three or more), "Fasse die Unterschiede zusammen" asked
+  you to pick exactly two documents. "Summarize the differences" got an answer built from a few passages
+  of the documents instead, which could describe a second version that was not there. Now both languages
+  ask for exactly two documents. That covers requests with words such as "differences", "difference",
+  "changes", "compare", "comparison", "vs" or "old/new version", and German ones such as "Was hat sich
+  am Vertrag geändert?", "Was ist der Unterschied?" or "die beiden Verträge vergleichen". "Differences"
+  also suggests the skill now, as "Unterschiede" already did (#582).
 - **Word documents no longer leave some of their text out of search.** Text inside custom XML
   (used by some forms and templates) and text moved with Track Changes was skipped when a `.docx`
   was added, so questions about it found nothing. The updated Word reader (mammoth 1.13.0) reads
@@ -325,17 +380,37 @@ from its first public `1.0.0` release onward.
   next time you unlock. The voice-dictation messages are now shown in German too (#530).
 - **Home no longer calls the demo mode "running".** When a model answers with simulated demo
   replies, Home says so (#530).
-- **The Translate screen now says how much of translation really runs on the graphics card.** It
-  said "runs on the graphics card" after every graphics-card start, even when the chat model had
-  left no room and translation actually ran at processor speed. The Performance screen now also
-  counts translation as being on the card when it is (#629).
-- **Translation gets the graphics card's memory when it starts.** A reranker sitting on the graphics
-  card now moves to the processor first, and returns to the card once translation is done. On a
-  computer with both a built-in and a separate graphics card, the faster draft mode of the largest
-  models is now judged by the separate card's free memory instead of the built-in one's (#473).
 
 ### Security
 
+- **The PDF reader that powers "Make searchable (OCR)" now runs fully inside the app's strict
+  content-security sandbox.** When a scanned PDF is prepared for text recognition, the component
+  that reads it previously ran in a helper that was not covered by the app's content-security
+  policy. It now runs under the same strict policy as the rest of the app, which blocks any
+  attempt to reach the network or run generated code. OCR and the text it produces are unchanged.
+- **The app's windows can no longer read other files on your computer.** The app's screens used to
+  be loaded as local files, and in that mode the browser engine behind them could read any file
+  your user account can open. Nothing in the app did so, but a future bug that let content run code
+  in a window could have used it. The screens now load from the app's own private address, which
+  reaches the app's bundled files and nothing else, and the app has given up that extra file access
+  altogether (#560).
+- **The app can no longer be used to run other programs' code, and it checks its own files.**
+  The HilbertRaum program could be started as a general-purpose script runner, or with a debugging
+  port, by anything that could already start programs on your computer. Both are switched off now.
+  On Windows and macOS the app also stops if its main program files have been changed since it
+  was built. Nothing changes in how you use the app (#562).
+- **Exporting an evidence pack as a PDF no longer puts a temporary copy of the pack next to the
+  exported file.** To print the PDF, the app used to save the pack's readable content as a temporary
+  file beside the one you chose, and remove it afterwards. If the app was closed mid-export, or
+  another program held that file open, the copy could stay behind. The app now prints the pack
+  straight from memory, so no such copy is ever written (#563).
+- **The app no longer contacts Google for a spelling dictionary, or the local network for proxy
+  settings.** Spell-checking has been off in the app for several versions, but the browser engine
+  inside it still downloaded a spelling dictionary from a Google server when the app started: on
+  Linux for every language, on Windows for a language Windows cannot spell-check itself. Nothing
+  from your workspace was sent, but the request told the server your computer's address and
+  language. On Windows the engine also asked the local network for proxy settings, which a hostile
+  network could answer. Both requests are gone now. Nothing changes in how you use the app (#567).
 - **Documented: on Linux, the AppImage can run without Chromium's sandbox.** On distributions
   that restrict unprivileged user namespaces, Ubuntu 24.04 and later among them, the AppImage
   starts with Chromium's operating-system sandbox switched off instead of refusing to start, and a
@@ -1342,7 +1417,8 @@ For what the product *is*, see the [README](README.md) and
 [`docs/known-limitations.md`](docs/known-limitations.md). Every release since has its own
 section in [`CHANGELOG.md`](CHANGELOG.md).
 
-[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.62...HEAD
+[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.63...HEAD
+[0.1.63]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.62...v0.1.63
 [0.1.62]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.61...v0.1.62
 [0.1.61]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.60...v0.1.61
 [0.1.60]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.59...v0.1.60

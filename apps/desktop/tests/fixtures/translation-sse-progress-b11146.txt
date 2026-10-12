@@ -1,0 +1,67 @@
+: Captured llama-server SSE body — pinned b11146 (the official Windows Vulkan release, llama-b11146-bin-win-vulkan-x64.zip,
+: as the app installs it; forced to CPU with --device none, the translation sidecar's CPU posture). Native /completion with
+: TranslationRuntime's request body (stream:true, temperature 0, stop ["<end_of_turn>"], cache_prompt:true, n_predict 1998)
+: plus #605's return_progress:true, and the translation argv: --ctx-size 4096 --threads 2 --log-colors off --batch-size 512
+: --ubatch-size 512 --parallel 1 --device none --chat-template gemma. --threads 2 (the app passes 6 on this machine) slows
+: prefill so the server's `:` pings fall between the batches, as on a slow CPU. Model: a STAND-IN, qwen3.5-9b-ud-q4kxl in
+: the translation slot (no TranslateGemma weights on this machine; the frames are the server's, not the model's). A
+: 600-word German window (buildTranslationPrompt de→en), 1,022 prompt tokens, i7-8700 (DesktopDiT), 2026-10-08. Response
+: headers at +11 ms with the 0 % progress frame, then one per 512-token batch (510 / 1018; the hybrid model's context
+: checkpoint takes the last 4 tokens apart: 1022), pings between, the first token at +116.8 s. TRUNCATED after the 12th
+: token: the rest of the answer is omitted, so the stream here ends without the final stop frame. Each `: +<ms> ms` line is
+: the arrival time of the socket read below it (ms after the request was sent; de-chunked, otherwise verbatim). These colon
+: lines are SSE comments (the reader ignores them), like the server's own `:` pings.
+: +11 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":0,"time_ms":0}}
+
+: +30317 ms
+:
+
+: +58015 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":510,"time_ms":58006}}
+
+: +88287 ms
+:
+
+: +115971 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":1018,"time_ms":115962}}
+
+: +116772 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":1022,"time_ms":116763}}
+
+: +116773 ms
+data: {"index":0,"content":"Invoice","tokens":[33526],"stop":false,"id_slot":-1,"tokens_predicted":1,"tokens_evaluated":1022}
+
+: +117214 ms
+data: {"index":0,"content":" No","tokens":[2233],"stop":false,"id_slot":-1,"tokens_predicted":2,"tokens_evaluated":1022}
+
+: +117742 ms
+data: {"index":0,"content":".","tokens":[13],"stop":false,"id_slot":-1,"tokens_predicted":3,"tokens_evaluated":1022}
+
+: +118068 ms
+data: {"index":0,"content":" ","tokens":[220],"stop":false,"id_slot":-1,"tokens_predicted":4,"tokens_evaluated":1022}
+
+: +118403 ms
+data: {"index":0,"content":"1","tokens":[16],"stop":false,"id_slot":-1,"tokens_predicted":5,"tokens_evaluated":1022}
+
+: +118773 ms
+data: {"index":0,"content":"0","tokens":[15],"stop":false,"id_slot":-1,"tokens_predicted":6,"tokens_evaluated":1022}
+
+: +119096 ms
+data: {"index":0,"content":"0","tokens":[15],"stop":false,"id_slot":-1,"tokens_predicted":7,"tokens_evaluated":1022}
+
+: +119452 ms
+data: {"index":0,"content":"0","tokens":[15],"stop":false,"id_slot":-1,"tokens_predicted":8,"tokens_evaluated":1022}
+
+: +119803 ms
+data: {"index":0,"content":" was","tokens":[557],"stop":false,"id_slot":-1,"tokens_predicted":9,"tokens_evaluated":1022}
+
+: +120141 ms
+data: {"index":0,"content":" forwarded","tokens":[50492],"stop":false,"id_slot":-1,"tokens_predicted":10,"tokens_evaluated":1022}
+
+: +120456 ms
+data: {"index":0,"content":" to","tokens":[310],"stop":false,"id_slot":-1,"tokens_predicted":11,"tokens_evaluated":1022}
+
+: +120778 ms
+data: {"index":0,"content":" accounting","tokens":[22445],"stop":false,"id_slot":-1,"tokens_predicted":12,"tokens_evaluated":1022}
+

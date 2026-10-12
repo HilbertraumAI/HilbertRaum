@@ -237,8 +237,15 @@ export class VisionService {
       }
 
       this.set(jobId, { jobId, state: 'starting' })
+      // #637: a cancelled job stops waiting for the start it began, so a start that failed after
+      // every job left latched this instance with no run() here to see it. Discard it as the catch
+      // below does, but without the #117 cooldown: this job starts fresh rather than failing on a
+      // failure nobody waited for. If the fault is permanent, this job's own failure arms it.
+      if (this.runtime?.isStartFailed?.()) {
+        log.warn('Vision runtime discarded: its start failed after the job was cancelled', { jobId })
+        this.runtime = null
+      }
       const runtime = (this.runtime ??= this.attachRuntime(status))
-
 
       this.set(jobId, { jobId, state: 'analyzing' })
       const answer = await runtime.analyze({
@@ -297,7 +304,9 @@ export class VisionService {
     } finally {
       // #120 item 3: the busy slot is released HERE — after the (possibly aborted) runtime call
       // fully unwound — never in cancel(), so a new analyze can't run concurrently against the
-      // `--parallel 1` sidecar while the aborted request is still draining server-side.
+      // `--parallel 1` sidecar while the aborted request is still draining server-side. A job
+      // cancelled during the cold start unwinds at once (#637): it has sent no request, so the next
+      // job joins the same start and is still the only request on the sidecar.
       this.controllers.delete(jobId)
       if (this.activeJobId === jobId) this.activeJobId = null
     }

@@ -1490,8 +1490,10 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - A re-ask right after a Stop still waits for the cancelled request's batch, now for up to
         180 s.
 
-      **Out of scope.** The translation sidecar's reader has no watchdog at all; its 45-minute request
-      cap and one retry bound it at about 90 min. That is #605.
+      **Out of scope.** The translation sidecar's reader had no watchdog at all. #605 gave it these
+      clocks with its own budgets and restarts a hung sidecar: see the translation sidecar record's
+      "#605 amendment". The "about 90 min" first written here was wrong, because Electron's fetch ends
+      300 s of silence by itself; it was ≈ 50 / 45 / 10 min per window.
 
       **Real app** (2026-10-06, DesktopDiT, dev build over CDP, b11146 CPU rung, the 4B at ctx 4096).
       - A 3.4K-token question answered after 214.7 s, past the old 120 s.
@@ -3211,19 +3213,24 @@ Per-finding disposition (F-1…F-8):
   `--chat-template gemma` (`TRANSLATION_TEMPLATE_ARGS` — **REQUIRED**, TG-2 smoke finding: b9849
   crashes at STARTUP validating TranslateGemma's embedded template — the #20305 minja crash at init,
   even without `--jinja` — so we override it with the built-in legacy gemma template; safe because
-  `/completion` never applies the chat template). NO `--jinja`, NOT `CHAT_SERVER_ARGS`.
+  `/completion` never applies the chat template). NO `--jinja`, NOT `CHAT_SERVER_ARGS`. Since #605
+  also `--batch-size 512 --ubatch-size 512` (`TRANSLATION_BATCH_ARGS`: a progress frame per batch;
+  see the "#605 amendment" at the end of this record).
 - **Prompt in app code (`prompt.ts`), raw `/completion` (`completion.ts`).** The trained
   single-user-turn prompt is formatted in `buildTranslationPrompt` (our own `code → English name`
   map — the template's dictionary is unusable without jinja) and POSTed to the native `/completion`
   endpoint with `temperature 0` (greedy MT) + `stop: ["<end_of_turn>"]`; `readCompletionSSE` parses
-  the bare-object stream (NOT `readChatSSE`'s `choices[].delta` shape). Source text inside `{TEXT}`
+  the bare-object stream (NOT `readChatSSE`'s `choices[].delta` shape; since #605 with that reader's
+  liveness clocks and `return_progress`). Source text inside `{TEXT}`
   is translated, never obeyed (no "part n of m" scaffolding, D2). VERBATIM template reconciliation
   (plan §7 V1) is done by the `translategemma-smoke` harness against the server's `/props`.
 - **Lifecycle — a hybrid.** The vision RUNTIME-4 SOFT idle-teardown interlock (120 s default,
   `HILBERTRAUM_TRANSLATION_IDLE_MS`; re-armed only when the last in-flight window settles) bounds
   the ~10 GB co-residency window (plan §2 D9); the reranker `stop()` (permanent, quit) vs
   `suspend()` (soft, workspace lock → lazy restart) split + `tearingDown`/bind-race-forgiving
-  `startFailed` latches keep the session-held instance safe across lock/unlock. Availability-driven:
+  `startFailed` latches keep the session-held instance safe across lock/unlock. A cancel ends a
+  window's wait for a cold start without cancelling the start, and the start arms the idle clock
+  itself when it lands (#637, image-understanding record §6 "#637 amendment"). Availability-driven:
   `resolveModelByRole('translation')` → `resolveSidecarSelection` → `createSelectedTranslator`
   (null when binary/weights absent; no mock — plan O2). Composed in `compose-services.ts`, carried
   on `AppContext.translator`, stopped on quit (`shutdown.ts`) + suspended on lock
@@ -3251,7 +3258,8 @@ Per-finding disposition (F-1…F-8):
   (~3–4 tok/s tolerable for a background doc-task; GPU deferred, not rejected) — **superseded by
   issue #42 (2026-07-09)**, which pulled GPU forward: see the issue-#40/#42 bullet below. The
   per-window timeout was recalibrated to 45 min (a ~2,070-token full window at the observed-worst
-  ~1.1 tok/s is ~30 min; it stays — an upper bound is harmless on a fast GPU decode). **D9 (chat-during-translation relaxation):** KEEP serialization —
+  ~1.1 tok/s is ~30 min; it stays — an upper bound is harmless on a fast GPU decode; since #605 a
+  hung sidecar ends much sooner, see the "#605 amendment"). **D9 (chat-during-translation relaxation):** KEEP serialization —
   co-residency measured ≈13.2 GiB (translation ≈9.2 + a 4B chat + embedder); a 12B chat pushes the
   pair past a 16 GB machine, so two large models decoding at once is infeasible. **min-RAM (D10):**
   `recommended_min_ram_gb` reset to 17 (the §4 peak+3-headroom rule applied to the measured 13.24 GiB
@@ -3382,6 +3390,10 @@ Per-finding disposition (F-1…F-8):
   lock/quit; `tests/integration/sidecar-teardown-abort.test.ts` bounds all four at < 5 s under
   production defaults — typically one health-poll, ≈ 5 s worst case with the 3 s probe timeout
   and the 2 s SIGTERM grace — where the three used to take the full 180 s and then latch.)*
+  *(#635: a caller's own Stop is the other half. It ends only that caller's wait for the start
+  (`waitUnlessAborted`), never the start, which other callers may share — the embedder and the
+  reranker since 2026-10-07 (`rag-design.md` §12.4 "#635 amendment"), vision and translation too
+  (#637, image-understanding record §6 "#637 amendment").)*
   **(#160)** the F-2
   retry classification splits the per-request timeout by tokens-flowed (live-decode timeout =
   deterministic, no retry; wedged = one retry) in BOTH consumers; the view paste is bounded by
@@ -3404,6 +3416,105 @@ Per-finding disposition (F-1…F-8):
   text is ≈ 1,798 input tokens plus the scaffold, **under** TranslateGemma's trained 2K input;
   at 690 words it was ≈ 2,080, just over. The cost is about 7 % more windows per document. The
   45-min per-window timeout is unchanged (a ~2,000-token window at ~1.1 tok/s is still ~30 min).
+- **#605 amendment (2026-10-08) — liveness clocks for the translation stream; a hung sidecar is
+  restarted.** Before, `readCompletionSSE` had no idle watchdog: only the 45-min request cap and
+  one retry bounded a window. The issue's "about 90 min" was wrong, because Electron's fetch
+  (undici 7.29.1) ends 300 s of byte silence or header wait by itself (measured under #594 and
+  #607). The real cost per window:
+  - a prefill wedge with pings ≈ 50 min: the cap, then the retry queued behind the stuck slot until
+    undici's header limit;
+  - a decode wedge 45 min: timed out mid-decode, so not retried (#160);
+  - a frozen process ≈ 10 min.
+
+  Nothing restarted the sidecar, so every later window of a document waited ≈ 10 min more. All that
+  time the doc-task lane refused chat, other document tasks, the local API, benchmark and skill runs
+  and the engine update. The 12B also stayed resident, since the idle teardown cannot fire mid-job,
+  and a GPU-posture sidecar kept the card from the reranker (`gpuOccupied`).
+
+  **Facts**, verified at both pins (upstream source at `7fe450e1` / `799fcc04`, and captures on
+  DesktopDiT):
+  - The native `/completion` stream carries `prompt_progress` when the request sets `return_progress`
+    (`server_task_result_cmpl_partial::to_json_non_oaicompat`). The frame carries no text (`content ""`,
+    `tokens [0]`). One comes with the headers, then one after every `n_batch` decode (`post_decode`).
+  - The default `n_batch` is **2048** (`common.h`; the physical `n_ubatch` is 512). So a window of up
+    to ~1,950 prompt tokens prefilled as ONE batch, with nothing between 0 % and 100 % (captured:
+    1,263 tokens, the 100 % frame at 29.9 s).
+  - `--batch-size 512` keeps the compute, because the physical batch is 512 either way. Prefill:
+    29.9 / 28.6 s at the default, 30.8 / 26.3 s at 512 (the 4B, 1,263 tokens, the CPU posture). A 14B
+    took 33.6 / 36.1 s per 512-token batch on the i7-8700's CPU.
+  - Every decoded token sends a frame, but its `content` can be **empty**: the server holds text back
+    while it may be the start of the stop string (captured: `<end_of_turn>` as five text-less frames).
+    Hybrid / SWA models take the last few prompt tokens apart for a context checkpoint (1018 → 1022).
+  - Pings start only after the headers (`set_next`). Before them, the handler waits for the first
+    result.
+
+  **As built** (owner calls 2026-10-08; the first wording of the budget questions was unclear to the
+  owner and was re-asked in plain words):
+  - `TRANSLATION_BATCH_ARGS` (`--batch-size 512 --ubatch-size 512`) goes into `translationServerArgs`,
+    so the manual smoke follows. Every window sends `return_progress: true`.
+  - `readCompletionSSE` races each read with the chat reader's `readWithIdleTimeout`, on its own
+    budgets (`TRANSLATION_IDLE`):
+    - the **process clock**, 120 s: any byte re-arms it, pings included;
+    - the **compute clock**, **10 min** per progress frame (owner). The slowest per-batch estimate is
+      ~2.4 min on the slowest laptop measured, ~8 min under memory pressure;
+    - the **decode clock**, **120 s** (owner): it starts at the first token FRAME (text or not), and
+      only model output re-arms it — any data, the #594 rule — never pings.
+  - The `/completion` headers wait `HEADER_WAIT_MS`, 180 s (chat's value). The 45-min cap stays as
+    the outer bound for a decode that is alive but too slow (#160, not retried).
+  - Either error is chat's `RuntimeUnresponsiveError`. `TranslationRuntime.restartHung` then stops
+    the hung child as a soft teardown (`idleTeardownPromise`): a racing translate waits for the kill,
+    and a lock or quit awaits it. The posture is kept (owner): a hang does not latch the session to
+    the CPU, unlike a GPU-posture crash.
+  - Both consumers retry the window once, tokens or not. The error is not a `TimeoutError`, so the
+    #160 rule does not apply. The existing `runtimeFailed` copy and the failed-window notice fit
+    unchanged.
+  - **Requests take the one slot in turn** (`takeSlot`, from the code review). A document
+    translation can start while a Translate job runs (`jobs.ts` D9), and the two used to queue at
+    the `--parallel 1` server. There the second request's wait for its headers covered the first
+    one's whole window, which the header wait would read as a hang and so stop a healthy sidecar
+    under both. Now they queue in the app, and a cancel ends a queued window's wait at once.
+
+  **Tests:**
+  - `translation-sse-progress-fixture.test.ts` replays four real captures (b11146 legitimate
+    prefill, prefill wedge, decode wedge; b9849 legitimate) at the production budgets.
+  - `translation-completion.test.ts` "liveness clocks" covers a silent process, held-back tokens and a
+    Stop mid-read.
+  - `translation-runtime.test.ts` "#605" covers the restart, the header wait, the one-slot queue,
+    and the argv and body.
+  - The #160 neighbours in `translate-ipc` and `doctasks-translation` pin the retry.
+
+  **Real app** (2026-10-08, DesktopDiT): the dev build over CDP, b11146 in the CPU posture, and the
+  qwen3.5-9b as a stand-in in the translation slot (there are no TranslateGemma weights on that
+  machine). "Before" is master's reader and runtime swapped in.
+  - **Whole process frozen** 3 s into a 400-word Translate job.
+    - Master failed the job 609 s after the freeze: `terminated` at 301 s, then the retry's `fetch
+      failed` at +306 s. The frozen process stayed the sidecar.
+    - The fix ended the attempt 120.0 s after the last byte and had a fresh sidecar up 6.3 s later.
+      The retry finished the translation.
+  - **One compute thread suspended mid-decode**, pings still flowing.
+    - Master was still waiting 321 s later.
+    - The fix ended the attempt 120.0 s after the last token, and the retry finished.
+  - **One compute thread suspended mid-prefill**: the fix ended the attempt 600.0 s after the 0 %
+    frame, although the pings kept coming. The retry finished.
+  - **A three-window document translation**, the sidecar frozen 8 s in: window 1 ended at 120 s.
+    Its retry and windows 2–3 ran on the fresh sidecar, and the task finished with no failed
+    window.
+  - **A Translate job and a document translation started together** (after the code review): the
+    document's first window waited in the app for 919 s behind a 640-word Translate window, slowed
+    by a test run beside it. No hang was declared and no sidecar restarted; both finished on one
+    sidecar, the document with no failed window. Without the queue it would have been declared
+    hung at 180 s.
+
+  **Accepted:**
+  - A hang that recurs on a fresh sidecar for the same window fails that window twice, at
+    ≈ budget + cold start each. A document marks it and moves on.
+  - A window sent right after a cancel waits for the cancelled request's current 512-token batch.
+    When that batch takes longer than 180 s (a slow laptop under memory pressure), a healthy
+    sidecar is restarted: one cold load, then the retry. The header wait must stay under
+    Electron's own 300 s limit, or a pre-header hang would end as a plain "fetch failed" and
+    restart nothing.
+  - The compute budget rests on a 14B proxy and scaling: no TranslateGemma prefill has been measured
+    on the slowest laptop.
 
 ### §-anchor legend (historical plan citations)
 
@@ -4593,7 +4704,8 @@ graphics card".
 - **Embedder.** Still latches, so a refused engine is not respawned on every import. Ingestion
   stores the canonical, display-mapped text: `main.ingest.engineLibraryMissing` (interpolated
   `{library}`) or `main.ingest.engineCannotRun`. A document question maps the error to
-  `main.engine.cannotRun`.
+  `main.engine.cannotRun`. #634 gives the search model's other failures (a timeout, a damaged
+  weight file, a crash) the same treatment by kind: `rag-design.md` §12.4 "#634 amendment".
 - **Reranker and translation.** No GPU-fallback latch, no CPU retry; they latch. Translation
   reports `engineCannotRun` instead of the "free memory" copy.
 - **Vision.** Reports `engineCannotRun` (it used to say "pick another model") and repeats it
@@ -4639,7 +4751,9 @@ until a lock/unlock.
 create), before the auto-start reads the GPU flags. It clears a loader-caused `gpuAutoDisabled`
 together with its `gpuLastError`. That flag has no machine stamp, so it would otherwise have followed
 the drive to every computer. It also rewrites failed rows still holding the raw line
-(`rewriteEngineFailureRows`). Both steps are idempotent and admission-gated.
+(`rewriteEngineFailureRows`). Both steps are idempotent and admission-gated. #634 adds a third
+after them, for rows holding the search model's raw failure (`rewriteSearchModelFailureRows`,
+`rag-design.md` §12.4 "#634 amendment"); a row this classifier claims keeps #530's text.
 
 ### §6 Surfaces
 
@@ -5188,7 +5302,9 @@ a download that verified while locked still reports `done` and fires `onModelIns
 `DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified".
 A job reaching `done` additionally fires `DownloadManagerDeps.onModelInstalled` → wired to
 `AppContext.onModelInstalled`, which re-runs the startup-frozen availability selectors — the
-translation sidecar today (issue #40; the "Translation sidecar" record has the details).
+translation sidecar today (issue #40; the "Translation sidecar" record has the details). Since #634
+it also re-arms the embedder's failed-start latch when the installed model is the embedder's own,
+so a re-downloaded damaged e5 file works without a lock/unlock (`rag-design.md` §12.4).
 No update checks, no catalog (only manifests already on the drive), no background anything;
 a sanctioned download session is by definition not `offlineMode`. Gate semantics +
 licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PRIVACY.md`.
@@ -6669,7 +6785,7 @@ deleted at S13 close — text in git history) holds the baseline tables; this is
 **The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
 deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
 the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
-no-user-data corpus of 160 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+no-user-data corpus of 161 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
 through the **production** `suggestSkillsForTurn` / `resolveAutoFireSkill` on a real temporary
 database with the committed app skills reconciled (`tests/eval/skill-triggers.ts` + `.test.ts`),
 reporting precision/recall + a confusion matrix. Still no model and no network. The
@@ -6701,7 +6817,7 @@ below); and `tp-redaction-en-sensitive-blackout-01` and `tp-sharesafe-de-sensibl
 and a check before sharing that only the bare "sensitive data" / "sensible Daten" offered Redaction on,
 which the labellers accepted, until #604: the accepted cost of that decision, see below). The GDPR row
 `tp-redaction-en-02` left the list in #583, when "remove all personal data" joined the vocabulary.
-Measured on the 160 rows: suggestion precision 99.1%, recall 96.4% (107 correct, 1 wrong, 4
+Measured on the 161 rows: suggestion precision 99.1%, recall 96.4% (108 correct, 1 wrong, 4
 missed), confusion set 0 wrong / 0 missed. The
 printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
 (all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
@@ -6716,7 +6832,7 @@ never auto-fire (the U4 narrowing and the #130 doc-signal gate). From 2026-10-05
 such rows: German share-safe questions with "sensible Daten" (`tp-sharesafe-de-01`, `-02`) fired
 document-redaction's read-only scan, because the keyword belonged to both skills and only redaction
 auto-fires. #604 ended them (below): the map is empty and the cap is 0. Measured auto-fire precision is
-100% (34 correct, 0 wrong, 77 missed, recall 30.6%) over all rows. Auto-fire recall is low by design:
+100% (34 correct, 0 wrong, 78 missed, recall 30.4%) over all rows. Auto-fire recall is low by design:
 rows labelled with the five skills that never auto-fire count as misses.
 
 **#604: "sensible Daten" / "sensitive data" stop offering (owner decision 2026-10-06).** The #608
@@ -6800,6 +6916,38 @@ matches. A co-occurrence rule (a sending word plus a permission word, measured r
 right answer net and made 7 wrong suggestions: three legal questions, two sending tasks, a question
 about what a contract allows, and a sharing question with no document selected. Nothing changed; the
 route to better recall is the same §6 path.
+
+**#582: English and German compare requests route alike (owner decision 2026-10-07).** With What-changed
+active at any document count other than two (one document, three, a whole Library), `applies()` is false,
+so `intends()` (the skill's routing vocabulary) decides between the "select exactly two documents" answer
+and the ordinary engines (SKA-8, §39). German "Fasse die Unterschiede zusammen" matched `unterschiede` and
+got that answer. English "summarize the differences" matched nothing. The task router already reads both as
+a compare (`COMPARE_RE`), so the English turn became a top-k answer under the compare fence. The shipped
+0.1.59 build with a 4B model showed the cost: over one draft it invented a "Document B", and over three
+drafts it compared passages mixed across all of them. The owner chose to route both languages:
+- `differences` is now an offer and route term like `unterschiede`.
+- Route-only, English: `compare`, `comparison`, `changes`, `changed`, `old version`, `new version`, and the
+  noun `the change` / `a change`. A bare `change` is mostly the verb ("How do I change my password?"), which
+  German `ändere`/`ändern` does not route either.
+- Route-only, German: `geändert`, `geänderte(n)`, `verändert`, `veränderte(n)` and `veränderung(en)`.
+  German puts the participle last, so `was hat sich geändert` missed "Was hat sich am Vertrag geändert?".
+- Route-only, both languages: the rest of what `COMPARE_RE` reads as a compare: `difference`, `versus`, `vs`,
+  `diff`, `unterschied`, and `vergleich` with `vergleiche` / `vergleichen`.
+
+The German forms are listed word by word, because a stem would also catch "unverändert" (unchanged),
+"unterschiedlich" (various) and "Vergleichs…" compounds (a legal settlement), none of which English routes.
+`compare`, `difference` and `unterschied` replaced the phrases they cover (`compare these`, `compare the
+two`, `difference between`, `unterschied zwischen`), and the offer phrase `differences between` went with
+`differences`. The cost: while What-changed is active at the wrong count, more questions with a
+compare or change word get "select two", in a Library chat too. German `änderung` already reached that far.
+Accepting the `differences` offer, or a classifier offer (#133 counts the routing answer as engaging), over
+one document also leads to "select two". The offer changes only for `differences`. What-changed never
+auto-fires, and its install id loses every equal-score tie, so it cannot take another skill's offer.
+`skills-analysis-whole-doc.test.ts` pins 23 request pairs side by side, and each English request must get
+the same answer as its German counterpart. `rag-skill-analysis.test.ts` runs "summarize the differences"
+through the real W2 pre-pass. Corpus row `tp-whatchanged-en-03` is the English twin of
+`tp-whatchanged-de-02`. Left open: "amendments" / "modifications" route in neither language (a recall gap,
+not a language gap).
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
@@ -6921,6 +7069,9 @@ tolerantly (a stringify fault degrades to NULL, never blocks the append) and `ro
 falls back to `{ mode:'relevance' }` so every pre-migration message and every non-re-routed turn
 renders byte-identically (R5). The skill-analysis path stamps a real `{ mode:'extract', chunksCovered,
 chunksTotal, fullyChunked }`, where `fullyChunked` gates the "whole document" meter wording.
+(Later additive fields: D72 stamps `relevance` with real counts on the relevance path; #643 adds
+`labelledExcerpts` to a `capped` answer whose prompt showed every section under its `[Sn]` label —
+rag-design §14.4 "#643 amendment". Old rows stay as written.)
 
 **Chat routing + the refuse gate (in `registerRagIpc.askDocuments`).** After the turn skill resolves +
 scope/filename auto-scope, and BEFORE the `routeQuestion`/`generateGroundedAnswer` decision, the turn
@@ -7948,7 +8099,7 @@ lives in **this section**. This ledger is the durable index — resolve a code c
 | **FE-1** (Low) | 4 | **fixed** — `ChatScreen` gained the FE-4-class `mountedRef` (gating the attach-poll + stream-flush setStates) + a flush-timer `clearTimeout` on unmount; the main-side stream is **not** torn down (recovered via `getActiveStream`) — guard-only | arch renderer record (FE-4 bullet, "Extended (full audit 2026-06-29, FE-1)") |
 | RAG-1 (Low) | 4 | **fixed** — both fusion input lists carry a `chunkId` tiebreak (vector sort `score desc, chunkId asc`; FTS `ORDER BY bm25(...), chunks_fts.chunk_id`) so equal-score ties are total/reproducible across SQLite versions; resident-cache equivalence oracle aligned | rag-design §11 per-list tie-break note |
 | RAG-2 (Low) | 4 | **fixed** — `truncateSnippet` counts AND slices by code point (`[...trimmed]`) so a boundary-straddling astral char no longer leaves a lone surrogate in a citation snippet (display-only) | source comments (`snippet-truncate.test.ts`); this ledger |
-| REL-4 (Low) | 4 | **fixed** — `combineSignals` owns an `AbortController` + explicit `setTimeout` and returns `{ signal, clear }`; the three embed/rerank/vision call sites `clear()` in `finally` so an early completion no longer leaves a 120 s/300 s timer + `any`-listener alive (behaviour preserved: caller-abort + timeout still abort, `TimeoutError`, unref'd) | source comments (`combine-signals.test.ts`); this ledger |
+| REL-4 (Low) | 4 | **fixed** — `combineSignals` owns an `AbortController` + explicit `setTimeout` and returns `{ signal, clear }`; the three embed/rerank/vision call sites `clear()` in `finally` so an early completion no longer leaves a 120 s/300 s timer + `any`-listener alive (behaviour preserved: caller-abort + timeout still abort, `TimeoutError`, unref'd). *#607: the embed site lost this on 2026-06-30, when the context-overflow retry (`dbfee90f`) moved the `clear()` to the response headers; restored, see `rag-design.md` §12.4 "#607 amendment".* | source comments (`combine-signals.test.ts`); this ledger |
 | **PERF-1** (Med, the scalability item) | 5 | **fixed** — the resident decoded-vector cache is now **incremental**: `invalidate` marks dirty (no longer drops the map); the next read reconciles via an ids-only scan (drop gone ids) + a point decode of only genuinely-new chunk ids — a pure-add of K into N decodes K, not N. The `(count, maxRowid)` signature is **retained** as the self-healing backstop (out-of-band write → full rebuild); `purge` still drops the map on lock | arch "Performance — design record … Wave P4" (Incremental-delta + PERF-1 Phase-5 note) |
 | DOC-1 (Med) | 6 | **fixed (docs)** — `collections.ts` header no longer claims the *shipped* C2 delete-with-documents is "left out of v1"; repointed from the wrong `rag-design §13.7` to **architecture.md §1 C2** (the `projectOnlyDocumentIds` predicate is in the same file) | code comment → arch "Document organization — design record" §1 C2 |
 | DOC-3 (Low) | 6 | **fixed (docs)** — `bge-reranker-v2-m3.yaml` `size_on_disk_gb` 1.08 (GiB mislabel) → **1.16** (decimal GB, matching `size_bytes 1159776896 / 1e9` and the other twelve manifests); `model-policy.md` "~1.08 GB" → "~1.16 GB" | model-manifest + model-policy.md reranker row |
@@ -8655,7 +8806,8 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
    extract, not top-k) — a separate chat-path composition, distinct from `intends()`; (SKA-8) `intends()` —
    the W2 count-mismatch routing predicate — was decoupled from `applies()` and made VOCABULARY-shaped for
    the whole-doc/compare handlers too, so a general/off-topic question at multi-doc scope falls through to
-   the ordinary engines instead of a "pick one document" dead-end; (SKA-12) the needle downgrade **dropped
+   the ordinary engines instead of a "pick one document" dead-end (#582 later made what-changed's compare
+   vocabulary route English and German alike: §18 "#582"); (SKA-12) the needle downgrade **dropped
    the "AND no tree exists" conjunct** — a needle prefers top-k whenever the whole read would truncate, tree
    or no tree (the tree rescues DELIVERABLES only); (SKA-23) the needle downgrade is evaluated **before** the
    D45 fully-chunked refusal for grounded-whole-doc handlers (a downgraded needle makes no whole-document
@@ -11942,6 +12094,86 @@ As built in `runtime.ts`:
   no child orphans on quit; the timer is `unref()`-ed so it never blocks a clean exit.
 - Default **120 000 ms** (tuned V5 — model-benchmarks §8.3), env `HILBERTRAUM_VISION_IDLE_MS`.
 
+**#637 amendment (2026-10-07) — a cancel ends the wait for a cold start, not the start; the start
+arms the idle clock.** It covers vision and translation, which share this interlock (translation
+record "Lifecycle — a hybrid").
+- **What was wrong.** `analyze()` and `translate()` awaited the shared lazy start before the job's
+  signal reached anything: the signal first met `combineSignals` at the request. A cancel during a
+  start that hung waited up to the 180 s health budget (translation's GPU→CPU ladder: two of them).
+  - Vision: `VisionService` frees its busy slot only when `run()` unwinds (#120 item 3), so a new
+    analysis was refused "busy" until the start landed.
+  - Translation: the Translate view frees its slot at cancel, but a cancelled document translation
+    stayed `running` until its window unwound. That kept `hasActiveTask()` true, so chat was refused
+    (`DOC_TASK_BUSY_MESSAGE`) and the view answered `docTaskBusy`.
+  - A soft idle teardown that a translate waits out first (M5) is bounded by the 2 s kill grace.
+- **The trap the fix had to close.** A job's `finally` arms the idle clock when `inFlight` reaches 0,
+  and `armIdleTimer` returns early while `starting` is set. A job that stops waiting therefore arms
+  nothing, and a start that lands after every job left would stay resident until lock or quit: the
+  vision model, or ~10 GB of translation model.
+- **As built.**
+  - Both `ensureStarted`s race the shared start with the caller's signal (`waitUnlessAborted`, #635),
+    and translation races its wait for a soft idle teardown the same way. The job rejects with
+    `signal.reason`, so both consumers read a cancel from their aborted signal, as before.
+  - The start is never cancelled: the next job joins it. Only lock and quit cancel a start
+    (`startAbort`, #244), and the engine update's pause does the same (`suspend()` /
+    `releaseRuntime()`).
+  - **The start's own settle calls `armIdleTimer()`**, after `starting` is cleared. While a job still
+    waits, `inFlight > 0` makes it a no-op; when every job left, it arms the clock, so an abandoned
+    start that lands is torn down after the idle window, as after a finished job.
+  - `analyze()` / `translate()` refuse a signal that is already aborted before they touch anything, so
+    a stopped caller starts nothing and does not reset the idle clock.
+  - **`VisionService`** discards a runtime whose start failed after its cancelled job left, before it
+    reuses the instance, and logs that it did. `run()`'s catch, which discards a start-failed runtime
+    (#117), never sees that failure. Without the discard, the next job failed on a failure nobody
+    waited for. The cooldown (5 s) is not armed for it, so the next job gets one fresh start; if the
+    fault is permanent, that job's own failure arms it.
+  - **Translation's CPU rung runs only while a translate waits** (`inFlight > 0`). A GPU attempt that
+    fails after every translate left still arms the session CPU latch, but loads no ~10 GB CPU rung
+    for nobody, and its failure is not latched: the next translate starts on the CPU directly.
+  - A translation start that fails on its last rung after its job left still arms the session-long
+    `startFailed` latch (F-7), so the next translation fails fast with the "restart / free memory"
+    copy. That is unchanged: before #637 the cancelled job ended `cancelled` too, and the next job hit
+    the same latch. Vision differs because its service rebuilds a failed runtime (#117).
+  - The #120 single-slot rule holds: a job cancelled during the start has sent no request, so the
+    next job is still the only request on the `--parallel 1` sidecar.
+- **Considered, not built: cancelling the start when its last waiter leaves.** Every vision and
+  translation caller carries a signal, so this was possible. It was rejected because a cancel is
+  often followed by a new job (another question, another language), which then joins the start
+  instead of paying for a second cold load. The cost of an abandoned start is bounded: it loads, then
+  sits for one idle window (2 min), recorded in `known-limitations.md`.
+- **Tests.** The cold-start fake is shared: `tests/helpers/loading-sidecar.ts` (`/health` 503 until
+  loaded; the #635 embedder and reranker rows use it too), with the `until` / `within` hang detectors
+  in `tests/helpers/hang-budget.ts`.
+  - `vision-runtime.test.ts`: a cancel during a start that never gets healthy ends that analyze with
+    its own reason while an analyze sharing the start is answered (one spawn, the child alive); idle
+    row (h): the abandoned start arms the clock when it lands and its fire tears it down; a stopped
+    analyze spawns nothing; `VisionService` frees the slot at once and the next job joins the start;
+    a start that fails after its job left does not fail the next job.
+  - `translation-runtime.test.ts`: the same start, idle and stopped-caller rows; a cancel during the
+    M5 idle-teardown wait starts no second child; a GPU attempt that fails after every translate left
+    walks no CPU rung (the engine spawn gate holds a rung that would start, so a `suspend()` would
+    wait for it) and the next translate starts on the CPU.
+  - All 10 fail on master: the start waits by their hang detectors, the stopped callers by a spawn,
+    the idle-teardown wait by a second child. One mutation per piece (the settle's arm, the discard,
+    the CPU-rung condition, each `throwIfAborted`, the idle-teardown race, and "cancel the start on a
+    cancel") reddens exactly its own rows.
+- **Real app** (2026-10-07, DesktopDiT, dev build, an encrypted vault; E:'s b9849 runtime, Qwen2.5-VL
+  3B, and the 4B standing in for TranslateGemma under its file name). A watcher suspended the sidecar
+  the moment it spawned (`NtSuspendProcess`), the job was cancelled 4 s in, and the sidecar was
+  thawed 20.8 s after the cancel. Idle windows set to 15 s.
+
+  | Frozen start | Master | Fix |
+  |---|---|---|
+  | Vision: a new analysis admitted after the cancel | 28,818 ms (453 "busy" refusals, admitted only after the thaw) | 30 ms, and it joined the frozen start |
+  | Document translation: the task `cancelled` after the cancel | 23,869 ms (after the thaw) | 5 ms |
+
+  On the fix, the next analysis answered "STOP 637" from the image once the start was thawed, with
+  one vision sidecar. An abandoned start with nobody waiting landed and exited one idle window later
+  (translation 15.6 s, vision 15.9 s after `sidecar_healthy`).
+  - **Re-run on the final code** (after the code-review changes above): 32 ms and 6 ms. A frozen GPU
+    attempt killed after its task was cancelled logged the CPU fallback, and no translation sidecar
+    started in the 15 s after. The next translation's sidecar started with `--device none`.
+
 ### §7 Security & privacy posture (additive within the boundaries)
 
 Renderer stays sandboxed (no Node/network); main owns all file I/O + the sidecar call. **CSP
@@ -12509,6 +12741,9 @@ writes a `.print.tmp.html` file beside the destination. `print-pdf.ts` holds the
   `fetch` fails ("scheme not supported"), XHR is blocked by CORS, and an iframe loads with the
   parent reading `null`, but such a request uses up the one-shot page: a script that already
   had the token could fail that print, never read it.
+- **Open.** The real-Electron smoke has not run on the stock (fuses-on) binary: Smart App Control
+  refused that binary on the day. (Moved here from the retired BUILD_STATE 2026-10-03 #563 entry on
+  2026-10-12.)
 
 ### §-anchor legend (historical spec/plan citations)
 

@@ -274,8 +274,9 @@ function parseSseLine(line: string): {
   return {}
 }
 
-/** #594: does this SSE text hold anything but blank lines and comments (`:`, the keep-alive ping)? */
-function isModelOutput(text: string): boolean {
+/** #594: does this SSE text hold anything but blank lines and comments (`:`, the keep-alive ping)?
+ *  Shared with the translation reader (`readCompletionSSE`, #605). */
+export function isModelOutput(text: string): boolean {
   return text.split('\n').some((line) => {
     const t = line.trim()
     return t !== '' && !t.startsWith(':')
@@ -408,6 +409,23 @@ export interface IdleWatchdog {
   /** Max wait between chunks once streaming has started. SSE comment pings do not count (#594). */
   streamMs: number
 }
+/**
+ * Which clock ends the next read (#594, #598). Once output has started, the stream budget, less
+ * the waiting time since the last output; before it, the process clock (re-armed by every read,
+ * so always whole) or the compute clock, whichever runs out first. The compute clock counts once
+ * the server has sent a progress event. Shared by `readChatSSE` and the translation reader
+ * (`readCompletionSSE`, #605).
+ */
+export function nextReadBudget(
+  idle: IdleWatchdog,
+  s: { started: boolean; quietMs: number; sawProgress: boolean; stalledMs: number }
+): { waitMs: number; budget: { ms: number; what: string } } {
+  if (s.started) return { waitMs: idle.streamMs - s.quietMs, budget: { ms: idle.streamMs, what: 'output' } }
+  if (s.sawProgress && idle.progressMs - s.stalledMs < idle.prefillMs) {
+    return { waitMs: idle.progressMs - s.stalledMs, budget: { ms: idle.progressMs, what: 'prompt progress' } }
+  }
+  return { waitMs: idle.prefillMs, budget: { ms: idle.prefillMs, what: 'data at all (pings included)' } }
+}
 const PREFILL_IDLE_MS = 120_000
 const PROGRESS_IDLE_MS = 600_000
 const STREAM_IDLE_MS = 30_000
@@ -438,9 +456,10 @@ function abortReadError(): Error {
  * read's own error. A user Stop wins first: an aborted `signal` rejects with an `AbortError` so the
  * partial persists exactly as today — a hang is NEVER converted to an abort or vice-versa. A `settled`
  * guard makes the first outcome authoritative (no double-settle). `budget` is the clock the error
- * names: `waitMs` is only what is LEFT of it after pings (#594, #598).
+ * names: `waitMs` is only what is LEFT of it after pings (#594, #598). The translation reader
+ * (`readCompletionSSE`) races its reads the same way (#605).
  */
-function readWithIdleTimeout<T>(
+export function readWithIdleTimeout<T>(
   reader: ReadableStreamDefaultReader<T>,
   waitMs: number,
   budget: { ms: number; what: string },
@@ -558,18 +577,7 @@ export async function* readChatSSE(
       if (signal?.aborted) return
       // Which clock ends this read: the stream budget once a chunk landed; before that the process
       // clock (re-armed by every read, so always whole) or the compute clock, whichever runs out first.
-      let waitMs: number
-      let budget: { ms: number; what: string }
-      if (sawChunk) {
-        waitMs = idle.streamMs - quietMs
-        budget = { ms: idle.streamMs, what: 'output' }
-      } else if (sawProgress && idle.progressMs - stalledMs < idle.prefillMs) {
-        waitMs = idle.progressMs - stalledMs
-        budget = { ms: idle.progressMs, what: 'prompt progress' }
-      } else {
-        waitMs = idle.prefillMs
-        budget = { ms: idle.prefillMs, what: 'data at all (pings included)' }
-      }
+      const { waitMs, budget } = nextReadBudget(idle, { started: sawChunk, quietMs, sawProgress, stalledMs })
       const waitStart = performance.now() // monotonic: a wall-clock step must not eat the budget
       const { done, value } = await readWithIdleTimeout(reader, waitMs, budget, signal)
       if (done) break

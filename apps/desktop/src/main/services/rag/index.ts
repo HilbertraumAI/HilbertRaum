@@ -856,6 +856,21 @@ function sourceMeta(chunk: RetrievedChunk): string {
 /** A document's whole size in the SAME token unit as `retrieveWholeDocument` (persisted token_count
  *  scaled by TOKENS_PER_WORD), so the compare budget can be split by real size. */
 export function documentApproxTokenTotal(db: Db, documentId: string): number {
+  return deOverlappedTokenTotal(db, documentId, Number.POSITIVE_INFINITY)
+}
+
+/**
+ * #643: does the WHOLE document fit `budgetTokens` — the same test `retrieveWholeDocument` applies, so a
+ * `true` here means that read comes back untruncated. Stops reading at the first chunk past the budget, so
+ * the per-question check on a 1,000-section document reads a budget's worth of rows, not all of them.
+ * `perSectionTokens` charges each section extra (the `[Sn] File: … | Page: …` line, see
+ * `WHOLE_READ_SECTION_FRAMING_TOKENS`); 0 is `retrieveWholeDocument`'s own text-only test.
+ */
+export function documentFitsWholeRead(db: Db, documentId: string, budgetTokens: number, perSectionTokens = 0): boolean {
+  return deOverlappedTokenTotal(db, documentId, budgetTokens, perSectionTokens) <= budgetTokens
+}
+
+function deOverlappedTokenTotal(db: Db, documentId: string, stopAbove: number, perSectionTokens = 0): number {
   // ORDER BY chunk_index for read-shape parity with `retrieveWholeDocument`: the whole-document read
   // de-overlaps consecutive same-segment chunks and charges the de-overlapped text against the budget
   // (audit §2.2), so the compare-split sizing must measure the SAME de-overlapped totals — otherwise a
@@ -863,12 +878,14 @@ export function documentApproxTokenTotal(db: Db, documentId: string): number {
   // actually occupies. The scan is therefore order-dependent (each chunk compared to its predecessor).
   const rows = db
     .prepare('SELECT text, page_number, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index')
-    .all(documentId) as unknown as Array<{ text: string; page_number: number | null; section_label: string | null }>
+    .iterate(documentId) as unknown as Iterable<{ text: string; page_number: number | null; section_label: string | null }>
   let total = 0
   let prev: { text: string; page_number: number | null; section_label: string | null } | null = null
   for (const r of rows) {
     const text = prev && sameSegment(prev, r) ? deOverlapAgainstPrev(prev.text, r.text) : r.text
-    total += Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
+    total += Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD) + perSectionTokens
+    // Leaving the loop early resets the statement (the iterator's return()).
+    if (total > stopAbove) break
     prev = r
   }
   return total
@@ -1561,9 +1578,11 @@ export interface GroundedAnswerOptions {
    * Skill-aware WHOLE-DOCUMENT answer (skill-whole-doc engine, Wave 2). When set, the grounded
    * context is the named document read IN ORDER (not top-k retrieval), capped to the context
    * budget, and the persisted coverage is `capped` ("covers the whole document" / "covers the
-   * beginning" when truncated) instead of `relevance`. Set ONLY by a `grounded-whole-doc` analysis
-   * handler over its single in-scope, fully-chunked document; the caller has already enforced those
-   * preconditions (the D45 fully-chunked refusal still gates this in `registerRagIpc`).
+   * beginning" when truncated) instead of `relevance`. Set by a `grounded-whole-doc` analysis
+   * handler over its single in-scope, fully-chunked document (the D45 fully-chunked refusal still
+   * gates this in `registerRagIpc`), and since #643 / #642 for any top-k-bound turn over ONE fully
+   * chunked document that fits the budget, or a summary ask whose document has a ready deep index
+   * (`registerRagIpc`'s `wholeReadDocumentId`). The caller has enforced those preconditions.
    */
   wholeDocument?: { documentId: string }
   /**
@@ -1598,6 +1617,16 @@ export interface GroundedAnswerOptions {
    * (the byte-unchanged path). App-authored text; it carries no content and needs no model call.
    */
   answerPrefix?: string
+  /**
+   * #641: an app-authored notice that leads the answer, after `answerPrefix`, ONLY when the
+   * relevance retrieval left part of the scope out — fewer distinct document sections reached
+   * the prompt than `scopeChunkTotal`, the section count of the documents in scope (Infinity
+   * when one of them was never fully chunked: no answer can have read all of it). The #37/#38
+   * deep-index hint and the #641 partial-answer label ride it: decided before retrieval, the hint
+   * told a 2-section letter whose answer had read both sections that the answer was partial.
+   * The whole-document and compare paths read the documents themselves and ignore it.
+   */
+  partialCoverageNotice?: { text: string; scopeChunkTotal: number }
   /**
    * Knowledge packs (ZIM wave): the query-time archive arm for this conversation's scope,
    * built by the IPC layer from `RetrievalScope.packIds` (absent/empty scope ⇒ undefined —
@@ -1644,6 +1673,18 @@ export function wholeDocumentBudgetTokens(
  */
 const RETRIEVAL_FIT_SAFETY = 1.5
 
+/** Approx tokens of one excerpt's `[Sn] File: <title> | Page: N` line + quotes, per chunk. */
+const EXCERPT_LINE_FRAMING_TOKENS = 48
+
+/**
+ * #643: what one section's `[Sn] File: …` framing costs a whole read, in the budget's units — the
+ * relevance path's per-excerpt allowance taken through the same `RETRIEVAL_FIT_SAFETY` divisor.
+ * `retrieveWholeDocument` charges text only, so a document of many short sections (a slide deck, one
+ * section per page) could pass a text-only fit and still crowd the window; the small-document read
+ * (`registerRagIpc`'s `wholeReadDocumentId`) charges this per section before it chooses a whole read.
+ */
+export const WHOLE_READ_SECTION_FRAMING_TOKENS = Math.ceil(EXCERPT_LINE_FRAMING_TOKENS / RETRIEVAL_FIT_SAFETY)
+
 /**
  * The excerpt-block budget for the RELEVANCE (top-k) path, clamped to the REAL launched context
  * window (§L0) — not just the fixed `ragMaxContextTokens` setting. Mirrors `wholeDocumentBudgetTokens`
@@ -1658,7 +1699,7 @@ function retrievalExcerptBudgetTokens(
   skill: TurnSkill | null | undefined,
   topKFinal: number
 ): number {
-  const perExcerptFraming = 48 * Math.max(1, topKFinal) // "[Sn] File: <title> | Page: N" + quotes, per chunk
+  const perExcerptFraming = EXCERPT_LINE_FRAMING_TOKENS * Math.max(1, topKFinal)
   const usable = wholeDocumentBudgetTokens(contextTokens, question, skill) - perExcerptFraming
   return Math.max(256, Math.floor(usable / RETRIEVAL_FIT_SAFETY))
 }
@@ -1763,6 +1804,8 @@ export async function generateGroundedAnswer(
   // `labelA`/`labelB` name the pair (title + import date) so the prompt states the A→B direction
   // WITHOUT asserting which is the old/new version (audit §5.1).
   let compareDiff: { redlineText: string; changesText: string; labelA: string; labelB: string; truncated: boolean } | null = null
+  // #641: set on the relevance path when retrieval left in-scope sections out (`partialCoverageNotice`).
+  let partialNotice: string | null = null
   if (opts.wholeDocument || opts.wholeDocumentCompare) {
     // Both document-reading modes make the SAME honest disclosure: this answer read the
     // document(s), so the ticked packs took no part in it (plan §9.21 (e)5). Computed before the
@@ -1830,7 +1873,10 @@ export async function generateGroundedAnswer(
       mode: 'capped',
       chunksCovered: whole.chunksCovered,
       chunksTotal: whole.chunksTotal,
-      truncated: whole.truncated
+      truncated: whole.truncated,
+      // #643: the prompt showed these sections under their [Sn] labels (buildGroundedPrompt), so the
+      // citations are labelled excerpts, not provenance — the map-reduce rescues above never set it.
+      labelledExcerpts: true
     }
     // The last-resort capped FLOOR (both map-reduce rescues declined — zero chunks, or a disabled path): the
     // read is the honest beginning. Tell the model exactly what it cannot see so its answer never claims
@@ -1871,7 +1917,10 @@ export async function generateGroundedAnswer(
         mode: 'capped',
         chunksCovered: comp.chunksCovered,
         chunksTotal: comp.chunksTotal,
-        truncated: comp.truncated
+        truncated: comp.truncated,
+        // #643: both documents' sections were shown under their [Sn] labels (buildCompareWholeDocPrompt).
+        // The diff branch above shows the model change lines, not the sections, so it stays provenance.
+        labelledExcerpts: true
       }
     }
   } else {
@@ -1918,15 +1967,20 @@ export async function generateGroundedAnswer(
     // flip fullyChunked. A pure-archive answer gets NO coverage fraction (honest: there
     // is no document corpus to be "N of M" over).
     const docChunks = chunks.filter((c) => c.sourceKind !== 'archive')
+    const distinctCitedChunks = new Set(docChunks.map((c) => c.chunkId)).size
     if (docChunks.length > 0) {
       const docIds = [...new Set(docChunks.map((c) => c.documentId))]
-      const distinctCitedChunks = new Set(docChunks.map((c) => c.chunkId)).size
       coverage = {
         mode: 'relevance',
         chunksCovered: distinctCitedChunks,
         chunksTotal: docIds.reduce((sum, id) => sum + documentChunkCount(db, id), 0),
         fullyChunked: docIds.every((id) => documentIsFullyChunked(db, id))
       }
+    }
+    // #641: the notice is true only when the prompt missed sections of the scope — compared with
+    // the whole scope, not just the documents drawn on, so an unread document counts as missed.
+    if (opts.partialCoverageNotice && distinctCitedChunks < opts.partialCoverageNotice.scopeChunkTotal) {
+      partialNotice = opts.partialCoverageNotice.text
     }
   }
 
@@ -2010,9 +2064,10 @@ export async function generateGroundedAnswer(
   })
   // W2 scope notice (§2.1): when the scope was auto-narrowed to this one document, lead with the fixed
   // localized notice so it streams first AND lands in the persisted content (never a silent narrowing).
-  const seededPrefix = opts.answerPrefix ?? ''
+  // #641: the partial-coverage notice follows it, in the same stream-first, persisted shape.
+  const seededPrefix = (opts.answerPrefix ?? '') + (partialNotice ? `${partialNotice}\n\n` : '')
   let content = seededPrefix
-  if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
+  if (seededPrefix) opts.onToken?.(seededPrefix)
   // Honest-signal parity with plain chat (§L0): capture the finish reason so a grounded answer the
   // model cut off at the context ceiling gets the truncated badge instead of persisting a mid-word
   // partial as if complete — a budget-filling document turn is exactly where the ceiling hits.

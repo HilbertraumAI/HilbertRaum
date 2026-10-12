@@ -6,6 +6,7 @@ import type {
   EvidenceSourceSnapshot
 } from '../../../shared/types'
 import { t } from '../../../shared/i18n'
+import { hasLabelledExcerpts } from '../../../shared/evidence-review'
 import { prepareCached, type Db } from '../db'
 import { parseCitations, parseCoverage } from '../chat'
 import { parseEndedEarly } from '../chat/ended-early'
@@ -95,17 +96,24 @@ interface DocumentRow {
  *   an unknown mode must never mint "cited by the answer" claims). The `never` assignment
  *   keeps the switch compile-time exhaustive: a NEW `CoverageMode` member reds this
  *   function until it is mapped deliberately.
+ * - `capped` + `labelledExcerpts` (#643): a whole document read in ONE grounded turn, its
+ *   sections shown under their `[Sn]` labels — direct excerpts, auto-linked like relevance.
  */
 export function sourceKindForMode(
-  mode: CoverageInfo['mode'] | undefined
+  mode: CoverageInfo['mode'] | undefined,
+  labelledExcerpts?: boolean
 ): EvidenceSourceSnapshot['kind'] {
   if (mode === undefined) return 'direct_excerpt'
   switch (mode) {
     case 'relevance':
       return 'direct_excerpt'
     case 'tree':
-    case 'capped':
       return 'whole_document_provenance'
+    case 'capped':
+      // #643: a single-turn whole read showed the model its sections under their [Sn] labels — labelled
+      // excerpts, exactly the relevance contract. Without the stamp (map-reduce, pre-#643 rows) a capped
+      // answer's citations stay provenance. Honoured for `capped` only: no other mode can mint labels.
+      return labelledExcerpts === true ? 'direct_excerpt' : 'whole_document_provenance'
     case 'extract':
       return 'structured_record'
     default: {
@@ -256,7 +264,7 @@ export function createEvidenceReviewFromMessage(
 
   const citations = parseCitations(msg.citations_json) ?? []
   const coverage = parseCoverage(msg.coverage_json) ?? null
-  const kind = sourceKindForMode(coverage?.mode)
+  const kind = sourceKindForMode(coverage?.mode, hasLabelledExcerpts(coverage))
   const sources = buildEvidenceSourceSnapshots(db, citations, kind)
 
   const modelId = conv?.model_id ?? null

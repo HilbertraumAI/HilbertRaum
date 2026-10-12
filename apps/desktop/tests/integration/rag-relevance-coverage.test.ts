@@ -165,7 +165,7 @@ describe('relevance coverage stamp (Phase 5, #24, D72)', () => {
     expect(msg.citations).toBeUndefined()
   })
 
-  it('the whole-document path still stamps capped coverage (unchanged by Phase 5)', async () => {
+  it('the whole-document path still stamps capped coverage (unchanged by Phase 5), labelled when it fits (#643)', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     const docId = await seedDocument(db, embedder, 'whole.pdf', [{ text: QUERY }, { text: 'second section body' }], true)
@@ -177,5 +177,8 @@ describe('relevance coverage stamp (Phase 5, #24, D72)', () => {
     })) as Message
 
     expect(msg.coverage?.mode).toBe('capped')
+    // #643: the document fit, so one grounded turn showed both sections under their [Sn] labels — the
+    // citations are labelled excerpts (cards keep [Sn], a review links the markers), not provenance.
+    expect(msg.coverage?.labelledExcerpts).toBe(true)
   })
 })

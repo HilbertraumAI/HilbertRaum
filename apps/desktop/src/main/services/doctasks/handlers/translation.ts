@@ -53,9 +53,10 @@ async function translateWithRetry(
   translator: Translator,
   req: WindowRequest
 ): Promise<string | null> {
-  // A cancel that landed BETWEEN windows must not start the next one: translate() would
-  // run the sidecar's lazy ensureStarted before its fetch sees the aborted signal — after
-  // a workspace-lock suspend that would RESPAWN the just-killed ~10 GB server for nothing.
+  // A cancel that landed BETWEEN windows must not start the next one: after a workspace-lock
+  // suspend that would RESPAWN the just-killed ~10 GB server for nothing. Since #637 translate()
+  // itself refuses a stopped caller before it starts anything; this check stays the handler's own
+  // guarantee, independent of the backend behind `Translator`.
   if (req.signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
   for (let attempt = 1; attempt <= 2; attempt++) {
     let final: CompletionFinal | undefined
@@ -116,6 +117,8 @@ async function translateWithRetry(
         log.warn('Translation window timed out mid-decode — not retried', { attempt })
         return null
       }
+      // #605: a hung sidecar (`RuntimeUnresponsiveError`) is retried, tokens or not: the runtime
+      // stopped it, so the retry runs on a fresh one.
       log.warn('Translation window failed', {
         attempt,
         error: err instanceof Error ? err.message : String(err)

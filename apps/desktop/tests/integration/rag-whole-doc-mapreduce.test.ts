@@ -155,6 +155,8 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
     expect(msg.coverage?.truncated).toBe(false)
     expect(msg.coverage?.chunksCovered).toBeGreaterThan(0)
     expect(msg.coverage?.chunksCovered).toBe(msg.coverage?.chunksTotal)
+    // #643: the model saw section notes, never [Sn] labels — these citations stay provenance.
+    expect(msg.coverage?.labelledExcerpts).toBeUndefined()
     // Representative leaf-chunk provenance (M2 — real chunks), bounded, never one-per-chunk noise.
     expect((msg.citations?.length ?? 0)).toBeGreaterThan(0)
     expect((msg.citations?.length ?? 0)).toBeLessThanOrEqual(12)

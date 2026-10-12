@@ -298,7 +298,8 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
       const res = await server.fetch('/completion', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, stream: true, temperature: 0, stop: [TRANSLATION_STOP_TOKEN], cache_prompt: true })
+        // #605: the shipping body (TranslationRuntime) asks for progress frames too
+        body: JSON.stringify({ prompt, stream: true, temperature: 0, stop: [TRANSLATION_STOP_TOKEN], cache_prompt: true, return_progress: true })
       })
       expect(res.ok, `${caseLabel}: /completion HTTP ${res.status}`).toBe(true)
       expect(res.body).toBeTruthy()
@@ -574,7 +575,8 @@ describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real 
             temperature: 0,
             stop: [TRANSLATION_STOP_TOKEN],
             n_predict: plan.windowMaxTokens,
-            cache_prompt: true
+            cache_prompt: true,
+            return_progress: true // #605, as TranslationRuntime sends it
           })
         })
         expect(res.ok, `window ${i}: /completion HTTP ${res.status}`).toBe(true)
