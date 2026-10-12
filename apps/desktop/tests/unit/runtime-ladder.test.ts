@@ -29,7 +29,8 @@ import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
 import type { EngineProblem, GpuDevice } from '../../src/shared/types'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
-import { deferred, ladderHarness, until } from '../helpers/ladder-harness'
+import { deferred, ladderHarness } from '../helpers/ladder-harness'
+import { until } from '../helpers/hang-budget'
 
 // Phase 15 start ladder (architecture.md GPU record §5.2). Zero binaries, zero GPUs:
 // everything runs through the injected makeLlama/makeMock/probe seams (tests/helpers/ladder-harness.ts).
@@ -185,7 +186,7 @@ describe('the GPU start ladder', () => {
     const start = runtime.start().then(() => {
       settled = true
     })
-    await until(() => h.calls.length === 1)
+    await until(() => h.calls.length === 1, 'the rung-1 spawn')
     await new Promise((r) => setImmediate(r))
     expect(settled).toBe(false) // parked on the probe, with the fake server already started
     late.resolve([RTX])
@@ -514,7 +515,7 @@ describe('hidden warm-up generation (#109)', () => {
       started = true
     })
 
-    await until(() => h.chatCalls.length === 1)
+    await until(() => h.chatCalls.length === 1, 'the warm-up request')
     // The label was already set when the warm-up fired — a GPU crash inside this window
     // routes through the §5.3 onGpuCrash auto-fallback (gated on backend === 'gpu').
     expect(backendsAtWarmup).toEqual(['gpu'])
@@ -584,7 +585,7 @@ describe('hidden warm-up generation (#109)', () => {
     const runtime = h.factory(opts)
     const startP = runtime.start()
     startP.catch(() => undefined)
-    await until(() => h.chatCalls.length === 1)
+    await until(() => h.chatCalls.length === 1, 'the warm-up request')
 
     await runtime.stop() // quit / "Lock now" / manual stop lands mid-warm-up
     release()
@@ -603,7 +604,7 @@ describe('hidden warm-up generation (#109)', () => {
     const runtime = h.factory(opts)
     const startP = runtime.start()
     startP.catch(() => undefined)
-    await until(() => h.chatCalls.length === 1)
+    await until(() => h.chatCalls.length === 1, 'the warm-up request')
 
     await runtime.stop()
     release() // the stream finishes normally — the cancel must STILL win over ready
@@ -675,7 +676,7 @@ describe('concurrent weight prefetch (#114)', () => {
     expect(h.prefetches[0].paths).toEqual([opts.modelPath])
     // The load finished → the window closed and the reader was told to stop.
     expect(h.prefetches[0].aborted).toBe(true)
-    await until(() => h.prefetchEvents.length >= 2)
+    await until(() => h.prefetchEvents.length >= 2, 'the prefetch settling')
     expect(h.prefetchEvents.map((e) => e.event)).toEqual(['started', 'aborted'])
   })
 
@@ -733,7 +734,7 @@ describe('concurrent weight prefetch (#114)', () => {
   it('a prefetch read failure never affects the start', async () => {
     const h = ladderHarness({ prefetchFails: true })
     await h.factory(opts).start() // resolves ready — nothing to catch
-    await until(() => h.prefetchEvents.some((e) => e.event === 'failed'))
+    await until(() => h.prefetchEvents.some((e) => e.event === 'failed'), 'the failed prefetch event')
     expect(h.prefetchEvents[0]?.event).toBe('started')
     expect(h.wasMock()).toBe(false)
   })
@@ -744,7 +745,7 @@ describe('concurrent weight prefetch (#114)', () => {
     const runtime = h.factory(opts)
     const startP = runtime.start()
     startP.catch(() => undefined)
-    await until(() => h.calls.length === 1)
+    await until(() => h.calls.length === 1, 'the rung-1 spawn')
     await runtime.stop()
     expect(h.prefetches).toHaveLength(1)
     expect(h.prefetches[0].aborted).toBe(true) // stop() ended it — the load window has NOT closed yet
@@ -917,7 +918,7 @@ describe('createSpeculativeCrashAutoFallback (#182)', () => {
     })
     handler(startOpts, info)
     handler(startOpts, info) // re-entrancy guard: one restart, never a loop
-    await until(() => restarts.length > 0)
+    await until(() => restarts.length > 0, 'the restart')
     expect(restarts).toHaveLength(1)
     expect(notices).toEqual([t('en', 'main.runtime.speedUpDisabled')])
     expect(notices[0]).not.toBe(t('en', 'main.runtime.compatibilityMode'))
@@ -1271,12 +1272,13 @@ describe('#372 wiring pin: ctx.onModelInstalled re-arms the model before anythin
   const handlerSrc = indexSrc.slice(handlerStart, indexSrc.indexOf('\n  }\n', handlerStart))
 
   it("clearModelLoadLatch(modelId) is the handler's first statement — before anything that can return or throw", () => {
-    expect(handlerSrc).toMatch(/ctx\.onModelInstalled = \(modelId\)/) // also proves the handler was found
-    const clearAt = handlerSrc.indexOf('clearModelLoadLatch(modelId)')
-    expect(clearAt).toBeGreaterThanOrEqual(0)
-    for (const later of ['if (!ctx) return', 'resetStartFailure', 'refreshTranscriberSlot(', 'refreshTranslatorSlot?.(']) {
-      expect(handlerSrc.indexOf(later), later).toBeGreaterThan(clearAt)
-    }
+    expect(handlerSrc).toMatch(/ctx\.onModelInstalled = \(modelId\) => \{/) // also proves the handler was found
+    const firstStatement = handlerSrc
+      .slice(handlerSrc.indexOf('{') + 1)
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line !== '' && !line.startsWith('//'))
+    expect(firstStatement).toBe('clearModelLoadLatch(modelId)')
   })
 })
 

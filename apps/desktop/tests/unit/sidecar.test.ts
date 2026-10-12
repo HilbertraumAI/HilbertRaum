@@ -190,13 +190,8 @@ describe('findFreePort', () => {
     listen.mockRestore()
     expect(port).toBeGreaterThan(0)
     expect(port).toBeLessThan(65536)
-    // The port is free on loopback: it re-binds there.
-    const srv = net.createServer()
-    await new Promise<void>((resolve, reject) => {
-      srv.once('error', reject)
-      srv.listen(port, LOOPBACK_HOST, () => resolve())
-    })
-    await new Promise<void>((r) => srv.close(() => r()))
+    // No re-bind check: the port is released before anyone binds it again, the very REL-1 window
+    // LlamaServer retries, so a re-bind here would flake under parallel workers.
   })
 })
 

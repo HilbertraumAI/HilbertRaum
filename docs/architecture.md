@@ -4273,8 +4273,10 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
   `gpuAutoDisabled` for a killed attempt (not a device fault), and (d) refuses the rung-4 mock fallback
   for a cancelled start. Queue semantics are unchanged — the queued stop still runs after the start
   settles; the start just settles *promptly* now. Never a bare timeout race (would orphan the loading
-  child). Pinned in `runtime-manager.test.ts` ("quit-path lifecycle") + `runtime-ladder.test.ts`
-  ("ladder start cancellation").
+  child). Pinned in `runtime-manager.test.ts` ("quit-path lifecycle": "stop() mid-start kills the loading
+  child…" covers (a)–(d) over a real `LlamaServer`) + `runtime-ladder.test.ts` ("ladder start
+  cancellation": a stop before the walk begins; the warm-up window and the #312 / #372 verdict cancels
+  sit in their own blocks).
 - **CODE-11 — crash-exit child reap (rider).** A hard `uncaughtException` skips will-quit's awaited
   sidecar stops entirely, and on Windows the children survive `process.exit(1)`. Every sidecar spawn
   funnels through `LlamaServer` or `WhisperCliTranscriber`; both now register/deregister their live

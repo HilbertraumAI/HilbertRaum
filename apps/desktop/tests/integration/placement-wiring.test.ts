@@ -54,7 +54,8 @@ import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { getSettings } from '../../src/main/services/settings'
 import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { GpuDevice, ModelPlacement } from '../../src/shared/types'
-import { ladderHarness, until } from '../helpers/ladder-harness'
+import { ladderHarness } from '../helpers/ladder-harness'
+import { until } from '../helpers/hang-budget'
 import {
   closePerformanceFixture,
   ctxWith,
@@ -160,7 +161,7 @@ describe('the start ladder feeds the placement latch', () => {
 
     // Read the latch while the warm-up is still OPEN: the Performance screen must not have to
     // wait out a hidden generation (capped at 90 s) before it can show "Your model".
-    await until(() => warmUpEntered)
+    await until(() => warmUpEntered, 'the warm-up')
     expect(startResolved).toBe(false)
     expect(latestModelPlacement()).toEqual({
       modelId: 'm',

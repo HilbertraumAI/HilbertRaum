@@ -635,6 +635,8 @@ describe('App — runtime notice target (#530)', () => {
     { what: 'the AI Model notice leaves', target: 'models' as const, stays: false },
     { what: 'a notice without a target stays', target: undefined, stays: true }
   ])('once Check again healed the chat engine (verdict true → false), $what', async ({ target, stays }) => {
+    // Both rows run one sequence: the `leaves` row is the timing control that App's own re-read has
+    // landed by the final assertion, so the `stays` row cannot pass because App had not read yet.
     let problems: EngineProblem[] = [LIBGOMP]
     const app = renderApp({ problems: () => problems })
     // The verdict was read: Home's row says so (App's own read was issued first, at mount).

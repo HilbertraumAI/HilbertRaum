@@ -4,7 +4,6 @@ import type { ModelPrefetch, PrefetchOutcome } from '../../src/main/services/run
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
 import type { EngineProblem, GpuDevice } from '../../src/shared/types'
-import { hangPolls } from './hang-budget'
 
 // The start-ladder harness shared by `tests/unit/runtime-ladder.test.ts` (the ladder's own
 // contract) and `tests/integration/placement-wiring.test.ts` (the ladder → placement latch →
@@ -231,14 +230,4 @@ export function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } 
     resolve = res
   })
   return { promise, resolve }
-}
-
-/** Resolve once `cond` holds — polled on observable state, never a fixed sleep (a hang detector,
- *  `hangPolls`-bounded so it widens on CI). */
-export async function until(cond: () => boolean, polls = 500): Promise<void> {
-  for (let i = 0; i < hangPolls(polls, 1); i++) {
-    if (cond()) return
-    await new Promise((r) => setTimeout(r, 1))
-  }
-  throw new Error('condition not reached')
 }

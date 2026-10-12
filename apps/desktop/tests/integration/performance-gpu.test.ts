@@ -43,6 +43,7 @@ import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import {
   clearModelLoadLatches,
+  clearSpeculativeSuppression,
   isSpeculativeSuppressed,
   latchModelLoad,
   modelLoadLatchReason,
@@ -711,7 +712,9 @@ describe('"Try GPU again" and the session latches (#182, #372)', () => {
       expect(isSpeculativeSuppressed('m')).toBe(false)
       expect(modelLoadLatchReason('m')).toBe('unknown model architecture')
     } finally {
-      clearModelLoadLatches() // module state: never leak into a later case
+      // module state: never leak into a later case (the speculative one too, if tryGpuAgain threw)
+      clearModelLoadLatches()
+      clearSpeculativeSuppression()
     }
   })
 })
