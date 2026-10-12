@@ -1564,20 +1564,17 @@ describe('registerModelIpc', () => {
       const health = { healthy: true }
       const started: string[] = []
       const audits: string[] = []
-      const mgr = new RuntimeManager(
-        (o) => {
-          started.push(o.modelId)
-          return {
-            modelId: o.modelId,
-            start: async () => {},
-            stop: async () => {},
-            health: async () => ({ healthy: health.healthy, message: '', port: 1 }),
-            // eslint-disable-next-line require-yield
-            chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
-          }
-        },
-        { healthProbeTtlMs: 0 }
-      )
+      const mgr = new RuntimeManager((o) => {
+        started.push(o.modelId)
+        return {
+          modelId: o.modelId,
+          start: async () => {},
+          stop: async () => {},
+          health: async () => ({ healthy: health.healthy, message: '', port: 1 }),
+          // eslint-disable-next-line require-yield
+          chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+        }
+      })
       const db = seededDb()
       updateSettings(db, { developerMode: true })
       const ctx = {
@@ -1594,12 +1591,19 @@ describe('registerModelIpc', () => {
     }
 
     it('the status read re-checks a running model: a frozen process reads "not responding"', async () => {
-      const { mgr, health } = liveCtx()
-      await invoke(handlers, IPC.startRuntime, MODEL)
-      health.healthy = false // the process stopped answering /health (frozen, suspended)
-      const status = (await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus
-      expect(status).toMatchObject({ running: true, healthy: false, unresponsive: true })
-      await mgr.stop()
+      // Installed before the start, so the start's own health stamp lands on the fake clock.
+      vi.useFakeTimers({ toFake: ['performance'] })
+      try {
+        const { mgr, health } = liveCtx()
+        await invoke(handlers, IPC.startRuntime, MODEL)
+        health.healthy = false // the process stopped answering /health (frozen, suspended)
+        vi.advanceTimersByTime(10_000) // past the 10 s probe TTL
+        const status = (await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus
+        expect(status).toMatchObject({ running: true, healthy: false, unresponsive: true })
+        await mgr.stop()
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('a start counts as starting from the request — while it still checks the weights', async () => {

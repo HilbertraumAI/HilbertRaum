@@ -1875,7 +1875,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
       **Tests.**
       - `runtime-manager.test.ts` "liveness of the running model (#599)": the watchdog mark and what
-        clears it, the probe and its cache, Restart, `stopCrashed`, the start request.
+        clears it, the probe and its 10 s cache, Restart, `stopCrashed`, the start request; and
+        "GPU mid-session crash auto-fallback through the real manager (REL-1)": the GPU fallback once,
+        then the CPU crash budget through the real `forceRestart`/`stopCrashed`.
       - `runtime-ladder-exit-wiring.test.ts` "a CPU-mode crash restarts the model once per session":
         the real sidecar exit wiring through the ladder and the restart policy.
       - `core-model-ipc.test.ts` "liveness of the running model (#599)": the status read probes, a start
