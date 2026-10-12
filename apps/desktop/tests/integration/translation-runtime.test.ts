@@ -1621,6 +1621,101 @@ describe('#473 — beforeGpuStart runs before a GPU-posture spawn', () => {
   })
 })
 
+// #473 Phase 1, rulings 1 and 2: the headroom gate picks a cold start's posture, and a chat start
+// takes the card from a sidecar resident on it (`yieldGpu`). The gate's own arithmetic is pinned
+// in gpu-sharing-gates.test.ts; these pin the runtime's half.
+describe('#473 — the headroom gate and yieldGpu', () => {
+  /** /health parks until released, so a cold start can be observed mid-flight. */
+  function parkedHealthFetch() {
+    const health: { release: (() => void) | null } = { release: null }
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        if (!health.release) await new Promise<void>((r) => (health.release = r))
+        return { ok: true, status: 200 } as Response
+      }
+      if (u.endsWith('/completion')) return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    return { fetchImpl, health }
+  }
+
+  it('the gate decides the cold start\'s posture, and gpuOccupied reports what that start chose', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl, health } = parkedHealthFetch()
+    let gate: 'auto' | 'beside-chat' = 'auto'
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, gpu: { gpuHeadroom: () => gate } })
+    const done = rt.translate(translateOpts)
+    for (let i = 0; i < hangPolls(200, 5) && !health.release; i++) await sleep(5)
+    expect(health.release, 'the cold start never reached its health wait').not.toBeNull()
+    gate = 'beside-chat' // the gate's answer changed meanwhile; THIS start still loads onto the card
+    expect(rt.gpuOccupied()).toBe(true)
+    health.release?.()
+    await done
+    expect(calls[0].args).not.toContain('none')
+    await rt.stop()
+
+    const cpu = fakeSpawn()
+    const off = new TranslationRuntime({
+      ...base,
+      spawn: cpu.spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      gpu: { gpuHeadroom: () => 'beside-chat' }
+    })
+    await off.translate(translateOpts)
+    expect(cpu.calls[0].args.join(' ')).toContain('--device none')
+    expect(off.gpuOccupied()).toBe(false)
+    expect(off.deviceStatus()?.cpuCause).toBe('beside-chat') // the reason the Translate screen names
+    await off.stop()
+  })
+
+  it('yieldGpu stops a sidecar resident on the card and the next window cold-starts; one on the processor stays', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl })
+    await rt.translate(translateOpts)
+    expect(rt.deviceStatus()?.live).toBe(true)
+    await rt.yieldGpu()
+    expect(children[0].killed).toBe(true)
+    expect(rt.deviceStatus()?.live).toBe(false)
+    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
+    expect(calls).toHaveLength(2) // a fresh child for the next window
+    await rt.stop()
+
+    const cpu = fakeSpawn()
+    const off = new TranslationRuntime({
+      ...base,
+      spawn: cpu.spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      gpu: { getGpuMode: () => 'off' }
+    })
+    await off.translate(translateOpts)
+    await off.yieldGpu()
+    expect(cpu.children[0].killed).toBe(false) // it holds nothing on the card
+    expect(off.deviceStatus()?.live).toBe(true)
+    await off.stop()
+  })
+
+  it('yieldGpu lets a GPU cold start in flight finish, then stops it — never aborts it', async () => {
+    const { spawn, children } = fakeSpawn()
+    const { fetchImpl, health } = parkedHealthFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    const done = rt.translate(translateOpts)
+    for (let i = 0; i < hangPolls(200, 5) && !health.release; i++) await sleep(5)
+    expect(health.release, 'the cold start never reached its health wait').not.toBeNull()
+    const yielded = rt.yieldGpu()
+    await tick()
+    expect(children[0].killed).toBe(false) // still waiting for the start
+    health.release?.()
+    await yielded
+    // Not cancelled: the start was let finish. (This fake's request does not depend on the child,
+    // so it completes; a real one cut mid-answer fails with a stream error the caller retries.)
+    await expect(done).resolves.toBe(COMPLETION_TEXT)
+    expect(children[0].killed).toBe(true)
+    expect(rt.isStartFailed()).toBe(false)
+    await rt.stop()
+  })
+})
+
 describe('TranslationRuntime — OS loader refusal (#530)', () => {
   afterEach(() => resetEngineProblemsForTest())
 

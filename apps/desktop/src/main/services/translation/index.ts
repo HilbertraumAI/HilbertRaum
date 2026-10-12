@@ -78,4 +78,10 @@ export interface Translator {
    * unoccupied (today's behaviour: the reranker's gate never blocked on translation before this).
    */
   gpuOccupied?(): boolean
+  /**
+   * #473 ruling 2: a chat model start takes the graphics card first — stop a sidecar resident on
+   * the card so a window in flight is retried; leave one on the processor alone. Optional — fakes
+   * without it never yield. Never rejects.
+   */
+  yieldGpu?(): Promise<void>
 }

@@ -30,6 +30,16 @@ recommended_ram_gb: 24
 # budget; 4096 leaves room for input + output). This field is the sidecar's launch window, read
 # back via the sidecar's own contextWindow() at TG-2/TG-3 — NOT a chat window.
 recommended_context_tokens: 4096
+# MEASURED for the translation sidecar's headroom gate (#473 ruling 1, 2026-10-12), which judges
+# whether this model fully fits on the card beside the chat model. Read off a FULL-OFFLOAD start
+# (49/49 layers) of this sidecar at --ctx-size 4096, build 11146:
+# eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/issue473-translategemma-full-offload.stderr.log
+# — `CPU_Mapped model buffer size = 787.69 MiB` (the token embedding stays in host memory) and the
+# two KV buffers, 256.00 (non-SWA) + 480.00 (SWA) = 736 MiB, rounded up to 0.75 GiB. With them
+# the estimate is 8,892 MiB against 7,811 MiB on the card (6,956 weights + 736 KV + 119 compute),
+# 1.14x, as conservative as the chat models; without them it read 9,542 (1.22x).
+host_mapped_weights_mib: 787.69
+estimated_context_cache_gib: 0.75
 supports_thinking_mode: false
 supports_tools: false
 # TEXT-ONLY USE (the Gemma-4 precedent): TranslateGemma is an image-text-to-text model and the

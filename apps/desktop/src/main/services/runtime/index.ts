@@ -379,11 +379,25 @@ export class RuntimeManager {
 
   constructor(
     private readonly factory: RuntimeFactory,
-    opts?: { externalTeardownTimeoutMs?: number; healthProbeTtlMs?: number }
+    opts?: {
+      externalTeardownTimeoutMs?: number
+      healthProbeTtlMs?: number
+      /**
+       * #473 ruling 2: awaited by EVERY start — Start, a switch, the auto-start, Restart and the
+       * crash restarts — after the old runtime stopped and before the factory spawns, while the
+       * start is already visible as starting. The composition uses it to take a translation
+       * sidecar off the graphics card first, because a chat model that starts second stays
+       * squeezed until it is restarted. Must never throw.
+       */
+      beforeStart?: (opts: RuntimeStartOptions) => Promise<void>
+    }
   ) {
     this.externalTeardownTimeoutMs = opts?.externalTeardownTimeoutMs ?? EXTERNAL_TEARDOWN_TIMEOUT_MS
     this.healthProbeTtlMs = opts?.healthProbeTtlMs ?? HEALTH_PROBE_TTL_MS
+    this.beforeStart = opts?.beforeStart
   }
+
+  private readonly beforeStart?: (opts: RuntimeStartOptions) => Promise<void>
 
   /** True while ANY lane has an in-flight generation. For external admission use
    *  {@link isExternallyBusy} — this narrower read is NOT fail-closed on its own. */
@@ -818,6 +832,11 @@ export class RuntimeManager {
     // factory is invoked, or the switch would spawn and the quit's queued stop would
     // wait out the full model load/health timeout (the CODE-2 freeze, reintroduced).
     if (this.stopped) throw shutdownError()
+    if (this.beforeStart) {
+      await this.beforeStart(opts).catch(() => undefined)
+      // The hook can take seconds (a sidecar's kill); a quit arming the latch meanwhile wins.
+      if (this.stopped) throw shutdownError()
+    }
     // Commit to `this.current`/`this.last` only on a FULLY successful start. A failed
     // start (e.g. the real sidecar's health timeout) must not leave a half-started
     // runtime as "active" — callers gate chat/RAG on `active() != null`, so a stale

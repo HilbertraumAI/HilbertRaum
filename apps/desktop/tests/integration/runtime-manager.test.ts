@@ -1422,3 +1422,52 @@ describe('liveness of the running model (#599)', () => {
     next()
   })
 })
+
+// #473 ruling 2: every chat start awaits `beforeStart` after the old runtime stopped and before the
+// factory spawns, while the start is visible as starting — the composition takes a translation
+// sidecar off the graphics card there, because a chat model that starts second stays squeezed.
+describe('the beforeStart hook (#473)', () => {
+  function hookHarness(beforeStart: (mgr: RuntimeManager) => Promise<void>) {
+    const order: string[] = []
+    const mgr: RuntimeManager = new RuntimeManager(
+      (opts) => {
+        order.push(`spawn ${opts.modelId}`)
+        return {
+          modelId: opts.modelId,
+          start: async () => {},
+          stop: async () => {
+            order.push(`kill ${opts.modelId}`)
+          },
+          health: async () => ({ healthy: true, message: '', port: null }),
+          // eslint-disable-next-line require-yield
+          chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+        }
+      },
+      { beforeStart: () => beforeStart(mgr) }
+    )
+    return { mgr, order }
+  }
+  const A: RuntimeStartOptions = { modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 }
+  const B: RuntimeStartOptions = { modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 }
+
+  it.each([
+    ['a switch (start)', (mgr: RuntimeManager) => mgr.start(B)],
+    ['a Restart or crash restart (forceRestart)', (mgr: RuntimeManager) => mgr.forceRestart(B)]
+  ])('%s: the old model stops, then the hook runs with the start visible, then the spawn', async (_label, go) => {
+    const { mgr, order } = hookHarness(async (m) => {
+      order.push(`hook, starting: ${m.status().startingModelId ?? 'none'}`)
+    })
+    await mgr.start(A)
+    order.length = 0
+    await go(mgr)
+    expect(order).toEqual(['kill a', 'hook, starting: b', 'spawn b'])
+  })
+
+  it('a quit during the hook spawns nothing', async () => {
+    const { mgr, order } = hookHarness(async (m) => {
+      m.shutdown()
+    })
+    await expect(mgr.start(A)).rejects.toThrow()
+    expect(order).toEqual([])
+  })
+})

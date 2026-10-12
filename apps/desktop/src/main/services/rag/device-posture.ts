@@ -3,11 +3,13 @@ import { DEFAULT_SETTINGS } from '../../../shared/types'
 import { primaryUsefulDevice } from '../../../shared/gpu-rules'
 import { eligibleDevicesFor, machineKey } from '../performance'
 import { detectSystem } from '../benchmark'
-import { estimateGraphicsNeedMib, findManifestById, graphicsBudgetMib } from '../models'
+import { chatGraphicsShareMib, estimateGraphicsNeedMib, findManifestById, graphicsBudgetMib } from '../models'
+import { latestModelPlacement } from '../runtime/placement'
 import { defaultThreadCount } from '../runtime/sidecar'
 import { totalCandidateCapFor } from '../zim/arm'
 import type { RuntimeManager } from '../runtime'
 import type { Translator } from '../translation'
+import type { TranslationHeadroomVerdict } from '../translation/runtime'
 import {
   rerankerDeviceFor,
   resolveRerankProfile,
@@ -76,9 +78,76 @@ export function resolveRerankerDevicePosture(
   // scope (`registerRagIpc.ts`'s `resolveAskCandidateScope`, the one caller that can see this
   // field) agrees with the sidecar instead of asking for a GPU-sized scope G would refuse.
   if (occupancy.chatStartBusy || occupancy.translationOccupied || occupancy.rerankerDemoted) return 'cpu'
-  const activeManifest = findManifestById(manifestsDir, occupancy.committedModelId)
-  const chatModelNeedMib = activeManifest ? estimateGraphicsNeedMib(activeManifest) : null
-  return rerankerDeviceFor({ probeDevices, budgetMib, chatModelNeedMib })
+  return rerankerDeviceFor({ probeDevices, budgetMib, chatModelNeedMib: committedChatShareMib(manifestsDir, occupancy) })
+}
+
+/**
+ * #473 ruling 3: what the committed chat model holds on the card, MiB — measured when this
+ * session's load log describes it at its launched window, else the estimate scaled to that window
+ * (`chatGraphicsShareMib`); 0 when it runs on the processor, which holds nothing there. Null when
+ * no model is committed or its manifest cannot be resolved — each gate decides what that means.
+ */
+function committedChatShareMib(manifestsDir: string | null, occupancy: RerankerOccupancySnapshot): number | null {
+  const manifest = findManifestById(manifestsDir, occupancy.committedModelId)
+  if (!manifest) return null
+  if (occupancy.committedBackend === 'cpu') return 0
+  return chatGraphicsShareMib(manifest, occupancy.committedContextTokens ?? null, latestModelPlacement())
+}
+
+/**
+ * #473 ruling 1 (owner, 2026-10-12): the translation sidecar's headroom gate — the reranker's kind
+ * of check. A GPU-posture start ('auto') only when the translation model FULLY fits on the budget
+ * device beside the chat model the app already has there; otherwise the processor ('cpu').
+ *
+ * Why a gate and not `--fit-target`: llama.cpp's own `--fit` sizes a process by the free figure,
+ * and on NVIDIA/Windows (`model-benchmarks.md` §6.6 finding 2) and Apple Silicon (Metal reports
+ * free memory per process) that figure never sees a resident chat model, so a translation start
+ * beside one overcommitted the card. Where the figure does track usage (Linux), `--fit` squeezed
+ * translation into a partial offload that ran at about processor speed (§11.4), so giving up the
+ * partial offload costs little. Nothing is passed to llama.cpp's fit.
+ *
+ * 'auto' — today's behaviour, llama.cpp decides — whenever there is nothing to judge: a locked
+ * workspace, no stored probe for this machine (a probe that timed out this session), no usable
+ * discrete card (an integrated-only machine shares RAM, out of scope), or no translation manifest.
+ * Otherwise the processor, with the reason the Translate screen names: 'chat-starting' while a chat
+ * start is in flight or pending (ruling 2: chat takes the card first), 'too-large' when the model
+ * does not fit on this card even alone, 'beside-chat' when it does not fit beside the chat model
+ * (or that model's manifest cannot be resolved). The reranker is not counted: a GPU-posture
+ * translation start first takes it off the card (`translationGpuYield`).
+ */
+export function resolveTranslationDevicePosture(
+  settings: AppSettings | null,
+  manifestsDir: string | null,
+  occupancy: RerankerOccupancySnapshot,
+  translationModelId: string
+): TranslationHeadroomVerdict {
+  if (settings == null) return 'auto'
+  const probeDevices = eligibleDevicesFor(settings, machineKey(detectSystem()))
+  if (!Array.isArray(probeDevices)) return 'auto'
+  const budgetMib = graphicsBudgetMib(primaryUsefulDevice(probeDevices))
+  if (budgetMib == null) return 'auto'
+  const translation = findManifestById(manifestsDir, translationModelId)
+  if (!translation) return 'auto'
+  if (occupancy.chatStartBusy) return 'chat-starting'
+  const needMib = estimateGraphicsNeedMib(translation)
+  if (budgetMib < needMib) return 'too-large'
+  const chatShareMib = occupancy.committedModelId == null ? 0 : committedChatShareMib(manifestsDir, occupancy)
+  if (chatShareMib == null) return 'beside-chat'
+  return budgetMib - chatShareMib >= needMib ? 'auto' : 'beside-chat'
+}
+
+/** The translation gate as the sidecar's `gpuHeadroom` callback, from the reranker callbacks' own
+ *  runtime/counter/settings dependencies (one occupancy snapshot builder for both gates). */
+export function createTranslationHeadroom(
+  deps: Omit<RerankerCallbackDeps, 'getTranslator'>
+): (modelId: string) => TranslationHeadroomVerdict {
+  return (modelId) =>
+    resolveTranslationDevicePosture(
+      deps.getSettings(),
+      deps.manifestsDir,
+      snapshotRerankerOccupancy(deps.runtimeManager, deps.pendingModelSwitches, () => null),
+      modelId
+    )
 }
 
 /**
@@ -117,6 +186,13 @@ export interface RerankerOccupancySnapshot {
    * sets it explicitly from `ctx.reranker?.gpuDemoted?.()`.
    */
   rerankerDemoted?: boolean
+  /**
+   * #473 ruling 3: the committed runtime's launched context window (`contextWindow()`) and the
+   * backend it landed on. OPTIONAL like `rerankerDemoted`: an omitted field reads as today's
+   * behaviour (an unscaled estimate on the card), never as a smaller share.
+   */
+  committedContextTokens?: number | null
+  committedBackend?: 'gpu' | 'cpu' | null
 }
 
 /**
@@ -189,7 +265,7 @@ export function cpuRequestCeilingFor(settings: AppSettings | null): number {
  */
 export interface RerankerCallbackDeps {
   /** The chat runtime manager — only the two read-only methods the posture needs. */
-  runtimeManager: Pick<RuntimeManager, 'activeModelId' | 'status'>
+  runtimeManager: Pick<RuntimeManager, 'activeModelId' | 'status'> & Partial<Pick<RuntimeManager, 'active'>>
   /** Wave 8 ruling (a)'s pending-switch counter — shared with `registerModelIpc.ts`. */
   pendingModelSwitches: PendingModelSwitchCounter
   /**
@@ -235,15 +311,18 @@ export function createRerankerCallbacks(deps: RerankerCallbackDeps): {
  * flight", the same as today's behaviour for those tests.
  */
 export function snapshotRerankerOccupancy(
-  runtimeManager: Pick<RuntimeManager, 'activeModelId'> & Partial<Pick<RuntimeManager, 'status'>>,
+  runtimeManager: Pick<RuntimeManager, 'activeModelId'> & Partial<Pick<RuntimeManager, 'status' | 'active'>>,
   pendingModelSwitches: PendingModelSwitchCounter,
   getTranslator: () => Translator | null
 ): RerankerOccupancySnapshot {
   const startingModelId = runtimeManager.status?.().startingModelId ?? null
+  const active = runtimeManager.active?.() ?? null
   return {
     committedModelId: runtimeManager.activeModelId(),
     chatStartBusy: startingModelId != null || pendingModelSwitches.count > 0,
-    translationOccupied: getTranslator()?.gpuOccupied?.() ?? false
+    translationOccupied: getTranslator()?.gpuOccupied?.() ?? false,
+    committedContextTokens: active?.contextWindow?.() ?? null,
+    committedBackend: active?.backend === 'gpu' || active?.backend === 'cpu' ? active.backend : null
   }
 }
 

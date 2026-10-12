@@ -193,7 +193,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.8-27b-ud-q4km': 0.9, // was 1.1: KV 512 + RS 448.88 (MTP, 1 seq) = 960.88 MiB
     'qwen3.8-27b-ud-q5km': 0.9, // was 1.1: same figures — the recurrent state is f32, quant-independent
     'qwen3.5-9b-ud-q4kxl': 0.3, // was 0.4: KV 256 + 1 × 48 = 304 MiB
-    'qwen3.5-4b-ud-q4kxl': 0.2 // was 0.3: KV 128 + 1 × 48 = 176 MiB (at its 4,096 window)
+    'qwen3.5-4b-ud-q4kxl': 0.2, // was 0.3: KV 128 + 1 × 48 = 176 MiB (at its 4,096 window)
+    // #473: the translation sidecar, for its headroom gate — KV 256 (non-SWA) + 480 (SWA) = 736 MiB
+    // at its 4,096 window (issue473-translategemma-full-offload, 49/49), rounded up.
+    'translategemma-12b-it-q4': 0.75
   }
   // (j2) #321: the MEASURED host-mapped weight share `estimateGraphicsNeedMib` subtracts before
   // applying its 15 % working share. Each figure is the `CPU_Mapped model buffer size` of a
@@ -218,9 +221,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.8-27b-ud-q4km': 682.03, // leg 7, 66/66
     'qwen3.8-27b-ud-q5km': 682.03, // leg 1 `-np 1`, 66/66
     'qwen3.5-4b-ud-q4kxl': 497.31, // #391 leg 4 follow-up (b), 33/33 on the RTX 3060 Laptop
-    'gemma4-26b-a4b-it-qat-q4': 577.5 // #391 last item, 31/31 on the RTX 3090 (the only card that holds it)
+    'gemma4-26b-a4b-it-qat-q4': 577.5, // #391 last item, 31/31 on the RTX 3090 (the only card that holds it)
+    'translategemma-12b-it-q4': 787.69 // #473, the translation sidecar's 49/49 start on the RTX 3080 Ti
   }
-  it('pins the seven measured host_mapped_weights_mib values, and that no other manifest carries the field (#321)', () => {
+  it('pins the eight measured host_mapped_weights_mib values, and that no other manifest carries the field (#321, #473)', () => {
     const all = committedManifests()
     const byId = Object.fromEntries(all.map((m) => [m.id, m]))
     for (const [id, mib] of Object.entries(HOST_MAPPED_MIB)) {
@@ -274,7 +278,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(estimateGraphicsNeedMib(fourB) / 3261).toBeLessThan(1.2)
   })
 
-  it('pins the seven estimated_context_cache_gib values, and that no other manifest carries the field', () => {
+  it('pins the eight estimated_context_cache_gib values, and that no other manifest carries the field (#473)', () => {
     const all = committedManifests()
     const byId = Object.fromEntries(all.map((m) => [m.id, m]))
     for (const [id, gib] of Object.entries(CACHE_GIB)) {
