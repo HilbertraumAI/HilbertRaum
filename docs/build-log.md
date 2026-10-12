@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-12 — the closed 2026-10-03 #562 fuses entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #643 entry). Its record is unchanged:
+`architecture.md` "Electron fuses" (#562). Citations of the form "BUILD_STATE 2026-10-03 #562 entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#562 — packaged fuses: RunAsNode + `--inspect` off, asar integrity + only-asar on; NODE_OPTIONS stays on (`fix/562-electron-fuses`).** Wire
+`001011001`. Owner: fuse 2 stays on (off drops `NODE_EXTRA_CA_CERTS`; the engine download then failed behind Norton). Packaged OCR no longer follows
+`ELECTRON_RENDERER_URL`. Measured before/after: smoke 22/22, robustness 4/4, upgrade 11/11, tamper matrix, first paint unchanged. Record:
+`architecture.md` "Electron fuses" (#562). Open: `app.asar.unpacked` unchecked; Linux/macOS legs (platform PR); fuse 2 needs an OS-trust-store downloader (#564)._
+
 ## 2026-10-12 — the closed 2026-10-03 #560 app-scheme entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #646 entry). Its record is unchanged:

@@ -92,6 +92,12 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Questions about a short document now read the whole document.** When a chat answers from one
+  document that is short enough for the AI model to read at once (about 3 pages with the smallest
+  models, about 7 with most, more if you raise the context size), the app now gives the model the
+  whole document, in order, instead of the few passages that best match the question. Answers no
+  longer miss part of a short letter, and the line under the answer says **Covers the whole
+  document**. A chat with several documents, or with knowledge packs, works as before (#643).
 - **Some display preferences are reset once after this update.** Because the app's screens moved
   to their own address, the browser engine treats them as new and forgets four display
   preferences once: the unlock screen appears in your computer's language until you unlock (it
@@ -121,6 +127,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **"Summarize this document" uses the deep index.** With one long document in the chat and its
+  deep index built, a summary question was still answered from a few matching passages. It now
+  draws on the deep index's summaries of every section and says it covers the whole document (#642).
+- **The source markers in an answer about a whole short document now match its sources.** When a
+  skill such as Contract brief read a short document whole, the answer cited markers like **[S2]**,
+  but its source cards showed none and an evidence review linked nothing to them. The cards now
+  carry their markers and a review links the answer's markers to them. Answers written before this
+  update keep their old display (#643).
 - **A frozen AI model no longer shows as "Running" and healthy.** The app now re-checks the model when
   a screen asks for its state, and when an answer on it times out. The AI Model screen then says
   **Not responding** and offers a one-click **Restart**; Diagnostics says it is unhealthy. The app never

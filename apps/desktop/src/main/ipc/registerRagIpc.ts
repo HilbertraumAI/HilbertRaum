@@ -20,13 +20,16 @@ import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
 import {
   detectFilenameScope,
-  documentApproxTokenTotal,
+  documentFitsWholeRead,
   generateGroundedAnswer,
   generateGroundedDataAnswer,
+  type GroundedAnswerOptions,
   modePackOutcomes,
   ragSettingsFrom,
+  WHOLE_READ_SECTION_FRAMING_TOKENS,
   wholeDocumentFitBudgetTokens
 } from '../services/rag'
+import { wholeDocTreeMaterial } from '../services/rag/whole-doc-tree'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import {
   BANK_STATEMENT_INSTALL_ID,
@@ -170,6 +173,44 @@ function allInScopeDocsFullyChunked(db: Db, scope: RetrievalScope): boolean {
     )
     .get(...(filter ? filter.params : [])) as unknown as { n: number }
   return (row?.n ?? 0) === 0
+}
+
+/**
+ * #643 / #642: the one document a turn bound for top-k retrieval reads WHOLE instead, or null.
+ *
+ * Top-k keeps at most `ragTopKFinal` sections and only the best one per PDF page, so even a short
+ * letter can reach the prompt incomplete. A scope of exactly ONE document whose whole text fits the
+ * launched window's whole-document budget is read in order instead (`generateGroundedAnswer({
+ * wholeDocument })` — one grounded turn, every section under its `[Sn]` label), the rule the whole-doc
+ * skills already follow (A3). `fitBudgetTokens` is that budget for this question + skill.
+ *
+ * #642: a summary ask the router sent to `tree-summary` takes the same path when the document is too
+ * large to read whole but its deep index is ready — `generateGroundedAnswer` reaches the tree map-reduce
+ * when the read would truncate. Without a ready tree it stays top-k (no surprise chunk map-reduce).
+ *
+ * Stays top-k: a multi-document scope; a chat with knowledge packs (the whole read never queries
+ * them); small talk (top-k answers it without a model call when nothing matches); a legacy, partly
+ * chunked document (its sections are not its whole text, so "covers the whole document" would lie).
+ */
+function wholeReadDocumentId(
+  db: Db,
+  scope: RetrievalScope,
+  routableDocs: ReadonlyArray<{ id: string }>,
+  question: string,
+  fitBudgetTokens: number,
+  treeSummary: boolean
+): string | null {
+  if (routableDocs.length !== 1) return null
+  if ((scope.packIds?.length ?? 0) > 0) return null
+  if (isSmallTalk(question)) return null
+  if (!allInScopeDocsFullyChunked(db, scope)) return null
+  const documentId = routableDocs[0]!.id
+  // Each section also carries its `[Sn] File: …` line, which `retrieveWholeDocument` does not charge.
+  if (documentFitsWholeRead(db, documentId, fitBudgetTokens, WHOLE_READ_SECTION_FRAMING_TOKENS)) return documentId
+  // The tree answers only when it is ready AND holds a usable summary (`answerWholeDocFromTree`'s own
+  // gate); otherwise the whole path would fall to the chunk map-reduce.
+  if (treeSummary && wholeDocTreeMaterial(db, documentId) != null) return documentId
+  return null
 }
 
 /** Count in-scope documents with a READY deep-index tree (enables the tree-summary route). */
@@ -507,8 +548,11 @@ export function registerRagIpc(ctx: AppContext): void {
             //     served by top-k, not refused. A DELIVERABLE keeps the whole read and DOES hit the refusal.
             const needleDowngrade =
               isNeedleShaped(text) &&
-              documentApproxTokenTotal(ctx.db, documentId) >
+              !documentFitsWholeRead(
+                ctx.db,
+                documentId,
                 wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, turnSkill)
+              )
             if (!needleDowngrade) {
               // Only a whole (capped/tree) read makes the whole-document claim → enforce the D45 refusal now.
               if (!allInScopeDocsFullyChunked(ctx.db, scope)) return refusePartial()
@@ -624,7 +668,16 @@ export function registerRagIpc(ctx: AppContext): void {
                 // look like this skill's type — answer the user's ACTUAL question via the ordinary grounded
                 // (relevance) path in the SAME locked slot, instead of the misleading empty template. The
                 // turn's skill fence still rides along (parity with the ordinary document path below).
+                // #643: like that path, a document that fits is read whole instead of top-k.
                 if (result.fallThrough) {
+                  const wholeReadId = wholeReadDocumentId(
+                    ctx.db,
+                    scope,
+                    documentsInScope(ctx.db, scope, { requireChunks: true }),
+                    text,
+                    wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, turnSkill),
+                    false
+                  )
                   return generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
                     signal,
                     onCompactionStart: sendCompaction,
@@ -632,6 +685,7 @@ export function registerRagIpc(ctx: AppContext): void {
                     scope,
                     reranker: ctx.reranker,
                     skill: turnSkill,
+                    wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,
                     onToken: sendToken
                   })
                 }
@@ -711,7 +765,8 @@ export function registerRagIpc(ctx: AppContext): void {
       // question over a mapped, PRE-EXTRACTED type is answered by the precomputed SQL
       // aggregation — exhaustive over indexed sections, with provenance, at ZERO query-time
       // model calls. Anything else (incl. an unmapped/ad-hoc {X} with no precomputed table)
-      // falls through to the existing relevance path BYTE-UNCHANGED.
+      // falls through to the final grounded answer below: the relevance path, or the whole
+      // read of a single fitting document (#643 / #642).
       const routableDocs = documentsInScope(ctx.db, scope, { requireChunks: true })
       const decision = routeQuestion({
         question: text,
@@ -848,18 +903,27 @@ export function registerRagIpc(ctx: AppContext): void {
       // deep-index advice: the deep index would not answer it either. A document in scope that
       // was never fully chunked (legacy) has text no section holds, so it always counts as
       // partly read.
-      const scopeSections =
-        decision.confidence === 'low' &&
-        (decision.fallback === 'coverage' || decision.fallback === 'partial') &&
-        routableDocs.length > 0
-          ? scopeSectionTotals(ctx.db, scope)
-          : null
-      const partialCoverageNotice = scopeSections
-        ? {
-            text: tMain(decision.fallback === 'coverage' ? 'analysis.wholeDocHint' : 'analysis.partialAnswerHint'),
-            scopeChunkTotal: scopeSections.partlyChunked ? Number.POSITIVE_INFINITY : scopeSections.sections
-          }
-        : undefined
+      //
+      // #643 / #642: ONE in-scope document that fits the window is read whole instead (every
+      // section in the prompt, so neither notice can be true), and a summary ask over one document
+      // too large for that, with a ready deep index, takes the tree. See `wholeReadDocumentId`.
+      // Both are decided inside the chat slot (below), against the document as the answer reads
+      // it — not before a wait for a yielding document task.
+      const partialCoverageNoticeFor = (wholeRead: boolean): GroundedAnswerOptions['partialCoverageNotice'] => {
+        const scopeSections =
+          !wholeRead &&
+          decision.confidence === 'low' &&
+          (decision.fallback === 'coverage' || decision.fallback === 'partial') &&
+          routableDocs.length > 0
+            ? scopeSectionTotals(ctx.db, scope)
+            : null
+        return scopeSections
+          ? {
+              text: tMain(decision.fallback === 'coverage' ? 'analysis.wholeDocHint' : 'analysis.partialAnswerHint'),
+              scopeChunkTotal: scopeSections.partlyChunked ? Number.POSITIVE_INFINITY : scopeSections.sections
+            }
+          : undefined
+      }
       const relevancePrefix = scopeNotice ? `${scopeNotice}\n\n` : undefined
 
       return withChatStream(
@@ -876,6 +940,15 @@ export function registerRagIpc(ctx: AppContext): void {
           // afterwards (update-in-place of the offer column only) — it never touches the
           // answer content or the stream.
           const offer = await classifierOffer(signal)
+          const wholeReadId = wholeReadDocumentId(
+            ctx.db,
+            scope,
+            documentsInScope(ctx.db, scope, { requireChunks: true }),
+            text,
+            wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
+            decision.engine === 'tree-summary'
+          )
+          const partialCoverageNotice = partialCoverageNoticeFor(wholeReadId != null)
           const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
             signal,
             // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);
@@ -907,6 +980,9 @@ export function registerRagIpc(ctx: AppContext): void {
             // The turn's skill: its fence rides in the grounded user turn; the assistant row is
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,
+            // #643 / #642: the one document read whole (or through its ready deep index) instead
+            // of top-k — `capped`/`tree` coverage; the pack arm and the notice below are top-k only.
+            wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,
             // A3: a needle ask that was auto-narrowed to one doc (W2) and then downgraded off the
             // whole-doc engine reaches HERE — lead the honest scope notice so the narrowing stays
             // visible. #37/#38/#641: the whole-document-question hint or the partial-answer label

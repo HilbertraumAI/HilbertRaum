@@ -742,6 +742,30 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
 }
 
 /**
+ * The material a tree answer reads: the document's title and its deepest node summaries, or `null` when
+ * there is no READY tree with at least one usable summary (then `answerWholeDocFromTree` declines and the
+ * caller's chunk map-reduce runs). Pure reads. Exported so `rag:ask` can route a summary ask to the tree
+ * (#642) only when the tree will actually answer it — never into an unasked-for chunk map-reduce.
+ */
+export function wholeDocTreeMaterial(db: Db, documentId: string): { title: string; nodeTexts: string[] } | null {
+  const meta = db
+    .prepare('SELECT title, tree_status FROM documents WHERE id = ?')
+    .get(documentId) as unknown as { title: string | null; tree_status: string | null } | undefined
+  if (!meta || meta.tree_status !== 'ready') return null
+  // Deepest layer = full leaf coverage (the Tier-3 choice in summarizeFromTree). A degenerate tree
+  // (single level / empty layer) falls back to the stored root summary as the only material.
+  let nodeTexts = nodeSummariesAtLevel(db, documentId, 1)
+  if (nodeTexts.length === 0) {
+    const root = db
+      .prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1 LIMIT 1')
+      .get(documentId) as unknown as { summary_text: string } | undefined
+    if (!root || root.summary_text.trim().length === 0) return null
+    nodeTexts = [root.summary_text]
+  }
+  return { title: meta.title ?? 'Untitled', nodeTexts }
+}
+
+/**
  * Answer a whole-document skill turn from the document's READY deep-index tree, or return `null` when
  * there is no usable tree (caller falls back to the chunk map-reduce / capped path). The pre-model gate
  * (a ready tree + usable node summaries) and the leaf-chunk provenance/coverage reads are pure and done
@@ -765,22 +789,9 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
   } = deps
 
   // Pre-model gate (pure reads): a ready tree + at least one usable node summary, else fall back.
-  const meta = db
-    .prepare('SELECT title, tree_status FROM documents WHERE id = ?')
-    .get(documentId) as unknown as { title: string | null; tree_status: string | null } | undefined
-  if (!meta || meta.tree_status !== 'ready') return null
-  const title = meta.title ?? 'Untitled'
-
-  // Deepest layer = full leaf coverage (the Tier-3 choice in summarizeFromTree). A degenerate tree
-  // (single level / empty layer) falls back to the stored root summary as the only material.
-  let nodeTexts = nodeSummariesAtLevel(db, documentId, 1)
-  if (nodeTexts.length === 0) {
-    const root = db
-      .prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1 LIMIT 1')
-      .get(documentId) as unknown as { summary_text: string } | undefined
-    if (!root || root.summary_text.trim().length === 0) return null
-    nodeTexts = [root.summary_text]
-  }
+  const material = wholeDocTreeMaterial(db, documentId)
+  if (!material) return null
+  const { title, nodeTexts } = material
 
   // Provenance + the whole-tree coverage reads (leaf chunks only — M2). The `truncated` flag is finalized
   // inside the core, after the map-reduce (a ceiling cut or notes truncation covers only the beginning).

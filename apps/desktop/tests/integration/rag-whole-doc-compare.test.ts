@@ -169,6 +169,8 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     expect(userTurn).toContain('textually identical')
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)
+    // #643: the diff shows the model change lines, not the sections — provenance, not labelled excerpts.
+    expect(msg.coverage?.labelledExcerpts).toBeUndefined()
   })
 
   it('a full rewrite (no shared wording) falls back to the labelled whole-doc-compare read', async () => {
@@ -193,6 +195,8 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     expect(userTurn).not.toContain('deterministic word-level comparison')
     expect(userTurn).not.toMatch(/old version|new version/i)
     expect(msg.coverage?.mode).toBe('capped')
+    // #643: both documents' sections were shown under their [Sn] labels.
+    expect(msg.coverage?.labelledExcerpts).toBe(true)
   })
 
   it('refuse path: a not-fully-chunked doc in the pair is refused — fixed message, no model call', async () => {
