@@ -1803,43 +1803,64 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   BUILT (#644, 2026-10-12).** After #641 every quantifier (all/every/each, alle/jede/sämtliche) still
   counted as a list request wherever it stood. Once a deep index with extract data existed, "Gilt die
   Frist für alle Mieter?" got every date in the document at zero model calls. Without extract data,
-  the same question got the deep-index heads-up, which promised that list. Probing ~110 EN/DE phrasings,
-  44 changed decision; every list request and aggregation ask kept its route. Fix (owner calls, all as
-  recommended, the type rule revised once):
+  the same question got the deep-index heads-up, which promised that list. Of ~110 probed EN/DE
+  phrasings, 44 changed decision; every probed list request and aggregation ask kept its route. A review
+  pass probed ~60 more (fillers, polite forms, request verbs, claims, abbreviations). Fix (owner calls,
+  all as recommended; the type rule was revised once):
   (1) `COVERAGE_RE` is split. A list/count verb (`LIST_VERB_RE`: list/enumerate/how many/how much/count,
   liste/wie viele/auflist/aufzähl/zähl) still asks for a list wherever it stands. A quantifier does so
-  only at the HEAD of a request, after the openers a request starts with (please / can you / give me /
-  show me / what are / who are / I need …, bitte / nenne / zeig mir / gib mir / was sind / wie lauten /
-  ich brauche …; `REQUEST_OPENERS`): "Alle Fristen?", "every deadline", "Kannst du mir alle Fristen
-  nennen?", "What are all the deadlines?".
+  only at the HEAD of a request, after the words a request opens with (`REQUEST_OPENERS`: give me /
+  show me / tell me / find / extract / display / what are / who are / I need …, nenne / zeig mir / gib
+  mir / extrahiere / ermittle / schreib / listen Sie / sagen Sie / was sind / wie lauten / ich brauche …,
+  matched longest first). Fillers (please / ok / hi / and, bitte / hallo / und …) are skipped wherever an
+  opener may stand. Examples: "Alle Fristen?", "every deadline", "Bitte nenne mir sämtliche Fristen",
+  "What are all the deadlines?". A missing request verb costs the listing: the request gets the labelled
+  written answer, never the listing for a question.
   (2) A yes/no question is a lookup, even when it carries a list verb ("Does the contract list all the
   deadlines?", "Zählt jede Zahlung zur Miete?"). It gets `{ relevance, high }`: an ordinary answer, no
-  notice and no #80 classification call. A yes/no question is recognised when its first word is an EN
-  auxiliary or modal, or one of the common German finite verbs (`YES_NO_VERBS`; German puts any verb
-  first, so the list is closed and a missing verb costs only the label). "was" and "am" count only before
-  an English subject ("Was every payment on time?" against "Was sind alle Fristen?"). It is also
-  recognised as an embedded "whether"/"ob", or an "if" after an opener ("Tell me if …"). A polite request
-  ("Can you / Could you / Can I see …", "Kannst du / Können Sie / Würden Sie …"; `POLITE_OPENERS`) is
-  not a yes/no question.
+  notice and no #80 classification call. A yes/no question is recognised in three ways:
+  - its first word (after fillers) is an EN auxiliary or modal, or one of the common German finite
+    verbs (`YES_NO_VERBS`). German puts any verb first, so the list is closed: a missing verb gets the
+    label, never the listing. "was" and "am" count only before an English subject ("Was every payment
+    on time?" against "Was sind alle Fristen?", "Was an Gebühren …");
+  - an embedded "whether"/"ob", or an "if" after an opener ("Tell me if …");
+  - a claim about the quantified items, asked or stated: a finite verb after the head quantifier, before
+    any comma or clause word ("Jede Zahlung ist pünktlich eingegangen?", "Each payment is due on the 1st,
+    right?", "Alle Zahlungen sind am Ersten fällig."; but "Alle Fristen, die gelten?" and "Every deadline
+    that is binding?" stay requests).
+
+  A polite request opens like a yes/no question but is not one: a modal before "you / du / Sie / ihr"
+  ("Can you …", "Kannst du …", "Würden Sie …"); a modal before "I / we / man" when the asker asks to see
+  or get the thing, or uses a list verb ("Can I see …", "Kann ich alle Fristen sehen?", "Können wir alle
+  Fristen auflisten?", but "Kann ich alle Zahlungen zurückfordern?" is a yes/no question); or a fixed
+  phrase ("Is it possible to …", "Do you know …", "Would you mind …", "Gibt es eine Liste …").
   (3) A quantifier inside some other question ("When is each payment due?", "Welche Frist gilt für
   alle Mieter?") gets #641's labelled relevance (`fallback: 'partial'`): the listing cannot pair or
-  filter, and the answer covers several items.
+  filter, and the answer covers several items. So does a request whose quantifier follows a phrase
+  ("Kannst du mir ab dem 1. Mai alle Zahlungen zeigen?"); it is not at the head.
   Each sentence is judged on its own ("Ich habe einen Mietvertrag. Gilt die Frist für alle Mieter?"). A
-  period splits a sentence only before a capital, so "inkl. aller" stays one.
+  sentence ends at ? ! ; : and at a period before a capital, except after a number ("1. Mai"), a word of
+  under four letters ("lt.", "gem.") or a listed abbreviation ("inkl."); a line break alone ends none. The
+  list request's own sentence must name the typed thing: "Gilt die Frist für alle Mieter? Liste alle
+  Abkürzungen auf" is an untyped list request, and so is "Welche Fristen gelten? Liste alle auf".
   (4) The issue's type-detection cases: the listing's type is the synonym that the list request's own
-  sentence names first, question words included, otherwise the whole question's first synonym. It is no
-  longer the first table row. So "List every expense and when it was paid" and "List all payments and
-  their due dates" list amounts, "List when every payment is due" lists dates, "List who paid each fee"
-  lists parties, and "What must every tenant pay? List all the fees" lists fees. "terms", "names" /
-  "Namen" and "Daten" left the synonym table ("medical terms", "names of the medications", data), so
-  such an ask is untyped and labelled. The first draft also stripped question words before mapping
-  ("a named noun beats a question word"). It was redundant for the issue's case and listed amounts for
-  "List when every payment is due", so the owner took the sentence-scoped rule instead.
+  sentence names first, otherwise the whole question's first synonym. It is no longer the first table
+  row. Question words take part ("List when every payment is due" lists dates, "List who paid each fee"
+  lists parties). Modals (must/shall/muss/müssen) decide only when nothing else is named ("How many
+  tenants must pay a fee?" lists amounts). So "List every expense and when it was paid" and "List all
+  payments and their due dates" list amounts, and "When was the lease signed? List all the fees" lists
+  fees. "terms", "names" / "Namen" and "Daten" left the synonym table ("medical terms", "names of the
+  medications", data), so such an ask is untyped and labelled. The first draft also stripped question
+  words before mapping ("a named noun beats a question word"). That was redundant for the issue's case
+  and listed amounts for "List when every payment is due", so the owner took the sentence-scoped rule
+  instead.
   Unchanged: explain asks, untyped asks, aggregation asks (including "Are all the costs broken down per
   category?"), the IPC wiring, and the precedence. A demoted question over one fitting document gets
-  the #643 whole read like any other. Router golden rows in `extract-router.test.ts`: 31 fail on master;
-  each of the 21 rule mutations turns the suite red. One #641 pin moved ("Does every employee get a
-  bonus?": labelled → plain).
+  the #643 whole read like any other. Router golden rows in `extract-router.test.ts`: 44 fail on master,
+  and the review's 25 failed on the first draft. Of the 42 rule mutations, 41 turn the suite red; the
+  longest-first sort of the openers changes no decision today (no two openers share a prefix in the
+  wrong order) and stays as a guard. One #641 pin moved ("Does every employee get a bonus?": labelled →
+  plain).
   Real app (dev build, qwen3-4b-instruct-q4 at 4,096; a fictional 2-page lease with a deep index and
   extract data; a scratch root with b11146 and the D: drive with its b9849, alike):
   - On master, "Gilt die Frist für alle Mieter?", "Is each payment due on the first of the month?" and
@@ -1852,11 +1873,18 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   - Over the 12-page report without extract data (6 of 12 sections read), "Wurden alle Termine
     eingehalten?" lost the deep-index heads-up and "Liegen alle LDL-Werte unter 100 mg/dl?" lost the
     label.
-  **Residuals:** "Zählen alle Zahlungen zur Miete?" still lists, because "zählen" is also the formal
-  imperative ("Zählen Sie …"). "Do you have all the deadlines?" gets a plain answer. A noun fragment
-  ("Fristen für alle Mieter?") is labelled. A listing still shows one type ("Liste alle Termine und
-  Beträge auf" lists dates). A "how much" lookup still lists every amount ("How much is the monthly
-  fee?" — #649, which also has to keep sum asks off a silent top-k sum).
+
+  **Residuals** (all recognised by closed word lists):
+  - Still listed: "Zählen alle Zahlungen zur Miete?", because "zählen" is also the request "Zählen
+    Sie …"; and an elliptical claim with no verb ("Alle Zahlungen pünktlich eingegangen?").
+  - "Do you have all the deadlines?" gets a plain answer.
+  - A request whose quantifier follows a phrase, and a request verb missing from the list, get the
+    labelled answer.
+  - A listing still shows one type ("Liste alle Termine und Beträge auf" lists dates).
+  - Pre-existing and filed under #649: a "how much" lookup still lists every amount ("How much is the
+    monthly fee?"); "list"/"Liste" as a noun ("Welche Fristen stehen auf der Liste?") and "zählt als"
+    still list; a sum with a quantifier inside ("Wie hoch ist die Summe aller Zahlungen?") gets the
+    labelled answer, not the coverage route.
 - **Suggestion-only cascade — AS BUILT (issue #80, wave R80; STR-1 §5.2). Truth maintenance on the
   0-model-call claim:** the router itself stays pure and byte-unchanged, and every HAPPY path above
   still answers at 0 query-time model calls — but exactly two decision classes now additionally run

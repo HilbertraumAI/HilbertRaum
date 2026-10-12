@@ -1162,10 +1162,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   carries one ("Gilt die Frist für alle Mieter?", "Does the contract list all the deadlines?") gets an
   ordinary answer with no heads-up. One inside another question ("Welche Frist gilt für alle
   Mieter?") gets the labelled answer. These shapes are also recognised by word lists, so a few still
-  miss. "Zählen alle Zahlungen zur Miete?" still lists, because "zählen" doubles as the request
-  "Zählen Sie …". "Do you have all the deadlines?" gets an ordinary answer rather than the list. A
-  "how much" question about an amount still gets every amount ("How much is the monthly fee?" — #649).
-  A listing shows one kind of item: "Liste alle Termine und Beträge auf" lists the dates. v1 has no live full-scan for unmapped
+  miss:
+  - Still listed: "Zählen alle Zahlungen zur Miete?" ("zählen" doubles as the request "Zählen Sie …")
+    and a claim without a verb ("Alle Zahlungen pünktlich eingegangen?").
+  - "Do you have all the deadlines?" gets an ordinary answer rather than the list.
+  - The written answer instead of the list: a request whose "all" comes after another phrase ("Kannst
+    du mir ab dem 1. Mai alle Zahlungen zeigen?"), and one that opens with a verb the list lacks.
+  - A "how much" question about an amount still gets every amount ("How much is the monthly fee?"). A
+    sum over "all" ("Wie hoch ist die Summe aller Zahlungen?") gets the written answer, not the list.
+    Both are #649.
+  - A listing shows one kind of item: "Liste alle Termine und Beträge auf" lists the dates.
+
+  v1 has no live full-scan for unmapped
   types and does not auto-run the extract pass at import (it is started on request) — both are later
   phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
   **The listing cannot categorize or sum — and since issue #54 (2026-07-17) it says so; since #80
