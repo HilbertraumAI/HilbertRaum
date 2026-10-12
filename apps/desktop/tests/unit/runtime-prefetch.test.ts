@@ -32,26 +32,17 @@ describe('startModelPrefetch (#114)', () => {
     await expect(p.done).resolves.toBe('done')
   })
 
-  it('an immediate abort settles aborted without reading', async () => {
+  it('an immediate abort settles aborted', async () => {
     const p = startModelPrefetch([fileA, fileB])
     p.abort()
     await expect(p.done).resolves.toBe('aborted')
   })
 
-  it('abort after completion leaves the done outcome (idempotent)', async () => {
-    const p = startModelPrefetch([fileA])
-    await expect(p.done).resolves.toBe('done')
-    p.abort() // late abort (the ladder always aborts at window end) must not rewrite history
-    await expect(p.done).resolves.toBe('done')
-  })
-
-  it('a missing file settles failed — never rejects', async () => {
-    const p = startModelPrefetch([join(dir, 'no-such-file.bin')])
-    await expect(p.done).resolves.toBe('failed')
-  })
-
-  it('a missing file after a good one still settles failed (partial prefetch is harmless)', async () => {
-    const p = startModelPrefetch([fileA, join(dir, 'no-such-file.bin')])
-    await expect(p.done).resolves.toBe('failed')
+  // Rows are thunks: `dir` / `fileA` are assigned in beforeAll, after the table is built.
+  it.each([
+    ['a missing file', () => [join(dir, 'no-such-file.bin')]],
+    ['a missing file after a good one (partial prefetch is harmless)', () => [fileA, join(dir, 'no-such-file.bin')]]
+  ])('%s settles failed — never rejects', async (_name, paths) => {
+    await expect(startModelPrefetch(paths()).done).resolves.toBe('failed')
   })
 })

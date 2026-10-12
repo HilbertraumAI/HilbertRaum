@@ -17,7 +17,7 @@ import {
 // interpolated, so the Documents row can name it.
 
 /** The persist-canonical row text for an engine the OS refused to start. */
-export function engineProblemRowMessage(problem: EngineProblem): string {
+function engineProblemRowMessage(problem: EngineProblem): string {
   if (problem.family === 'whisper_cpp') return t('en', 'main.ingest.voiceEngineCannotRun')
   if (problem.reason === 'library-missing' && problem.name) {
     return t('en', 'main.ingest.engineLibraryMissing', { library: problem.name })

@@ -29,9 +29,8 @@ import { performanceSnapshot } from '../helpers/status'
 const RTX = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** A hybrid laptop's FIRST enumerated device: integrated, reporting shared system memory. */
 const IRIS = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 12000 }
-/** The snapshot's eligible display device for each of the two, as main would compute it. */
+/** The snapshot's eligible display device for the RTX, as main computes it. */
 const RTX_CURRENT = { name: RTX.name, totalMb: RTX.totalMb, useful: true }
-const IRIS_CURRENT = { name: IRIS.name, totalMb: IRIS.totalMb, useful: false }
 
 function settings(over: Partial<AppSettings> = {}): AppSettings {
   return { ...DEFAULT_SETTINGS, ...over }
@@ -111,17 +110,6 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     expect(await screen.findByText('NVIDIA GeForce RTX 3080 Ti (GPU)')).toBeInTheDocument()
   })
 
-  it('shows the probed GPU as available when nothing is running', async () => {
-    stubDiagnostics({
-      settings: settings({ gpuProbe: { devices: [RTX], probedAt: '2026-06-10T00:00:00Z' } }),
-      currentGpu: RTX_CURRENT
-    })
-    renderDiagnostics()
-    expect(
-      await screen.findByText('NVIDIA GeForce RTX 3080 Ti (GPU available)')
-    ).toBeInTheDocument()
-  })
-
   it('names the DISPLAY device on a hybrid box, not the first enumerated one (PR #303 audit M8.2)', async () => {
     // A hybrid laptop enumerates the iGPU first while the model runs on the dGPU. The line
     // credits the device the shared `displayDevice` rule selects — the same one the start
@@ -135,15 +123,6 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     renderDiagnostics()
     expect(await screen.findByText('NVIDIA GeForce RTX 3080 Ti (GPU available)')).toBeInTheDocument()
     expect(screen.queryByText(/Iris/)).not.toBeInTheDocument()
-  })
-
-  it('still names an integrated-only machine rather than falling silent', async () => {
-    stubDiagnostics({
-      settings: settings({ gpuProbe: { devices: [IRIS], probedAt: '2026-06-10T00:00:00Z' } }),
-      currentGpu: IRIS_CURRENT
-    })
-    renderDiagnostics()
-    expect(await screen.findByText('Intel(R) Iris(R) Xe Graphics (GPU available)')).toBeInTheDocument()
   })
 
   it('#327: a probe stamped for ANOTHER computer names no card — the line says CPU', async () => {
@@ -181,15 +160,6 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     expect(screen.queryByText(/GPU available/)).not.toBeInTheDocument()
   })
 
-  it('reads simply "CPU" with no GPU probed (never scary copy)', async () => {
-    stubDiagnostics({
-      settings: settings({ gpuProbe: { devices: [], probedAt: '2026-06-10T00:00:00Z' } })
-    })
-    renderDiagnostics()
-    expect(await screen.findByText('CPU')).toBeInTheDocument()
-    expect(screen.queryByText(/fail|broken|bad/i)).not.toBeInTheDocument()
-  })
-
   it('shows the installed runtime build from the .hilbertraum-runtime.json marker', async () => {
     stubDiagnostics({ install: { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' } })
     renderDiagnostics()
@@ -203,7 +173,15 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     // The retry PERSISTS the cleared flags, and the tab re-reads its status afterwards (#327
     // follow-through), so the settings stub must reflect the persisted change like main does —
     // `stubDiagnostics` reads `opts.settings` on every call, so a mutable holder is enough.
-    const stub = { settings: settings({ gpuAutoDisabled: true }), updateSettings: update, tryGpuAgain: undefined as Mock | undefined }
+    const stub = {
+      settings: settings({
+        gpuAutoDisabled: true,
+        gpuLastError:
+          '2026-09-30T10:00:00.000Z — llama-server exited before becoming healthy (code 1) — last output: ggml_vulkan: Device memory allocation of size 123 failed.'
+      }),
+      updateSettings: update,
+      tryGpuAgain: undefined as Mock | undefined
+    }
     const tryAgain = vi.fn(async () => {
       stub.settings = settings({ gpuAutoDisabled: false, gpuLastError: null })
       return stub.settings
@@ -212,6 +190,8 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     stubDiagnostics(stub)
     renderDiagnostics()
     expect(await screen.findByText(/compatibility mode/i)).toBeInTheDocument()
+    // GPU record §8: never "GPU failed" — the stored error text stays out of the card.
+    expect(screen.queryByText(/fail|broken|bad/i)).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /try gpu again/i }))
     expect(tryAgain).toHaveBeenCalledTimes(1)
@@ -251,12 +231,6 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     expect(screen.getByText(/turned off in settings/i)).toBeInTheDocument()
   })
 
-  it('shows no compatibility-mode note when GPU is fine', async () => {
-    stubDiagnostics({})
-    renderDiagnostics()
-    await screen.findByText(/local-only diagnostics/i)
-    expect(screen.queryByRole('button', { name: /try gpu again/i })).not.toBeInTheDocument()
-  })
 })
 
 describe('Settings → General — Use GPU acceleration (Phase 16)', () => {

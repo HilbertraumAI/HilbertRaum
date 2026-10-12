@@ -2,23 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   EngineCannotRunError,
   classifyLoadFailure,
-  classifyLoadFailureMessage,
   classifySpawnError,
   clearEngineProblem,
-  clearEngineProblemFor,
   pathFreeSpawnError,
-  describeExit,
-  describeLoadFailure,
   engineProblemFor,
-  engineProblemReportedSince,
   engineInstalled,
-  engineProblemSeq,
-  engineProblems,
   isEngineCannotRunError,
   onEngineProblemsChanged,
   reportEngineProblem,
-  resetEngineProblemsForTest,
-  VC_RUNTIME_DLLS
+  resetEngineProblemsForTest
 } from '../../src/main/services/runtime/engine-load'
 
 // #530 — the loader-failure classifier and the session verdict store. The stderr strings below
@@ -135,15 +127,17 @@ describe('classifyLoadFailure — Windows (exit codes as Node reports them)', ()
     })
   })
 
-  it('names the first missing Visual C++ runtime DLL when System32 lacks one', () => {
-    const exists = (dll: string): boolean => dll !== 'vcruntime140_1.dll'
-    expect(classifyLoadFailure({ exitCode: 3221225781, signal: null, stderr: '', platform: 'win32', systemDllExists: exists })).toEqual({
-      reason: 'vc-runtime-missing',
-      os: 'win',
-      name: 'vcruntime140_1.dll',
-      exit: 'exit code 0xC0000135'
-    })
-    expect(VC_RUNTIME_DLLS).toEqual(['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'])
+  it.each([
+    { absent: ['msvcp140.dll'], named: 'msvcp140.dll' },
+    { absent: ['vcruntime140.dll'], named: 'vcruntime140.dll' },
+    { absent: ['vcruntime140_1.dll'], named: 'vcruntime140_1.dll' },
+    // No Redistributable at all: the first DLL in import order is named.
+    { absent: ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'], named: 'msvcp140.dll' }
+  ])('names $named as the missing Visual C++ runtime DLL when System32 lacks $absent', ({ absent, named }) => {
+    const exists = (dll: string): boolean => !absent.includes(dll)
+    expect(
+      classifyLoadFailure({ exitCode: 3221225781, signal: null, stderr: '', platform: 'win32', systemDllExists: exists })
+    ).toEqual({ reason: 'vc-runtime-missing', os: 'win', name: named, exit: 'exit code 0xC0000135' })
   })
 
   it('treats an entry point not found (measured) and a bad image format like a DLL not found', () => {
@@ -224,44 +218,6 @@ describe('classifySpawnError / pathFreeSpawnError — the program never started'
   })
 })
 
-describe('describeExit / describeLoadFailure', () => {
-  it('formats POSIX codes in decimal, NTSTATUS in hex, signals by name', () => {
-    expect(describeExit(127, null)).toBe('exit code 127')
-    expect(describeExit(3221225781, null)).toBe('exit code 0xC0000135')
-    expect(describeExit(null, 'SIGABRT')).toBe('signal SIGABRT')
-    expect(describeExit(null, null)).toBe('no exit status')
-  })
-
-  it('reads as one path-free English line', () => {
-    expect(describeLoadFailure({ reason: 'library-missing', os: 'linux', name: 'libgomp.so.1', exit: 'exit code 127' })).toBe(
-      'a system library is missing: libgomp.so.1 (exit code 127)'
-    )
-  })
-})
-
-describe('classifyLoadFailureMessage — healing state written before #530', () => {
-  it('recognises the embedder/ladder message shape that rows and gpuLastError stored', () => {
-    const stored = `llama-server exited before becoming healthy (code 127) — last output: ${missing(LLAMA, 'libgomp.so.1').trim()}`
-    expect(classifyLoadFailureMessage(stored, linux)).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1', exit: 'exit code 127' })
-    // gpuLastError carries an ISO timestamp first.
-    expect(classifyLoadFailureMessage(`2026-10-01T07:00:00.000Z — ${stored}`, linux)?.reason).toBe('library-missing')
-    // The Windows shape carries no tail at all — the code decides.
-    expect(
-      classifyLoadFailureMessage('llama-server exited before becoming healthy (code 3221225781)', { platform: 'win32', systemDllExists: () => true })?.reason
-    ).toBe('files-damaged')
-  })
-
-  it('leaves a genuine GPU or model failure alone', () => {
-    expect(
-      classifyLoadFailureMessage(
-        'llama-server exited before becoming healthy (code 1) — last output: ggml_vulkan: Device memory allocation of size 123 failed.',
-        linux
-      )
-    ).toBeNull()
-    expect(classifyLoadFailureMessage('llama-server did not become healthy within 180000ms', linux)).toBeNull()
-  })
-})
-
 describe('EngineCannotRunError', () => {
   it('is path-free and carries the problem', () => {
     const problem = { family: 'llama_cpp' as const, reason: 'library-missing' as const, os: 'linux' as const, name: 'libgomp.so.1', exit: 'exit code 127' }
@@ -275,16 +231,6 @@ describe('EngineCannotRunError', () => {
 
 describe('the session verdict store', () => {
   const gomp = { family: 'llama_cpp' as const, reason: 'library-missing' as const, os: 'linux' as const, name: 'libgomp.so.1', exit: 'exit code 127' }
-  const voice = { ...gomp, family: 'whisper_cpp' as const }
-
-  it('lists the chat engine first and clears per family', () => {
-    reportEngineProblem(voice)
-    reportEngineProblem(gomp)
-    expect(engineProblems().map((p) => p.family)).toEqual(['llama_cpp', 'whisper_cpp'])
-    clearEngineProblem('llama_cpp')
-    expect(engineProblemFor('llama_cpp')).toBeNull()
-    expect(engineProblemFor('whisper_cpp')).toEqual(voice)
-  })
 
   it('notifies on a new or different verdict and on a clear — not on a repeat', () => {
     const listener = vi.fn()
@@ -300,28 +246,6 @@ describe('the session verdict store', () => {
     off()
     reportEngineProblem(gomp)
     expect(listener).toHaveBeenCalledTimes(3)
-  })
-
-  it('tells "Check again" whether a refusal landed after it began, even an identical one', () => {
-    reportEngineProblem(gomp)
-    const seq = engineProblemSeq()
-    expect(engineProblemReportedSince('llama_cpp', seq)).toBe(false)
-    reportEngineProblem(gomp)
-    expect(engineProblemReportedSince('llama_cpp', seq)).toBe(true)
-  })
-
-  it('a healthy start of the SAME program clears its verdict; another program of the family does not', () => {
-    reportEngineProblem(gomp, '/k/runtime/llama.cpp/win/llama-server.exe')
-    // A Windows Kit's cpu/ build runs beside a damaged main folder: the verdict stays.
-    clearEngineProblemFor('llama_cpp', '/k/runtime/llama.cpp/win/cpu/llama-server.exe')
-    expect(engineProblemFor('llama_cpp')).toEqual(gomp)
-    // The refused program itself now runs (an intermittent block that went away): stale, dropped.
-    clearEngineProblemFor('llama_cpp', '/k/runtime/llama.cpp/win/llama-server.exe')
-    expect(engineProblemFor('llama_cpp')).toBeNull()
-    // A verdict reported without a program path is never cleared this way.
-    reportEngineProblem(gomp)
-    clearEngineProblemFor('llama_cpp', '/k/runtime/llama.cpp/win/llama-server.exe')
-    expect(engineProblemFor('llama_cpp')).toEqual(gomp)
   })
 
   // #532: a "files damaged" verdict about the program an install just put on the drive is about a

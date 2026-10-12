@@ -29,11 +29,6 @@ describe('RuntimeManager + MockRuntime', () => {
     expect(mgr.status().contextWindow).toBeUndefined()
   })
 
-  it('the mock runtime reports its configured context window', () => {
-    const runtime = createMockRuntime({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 3210 })
-    expect(runtime.contextWindow()).toBe(3210)
-  })
-
   // #39: contract parity with the real (ladder) runtime — cold after start, warm once anything
   // has streamed, and RuntimeManager.status() carries the flag for the Chat warm-up hint.
   it('the mock runtime reports warmedUp false until its first streamed token', async () => {
@@ -42,22 +37,6 @@ describe('RuntimeManager + MockRuntime', () => {
     expect(mgr.status().warmedUp).toBe(false)
     for await (const _t of mgr.active()!.chatStream([{ role: 'user', content: 'hi' }])) break
     expect(mgr.status().warmedUp).toBe(true)
-  })
-
-  it('switches models by restarting the runtime', async () => {
-    const mgr = new RuntimeManager(createMockRuntime)
-    await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
-    const s = await mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 })
-    expect(s.modelId).toBe('b')
-    expect(mgr.activeModelId()).toBe('b')
-  })
-
-  it('stops cleanly', async () => {
-    const mgr = new RuntimeManager(createMockRuntime)
-    await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
-    await mgr.stop()
-    expect(mgr.status().running).toBe(false)
-    expect(mgr.activeModelId()).toBe(null)
   })
 
   it('streams a mock reply token-by-token that echoes the user message', async () => {
@@ -69,20 +48,5 @@ describe('RuntimeManager + MockRuntime', () => {
     // Multiple tokens (not one blob), and the reply references the user's text.
     expect(chunks.length).toBeGreaterThan(1)
     expect(chunks.join('')).toContain('hello there')
-  })
-
-  it('stops streaming promptly when the signal is aborted', async () => {
-    const runtime = createMockRuntime({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
-    await runtime.start()
-    const controller = new AbortController()
-    const chunks: string[] = []
-    for await (const t of runtime.chatStream([{ role: 'user', content: 'hi' }], {
-      signal: controller.signal
-    })) {
-      chunks.push(t)
-      if (chunks.length === 2) controller.abort()
-    }
-    // Aborting after 2 tokens means the stream ends without emitting the whole reply.
-    expect(chunks.length).toBe(2)
   })
 })

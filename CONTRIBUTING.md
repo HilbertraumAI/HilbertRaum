@@ -150,6 +150,18 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `audit-capture`, `db-spy`, `scripted-runtime`, `skills-world` (the skills-IPC and RAG-ask
   contexts; the importing file must `vi.mock('electron', …)`) and `chat-fixtures`. Extend them
   rather than copying setup into a new suite; keep a local copy only where it deliberately differs.
+- **Pin the bound that ships, not a shorter test-only one.** `RuntimeManager` once took timing
+  options only tests passed: they proved a 50 ms teardown bound and a 0 or 60,000 ms probe TTL while
+  5 s and 10 s shipped, and a probe test passed with the start's probe time never recorded. Drive
+  the real constant with fake timers (`vi.useFakeTimers({ toFake: ['performance'] })` for a
+  `performance.now()` clock) and advance to just past it, and to just short of it.
+- **`expect(() => fn()).not.toThrow()` proves nothing when `fn` is async**: a rejection is not a
+  throw. Await the outcome, or call `fn` again and assert what the guard re-armed.
+- **The start-ladder fake lives in `tests/helpers/ladder-harness.ts`** (fake rungs and their stderr,
+  the probe, prefetch, warm-up and every ladder hook recorded), shared by `runtime-ladder.test.ts`
+  and `placement-wiring.test.ts`. Its `chatCalls` records only the fake llama's stream, never the
+  mock's: a "never warms up / never prefetches" negative reads the ladder's own `warmups` /
+  `prefetchEvents`. Suites whose rungs are the real `LlamaServer` keep their own harnesses.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

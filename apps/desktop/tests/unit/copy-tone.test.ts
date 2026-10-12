@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { NO_DOCUMENT_CONTEXT_ANSWER, REINDEX_NEEDED_ANSWER } from '../../src/main/services/rag'
-import { COMPATIBILITY_MODE_NOTICE } from '../../src/main/services/runtime/factory'
+import { t } from '../../src/shared/i18n'
 
 // Phase 27 copy-tone guard (guidelines §7): keeps the swept user-facing strings swept.
 // Two layers: (1) tone assertions on the exported user-facing constants — calm, no
@@ -97,7 +97,7 @@ describe('user-facing constants follow the §7 voice', () => {
   it.each([
     ['NO_DOCUMENT_CONTEXT_ANSWER', NO_DOCUMENT_CONTEXT_ANSWER],
     ['REINDEX_NEEDED_ANSWER', REINDEX_NEEDED_ANSWER],
-    ['COMPATIBILITY_MODE_NOTICE', COMPATIBILITY_MODE_NOTICE]
+    ['main.runtime.compatibilityMode', t('en', 'main.runtime.compatibilityMode')]
   ])('%s is calm and jargon-free', (_name, text) => {
     expect(text).not.toMatch(/!/) // no exclamation marks in failure states
     expect(text).not.toMatch(/checksum|exit code|GPU|embedding model|quantization/i)

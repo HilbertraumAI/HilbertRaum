@@ -38,7 +38,7 @@ import type { ChildProcessLike, SpawnFn } from './sidecar'
  * concurrent weight upload; a slower drive would have crossed this bound and stamped a
  * card machine as "None".
  */
-export const DEFAULT_PROBE_TIMEOUT_MS = 10_000
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000
 
 /**
  * Parse `llama-server --list-devices` stdout. Pure (fixture-tested). Expected lines:
@@ -65,12 +65,9 @@ export function parseListDevices(stdout: string): GpuDevice[] {
 }
 
 // The usefulness rules — `looksIntegrated`, the `GPU_BUMP_MIN_VRAM_MB` gate (5 GiB since #321) and
-// `gpuUsefulForProfile` (GPU record §8) — moved VERBATIM to `shared/gpu-rules.ts` with the
-// PR #303 audit (M8 / N3): the Performance screen must rate a device by the same definition
-// the profile bump and the memory class use, and the renderer cannot import this module (it
-// spawns). Re-exported here so every existing import site is unchanged; the bump's semantics
-// are untouched (owner decision G4).
-export { GPU_BUMP_MIN_VRAM_MB, gpuUsefulForProfile, looksIntegrated } from '../../../shared/gpu-rules'
+// `gpuUsefulForProfile` (GPU record §8) — live in `shared/gpu-rules.ts` since the PR #303 audit
+// (M8 / N3): the Performance screen must rate a device by the same definition the profile bump
+// and the memory class use, and the renderer cannot import this module (it spawns).
 
 export interface GpuProbeDeps {
   /** Injected spawn (the same `SpawnFn` seam the sidecar uses) — tests fake it. */

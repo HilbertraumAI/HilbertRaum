@@ -308,7 +308,7 @@ export class RuntimeManager {
   // No per-lane registry sees them all, so the busy signal lives HERE: `doStart` wraps the
   // factory-returned runtime (ladder AND mock — the gate CI exercises is the shipped one)
   // in a decorator whose chatStream counts per-lane in-flight generations. External
-  // admission (the local API) reads `isGenerating()` and FAILS CLOSED: no active runtime
+  // admission (the local API) reads `isExternallyBusy()`, which FAILS CLOSED: no active runtime
   // (which includes the whole start window — the #109 warm-up generation runs against the
   // inner rung runtime while `active()` is still null) means "busy", never "idle".
   /** In-flight generation count per lane; mutated only inside the gate wrapper. */
@@ -333,7 +333,6 @@ export class RuntimeManager {
    * misbehaving consumer never resumes its generator.
    */
   private externalPreemptionHook: ((reason: string) => void) | null = null
-  private readonly externalTeardownTimeoutMs: number
   /**
    * Narrow change seam (PR #303 P3): fired synchronously AFTER every transition `status()`
    * reports differently — a start admitted (`startingModelId` set), a start committed
@@ -373,27 +372,23 @@ export class RuntimeManager {
   /** #599: when the last `/health` re-probe settled (`performance.now()`), and the one in flight. */
   private probedAt = 0
   private probeInFlight: Promise<void> | null = null
-  private readonly healthProbeTtlMs: number
   /** #599: starts requested and not yet settled (`beginStartRequest`), the weight check included. */
   private startRequests = 0
 
   constructor(
     private readonly factory: RuntimeFactory,
     opts?: {
-      externalTeardownTimeoutMs?: number
-      healthProbeTtlMs?: number
       /**
        * #473 ruling 2: awaited by EVERY start — Start, a switch, the auto-start, Restart and the
        * crash restarts — after the old runtime stopped and before the factory spawns, while the
-       * start is already visible as starting. A quit, Stop or lock meanwhile cancels the start. The composition uses it to take a translation
-       * sidecar off the graphics card first, because a chat model that starts second stays
-       * squeezed until it is restarted. Must never throw.
+       * start is already visible as starting. A quit, Stop or lock meanwhile cancels the start.
+       * The composition uses it to take a translation sidecar off the graphics card first,
+       * because a chat model that starts second stays squeezed until it is restarted. Must never
+       * throw.
        */
       beforeStart?: (opts: RuntimeStartOptions) => Promise<void>
     }
   ) {
-    this.externalTeardownTimeoutMs = opts?.externalTeardownTimeoutMs ?? EXTERNAL_TEARDOWN_TIMEOUT_MS
-    this.healthProbeTtlMs = opts?.healthProbeTtlMs ?? HEALTH_PROBE_TTL_MS
     this.beforeStart = opts?.beforeStart
   }
 
@@ -461,7 +456,7 @@ export class RuntimeManager {
   }
 
   /**
-   * #599: re-check the running model's `/health`, at most once per `healthProbeTtlMs`. Called by the
+   * #599: re-check the running model's `/health`, at most once per `HEALTH_PROBE_TTL_MS`. Called by the
    * status read (`getRuntimeStatus`), never by a timer, so an idle app probes nothing. A failed
    * probe marks the model unresponsive until a later probe passes; concurrent reads share one
    * probe, and a probe that outlives a stop or switch is discarded.
@@ -470,7 +465,7 @@ export class RuntimeManager {
     const runtime = this.current
     if (!runtime) return Promise.resolve()
     if (this.probeInFlight) return this.probeInFlight
-    if (performance.now() - this.probedAt < this.healthProbeTtlMs) return Promise.resolve()
+    if (performance.now() - this.probedAt < HEALTH_PROBE_TTL_MS) return Promise.resolve()
     const probe = (async () => {
       let health: HealthStatus
       try {
@@ -583,7 +578,7 @@ export class RuntimeManager {
         this.externalIdleWaiters = this.externalIdleWaiters.filter((w) => w !== settle)
         resolve()
       }
-      const timer = setTimeout(settle, this.externalTeardownTimeoutMs)
+      const timer = setTimeout(settle, EXTERNAL_TEARDOWN_TIMEOUT_MS)
       ;(timer as { unref?: () => void }).unref?.()
       signal?.addEventListener('abort', settle, { once: true })
       this.externalIdleWaiters.push(settle)

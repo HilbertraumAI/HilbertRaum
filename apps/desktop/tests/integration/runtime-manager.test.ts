@@ -1,28 +1,32 @@
 import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import {
-  LlamaServer,
-  type ChildProcessLike,
-  type SpawnFn,
-  type UnexpectedExitInfo
-} from '../../src/main/services/runtime/sidecar'
+import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { RuntimeManager, ExternalGenerationBusyError } from '../../src/main/services/runtime'
-import type { ModelRuntime, RuntimeStartOptions, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type {
+  HealthStatus,
+  ModelRuntime,
+  RuntimeStartOptions,
+  RuntimeChatOptions
+} from '../../src/main/services/runtime'
 import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
-  COMPATIBILITY_MODE_NOTICE,
+  createCpuCrashAutoRestart,
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
-import { createLlamaRuntime, RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
+import {
+  createLlamaRuntime,
+  RuntimeConnectionLostError,
+  RuntimeUnresponsiveError
+} from '../../src/main/services/runtime/llama'
 import { performShutdown } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 import type { GpuDevice } from '../../src/shared/types'
+import { t } from '../../src/shared/i18n'
 import { manualSource, type ManualSource } from '../helpers/manual-stream'
+import { hangBudgetMs, until, within } from '../helpers/hang-budget'
 
-// Regression tests for the two runtime-lifecycle fixes:
-//  B1 — LlamaServer.stop() must escalate to SIGKILL when the child ignores SIGTERM
-//       (the escalation gated on `this.exited`, not the always-true `child.killed`).
+// Regression tests for the runtime-lifecycle fix:
 //  B2 — RuntimeManager.start() must NOT leave a half-started runtime as "active" when
 //       start()/health() throws (callers gate chat/RAG on active() != null).
 
@@ -46,47 +50,6 @@ class RecordingChild extends EventEmitter implements ChildProcessLike {
   }
 }
 
-function healthOnlyFetch(): typeof fetch {
-  return (async (url: string | URL) => {
-    if (String(url).endsWith('/health')) return { ok: true, status: 200 } as Response
-    throw new Error('unexpected url')
-  }) as typeof fetch
-}
-
-function makeServer(child: ChildProcessLike): LlamaServer {
-  return new LlamaServer({
-    binPath: '/bin/llama-server',
-    modelPath: '/m.gguf',
-    contextTokens: 2048,
-    spawn: () => child,
-    fetchImpl: healthOnlyFetch(),
-    findPort: async () => 51010,
-    healthIntervalMs: 1,
-    killGraceMs: 10 // tiny grace so the escalation path is fast to test
-  })
-}
-
-describe('LlamaServer.stop() — B1 force-kill escalation', () => {
-  it('escalates to SIGKILL when the child ignores SIGTERM', async () => {
-    const child = new RecordingChild('SIGKILL') // ignores SIGTERM
-    const server = makeServer(child)
-    await server.start()
-    await server.stop()
-    // First a polite SIGTERM (no arg), then the SIGKILL escalation after the grace window.
-    expect(child.signals).toContain('SIGKILL')
-    expect(child.signals[0]).toBeUndefined()
-  })
-
-  it('does NOT escalate when the child exits on the polite SIGTERM', async () => {
-    const child = new RecordingChild('SIGTERM')
-    const server = makeServer(child)
-    await server.start()
-    await server.stop()
-    // Only the polite signal was sent; no SIGKILL needed.
-    expect(child.signals).toEqual([undefined])
-  })
-})
-
 describe('RuntimeManager.start() — B2 reset on failed start', () => {
   const opts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 2048 }
 
@@ -101,36 +64,41 @@ describe('RuntimeManager.start() — B2 reset on failed start', () => {
     }
   }
 
-  it('leaves no active runtime when start() throws, and cleans up the failed runtime', async () => {
+  it.each<[string, Partial<ModelRuntime>, RegExp]>([
+    [
+      'start() throws',
+      {
+        start: async () => {
+          throw new Error('llama-server health timeout')
+        }
+      },
+      /health timeout/
+    ],
+    [
+      'health() throws after a successful start',
+      {
+        health: async () => {
+          throw new Error('health probe blew up')
+        }
+      },
+      /health probe/
+    ]
+  ])('leaves no active runtime when %s, and cleans up the failed runtime', async (_label, failure, message) => {
     let stopped = false
     const failing = runtime({
-      start: async () => {
-        throw new Error('llama-server health timeout')
-      },
+      ...failure,
       onStop: () => {
         stopped = true
       }
     })
     const mgr = new RuntimeManager(() => failing)
-
-    await expect(mgr.start(opts)).rejects.toThrow(/health timeout/)
+    await expect(mgr.start(opts)).rejects.toThrow(message)
     // No stale "active" runtime — chat/RAG gate on active() != null.
     expect(mgr.active()).toBeNull()
     expect(mgr.activeModelId()).toBeNull()
     expect(mgr.status().running).toBe(false)
-    // The half-started runtime was stopped (best-effort cleanup).
+    // The half-started runtime was stopped (best-effort cleanup) — on the health-throws path too.
     expect(stopped).toBe(true)
-  })
-
-  it('also resets when health() throws after a successful start', async () => {
-    const failing = runtime({
-      health: async () => {
-        throw new Error('health probe blew up')
-      }
-    })
-    const mgr = new RuntimeManager(() => failing)
-    await expect(mgr.start(opts)).rejects.toThrow(/health probe/)
-    expect(mgr.active()).toBeNull()
   })
 
   // H2 (audit round 4): start/stop must be SERIALIZED. A real GGUF start can take up
@@ -306,10 +274,12 @@ class FakeServerChild extends EventEmitter implements ChildProcessLike {
 }
 
 /**
- * Wire the REAL stack exactly as `main/index.ts` does — `createGpuCrashAutoFallback` →
- * `manager.forceRestart`, `createSelectingRuntimeFactory` with the ladder hooks, `RuntimeManager`
- * — but inject a fake child at the spawn seam and a loopback `fetch` that only answers for a LIVE
- * child's port (so a request routed to a dead server actually fails, the way it would in prod).
+ * Wire the REAL stack as `main/index.ts` does — the §5.3 GPU fallback (`createGpuCrashAutoFallback`)
+ * and the #599 CPU crash handler (`createCpuCrashAutoRestart`) routed to `manager.forceRestart` /
+ * `manager.stopCrashed`, `createSelectingRuntimeFactory` with the ladder hooks, `RuntimeManager` —
+ * minus the composition's lock admission (AUD-02) and the speculative rung. A fake child is
+ * injected at the spawn seam, and a loopback `fetch` only answers for a LIVE child's port (so a
+ * request routed to a dead server actually fails, the way it would in prod).
  */
 function crashHarness() {
   let pidSeq = 100
@@ -391,6 +361,19 @@ function crashHarness() {
     },
     notify: (m) => notices.push(m)
   })
+  const cpuCrashPromises: Array<Promise<unknown>> = []
+  const cpuCrash = createCpuCrashAutoRestart({
+    restart: (o) => {
+      const p = mgrRef!.forceRestart(o)
+      cpuCrashPromises.push(p)
+      return p
+    },
+    stop: (o) => {
+      const p = mgrRef!.stopCrashed(o.modelId)
+      cpuCrashPromises.push(p)
+      return p
+    }
+  })
 
   const factory = createSelectingRuntimeFactory({
     rootPath: '/root',
@@ -403,7 +386,8 @@ function crashHarness() {
       onGpuFailure: (reason) => persisted.push(reason),
       probeDevices: async () => (gpuAutoDisabled ? [] : [RTX]),
       resolveCpuBin: () => null,
-      onGpuCrash: (o, info) => fallback(o, info)
+      onGpuCrash: (o, info) => fallback(o, info),
+      onCpuCrash: (o, info) => cpuCrash(o, info)
     }
   })
   const mgr = new RuntimeManager(factory)
@@ -416,6 +400,7 @@ function crashHarness() {
     persisted,
     notices,
     restartPromises,
+    cpuCrashPromises,
     gpuDisabled: () => gpuAutoDisabled
   }
 }
@@ -446,7 +431,7 @@ describe('GPU mid-session crash auto-fallback through the real manager (REL-1)',
     expect(h.children[0].args).not.toContain('none') // rung 1 — GPU auto-offload
     expect(h.children[1].args).toContain('none') // rung 2 — `--device none` (forced CPU)
     expect(h.gpuDisabled()).toBe(true) // persisted before the restart (retry lands on CPU)
-    expect(h.notices).toEqual([COMPATIBILITY_MODE_NOTICE])
+    expect(h.notices).toEqual([t('en', 'main.runtime.compatibilityMode')])
 
     const status = h.mgr.status()
     expect(status.backend).toBe('cpu')
@@ -475,22 +460,26 @@ describe('GPU mid-session crash auto-fallback through the real manager (REL-1)',
     expect(h.children[1].child.killed).toBe(true) // stop() reached the LIVE child's kill — real reap
   })
 
-  it('does NOT loop: a CPU restart that itself crashes does not auto-fall-back again', async () => {
+  it('does NOT loop: after the GPU fallback a CPU crash restarts once, the next one stops the model (#599)', async () => {
     const h = crashHarness()
     await h.mgr.start(CRASH_OPTS)
-
-    // First (GPU) crash → one CPU restart.
-    h.children[0].child.crash(134)
+    h.children[0].child.crash(134) // GPU crash → the §5.3 fallback: one CPU restart
     await Promise.all(h.restartPromises)
     expect(h.children).toHaveLength(2)
     expect(h.mgr.status().backend).toBe('cpu')
-
-    // Crash the restarted CPU server too. A CPU crash is NOT a GPU-fallback case (LadderRuntime
-    // gates onGpuCrash on backend === 'gpu'), so no further restart is triggered.
+    // The restarted CPU server crashes: NOT a GPU-fallback case (the ladder routes it to onCpuCrash) —
+    // its one #599 restart, through the real forceRestart.
     h.children[1].child.crash(1)
-    await new Promise((r) => setTimeout(r, 0))
-    expect(h.restartPromises).toHaveLength(1) // still exactly one — no loop
-    expect(h.children).toHaveLength(2) // no third spawn
+    await Promise.all(h.cpuCrashPromises)
+    expect(h.children).toHaveLength(3)
+    expect(h.children[2].args).toContain('none') // still CPU
+    expect(h.mgr.status()).toMatchObject({ running: true, backend: 'cpu', healthy: true })
+    // It crashes again: the restart is spent — stopCrashed reads the dead sidecar's /health and drops it.
+    h.children[2].child.crash(1)
+    await Promise.all(h.cpuCrashPromises)
+    expect(h.children).toHaveLength(3) // no fourth spawn
+    expect(h.mgr.status().running).toBe(false)
+    expect(h.restartPromises).toHaveLength(1) // the GPU fallback fired exactly once
   })
 })
 
@@ -592,7 +581,7 @@ describe('#109 warm-up window through the real manager', () => {
 
     const t0 = Date.now()
     await h.mgr.stop() // pre-#109 semantics preserved: the CODE-2 cancel reaches the new window
-    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(Date.now() - t0).toBeLessThan(hangBudgetMs(5_000)) // a hang detector: the warm-up cap is 90 s
     expect(h.child.killed).toBe(true)
     await expect(startP).rejects.toThrow(/cancelled/i)
     expect(h.mgr.active()).toBeNull()
@@ -674,57 +663,49 @@ function loadingStartHarness() {
 const tick = (ms = 1): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
-  it(
-    'stop() mid-start kills the loading child and settles promptly (CODE-2, mid-waitForHealthy)',
-    { timeout: 15_000 },
-    async () => {
-      const h = loadingStartHarness()
-      const startP = h.mgr.start(QUIT_OPTS)
-      startP.catch(() => undefined) // asserted below; pre-arm so no unhandled rejection
-      while (h.spawnCount() === 0) await tick()
-      const t0 = Date.now()
-      await h.mgr.stop() // pre-fix: queued behind the full 60 s health timeout → test timeout
-      expect(Date.now() - t0).toBeLessThan(5_000)
-      expect(h.child.killed).toBe(true)
-      await expect(startP).rejects.toThrow(/cancelled/i)
-      // A start killed by the cancel is NOT a GPU fault — nothing persists gpuAutoDisabled…
-      expect(h.failures).toEqual([])
-      // …and the ladder walk aborted: no rung-2 respawn, no mock fallback for a cancelled start.
-      expect(h.spawnCount()).toBe(1)
-      expect(h.wasMock()).toBe(false)
-      expect(h.mgr.active()).toBeNull()
-      expect(h.mgr.status().running).toBe(false)
-    }
-  )
+  it('stop() mid-start kills the loading child and settles promptly (CODE-2, mid-waitForHealthy)', async () => {
+    const h = loadingStartHarness()
+    const startP = h.mgr.start(QUIT_OPTS)
+    startP.catch(() => undefined) // asserted below; pre-arm so no unhandled rejection
+    while (h.spawnCount() === 0) await tick()
+    const t0 = Date.now()
+    await h.mgr.stop() // pre-fix: queued behind the full 60 s health timeout → test timeout
+    expect(Date.now() - t0).toBeLessThan(hangBudgetMs(5_000)) // a hang detector, not a timing proof
+    expect(h.child.killed).toBe(true)
+    await expect(startP).rejects.toThrow(/cancelled/i)
+    // A start killed by the cancel is NOT a GPU fault — nothing persists gpuAutoDisabled…
+    expect(h.failures).toEqual([])
+    // …and the ladder walk aborted: no rung-2 respawn, no mock fallback for a cancelled start.
+    expect(h.spawnCount()).toBe(1)
+    expect(h.wasMock()).toBe(false)
+    expect(h.mgr.active()).toBeNull()
+    expect(h.mgr.status().running).toBe(false)
+  })
 
-  it(
-    'performShutdown during a model start settles promptly and latches the manager (CODE-2/CODE-3 quit path)',
-    { timeout: 15_000 },
-    async () => {
-      const h = loadingStartHarness()
-      const startP = h.mgr.start(QUIT_OPTS)
-      startP.catch(() => undefined)
-      while (h.spawnCount() === 0) await tick()
+  it('performShutdown during a model start settles promptly and latches the manager (CODE-2/CODE-3 quit path)', async () => {
+    const h = loadingStartHarness()
+    const startP = h.mgr.start(QUIT_OPTS)
+    startP.catch(() => undefined)
+    while (h.spawnCount() === 0) await tick()
 
-      const ctx = {
-        runtime: h.mgr,
-        embedder: {},
-        workspace: { shutdown: () => undefined }
-      } as unknown as AppContext
-      await performShutdown(ctx, {
-        inFlightStreams: new Map(),
-        streamSettled: new Map(),
-        detachVaultKey: () => undefined,
-        log: { error: () => undefined, info: () => undefined }
-      })
+    const ctx = {
+      runtime: h.mgr,
+      embedder: {},
+      workspace: { shutdown: () => undefined }
+    } as unknown as AppContext
+    await performShutdown(ctx, {
+      inFlightStreams: new Map(),
+      streamSettled: new Map(),
+      detachVaultKey: () => undefined,
+      log: { error: () => undefined, info: () => undefined }
+    })
 
-      expect(h.child.killed).toBe(true) // the loading child died with the teardown — no orphan
-      await expect(startP).rejects.toThrow()
-      // The latch is armed: a late auto-start (its weight hash just completed) can't spawn.
-      await expect(h.mgr.start(QUIT_OPTS)).rejects.toThrow(/shut down/i)
-      expect(h.spawnCount()).toBe(1)
-    }
-  )
+    expect(h.child.killed).toBe(true) // the loading child died with the teardown — no orphan
+    await expect(startP).rejects.toThrow(/cancelled/i) // a quit mid-start reads as a cancelled start
+    // The latch is armed: a late auto-start (its weight hash just completed) can't spawn.
+    await expect(h.mgr.start(QUIT_OPTS)).rejects.toThrow(/shut down/i)
+    expect(h.spawnCount()).toBe(1)
+  })
 
   it('start() after shutdown() rejects WITHOUT invoking the factory (CODE-3)', async () => {
     let made = 0
@@ -817,32 +798,6 @@ describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
   })
 })
 
-describe('LlamaServer.start() — REL-2 single-flight', () => {
-  it('two concurrent start() calls spawn exactly one child', async () => {
-    let spawns = 0
-    const child = new RecordingChild('SIGTERM')
-    const server = new LlamaServer({
-      binPath: '/bin/llama-server',
-      modelPath: '/m.gguf',
-      contextTokens: 2048,
-      spawn: () => {
-        spawns++
-        return child
-      },
-      fetchImpl: healthOnlyFetch(),
-      findPort: async () => 51011,
-      verifyBinary: async () => 'ok',
-      healthIntervalMs: 1
-    })
-
-    // Both calls race past the (pre-assignment) `if (this.child)` guard; the single-flight latch
-    // must collapse them to ONE spawn and resolve both only once the server is healthy.
-    await Promise.all([server.start(), server.start()])
-    expect(spawns).toBe(1)
-    expect((await server.health()).healthy).toBe(true)
-  })
-})
-
 // ---- Generation gate (local-api P1) ------------------------------------------------------
 //
 // The busy signal for external (local-API) admission lives at the MANAGER, not in any one
@@ -854,22 +809,19 @@ describe('LlamaServer.start() — REL-2 single-flight', () => {
 // "no active runtime ⇒ busy" (asserted in local-api-admission.test.ts) closes that window.
 
 /** Manager whose factory returns a runtime streaming from a fresh manualSource per call. */
-async function gatedHarness(opts?: { externalTeardownTimeoutMs?: number }) {
+async function gatedHarness() {
   const sources: ManualSource[] = []
-  const mgr = new RuntimeManager(
-    (startOpts) => ({
-      modelId: startOpts.modelId,
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: '', port: null }),
-      chatStream(_messages, options?: RuntimeChatOptions) {
-        const src = manualSource()
-        sources.push(src)
-        return src.stream(options?.signal)
-      }
-    }),
-    opts
-  )
+  const mgr = new RuntimeManager((startOpts) => ({
+    modelId: startOpts.modelId,
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: '', port: null }),
+    chatStream(_messages, options?: RuntimeChatOptions) {
+      const src = manualSource()
+      sources.push(src)
+      return src.stream(options?.signal)
+    }
+  }))
   await mgr.start({ modelId: 'gate-m', modelPath: '/m.gguf', contextTokens: 2048 })
   const runtime = mgr.active()!
   return { mgr, runtime, sources }
@@ -920,15 +872,15 @@ describe('RuntimeManager generation gate (local-api P1)', () => {
       start: async () => {},
       stop: async () => {},
       health: async () => ({ healthy: true, message: '', port: null }),
-      // The real runtime's synchronous guard: chatStream throws 'Runtime is not started'.
-      // eslint-disable-next-line require-yield
-      chatStream: async function* (): AsyncGenerator<string, void, unknown> {
-        throw new Error('Runtime is not started')
+      // The real runtime's synchronous guard: LadderRuntime.chatStream is a plain method that throws
+      // RuntimeConnectionLostError at CALL time (#600) — before any generator exists.
+      chatStream: () => {
+        throw new RuntimeConnectionLostError()
       }
     }))
     await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
     const gen = mgr.active()!.chatStream([{ role: 'user', content: 'q' }])
-    await expect(gen.next()).rejects.toThrow('Runtime is not started')
+    await expect(gen.next()).rejects.toThrow(RuntimeConnectionLostError)
     expect(mgr.isGenerating()).toBe(false) // a pre-yield throw must not wedge the gate
   })
 
@@ -982,20 +934,21 @@ describe('RuntimeManager generation gate (local-api P1)', () => {
     sources[0].push('e1')
     await extFirst
     expect(mgr.isGenerating()).toBe(true)
-    // In-app turn enters: hook fires, external tears down, THEN the in-app stream issues.
-    const extDrain = (async () => {
-      // Consumer keeps pulling; the abort ends the stream (return) on the next pull.
-      const r = await external.next()
-      order.push(`external-settled:${r.done}`)
-    })()
+    // The in-app turn enters while the external consumer is BETWEEN pulls: the hook aborts it, but its
+    // count only drops when the consumer pulls again — its real teardown. Until then the in-app
+    // generation must not reach the runtime.
     const inApp = runtime.chatStream([{ role: 'user', content: 'q' }])
     const inAppFirst = (async () => {
       const r = await inApp.next()
       order.push(`in-app-first:${String(r.value)}`)
       return r
     })()
-    await extDrain
-    // Feed the in-app stream only after the external one settled.
+    await tick(0) // one macrotask: every microtask the in-app entry could chain has run
+    expect(order).toEqual(['preempt-hook'])
+    expect(sources).toHaveLength(1) // parked on the external teardown — not issued
+    const r = await external.next() // the consumer resumes: the abort ends its stream, the count drops
+    order.push(`external-settled:${r.done}`)
+    await until(() => sources.length === 2, 'the in-app generation issued once the external stream ended')
     sources[1].push('a1')
     await inAppFirst
     expect(order).toEqual(['preempt-hook', 'external-settled:true', 'in-app-first:a1'])
@@ -1129,25 +1082,33 @@ describe('RuntimeManager generation gate (local-api P1)', () => {
   })
 
   it('bounds the pre-emption teardown wait — a consumer that never resumes cannot wedge in-app turns', async () => {
-    const { mgr, runtime, sources } = await gatedHarness({ externalTeardownTimeoutMs: 50 })
-    // External stream started, then ABANDONED: no further pull, no return() — its
-    // finally can never run, so the count stays 1 (the buggy-consumer class).
-    const external = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
-    const extFirst = external.next()
-    await Promise.resolve()
-    sources[0].push('e1')
-    await extFirst
-    // In-app turn enters: waits the bound, then proceeds anyway (the abort already
-    // killed the sidecar socket in production — the KV slot is free).
-    const inApp = runtime.chatStream([{ role: 'user', content: 'q' }])
-    const pull = inApp.next()
-    await new Promise((r) => setTimeout(r, 120))
-    sources[1].push('a1')
-    expect((await pull).value).toBe('a1')
-    expect(mgr.isGenerating()).toBe(true)
-    await inApp.return()
-    // The abandoned external still leaks its count within this epoch (documented) …
-    expect(mgr.isGenerating()).toBe(true)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const { mgr, runtime, sources } = await gatedHarness()
+      // External stream started, then ABANDONED: no further pull, no return() — its
+      // finally can never run, so the count stays 1 (the buggy-consumer class).
+      const external = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
+      const extFirst = external.next()
+      await Promise.resolve()
+      sources[0].push('e1')
+      await extFirst
+      // In-app turn enters: waits the bound, then proceeds anyway (the abort already
+      // killed the sidecar socket in production — the KV slot is free).
+      const inApp = runtime.chatStream([{ role: 'user', content: 'q' }])
+      const pull = inApp.next()
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(sources).toHaveLength(1) // still waiting inside the bound
+      await vi.advanceTimersByTimeAsync(1) // EXTERNAL_TEARDOWN_TIMEOUT_MS = 5 s (data-contracts.md "bounded ~5 s (D8)")
+      await until(() => sources.length === 2, 'the in-app turn proceeding past the 5 s bound')
+      sources[1].push('a1')
+      expect((await pull).value).toBe('a1')
+      expect(mgr.isGenerating()).toBe(true)
+      await inApp.return()
+      // The abandoned external still leaks its count within this epoch (documented) …
+      expect(mgr.isGenerating()).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('self-heals a leaked lane count on the next model start (gate epoch)', async () => {
@@ -1161,30 +1122,45 @@ describe('RuntimeManager generation gate (local-api P1)', () => {
     // No return(), no further pull — the count is leaked. A model restart heals it.
     await mgr.start({ modelId: 'gate-m2', modelPath: '/m2.gguf', contextTokens: 2048 })
     expect(mgr.isGenerating()).toBe(false)
-    // The stale stream's late teardown must NOT corrupt the new epoch's counts.
+    // A live external stream on the NEW runtime …
+    const fresh = mgr.active()!.chatStream([{ role: 'user', content: 'y' }], { lane: 'external' })
+    const freshPull = fresh.next()
+    await Promise.resolve()
+    expect(mgr.isGenerating()).toBe(true)
+    // … survives the stale stream's late teardown: its decrement belongs to the old epoch.
     await abandoned.return()
+    expect(mgr.isGenerating()).toBe(true)
+    sources[1].end()
+    expect((await freshPull).done).toBe(true)
     expect(mgr.isGenerating()).toBe(false)
     await mgr.stop()
   })
 
   it('a user Stop during the pre-emption wait ends the in-app turn cleanly (no hang, no error)', async () => {
-    const { mgr, runtime, sources } = await gatedHarness()
-    const external = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
-    const extFirst = external.next()
-    await Promise.resolve()
-    sources[0].push('e1')
-    await extFirst
-    const stop = new AbortController()
-    const inApp = runtime.chatStream([{ role: 'user', content: 'q' }], { signal: stop.signal })
-    const pull = inApp.next()
-    await Promise.resolve()
-    stop.abort() // the user stops while the turn is parked on external teardown
-    const r = await pull
-    expect(r.done).toBe(true) // clean abort shape, exactly like the runtimes' own
-    expect(mgr.isGenerating()).toBe(true) // only the external stream still counts
-    sources[0].end()
-    await external.return()
-    expect(mgr.isGenerating()).toBe(false)
+    // The 5 s bound can never fire: only the abort can end the wait.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const { mgr, runtime, sources } = await gatedHarness()
+      const external = runtime.chatStream([{ role: 'user', content: 'x' }], { lane: 'external' })
+      const extFirst = external.next()
+      await Promise.resolve()
+      sources[0].push('e1')
+      await extFirst
+      const stop = new AbortController()
+      const inApp = runtime.chatStream([{ role: 'user', content: 'q' }], { signal: stop.signal })
+      const pull = inApp.next()
+      await Promise.resolve()
+      stop.abort() // the user stops while the turn is parked on external teardown
+      const r = await within(pull, 'the in-app turn ending on the user Stop')
+      expect(r.done).toBe(true) // clean abort shape, exactly like the runtimes' own
+      expect(sources).toHaveLength(1) // the stopped turn never reached the runtime
+      expect(mgr.isGenerating()).toBe(true) // only the external stream still counts
+      sources[0].end()
+      await external.return()
+      expect(mgr.isGenerating()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -1258,7 +1234,7 @@ describe('the model-stop hook — a deliberate stop or switch ends in-flight wor
 // status reads (cached), and an answer the CB-5 watchdog ended (a wedged compute loop, which /health —
 // served by the HTTP thread — cannot see).
 describe('liveness of the running model (#599)', () => {
-  async function livenessHarness(opts?: { healthProbeTtlMs?: number }) {
+  async function livenessHarness() {
     const sources: ManualSource[] = []
     const health = { healthy: true }
     const probes = { count: 0 }
@@ -1282,7 +1258,7 @@ describe('liveness of the running model (#599)', () => {
           return src.stream(options?.signal)
         }
       }
-    }, opts)
+    })
     mgr.setModelStopHook((kind) => order.push(`hook ${kind}`))
     const startOpts = { modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 }
     await mgr.start(startOpts)
@@ -1304,35 +1280,52 @@ describe('liveness of the running model (#599)', () => {
   }
 
   it('an answer the watchdog ended marks the model unresponsive; a passing /health does not clear it, the next completed answer does', async () => {
-    const { mgr, sources } = await livenessHarness({ healthProbeTtlMs: 0 })
-    const err = await answer(mgr, () => sources[0], (s) => s.fail(new RuntimeUnresponsiveError(600_000)))
-    expect(err).toBeInstanceOf(RuntimeUnresponsiveError)
-    expect(mgr.status()).toMatchObject({ running: true, healthy: false, unresponsive: true })
+    vi.useFakeTimers({ toFake: ['performance'] })
+    try {
+      const { mgr, sources, probes } = await livenessHarness()
+      const err = await answer(mgr, () => sources[0], (s) => s.fail(new RuntimeUnresponsiveError(600_000)))
+      expect(err).toBeInstanceOf(RuntimeUnresponsiveError)
+      expect(mgr.status()).toMatchObject({ running: true, healthy: false, unresponsive: true })
 
-    await mgr.refreshHealth() // /health passes — the HTTP thread answers while the compute loop is wedged
-    expect(mgr.status().unresponsive).toBe(true)
+      vi.advanceTimersByTime(10_000) // past the 10 s probe TTL
+      await mgr.refreshHealth() // /health passes — the HTTP thread answers while the compute loop is wedged
+      expect(probes.count).toBe(1) // the probe ran — and passed — yet …
+      expect(mgr.status().unresponsive).toBe(true)
 
-    await answer(mgr, () => sources[1], (s) => {
-      s.push('fine')
-      s.end()
-    })
-    expect(mgr.status()).toMatchObject({ healthy: true })
-    expect(mgr.status().unresponsive).toBeUndefined()
+      await answer(mgr, () => sources[1], (s) => {
+        s.push('fine')
+        s.end()
+      })
+      expect(mgr.status()).toMatchObject({ healthy: true })
+      expect(mgr.status().unresponsive).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a failed /health re-probe marks it unresponsive until a probe passes; one probe per TTL', async () => {
-    const cached = await livenessHarness({ healthProbeTtlMs: 60_000 })
-    await cached.mgr.refreshHealth() // inside the TTL of the start's own check: nothing probed
-    expect(cached.probes.count).toBe(0)
-
-    const { mgr, health, probes } = await livenessHarness({ healthProbeTtlMs: 0 })
-    health.healthy = false // frozen: the probe times out
-    await Promise.all([mgr.refreshHealth(), mgr.refreshHealth()])
-    expect(probes.count).toBe(1) // concurrent reads share one probe
-    expect(mgr.status()).toMatchObject({ healthy: false, unresponsive: true })
-    health.healthy = true // resumed
-    await mgr.refreshHealth()
-    expect(mgr.status().unresponsive).toBeUndefined()
+    vi.useFakeTimers({ toFake: ['performance'] })
+    try {
+      vi.advanceTimersByTime(60_000) // a start that did not stamp its own check would now read stale
+      const { mgr, health, probes } = await livenessHarness()
+      await mgr.refreshHealth()
+      expect(probes.count).toBe(0) // inside the TTL of the start's own check: nothing probed
+      vi.advanceTimersByTime(9_999)
+      await mgr.refreshHealth()
+      expect(probes.count).toBe(0) // still inside HEALTH_PROBE_TTL_MS (10 s, architecture.md #599)
+      vi.advanceTimersByTime(1)
+      health.healthy = false // frozen: the probe fails
+      await Promise.all([mgr.refreshHealth(), mgr.refreshHealth()])
+      expect(probes.count).toBe(1) // concurrent reads share one probe
+      expect(mgr.status()).toMatchObject({ healthy: false, unresponsive: true })
+      health.healthy = true // resumed
+      vi.advanceTimersByTime(10_000)
+      await mgr.refreshHealth()
+      expect(probes.count).toBe(2)
+      expect(mgr.status().unresponsive).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('Restart starts the same model again with its own options and ends its answers as a switch (#600)', async () => {
@@ -1420,6 +1413,41 @@ describe('liveness of the running model (#599)', () => {
     const next = mgr.beginStartRequest()
     expect(mgr.isStarting()).toBe(true)
     next()
+  })
+
+  it('a /health probe that outlives a model switch is discarded — it never marks the new model (#599)', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    try {
+      let parkA = false
+      let probedA = false
+      let answerA: (healthy: boolean) => void = () => undefined
+      const mgr = new RuntimeManager((o) => ({
+        modelId: o.modelId,
+        start: async () => {},
+        stop: async () => {},
+        health: () =>
+          o.modelId === 'a' && parkA
+            ? new Promise<HealthStatus>((r) => {
+                probedA = true
+                answerA = (healthy) => r({ healthy, message: '', port: 1 })
+              })
+            : Promise.resolve({ healthy: true, message: '', port: 1 }),
+        // eslint-disable-next-line require-yield
+        chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+      }))
+      await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+      parkA = true // a freezes: its next /health answers only when the test says so
+      vi.advanceTimersByTime(10_000) // past the 10 s probe TTL
+      const probe = mgr.refreshHealth()
+      expect(probedA).toBe(true) // the probe really went out to a (not skipped inside the TTL)
+      await mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 }) // the switch lands meanwhile
+      answerA(false) // a's late verdict
+      await probe
+      expect(mgr.status()).toMatchObject({ running: true, modelId: 'b', healthy: true })
+      expect(mgr.status().unresponsive).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

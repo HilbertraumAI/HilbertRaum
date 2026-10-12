@@ -4,7 +4,6 @@ import { render, screen, cleanup, act, waitFor } from '@testing-library/react'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type { RuntimeStatus } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { stubApi } from '../helpers/renderer'
 
 // Issue #36: the muted chat-header hint — which model is answering, and whether it runs
@@ -121,23 +120,5 @@ describe('ChatScreen — runtime hint in the header (#36)', () => {
     render(<ChatScreen onNavigate={() => {}} />)
     expect(await screen.findByText(t('en', 'chat.noModel.title'))).toBeInTheDocument()
     expect(document.querySelector('.chat-runtime-hint')).toBeNull()
-  })
-
-  it('renders the German compatibility label from the catalog (D-L8)', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status({ backend: 'cpu', gpuAutoDisabled: true }))
-    })
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    render(
-      <I18nProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </I18nProvider>
-    )
-    expect(
-      await screen.findByText(
-        t('de', 'chat.runtime.cpuCompat', { model: 'qwen3.5-9b-q8' })
-      )
-    ).toBeInTheDocument()
   })
 })

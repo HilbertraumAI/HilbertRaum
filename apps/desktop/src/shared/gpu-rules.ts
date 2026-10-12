@@ -2,9 +2,8 @@ import type { GpuDevice, GpuProbeResult } from './types'
 
 // The ONE definition of "a graphics card the app can use" (PR #303 audit M8 / N3, owner
 // decisions G3 / G4). Shared and PURE — no node:, no electron, no DB — so the runtime's
-// profile-bump gate (`services/runtime/gpu.ts` re-exports these), the snapshot builder (main)
-// and the Performance screen (renderer) can never disagree about which device counts, which one
-// is shown, and what its memory figure means. Before this module there were three rules: the
+// profile-bump gate, the snapshot builder (main) and the Performance screen (renderer) can never
+// disagree about which device counts, which one is shown, and what its memory figure means. Before this module there were three rules: the
 // runtime gate (a VRAM floor AND not integrated), the graphics tile (the floor alone) and `devices[0]`
 // for every recorded figure — so an Intel Iris Xe reporting 16 GB of SHARED memory rendered
 // "16.0 GB VRAM · Usable" beside "Will run on the processor", and a hybrid `[iGPU, dGPU]` box

@@ -17,7 +17,7 @@ import {
 } from '../../src/main/services/performance'
 import { join } from 'node:path'
 import { discoverManifests, fitsGraphicsMemory, weightsMib } from '../../src/main/services/models'
-import { GPU_BUMP_MIN_VRAM_MB } from '../../src/main/services/runtime/gpu'
+import { GPU_BUMP_MIN_VRAM_MB } from '../../src/shared/gpu-rules'
 import type { ModelManifest } from '../../src/shared/manifest'
 import {
   MAX_BENCHMARK_HISTORY,
