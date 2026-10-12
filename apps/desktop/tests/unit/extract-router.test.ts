@@ -414,9 +414,14 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'How much is charged for a late payment?',
     'Wie viel Miete muss ich zahlen?',
     'Wie viel schulde ich dem Vermieter?',
+    'Wie viel bezahlt der Mieter pro Monat?', // a participle alone is the present
+    'How much is paid per month?', // … and so is one after "is"
+    'How much will I be paid per month?',
+    'How much has to be paid on signing?', // "be paid": a passive, not the past
     // "how much" measures something that is not money: pre-fix labelled
     'How much space does the flat have in total?',
     'Wie viel Urlaub habe ich insgesamt?',
+    'wie viel urlaub habe ich insgesamt?', // written all lower-case
     // a list the question asks about, in a question that opens with a question word
     'Welche Fristen stehen auf der Liste?', // the comment's example, verbatim
     'What is on the list of fees?', // the comment's example, verbatim
@@ -435,6 +440,8 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'Was zählt als Zahlung?', // the comment's example, verbatim
     'Welche Zahlungen zählen nicht zur Miete?',
     'Welche Ausgaben zählt der Vertrag zu den Nebenkosten?',
+    'Welche Kosten zählen Sie zu den Nebenkosten?', // "zählen Sie" after a question word is a question
+    'Was zählen Sie als Zahlung?',
     'Which fees count as operating costs?',
     'Which costs count towards the deposit?',
     'Zählen alle Zahlungen zur Miete?', // a #644 residual: "zählen" opens a yes/no question
@@ -477,6 +484,7 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'Wie viel macht das zusammen?', // "wie viel" makes "zusammen" a total
     'I need the total of all payments.', // a request, not a statement
     'Ich frage mich, wie viel ich insgesamt gezahlt habe?', // asked, not stated
+    'We paid how much in total?', // led by a pronoun, but asked
     'What is the sum of the fees?', // pre-fix: a plain answer
     'Wie hoch ist der Gesamtbetrag?', // pre-fix: a plain answer
     "What's my total?",
@@ -489,6 +497,17 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'Kannst du mir sagen, wie viel ich insgesamt zahle?',
     'Rechne alle Zahlungen zusammen.',
     'Rechne alles zusammen.', // a reckoning verb needs no money word
+    'Rechne alle Zahlungen zusammen. Wie viel ist das?', // a request needs no question mark
+    'Could you calculate how much I paid in total?', // a polite request to reckon, no yes/no question
+    'Kannst du alle Zahlungen zusammenrechnen?',
+    'We would like the total of all fees.',
+    'Wir möchten die Summe aller Zahlungen wissen.',
+    'Wie viel Kosten muss der Mieter insgesamt tragen?', // "tragen" gathers only with "zusammen"
+    'Wie viel stellt mir der Vermieter insgesamt in Rechnung?', // a capitalising writer: "stellt" is no noun
+    'wie viel zahle ich insgesamt?',
+    'wie viel macht das insgesamt?', // lower-case: "macht" is a verb, no noun
+    'Wie viel zahlte ich im Januar?', // a past form
+    'How much was spent on repairs?', // a participle after a past auxiliary
     'Was ergeben 950 € und 180 € zusammen?', // the currency sign is the money word
     'Addiere alle Beträge.'
   ])('%s → the aggregation route over amounts (pre-fix: the plain listing, a label or a plain answer)', (question) => {
@@ -510,8 +529,18 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'Ist die Summe aller Zahlungen korrekt?',
     'Who pays the total rent?',
     'When is the total due?',
+    'Tell me who pays the total rent.', // a who-question after an opener
+    'Bis wann muss die Gesamtmiete bezahlt sein?',
+    'Kann ich die Gesamtmiete steuerlich absetzen?', // a yes/no question: no reckoning verb asks
+    'The total rent is 1,175 euros. Is the deposit included?', // a statement in a question gives context
+    'Die Gesamtmiete beträgt 1.175 Euro. Ist die Kaution darin enthalten?',
+    'What happens in case of a total loss?', // an idiom
+    'What is the sum insured?',
+    'Welche Gebühren fallen insgesamt an?', // a which-question asks for the fees
+    'Welche Kosten rechnet der Vermieter zusammen mit den Nebenkosten ab?',
     'I paid a total of 500 euros last year. Which payment was late?',
     'Ich habe insgesamt drei Zahlungen geleistet. Welche war die höchste?',
+    'Ich habe insgesamt drei Zahlungen geleistet.', // a statement led by a pronoun, on its own
     'Wir zahlen die Miete zusammen. Wie hoch ist mein Anteil?',
     'Zahlen die Mieter die Miete zusammen?',
     'Haften alle Mieter zusammen?',
@@ -553,6 +582,7 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     ['Is there a list of fees?', 'amount'],
     ['How many fees are on the list?', 'amount'],
     ['Zähle alle Zahlungen', 'amount'],
+    ['Mach eine Zählung aller Zahlungen', 'amount'], // "Zählung" is a count, no meter
     ['Alle Zahlungen zählen und auflisten', 'amount'], // the infinitive request, no claim
     ['Zählen alle Zahlungen', 'amount'], // no question mark: the infinitive request, no yes/no question
     ['Zähle alle Zahlungen zur Miete auf', 'amount'],
@@ -586,11 +616,24 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     }
   )
 
+  // A summary that mentions a total is a summary: it keeps the tree summary over the listing.
+  it.each(['Summarize the lease, including the total rent.', 'Fasse den Vertrag zusammen und nenne die Gesamtmiete.'])(
+    '%s → tree-summary with a ready deep index, not a sum',
+    (question) => {
+      expect(routeQuestion({ documentCount: 1, treeAvailable: true, extractAvailable: true, question })).toEqual({
+        engine: 'tree-summary',
+        confidence: 'high'
+      })
+    }
+  )
+
   // The arithmetic heads-up's question (design-guidelines §11.24): a total of amounts, not any grouping.
   it.each([
     ['How much did I pay in fees?', true],
     ['Kategorisiere alle Ausgaben', true],
     ['Summiere alle Zahlungen', true],
+    ['Summiere alle Buchungen', true], // an adding-up verb, whatever it names
+    ['Tally up the transactions', true],
     ['Gruppiere die Fristen nach Mieter', false],
     ['categorize all the findings', false],
     ['How much is the monthly fee?', false],

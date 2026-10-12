@@ -609,8 +609,9 @@ export function registerRagIpc(ctx: AppContext): void {
                     wholeDocumentPiiScan: analysisHandler.injectPiiScan === true,
                     onToken: sendToken,
                     // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
-                    // answer with the honest scope notice (undefined ⇒ byte-unchanged).
-                    answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined
+                    // answer with the honest scope notice (undefined ⇒ byte-unchanged). #649: a total leads with
+                    // the arithmetic heads-up too — this is a whole read.
+                    answerPrefix: groundedPrefix(true)
                   })),
                 (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
               )
@@ -653,6 +654,8 @@ export function registerRagIpc(ctx: AppContext): void {
                     reranker: ctx.reranker,
                     skill: turnSkill,
                     wholeDocumentCompare: { documentIds },
+                    // #649: both documents are read whole, so a total leads with the arithmetic heads-up.
+                    answerPrefix: groundedPrefix(true),
                     onToken: sendToken
                   })),
                 (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})

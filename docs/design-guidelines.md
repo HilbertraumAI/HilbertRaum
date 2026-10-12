@@ -1785,14 +1785,15 @@ invoice?").
   because the risk is the number, and a reader who stops at the number should have seen it.
 - **No new advice.** The sources are already under the answer. For a bank statement, the
   bank-statement offer (#80) rides along when that skill is enabled; the line does not repeat it.
-- **Only where a total is asked for and read whole** (`isTotalAsk`). A top-k sum keeps #37's notices;
-  a listing keeps the #54 hint. A lookup ("How much is the monthly fee?") and a grouping of anything
-  but amounts ("Gruppiere die Fristen nach Mieter") get none. The bank skill's plausibility fall-through
-  (its extractor found nothing, so the model reads the document) carries it too.
+- **Only where a total is asked for and read whole** (`isTotalAsk`: a sum, an adding-up verb, or a
+  grouping of amounts). A top-k sum keeps #37's notices; a listing keeps the #54 hint. A lookup ("How
+  much is the monthly fee?") and a grouping of anything but amounts ("Gruppiere die Fristen nach Mieter")
+  get none. Every whole read carries it: the bank skill's plausibility fall-through (its extractor found
+  nothing, so the model reads the document), a whole-doc skill's read and a two-document compare.
 
 **Copy:** `analysis.wholeReadSumHint` (en + de). **Tests:** `rag-skill-analysis.test.ts` (the #54/#649
-table and the plausibility fall-through table), `rag-whole-read.test.ts` (a list ask read whole carries
-none).
+table and the plausibility fall-through table), `rag-whole-doc-skill.test.ts`, `rag-whole-doc-compare.test.ts`,
+`rag-whole-read.test.ts` (a list ask read whole carries none).
 
 ---
 

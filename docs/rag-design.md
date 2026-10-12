@@ -1910,9 +1910,10 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   fees?" and "Wie hoch ist der Gesamtbetrag?" carried no trigger and got a plain answer. "list"/"Liste" as
   a noun ("Welche Fristen stehen auf der Liste?") and "zählen zu / zählt als" still listed. Of 219 probed
   EN/DE phrasings, 112 changed decision; every probed list request, count, aggregation ask and #644
-  control kept its route. A /code-review pass probed ~30 more and tightened the rules below (present-tense
-  pay verbs, who/when questions, context statements, measured nouns, "What is the list of …"). Fix (owner
-  calls 1–4 as recommended, a fifth after the real-app run):
+  control kept its route. Two /code-review passes probed ~60 more phrasings and tightened the rules below:
+  present and passive pay verbs, polite reckoning requests, who/when questions, context statements,
+  measured nouns, summaries, which-questions, idioms, and "What is the list of …". Fix (owner calls 1–4 as
+  recommended, a fifth after the real-app run):
   (1) "how much" / "wie viel" leave `LIST_VERB_RE` ("wie viele" stays). A lookup is an ordinary
   question, like "What is the monthly fee?" or "Wie hoch ist die Kaution?": `{ relevance, high }`, a
   plain answer with no #80 call. A quantifier inside it still gets #644's label ("How much is each
@@ -1920,38 +1921,57 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   (2) A sum ask (`isSumAsk`, per sentence) joins the aggregation route and lists amounts whatever it
   names. A sum is recognised in three ways:
   - a sum word: total, sum of, the sum, add up, Summe aller/der/von, die Summe, in Summe, Gesamtbetrag,
-    Gesamtkosten, Gesamtmiete …, addieren, zusammenrechnen, zusammenzählen, or "zusammen" after a
-    reckoning verb ("Rechne alles zusammen");
+    Gesamtkosten, Gesamtmiete …, addieren, zusammenrechnen, zusammenzählen, or "zusammen" (not "zusammen
+    mit") after a reckoning verb ("Rechne alles zusammen"). Idioms do not count ("total loss", "sum
+    insured", "lump sum");
   - a totalling word (in total, altogether, together, combined, insgesamt, zusammen) beside a money word,
     a currency sign or "how much" / "wie viel" ("Was kostet alles zusammen?", "How much are all the fees
-    together?", "Wie viel macht das zusammen?"). Alone, a totalling word is often no sum ("Wer wohnt
-    zusammen in der Wohnung?"). "zusammen mit", "together with" and "combined with" join two things.
-    "Fasse … zusammen", "Stelle … zusammen" and "put together" gather a list;
+    together?", "Wie viel macht das zusammen?"). This shape does not count in a which-question ("Welche
+    Gebühren fallen insgesamt an?" asks for the fees). Alone, a totalling word is often no sum ("Wer
+    wohnt zusammen in der Wohnung?"). "zusammen mit", "together with" and "combined with" join two things.
+    "Fasse … zusammen", "Stelle … zusammen" and "put together" gather a list; with "insgesamt" those verbs
+    pay ("Wie viel Kosten muss der Mieter insgesamt tragen?");
   - "how much" / "wie viel" with a pay or spend verb in the past ("How much did I pay in fees?", "How
-    much have I paid so far?", "Wie viel habe ich für Gebühren bezahlt?"): what was paid adds up a
-    history. A present pay verb asks what is paid, a lookup ("How much do I pay per month?", "Wie viel
-    Miete muss ich zahlen?", "How much is charged for a late payment?").
+    much have I paid so far?", "Wie viel habe ich für Gebühren bezahlt?", "Wie viel zahlte ich im
+    Januar?"): what was paid adds up a history. The past is a past form, "did" with the base, or a
+    participle after a perfect or past auxiliary not preceded by "be". A participle alone, or a passive,
+    is the present: "Wie viel bezahlt der Mieter pro Monat?", "How much is paid per month?", "How much has
+    to be paid on signing?". A present pay verb asks what is paid, a lookup ("How much do I pay per
+    month?", "Wie viel Miete muss ich zahlen?").
 
-  None counts with a count word (how many, wie viele, number of, total number, Anzahl), with an explain
-  verb ("Erkläre, wie sich die Gesamtmiete zusammensetzt"), or without a money word beside a measure or
-  a noun "how much" measures ("How long is the lease in total?", "What is the total area?", "How much
-  space …", "Wie viel Urlaub habe ich insgesamt?"; a German noun is the capitalised word after "wie
-  viel", an English one any word there but a verb or a function word). A who / when / where / why
-  question asks about a party, a date, a place or a reason ("Who pays the total rent?", "When is the
-  total due?"). A statement led by a personal pronoun, without a question mark or a request opener,
-  gives context ("I paid a total of 500 euros last year. Which payment was late?"; "I need the total of
-  all payments" stays a request). A yes/no question about a sum asks for a verdict (#644): "Is the total
-  rent 1,175 euros?" and the #80 near-miss "is the total correct on page 2?" stay plain.
-  `isAggregationShaped` includes sums, so a sum gets the #54 shape hint, the #80 classification and the
-  deterministic bank-statement offer for amounts. A sum lists amounts unless a list request in the same
-  question names its own type ("List all the deadlines and the total rent" lists dates).
+  None counts in these cases:
+  - with a count word (how many, wie viele, number of, total number, Anzahl);
+  - with an explain or summary verb ("Erkläre, wie sich die Gesamtmiete zusammensetzt", "Summarize the
+    lease, including the total rent" keeps its tree summary);
+  - without a money word beside a measure, or beside a noun "how much" measures ("How long is the lease
+    in total?", "What is the total area?", "How much space …", "Wie viel Urlaub habe ich insgesamt?"). The
+    noun is the word after "how much" / "wie viel" unless it is a verb or a function word; from a writer who
+    capitalises German nouns, only a capitalised word;
+  - in a who / when / where / why question, also after a polite opener, a request verb or a preposition
+    ("Who pays the total rent?", "Tell me who pays the total rent.", "Bis wann muss die Gesamtmiete
+    bezahlt sein?");
+  - in a statement that gives context: one led by a personal pronoun without a question mark or a
+    request opener ("I paid a total of 500 euros last year. Which payment was late?"; "I need the total of
+    all payments" and "We would like the total of all fees" stay requests), or any sentence without a
+    question mark in a question that asks one, unless it opens with a request opener or a reckoning
+    imperative ("The total rent is 1,175 euros. Is the deposit included?" against "Rechne alle Zahlungen
+    zusammen. Wie viel ist das?").
+
+  A yes/no question about a sum asks for a verdict (#644): "Is the total rent 1,175 euros?", "Kann ich die
+  Gesamtmiete steuerlich absetzen?" and the #80 near-miss "is the total correct on page 2?" stay plain. A
+  polite request is not a yes/no question when it asks to reckon (calculate / add / ausrechnen /
+  zusammenrechnen …): "Could you calculate how much I paid in total?", "Kannst du alle Zahlungen
+  zusammenrechnen?". `isAggregationShaped` includes sums, so a sum gets the #54 shape hint, the #80
+  classification and the deterministic bank-statement offer for amounts. A sum lists amounts unless a list
+  request in the same question names its own type ("List all the deadlines and the total rent" lists
+  dates).
   (3) **IPC: an aggregation ask over ONE document that fits the window is read whole instead of
   listed** (`registerRagIpc`, inside the chat slot, `wholeReadDocumentId`). This covers sums and
   categorize asks: the model sees every section and can add them up, which the listing cannot (#54). The
   offer rides along. A plain list ask keeps the listing, and so does a document too long to read whole
   (the listing + #54 hint) or a multi-document scope. Without extract data, a fitting document was
   already read whole since #643. So the #643 precedence above ("coverage-extract still wins over a model
-  read") now holds for list asks only.
+  read") now holds for list asks only. The listing is now computed only when it is the answer.
   (4) "list" / "Liste" / "Aufzählung" / "Auflistung" after a definite article, a demonstrative or a
   possessive, in a question that opens with a question word, asks about a list the document holds, not
   for one. The question word may follow a preposition, a polite opener or a request verb ("Auf welcher
@@ -1961,30 +1981,40 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   Liste der Fristen?", "Wie lang ist die Liste der Fristen?"), "Zeig mir die Liste der Fristen", "Zeigst du
   mir die Liste der Fristen?", "Could you send me the list of fees?", "Make a list of the payments", "Is
   there a list of fees?". The issue's stricter rule (any article makes a noun, which then asks only at the
-  head of a recognised request) would have turned unlisted request verbs into plain answers. "zählen zu /
-  zum / zur / als" and "count as / toward(s) / among / against" mean "belong to". The exceptions: "auf"
-  ends the clause ("Welche Zahlungen zählt der Vertrag zur Miete auf?" is "aufzählen"), an imperative is
-  a request ("Zähle … zur Miete", "Zählen Sie die Zahlungen bis zum 31. März"), and a "zu" behind a comma
-  belongs to the clause. "Zähler…" (a meter, "Zählerstand") is no verb. "zählen" joins the yes/no and
-  plural verbs, so "Zählen alle Zahlungen zur Miete?" (a #644 residual) and "Zählen die Fristen auch am
-  Wochenende?" are verdicts, while "Zählen Sie alle Fristen auf" stays a polite request. It opens a
-  yes/no question only with a question mark, and it is never a claim verb: "Zählen alle Zahlungen" and
-  "Alle Zahlungen zählen und auflisten" stay requests.
+  head of a recognised request) would have turned unlisted request verbs into plain answers.
+  "zählen zu / zum / zur / als" and "count as / toward(s) / among / against" mean "belong to". The
+  exceptions:
+  - "auf" ends the clause ("Welche Zahlungen zählt der Vertrag zur Miete auf?" is "aufzählen");
+  - an imperative is a request ("Zähle … zur Miete", and "Zählen Sie die Zahlungen bis zum 31. März" at
+    the head of the sentence). After a question word, "zählen Sie" is a question: "Was zählen Sie als
+    Zahlung?" means "belong to";
+  - a "zu" behind a comma belongs to the clause.
+
+  "Zähler…" (a meter, "Zählerstand") is no verb; "Zählung" is a count and still lists. "zählen" joins the
+  yes/no and plural verbs, so "Zählen alle Zahlungen zur Miete?" (a #644 residual) and "Zählen die Fristen
+  auch am Wochenende?" are verdicts, while "Zählen Sie alle Fristen auf(?)" stays a polite request. It
+  opens a yes/no question only with a question mark, and it is never a claim verb: "Zählen alle Zahlungen"
+  and "Alle Zahlungen zählen und auflisten" stay requests.
   (5) **The arithmetic heads-up** (owner call after the real-app run, design-guidelines §11.24). A whole
   read of a total leads with `analysis.wholeReadSumHint`, with or without extract data (EN
   *"**Heads-up:** the model works out totals itself and can miss or miscount items. Check any total
   against the sources."*). The wording stays true when the document states the total and the model only
-  read it. A total is `isTotalAsk`: a sum, or an aggregation over amounts ("Kategorisiere alle Ausgaben");
-  a grouping of anything else ("Gruppiere die Fristen nach Mieter") is read whole without it. It rides
-  `answerPrefix` after the W2 scope notice (`groundedPrefix`). That covers every whole read: the
-  coverage branch and the final path share one `groundedAnswer`, and the tool skill's plausibility
-  fall-through (a skill whose extractor found nothing) leads with both too. Before, that path dropped the
-  W2 notice. A top-k sum keeps #37's notices.
-  Tests: router golden rows in `extract-router.test.ts` (66 fail on master; 7 more pin the new `isTotalAsk`) and the #54/#649 table in
-  `rag-skill-analysis.test.ts`. The #54 pin moved to a statement too long to read whole. The fitting
-  statement is read whole behind the heads-up with and without extract data, and so is a #649 sum
-  phrasing; a dates grouping carries no heads-up. The plausibility fall-through table covers the heads-up
-  there (5 IPC rows fail on master). Every one of the 67 rule mutations turns the suite red.
+  read it. A total is `isTotalAsk`: a sum, an adding-up verb ("Summiere alle Buchungen", "sum per
+  category", "tally"), or an aggregation over amounts ("Kategorisiere alle Ausgaben"). A grouping of
+  anything else ("Gruppiere die Fristen nach Mieter") is read whole without it. It rides `answerPrefix`
+  after the W2 scope notice (`groundedPrefix`). That covers every whole read: the coverage branch and the
+  final path share one `groundedAnswer`. The tool skill's plausibility fall-through (a skill whose
+  extractor found nothing) leads with both too; before, that path dropped the W2 notice. So do a
+  whole-doc skill's read and a two-document compare. A top-k sum keeps #37's notices.
+  Tests:
+  - router golden rows in `extract-router.test.ts`: 86 fail on master, and 9 more pin the new `isTotalAsk`;
+  - the #54/#649 table in `rag-skill-analysis.test.ts`. The #54 pin moved to a statement too long to read
+    whole. The fitting statement is read whole behind the heads-up with and without extract data, and so
+    is a #649 sum phrasing; a dates grouping carries no heads-up;
+  - the plausibility fall-through table there, a whole-doc skill row in `rag-whole-doc-skill.test.ts` and
+    a compare row in `rag-whole-doc-compare.test.ts` carry the heads-up. 7 IPC rows fail on master.
+
+  Every one of the 84 rule mutations turns the suites red.
   Real app (dev build, qwen3-4b-instruct-q4 at 4,096; a fictional 2-page lease and a fictional 1-page
   bank statement, each with a deep index and extract data; a scratch root with b11146 and the D: drive
   with its b9849, alike):
@@ -2004,6 +2034,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   - A question about a total the document states takes the sum route ("What is the total amount due on
     the invoice?"): on a long document with extract data it gets the listing, not the stated total.
   - The colloquial count "Wie viel Zahlungen gibt es?" gets a plain answer.
+  - All-lower-case German with a verb after "wie viel" that the function-word list lacks reads that verb as
+    a measured noun, so a total with no money word gets a plain answer.
   - "the full list" / "price list", or a list noun before the question word ("In der Liste fehlt eine
     Frist, welche?"), and "Ich habe eine Liste der Fristen. Welche fehlt?" still list.
   - "Was zähle ich zu den Nebenkosten?" still lists (the first-person "zähle" reads as the imperative).

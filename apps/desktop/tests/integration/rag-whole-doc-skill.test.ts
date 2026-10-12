@@ -133,9 +133,14 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
   // A3 inversion: a GENERAL (non-shaped, non-chatter) question gets the whole-doc engine too. Pre-A3 an
   // off-the-keyword-list question degraded to top-k; now the engine is the default for an active analysis
   // skill over a single fully-chunked doc.
-  it.each(['write the meeting minutes', 'what does this document cover?'])(
-    'whole-document path (%j): a fully-chunked doc gets a MODEL answer with capped coverage + the fence',
-    async (question) => {
+  // #649: a total asked of the whole read leads with the arithmetic heads-up (design-guidelines §11.24).
+  it.each([
+    { question: 'write the meeting minutes', total: false },
+    { question: 'what does this document cover?', total: false },
+    { question: 'How much did we spend in total?', total: true }
+  ])(
+    'whole-document path ($question): a fully-chunked doc gets a MODEL answer with capped coverage + the fence',
+    async ({ question, total }) => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -149,6 +154,7 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
     // The MODEL was called (unlike the deterministic bank/invoice handlers).
     expect(h.runtime.calls).toBe(1)
     expect(msg.content).toContain('Minutes')
+    expect(msg.content.startsWith(t('en', 'analysis.wholeReadSumHint'))).toBe(total)
     // Honest breadth: the whole (small) document fit → capped/not-truncated → "covers the whole document".
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)
