@@ -159,10 +159,13 @@ describe('Wave 8 ruling (a): absent inputs mean cpu -- never a fallback to the s
 
   it('settings.activeModelId is NEVER consulted -- a stale/mismatched setting changes nothing', () => {
     const db = seededDb()
+    // The GTX 1070 Ti (#391 leg 2): the 9B leaves less than the floor free, the 4B more — on the
+    // RTX above both models read 'gpu', so a resolver that read the setting would pass unseen.
+    const gtx1070Ti: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7504 }
     updateSettings(db, {
       gpuMode: 'auto',
       gpuAutoDisabled: false,
-      gpuProbe: { devices: [RTX], probedAt: new Date().toISOString() },
+      gpuProbe: { devices: [gtx1070Ti], probedAt: new Date().toISOString() },
       activeModelId: NINE_B // the SETTING says the 9B (posture would be cpu if this were read)
     })
     // The COMMITTED model is the 4B -- the posture must follow IT, not the stale setting.
