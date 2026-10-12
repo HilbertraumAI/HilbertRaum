@@ -5088,7 +5088,7 @@ Tests:
   gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate; `gpu.test.ts` (same
   title) the `--list-devices` probe, and `engine-health.test.ts` "waits for an install of its family to
   finish the swap before it launches (#516 spawn gate)" the "Check again" launch. The whisper-cli
-  spawn site has no such row yet.
+  spawn site has no such row yet (#656).
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.

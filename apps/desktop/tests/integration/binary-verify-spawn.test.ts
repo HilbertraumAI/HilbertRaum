@@ -31,7 +31,7 @@ import { checkProgramLoads } from '../../src/main/services/engine-health'
 // LlamaServer seam's positive controls run through the real verifier too: a matching marker (`ok`)
 // and a legacy, hash-less marker (`skip-legacy`, security-model.md §3's non-breaking rollout). The
 // LlamaServer injected-verdict copy in sidecar.test.ts was retired for these; transcriber.test.ts
-// keeps its own. kiwix-serve / kiwix-manage are not covered here yet (follow-up).
+// keeps its own. kiwix-serve / kiwix-manage are not covered here yet (#656).
 //
 // TEETH: delete the `verifyBinaryBeforeSpawn`/`verify` call at a seam → the spawn proceeds (`calls` non-empty /
 // the refusal vanishes) → the matching test reddens. The matching-marker positive control proves the

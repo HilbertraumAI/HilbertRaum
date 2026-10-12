@@ -153,13 +153,13 @@ describe('the GPU start ladder', () => {
     expect(runtime.gpuName).toBeNull()
   })
 
-  // CHARACTERIZATION of today's behaviour, NOT the design goal — follow-up #TBD-empty-probe. An EMPTY
+  // CHARACTERIZATION of today's behaviour, NOT the design goal — follow-up #653. An EMPTY
   // answer (`[]`) is taken as "this machine enumerates no device" and outranks this start's own load
   // log, so a start whose log says it offloaded layers is still labelled cpu (and its placement record
   // says backend 'cpu' beside N>0 GPU layers). #380 moved only the UNKNOWN answer (`null`) to the log
-  // (the #380 tests above). If #TBD-empty-probe decides a positive offload line wins, FLIP this
+  // (the #380 tests above). If #653 decides a positive offload line wins, FLIP this
   // expectation — it is the only test that pins the `[]` branch with a log.
-  it('an EMPTY probe answer still labels the rung cpu when the load log reports offloaded layers (characterization, #TBD-empty-probe)', async () => {
+  it('an EMPTY probe answer still labels the rung cpu when the load log reports offloaded layers (characterization, #653)', async () => {
     const h = ladderHarness({
       probe: [],
       stderr: [
