@@ -1,20 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import {
   MAX_PARK_DEFERRAL_MS,
   ModelSlotArbiter,
   RESUME_AFTER_CHAT_DELAY_MS,
   SlotAbortedError
 } from '../../src/main/services/analysis/model-slot-arbiter'
-import { openDatabase } from '../../src/main/services/db'
-import {
-  createQueuedDocument,
-  documentsDir,
-  processDocument
-} from '../../src/main/services/ingestion'
 import { buildTree } from '../../src/main/services/analysis/tree-build'
+import { docTaskWorld, importWords } from '../helpers/doctask-fixtures'
+import { within } from '../helpers/hang-budget'
+import { slotClock, type SlotClock } from '../helpers/slot-clock'
 
 // Whole-document-analysis plan §4.1 (H9/H10): the single model-slot arbiter that lets a
 // yielding tree build cede the one chat runtime slot to an interactive answer and resume
@@ -23,50 +17,12 @@ import { buildTree } from '../../src/main/services/analysis/tree-build'
 
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
-// #399 D3(a): the builder no longer resumes the instant chat releases — it waits
-// RESUME_AFTER_CHAT_DELAY_MS (90 s of real wall clock). Every test here drives that with an
-// injected clock: nothing sleeps, and `advance()` is the ONLY thing that fires a resume, so a
-// resume that happened too early or not at all is visible rather than merely slow.
-interface FakeClock {
-  deps: { now: () => number; setTimer: (fn: () => void, ms: number) => unknown; clearTimer: (h: unknown) => void }
-  advance: (ms: number) => void
-  pending: () => number
-}
-function makeClock(): FakeClock {
-  let nowMs = 0
-  let seq = 0
-  const timers = new Map<number, { at: number; fn: () => void }>()
-  return {
-    deps: {
-      now: () => nowMs,
-      setTimer: (fn, ms) => {
-        const id = ++seq
-        timers.set(id, { at: nowMs + ms, fn })
-        return id
-      },
-      clearTimer: (h) => {
-        timers.delete(h as number)
-      }
-    },
-    advance: (ms) => {
-      nowMs += ms
-      for (const [id, e] of [...timers]) {
-        if (e.at <= nowMs) {
-          timers.delete(id)
-          e.fn()
-        }
-      }
-    },
-    pending: () => timers.size
-  }
-}
-
 describe('ModelSlotArbiter', () => {
-  let clock: FakeClock
+  let clock: SlotClock
   beforeEach(() => {
-    clock = makeClock()
+    clock = slotClock()
   })
-  /** An arbiter on the fake clock, with the SHIPPED delay + cap (never a test-only value). */
+  /** An arbiter on the fake clock; the delay and cap are the shipped constants (the deps carry only the clock). */
   const mkArbiter = (): ModelSlotArbiter => new ModelSlotArbiter(clock.deps)
   /** Let the whole post-chat resume delay elapse. */
   const passDelay = (): void => clock.advance(RESUME_AFTER_CHAT_DELAY_MS)
@@ -126,8 +82,9 @@ describe('ModelSlotArbiter', () => {
     const rel2 = await acquire2
 
     rel1()
+    passDelay() // a WHOLE resume delay passes while chat 2 still holds the slot…
     await tick()
-    expect(resumed).toBe(false) // one chat still holds the slot
+    expect(resumed).toBe(false) // …and the build stays parked
     rel2()
     passDelay()
     await parked
@@ -156,8 +113,9 @@ describe('ModelSlotArbiter', () => {
     let resumed = false
     void parked.then(() => (resumed = true))
     relA()
+    passDelay() // a WHOLE resume delay passes while chat B still holds the slot…
     await tick()
-    expect(resumed).toBe(false)
+    expect(resumed).toBe(false) // …and the build stays parked
     relB()
     passDelay()
     await parked
@@ -278,19 +236,6 @@ describe('ModelSlotArbiter', () => {
     release()
   })
 
-  it('release is idempotent', async () => {
-    const a = mkArbiter()
-    a.registerBuild('job1')
-    const acquire = a.acquireForChat()
-    await tick()
-    const parked = a.reacquire('job1')
-    const release = await acquire
-    release()
-    release() // second call is a no-op, does not double-resume
-    passDelay()
-    await expect(parked).resolves.toBeUndefined()
-  })
-
   // R2 (full-audit-2026-06-30, Phase C): the FAST PATH — a chat that acquires while the builder is
   // ALREADY parked (`reacquireReject !== null`) — used to install NO abort listener (it skips
   // waitForHandoff). So aborting a fast-path holder freed its `chatHolders` slot only when
@@ -313,6 +258,7 @@ describe('ModelSlotArbiter', () => {
     void parked.then(() => (resumed = true))
 
     ctrlB.abort() // R2: the fast-path abort listener releases B's holder slot
+    passDelay() // a whole delay later A still holds
     await tick()
     expect(resumed).toBe(false) // A still holds the slot → build NOT resumed yet
     relA() // the surviving chat releases
@@ -324,7 +270,16 @@ describe('ModelSlotArbiter', () => {
     expect(resumed).toBe(true)
   })
 
-  it('a FAST-PATH holder freed by abort is idempotent with its release fn (R2 — no double-release)', async () => {
+  it.each([
+    ['its release fn runs twice', (_ctrl: AbortController, rel: () => void): void => {
+      rel()
+      rel()
+    }],
+    ['its abort fires and then its release fn (as withChatStream finally calls it)', (ctrl: AbortController, rel: () => void): void => {
+      ctrl.abort()
+      rel()
+    }]
+  ])('a holder gives its slot back exactly once when %s (R2 — no double-release)', async (_label, giveBack) => {
     const a = mkArbiter()
     a.registerBuild('job1')
     const acquireA = a.acquireForChat()
@@ -332,18 +287,15 @@ describe('ModelSlotArbiter', () => {
     const parked = a.reacquire('job1')
     const relA = await acquireA
     const ctrlB = new AbortController()
-    const relB = await a.acquireForChat(ctrlB.signal) // FAST PATH
-
+    const relB = await a.acquireForChat(ctrlB.signal) // FAST PATH: the build is already parked
     let resumed = false
     void parked.then(() => (resumed = true))
 
-    // Both the abort listener AND the returned release fn (as withChatStream's finally calls it)
-    // fire for B — they share ONE `released` latch, so the slot is given back EXACTLY once.
-    ctrlB.abort()
-    relB()
+    // The listener and the release fn share ONE `released` latch, so B gives its slot back exactly once. A double
+    // decrement would reach chatHolders 0 here and arm the resume while A still holds — the whole delay passes to see it.
+    giveBack(ctrlB, relB)
+    passDelay()
     await tick()
-    // A naive fix that decremented twice would have hit chatHolders 0 here and resumed the build
-    // while A still holds → this pins single-release.
     expect(resumed).toBe(false)
     relA()
     passDelay()
@@ -533,19 +485,15 @@ describe('builder parks at the level boundary (full-audit 2026-07-10 BE-6)', () 
   const MARK = 'levelmark'
 
   it('a chat request during the FINAL level-1 node parks the build BEFORE the first level-2 generation', async () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-arbiter-yield-'))
-    const db = openDatabase(join(tmp, 'test.sqlite'))
-    const file = join(tmp, 'doc.txt')
-    writeFileSync(file, Array.from({ length: 4000 }, (_, i) => `word${i}`).join(' '), 'utf8')
-    const info = createQueuedDocument(db, file)
-    await processDocument(db, documentsDir(join(tmp, 'workspace')), info.id)
+    const w = docTaskWorld('arbiter-yield')
+    const docId = await importWords(w, 4000)
 
     // Probe build (its own modelId ⇒ cold summary_cache): count the level-1 calls so the
     // real run below lands its pause exactly on the FINAL level-1 node.
     let probeL1 = 0
     let probeL2 = 0
-    await buildTree(info.id, {
-      db,
+    await buildTree(docId, {
+      db: w.db,
       modelId: 'probe',
       contextTokens: 4096,
       signal: new AbortController().signal,
@@ -563,15 +511,15 @@ describe('builder parks at the level boundary (full-audit 2026-07-10 BE-6)', () 
 
     // Real build ('real' modelId ⇒ cache misses again): chat asks for the slot DURING the
     // final level-1 generation.
-    const clock = makeClock()
+    const clock = slotClock()
     const arbiter = new ModelSlotArbiter(clock.deps)
     arbiter.registerBuild('job-level-yield')
     let calls = 0
     // Boxed so the outer await does NOT flatten (and thus wait on) the acquire promise.
     let startChat: (box: { acquire: Promise<() => void> }) => void = () => {}
     const chatStarted = new Promise<{ acquire: Promise<() => void> }>((r) => (startChat = r))
-    const buildDone = buildTree(info.id, {
-      db,
+    const buildDone = buildTree(docId, {
+      db: w.db,
       modelId: 'real',
       contextTokens: 4096,
       signal: new AbortController().signal,
@@ -592,10 +540,10 @@ describe('builder parks at the level boundary (full-audit 2026-07-10 BE-6)', () 
     // level-1 node as the newest generation. UNFIXED: the first level-2 generation runs
     // first (`calls` overshoots) — or, when level 2 is only the root, the build finishes
     // without ever parking.
-    const winner = await Promise.race([
-      acquire.then(() => 'chat-acquired' as const),
-      buildDone.then(() => 'build-finished' as const)
-    ])
+    const winner = await within(
+      Promise.race([acquire.then(() => 'chat-acquired' as const), buildDone.then(() => 'build-finished' as const)]),
+      'the chat acquire or the build end'
+    )
     expect(winner).toBe('chat-acquired')
     expect(calls).toBe(probeL1) // parked BEFORE the first level-2 generation
 
@@ -608,6 +556,6 @@ describe('builder parks at the level boundary (full-audit 2026-07-10 BE-6)', () 
     expect(meta.levels).toBeGreaterThan(1)
     expect(calls).toBe(probeL1 + probeL2) // same structure as the probe run, nothing looped
     arbiter.unregisterBuild('job-level-yield')
-    db.close()
+    w.db.close()
   })
 })
