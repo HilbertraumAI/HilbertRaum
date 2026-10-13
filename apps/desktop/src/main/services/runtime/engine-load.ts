@@ -187,11 +187,15 @@ const WINDOWS_REFUSED_SPAWN_CODES = new Set(['EPERM', 'UNKNOWN', 'EACCES'])
  * code integrity, an application-control policy or security software surface from Node as EPERM /
  * `UNKNOWN` / EACCES (synchronously or via the `'error'` event) instead of an exit code: the same
  * "the OS refused the program" class as 0xC0E90002, so `blocked`. Elsewhere (ENOENT, a POSIX EACCES)
- * nothing here can say WHY, so null keeps the old handling.
+ * nothing here can say WHY, so null keeps the old handling. Only an error OF the spawn: a child's
+ * `'error'` event also reports a failed `kill()` (`syscall: 'kill'`, EPERM on Windows), which says
+ * nothing about whether the program may run (Node 24: a spawn error's syscall is `spawn` or
+ * `spawn <path>`, measured).
  */
 export function classifySpawnError(err: unknown, platform: NodeJS.Platform = process.platform): LoadFailure | null {
   if (platform !== 'win32') return null
-  const code = (err as { code?: unknown } | null)?.code
+  const { code, syscall } = (err ?? {}) as { code?: unknown; syscall?: unknown }
+  if (typeof syscall === 'string' && !syscall.startsWith('spawn')) return null
   if (typeof code !== 'string' || !WINDOWS_REFUSED_SPAWN_CODES.has(code)) return null
   return { reason: 'blocked', os: 'win', exit: `spawn error ${code}` }
 }
@@ -334,9 +338,12 @@ export function reportEngineProblem(problem: EngineProblem, binPath: string): vo
   if (!previous || !sameProblem(previous.problem, stored)) notifyListeners()
 }
 
-/** The engine started, was replaced or is gone (`why`): drop its verdict. Never throws. */
-export function clearEngineProblem(family: EngineProblemFamily, why: EngineVerdictDrop): void {
-  if (!problems.delete(family)) return
+/**
+ * The engine started, was replaced or is gone (`why`): drop its verdict. True when there was one to
+ * drop. Never throws.
+ */
+export function clearEngineProblem(family: EngineProblemFamily, why: EngineVerdictDrop): boolean {
+  if (!problems.delete(family)) return false
   notifyListeners()
   for (const listener of [...dropListeners]) {
     try {
@@ -345,6 +352,7 @@ export function clearEngineProblem(family: EngineProblemFamily, why: EngineVerdi
       /* a listener must never break a spawn site's start path */
     }
   }
+  return true
 }
 
 /**

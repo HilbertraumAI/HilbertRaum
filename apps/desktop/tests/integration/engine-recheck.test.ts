@@ -334,10 +334,59 @@ describe('rearmWhenChatEngineHeals — a healthy start of the refused engine (#6
       expect(f.refreshTranslatorSlot).toHaveBeenCalledTimes(1)
       expect(modelLoadLatchReason('m')).toBeNull()
       // The healthy start may be the embedder's while the chat model answers in demo mode (owner call).
-      expect(f.restartChat).toHaveBeenCalledTimes(1)
+      await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
     } finally {
       await server.stop()
     }
+  })
+
+  // The refused probes persisted nothing: the ladder the restart walks must read this computer's answer (#380).
+  it('with an unlocked workspace the probe is re-run and persisted before the restart', async () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-recheck-db-')), 'test.sqlite'))
+    seedSettings(db)
+    dbs.push(db)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
+    const f = makeCtx(driveRoot(), () => undefined, db)
+    clearEngineProblemFor('llama_cpp', REFUSED_LLAMA) // a reporting program started healthy
+    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+    expect(f.probe.invalidate).toHaveBeenCalledTimes(1)
+    expect(f.probe).toHaveBeenCalledTimes(1)
+    expect(f.probe.mock.invocationCallOrder[0]).toBeLessThan(f.restartChat.mock.invocationCallOrder[0])
+  })
+
+  // The usual trigger: the chat model's own healthy start. Nothing to restart, and a probe now would run
+  // beside its weight upload (#473).
+  it('the chat model starting re-arms the consumers but neither probes nor restarts', async () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-recheck-db-')), 'test.sqlite'))
+    seedSettings(db)
+    dbs.push(db)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
+    const f = makeCtx(driveRoot(), () => undefined, db)
+    Object.assign(f.ctx.runtime, {
+      status: () => ({ backend: 'mock', modelId: 'm', running: true, healthy: true, port: null, message: '', startingModelId: 'm' })
+    })
+    clearEngineProblemFor('llama_cpp', REFUSED_LLAMA)
+    expect(f.embedderReset).toHaveBeenCalledTimes(1)
+    expect(f.probe.invalidate).not.toHaveBeenCalled() // a re-probe drops the cache synchronously
+    // One macrotask: a chained probe or restart would have been called by now.
+    await new Promise((r) => setImmediate(r))
+    expect(f.probe).not.toHaveBeenCalled()
+    expect(f.restartChat).not.toHaveBeenCalled()
+  })
+
+  // A healthy start that lands while "Check again" checks (an import, say) heals it; Check again then
+  // finds nothing left to heal instead of re-arming, re-probing and restarting a second time.
+  it('a healthy start during Check again is healed once', async () => {
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
+    const f = makeCtx(driveRoot(), () => undefined)
+    const healthyStartDuringCheck: SpawnFn = (...args) => {
+      clearEngineProblemFor('llama_cpp', REFUSED_LLAMA)
+      return closingSpawn(0)(...args)
+    }
+    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn: healthyStartDuringCheck, verify: verified })
+    expect(result.problems).toEqual([])
+    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+    expect(f.embedderReset).toHaveBeenCalledTimes(1)
   })
 
   it('a voice engine that runs again re-arms and restarts nothing of the chat engine', () => {

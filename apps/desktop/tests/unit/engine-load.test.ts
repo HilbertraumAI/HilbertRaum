@@ -216,20 +216,24 @@ describe('classifyLoadFailure — macOS (dyld wording; not measured on hardware)
 })
 
 describe('classifySpawnError / pathFreeSpawnError — the program never started', () => {
-  const spawnErr = (code: string): Error =>
-    Object.assign(new Error(`spawn C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe ${code}`), { code })
+  // The `syscall` Node 24 sets (measured on Windows): `spawn <path>` on the 'error' event, `spawn` on a throw.
+  const spawnErr = (code: string, syscall = 'spawn C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe'): Error =>
+    Object.assign(new Error(`spawn C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe ${code}`), { code, syscall })
 
   it('on Windows, EPERM / UNKNOWN / EACCES (policy, security software, quarantine) are a block', () => {
     for (const code of ['EPERM', 'UNKNOWN', 'EACCES']) {
       expect(classifySpawnError(spawnErr(code), 'win32')).toEqual({ reason: 'blocked', os: 'win', exit: `spawn error ${code}` })
+      expect(classifySpawnError(spawnErr(code, 'spawn'), 'win32')?.reason).toBe('blocked')
     }
   })
 
-  it('says nothing for ENOENT, for other systems, or for an error without a code', () => {
+  it('says nothing for ENOENT, for other systems, for an error without a code, or for a failed kill', () => {
     expect(classifySpawnError(spawnErr('ENOENT'), 'win32')).toBeNull()
     expect(classifySpawnError(spawnErr('EACCES'), 'linux')).toBeNull()
     expect(classifySpawnError(new Error('boom'), 'win32')).toBeNull()
     expect(classifySpawnError(null, 'win32')).toBeNull()
+    // A child's 'error' event also reports a kill() Windows refused: no verdict about running it.
+    expect(classifySpawnError(Object.assign(new Error('kill EPERM'), { code: 'EPERM', syscall: 'kill' }), 'win32')).toBeNull()
   })
 
   it('drops the absolute path Node writes into the message', () => {
