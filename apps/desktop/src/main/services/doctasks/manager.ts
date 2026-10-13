@@ -88,7 +88,6 @@ export const TASK_SOURCE_UNREADABLE_MESSAGE = t('en', 'main.task.sourceUnreadabl
 export const TASK_NEEDS_OCR_MESSAGE = t('en', 'main.task.needsOcr')
 export const TASK_OCR_NOT_A_SCAN_MESSAGE = t('en', 'main.task.ocrNotAScan')
 export const TASK_OCR_NO_TEXT_MESSAGE = t('en', 'main.task.ocrNoText')
-export const TASK_OCR_FAILED_MESSAGE = t('en', 'main.task.ocrFailed')
 export const TASK_DOCUMENT_BUSY_INGESTING_MESSAGE = t('en', 'main.task.documentBusyIngesting')
 
 const TERMINAL: ReadonlySet<DocTaskStatus['state']> = new Set(['done', 'failed', 'cancelled'])
