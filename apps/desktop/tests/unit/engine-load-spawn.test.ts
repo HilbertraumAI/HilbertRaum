@@ -177,6 +177,32 @@ describe('LlamaServer — a program the OS loader refused (#530)', () => {
     await s.stop()
   })
 
+  // #655: on a Kit the probe and rungs 1–2 (main build) and rung 3 (cpu/) all report, cpu/ last. Once the
+  // fix is in, the main build runs on the graphics card — that clears it. The cpu/ net starts only after the
+  // main build's rungs failed, so it clears only as the latest reporter: a main build that refused it again
+  // right before (still damaged) keeps the verdict and its #532 reinstall offer (review of #655).
+  const KIT_MAIN = 'C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe'
+  const KIT_CPU = 'C:\\Kit\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe'
+  it.each<[string, string[], string, boolean]>([
+    ['the main build clears a verdict the cpu/ build reported last (#655)', [KIT_MAIN, KIT_CPU], KIT_MAIN, true],
+    ['the cpu/ build keeps a verdict the main build reported after it', [KIT_MAIN, KIT_CPU, KIT_MAIN], KIT_CPU, false],
+    ['the cpu/ build clears a verdict it reported last (an intermittent block)', [KIT_MAIN, KIT_CPU], KIT_CPU, true],
+    // Rungs 1–2 failed for a reason that is not the loader's; only cpu/ was refused (and still is).
+    ['the main build leaves a verdict only the cpu/ build reported', [KIT_CPU], KIT_MAIN, false]
+  ])('a healthy start: %s', async (_label, reporters, started, cleared) => {
+    const problem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' } as const
+    for (const binPath of reporters) reportEngineProblem(problem, binPath)
+    const spawn: SpawnFn = () => new FakeChild()
+    const healthy = (async () => ({ ok: true, status: 200 }) as Response) as typeof fetch
+    const s = server(spawn, { fetchImpl: healthy, binPath: started })
+    await s.start()
+    try {
+      expect(engineProblemFor('llama_cpp') === null).toBe(cleared)
+    } finally {
+      await s.stop()
+    }
+  })
+
   it('a healthy start of ANOTHER program of the family (a cpu/ build) leaves the verdict', async () => {
     reportEngineProblem(
       { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' },

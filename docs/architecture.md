@@ -4738,7 +4738,7 @@ caller's old handling byte for byte.
 | exit 0xC0000135 / 0xC0000139 / 0xC000007B with a VC++ DLL absent from `%SystemRoot%\System32` | `vc-runtime-missing` (`name` = that DLL) |
 | … with all three present | `files-damaged` |
 | exit 0xC0E90002 | `blocked` (code integrity / Smart App Control) |
-| Windows spawn error EPERM / `UNKNOWN` / EACCES (`classifySpawnError` — policy, security software, quarantine) | `blocked` |
+| Windows spawn error EPERM / `UNKNOWN` / EACCES (`classifySpawnError` — policy, security software, quarantine); only an error of the spawn (`syscall` `spawn…`), never a failed `kill()` the child's `'error'` event also reports (#658 review) | `blocked` |
 
 `classifyLoadFailureMessage` applies the same classifier to a stored message (the `exited before
 becoming healthy (code N)` shape), for the heal.
@@ -4756,9 +4756,13 @@ becoming healthy (code N)` shape), for the heal.
   rows).
   - Review fix: the bare `launch` signature matched on every rung, so a Windows block had moved
     from "blame the GPU" to "blame the model".
-- A healthy start clears a verdict recorded against THE SAME binary (`clearEngineProblemFor`): an
-  intermittent block that went away. A Windows Kit's `cpu/` build starting beside a damaged main
-  folder does not clear it.
+- A healthy start of a program that REPORTED the verdict clears it (`clearEngineProblemFor`): an
+  intermittent block that went away, or a library installed since. The store keeps every reporting
+  program, not only the last one (#655, §9). The `cpu/` safety net clears it only as the latest
+  reporter: it starts only after the main build failed, usually by a refusal that still stands. A
+  program that never reported does not clear it: a Windows Kit's `cpu/` build starting beside a
+  damaged main folder, or the main build beside a verdict only `cpu/` reported. The clear heals the
+  consumers (§5, #654).
 
 **The GPU probe** (`gpu.ts`) pipes stderr. A refusal resolves **`null`**, the #380 unknown: not
 cached, not persisted. It also reports the verdict. Before #530 it was cached and persisted as "no
@@ -4766,7 +4770,7 @@ graphics card".
 
 **whisper-cli** (`transcriber/cli.ts`) classifies on `'close'` and throws the typed error for the
 `whisper_cpp` family. The signal branch now keeps the stderr tail, and the spawn passes
-`windowsHide`.
+`windowsHide`. A spawn error is classified whether Node throws it or emits it (#658, §9).
 
 **Consumers:**
 - **Chat ladder.** A refused rung is never held as a GPU verdict and never sets the #312 control
@@ -4799,6 +4803,11 @@ graphics card".
 - **Read by** `AppStatus.engineProblems` (chat engine first). The payload-free
   `engine:problemsChanged` push, sent on a new, different or cleared verdict, makes mounted
   screens re-read it.
+- **Dropped with a cause** (#654, §9): `started` (a reporting program started: a healthy start, the
+  probe answering), `rechecked` (Check again found it loads), `installed` (a new copy replaced it)
+  or `gone` (it left the drive). `rearmWhenChatEngineHeals`, subscribed once in `main/index.ts`,
+  heals a chat-engine `started` drop the way Check again heals its own: it re-arms the consumers and,
+  when a model answers from the demo runtime, re-runs and persists the probe and then restarts it.
 
 **Check again** (`engine:recheck`, `ipc/engine-recheck.ts`) re-starts each family with a verdict.
 - Each engine gets an explicit spawn (`checkProgramLoads`): `llama-server --version` and
@@ -4819,7 +4828,7 @@ graphics card".
 
 **The engine install hook** now runs the same `rearmLlamaConsumers` and clears the family's verdict.
 Before #530 it re-armed the model latches only, so a repaired engine still failed every import
-until a lock/unlock.
+until a lock/unlock. It re-arms itself, verdict or not; its `installed` drop heals nothing more.
 
 **The heal** (`healEngineLoadState`) runs at every session start (plaintext startup, unlock,
 create), before the auto-start reads the GPU flags. It clears a loader-caused `gpuAutoDisabled`
@@ -4980,6 +4989,119 @@ verdict gate, the demo-runtime install and restart, the payload rows), `engine-d
 `EngineProblem.test.tsx` "Install the engine again (#532)" (offer, order, progress, toast, the
 gate rows, no offer, the voice hint and its attribution, the Diagnostics line) and
 `ModelsScreen.test.tsx` (the deep-link rows).
+
+### §9 #654 / #655 / #658 amendment — the verdict heals on a healthy start (2026-10-13)
+
+**The gaps** (found by the runtime-ladder and sidecar-services test campaigns, reproduced on the
+real app):
+- **#655.** The store kept only the LAST reporting program. On a Kit the probe and rungs 1–2 (main
+  build) report, then rung 3 (`cpu/`). Once the fix was in, the main build ran on the graphics card,
+  but its healthy start matched nothing, so the banner and the Performance tile's "could not be
+  checked" stayed until Check again. That contradicted §4.
+- **#654.** A healthy start or an answering probe dropped the verdict but re-armed no consumer. Only
+  Check again and the install hook did. The banner went away while every import kept failing on the
+  embedder's latch ("The AI engine can't run on this computer"). The reranker stayed latched until a
+  restart. That contradicted §5.
+- **#658.** Node throws EPERM and `UNKNOWN` from `spawn()` instead of emitting `'error'`. The
+  whisper-cli spawn had no `try`, so a policy or security-software refusal never became a verdict.
+  Dictation read "could not be transcribed", and an import stored the generic failure.
+
+**Owner calls (2026-10-13; the first posted on #654).**
+1. Whenever the chat-engine verdict is dropped, the consumers are re-armed, whichever path drops it.
+2. Not on `gone`: the binary left the drive, nothing was healed, and a consumer re-armed against a
+   missing binary only fails again.
+3. From the review: a healthy start that heals the engine also restarts a model the demo runtime
+   stands in for. Check again and an install already did. Without it, an import that was the first
+   engine start after the repair left the chat in demo mode with no banner to bring it back.
+4. From the review: `cpu/` clears the verdict only as the latest reporter. "Any reporter clears"
+   let a healthy `cpu/` start on the next ladder walk drop a verdict the main build had just
+   re-reported, hiding a still-damaged main build and its #532 reinstall offer.
+
+**As built.**
+- **The store** (`engine-load.ts`):
+  - `StoredProblem.reporters` holds every program that reported since the verdict was recorded.
+    The shown problem is the latest report, so the #532 `afterInstall` rule is unchanged.
+  - `clearEngineProblemFor` clears when the healthy program is a reporter. The `cpu/` net
+    (`runtime/llama.cpp/<os>/cpu/`) must also be the latest one (`lastReporter`).
+  - `reportEngineProblem`'s program is required; every production reporter passed it already.
+  - `clearEngineProblem(family, why)` tells `onEngineProblemDropped` listeners why the verdict went:
+    `started`, `rechecked`, `installed` or `gone`. A listener that throws is caught. It returns
+    whether there was a verdict to drop.
+- **The heal.**
+  - `rearmWhenChatEngineHeals(ctx)` (`engine-recheck.ts`, subscribed once in `main/index.ts`)
+    answers a `llama_cpp` `started` drop. It re-arms the consumers. Then, only if a model answers
+    from the demo runtime with no start in flight, it re-runs and persists the probe (`reprobeGpu`)
+    and runs `restartChatOnRealEngine` in the background. The refused probes persisted nothing,
+    and the ladder must read this computer's answer (#380).
+  - The chat's own healthy start, the usual trigger, therefore neither restarts nor probes beside
+    its weight upload (#473).
+  - The other drops heal where they happen, each once and in its own order. Check again (`rechecked`)
+    re-arms, heals, re-probes and then restarts. It does all that only for a verdict it dropped itself:
+    a healthy start that landed during the check has already healed it. The install hook (`installed`)
+    re-arms with or without a verdict, then refreshes the probe and restarts. `gone` heals nothing.
+  - The re-arm spawns nothing, so it cannot report into the store while the store notifies.
+  - A consumer start in flight is not latched yet; if that start was refused, it re-latches and
+    re-reports, which is true.
+  - The #372 model latches are re-armed too (owner call 1). A model with a real GGUF fault walks
+    its ladder once more after the heal and latches again.
+- **whisper-cli** (`transcriber/cli.ts`): the spawn is wrapped. A thrown error and the `'error'` event
+  share `spawnFailure` (classify, log, verdict, `EngineCannotRunError`). A cancelled call, or one
+  on a stopped transcriber (quit), spawns nothing. That is checked before the #516 gate and the hash,
+  and again after them: a `stop()` that lands while the call waits finds nothing in `active` to kill.
+  `classifySpawnError` now reads only errors of the spawn. Before, a failed `kill()` on a cancel would
+  have recorded a false "Windows refused to start it".
+- **Residuals.**
+  - A chat on the `cpu/` net (rung 3) stays there after the heal. The status cannot tell rung 3 from
+    rung 2 (§8), and rung 2 is also compatibility mode after a GPU fault, so only the demo runtime is
+    restarted.
+  - The heal's restart is a chat start. On a shared card it takes the card from a translation that
+    started on it (#473 Phase 1, "a chat start takes the card first"), as Check again's restart did.
+  - Unchanged from #532: on a Kit, a `cpu/` refusal after a reinstall replaces the main build's
+    `afterInstall` verdict, so the reinstall is offered again (#670).
+
+**Real-app verification (2026-10-13, DesktopDiT, GTX 1070 Ti, dev build, scratch drive roots; D:
+was only read).**
+- **#654**, the main build only: `llama.dll` was removed, giving a startup `files-damaged` and a
+  failed import. With the DLL restored, the 4B started on the GPU and the verdict cleared.
+  - Master: the next import still failed with the engine copy.
+  - The fix: it was indexed.
+- **#655**, a Kit with `cpu/`, both DLLs removed. The main build reported from the probe, an import
+  and rungs 1–2, then rung 3 reported from `cpu/`. With the DLLs restored, the 4B ran on the GPU.
+  - Master: the banner with its demo note and the "answers are simulated" notice stayed, and the
+    import failed.
+  - The fix: both cleared and the import was indexed. No Check again and no restart in either case.
+- **Review F1**, the main build only, `llama.dll` removed. The chat start ended on the demo runtime.
+  With the DLL restored, an import was the first engine start: it was indexed and the verdict
+  cleared.
+  - Master: 120 s later the chat was still in demo mode, with no banner.
+  - The fix: the 4B was back on the GPU 4.1 s after the import, with one restart logged. The probe
+    (the 1070 Ti, 7,490 MiB free) was persisted 1 ms before that restart. The legs above logged no
+    restart: there the healthy start was the chat's own.
+- **#658**, a stand-in `whisper-cli.exe` with a deny-execute ACL. Node 24.13 throws `spawn EPERM`
+  synchronously. Smart App Control is off on this box, so the ACL stands in for it at the same Node
+  boundary.
+  - Master: dictation said "could not be transcribed", the import stored the generic failure, and
+    no verdict was recorded.
+  - The fix: dictation said the voice engine can't run, the verdict was `whisper_cpp` `blocked`
+    (`spawn error EPERM`), the import stored the voice-engine copy, and the speech-model card showed
+    the hint.
+
+Tests:
+- `engine-load-spawn.test.ts` "a healthy start: …": the #655 table, which includes the `cpu/`
+  rule and the never-reporter rule.
+- `engine-recheck.test.ts` "#654" covers:
+  - the re-arm plus restart;
+  - the probe re-run before that restart;
+  - the chat's own start, which neither probes nor restarts;
+  - a healthy start during Check again, healed once;
+  - a voice-engine heal that touches nothing of the chat engine.
+
+  Its fake context subscribes as `main/index.ts` does, so the `gone` row and Check again's
+  exactly-once counts guard the other causes.
+- `engine-load.test.ts`: a throwing drop listener, and a failed kill that `classifySpawnError`
+  does not read as a refusal.
+- `transcriber.test.ts`: the thrown refusal, the clean-run heal, the pre-aborted call, and the
+  stop/cancel and already-cancelled rows at the #516 gate.
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 

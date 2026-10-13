@@ -7,10 +7,12 @@ import {
   classifyLoadFailureMessage,
   classifySpawnError,
   clearEngineProblem,
+  clearEngineProblemFor,
   pathFreeSpawnError,
   engineProblemFor,
   engineInstalled,
   isEngineCannotRunError,
+  onEngineProblemDropped,
   onEngineProblemsChanged,
   reportEngineProblem,
   resetEngineProblemsForTest
@@ -214,20 +216,24 @@ describe('classifyLoadFailure — macOS (dyld wording; not measured on hardware)
 })
 
 describe('classifySpawnError / pathFreeSpawnError — the program never started', () => {
-  const spawnErr = (code: string): Error =>
-    Object.assign(new Error(`spawn C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe ${code}`), { code })
+  // The `syscall` Node 24 sets (measured on Windows): `spawn <path>` on the 'error' event, `spawn` on a throw.
+  const spawnErr = (code: string, syscall = 'spawn C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe'): Error =>
+    Object.assign(new Error(`spawn C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe ${code}`), { code, syscall })
 
   it('on Windows, EPERM / UNKNOWN / EACCES (policy, security software, quarantine) are a block', () => {
     for (const code of ['EPERM', 'UNKNOWN', 'EACCES']) {
       expect(classifySpawnError(spawnErr(code), 'win32')).toEqual({ reason: 'blocked', os: 'win', exit: `spawn error ${code}` })
+      expect(classifySpawnError(spawnErr(code, 'spawn'), 'win32')?.reason).toBe('blocked')
     }
   })
 
-  it('says nothing for ENOENT, for other systems, or for an error without a code', () => {
+  it('says nothing for ENOENT, for other systems, for an error without a code, or for a failed kill', () => {
     expect(classifySpawnError(spawnErr('ENOENT'), 'win32')).toBeNull()
     expect(classifySpawnError(spawnErr('EACCES'), 'linux')).toBeNull()
     expect(classifySpawnError(new Error('boom'), 'win32')).toBeNull()
     expect(classifySpawnError(null, 'win32')).toBeNull()
+    // A child's 'error' event also reports a kill() Windows refused: no verdict about running it.
+    expect(classifySpawnError(Object.assign(new Error('kill EPERM'), { code: 'EPERM', syscall: 'kill' }), 'win32')).toBeNull()
   })
 
   it('drops the absolute path Node writes into the message', () => {
@@ -253,16 +259,16 @@ describe('the session verdict store', () => {
   it('notifies on a new or different verdict and on a clear — not on a repeat', () => {
     const listener = vi.fn()
     const off = onEngineProblemsChanged(listener)
-    reportEngineProblem(gomp)
-    reportEngineProblem(gomp) // the same refusal again (every spawn re-reports it)
+    reportEngineProblem(gomp, LLAMA)
+    reportEngineProblem(gomp, LLAMA) // the same refusal again (every spawn re-reports it)
     expect(listener).toHaveBeenCalledTimes(1)
-    reportEngineProblem({ ...gomp, reason: 'system-too-old', name: 'GLIBC_2.34' })
+    reportEngineProblem({ ...gomp, reason: 'system-too-old', name: 'GLIBC_2.34' }, LLAMA)
     expect(listener).toHaveBeenCalledTimes(2)
-    clearEngineProblem('llama_cpp')
-    clearEngineProblem('llama_cpp') // nothing left to clear
+    clearEngineProblem('llama_cpp', 'started')
+    clearEngineProblem('llama_cpp', 'started') // nothing left to clear
     expect(listener).toHaveBeenCalledTimes(3)
     off()
-    reportEngineProblem(gomp)
+    reportEngineProblem(gomp, LLAMA)
     expect(listener).toHaveBeenCalledTimes(3)
   })
 
@@ -290,11 +296,17 @@ describe('the session verdict store', () => {
     expect(engineProblemFor('whisper_cpp')?.afterInstall).toBeUndefined()
   })
 
-  it('never lets a throwing listener break a report', () => {
+  // A clear runs inside LlamaServer.start()'s healthy path (#654): a listener that throws there must not fail it.
+  it('never lets a throwing listener break a report or a clear', () => {
     onEngineProblemsChanged(() => {
       throw new Error('boom')
     })
-    expect(() => reportEngineProblem(gomp)).not.toThrow()
+    onEngineProblemDropped(() => {
+      throw new Error('boom')
+    })
+    expect(() => reportEngineProblem(gomp, LLAMA)).not.toThrow()
     expect(engineProblemFor('llama_cpp')).toEqual(gomp)
+    expect(() => clearEngineProblemFor('llama_cpp', LLAMA)).not.toThrow()
+    expect(engineProblemFor('llama_cpp')).toBeNull()
   })
 })

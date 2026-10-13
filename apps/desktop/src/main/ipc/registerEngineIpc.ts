@@ -180,6 +180,8 @@ export function registerEngineIpc(
       // a lock/unlock), and the old binary's load verdict no longer describes the new one — a
       // refusal of the new binary re-reports itself on its first spawn (the probe just below).
       // #532: one that still says "files damaged" is then marked as about this fresh copy.
+      // #654: this call is the install's re-arm, verdict or not — the store's `installed` drop
+      // heals nothing on its own (`rearmWhenChatEngineHeals` answers `started` only).
       engineInstalled('llama_cpp', binaryPaths.llama_cpp)
       rearmLlamaConsumers(ctx)
       // #532: a model the demo runtime stands in for comes back on the real engine, as after a

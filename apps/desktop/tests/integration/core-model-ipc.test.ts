@@ -223,8 +223,8 @@ describe('registerCoreIpc', () => {
     expect(((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).engineProblems).toEqual([])
     const whisper = { family: 'whisper_cpp', reason: 'library-missing', os: 'linux', name: 'libgomp.so.1', exit: 'exit code 127' } as const
     const llama = { ...whisper, family: 'llama_cpp' } as const
-    reportEngineProblem(whisper)
-    reportEngineProblem(llama)
+    reportEngineProblem(whisper, '/drive/runtime/whisper.cpp/linux/whisper-cli')
+    reportEngineProblem(llama, '/drive/runtime/llama.cpp/linux/llama-server')
     expect(((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).engineProblems).toEqual([llama, whisper])
   })
 
