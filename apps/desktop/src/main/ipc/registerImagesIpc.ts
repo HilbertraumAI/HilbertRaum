@@ -33,7 +33,9 @@ import { log } from '../services/logging'
 // answers a question about ONE image. Privacy posture (§12/§13):
 //   • getStatus is WORKSPACE-AGNOSTIC (no requireUnlocked); the file/runtime handlers require
 //     an unlocked workspace.
-//   • The image bytes are base64-inlined into the loopback sidecar request — never on disk.
+//   • The analyze call writes no temp file: the image bytes are base64-inlined into the
+//     loopback sidecar request. The only on-disk copy is the history's, encrypted at rest in
+//     an encrypted workspace (architecture.md image-understanding §10).
 //   • NO image/prompt/answer content is logged or audited; errors to the renderer are codes.
 //   • chooseImage returns {token,name,sizeBytes} (IPC-2); the renderer NEVER sees the absolute
 //     path. readBytes accepts only that opaque main-held token and resolves it to the path the

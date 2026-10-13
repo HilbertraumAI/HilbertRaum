@@ -3213,8 +3213,9 @@ Per-finding disposition (F-1…F-8):
 - **Launch args (`runtime.ts`, `translationServerArgs(device)`).** `--ctx-size 4096` (the model
   card's 2K input budget + output headroom, plan §2 D4) `--parallel 1` (`TRANSLATION_SLOT_ARGS` —
   strictly sequential windows; contains the #25142 Windows-Vulkan parallel-translation hang in BOTH
-  device postures) the **device posture** (issue #42: `'auto'` = NO device args → b9849 ngl=auto +
-  fit=on VRAM-aware offload, the chat rung-1 shape; `'cpu'` = `--device none` via
+  device postures) the **device posture** (issue #42: `'auto'` = NO device args → the pin's
+  `-ngl auto` + `--fit on` VRAM-aware offload, b9849 and b11146 alike (#660), the chat rung-1
+  shape; `'cpu'` = `--device none` via
   `TRANSLATION_CPU_DEVICE_ARGS` — the only CPU-forcing mechanism, never `-ngl`)
   `--chat-template gemma` (`TRANSLATION_TEMPLATE_ARGS` — **REQUIRED**, TG-2 smoke finding: b9849
   crashes at STARTUP validating TranslateGemma's embedded template — the #20305 minja crash at init,
@@ -3345,7 +3346,8 @@ Per-finding disposition (F-1…F-8):
     sidecar now runs a two-rung **device ladder** (`runtime.ts`): per COLD START it re-reads the
     SAME Settings signals the chat ladder gets (`gpuMode` + `gpuAutoDisabled`, injected as
     `TranslationGpuDeps` from the shared `gpuSignals` in main/index.ts) — allowed ⇒ launch with
-    **no device args** (b9849 ngl=auto + fit=on; on a GPU-less box that IS CPU mode), else
+    **no device args** (the pin's `-ngl auto` + `--fit on`, b9849 and b11146 alike; on a GPU-less
+    box that IS CPU mode), else
     `--device none`. A **non-bind-race GPU start failure** retries once at forced CPU within the
     same start and arms a **session-scoped `gpuFellBack` latch** (later cold starts pin CPU — no
     repeated GPU health timeouts); a **mid-session crash of a GPU-composed sidecar** arms the same
@@ -12281,15 +12283,15 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
 | Decision | Choice | Why (short) |
 |---|---|---|
 | Runtime topology | **Dedicated lazy vision sidecar** (`services/vision/`, own `LlamaServer`) — Option A | Mirrors the embedder/reranker, keeps Chat undisturbed; composes `LlamaServer` directly so it does NOT inherit `CHAT_SERVER_ARGS` (RUNTIME-2). Option B (swap chat to multimodal) + Option C (mtmd CLI) rejected — §4 |
-| Image transport | **base64 `image_url` data-URL inlined into the loopback request — NO disk write, NO pin bump** | V1 gate #1 best case: `llama-server --mmproj` on b9585 answers `/v1/chat/completions` with a base64 image; the temp-file fallback (§12 of the plan) was NOT built |
-| Vision arg set (V1-resolved) | `--mmproj <projector>` + `--device none`; `--jinja` left default-ON; **`--reasoning-format` NOT passed** | Qwen2.5-VL is non-reasoning (emits no reasoning frames); CPU-pin avoids VRAM contention. `cache_prompt:true` caches the image prefill across follow-ups |
+| Image transport | **base64 `image_url` data-URL inlined into the loopback request — NO disk write for the analyze call, NO pin bump** | V1 gate #1 best case: `llama-server --mmproj` on b9585 answers `/v1/chat/completions` with a base64 image; the temp-file fallback (§12 of the plan) was NOT built. *Since §10 the image does reach disk once, as the history copy (encrypted at rest in an encrypted workspace); the call itself still writes no temp file (§7).* |
+| Vision arg set (V1-resolved) | `--mmproj <projector>` + `--device none`; `--jinja` left default-ON; **`--reasoning-format` NOT passed**. *Amended 2026-07-01 on b9849: + `--no-mmproj-offload` (RUNTIME-6: the projector otherwise offloads to the GPU even under `--device none`) and `--parallel 1` (RUNTIME-5: one slot, not 4 slots splitting a unified KV) — GPU record §3 "VISION RE-VERIFIED 2026-07-01"* | Qwen2.5-VL is non-reasoning (emits no reasoning frames); CPU-pin avoids VRAM contention. `cache_prompt:true` caches the image prefill across follow-ups |
 | SSE reader | **Reuse `readChatSSE` unchanged** | V1: the streamed frames are byte-identical to text chat — streaming-by-default stands (no vision-specific reader, no poll fallback) |
 | Serialization | **Vision's OWN one-job latch + busy-REJECT** (not the chat slot arbiter) | A separate sidecar is not covered by `model-slot-arbiter`; chat + embedder + vision = 3 co-resident (RUNTIME-3). A 2nd analyze returns `busy`, never queued (IPC-3) |
 | Idle teardown | **Net-new SOFT idle teardown, default 120 000 ms** (2 min, §19.13 band; tuned V5) | The idle ~4.6 GB must not sit co-resident forever; cache_prompt makes the warm-window value small, so reclaim RAM promptly (RUNTIME-4 / model-benchmarks §8.3) |
 | Preview encoding | **`data:` URL only — NOT `blob:`** | Prod CSP `img-src 'self' data:` lists no `blob:` (`main/index.ts`); `data:` needs NO CSP change (SEC-1). ~33% base64 inflation, mitigated by downscaling first |
 | Image decode/downscale | **Browser APIs in the sandbox, no native dep** (`createImageBitmap` → 1536 px → re-encode) | No `sharp`/`jimp`; downscale is a real LATENCY lever (fewer image tokens ⇒ less CPU prefill) AND normalizes EXIF orientation |
 | Download topology | **Two atomic single-file planner tasks sharing one `modelId`**, fetched under one UI job | Install = both GGUF + mmproj present + verified. The planner (`planModelDownloads`) and the scripts always emitted both; the in-app `DownloadManager` later grew to run all of a model's tasks sequentially under one job with COMBINED progress (DIST-1) |
-| Persistence | **Ephemeral renderer state only** — no DB writes, no auto-OCR, no corpus indexing | The image/question/answer live only in screen state (§3 non-goals); never persisted |
+| Persistence | As first decided: ephemeral renderer state only, no DB writes. **Superseded 2026-06-20 by §10:** every completed analysis is saved to an encrypted, deletable history (`image_sessions` / `image_turns` + the stored image). Still no auto-OCR, no corpus indexing | The V1–V5 design kept the image/question/answer in screen state only (the plan's §3 non-goals); §10 added the history for parity with the documents and chat history |
 | Model | **Qwen2.5-VL-3B-Instruct Q4_K_M + f16 mmproj** (Apache-2.0) | V1 winner: loads on b9585, reads a real German invoice; ~3.27 GB on disk, ~4.6 GB peak RSS (model-benchmarks §8.2) |
 
 ### §2 Hard rules (these bound every choice)
@@ -12362,11 +12364,14 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   (no `await` between the `signal.aborted` check and the write), it hardens the path against a refactor
   that inserts one; `tests/integration/vision-cancel.test.ts` pins the contract and the dual-neuter
   (remove the abort check AND the `set()` guard → resurrection) is the recorded teeth-check.
-- **`ipc/registerImagesIpc.ts`** — `images:getStatus|chooseImage|readBytes|analyze|cancel|getJob` +
-  `STREAM.imgToken/imgDone/imgError(jobId)`. `getStatus` needs no unlock; file/runtime handlers
-  `requireUnlocked`. `chooseImage` returns `{path,name,sizeBytes}` (IPC-2); `readBytes`/`analyze`
-  re-validate extension + byte cap in MAIN (SEC-3). `imageReadBytes` is the PICKER path only —
-  drag-drop reads the `File` bytes directly (IPC-1).
+- **`ipc/registerImagesIpc.ts`** — `images:getStatus|chooseImage|readBytes|analyze|cancel|getJob`,
+  the history's `images:listSessions|getSession|deleteSession|clearSessions` (§10, §11) +
+  `STREAM.imgToken/imgDone/imgError(jobId)`. `getStatus` needs no unlock; every other handler
+  `requireUnlocked`. `chooseImage` returns `{token,name,sizeBytes}` (IPC-2; V1–V5 returned the
+  absolute `path` — since D2, vuln-scan-2026-06-21, it stays in main and `readBytes` takes the
+  one-time token, `security-model.md`); `readBytes`/`analyze` re-validate extension + byte cap in
+  MAIN (SEC-3). `imageReadBytes` is the PICKER path only — drag-drop reads the `File` bytes
+  directly (IPC-1).
 - **Renderer** — `renderer/screens/ImagesScreen.tsx` (the §5.6-plan state machine, busy-reject,
   focus re-check) reads the active analysis from `renderer/lib/visionSession.ts` — a **module-level
   store** (the `doctasks.ts`/`skillruns.ts` "survives screen unmount" precedent) that holds the
@@ -12578,7 +12583,9 @@ anchor as:
 | `SEC-3` | Main-side extension+cap re-validation (net-new) | §5 + §7 |
 | `PROD-1` | RAM co-residency peak (idle bounds the window, not the peak) | §8 |
 | `PROD-2` | Workspace-agnostic status (no `'locked'` reason) | §2 |
-| `IPC-1/2/3` | Drag-drop skips `readBytes`; `{path,name,sizeBytes}`; busy-reject | §5 |
+| `RUNTIME-5` | `--parallel 1`: one slot, so a large image gets the whole context (added 2026-07-01) | GPU record §3 "VISION RE-VERIFIED 2026-07-01" + §1 |
+| `RUNTIME-6` | `--no-mmproj-offload`: the projector stays on the processor too (added 2026-07-01) | GPU record §3 "VISION RE-VERIFIED 2026-07-01" + §1 |
+| `IPC-1/2/3` | Drag-drop skips `readBytes`; `chooseImage` returns name + size (the plan's `{path,name,sizeBytes}`, `{token,name,sizeBytes}` since D2); busy-reject | §5 |
 | `DIST-1` | Two download jobs share one modelId | §1 + §5 |
 
 ### §10 Analysis history (encrypted-at-rest, deletable — added 2026-06-20)

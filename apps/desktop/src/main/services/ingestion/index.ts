@@ -83,10 +83,9 @@ import {
 
 /** Optional pipeline dependencies: embedding, encrypted storage, transcription, OCR. */
 export interface IngestionDeps {
-  /** Embedder used to vectorize chunks. Omit to skip the embedding step. */
+  /** Embedder used to vectorize chunks; its `id` tags every row (`embeddings.embedding_model_id`,
+   *  rag-design §10). Omit to skip the embedding step. */
   embedder?: Embedder
-  /** Model id tag for `embeddings.embedding_model_id`; falls back to `embedder.id`. */
-  embeddingModelId?: string | null
   /**
    * When present (encrypted workspace), the stored document copy is written ENCRYPTED
    * (`<id><ext>.enc`, vault-key AES-GCM) instead of a plaintext copy — spec §3.5
@@ -1075,7 +1074,7 @@ export async function finalizeDocument(
     // DELETE already cleared stale vectors, so re-index re-embeds cleanly.
     if (deps.embedder) {
       const embedT0 = performance.now()
-      await embedChunks(db, documentId, deps.embedder, deps.embeddingModelId ?? deps.embedder.id)
+      await embedChunks(db, documentId, deps.embedder)
       perfMark('ingest_embed_done', { docId: documentId, ms: perfMs(embedT0) })
     }
 
@@ -1150,15 +1149,11 @@ function infoOrDeleted(db: Db, documentId: string): DocumentInfo {
 /**
  * Embed every chunk of a document and persist the vectors. Chunks are embedded as a
  * single batch (the 1000-chunk-per-file cap bounds the work); the BLOB holds the raw
- * Float32 bytes (`encodeVector`). Tagged with `embeddingModelId` so re-embedding on a
- * model change is detectable. Assumes prior vectors for the document were already deleted.
+ * Float32 bytes (`encodeVector`). Tagged with `embedder.id`, the id the search scopes by, so
+ * an embedder change is detectable (rag-design §10). Assumes prior vectors for the document
+ * were already deleted.
  */
-async function embedChunks(
-  db: Db,
-  documentId: string,
-  embedder: Embedder,
-  embeddingModelId: string
-): Promise<void> {
+async function embedChunks(db: Db, documentId: string, embedder: Embedder): Promise<void> {
   const rows = db
     .prepare('SELECT id, text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
     .all(documentId) as unknown as Array<{ id: string; text: string }>
@@ -1177,7 +1172,7 @@ async function embedChunks(
   try {
     for (let i = 0; i < rows.length; i++) {
       const vec = vectors[i]
-      insert.run(rows[i].id, embeddingModelId, encodeVector(vec), vec.length, created)
+      insert.run(rows[i].id, embedder.id, encodeVector(vec), vec.length, created)
     }
     db.exec('COMMIT')
   } catch (err) {

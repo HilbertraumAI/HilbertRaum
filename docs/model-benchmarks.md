@@ -2506,10 +2506,13 @@ regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
   `gpuAutoDisabled`, one shared `gpuSignals` object in `main/index.ts`) — re-read per **cold
   start**, so with the 2-min idle teardown a Settings flip takes effect on the next translate, no
   restart.
-- **Postures:** allowed ⇒ `translationServerArgs('auto')` — NO device args (b9849 ngl=auto +
-  fit=on VRAM-aware offload; a GPU-less machine lands on CPU exactly as before). `gpuMode: 'off'`,
-  a persisted `gpuAutoDisabled`, or the session fallback latch ⇒ `translationServerArgs('cpu')`
-  (`--device none` — never `-ngl`).
+- **Postures:** allowed ⇒ `translationServerArgs('auto')` — NO device args (the pin's defaults
+  `-ngl auto` + `--fit on`, VRAM-aware offload; unchanged from b9849 to b11146, re-checked
+  against `--help` 2026-10-13, #660; a GPU-less machine lands on CPU exactly as before, though
+  its load log still claims `offloaded N/N layers`, #671). `gpuMode: 'off'`, a persisted
+  `gpuAutoDisabled`, the session fallback latch, or (since #473) the headroom gate choosing the
+  processor (no full fit beside the chat model, or a chat start pending) ⇒
+  `translationServerArgs('cpu')` (`--device none` — never `-ngl`).
 - **Fallback:** a non-bind-race GPU start failure retries ONCE at forced CPU within the same start;
   a mid-session crash of a GPU-composed sidecar arms the same session latch (the chat §5.3
   auto-fallback shape). Only the final CPU rung failing arms the permanent `startFailed` latch
@@ -2551,8 +2554,8 @@ regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
 **OPEN — the GPU-decode re-smoke (owner, PAID/GPU drive).** The §11.2 tokens/sec are CPU numbers;
 no GPU decode of TranslateGemma has been measured on the owner harness yet — the community
 datapoint above answers the architecture-risk question, but the recorded §11.2-grade evidence
-should still come from the owner run. On a drive with the b9849 binary + the TranslateGemma GGUF
-and a real GPU:
+should still come from the owner run. On a drive with the pinned binary (b11146) + the
+TranslateGemma GGUF and a real GPU:
 
 ```powershell
 $env:HILBERTRAUM_TRANSLATEGEMMA_SMOKE = "<root with runtime/llama.cpp/<os>/llama-server + models/translation/*.gguf>"

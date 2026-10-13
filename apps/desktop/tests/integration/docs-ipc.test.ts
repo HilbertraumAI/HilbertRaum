@@ -521,7 +521,7 @@ describe('registerDocsIpc', () => {
     const file = join(workspacePath, 'src.txt')
     writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta')
     const good = createQueuedDocument(db, file)
-    await processDocument(db, storeDir, good.id, { embedder: indexer, embeddingModelId: indexer.id })
+    await processDocument(db, storeDir, good.id, { embedder: indexer })
 
     // A document left mid-ingestion by a previous run (non-terminal + an old timestamp).
     const stuck = createQueuedDocument(db, file)
@@ -1094,7 +1094,7 @@ describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => 
     writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi')
     const doc = createQueuedDocument(db, file)
     // Encrypt into the workspace (`stored_path` becomes the `.enc` copy) via the fake cipher.
-    await processDocument(db, storeDir, doc.id, { embedder, embeddingModelId: embedder.id, cipher })
+    await processDocument(db, storeDir, doc.id, { embedder, cipher })
 
     const [a, b] = await Promise.all([
       extractDocumentPreview(db, storeDir, doc.id, { cipher }),
@@ -1315,7 +1315,7 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     const doc = createQueuedDocument(db, file)
     // Fully index it (chunks + embeddings under `embedder.id`), then force it BACK to a mid-import
     // status so the list has chunks-with-embeddings present but no `indexed` row.
-    await processDocument(db, storeDir, doc.id, { embedder, embeddingModelId: embedder.id })
+    await processDocument(db, storeDir, doc.id, { embedder })
     db.prepare("UPDATE documents SET status = 'embedding' WHERE id = ?").run(doc.id)
 
     const JOIN_SQL = 'FROM embeddings e JOIN chunks c'
@@ -1342,7 +1342,7 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     const file = join(workspacePath, 'kept.txt')
     writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta')
     const doc = createQueuedDocument(db, file)
-    await processDocument(db, storeDir, doc.id, { embedder: indexer, embeddingModelId: indexer.id })
+    await processDocument(db, storeDir, doc.id, { embedder: indexer })
 
     const JOIN_SQL = 'FROM embeddings e JOIN chunks c'
     const prepareSpy = vi.spyOn(db, 'prepare')
@@ -1434,7 +1434,7 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     writeFileSync(file, 'the quick brown fox jumps over the lazy dog again and again indeed')
     const doc = createQueuedDocument(db, file)
     // Encrypt into the workspace (stored_path becomes the `.enc` copy) via the fake cipher.
-    await processDocument(db, storeDir, doc.id, { embedder, embeddingModelId: embedder.id, cipher })
+    await processDocument(db, storeDir, doc.id, { embedder, cipher })
 
     const [a, b] = await Promise.all([
       readStoredDocumentText(db, storeDir, doc.id, { cipher }),

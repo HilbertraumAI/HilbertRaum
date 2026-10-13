@@ -71,7 +71,10 @@ import { decodeVector } from './codec'
 //     (alongside the embedder's `suspend()`, which purges the sidecar's recent-text memory):
 //     the decoded vectors are derived from chunk text and must not linger in main-process RAM
 //     after the vault re-encrypts. The signature would NOT catch this (the table is unchanged),
-//     so the lock purge is a hard, separate requirement. Also called on embedder (re)init.
+//     so the lock purge is a hard, separate requirement. The lock is its only caller: an
+//     embedder change needs no purge (the map is per-`Db` and model-agnostic, the search's
+//     model-id filter scopes results, and unlock reopens the `Db` → a fresh map; architecture.md
+//     "Wave P4").
 //
 // Everything stays in-process and offline: no network, no native dependency, no worker — the
 // off-main-thread scan (P4b) and an ANN index (P4c / sqlite-vec) remain deferred behind the
@@ -410,9 +413,10 @@ export function invalidateResidentVectors(db: Db, delta?: EmbeddingDelta): void 
 
 /**
  * Purge the resident map for `db` from memory. Unlike `invalidate` (which only marks dirty), this
- * DROPS the map entirely: it is the SECURITY contract, invoked on workspace LOCK (and embedder
- * (re)init) to guarantee chunk-text-derived vectors do not linger in RAM after the vault
- * re-encrypts — a requirement the staleness signature does not cover (the table is unchanged).
+ * DROPS the map entirely: it is the SECURITY contract, invoked on workspace LOCK (its only
+ * caller, `registerWorkspaceIpc`) to guarantee chunk-text-derived vectors do not linger in RAM
+ * after the vault re-encrypts — a requirement the staleness signature does not cover (the table
+ * is unchanged).
  */
 export function purgeResidentVectors(db: Db): void {
   caches.delete(db)

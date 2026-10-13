@@ -2342,9 +2342,13 @@ argument.
 
 ### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
 `validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines
-the **original** bytes to the sidecar — so a small (<20 MiB) **decompression bomb** PNG/JPEG that
-decodes to billions of pixels passed the guard and OOM'd the sidecar. The renderer's `MAX_DIMENSION`
-downscale is display-only and doesn't bound what the sidecar decodes. The main guard now parses the
+the **request** bytes to the sidecar (normally the renderer's downscaled re-encode, but renderer
+output is attacker-controllable, threat #1) — so a small (<20 MiB) **decompression bomb**
+PNG/JPEG that decodes to billions of pixels passed the guard and OOM'd the sidecar. The
+renderer's 1536-px downscale (`DOWNSCALE_TARGET`, `renderer/images/decode.ts`) is client hygiene
+and doesn't bound what the sidecar decodes. *(Wording corrected for #660, as
+`vision/limits.ts` was for #120 item 5: this said the **original** bytes and named the renderer's
+`MAX_DIMENSION`, a 4096-px reject that #118 removed.)* The main guard now parses the
 image **header** (PNG IHDR / JPEG SOF) for `width*height` — no full decode — and rejects above a
 **pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable via
 `HILBERTRAUM_MAX_IMAGE_PIXELS`) as `tooLarge`. This sits alongside the **byte cap** that bounds the

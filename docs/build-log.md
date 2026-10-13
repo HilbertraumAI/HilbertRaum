@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-06 #600 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #660 entry). Its record is unchanged:
+`architecture.md` CB-5 "#600 amendment". It named no open items of its own; its follow-ups (#606, #612, #613) are closed. Citations of the form
+"BUILD_STATE 2026-10-06 #600 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-06 — **#600 — a model stop or switch ends the answer cleanly; a crash speaks in words (`fix/600-model-stop-mid-answer`).** `RuntimeManager`'s model-stop hook
+(after `current` is cleared, before the kill, no wait; never on the crash restart) ends the local API request (`model_not_loaded`/`model_starting`), a deep-index build and
+the answers: partial kept + "Reply stopped" (new `messages.ended_early`, not `truncated`), a re-ask keeps its predecessor, an unanswered question is marked, an AI Model card note.
+A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: none (#606, #612, #613: above)._
+
 ## 2026-10-13 — the closed 2026-10-06 #598 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #662 entry). Its record is unchanged:
