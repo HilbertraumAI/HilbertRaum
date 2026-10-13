@@ -3,15 +3,17 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
-import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 35 renderer tests: the "Compare (2)" action on the Phase-17 multi-select
 // (visible at EXACTLY two selections), the polling busy state ("Comparing… (n/m)" on
-// BOTH source rows) + cancel, the completion flow (the new report document appears
-// with its both-sources provenance line and its preview auto-opens), friendly failure
-// copy, and Export on the materialized report.
+// BOTH source rows), the completion flow (the new report document appears with its
+// both-sources provenance line and its preview auto-opens), and Export on the materialized
+// report. The row Cancel and the failed-task banner are kind-agnostic (DocumentSummary
+// 'cancelling the busy task…', DocumentsScreenPolish DR-7).
 
 function doc(over: Partial<DocumentInfo> = {}): DocumentInfo {
   return {
@@ -66,7 +68,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup()
-  resetDocTaskStoreForTests()
+  clearDocTaskSession()
   vi.restoreAllMocks()
 })
 
@@ -134,7 +136,7 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
     expect(
       (
         await screen.findAllByText('Comparison: contract-v1 vs contract-v2.md', undefined, {
-          timeout: 3000
+          timeout: hangBudgetMs(3000)
         })
       ).length
     ).toBeGreaterThanOrEqual(1)
@@ -142,48 +144,6 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
     expect(previewDocument).toHaveBeenCalledWith('d9')
     expect(await screen.findByText(/What both documents share/)).toBeInTheDocument()
     expect(screen.queryByText(/Comparing…/)).not.toBeInTheDocument()
-  })
-
-  it('cancelling the busy comparison calls cancelDocTask', async () => {
-    const user = userEvent.setup()
-    const cancelDocTask = vi.fn(async () => {})
-    stubApi({
-      listDocuments: vi.fn(async () => [doc(), DOC_B]),
-      startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
-      getDocTask: vi.fn(async () => task({ state: 'running' })),
-      cancelDocTask
-    })
-    render(<DocumentsScreen onAskSelected={() => {}} />)
-    await screen.findByText('contract-v1.pdf')
-    await user.click(screen.getByLabelText('Select contract-v1.pdf for asking'))
-    await user.click(screen.getByLabelText('Select contract-v2.pdf for asking'))
-    await user.click(screen.getByRole('button', { name: /compare \(2\)/i }))
-    await user.click((await screen.findAllByRole('button', { name: /^cancel$/i }))[0])
-    // full-audit 2026-07-11 CODE-47: pin the EXACT args — the row Cancel is the no-arg
-    // active-task fallback (`cancelActiveDocTask()` → `cancelDocTask(null)` server-side), so zero
-    // args is the truthful teeth-giving assertion; a stray/foreign jobId would redden this.
-    expect(cancelDocTask).toHaveBeenCalledWith()
-  })
-
-  it('surfaces the friendly failure copy (e.g. the re-index-first guard)', async () => {
-    const user = userEvent.setup()
-    const reindexCopy =
-      'These documents need a quick re-index before they can be compared — at least one was ' +
-      'prepared with a different search model. Open the Documents screen and choose Re-index, ' +
-      'then try again.'
-    stubApi({
-      listDocuments: vi.fn(async () => [doc(), DOC_B]),
-      startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
-      getDocTask: vi.fn(async () => task({ state: 'failed', error: reindexCopy }))
-    })
-    render(<DocumentsScreen onAskSelected={() => {}} />)
-    await screen.findByText('contract-v1.pdf')
-    await user.click(screen.getByLabelText('Select contract-v1.pdf for asking'))
-    await user.click(screen.getByLabelText('Select contract-v2.pdf for asking'))
-    await user.click(screen.getByRole('button', { name: /compare \(2\)/i }))
-    expect(
-      await screen.findByText(/need a quick re-index/i, undefined, { timeout: 3000 })
-    ).toBeInTheDocument()
   })
 
   it('shows the both-sources provenance line and Export on the materialized report', async () => {

@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { ToastProvider } from '../../src/renderer/components'
-import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import {
   DOC_TASK_BUSY_MESSAGE,
   type DocTaskStatus,
@@ -14,10 +14,12 @@ import {
   type RuntimeStatus
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 33 renderer tests: the Summarize row action + polling busy state, the summary
-// display in the preview (attribution line, truncated note, Regenerate), the friendly
-// failure, and the chat-during-task busy copy with its cancel option.
+// display in the preview (attribution line, truncated note, Regenerate), and the chat-during-task
+// busy copy with its cancel option. The failed-task banner is kind-agnostic: DocumentsScreenPolish
+// DR-7 owns it.
 
 function doc(over: Partial<DocumentInfo> = {}): DocumentInfo {
   return {
@@ -75,7 +77,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup()
-  resetDocTaskStoreForTests()
+  clearDocTaskSession()
   vi.restoreAllMocks()
 })
 
@@ -112,7 +114,7 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
       progress: { stepsDone: 3, stepsTotal: 3 },
       resultRef: { documentId: 'd1' }
     })
-    await waitFor(() => expect(previewDocument).toHaveBeenCalledWith('d1'), { timeout: 3000 })
+    await waitFor(() => expect(previewDocument).toHaveBeenCalledWith('d1'), { timeout: hangBudgetMs(3000) })
 
     // The preview shows the summary section: text, attribution, Regenerate.
     expect(await screen.findByText(/payment is due in 30 days/)).toBeInTheDocument()
@@ -170,24 +172,6 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     // the busy row stays truthful — the task is still running backend-side.
     expect(await screen.findByText('cancel exploded')).toBeInTheDocument()
     expect(screen.getByText(/Summarizing…/)).toBeInTheDocument()
-  })
-
-  it('shows the friendly failure copy when the task fails', async () => {
-    const user = userEvent.setup()
-    stubApi({
-      listDocuments: vi.fn(async () => [doc()]),
-      startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
-      getDocTask: vi.fn(async () =>
-        task({ state: 'failed', error: 'No AI model is running. Open the AI Model screen and start one first.' })
-      )
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
-    await user.click(await screen.findByRole('menuitem', { name: /^summarize$/i }))
-    expect(
-      await screen.findByText(/No AI model is running/i, undefined, { timeout: 3000 })
-    ).toBeInTheDocument()
   })
 
   it('surfaces the backend refusal (e.g. answer streaming) as the error banner', async () => {
@@ -268,14 +252,14 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
   })
 
   it('offers no Summarize action for unready documents', async () => {
-    stubApi({
-      listDocuments: vi.fn(async () => [
-        doc({ status: 'failed', errorMessage: 'nope', chunkCount: 0 })
-      ])
-    })
+    const user = userEvent.setup()
+    stubApi({ listDocuments: vi.fn(async () => [doc({ status: 'extracting', chunkCount: 0 })]) })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    expect(screen.queryByRole('button', { name: /^summarize$/i })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    // The menu opened (its Re-index item renders, disabled while the row reads) — so the absence below is the gate's.
+    expect(await screen.findByRole('menuitem', { name: 'Re-index' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /^summarize$/i })).not.toBeInTheDocument()
   })
 })
 

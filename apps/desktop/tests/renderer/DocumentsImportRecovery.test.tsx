@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import type { DocumentInfo, ImportJobStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // DOC-1 (frontend audit 2026-08-09, #141): the import progress poll used to exist only as a
 // component-local interval started by startImport. Navigating away and back left NO poll —
@@ -66,36 +67,50 @@ describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () 
 
     // …and the re-attached poll runs (pre-fix getImportJob was never called again after a
     // remount, so the screen never noticed the backend finishing).
-    await waitFor(() => expect(getImportJob).toHaveBeenCalledWith('j1'), { timeout: 3000 })
+    await waitFor(() => expect(getImportJob).toHaveBeenCalledWith('j1'), { timeout: hangBudgetMs(3000) })
     await waitFor(
       () => expect(screen.getByRole('button', { name: 'Import files' })).toBeEnabled(),
-      { timeout: 5000 }
+      { timeout: hangBudgetMs(5000) }
     )
   })
 
   it('does nothing when no import is in flight', async () => {
-    const getImportJob = vi.fn(async (jobId: string) => ({
-      jobId,
-      total: 0,
-      completed: 0,
-      failed: 0,
-      done: true
-    }))
-    stubApi({
-      listCollections: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [doc({ status: 'indexed', chunkCount: 3 })]),
-      getActiveImportJob: vi.fn(async () => null),
-      getImportJob
-    })
-    render(
-      <ToastProvider>
-        <DocumentsScreen />
-      </ToastProvider>
-    )
-    expect(await screen.findByRole('button', { name: 'Import files' })).toBeEnabled()
-    // No stray poll was started for a non-existent job.
-    await new Promise((r) => setTimeout(r, 600))
-    expect(getImportJob).not.toHaveBeenCalled()
+    vi.useFakeTimers()
+    try {
+      const getActiveImportJob = vi.fn(async () => null)
+      const getImportJob = vi.fn(async (jobId: string) => ({
+        jobId,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        done: true
+      }))
+      stubApi({
+        listCollections: vi.fn(async () => []),
+        listDocuments: vi.fn(async () => [doc({ status: 'indexed', chunkCount: 3 })]),
+        getActiveImportJob,
+        getImportJob
+      })
+      render(
+        <ToastProvider>
+          <DocumentsScreen />
+        </ToastProvider>
+      )
+      // The recover effect's own verdict (DocumentsScreen.tsx, DOC-1): it asked main once and got
+      // "nothing in flight".
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(getActiveImportJob).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole('button', { name: 'Import files' })).toBeEnabled()
+      // Three periods of the production 400 ms import poll: a stray watchJob would have polled by now.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1200)
+      })
+      expect(getImportJob).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -139,7 +154,7 @@ describe('DocumentsScreen — Import folder happy path (#147)', () => {
     // …and the poll notices completion, re-enabling both entry points.
     await waitFor(
       () => expect(screen.getByRole('button', { name: 'Import files' })).toBeEnabled(),
-      { timeout: 5000 }
+      { timeout: hangBudgetMs(5000) }
     )
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeEnabled()
   })

@@ -2,15 +2,23 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DocumentsScreen, __docRowRenderCounts } from '../../src/renderer/screens/DocumentsScreen'
-import { formatSize } from '../../src/renderer/screens/documents/format'
+import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import { startTask, resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { startTask, clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { en } from '../../src/shared/i18n'
 import type { Collection, DocTaskStatus, DocumentInfo, DocumentPreview } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Session 3 (chat-docs remediation) — Documents renderer polish, DR-1…DR-9. Each test has
+// PERF-5: count DocRow renders test-side — production's memo object, inner component wrapped (no src seam).
+const rowRenders = vi.hoisted(() => new Map<string, number>())
+vi.mock('../../src/renderer/screens/documents/DocRow', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../src/renderer/screens/documents/DocRow')>()
+  const { countMemoRenders } = await import('../helpers/render-counter')
+  return { ...m, DocRow: countMemoRenders(m.DocRow, (p) => p.d.id, rowRenders) }
+})
+
+// Session 3 (chat-docs remediation) — Documents renderer polish, DR-1…DR-8 (DR-9's `formatSize` table
+// lives in tests/unit/documents-format.test.ts). Each test has
 // TEETH: reverting its fix reddens exactly the named assertion. DR-1/DR-2 are the two races and
 // were revert-and-rerun confirmed by hand; the rest are single-assertion characterizations.
 
@@ -59,7 +67,7 @@ function firstPage(over: Partial<DocumentPreview> = {}): DocumentPreview {
 
 afterEach(() => {
   cleanup()
-  resetDocTaskStoreForTests()
+  clearDocTaskSession()
   vi.restoreAllMocks()
   window.localStorage.clear()
 })
@@ -165,7 +173,7 @@ describe('DocumentsScreen — DR-4 per-row preview loading', () => {
     await screen.findByText('beta.pdf')
 
     const [aBtn, bBtn] = screen.getAllByRole('button', { name: 'Preview' })
-    const before = new Map(__docRowRenderCounts)
+    const before = new Map(rowRenders)
 
     fireEvent.click(aBtn) // opens row A (d1)'s preview — its IPC is parked, so loading persists
 
@@ -177,7 +185,8 @@ describe('DocumentsScreen — DR-4 per-row preview loading', () => {
 
     // TEETH: with the old screen-global `previewLoading`, B's prop flips too → B re-renders (delta > 0)
     // AND B reads "Opening…"/disabled. The per-row `previewLoadingId === d.id` keeps B's memo intact.
-    const delta = (id: string): number => (__docRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
+    const delta = (id: string): number => (rowRenders.get(id) ?? 0) - (before.get(id) ?? 0)
+    expect(delta('d1')).toBeGreaterThan(0) // the oracle sees row A's previewLoading flip
     expect(delta('d2')).toBe(0)
   })
 })
@@ -268,7 +277,6 @@ describe('DocumentsScreen — DR-7 localized doc-task failure copy', () => {
       expect(screen.getByText('Die Quelldatei wurde nicht gefunden.')).toBeInTheDocument()
       expect(screen.queryByText('Source file not found on disk.')).not.toBeInTheDocument()
     } finally {
-      resetDocTaskStoreForTests()
       vi.useRealTimers()
     }
   })
@@ -398,7 +406,9 @@ describe('DocumentsScreen — CODE-38 collections refresh', () => {
 
     fail = true
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
-    await waitFor(() => expect(listCollections.mock.calls.length).toBeGreaterThan(1))
+    await waitFor(() => expect(listCollections).toHaveBeenCalledTimes(2))
+    // Gate on the rejection's own handling, not on the call: settle the failed read inside act.
+    await act(async () => { await listCollections.mock.results[1].value.catch(() => {}) })
 
     // TEETH: pre-fix the catch ran `setCollections([])` — the Projects rail emptied here.
     expect(screen.getByRole('button', { name: 'Cases' })).toBeInTheDocument()
@@ -475,7 +485,6 @@ describe('DocumentsScreen — CODE-39 done-task auto-open failure', () => {
       expect(screen.getByText(/workspace is locked/i)).toBeInTheDocument()
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     } finally {
-      resetDocTaskStoreForTests()
       vi.useRealTimers()
     }
   })
@@ -522,20 +531,7 @@ describe('DocumentsScreen — state-unknown task row (F2 rider)', () => {
       // The row is interactive again (the normal Preview action is back).
       expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument()
     } finally {
-      resetDocTaskStoreForTests()
       vi.useRealTimers()
     }
-  })
-})
-
-// ---- DR-9: formatSize GB tier -----------------------------------------------------------
-describe('formatSize — DR-9 GB tier', () => {
-  it('formats GB-scale sizes with the locale decimal', () => {
-    // TEETH: without the GB tier these return "2048.0 MB" / "1536,0 MB".
-    expect(formatSize(2 * 1024 ** 3, 'en')).toBe('2.0 GB')
-    expect(formatSize(1.5 * 1024 ** 3, 'de')).toBe('1,5 GB')
-    // The lower tiers are unchanged.
-    expect(formatSize(2048, 'en')).toBe('2.0 KB')
-    expect(formatSize(5 * 1024 * 1024, 'en')).toBe('5.0 MB')
   })
 })

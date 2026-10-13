@@ -393,7 +393,7 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
 
   // PF-7c (full-audit 2026-07-10): stable handler identities (useEventCallback) + the token batch
   // flush mean a SETTLED turn's memoized row no longer re-renders on every stream flush of a
-  // sibling turn — the `__docRowRenderCounts` oracle pattern, applied to TurnRow.
+  // sibling turn — a per-id render-count oracle on TurnRow (the DocRow PERF-5 pattern).
   it('a settled TurnRow does not re-render while a new turn streams (PF-7c)', async () => {
     const user = userEvent.setup()
     const s = streamStubs()

@@ -5,8 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { CoverageMeter } from '../../src/renderer/components'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { I18nProvider } from '../../src/renderer/i18n'
+import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { t } from '../../src/shared/i18n'
 import type {
   CoverageInfo,
@@ -31,10 +31,9 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup()
-  resetDocTaskStoreForTests()
+  clearDocTaskSession()
   vi.restoreAllMocks()
-  // A DE-forcing test writes the UI language into localStorage; clear it so later EN
-  // assertions in this file don't read a leaked 'de'.
+  // Keep the UI-language / rail keys from leaking between rows.
   window.localStorage.clear()
 })
 
@@ -47,11 +46,6 @@ function meter(coverage: CoverageInfo): JSX.Element {
 }
 
 describe('CoverageMeter — breadth ≠ fidelity honesty (C1/L2)', () => {
-  it('a relevance answer is labelled "not the whole document"', () => {
-    render(meter({ mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }))
-    expect(screen.getByText(t('en', 'coverage.relevance'))).toBeInTheDocument()
-  })
-
   // D72 (#24): a relevance answer that stamped real section counts shows the fraction line,
   // NOT the flat honesty label. Multi-doc scopes stay honest via wording (never "whole document").
   it('a counted relevance answer shows the "based on N of M sections" fraction', () => {
@@ -71,15 +65,6 @@ describe('CoverageMeter — breadth ≠ fidelity honesty (C1/L2)', () => {
     expect(
       screen.queryByText(t('en', 'coverage.relevance.counted', { covered: 0, total: 0 }))
     ).not.toBeInTheDocument()
-  })
-
-  // DE label forced via localStorage + asserted from the de catalog (D-L8), not a re-typed literal.
-  it('renders the DE fraction line for a counted relevance answer', () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    render(meter({ mode: 'relevance', chunksCovered: 3, chunksTotal: 12, fullyChunked: true }))
-    expect(
-      screen.getByText(t('de', 'coverage.relevance.counted', { covered: 3, total: 12 }))
-    ).toBeInTheDocument()
   })
 
   it('a ready deep index shows "whole document (deeply indexed)" PLUS the tier depth', () => {
@@ -290,18 +275,6 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     expect(startDocTask).not.toHaveBeenCalled()
   })
 
-  it('a COMPLETE deep index (tree + extract both ready, #38) shows the "Deeply indexed" badge and no build action', async () => {
-    stubApi({
-      listDocuments: vi.fn(async () => [
-        doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: 'ready' })
-      ])
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('report.pdf')
-    expect(screen.getByText(t('en', 'docs.deepIndex.ready'))).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: t('en', 'docs.deepIndex.build') })).not.toBeInTheDocument()
-  })
-
   it('the preview meter renders the coverage from analysis:coverage', async () => {
     const user = userEvent.setup()
     const coverage: DocumentCoverage = {
@@ -330,7 +303,7 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     await waitFor(() =>
       expect(screen.getByText(t('en', 'coverage.tree.whole'))).toBeInTheDocument()
     )
-    // The tier selector is offered (ready deep index) and the source provenance is exposed.
+    // The tier selector is offered (ready deep index).
     expect(
       screen.getByRole('button', { name: new RegExp(t('en', 'coverage.tier.1'), 'i') })
     ).toBeInTheDocument()

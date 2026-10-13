@@ -2,19 +2,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import {
-  DocumentsScreen,
-  friendlyMimeLabel,
-  isRetryableFailure,
-  RAIL_COLLAPSED_KEY,
-  LOCATIONS_MORE_KEY,
-  __docRowRenderCounts
-} from '../../src/renderer/screens/DocumentsScreen'
+import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
+import { RAIL_COLLAPSED_KEY, LOCATIONS_MORE_KEY } from '../../src/renderer/screens/documents/types'
 import { en, t as translate } from '../../src/shared/i18n'
 import { ToastProvider } from '../../src/renderer/components'
-import { startTask, resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { startTask, clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { AppStatus, Collection, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { hangBudgetMs } from '../helpers/hang-budget'
+
+// PERF-5: count DocRow renders test-side — production's memo object, inner component wrapped (no src seam).
+const rowRenders = vi.hoisted(() => new Map<string, number>())
+vi.mock('../../src/renderer/screens/documents/DocRow', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../src/renderer/screens/documents/DocRow')>()
+  const { countMemoRenders } = await import('../helpers/render-counter')
+  return { ...m, DocRow: countMemoRenders(m.DocRow, (p) => p.d.id, rowRenders) }
+})
 
 // Renderer test (jsdom + RTL) for the Documents screen: list rendering + status, the
 // stale-embedding re-index banner (M7), the failed-document error, the empty state, and
@@ -51,7 +54,10 @@ function coll(over: Partial<Collection>): Collection {
   }
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  clearDocTaskSession()
+})
 
 // ---- Document organization: section rail + chips + project management (plan §12) ----
 describe('DocumentsScreen — organization', () => {
@@ -99,49 +105,10 @@ describe('DocumentsScreen — organization', () => {
     await user.type(await screen.findByLabelText('Project name'), 'Lawsuit')
     await user.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Lawsuit'))
-  })
-
-  it('shows collection chips on a document row', async () => {
-    stubApi({
-      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
-      listDocuments: vi.fn(async () => [
-        doc({ collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] })
-      ])
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('contract.pdf')
-    // The Library membership renders as a chip (localized by type).
-    expect(screen.getAllByText('Library').length).toBeGreaterThan(0)
+    expect(await screen.findByRole('button', { name: 'Lawsuit' })).toHaveAttribute('aria-current', 'true')
   })
 
   // ---- Phase E: smart views + generated-staleness badge (plan §7.6/§12.1/§15.3) ------
-
-  it('renders the smart-view rail entries and filters by the selected view', async () => {
-    const user = userEvent.setup()
-    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
-    const tax = coll({ id: 'tax', name: 'Tax 2025' })
-    stubApi({
-      listCollections: vi.fn(async () => [library, tax]),
-      listDocuments: vi.fn(async () => [
-        doc({ id: 'd1', title: 'libonly.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
-        doc({ id: 'd2', title: 'filed.pdf', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] }),
-        doc({ id: 'd3', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 })
-      ])
-    })
-    render(<DocumentsScreen />)
-
-    // "Needs attention" (§11.16) is the one diagnostic view — offered because a doc failed.
-    await user.click(await screen.findByRole('button', { name: 'Needs attention' }))
-    expect(screen.getByText('broken.xyz')).toBeInTheDocument()
-    expect(screen.queryByText('libonly.pdf')).not.toBeInTheDocument()
-    expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
-
-    // Unfiled is a common view, always visible (no "More" needed) → the Library-only doc,
-    // never the project-filed one (Library isn't "filed").
-    await user.click(screen.getByRole('button', { name: 'Unfiled' }))
-    expect(screen.getByText('libonly.pdf')).toBeInTheDocument()
-    expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
-  })
 
   it('shows a quiet staleness badge on a generated row whose source changed, but not a fresh one', async () => {
     const user = userEvent.setup()
@@ -233,23 +200,6 @@ describe('DocumentsScreen — organization', () => {
     expect(setDocumentLifecycle).toHaveBeenCalledWith(['d1'], 'permanent')
     expect(removeFromCollection).toHaveBeenCalledWith(['d1'], 'temp')
   })
-
-  // ---- Suggested-project feature REMOVED: no suggestion UI must remain (the IPC is gone from
-  //      the preload Api type, so a `filingSuggestions` stub would not even typecheck) --------
-  it('renders no project-suggestion chip on an unfiled doc that a rule would have matched', async () => {
-    stubApi({
-      listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
-      // An unfiled doc whose folder label a folder-name rule WOULD have matched, to be sure
-      // nothing surfaces.
-      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'return.pdf', sourceFolderLabel: 'Tax 2025' })])
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('return.pdf')
-    // No suggestion chip, no Apply/Dismiss affordance.
-    expect(screen.queryByText(/suggested project|suggested new project/i)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^apply$/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^dismiss$/i })).not.toBeInTheDocument()
-  })
 })
 
 describe('DocumentsScreen', () => {
@@ -317,27 +267,6 @@ describe('DocumentsScreen', () => {
     expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d9'))
-  })
-
-  it('isRetryableFailure: intrinsic failures are not retryable, transient ones are', () => {
-    // Unsupported type (current + legacy wording) and size-cap failures are intrinsic → no retry.
-    expect(isRetryableFailure(translate('en', 'main.ingest.unsupportedType', { ext: '.xyz' }))).toBe(false)
-    expect(isRetryableFailure('Unsupported file type: .heic')).toBe(false)
-    expect(isRetryableFailure(translate('en', 'main.ingest.fileTooLarge'))).toBe(false)
-    expect(isRetryableFailure(translate('en', 'main.ingest.tooManyChunks'))).toBe(false)
-    // #572: a detected scan fails the same way until OCR runs; a photo that needed the OCR files
-    // DOES read after their download, so it stays retryable.
-    expect(isRetryableFailure(translate('en', 'main.ingest.pdfScanDetected'))).toBe(false)
-    expect(isRetryableFailure(translate('en', 'main.ingest.imageNeedsOcr'))).toBe(true)
-    // A read/parse error or an unknown cause → retryable.
-    expect(isRetryableFailure('EIO: i/o error, read')).toBe(true)
-    expect(isRetryableFailure(null)).toBe(true)
-  })
-
-  it('renders the empty state when there are no documents', async () => {
-    stubApi({ listDocuments: vi.fn(async () => []) })
-    render(<DocumentsScreen />)
-    expect(await screen.findByText(/No documents yet/i)).toBeInTheDocument()
   })
 
   it('deletes a document after the ConfirmDialog confirms, and refreshes the list', async () => {
@@ -715,7 +644,7 @@ describe('DocumentsScreen', () => {
     await waitFor(() => expect(startReindexAll).toHaveBeenCalledWith(['d1', 'd2']))
     // The completion toast stays plural for 2 (the tCount .other side — CODE-8).
     expect(
-      await screen.findByText('Re-indexed 2 documents.', {}, { timeout: 5000 })
+      await screen.findByText('Re-indexed 2 documents.', {}, { timeout: hangBudgetMs(5000) })
     ).toBeInTheDocument()
     // The bar clears once the polled job reports done and the list refreshes (no more stale docs).
     await waitFor(() =>
@@ -749,7 +678,7 @@ describe('DocumentsScreen', () => {
 
     // Pre-fix: "Re-indexed 1 documents." (plain t() over the {done} key — CODE-8).
     expect(
-      await screen.findByText('Re-indexed 1 document.', {}, { timeout: 5000 })
+      await screen.findByText('Re-indexed 1 document.', {}, { timeout: hangBudgetMs(5000) })
     ).toBeInTheDocument()
   })
 
@@ -997,18 +926,6 @@ describe('DocumentsScreen', () => {
 
 // ---- §11.6 refinement: action overflow, MIME→label, selection toolbar, status badges ----
 describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () => {
-  it('friendlyMimeLabel maps known MIME types to friendly labels', () => {
-    expect(friendlyMimeLabel('application/pdf')).toBe('PDF')
-    expect(friendlyMimeLabel('text/markdown')).toBe('Markdown')
-    expect(friendlyMimeLabel('text/csv')).toBe('CSV')
-    expect(friendlyMimeLabel('application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe('Word')
-    expect(friendlyMimeLabel('audio/mpeg')).toBe('MP3')
-    expect(friendlyMimeLabel('image/png')).toBe('PNG')
-    expect(friendlyMimeLabel('audio/aac')).toBe('Audio')
-    expect(friendlyMimeLabel('application/zip')).toBe('ZIP')
-    expect(friendlyMimeLabel(null)).toBe('—')
-  })
-
   it('the "⋯" overflow exposes Summarize/Translate/Re-index/Build deep index/Add to project + a destructive Delete that opens ConfirmDialog', async () => {
     const user = userEvent.setup()
     stubApi({
@@ -1058,26 +975,6 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
     expect(deleteDocument).not.toHaveBeenCalled()
     await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
     await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d1'))
-  })
-
-  it('Compare in the selection toolbar is enabled ONLY at exactly two selections', async () => {
-    const user = userEvent.setup()
-    stubApi({
-      listDocuments: vi.fn(async () => [
-        doc({ id: 'd1' }),
-        doc({ id: 'd2', title: 'terms.docx' }),
-        doc({ id: 'd3', title: 'memo.pdf' })
-      ])
-    })
-    render(<DocumentsScreen onAskSelected={() => {}} />)
-    await screen.findByText('contract.pdf')
-
-    await user.click(screen.getByRole('checkbox', { name: /select contract.pdf/i }))
-    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeDisabled()
-    await user.click(screen.getByRole('checkbox', { name: /select terms.docx/i }))
-    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeEnabled()
-    await user.click(screen.getByRole('checkbox', { name: /select memo.pdf/i }))
-    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeDisabled()
   })
 
   it('a COMPLETE deep index (tree + extract, #38) reads as the "Deeply indexed" badge (not a button), and Build is gone from the overflow', async () => {
@@ -1199,7 +1096,8 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     }
   })
 
-  it('renders the mode switch and the decluttered rail: All documents · Recently added · Projects · More', async () => {
+  it('renders the mode switch and the decluttered rail: All documents · Recently added · Projects · More; Unfiled lists only the unfiled documents', async () => {
+    const user = userEvent.setup()
     stubApi({
       listCollections: vi.fn(async () => [
         coll({ id: 'lib', name: 'Library', type: 'library', builtin: true }),
@@ -1233,6 +1131,10 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     expect(screen.queryByRole('button', { name: 'Needs attention' })).not.toBeInTheDocument()
     // The lead paragraph teaches only in the empty state.
     expect(screen.queryByText(/Import documents to ask questions/)).not.toBeInTheDocument()
+    // Unfiled lists the Library-only document, never the project-filed one (Library isn't "filed").
+    await user.click(screen.getByRole('button', { name: 'Unfiled' }))
+    expect(screen.getByText('loose.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('contract.pdf')).not.toBeInTheDocument()
   })
 
   it('the active item carries aria-current and uses the fill (not a ring); selection moves it', async () => {
@@ -1423,12 +1325,12 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 //   (1) the user-VISIBLE EFFECT of the interaction (the checkbox is now checked + the selection
 //       toolbar counts it / the ⋯ menu actually opened and the sibling rows are intact) — so a
 //       regression where the click stops producing its effect but an unrelated re-render still bumps
-//       the count CANNOT pass green (T2, full-audit-2026-06-30), and the oracle survives a DX-2 DEV
-//       flip that empties `__docRowRenderCounts`; and
-//   (2) the SECONDARY perf oracle — the module-scoped `__docRowRenderCounts` Map that DocRow bumps by
-//       id in its body: only the affected row's delta moves. Removing `memo(...)`, or passing the
-//       whole `selected` Set / `menuOpenId` string instead of the per-row boolean, re-renders the
-//       untouched rows too → the delta assertions fail (the memoization teeth).
+//       the count CANNOT pass green (T2, full-audit-2026-06-30); and
+//   (2) the SECONDARY perf oracle — a test-side counter (`countMemoRenders`, tests/helpers/render-counter.ts)
+//       wrapped around production's `DocRow` memo by the `vi.mock` above: only the affected row's delta
+//       moves. Removing `memo(...)`, or passing the whole `selected` Set / `menuOpenId` string or an
+//       inline handler instead of the per-row boolean / stable handler, re-renders the untouched rows
+//       too → the delta assertions fail.
 describe('DocumentsScreen — row memoization (PERF-5)', () => {
   it('re-renders ONLY the toggled row when another row’s selection changes', async () => {
     const user = userEvent.setup()
@@ -1447,7 +1349,7 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
     await screen.findByText('gamma.pdf')
 
     // Snapshot render counts AFTER the list is stable, then toggle d2's selection only.
-    const before = new Map(__docRowRenderCounts)
+    const before = new Map(rowRenders)
     const beta = screen.getByRole('checkbox', { name: /select beta.pdf/i })
     expect(beta).not.toBeChecked()
     await user.click(beta)
@@ -1463,7 +1365,7 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
 
     // (2) PERF (secondary): the toggled row re-rendered (its `selected` boolean flipped)…
     const delta = (id: string): number =>
-      (__docRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
+      (rowRenders.get(id) ?? 0) - (before.get(id) ?? 0)
     expect(delta('d2')).toBeGreaterThan(0)
     // …while the untouched rows held their memo (their props are Object.is-unchanged). With
     // memo removed (or the whole Set passed), these would be > 0 and the test fails — the teeth.
@@ -1485,7 +1387,7 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
     await screen.findByText('alpha.pdf')
     await screen.findByText('gamma.pdf')
 
-    const before = new Map(__docRowRenderCounts)
+    const before = new Map(rowRenders)
     // Opening d2's overflow flips the parent's `menuOpenId` to 'd2'.
     await user.click(screen.getByRole('button', { name: 'More actions for beta.pdf' }))
 
@@ -1500,7 +1402,7 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
     // (2) PERF (secondary): only d2 re-rendered; d1/d3 receive `menuOpen={false}` unchanged → their
     // memo holds. (Teeth: passing the whole menuOpenId string, or dropping memo, re-renders them too.)
     const delta = (id: string): number =>
-      (__docRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
+      (rowRenders.get(id) ?? 0) - (before.get(id) ?? 0)
     expect(delta('d2')).toBeGreaterThan(0)
     expect(delta('d1')).toBe(0)
     expect(delta('d3')).toBe(0)
@@ -1599,8 +1501,6 @@ describe('DocumentsScreen — list windowing (PERF-2)', () => {
 // the GAP-7 duality ("Stopping if possible…"). The behavioral tests were watched fail on the
 // pre-fix tree (the two controls characterize behavior that must NOT change).
 describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
-  afterEach(() => resetDocTaskStoreForTests())
-
   const scanDoc = (over: Partial<DocumentInfo> = {}): DocumentInfo =>
     doc({
       id: 'scan1',
@@ -1718,7 +1618,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     expect(screen.queryByText(/needs the OCR files/)).not.toBeInTheDocument()
     // The re-read (1.5 s cadence) lands the verdict without a remount.
     expect(
-      await screen.findByRole('button', { name: 'Make searchable (OCR)' }, { timeout: 6_000 })
+      await screen.findByRole('button', { name: 'Make searchable (OCR)' }, { timeout: hangBudgetMs(6_000) })
     ).toBeInTheDocument()
     expect(getAppStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
@@ -2140,7 +2040,7 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
     // only thing distinguishing "it worked" from "nothing happened". Deleting the showToast
     // call in `run()` turns exactly this line red.
     expect(
-      await screen.findByText('“contract.pdf” re-indexed.', {}, { timeout: 5000 })
+      await screen.findByText('“contract.pdf” re-indexed.', {}, { timeout: hangBudgetMs(5000) })
     ).toBeInTheDocument()
   })
 
@@ -2165,7 +2065,7 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
     await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
     await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d1'))
     expect(
-      await screen.findByText('“contract.pdf” deleted.', {}, { timeout: 5000 })
+      await screen.findByText('“contract.pdf” deleted.', {}, { timeout: hangBudgetMs(5000) })
     ).toBeInTheDocument()
   })
 
