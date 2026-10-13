@@ -102,7 +102,7 @@ describe('wordDiff — the core cases', () => {
     const half = Math.floor(DEFAULT_MAX_EDITS / 2)
     // All-distinct streams: the edit distance is the summed length.
     expect(wordDiff(distinct(half, 'alpha'), distinct(half, 'beta'))).not.toBeNull() // exactly DEFAULT_MAX_EDITS edits
-    expect(wordDiff(distinct(half + 1, 'alpha'), distinct(half + 1, 'beta'))).toBeNull() // two over
+    expect(wordDiff(distinct(half, 'alpha'), distinct(half + 1, 'beta'))).toBeNull() // ONE over: the bound is exact
   })
 
   it('near-identical large texts diff cheaply under the default cutoff (Myers is ~linear here)', () => {
