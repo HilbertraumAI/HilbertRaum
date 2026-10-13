@@ -337,12 +337,3 @@ export async function adoptActiveJob(): Promise<void> {
   // the Stop button (stopActive) is shown while 'translating', so the user can always reset.
   wireStream(job.jobId)
 }
-
-/** Test-only: drop module-level state between renderer tests. */
-export function resetTranslateSessionForTests(): void {
-  teardownStream()
-  snapshot = EMPTY
-  startGen = 0
-  lastChoice = null
-  listeners.clear()
-}
