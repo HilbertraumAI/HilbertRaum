@@ -370,8 +370,23 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     } finally {
       release()
     }
-    await expect(within(call, 'the ended call settling')).rejects.toThrow(/cancelled/i)
+    await expect(within(call, 'the ended call settling')).rejects.toThrow('Transcription was cancelled.')
     expect(spawned).toHaveLength(0)
+  })
+
+  // #658: a call already cancelled (the dictation deadline) does not sit out an engine install's swap first.
+  it('a call already cancelled does not wait for the #516 gate', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-gate-pre-'))
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })
+    const release = holdEngineSpawns('whisper_cpp')
+    try {
+      const call = transcriber.transcribe('a.mp3', { workDir, signal: AbortSignal.abort() })
+      // The exact message: `within`'s own timeout error must not pass for it.
+      await expect(within(call, 'the call settling while the gate is held')).rejects.toThrow('Transcription was cancelled.')
+      expect(spawned).toHaveLength(0)
+    } finally {
+      release()
+    }
   })
 
   // REL-1 (TEST-4): the threaded AbortSignal (now actually supplied by the ingestion call

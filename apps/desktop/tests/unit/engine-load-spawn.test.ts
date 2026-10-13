@@ -186,7 +186,9 @@ describe('LlamaServer — a program the OS loader refused (#530)', () => {
   it.each<[string, string[], string, boolean]>([
     ['the main build clears a verdict the cpu/ build reported last (#655)', [KIT_MAIN, KIT_CPU], KIT_MAIN, true],
     ['the cpu/ build keeps a verdict the main build reported after it', [KIT_MAIN, KIT_CPU, KIT_MAIN], KIT_CPU, false],
-    ['the cpu/ build clears a verdict it reported last (an intermittent block)', [KIT_MAIN, KIT_CPU], KIT_CPU, true]
+    ['the cpu/ build clears a verdict it reported last (an intermittent block)', [KIT_MAIN, KIT_CPU], KIT_CPU, true],
+    // Rungs 1–2 failed for a reason that is not the loader's; only cpu/ was refused (and still is).
+    ['the main build leaves a verdict only the cpu/ build reported', [KIT_CPU], KIT_MAIN, false]
   ])('a healthy start: %s', async (_label, reporters, started, cleared) => {
     const problem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' } as const
     for (const binPath of reporters) reportEngineProblem(problem, binPath)
