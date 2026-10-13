@@ -99,7 +99,7 @@ function defaultSystemDllExists(dll: string): boolean {
 }
 
 /** How the program ended, for Diagnostics: `exit code 127`, `exit code 0xC0000135`, `signal SIGABRT`. */
-function describeExit(exitCode: number | null, signal: string | null): string {
+export function describeExit(exitCode: number | null, signal: string | null): string {
   if (exitCode != null) {
     const unsigned = exitCode >>> 0
     return unsigned > 0xffff ? `exit code 0x${unsigned.toString(16).toUpperCase()}` : `exit code ${exitCode}`

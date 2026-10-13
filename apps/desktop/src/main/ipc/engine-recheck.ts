@@ -162,9 +162,9 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
 
 /**
  * Start the family's program just far enough to know whether the OS accepts it. An explicit spawn
- * rather than the GPU probe: the probe answers `[]` for a binary it could not even run (a failed
- * integrity check, a spawn error), which would read as "loads" — `checkProgramLoads` tells those
- * apart as 'unchecked'.
+ * rather than the GPU probe: the probe answers `[]` for a binary it never ran (a failed integrity
+ * check, which would read as "loads") and `null` for a crash or a spawn error as well as for a
+ * refusal (#653) — `checkProgramLoads` tells those apart as 'unchecked'.
  */
 async function recheckFamily(
   ctx: AppContext,

@@ -92,8 +92,9 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * the previous machine's devices, and they decided the memory class, the VRAM budget and the
  * graphics tile there. Readers go through `eligibleGpuProbe`. The write rules, as merged from
  * the two audits: EVERY path that reaches the write persists THIS session's answer, stamped —
- * a probe that resolves (an empty list included: `probeGpuDevices` maps its failures to `[]` by
- * contract — except its kill-timeout, which resolves `null`, the #380 exception below), a probe
+ * a probe that resolves (an empty list included — `probeGpuDevices` answers `[]` only for an exit 0
+ * that named no device or a binary the integrity check refused; everything else that is not an
+ * answer resolves `null`, the #380 exception below), a probe
  * that CANNOT run (no binary resolves, no session probe) and a probe that
  * THREW all replace the old result with `{ devices, probedAt, machineKey: hereKey }` and notify
  * (PR #308 audit decision 6, findings R3/R5; GPU record §5.4). #303's "no binary → no write"
@@ -116,6 +117,11 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * there would be exactly the #330 failure: the driver never answered under the weight upload,
  * and a card machine was recorded (and labelled, and RAM-classed) as having none. Every OTHER
  * path is unchanged — an empty list, a missing binary and a thrower all still write.
+ *
+ * #530 and #653 widen what `null` covers, not this rule: a program the OS refused, and a probe
+ * that crashed (a Vulkan driver dying during enumeration) or could not be spawned (EMFILE, …), are
+ * not answers either. Before #653 the crash wrote `[]` here — and so did #669's heal re-probe
+ * (`reprobeGpu`), which could re-stamp a card machine as having none.
  */
 export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let devices: GpuDevice[] = []
@@ -153,13 +159,13 @@ export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkI
       // FAILURE plus attempt a (refused) empty write — neither is true here, so return the empty
       // summary without touching the DB at all.
       if (!workspaceAdmitsWork(ctx.workspace)) {
-        log.info('GPU probe gave no answer (timed out, or the engine could not start); workspace locked meanwhile')
+        log.info('GPU probe gave no answer (timed out, crashed, or the engine could not start); workspace locked meanwhile')
         return gpuSummary(
           [],
           nextStartMemory({ platform: process.platform, arch: process.arch, devices: [], gpuMode, gpuAutoDisabled })
         )
       }
-      log.info('GPU probe gave no answer (timed out, or the engine could not start — #530); the stored probe stands until the next start or check')
+      log.info('GPU probe gave no answer (timed out, crashed, or the engine could not start — #530, #653); the stored probe stands until the next start or check')
       devices = eligibleDevicesFor(getSettings(ctx.db), hereKey)
     } else {
       devices = probed

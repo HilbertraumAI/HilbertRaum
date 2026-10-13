@@ -114,6 +114,21 @@ function isCpuDevice(name: string): boolean {
 
 const round2 = (mb: number): number => Math.round(mb * 100) / 100
 
+/**
+ * #653: did this start put anything on a graphics device? True when the log filed a model, KV,
+ * recurrent-state or compute buffer under a GPU device (any name `isCpuDevice` does not claim).
+ *
+ * NOT the offload line. b9849 and b11146 print `offloaded 37/37 layers to GPU` on a machine with no
+ * usable device and under `--device none`, every buffer on the processor (`CPU_REPACK`), so the
+ * layer count says nothing about a card (`placement-b11146-gpuless-37of37-cpu.txt`). A start that
+ * offloads 0 layers beside a visible card still reserves its compute buffer there and runs the
+ * prefill on it (`placement-b11146-ngl0-0of37-compute.txt`: 74 % card load, 302 tok/s against 56
+ * with `--device none`), so that buffer counts as the card in use.
+ */
+export function holdsGpuBuffers(reading: PlacementReading): boolean {
+  return [reading.gpuModelMb, reading.gpuKvMb, reading.gpuRsMb, reading.gpuComputeMb].some((mb) => (mb ?? 0) > 0)
+}
+
 /** One parser per start attempt: a retried rung gets a fresh reading. */
 export function createPlacementParser(): PlacementParser {
   const r: Omit<PlacementReading, 'devices'> = {

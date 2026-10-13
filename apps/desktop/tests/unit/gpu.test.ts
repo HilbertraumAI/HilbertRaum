@@ -57,6 +57,10 @@ describe('parseListDevices', () => {
   it('returns [] for an empty device list (CPU build / no usable Vulkan)', () => {
     expect(parseListDevices('Available devices:\n')).toEqual([])
     expect(parseListDevices('')).toEqual([])
+    // #653: the real "no device" stdout of both pins (captured on the GTX 1070 Ti box with every
+    // device hidden): b11146 prints `(none)` under the header, b9849 the header alone.
+    expect(parseListDevices('Available devices:\r\n  (none)\r\n')).toEqual([])
+    expect(parseListDevices('Available devices:\r\n')).toEqual([])
   })
 
   it('ignores garbage and non-device noise', () => {
@@ -155,26 +159,45 @@ describe('probeGpuDevices', () => {
     expect(devices![0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
   })
 
-  // #380 + #530: a spawn failure that is not an OS refusal is still an ANSWER — `[]`, never `null`. Real
-  // non-refusal codes on Windows, where EPERM / EACCES / UNKNOWN ARE refusals (`null` + engine verdict):
-  // these rows keep that refusal set narrow.
+  // #653: a probe that never got to answer is UNKNOWN (`null`), not "no graphics card". Before, these
+  // resolved `[]`, which the session cache kept and `probeAndPersistGpu` stamped: a card machine whose
+  // probe child crashed read "None" everywhere and its card start was labelled cpu. Windows EPERM /
+  // EACCES / UNKNOWN are refusals (`null` + the engine verdict, engine-load-spawn.test.ts); the
+  // non-refusal codes below record no verdict. Never rejects.
   it.each([
     {
+      name: 'a Vulkan driver crash during enumeration on Windows (exit 0xC0000005)',
+      platform: 'win32' as const,
+      spawn: probeSpawn((child) => child.emit('close', 0xc0000005, null)).spawn
+    },
+    {
+      name: 'a crash during enumeration on Linux (SIGSEGV)',
+      platform: 'linux' as const,
+      spawn: probeSpawn((child) => child.emit('close', null, 'SIGSEGV')).spawn
+    },
+    {
       name: "an async 'error' event (ENOENT — the binary is missing)",
+      platform: 'win32' as const,
       spawn: probeSpawn((child) =>
         child.emit('error', Object.assign(new Error('spawn /missing/llama-server ENOENT'), { code: 'ENOENT' }))
       ).spawn
     },
     {
+      name: "an async 'error' event out of descriptors on Linux (EMFILE)",
+      platform: 'linux' as const,
+      spawn: probeSpawn((child) =>
+        child.emit('error', Object.assign(new Error('spawn /bin/llama-server EMFILE'), { code: 'EMFILE' }))
+      ).spawn
+    },
+    {
       name: 'a synchronous spawn throw (EINVAL)',
+      platform: 'win32' as const,
       spawn: (() => {
         throw Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' })
       }) as SpawnFn
     }
-  ])('a non-refusal spawn failure resolves [] — never rejects, never null: $name', async ({ spawn }) => {
-    expect(
-      await probeGpuDevices('/missing/llama-server', { spawn, platform: 'win32', verify: async () => 'skip-dev' })
-    ).toEqual([])
+  ])('a probe that gave no answer resolves null, not [] — $name (#653)', async ({ spawn, platform }) => {
+    expect(await probeGpuDevices('/bin/llama-server', { spawn, platform, verify: async () => 'skip-dev' })).toBeNull()
   })
 
   it('kills a hung probe on timeout and resolves NULL — unknown, NOT "no GPU" (#380; T6 — fake timers, no wall-clock flake)', async () => {

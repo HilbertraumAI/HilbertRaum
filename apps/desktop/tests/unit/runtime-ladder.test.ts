@@ -56,6 +56,9 @@ const GTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce GTX 1650', totalMb
 const MODEL_LOAD_REASON =
   'llama-server exited before becoming healthy (code 1) — last output: ' +
   'llama_model_load: error loading model: unknown model architecture: audit fixture'
+/** A real llama-server load log (tests/fixtures), fed whole through the ladder's own parser feed. */
+const fixture = (name: string): string => readFileSync(join(__dirname, '..', 'fixtures', name), 'utf8')
+
 /** A genuine device fault, same throw shape, different class. */
 const DEVICE_LOST_REASON =
   'llama-server exited before becoming healthy (code 134) — last output: ' +
@@ -98,27 +101,58 @@ describe('the GPU start ladder', () => {
     expect(runtime.gpuName).toBeNull()
   })
 
-  // #380 — an UNKNOWN probe (its 10 s kill-timeout, which the #330 round trip hit because the
-  // `--list-devices` child was competing with this very weight upload for the driver) is not
-  // "no device". The server's own load log already says where the weights went, and that is
-  // what the label must follow: a card decoding at 98–100 tok/s reported as "cpu" poisons the
-  // chat header, Diagnostics, the persisted placement, the #322 speed identity and the §5.3
-  // crash auto-fallback gate.
-  it('an UNKNOWN probe labels the rung from the load log: offloaded layers ⇒ gpu, named from device_info (#380)', async () => {
-    const h = ladderHarness({
-      probe: null,
-      stderr: [
-        [
-          '  - Vulkan0 : NVIDIA GeForce RTX 3080 Ti (12300 MiB, 11511 MiB free)',
-          'load_tensors: offloaded 33/33 layers to GPU',
-          ''
-        ].join('\n')
-      ]
-    })
+  // #380 / #653 — a probe that lists no device is not the last word on a start that put its model
+  // on a card. UNKNOWN (#380: its 10 s kill-timeout, which the #330 round trip hit because the
+  // `--list-devices` child competed with this very weight upload; #653: a crash, a failed spawn)
+  // and an EMPTY answer (#653: before it, a probe child that crashed answered `[]` and outranked the
+  // log) both yield to this start's own GPU buffers. A card start reported as "cpu" poisons the chat
+  // header, Diagnostics, the persisted placement, the #322 speed identity, the #473 chat share and
+  // the §5.3 crash auto-fallback gate (a GPU crash took the #599 restart on the same GPU rung).
+  // The log is the real b11146 capture of a full offload on the hybrid RTX 3080 Ti + UHD 770 box.
+  it.each([
+    { name: 'no answer (#380)', probe: null },
+    { name: 'an empty answer (#653)', probe: [] as GpuDevice[] }
+  ])(
+    'a probe that gave $name yields to the GPU buffers in this start’s load log: gpu, named from device_info',
+    async ({ probe }) => {
+      const h = ladderHarness({ probe, stderr: [fixture('placement-b11146-full-49of49-swa.txt')] })
+      const runtime = h.factory(opts)
+      await runtime.start()
+      expect(runtime.backend).toBe('gpu')
+      expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3080 Ti')
+    }
+  )
+
+  // #653 owner call 1: the evidence is a GPU BUFFER, never the offload line. On a machine with no
+  // usable device rung 1 prints `offloaded 37/37 layers to GPU` with every buffer on the processor
+  // (b11146 and b9849 alike; real capture, the GTX 1070 Ti hidden). #380 read that line, so a GPU-less
+  // PC whose probe gave no answer was labelled gpu; an override on the line would do the same to
+  // every GPU-less PC, whose probe answers `[]`.
+  it.each([
+    { name: 'no answer', probe: null },
+    { name: 'an empty answer', probe: [] as GpuDevice[] }
+  ])(
+    'a GPU-less rung 1 whose log says "offloaded 37/37 layers to GPU" reads cpu when the probe gave $name (#653)',
+    async ({ probe }) => {
+      const h = ladderHarness({ probe, stderr: [fixture('placement-b11146-gpuless-37of37-cpu.txt')] })
+      const runtime = h.factory(opts)
+      await runtime.start()
+      expect(runtime.backend).toBe('cpu')
+      expect(runtime.gpuName).toBeNull()
+    }
+  )
+
+  // #653 owner call 2 (the mirror): a listed card with "offloaded 0/37 layers" stays gpu. Real
+  // capture: the card still holds the compute buffer and ran the prefill (74 % load, 302 tok/s
+  // against 56 with `--device none`), so a driver crash can still hit it and §5.3 — not #599's
+  // restart on the same rung — is the right crash path.
+  it('a listed card stays gpu when the log offloads 0 layers: it still holds the compute buffer (#653 call 2)', async () => {
+    const GTX_1070_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7490 }
+    const h = ladderHarness({ probe: [GTX_1070_TI], stderr: [fixture('placement-b11146-ngl0-0of37-compute.txt')] })
     const runtime = h.factory(opts)
     await runtime.start()
     expect(runtime.backend).toBe('gpu')
-    expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3080 Ti')
+    expect(runtime.gpuName).toBe('NVIDIA GeForce GTX 1070 Ti')
   })
 
   it('an UNKNOWN probe on a HYBRID box names the device the compute buffer landed on, not the first row (#380)', async () => {
@@ -147,29 +181,6 @@ describe('the GPU start ladder', () => {
 
   it('an UNKNOWN probe with NO offload line in the log still reads as cpu (#380)', async () => {
     const h = ladderHarness({ probe: null, stderr: ['main: server is listening on http://127.0.0.1:1234\n'] })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(runtime.backend).toBe('cpu')
-    expect(runtime.gpuName).toBeNull()
-  })
-
-  // CHARACTERIZATION of today's behaviour, NOT the design goal — follow-up #653. An EMPTY
-  // answer (`[]`) is taken as "this machine enumerates no device" and outranks this start's own load
-  // log, so a start whose log says it offloaded layers is still labelled cpu (and its placement record
-  // says backend 'cpu' beside N>0 GPU layers). #380 moved only the UNKNOWN answer (`null`) to the log
-  // (the #380 tests above). If #653 decides a positive offload line wins, FLIP this
-  // expectation — it is the only test that pins the `[]` branch with a log.
-  it('an EMPTY probe answer still labels the rung cpu when the load log reports offloaded layers (characterization, #653)', async () => {
-    const h = ladderHarness({
-      probe: [],
-      stderr: [
-        [
-          '  - Vulkan0 : NVIDIA GeForce RTX 3080 Ti (12300 MiB, 11511 MiB free)',
-          'load_tensors: offloaded 33/33 layers to GPU',
-          ''
-        ].join('\n')
-      ]
-    })
     const runtime = h.factory(opts)
     await runtime.start()
     expect(runtime.backend).toBe('cpu')

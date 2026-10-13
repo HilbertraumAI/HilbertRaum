@@ -232,7 +232,9 @@ describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#5
     expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1' })
   })
 
-  it('still answers [] for a non-zero exit that is not the loader’s (the old contract)', async () => {
+  // #653: a non-zero exit that is not the loader's is no answer either (`null`, gpu.test.ts) — but it
+  // is no refusal: the engine ran, so no verdict is recorded and nothing tells the user it cannot run.
+  it('a non-zero exit that is not the loader’s is unknown too, and records no verdict (#653)', async () => {
     const spawn: SpawnFn = () => {
       const child = new FakeChild()
       queueMicrotask(() => {
@@ -241,7 +243,7 @@ describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#5
       })
       return child
     }
-    expect(await probeGpuDevices('/bin/llama-server', { spawn, platform: 'linux', verify: async () => 'skip-dev' })).toEqual([])
+    expect(await probeGpuDevices('/bin/llama-server', { spawn, platform: 'linux', verify: async () => 'skip-dev' })).toBeNull()
     expect(engineProblemFor('llama_cpp')).toBeNull()
   })
 
