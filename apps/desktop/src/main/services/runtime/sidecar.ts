@@ -552,8 +552,6 @@ export class LlamaServer {
   private ready = false
   /** True while stop() is tearing the child down — an exit then is EXPECTED. */
   private stopping = false
-  /** #656: this spawn's mid-session death was reported. Node may emit 'exit' after 'error'. */
-  private exitReported = false
   /**
    * The in-flight `start()` (REL-2, audit 2026-06-28). `this.child` alone can't gate a
    * single-flight start because it is assigned only AFTER the pre-spawn verify + `findPort`
@@ -696,7 +694,6 @@ export class LlamaServer {
     this.stderrCarry = ''
     this.ready = false
     this.stopping = false
-    this.exitReported = false
     this.port = await this.findPort(this.host)
 
     // stdin/stdout ignored; stderr PIPED. We never read stdout (health/chat go over HTTP),
@@ -738,6 +735,22 @@ export class LlamaServer {
     // F-32: every LlamaServer consumer (chat/embedder/reranker/vision/translation) runs the
     // shared `runtime/llama.cpp/<os>/` binary, so it registers under the llama_cpp family.
     registerSidecarChild(child.pid, 'llama_cpp')
+    // A healthy server died on its own: tell the owner once (#656). The 'error' and 'exit' handlers
+    // below both land here, and Node may emit 'exit' after 'error' for the same death; the
+    // consumers' own guards hold only while their restart is in flight, so a second report could
+    // audit, notify and (on the CPU path) stop the model a second time. The flag belongs to THIS
+    // spawn: a late event from an earlier child (the bind retry) cannot use up the current one's.
+    // Exits before health are start failures and throw from waitForHealthy; a stop() is expected.
+    let exitReported = false
+    const reportUnexpectedExit = (): void => {
+      if (exitReported || !this.ready || this.stopping) return
+      exitReported = true
+      this.opts.onUnexpectedExit?.({
+        exitCode: this.exitCode,
+        exitSignal: this.exitSignal,
+        stderrTail: this.redactedTail()
+      })
+    }
     child.stderr?.on('data', (chunk: unknown) => {
       // Exact-key redaction over carry + chunk, so the key can never leave the drain
       // toward the tail OR the observer — whole, chunk-split, or as a prefix (see the
@@ -773,7 +786,7 @@ export class LlamaServer {
       // Start-time errors are consulted by waitForHealthy instead, so they don't set this.
       if ((this.ready || this.stopping) && !this.exited) {
         this.exited = true
-        if (this.ready && !this.stopping) this.reportUnexpectedExit()
+        reportUnexpectedExit()
       }
     })
     child.once('exit', (code: unknown, signal: unknown) => {
@@ -783,8 +796,7 @@ export class LlamaServer {
       this.exitSignal = typeof signal === 'string' ? signal : null
       // A crash AFTER the server was healthy (and not during stop()) is the
       // mid-generation failure path — report it so the GPU auto-fallback can react.
-      // Exits before health are start failures and already throw from waitForHealthy.
-      if (this.ready && !this.stopping) this.reportUnexpectedExit()
+      reportUnexpectedExit()
     })
 
     await this.waitForHealthy()
@@ -811,22 +823,6 @@ export class LlamaServer {
     // #515: no colour codes in anything built from the tail (the first line is printed before
     // `--log-colors off` takes effect; an older binary may ignore the flag).
     return redactSidecarSecrets(this.stderrTail + this.stderrCarry, this.apiKey).replace(ANSI_RE, '')
-  }
-
-  /**
-   * A healthy server died on its own: tell the owner once (#656). The 'error' and 'exit' handlers
-   * both land here, and Node may emit 'exit' after 'error' for the same death. The consumers' own
-   * guards hold only while their restart is in flight, so a second report could audit, notify and
-   * on the CPU path stop the model a second time.
-   */
-  private reportUnexpectedExit(): void {
-    if (this.exitReported) return
-    this.exitReported = true
-    this.opts.onUnexpectedExit?.({
-      exitCode: this.exitCode,
-      exitSignal: this.exitSignal,
-      stderrTail: this.redactedTail()
-    })
   }
 
   /** #530: wait (bounded) for `'close'` after an early `'exit'`, so the tail is complete. */

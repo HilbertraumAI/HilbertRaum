@@ -486,6 +486,39 @@ describe('LlamaServer', () => {
     expect(exits).toHaveLength(1)
   })
 
+  // #656: that once-per-death flag belongs to the SPAWN. A server restarted on the same instance
+  // reports its own death, and a late event from the previous child (the bind retry leaves one
+  // behind too) neither reports again nor uses up the new child's report.
+  it('reports each spawn’s death once: a restarted server reports its own; a stale event from the old child counts for nothing (#656)', async () => {
+    const children: FakeChild[] = []
+    const spawn = (): ChildProcessLike => {
+      const child = new FakeChild()
+      children.push(child)
+      return child
+    }
+    const { fetchImpl } = healthFetch(0)
+    const exits: UnexpectedExitInfo[] = []
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      onUnexpectedExit: (info) => exits.push(info),
+      spawn,
+      fetchImpl,
+      findPort: async () => 50013,
+      healthIntervalMs: 1
+    })
+    await server.start()
+    children[0].emit('exit', 134, null)
+    expect(exits).toHaveLength(1)
+    await server.stop()
+    await server.start() // the owner's restart, same instance
+    children[0].emit('error', new Error('write EPIPE')) // late, from the dead child
+    expect(exits).toHaveLength(1)
+    children[1].emit('exit', 139, null)
+    expect(exits.map((e) => e.exitCode)).toEqual([134, 139])
+  })
+
   it('stop() resolves (does not hang) when the child only ever emits "error"', async () => {
     // A child whose kill() emits 'error' rather than 'exit'.
     class ErrorOnlyChild extends EventEmitter implements ChildProcessLike {

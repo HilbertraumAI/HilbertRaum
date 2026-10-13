@@ -100,31 +100,35 @@ describe.skipIf(!enabled)('GPU smoke (manual, real binaries + real model + real 
     })
     const runtime = factory(opts)
     await runtime.start()
-    expect(runtime.backend).toBe('gpu')
-    console.log('rung-1 backend:', runtime.backend, '| gpu:', runtime.gpuName)
-    // What the real load log said (benchmark.md "Your model"): layers on the card, the card's
-    // `device_info` row, and its compute buffer.
-    const placement = latestModelPlacement()
-    console.log('rung-1 placement:', JSON.stringify(placement))
-    expect(placement).toMatchObject({ modelId: opts.modelId, backend: 'gpu' })
-    expect(placement!.gpuLayers).toBeGreaterThan(0)
-    expect(placement!.totalLayers).toBeGreaterThanOrEqual(placement!.gpuLayers!)
-    expect(placement!.gpuModelMb).toBeGreaterThan(0)
-    expect(placement!.devices?.map((d) => d.name)).toContain(runtime.gpuName)
-    expect(placement!.devices?.find((d) => d.name === runtime.gpuName)?.computeMb).toBeGreaterThan(0)
-    const out: string[] = []
-    // Qwen3 is a thinking model. Since Phase 20 the omitted-mode default (balanced)
-    // already sends enable_thinking:false; the /no_think soft switch stays as belt and
-    // braces so this smoke also passes against older/unpinned server builds.
-    for await (const t of runtime.chatStream(
-      [{ role: 'user', content: 'Say "hello" and nothing else. /no_think' }],
-      { maxTokens: 64 }
-    )) {
-      out.push(t)
+    // A failed expect must not leave a multi-GB model on the card for the legs that follow.
+    try {
+      expect(runtime.backend).toBe('gpu')
+      console.log('rung-1 backend:', runtime.backend, '| gpu:', runtime.gpuName)
+      // What the real load log said (benchmark.md "Your model"): layers on the card, the card's
+      // `device_info` row, and its compute buffer.
+      const placement = latestModelPlacement()
+      console.log('rung-1 placement:', JSON.stringify(placement))
+      expect(placement).toMatchObject({ modelId: opts.modelId, backend: 'gpu' })
+      expect(placement!.gpuLayers).toBeGreaterThan(0)
+      expect(placement!.totalLayers).toBeGreaterThanOrEqual(placement!.gpuLayers!)
+      expect(placement!.gpuModelMb).toBeGreaterThan(0)
+      expect(placement!.devices?.map((d) => d.name)).toContain(runtime.gpuName)
+      expect(placement!.devices?.find((d) => d.name === runtime.gpuName)?.computeMb).toBeGreaterThan(0)
+      const out: string[] = []
+      // Qwen3 is a thinking model. Since Phase 20 the omitted-mode default (balanced)
+      // already sends enable_thinking:false; the /no_think soft switch stays as belt and
+      // braces so this smoke also passes against older/unpinned server builds.
+      for await (const t of runtime.chatStream(
+        [{ role: 'user', content: 'Say "hello" and nothing else. /no_think' }],
+        { maxTokens: 64 }
+      )) {
+        out.push(t)
+      }
+      console.log('rung-1 streamed:', JSON.stringify(out.join('')))
+      expect(out.length).toBeGreaterThan(0)
+    } finally {
+      await runtime.stop()
     }
-    console.log('rung-1 streamed:', JSON.stringify(out.join('')))
-    expect(out.length).toBeGreaterThan(0)
-    await runtime.stop()
   })
 
   // #380: a probe that hit its kill-timeout answers null (unknown), and the label comes from this
@@ -140,11 +144,14 @@ describe.skipIf(!enabled)('GPU smoke (manual, real binaries + real model + real 
     })
     const runtime = factory(opts)
     await runtime.start()
-    console.log('unknown-probe backend:', runtime.backend, '| gpu:', runtime.gpuName)
-    expect(runtime.backend).toBe('gpu')
-    expect(runtime.gpuName).toBe(displayDevice(real!)?.device.name)
-    expect(latestModelPlacement()).toMatchObject({ backend: 'gpu' })
-    await runtime.stop()
+    try {
+      console.log('unknown-probe backend:', runtime.backend, '| gpu:', runtime.gpuName)
+      expect(runtime.backend).toBe('gpu')
+      expect(runtime.gpuName).toBe(displayDevice(real!)?.device.name)
+      expect(latestModelPlacement()).toMatchObject({ backend: 'gpu' })
+    } finally {
+      await runtime.stop()
+    }
   })
 
   it('gpuMode "off": starts with --device none and reads as cpu', { timeout: 300_000 }, async () => {

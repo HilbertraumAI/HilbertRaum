@@ -4131,7 +4131,7 @@ the suspect, not the device.)
 
 A GPU-backed `llama-server` can die *after* it became healthy — a driver crash, VRAM stolen by
 another process. `LlamaServer`'s `onUnexpectedExit` hook fires (only for a healthy server dying
-outside `stop()`, and once per death: #656 — its `'error'` and `'exit'` handlers share one
+outside `stop()`, and once per death: #656 — its `'error'` and `'exit'` handlers share one per-spawn
 `reportUnexpectedExit`, because Node may emit `'exit'` after `'error'`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
 was `gpu`** (its `onUnexpectedExit`; a non-GPU exit goes to `onCpuCrash` since #599). `createGpuCrashAutoFallback` then, in order: persists
 `gpuAutoDisabled` + `gpuLastError`, surfaces the friendly compatibility-mode notice, and restarts

@@ -378,6 +378,39 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     expect(spy.mock.results.map((r) => r.value)).toEqual([probe([RTX], FOREIGN_KEY), written])
   })
 
+  // A-D1 through the SNAPSHOT the screen reads, not just the settings: the flag-clear push already
+  // shows this machine's card re-armed (chat row 'gpu'); the probe write's push then shows it
+  // gone, because a probe that cannot run persists the empty stamped answer (decision 6). Moved
+  // here from performance-notify.test.ts (#656), where it read the class from the host.
+  it.each<[label: string, binary: boolean, probeImpl: () => Promise<GpuDevice[]>]>([
+    ['no binary for this OS (the probe is never called)', false, async () => [RTX]],
+    [
+      'a rejecting probe',
+      true,
+      async () => {
+        throw new Error('driver wedged')
+      }
+    ]
+  ])('"Try GPU again": the first push re-arms this machine’s card on the screen even when the probe cannot run — %s (A-D1)', async (_label, binary, probeImpl) => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const before = probe([RTX], here())
+    updateSettings(db, { gpuProbe: before, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+    if (binary) withBinary(root)
+    const ctx = ctxWith(root, db, { probeGpu: fakeProbe(probeImpl) })
+    const chatDevice = (): string => buildPerformanceSnapshot(ctx).placement.models.find((r) => r.role === 'chat')!.device
+    expect(chatDevice()).toBe('cpu') // the auto-disable forces the processor before the button
+    const spy = performanceChangedSpy(() => ({ gpuAutoDisabled: getSettings(db).gpuAutoDisabled, chat: chatDevice() }))
+
+    await tryGpuAgain(ctx)
+
+    expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { gpuAutoDisabled: false, chat: 'gpu' },
+      { gpuAutoDisabled: false, chat: 'cpu' }
+    ])
+    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [], machineKey: here() })
+  })
+
   it('a probe-only refresh drops the cached answer first, then writes the devices stamped with this machine and pushes', async () => {
     const root = freshRoot()
     const db = seededDb(root)
