@@ -8484,8 +8484,8 @@ audit read each of these and found them correct and well-tested; they are delibe
   groups touched `ctx.db` with no **explicit** `requireUnlocked()` preamble, so they fail-closed but
   surfaced the raw English vault string. §30 added the localized preamble to those four groups and
   **generalized** the structural test across the core/model/audit/rag/benchmark/collections modules — see
-  `tests/integration/ipc-lock-coverage.test.ts`; the rest (docs/doctasks/images) keep their own dedicated
-  locked-vault tests.)*
+  `tests/integration/ipc-lock-coverage.test.ts`; images (vision test campaign) and docs/doctasks (documents
+  test campaign) have since joined its `MODULES` loop, and chat keeps its own TEST-N8 test.)*
 - **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
   allow-list, CSP `connect-src 'self'`, OCR window deny-all.
 - **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
@@ -9737,7 +9737,7 @@ Per-finding disposition (fixed → session@commit / deferred·declined·accepted
 | **D-6** | LOW | S7 (this) | **doc fixed** — the chat-IPC enumeration replaced with a single-source pointer to `shared/ipc.ts` (chat group), noting `suggestSkills` is registered by the **skills** IPC (`registerSkillsIpc`), not `registerChatIpc`. |
 | **T-1** | HIGH (cov) | S2 `6e89879` | **tests** — renderer stream-recovery (`ChatStreamRecovery.test.tsx`): live bubble + locked composer + refresh-on-completion (folds CR-4), fresh-mount re-select + documents-mode mirror (folds CR-5), user-click-not-yanked. |
 | **T-2** | MED | S2 `6e89879` | **tests** — mid-stream conversation switch + Stop target (`ChatSwitchStop.test.tsx`): the non-active row is `disabled`, Stop aborts the streaming conversation — the invariant that keeps CR-9 safe. |
-| **T-3** | MED | S7 (this) | **tests** — docs-IPC guard preconditions (`docs-ipc.test.ts`): a gated embedder parks a doc in `processing` → delete/reindex/preview all reject `/still being processed/`; a `docTasks.isDocumentBusy → true` variant → delete/reindex reject `/task is running/i` with a **negative control** that preview resolves (pins the asymmetry). |
+| **T-3** | MED | S7 (this) | **tests** — docs-IPC guard preconditions (`docs-ipc.test.ts`): a gated embedder parks a doc in `processing` → delete/reindex/preview/original export all reject `/still being processed/`; the task-busy half lives in `doctasks-ipc.test.ts` 'busy-document guard' over a REAL DocTaskManager — delete/reindex of every source of a running summary or compare reject `/task is running/i`, with a **negative control** that preview resolves (pins the asymmetry). |
 | **T-4** | MED | S7 (this) | **tests** — import-loop lock-mid-job break (`docs-ipc.test.ts`): a custom ctx whose `isUnlocked` flips false inside the first file's embed → job `done`, `completed===1`, f1 non-terminal (raw SELECT), lease balanced; then backdate + unlock → `listDocuments` reconciles f1 → `failed`. **Teeth revert-confirmed** (drop the drain's `processing.delete` → f1 stays `embedding`). |
 | **T-5** | LOW | S5 `b38f819` | **tests** — compaction boundaries (`chat-compaction.test.ts`): region `=== MIN_COMPACTABLE_TURNS` proceeds vs `MIN−1` returns; size `=== threshold` proceeds vs `threshold−1` against the CB-3 `min(0.85·window, window−reserve)`. |
 | **T-6** | LOW | S7 (this) | **tests (de-mock)** — `ChatUnmount.test.tsx` drops the `clearTimeout(<exact id>)` spy for a behavioral assertion (advance past `STREAM_FLUSH_MS`, no setState-after-unmount warning) — refactor-robust across a `clearTimeout`→`mountedRef` change; keeps the (b) `listDocuments`-count assertion. |
@@ -10848,7 +10848,8 @@ crash, permanently outside CI) closed with Phase 1's boundary tests, which use R
 not defects):** source-text scan "wiring pins" (`window-security.test.ts`, `packaging.test.ts`,
 `skills-installer`, `third-party-notices`, `ocr.test.ts`, `rail-labels.test.ts`); the katex
 `package.json` compare across hoist locations in `assistant-markdown.test.tsx`; `as unknown as`
-private-field injection (`docs-ipc.test.ts`) — whoever touches those files converts the pin to a
+private-field injection (`chat-ipc.test.ts:933`; `docs-ipc.test.ts` moved to `ctxWith` overrides in the
+documents test campaign) — whoever touches those files converts the pin to a
 behavioural assertion where the change is small, else leaves a `// watch-item` comment. Fake timers:
 the 2026-08-22 flake class is fixed; remaining `advanceTimersByTimeAsync(0)` loops drain microtasks
 only; `FullSuiteGuard` converts dropped test FILES into a hard failure but cannot see dropped
