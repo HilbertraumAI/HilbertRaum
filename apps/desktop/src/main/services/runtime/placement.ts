@@ -252,7 +252,8 @@ export function createPlacementParser(): PlacementParser {
         devices: rows.map((row) => ({ ...row, computeMb: byLabel.get(row.label) ?? null }))
       }
     },
-    // A CPU-side label never counts, even one that shares a row's prefix (`Vulkan_Host`).
+    // A CPU-side label never counts, even one a row label would match by prefix (`Vulkan_Host`
+    // against a numberless `Vulkan` row; ggml numbers its devices today, so this is a backstop).
     holdsGpuBuffers: () =>
       [...bufferLabels].some(
         (label) => !isCpuDevice(label) && rows.some((row) => label === row.label || label.startsWith(`${row.label}_`))

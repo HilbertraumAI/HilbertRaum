@@ -174,6 +174,28 @@ describe('the GPU start ladder', () => {
     }
   )
 
+  // #653: a mapped buffer counts for its device (`<label>_<suffix>`). Handwritten from ggml's naming —
+  // Metal is unwitnessed by any capture (benchmark.md HW2 / T9): a Mac whose probe gave no answer and
+  // whose weights sit in `MTL0_Mapped` must not read cpu.
+  it('a mapped buffer of a listed device labels the start gpu when the probe gave no answer (#653)', async () => {
+    const h = ladderHarness({
+      probe: null,
+      stderr: [
+        [
+          '  - MTL0    : Apple M2 Pro (21845 MiB, 21845 MiB free)',
+          'load_tensors: offloaded 37/37 layers to GPU',
+          'load_tensors:   CPU_Mapped model buffer size =   304.28 MiB',
+          'load_tensors:  MTL0_Mapped model buffer size =  2375.91 MiB',
+          ''
+        ].join('\n')
+      ]
+    })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.backend).toBe('gpu')
+    expect(runtime.gpuName).toBe('Apple M2 Pro')
+  })
+
   // #653 owner call 2 (the mirror): a listed card with "offloaded 0/37 layers" stays gpu. Real
   // capture: the card still holds the compute buffer and ran the prefill (74 % load, 302 tok/s
   // against 56 with `--device none`), so a driver crash can still hit it and §5.3 — not #599's
