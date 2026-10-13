@@ -7731,8 +7731,9 @@ and lets the model dismiss low-salience/placeholder content ("Lorem ipsum") as "
 compare". In the chat path it was compounded by truncation: at the default 4096-token window
 `splitCompareBudget` gives each doc ~half, so a ~2-page version pair had **page 2 (where the change was)
 dropped** as the capped tail — the model never saw it. *Fix.* A new pure module **`services/diff`**
-computes a **Myers word-level diff** (`wordDiff`, O((N+M)·D) with a `maxEdits` cutoff + a `maxWords`
-guard, so it is near-linear for a real version pair and cheaply BAILS to null when the two diverge).
+computes a **Myers word-level diff** (`wordDiff`, O((N+M)·D) with a `DEFAULT_MAX_EDITS` cutoff + a
+`DEFAULT_MAX_WORDS` guard, so it is near-linear for a real version pair and cheaply BAILS to null when the
+two diverge).
 `isPreciseDiffUseful` (the single routing policy) drives compare by the diff ONLY when the pair is
 similar (some shared content, changed fraction ≤ 0.5); a rewrite / too-large / too-different pair returns
 null and falls through to the existing modes. Both compare paths gained a **diff-driven mode (d)**:

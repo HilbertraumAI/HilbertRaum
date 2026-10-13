@@ -241,14 +241,11 @@ function toChanges(ops: DiffOp[], context: number): DiffChange[] {
 
 /**
  * Compute a word-level diff of two texts. Returns null when the two are "too different" (edit
- * distance over `maxEdits`) — the signal to fall back to the thematic compare modes. `context` is
- * how many unchanged words to keep on each side of a change (for a readable redline).
+ * distance over `DEFAULT_MAX_EDITS`, or a side over `DEFAULT_MAX_WORDS` words) — the signal to fall
+ * back to the thematic compare modes. `context` is how many unchanged words to keep on each side of a
+ * change (for a readable redline).
  */
-export function wordDiff(
-  oldText: string,
-  newText: string,
-  opts: { maxEdits?: number; context?: number; maxWords?: number } = {}
-): DiffResult | null {
+export function wordDiff(oldText: string, newText: string, opts: { context?: number } = {}): DiffResult | null {
   const a = tokenizeForDiff(oldText)
   const b = tokenizeForDiff(newText)
   // F-23 (audit 2026-07-16): two ZERO-word texts are word-for-word identical (the documented
@@ -259,10 +256,9 @@ export function wordDiff(
   if (a.length === 0 && b.length === 0) {
     return { ops: [], changes: [], stats: { added: 0, removed: 0, equal: 0 }, identical: true }
   }
-  const maxWords = opts.maxWords ?? DEFAULT_MAX_WORDS
-  if (a.length > maxWords || b.length > maxWords) return null // too large — fall back to modes
+  if (a.length > DEFAULT_MAX_WORDS || b.length > DEFAULT_MAX_WORDS) return null // too large — fall back to modes
   const context = opts.context ?? 6
-  const script = myers(a, b, opts.maxEdits ?? DEFAULT_MAX_EDITS)
+  const script = myers(a, b, DEFAULT_MAX_EDITS)
   if (!script) return null
   const ops = coalesce(script)
   const changes = toChanges(ops, context)
