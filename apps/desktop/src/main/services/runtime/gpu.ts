@@ -199,6 +199,9 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
       stderr = (stderr + String(chunk)).slice(-PROBE_STDERR_MAX)
     })
     child.once('error', (err: unknown) => {
+      // The kill-timeout already settled this probe (#380): what the killed child reports next
+      // is the kill, not an answer — and must not be logged as one (#653).
+      if (settled) return
       const refused = classifySpawnError(err, deps.platform)
       if (refused) {
         recordRefusal(refused, String(err))
@@ -212,6 +215,7 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
     // buffered in the pipe (Node delivers it afterwards), which would truncate the
     // parse into a false-empty device list. 'close' fires only after stdio drained.
     child.once('close', (code: unknown, signal: unknown) => {
+      if (settled) return // the kill-timeout's own SIGKILL, as above
       if (code === 0) {
         // #530: the program ran — a refusal recorded against THIS binary is stale.
         clearEngineProblemFor('llama_cpp', binPath)
