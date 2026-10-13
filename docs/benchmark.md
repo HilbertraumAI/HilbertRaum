@@ -918,7 +918,9 @@ chat and translation auto-fit onto the card (`device: 'gpu'`) — under the CURR
 without a usable card, when the GPU is switched off (`gpuMode: 'off'`) or auto-disabled, when the
 chat's matching observed start landed on the CPU backend, or when the translation sidecar's
 posture is the forced `--device none` (`deviceStatus().device === 'cpu'`, its session fallback
-latch); the copy then says "processor", not "processor, by design". Images / voice are pinned to
+latch) or its last start's load log put no buffer on a graphics device (`gpuBuffers === false`,
+#671: a GPU-posture start on a PC with no usable card); the copy then says "processor", not
+"processor, by design". Images / voice are pinned to
 the processor by design (`--device none`, see vision/runtime.ts, embeddings/e5.ts; whisper is a
 CLI) and say so; the embedder half of document search is pinned the same way. The reranker half
 of document search instead follows its own headroom-gated device posture (**Wave 8 ruling (a)**,
@@ -933,7 +935,9 @@ each service's own handle (`isLoaded()` on `E5Embedder`, `LlamaReranker`, `Visio
 `RuntimeManager.status()` running + healthy + no start in flight + the active model, never
 `active() != null` or the placement latch, which is recorded before the #109 warm-up finishes
 (PR #303 audit DR6: a loading model reads "not loaded" until it is ready)); the translation
-row carries its observed layer split when live. Three contributors can each show a summary line
+row carries its observed layer split when live, and only while the row itself says graphics card.
+`--device none` and a start with no usable graphics device both print `offloaded 49/49 layers to
+GPU`, so before #671 a processor row read "processor · 49 of 49 layers on the card". Three contributors can each show a summary line
 (the chat+translation pair counts as one line): the chat+translation card line (sizes against
 VRAM, shown only while a row actually goes to the card, with the START-ORDER warning when both
 are resident on it — `chatAndTranslationOnCard` needs both rows to say `'gpu'`, the active chat

@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-06 #606 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #671 entry). Its record is unchanged:
+`architecture.md` CB-5 "#606 amendment", `benchmark.md` "Lock and quit cancel the speed leg". It named no open items of its own; its follow-up (#620) is closed. Citations of the form
+"BUILD_STATE 2026-10-06 #606 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-06 — **#606 — lock, quit and a model stop or switch end the skill runs and the benchmark's speed leg on the model first (`fix/606-teardown-skill-bench`).** A run's
+own signal was never aborted, so a redaction whose model request died fell back to the rule-based floor and opened its save dialog (over the lock screen after "Lock now", real
+app); an edit ended `editFailed`. `SkillRunController` `cancelAll` / `cancelModelRuns` / `awaitSettled` (`ctx.skillRuns`), the #600 hook's 4th step, `ctx.cancelBenchmark`; the run
+reads "Stopped. Nothing was saved." Owner calls from the issue. Record: CB-5 "#606 amendment", `benchmark.md` "Lock and quit cancel the speed leg". Open: none (#620: above)._
+
 ## 2026-10-13 — the closed 2026-10-06 #612 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #670 entry). Its record is unchanged:

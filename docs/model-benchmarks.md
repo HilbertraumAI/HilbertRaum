@@ -2509,7 +2509,8 @@ regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
 - **Postures:** allowed ⇒ `translationServerArgs('auto')` — NO device args (the pin's defaults
   `-ngl auto` + `--fit on`, VRAM-aware offload; unchanged from b9849 to b11146, re-checked
   against `--help` 2026-10-13, #660; a GPU-less machine lands on CPU exactly as before, though
-  its load log still claims `offloaded N/N layers`, #671). `gpuMode: 'off'`, a persisted
+  its load log still claims `offloaded N/N layers`, so since #671 the start's own GPU buffers say
+  where it ran). `gpuMode: 'off'`, a persisted
   `gpuAutoDisabled`, the session fallback latch, or (since #473) the headroom gate choosing the
   processor (no full fit beside the chat model, or a chat start pending) ⇒
   `translationServerArgs('cpu')` (`--device none` — never `-ngl`).
@@ -2530,9 +2531,15 @@ regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
   hint's PARTIAL-offload form ("{done}/{total} layers — about processor speed", tooltip naming the
   cause + remedy) is the point: without it a `--fit` partial offload is indistinguishable from
   "GPU translation not working". Last-known values survive the idle teardown (`live: false`) so a
-  finished run stays explainable. Pinned in `translation-runtime.test.ts` ("cold-start device
-  observability"), `core-model-ipc.test.ts` (the status feed), and `TranslateScreen.test.tsx`
-  (the hint forms).
+  finished run stays explainable. **#671 (2026-10-13):** the split alone is no evidence of a card.
+  TranslateGemma's load log reads `offloaded 49/49 layers to GPU` with no usable device and under
+  `--device none`, every buffer on the processor (b11146 and b9849, measured), so the runtime reads
+  the log with the chat runtime's placement parser and records whether a buffer landed on a
+  graphics device (`gpuBuffers`). A start that put none there shows the processor form, and the
+  Performance row shows no split for it (`architecture.md` translation record, "#671 amendment").
+  Pinned in `translation-runtime.test.ts` ("cold-start device observability", three real
+  captures), `core-model-ipc.test.ts` (the status feed), and `TranslateScreen.test.tsx` (the hint
+  forms).
 
 **Field datapoint (issue #42 reopen — v0.1.46, RTX 3090 24 GB, Linux/Vulkan, b9849,
 `translategemma-12b-it.Q4_K_M`, the shipping `translationServerArgs('auto')` at ctx 4096):**

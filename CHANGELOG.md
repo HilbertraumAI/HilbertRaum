@@ -67,6 +67,11 @@ from its first public `1.0.0` release onward.
   still offered **Install the AI engine again**, because the Kit's CPU fallback build was refused
   right after it. The banner now says, as intended, that the engine's files are probably not the
   cause, and on Windows it points to the Microsoft Visual C++ Redistributable (#670).
+- **The Translate screen no longer says translation runs on the graphics card on a computer
+  without one.** On a PC with no usable graphics card it said "runs on the graphics card (GPU,
+  49/49 layers)" while translation actually ran on the processor. The Performance screen also no
+  longer shows "49 of 49 layers on the card" for translation running on the processor, as it did
+  whenever translation did not fit on the graphics card (#671).
 
 ## [0.1.63] — 2026-10-12
 

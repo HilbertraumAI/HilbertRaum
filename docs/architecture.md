@@ -3378,7 +3378,8 @@ Per-finding disposition (F-1…F-8):
     partial-offload form names the ~CPU speed and whose tooltip carries cause + remedy. Field
     numbers + the contention case: `model-benchmarks.md` §11.4; user-facing shape:
     `known-limitations.md` "Document translation". Tests: `translation-runtime.test.ts`
-    ("cold-start device observability" — chunk-split parse, once-per-start, honest-null CPU form,
+    ("cold-start device observability" — chunk-split parse, once-per-start, the CPU form (since #671
+    from real captures, which print the split under `--device none` too),
     throwing hook harmless; the ladder suite's GPU-fail → CPU row pins that the fallback lands as
     'cpu'), `core-model-ipc.test.ts` (status feed),
     `TranslateScreen.test.tsx` (hint forms + absent-before-first-start).
@@ -3524,6 +3525,78 @@ Per-finding disposition (F-1…F-8):
     restart nothing.
   - The compute budget rests on a 14B proxy and scaling: no TranslateGemma prefill has been measured
     on the slowest laptop.
+- **#671 amendment (2026-10-13) — a start's own GPU buffers say where translation ran, never the
+  offload line.** The device hint and the Performance row read the layer split as the measure of the
+  card. The line is no evidence of a card (the GPU record's §5.2 "#653 amendment"), and it reached
+  the user:
+  - **No usable graphics device.** The #473 gate answers `'auto'` when no usable device is on record
+    (`budgetMib == null`), so the sidecar started with no device args and printed `offloaded 49/49
+    layers to GPU`. The Translate screen said "runs on the graphics card (GPU, 49/49 layers)" while
+    VRAM stayed flat.
+  - **Every forced-processor start.** `--device none` prints the same line beside a visible card, so
+    `deviceStatus()` carried 49/49 and the "Models on this computer" row read "processor · 49 of 49
+    layers on the card". That is the common case on any card TranslateGemma does not fit (#473's
+    `too-large`, `beside-chat`, `chat-starting`), on every 8 GB card. The issue did not name it. The
+    #42-era premise "a forced-CPU start prints no offload line", pinned by a test row with a
+    hand-written log, was never measured.
+
+  **Facts** (DesktopDiT, GTX 1070 Ti, TranslateGemma 12B Q4_K_M, the sidecar's exact argv, captured
+  load-only): with the card hidden (`GGML_VK_VISIBLE_DEVICES=7`), b11146 and b9849 both print 49/49,
+  every buffer on the processor (`CPU_Mapped`, `CPU_REPACK`, `CPU` KV and compute), VRAM unchanged.
+  `--device none` beside the card prints the same. The `'auto'` posture on the card places 39/49, with
+  model, KV and compute buffers on Vulkan0.
+
+  **As built:**
+  - The runtime reads its load log with the chat runtime's `createPlacementParser`, not its own
+    regex. The parser keeps the split, and it reassembles lines across chunks, which covers CODE-22.
+    It is fed until the start lands; the reading is taken once.
+  - It records `TranslationDeviceStatus.gpuBuffers` from the parser's `gpuBufferEvidence()`, which
+    reads #653's `holdsGpuBuffers` both ways:
+    - `true` means a buffer landed on a device the log's `device_info` lists as a GPU;
+    - `false` means every buffer the log printed was under a processor-side label (`CPU`,
+      `CPU_Mapped`, `CPU_REPACK`, `*_Host`);
+    - `null` (absent on the wire) means nothing to judge by: no buffer line, or a buffer under a label
+      that is neither processor-side nor a listed GPU.
+
+    The review asked for that last case to stay open. Chat uses the evidence only positively and has
+    the probe behind it. Translation would use it negatively, so a `device_info` block that a future
+    pin prints differently would have turned every start on the card into "the processor".
+  - One rule, `translationRanOnProcessor` (`shared/runtime-status.ts`): a `'cpu'` posture, or
+    `gpuBuffers === false`. The Translate screen, the Performance row and the runtime's occupancy all
+    read it.
+  - The Translate screen shows the plain `translate.device.cpu` copy, with no cause: the screen
+    cannot know why no device was usable.
+  - The Performance row says processor for such a start, and a row that says processor shows no
+    split at all, whatever the sidecar printed. The RAM total then counts the whole model.
+  - `gpuOccupied()` and `yieldGpu()` read the same rule: a resident sidecar that put nothing on a
+    graphics device neither blocks the reranker's card posture nor is stopped for a chat start.
+  - Its crash no longer arms the session CPU latch, following chat's #599 rule for a CPU-mode crash.
+  - "Translation sidecar started" logs `gpuBuffers`.
+  - The 0-layer rule in `yieldGpu` is unchanged, although that start still holds its compute buffer
+    on the card (#653's `-ngl 0` measurement).
+  - The row's device follows the last start, as it followed the posture since #42. Gating only the
+    new evidence on `live` would make the row disagree with itself (review finding, declined).
+
+  **Real app** (dev build over CDP, scratch Kit roots, b11146, German UI):
+  - Card hidden: master said "Übersetzung läuft auf der Grafikkarte (GPU, 49/49 Schichten)" and
+    "Prozessor · … · 49 von 49 Schichten auf der Karte"; the fix says "… auf dem Prozessor (CPU)" and
+    "Prozessor · wird bei Leerlauf entladen".
+  - Card visible (`too-large`, `--device none` in the OS argv): the hint was already right on master
+    and stays the same; the row loses master's "49 von 49 Schichten auf der Karte".
+
+  **Tests:**
+  - `translation-runtime.test.ts` replays the three captures
+    (`placement-b11146-translategemma-{gpuless-49of49-cpu,devnone-49of49-cpu,partial-39of49}.txt`,
+    which are in the DR3 net of `placement-parser.test.ts`), with `gpuOccupied`, `yieldGpu` and crash
+    rows.
+  - `placement-parser.test.ts` covers the edge rows of `gpuBufferEvidence`.
+  - `TranslateScreen.test.tsx` and `performance-gpu.test.ts` cover the hint and the row.
+
+  **Residuals:**
+  - A Sapphire Rapids PC with no usable card whose model lands in ggml's `AMX` buffer reads as unknown,
+    so the hint keeps master's "graphics card" form there.
+  - A `device_info` block that a future pin prints differently reads as unknown too, which is the
+    safe direction. The re-capture rule at each pin bump still catches it.
 
 ### §-anchor legend (historical plan citations)
 
@@ -4171,7 +4244,8 @@ persisting nothing; a healthy model starts on rung 1.
      would make every probe on that machine unknown, and the pin-bump case it would catch is already
      caught by the b11146 capture test and the re-capture rule.
   4. The Translate screen's device hint reads the same offload line. On a GPU-less PC it would claim
-     the card. That is filed as #671, not fixed here.
+     the card. That is filed as #671, not fixed here. (Fixed by #671: the translation record's
+     "#671 amendment".)
 - **What each part changes.**
   - The label (1) fixes, for this start, everything that reads `RuntimeStatus.backend` and the
     placement: the header, Diagnostics, the stored placement, the #322 speed identity, the #473 chat

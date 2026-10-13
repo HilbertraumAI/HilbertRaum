@@ -2088,7 +2088,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   line could be parsed from the server log (`translate.device.gpuUnknown` — no split is invented;
   until #629 EVERY GPU start landed here, because the sidecar ran below the log level that prints
   the line) /
-  CPU. Since #161 (FE-4) the remedy for the two starved forms is VISIBLE text under the device
+  CPU (since #671 also for a GPU-posture start whose load log put no buffer on a graphics device:
+  on a PC with no usable card the log still reads `offloaded 49/49 layers to GPU`, and the line
+  used to claim the card). Since #161 (FE-4) the remedy for the two starved forms is VISIBLE text under the device
   line, no longer tooltip-only. **The two starved forms name the CAUSE since the owner decision of
   2026-09-08 on this issue (#42)** — they used to state the symptom ("about processor speed") alone, leaving a user who
   read no further with nothing to act on; the remedy line below is now the ACTION only, so the two
