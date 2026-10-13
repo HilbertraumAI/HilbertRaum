@@ -2143,8 +2143,8 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   rather than always sacrificing the Only-B tail. The same belt in mode (b) (`runCompareSectionMatched`)
   also sets `truncated` now (it cuts the later doc-A windows, so the existing `compareTruncationNotice`
   "covers its beginning" wording applies) — the two paths are honest about condensing in parallel.
-- **(b) asymmetric A-driven** (the existing section-matched map-reduce over `VectorIndex`-scoped doc-B
-  neighbours) — the labelled fallback when the two docs are **not** both deeply indexed. The materialized
+- **(b) asymmetric A-driven** (the existing section-matched map-reduce over doc-B neighbours ranked in
+  memory from doc B's stored vectors — `compareNearestNeighbors`, architecture.md "Compare retrieval") — the labelled fallback when the two docs are **not** both deeply indexed. The materialized
   report now carries `compareAsymmetricNotice` ("one-directional — may under-report content found only in
   B; deeply index both for a complete two-way comparison"). v1 does **not** auto-build the missing tree —
   it falls back, labelled, and the user has the per-doc "Build deep index" action (the default; flagged).

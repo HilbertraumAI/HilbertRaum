@@ -2775,9 +2775,11 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   300) / 1.3` input words per call). Both full texts fit ⇒ **mode (a)**: one
   structured-comparison call over both. Else **mode (b), section-matched**: doc A's
   chunks pack into half-budget windows (over-budget chunks split, pieces keep their
-  chunk id), each window's nearest doc-B chunks are retrieved via the EXISTING
-  `VectorIndex` scoped to doc B under the active embedder's id — STORED vectors only,
-  so the pairing is deterministic and costs nothing but cosine scans (top-3 neighbors
+  chunk id), each window's nearest doc-B chunks come from doc B's STORED vectors under
+  the active embedder's id, loaded and decoded once (RAG-2/ING-1) and ranked in memory by
+  the pure `compareNearestNeighbors` (P1: `dotProduct` on L2-normalized vectors, a running
+  top-K) — no `VectorIndex` search, so the pairing is deterministic and costs nothing but
+  dot products (top-3 neighbors
   per A-chunk, best-first fill of the other half-budget, presented in doc-B order);
   per-pair map calls use a deliberately smaller prefixed-bullets format
   (R-T2-confirmed), then one reduce merges the notes into the four dictated report
