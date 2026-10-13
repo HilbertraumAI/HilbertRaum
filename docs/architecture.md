@@ -4181,9 +4181,11 @@ persisting nothing; a healthy model starts on rung 1.
     each refresh, check or "Try GPU again", and each model start: two for a model with the MTP rung,
     since the speculative check's `null` drops itself before rung 1 asks again. The server would then
     crash at the same point too.
-  - The kill-timeout's own SIGKILL is not logged as a second non-answer: the `'error'` / `'close'`
-    handlers return once the probe has settled. The exception is an exit 0, which still clears a stale
-    refusal verdict, because the program ran.
+  - The kill-timeout settles the probe before it kills. Its own SIGKILL, or an error from a kill
+    that failed, is then not logged as a second non-answer. What a late `close` says about the program
+    still counts: an exit 0 clears a stale refusal verdict, because the program ran, and a loader
+    refusal is still recorded as the verdict. The crash log carries the stderr tail, as the refusal
+    log does.
 - **Real app (DesktopDiT, GTX 1070 Ti, b11146, the 4B).** A wrapper in a scratch root ran
   `--list-devices` as an exit 0xC0000005 and everything else as the real server, inside a kill-on-close
   Job Object. Launch 1 stored the card; launch 2 crashed the probe.
@@ -4195,8 +4197,14 @@ persisting nothing; a healthy model starts on rung 1.
     took #599's one CPU restart.
 - **Residuals:**
   - An exit-0 empty answer the server contradicts (an enumeration race, a pin bump that changes the
-    device-line shape) labels the start correctly, but the stored probe keeps `[]` until the next probe
-    answers.
+    device-line shape) labels the start correctly. But `[]` stays the session's cached answer and the
+    stored probe until "Try GPU again" or the next session. The ladder's dependency is a bare
+    function, so it cannot invalidate the cache.
+  - A probe that lists a card is never demoted (owner call 2). So a start that holds no GPU buffer at
+    all reads `gpu`: an eGPU unplugged after the session's probe, say.
+  - The persisted gpu/cpu MiB split (`gpuModelMb`, …) still uses the `isCpuDevice` blacklist, so an
+    `AMX` buffer would count as card memory in the placement figures and the #473 chat share. This
+    predates #653 and is a follow-up candidate; the label no longer reads it.
   - A drive that has never stored a probe still shows no card on the tile while its probes crash.
   - **Like a timeout (#380), a crash at the unlock refresh leaves the ladder's own probe to run beside
     the weight upload.** An answer there becomes the session's and can be persisted with the chat model
@@ -4211,9 +4219,13 @@ persisting nothing; a healthy model starts on rung 1.
     - real b11146 captures for the empty and unknown answers yielding to GPU buffers, the GPU-less
       rung 1, and the 0/37 mirror;
     - handwritten rows for an `AMX` buffer (cpu) and a Metal mapped buffer (gpu);
-  - `gpu.test.ts`: crashes and EMFILE resolve `null`; the kill's own `close` logs nothing;
-  - `engine-load-spawn.test.ts`: no verdict for an unclassified exit; a late exit 0 clears a stale verdict;
-  - `placement-parser.test.ts`: the DR3 content guard covers the two new captures.
+  - `gpu.test.ts`: crashes and EMFILE resolve `null`; neither the kill's own `close` nor a failed
+    kill logs anything;
+  - `engine-load-spawn.test.ts`: no verdict for an unclassified exit; after the timeout, a late exit 0
+    clears a stale verdict and a late refusal records one;
+  - `placement-parser.test.ts`: `holdsGpuBuffers`' edge rules (0 MiB, KV-only, RS-only, `Vulkan1` vs
+    `Vulkan10`, a host buffer against a numberless row); the DR3 content guard covers the two new
+    captures.
 
 *Interaction with #320* (excluding a hybrid laptop's iGPU with `--device` at launch): **decided
 2026-09-07 — it does not land**; the fit already drops the integrated device by type (runtime

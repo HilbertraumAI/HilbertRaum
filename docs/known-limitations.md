@@ -2870,7 +2870,8 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   Now such a probe gives no answer (the stored probe stands), and a start whose log put buffers on
   a card is labelled GPU from that log. Residuals:
   - an answer of "no device" that the server contradicts (an enumeration race) labels the start
-    right but keeps the stored probe empty until the next probe answers;
+    right, but the empty answer stays the session's (and the stored one) until "Try GPU again" or
+    the next session;
   - a drive that has never stored a probe still shows no card while every probe crashes;
   - a probe that crashes every time costs one short crashing child per start or check (two for a
     model with the speculative-decoding rung);
