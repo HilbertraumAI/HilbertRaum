@@ -33,7 +33,7 @@ delivered its `<p class="footer">`; 0 of 1,720 / 0 of 38 indented code lines sur
 exact furniture token is dropped — the issue's `\b` draft also hit Wikipedia's `zim-footer` (1,322/1,500 pages) and Read the Docs' article wrappers, refused — and `<pre>`
 whitespace rides placeholders through the tidy in prose and kept tables; caps count visible characters. Owner calls as recommended. 2,672 pages from 15 archives: words change
 only on gobyexample (footer) and lesscss (menu), `work`/`slices` identical, 0 word changes on 1,500 German Wikipedia pages; real app: footer 2/2 → 0, indented lines 0 → 8/8/38.
-Record: `rag-design.md` §17 "#627". Open: the maintainer's acceptance read; #662 (Wikipedia license line, nav boxes); #663 (entities)._
+Record: `rag-design.md` §17 "#627". Acceptance read: Stage A identical (949 + 1,024 articles, 0 word changes). Open: #662 (Wikipedia license line, nav boxes); #663 (entities)._
 _2026-10-12 — **#473 — the graphics card shared between chat, translation and the reranker, Phase 0 + 1 (`fix/473-phase0`, PR #631; #629).** Phase 0:
 translation at `-lv 4` (#629; content check beside DR3), rung 1a judges `primaryUsefulDevice`, a GPU translation start suspends a reranker on the card, first
 runs probe before the auto-start, §8.1 premise corrected, §6.6 finding 8. Phase 1 (owner rulings 2026-10-12, posted on #473): no `--fit-target`; translation

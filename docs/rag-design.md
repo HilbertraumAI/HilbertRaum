@@ -5495,10 +5495,12 @@ stopped it; three runs each, final code): per-slice p95 0.98–1.33 ms against m
 this one; the 60-article batch +5–8 % (73.4–75.0 → 77.3–80.7 ms); the 1 MiB families 0–12 %
 (`deep-nesting` the most, 45.1–48.2 → 50.7–52.7 ms: every `div` now asks whether it is
 furniture); and +8 % on 1,890 code-heavy real pages (1,465 → 1,585 ms, ≈ 0.06 ms per article,
-the code-block encoding itself about a fifth of it). **No acceptance read was run here**: the 949-article development cache and the 4-z-r
-harness are not on the machine this was built on, so the read is the maintainer's. By the
-measurement above it should be identical — the dev set's delivered words cannot change unless
-one of its articles carries a furniture token, which the sample never showed. Residuals:
+the code-block encoding itself about a fifth of it). **Acceptance read (2026-10-13): Stage A
+identical**, as the sample predicted. `scripts/zim-dev-set-diff.mjs`, run on the machine that
+holds the development cache, found the same words in all 949 core200 articles (936 identical,
+13 whitespace-only) and in all 1,024 of the second development cache (1,011 and 13), each cache
+checked against its tree manifest first; under the shipping rule below no full read runs (PR
+#664). Residuals:
 `known-limitations.md` "Site furniture and code blocks (#627)"; undecoded typographic entities
 (`&rsquo;`, measured on the same archives) are #663.
 
