@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,8 +13,9 @@ const fsLog = vi.hoisted(() => ({
   calls: [] as Array<{ fn: string; path: string }>,
   // #274: park the directory walk on a directory whose path carries `probe`. A SYNCHRONOUS
   // walk can only be parked by occupying the thread, so `readdirSync` spins for `spinMs`; the
-  // async `fs/promises.readdir` awaits `gate` instead. Disarmed before every test.
-  slow: { probe: '', spinMs: 0, gate: null as Promise<void> | null }
+  // async `fs/promises.readdir` awaits `gate` instead (calling `parked` first, so a test can await
+  // the walk actually sitting on the gate). Disarmed before every test.
+  slow: { probe: '', spinMs: 0, gate: null as Promise<void> | null, parked: null as (() => void) | null }
 }))
 const slowMatches = (p: string): boolean => fsLog.slow.probe !== '' && p.includes(fsLog.slow.probe)
 vi.mock('node:fs', async (importOriginal) => {
@@ -55,7 +56,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }) as unknown as F
   const gated = <F extends (...args: never[]) => Promise<unknown>>(real: F): F =>
     (async (...args: unknown[]) => {
-      if (fsLog.slow.gate !== null && slowMatches(String(args[0]))) await fsLog.slow.gate
+      if (fsLog.slow.gate !== null && slowMatches(String(args[0]))) {
+        fsLog.slow.parked?.()
+        await fsLog.slow.gate
+      }
       return (real as unknown as (...a: unknown[]) => Promise<unknown>)(...args)
     }) as unknown as F
   const mocked = {
@@ -68,10 +72,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...mocked, default: mocked }
 })
 
-// IPC-layer tests for registerDocsIpc — the handler glue: the `requireUnlocked` guard on
-// DB-backed handlers (M6), the one-shot startup reconcile of documents stuck mid-ingestion
-// by a prior run (M5), and threading the active embedder id into listDocuments so the
-// stale-embedding flag surfaces (M7).
+// IPC-layer tests for registerDocsIpc — the handler glue: the startup reconcile of
+// documents stuck mid-ingestion by a prior run (M5), threading the active embedder id into listDocuments (M7), the
+// import pipeline, picker binding and the guards. The locked-vault refusal of every docs:* handler is
+// ipc-lock-coverage.test.ts's MODULES row; the task-busy guard is doctasks-ipc.test.ts's (a real DocTaskManager).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 const dialogState = vi.hoisted(() => ({ result: { canceled: true, filePaths: [] as string[] } }))
@@ -123,26 +127,27 @@ import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
 import type {
   DocumentInfo,
+  DocumentLifecycle,
   DocumentOrigin,
-  DocumentPreview,
+  ImportDestination,
   ImportJob,
   ImportJobStatus,
   ImportOptions,
   ImportPreflight,
-  ReindexJobStatus
+  ReindexJobStatus,
+  SmartListView
 } from '../../src/shared/types'
-import { LARGE_FILE_BYTES } from '../../src/shared/types'
 import { MAX_DROP_PATHS } from '../../src/main/services/ingestion/limits'
 import type { AppContext } from '../../src/main/services/context'
-import {
-  DocTaskManager,
-  TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
-} from '../../src/main/services/doctasks'
+import { TASK_DOCUMENT_BUSY_INGESTING_MESSAGE } from '../../src/main/services/doctasks'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import { hangBudgetMs, hangPolls, testBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
+import { tempRoot } from '../helpers/db-fixtures'
+import { countPrepares } from '../helpers/db-spy'
+import { docTaskManager, docTaskRuntime, waitTerminal } from '../helpers/doctask-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -150,52 +155,67 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 beforeEach(() => {
   fsLog.probe = ''
   fsLog.calls.length = 0
-  fsLog.slow = { probe: '', spinMs: 0, gate: null }
+  fsLog.slow = { probe: '', spinMs: 0, gate: null, parked: null }
 })
 
 function freshWorkspace(): { db: Db; workspacePath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-docsipc-'))
+  const root = tempRoot('docsipc')
   return { db: openDatabase(join(root, 'hilbertraum.sqlite')), workspacePath: root }
 }
 
-function ctxWith(
-  db: Db,
-  workspacePath: string,
-  embedder: Embedder,
-  unlocked: boolean,
-  docTasks?: unknown,
-  cipher: DocumentCipher | null = null
-): AppContext {
+/** What a test may override on the stand-in ctx; everything else is the harmless default. */
+interface CtxOverrides {
+  /** Default `createMockEmbedder()`. */
+  embedder?: Embedder
+  /** Default null (a plaintext store); #90 export tests pass a fake cipher for the `.enc` path. */
+  cipher?: DocumentCipher | null
+  /** A partial DocTaskManager stand-in (e.g. one whose maybeEnqueueTreeBuild throws). */
+  docTasks?: unknown
+  audit?: AppContext['audit']
+  skillRunActive?: AppContext['skillRunActive']
+  /** Merged over the default workspace (unlocked, a no-op lease, the `cipher` above). */
+  workspace?: { isUnlocked?: () => boolean; unlockEpoch?: () => number; beginDocumentWork?: () => () => void }
+}
+
+function ctxWith(db: Db, workspacePath: string, o: CtxOverrides = {}): AppContext {
   return {
     trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath },
-    embedder,
-    // A full-enough workspace for the background import loop (lease + null cipher by default;
-    // #90 export tests pass a fake cipher to exercise the `.enc` storage path).
+    embedder: o.embedder ?? createMockEmbedder(),
+    // A full-enough workspace for the background import loop (lease + null cipher by default).
     workspace: {
-      isUnlocked: () => unlocked,
+      isUnlocked: () => true,
       beginDocumentWork: () => () => {},
-      documentCipher: () => cipher
+      documentCipher: () => o.cipher ?? null,
+      ...o.workspace
     },
-    // Optional: a fake DocTaskManager (e.g. one whose maybeEnqueueTreeBuild throws) to prove the
-    // deep-index offer is fire-and-forget and never fails a (re)index.
-    docTasks
+    docTasks: o.docTasks,
+    audit: o.audit,
+    skillRunActive: o.skillRunActive
   } as unknown as AppContext
 }
+
+/** Poll a job-status channel until `done`; a hang fails by name after `hangBudgetMs(localMs)` instead of falling
+ *  through silently into the next assertion (the hang-budget.ts `hangPolls` warning). */
+async function pollDone<T extends { done: boolean }>(what: string, channel: string, ...args: unknown[]): Promise<T> {
+  const deadline = Date.now() + hangBudgetMs(5_000)
+  for (;;) {
+    const s = (await invoke(handlers, channel, ...args)).result as T | null
+    if (s?.done) return s
+    if (Date.now() > deadline) throw new Error(`${what} never finished`)
+    await new Promise((r) => setTimeout(r, 5)) // poll interval of a bounded poll, not a wait-for-it sleep
+  }
+}
+const importDone = (jobId: string): Promise<ImportJobStatus> =>
+  pollDone<ImportJobStatus>('the import job', IPC.getImportJob, jobId)
+const reindexAllDone = (): Promise<ReindexJobStatus> => pollDone<ReindexJobStatus>('the bulk re-index', IPC.getReindexAllJob)
 
 /** Drive the background import loop to completion by polling the in-memory job aggregate. */
 async function runImport(paths: string[], options?: ImportOptions): Promise<ImportJob> {
   const { result } = await invoke(handlers, IPC.importDocuments, paths, options)
   const job = result as ImportJob
-  // T-7 (Chat & Documents audit 2026-07-07): a generous non-racy ceiling (was 200×5ms ≈ 1s) —
-  // the loop settles well before this; the higher bound only removes headroom flakiness on a
-  // busy CI box, it never gates a passing run.
-  for (let i = 0; i < hangPolls(400, 5); i++) {
-    const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
-    if ((s as ImportJobStatus).done) break
-    await new Promise((r) => setTimeout(r, 5))
-  }
+  await importDone(job.jobId)
   return job
 }
 
@@ -276,22 +296,9 @@ beforeEach(() => {
 })
 
 describe('registerDocsIpc', () => {
-  it('rejects DB-backed handlers with a clear message while the workspace is locked (M6)', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ false))
-
-    await expect(invoke(handlers, IPC.listDocuments)).rejects.toThrow(/Workspace is locked/)
-    await expect(invoke(handlers, IPC.importDocuments, ['/x.txt'])).rejects.toThrow(/Workspace is locked/)
-    await expect(invoke(handlers, IPC.reindexDocument, 'id')).rejects.toThrow(/Workspace is locked/)
-    await expect(invoke(handlers, IPC.deleteDocument, 'id')).rejects.toThrow(/Workspace is locked/)
-    // L-3: importPreflight is now unlock-gated too (was an unauthenticated filesystem
-    // walk/count oracle).
-    await expect(invoke(handlers, IPC.importPreflight, ['/some/dir'])).rejects.toThrow(/Workspace is locked/)
-  })
-
   it('importPreflight type-filters its paths arg and never throws on junk (L-3)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     // A non-array arg and non-string elements reduce to an empty selection (no walk crash).
     const bogus = await invoke(handlers, IPC.importPreflight, { not: 'an array' } as unknown as string[])
     expect(bogus.result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
@@ -306,15 +313,15 @@ describe('registerDocsIpc', () => {
   // be told apart lexically at all — that stays a documented residual there.)
   it('refuses more than MAX_DROP_PATHS strings on the drop and preflight seams before any lstat/stat/realpath (#240)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const probe = `probe-${randomUUID()}`
     const paths = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(workspacePath, `${probe}-${i}.txt`))
     fsLog.probe = probe
     fsLog.calls.length = 0
-    await expect(invoke(handlers, IPC.importPreflight, paths)).rejects.toThrow()
+    await expect(invoke(handlers, IPC.importPreflight, paths)).rejects.toThrow(/Too many files/)
     expect(fsLog.calls).toEqual([])
     // The drop seam (no picker token) is the same cap.
-    await expect(invoke(handlers, IPC.importDocuments, paths)).rejects.toThrow()
+    await expect(invoke(handlers, IPC.importDocuments, paths)).rejects.toThrow(/Too many files/)
     expect(fsLog.calls).toEqual([])
     // Exactly the cap is admitted and does reach the filesystem (the paths do not exist → empty).
     const atCap = paths.slice(0, MAX_DROP_PATHS)
@@ -327,9 +334,11 @@ describe('registerDocsIpc', () => {
   // counts main's own paths (the renderer array is ignored), the token stays live for the import.
   it('importPreflight with the pickDocuments token is not capped and does not spend the token (#240)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const probe = `probe-${randomUUID()}`
     const picked = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(workspacePath, `${probe}-${i}.txt`))
+    // One REAL `.txt` among the picked paths, so both the count and the redeeming import have something to see.
+    writeFileSync(picked[0], 'a picked note with enough words to index')
     dialogState.result = { canceled: false, filePaths: picked }
     const { result: pick } = await invoke(handlers, IPC.pickDocuments, 'files')
     const token = (pick as { token: string }).token
@@ -337,13 +346,13 @@ describe('registerDocsIpc', () => {
     fsLog.probe = probe
     // The renderer array is ignored: an EMPTY array + the token still counts the picked paths.
     const { result: pre } = await invoke(handlers, IPC.importPreflight, [], token)
-    expect(pre).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
+    expect(pre).toEqual({ fileCount: 1, audioFileCount: 0, audioBytes: 0 })
     expect(fsLog.calls.length).toBeGreaterThan(0)
-    // Not spent: the import still redeems it (no drop cap on that branch either).
-    const { result: job } = await invoke(handlers, IPC.importDocuments, [], { pickerToken: token })
-    expect((job as { documentIds: string[] }).documentIds).toEqual([])
+    // Not spent: the import still redeems it (no drop cap on that branch either) — only possible if the
+    // preflight left the token live.
+    expect((await runImport([], { pickerToken: token })).documentIds).toHaveLength(1)
     // A stale token falls back to the raw (capped) seam.
-    await expect(invoke(handlers, IPC.importPreflight, picked, token)).rejects.toThrow()
+    await expect(invoke(handlers, IPC.importPreflight, picked, token)).rejects.toThrow(/Too many files/)
     dialogState.result = { canceled: true, filePaths: [] }
   })
 
@@ -360,7 +369,7 @@ describe('registerDocsIpc', () => {
   // the gate parks the async walk.
   it('a parked walk does not block a concurrent invoke (#274)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const probe = `probe-${randomUUID()}`
     const dir = join(workspacePath, `${probe}-tree`)
     mkdirSync(dir)
@@ -368,7 +377,7 @@ describe('registerDocsIpc', () => {
     writeFileSync(join(dir, 'b.md'), 'x')
     const SPIN_MS = 2000
     let release!: () => void
-    fsLog.slow = { probe, spinMs: SPIN_MS, gate: new Promise<void>((r) => (release = r)) }
+    fsLog.slow = { probe, spinMs: SPIN_MS, gate: new Promise<void>((r) => (release = r)), parked: null }
 
     const t0 = Date.now()
     const walk = invoke(handlers, IPC.importPreflight, [dir])
@@ -392,7 +401,7 @@ describe('registerDocsIpc', () => {
   // seam here too. Absent (not null) when the walk completed: additive on every DTO.
   it('reports a cut walk on the preflight result, the import job and its status (#274)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const dir = join(workspacePath, 'wide')
     mkdirSync(dir)
     for (let i = 0; i < 12; i++) writeFileSync(join(dir, `f${String(i).padStart(2, '0')}.txt`), `note ${i} alpha beta`)
@@ -431,8 +440,7 @@ describe('registerDocsIpc', () => {
     let unlocked = true
     let held = 0
     let peak = 0
-    const ctx = {
-      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
+    const ctx = ctxWith(db, workspacePath, {
       workspace: {
         isUnlocked: () => unlocked,
         beginDocumentWork: () => {
@@ -441,10 +449,9 @@ describe('registerDocsIpc', () => {
           return () => {
             held -= 1
           }
-        },
-        documentCipher: () => null
+        }
       }
-    } as unknown as AppContext
+    })
     registerDocsIpc(ctx)
     const probe = `probe-${randomUUID()}`
     const dir = join(workspacePath, `${probe}-folder`)
@@ -454,12 +461,14 @@ describe('registerDocsIpc', () => {
     const token = ((await invoke(handlers, IPC.pickDocuments, 'folder')).result as { token: string }).token
     dialogState.result = { canceled: true, filePaths: [] }
     let release!: () => void
-    fsLog.slow = { probe, spinMs: 0, gate: new Promise<void>((r) => (release = r)) }
+    let walkParked!: () => void
+    const parked = new Promise<void>((r) => (walkParked = r))
+    fsLog.slow = { probe, spinMs: 0, gate: new Promise<void>((r) => (release = r)), parked: walkParked }
 
     const importP = invoke(handlers, IPC.importDocuments, [], { pickerToken: token })
-    // Let the walk reach the folder's gated readdir (its first awaits are the picked path's own
-    // stat/realpath), then lock the workspace underneath it and let the walk finish.
-    await new Promise((r) => setTimeout(r, 1))
+    // The walk reaches the folder's gated readdir (its first awaits are the picked path's own
+    // stat/realpath); the lock now lands MID-walk, provably, and then the walk finishes.
+    await within(parked, 'the walk parking on the gated readdir')
     unlocked = false
     release()
     await expect(importP).rejects.toThrow(/Workspace is locked\./)
@@ -479,30 +488,29 @@ describe('registerDocsIpc', () => {
     const { db, workspacePath } = freshWorkspace()
     let epoch = 1
     let held = 0
-    const ctx = {
-      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
+    const ctx = ctxWith(db, workspacePath, {
       workspace: {
-        isUnlocked: () => true,
         unlockEpoch: () => epoch,
         beginDocumentWork: () => {
           held += 1
           return () => {
             held -= 1
           }
-        },
-        documentCipher: () => null
+        }
       }
-    } as unknown as AppContext
+    })
     registerDocsIpc(ctx)
     const probe = `probe-${randomUUID()}`
     const dir = join(workspacePath, `${probe}-folder`)
     mkdirSync(dir)
     writeFileSync(join(dir, 'note.txt'), 'a note with enough words to index here please now')
     let release!: () => void
-    fsLog.slow = { probe, spinMs: 0, gate: new Promise<void>((r) => (release = r)) }
+    let walkParked!: () => void
+    const parked = new Promise<void>((r) => (walkParked = r))
+    fsLog.slow = { probe, spinMs: 0, gate: new Promise<void>((r) => (release = r)), parked: walkParked }
 
     const importP = invoke(handlers, IPC.importDocuments, [dir])
-    await new Promise((r) => setTimeout(r, 1))
+    await within(parked, 'the walk parking on the gated readdir') // the lock + re-unlock now land MID-walk
     epoch += 1 // the session this import was admitted into is gone
     release()
     await expect(importP).rejects.toThrow(/Workspace is locked\./)
@@ -531,7 +539,7 @@ describe('registerDocsIpc', () => {
 
     // The ACTIVE embedder reports a DIFFERENT id, so the indexed doc's vectors no longer match.
     const activeEmbedder = { ...createMockEmbedder(), id: 'a-different-model' } as Embedder
-    registerDocsIpc(ctxWith(db, workspacePath, activeEmbedder, /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath, { embedder: activeEmbedder }))
 
     const { result } = await invoke(handlers, IPC.listDocuments)
     const docs = result as DocumentInfo[]
@@ -546,22 +554,74 @@ describe('registerDocsIpc', () => {
 
   // ---- Phase C: import destination round-trip (plan §11.3) -------------------------
 
-  it('imports into Temporary (membership + lifecycle, NOT Library) via the destination option', async () => {
+  // The destination option threads through `sanitizeDestination` to the filing step: exactly one of
+  // Library / Temporary / the project holds the doc, with the matching lifecycle and (only for a chat
+  // attachment, C3) the conversation link. A malformed shape (a collection with no id) is the one input
+  // that reaches the sanitizer's default branch: it must file into Library and never throw.
+  it.each<{
+    name: string
+    options: (ids: { projectId: string; convId: string }) => ImportOptions | undefined
+    filed: 'library' | 'temporary' | 'project'
+    lifecycle: DocumentLifecycle
+    linked: boolean
+  }>([
+    {
+      name: 'Temporary',
+      options: () => ({ destination: { kind: 'temporary' } }),
+      filed: 'temporary',
+      lifecycle: 'temporary',
+      linked: false
+    },
+    {
+      name: 'a chat attachment (C3)',
+      options: ({ convId }) => ({ destination: { kind: 'conversation', conversationId: convId } }),
+      filed: 'temporary',
+      lifecycle: 'temporary',
+      linked: true
+    },
+    {
+      name: 'a project',
+      options: ({ projectId }) => ({ destination: { kind: 'collection', collectionId: projectId } }),
+      filed: 'project',
+      lifecycle: 'permanent',
+      linked: false
+    },
+    {
+      name: 'no options (Library, byte-for-byte)',
+      options: () => undefined,
+      filed: 'library',
+      lifecycle: 'permanent',
+      linked: false
+    },
+    {
+      name: 'a malformed destination (a collection with no id): Library, never a throw',
+      options: () => ({ destination: { kind: 'collection' } as unknown as ImportDestination }),
+      filed: 'library',
+      lifecycle: 'permanent',
+      linked: false
+    }
+  ])('files an import by its destination: $name', async ({ options, filed, lifecycle, linked }) => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
+    const projectId = createCollection(db, 'Tax 2025').id
+    const convId = createConversation(db, { mode: 'documents' }).id
     const file = join(workspacePath, 'invoice.txt')
-    writeFileSync(file, 'invoice total due 2026-01-31 alpha beta gamma')
+    writeFileSync(file, 'invoice total due 2026-01-31 alpha beta gamma delta')
 
-    const job = await runImport([file], { destination: { kind: 'temporary' } })
+    const job = await runImport([file], options({ projectId, convId }))
     const id = job.documentIds[0]
-    const { result } = await invoke(handlers, IPC.listDocuments)
-    const doc = (result as DocumentInfo[]).find((d) => d.id === id)!
+    const doc = ((await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]).find((d) => d.id === id)!
     expect(doc.status).toBe('indexed')
-    expect(doc.lifecycle).toBe('temporary')
-    const temp = getBuiltinCollection(db, 'temporary')!
-    const lib = getBuiltinCollection(db, 'library')!
-    expect(documentIdsInCollection(db, temp.id)).toContain(id)
-    expect(documentIdsInCollection(db, lib.id)).not.toContain(id) // stays out of Library
+    expect(doc.lifecycle ?? 'permanent').toBe(lifecycle)
+    const where = {
+      library: getBuiltinCollection(db, 'library')!.id,
+      temporary: getBuiltinCollection(db, 'temporary')!.id,
+      project: projectId
+    }
+    for (const [k, collectionId] of Object.entries(where)) {
+      expect(documentIdsInCollection(db, collectionId).includes(id), k).toBe(k === filed)
+    }
+    expect(conversationAttachmentIds(db, convId)).toEqual(linked ? [id] : [])
   })
 
   it('a throwing maybeEnqueueTreeBuild never fails the import or reindex (fire-and-forget)', async () => {
@@ -584,21 +644,16 @@ describe('registerDocsIpc', () => {
         }
       }
     )
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, docTasks))
+    registerDocsIpc(ctxWith(db, workspacePath, { docTasks }))
     const file = join(workspacePath, 'report.txt')
     writeFileSync(file, 'quarterly report alpha beta gamma delta epsilon')
 
     // Import path: the job completes with the doc INDEXED and ZERO failures despite the throw.
     const { result: imp } = await invoke(handlers, IPC.importDocuments, [file])
     const jobId = (imp as ImportJob).jobId
-    let status: ImportJobStatus | undefined
-    for (let i = 0; i < hangPolls(200, 5); i++) {
-      status = (await invoke(handlers, IPC.getImportJob, jobId)).result as ImportJobStatus
-      if (status.done) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
-    expect(status?.failed).toBe(0)
-    expect(status?.completed).toBe(1)
+    const status = await importDone(jobId)
+    expect(status.failed).toBe(0)
+    expect(status.completed).toBe(1)
     const id = (imp as ImportJob).documentIds[0]
     const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
     expect(listed.find((d) => d.id === id)!.status).toBe('indexed')
@@ -610,7 +665,7 @@ describe('registerDocsIpc', () => {
 
   it('startReindexAll runs the bulk loop in main, recoverable via parameterless getReindexAllJob', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const a = join(workspacePath, 'a.txt')
     const b = join(workspacePath, 'b.txt')
     writeFileSync(a, 'alpha beta gamma delta')
@@ -630,12 +685,7 @@ describe('registerDocsIpc', () => {
     expect(again.jobId).toBe(started.jobId)
 
     // Poll to completion, exactly as the renderer does.
-    let job = recovered
-    for (let i = 0; i < 200 && !job.done; i++) {
-      await new Promise((r) => setTimeout(r, 5))
-      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
-    }
-    expect(job.done).toBe(true)
+    const job = await reindexAllDone()
     expect(job.completed).toBe(2)
     expect(job.failed).toBe(0)
     const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
@@ -651,7 +701,7 @@ describe('registerDocsIpc', () => {
   it('cancelReindexAll stops the in-flight bulk loop deterministically (cancelled, completed===1)', async () => {
     const { db, workspacePath } = freshWorkspace()
     const { embedder, setGating, awaitParked, release } = perFileGatedEmbedder()
-    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath, { embedder }))
     const paths: string[] = []
     for (let i = 0; i < 6; i++) {
       const f = join(workspacePath, `f${i}.txt`)
@@ -669,16 +719,11 @@ describe('registerDocsIpc', () => {
 
     // The first document's re-embed parks. Cancel WHILE it is in flight, then release it: the loop
     // counts that one document, then breaks at the next boundary (`if (signal.aborted) break`).
-    await awaitParked()
+    await within(awaitParked(), 'the re-embed parking on the gate')
     await invoke(handlers, IPC.cancelReindexAll)
     release()
 
-    let job = started
-    for (let i = 0; i < 400 && !job.done; i++) {
-      await new Promise((r) => setTimeout(r, 5))
-      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
-    }
-    expect(job.done).toBe(true)
+    const job = await reindexAllDone()
     expect(job.cancelled).toBe(true)
     expect(job.completed).toBe(1) // exactly the one in-flight document — no wall-clock race
     expect(job.failed).toBe(0)
@@ -689,7 +734,7 @@ describe('registerDocsIpc', () => {
     // between listing and the loop reaching it), not abort the remainder with one generic error.
     // The settled counts still add up to total so the renderer's summary toast is honest.
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const paths: string[] = []
     for (let i = 0; i < 3; i++) {
       const f = join(workspacePath, `m${i}.txt`)
@@ -701,61 +746,14 @@ describe('registerDocsIpc', () => {
     // Delete the MIDDLE document so the loop hits the rejection with work still remaining.
     await invoke(handlers, IPC.deleteDocument, documentIds[1])
 
-    const started = (await invoke(handlers, IPC.startReindexAll, documentIds)).result as ReindexJobStatus
-    let job = started
-    for (let i = 0; i < 200 && !job.done; i++) {
-      await new Promise((r) => setTimeout(r, 5))
-      job = (await invoke(handlers, IPC.getReindexAllJob)).result as ReindexJobStatus
-    }
-    expect(job.done).toBe(true)
+    await invoke(handlers, IPC.startReindexAll, documentIds)
+    const job = await reindexAllDone()
     expect(job.cancelled).toBe(false)
     expect(job.completed).toBe(2) // the docs AFTER the rejection were still processed
     expect(job.failed).toBe(1)
     const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
     expect(listed.find((d) => d.id === documentIds[0])?.status).toBe('indexed')
     expect(listed.find((d) => d.id === documentIds[2])?.status).toBe('indexed')
-  })
-
-  it('imports a chat attachment: Temporary + a conversation_documents link (C3)', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
-    const conv = createConversation(db, { mode: 'documents' })
-    const file = join(workspacePath, 'drop.txt')
-    writeFileSync(file, 'a dropped file about widgets and gadgets')
-
-    const job = await runImport([file], {
-      destination: { kind: 'conversation', conversationId: conv.id }
-    })
-    const id = job.documentIds[0]
-    expect(conversationAttachmentIds(db, conv.id)).toEqual([id])
-    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'temporary')!.id)).toContain(id)
-  })
-
-  it('imports into a project (membership, NOT Library) via the collection destination', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
-    const project = createCollection(db, 'Tax 2025')
-    const file = join(workspacePath, 'receipt.txt')
-    writeFileSync(file, 'a receipt for the tax project filing')
-
-    const job = await runImport([file], {
-      destination: { kind: 'collection', collectionId: project.id }
-    })
-    const id = job.documentIds[0]
-    expect(documentIdsInCollection(db, project.id)).toContain(id)
-    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).not.toContain(id)
-  })
-
-  it('an options-less import still defaults to Library, byte-for-byte', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
-    const file = join(workspacePath, 'note.txt')
-    writeFileSync(file, 'a plain library note with several words to index')
-
-    const job = await runImport([file])
-    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).toContain(
-      job.documentIds[0]
-    )
   })
 
   // ---- M1 crash-resume through the REAL re-index flow (DM-1 / TEST-1) ---------------
@@ -777,7 +775,7 @@ describe('registerDocsIpc', () => {
       "UPDATE documents SET status = 'queued', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
     ).run(doc.id)
 
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
 
     // The first listDocuments runs the one-shot reconcile → the stuck row becomes `failed`,
     // and it is filed NOWHERE yet (its destination intent is still only the pending JSON).
@@ -836,9 +834,9 @@ describe('registerDocsIpc', () => {
 
   // ---- Phase E: docs:list smart-view predicates (plan §7.6/§12.1) ------------------
 
-  it('filters docs:list by each smart view and orders "recent" by createdAt desc', async () => {
+  it('filters docs:list by a smart view and orders "recent" by createdAt desc', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const project = createCollection(db, 'Tax 2025')
 
     // A project-filed doc (older) and a Library-default doc (newer).
@@ -854,8 +852,8 @@ describe('registerDocsIpc', () => {
     db.prepare("UPDATE documents SET created_at = '2025-01-01T00:00:00.000Z' WHERE id = ?").run(filedId)
     db.prepare("UPDATE documents SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(libId)
 
-    const list = async (smart: string): Promise<DocumentInfo[]> =>
-      (await invoke(handlers, IPC.listDocuments, { smart } as never)).result as DocumentInfo[]
+    const list = async (smart: SmartListView): Promise<DocumentInfo[]> =>
+      (await invoke(handlers, IPC.listDocuments, { smart })).result as DocumentInfo[]
 
     // Unfiled: the Library-only doc is "unfiled" (Library doesn't count); the project doc isn't.
     const unfiled = await list('unfiled')
@@ -867,25 +865,10 @@ describe('registerDocsIpc', () => {
     expect(recent[0].id).toBe(libId)
     expect(recent.findIndex((d) => d.id === libId)).toBeLessThan(recent.findIndex((d) => d.id === filedId))
 
-    // Large files: bump one doc's size past the threshold; only it shows.
-    db.prepare('UPDATE documents SET size_bytes = ? WHERE id = ?').run(LARGE_FILE_BYTES + 1, libId)
-    const large = await list('large')
-    expect(large.map((d) => d.id)).toEqual([libId])
-
-    // Failed imports: force one to failed.
-    db.prepare("UPDATE documents SET status = 'failed' WHERE id = ?").run(filedId)
-    const failed = await list('failed')
-    expect(failed.map((d) => d.id)).toEqual([filedId])
-
+    // (The per-view predicates themselves — large, failed, … — are `matchesSmartView`'s, owned by
+    // tests/unit/smart-views.test.ts; this pins the handler threading the filter through.)
     // 'all' is a no-op (returns everything non-deleted).
     expect((await list('all')).length).toBeGreaterThanOrEqual(2)
-  })
-
-  it('returns done:true for an unknown import job so a poller stops', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), true))
-    const { result } = await invoke(handlers, IPC.getImportJob, 'no-such-job')
-    expect(result).toMatchObject({ done: true, total: 0 })
   })
 
   // M-S2: the renderer is the untrusted boundary — a non-array `paths` (or non-string
@@ -893,10 +876,8 @@ describe('registerDocsIpc', () => {
   it('treats a malformed importDocuments paths arg as an empty import (no throw, lease released)', async () => {
     const { db, workspacePath } = freshWorkspace()
     let leaseDelta = 0
-    const ctx = {
-      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
+    const ctx = ctxWith(db, workspacePath, {
       workspace: {
-        isUnlocked: () => true,
         beginDocumentWork: () => {
           leaseDelta += 1
           return () => {
@@ -904,7 +885,7 @@ describe('registerDocsIpc', () => {
           }
         }
       }
-    } as unknown as AppContext
+    })
     registerDocsIpc(ctx)
 
     // A non-array arg and an array with a non-string element both reduce to no real files
@@ -914,9 +895,8 @@ describe('registerDocsIpc', () => {
     const mixed = await invoke(handlers, IPC.importDocuments, [42, null, '/nope.txt'] as unknown as string[])
     expect((mixed.result as { documentIds: string[] }).documentIds).toEqual([]) // /nope.txt absent → dropped
 
-    // The lease is released in the background loop's finally — let those microtasks run,
-    // then confirm no lease leaked (both acquire/release pairs balanced).
-    await new Promise((r) => setTimeout(r, 0))
+    // An empty job settles synchronously — the background loop has no await, so its `finally`
+    // released the lease before the invoke resolved. No acquire/release pair is left open.
     expect(leaseDelta).toBe(0)
   })
 
@@ -938,7 +918,7 @@ describe('registerDocsIpc', () => {
         return mock.embed(texts)
       }
     }
-    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath, { embedder }))
 
     const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-ing3-'))
     const f1 = join(dir, 'a.txt')
@@ -954,8 +934,7 @@ describe('registerDocsIpc', () => {
 
     // The aggregate job status: two completed, one failed — the failing file did not abort
     // the batch or the third file's import.
-    const jobId = (job as unknown as ImportJob).jobId
-    const { result: status } = await invoke(handlers, IPC.getImportJob, jobId)
+    const { result: status } = await invoke(handlers, IPC.getImportJob, job.jobId)
     expect(status).toMatchObject({ done: true, completed: 2, failed: 1 })
 
     // Per-file statuses by id (the source of truth): a + c indexed, b failed.
@@ -996,10 +975,7 @@ describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => 
   it('DB-1: import to a GHOST collection degrades to Library — indexed, audited, re-indexable', async () => {
     const { db, workspacePath } = freshWorkspace()
     const audit = vi.fn()
-    registerDocsIpc({
-      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
-      audit
-    } as unknown as AppContext)
+    registerDocsIpc(ctxWith(db, workspacePath, { audit }))
     const file = join(workspacePath, 'doc.txt')
     writeFileSync(file, 'a document filed into a collection id that does not exist any more here')
 
@@ -1049,7 +1025,7 @@ describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => 
       "UPDATE documents SET status = 'queued', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
     ).run(doc.id)
 
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
 
     // First list reconciles the prior-run stuck row → failed (filed nowhere yet).
     const before = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
@@ -1125,7 +1101,7 @@ describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => 
 
     let taskActive = true
     const docTasks = { hasActiveTask: () => taskActive, isDocumentBusy: () => false }
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, docTasks))
+    registerDocsIpc(ctxWith(db, workspacePath, { docTasks }))
 
     // TEETH: while a doc task is live the sweep is gated off → the row stays `embedding`.
     // Remove the `!taskActive` gate on `reconcileStuckDocuments` → this first list flips it.
@@ -1145,9 +1121,6 @@ describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => 
 // exactly what it returned, ignoring the renderer's `paths`); a forged/replayed token imports
 // nothing; the drag-drop seam (no token) is hardened (real file kept, symlink rejected).
 describe('registerDocsIpc — import path binding (D1)', () => {
-  const ctx = (db: Db, workspacePath: string): AppContext =>
-    ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true)
-
   async function pick(files: string[]): Promise<{ token: string; paths: string[] }> {
     dialogState.result = { canceled: false, filePaths: files }
     const { result } = await invoke(handlers, IPC.pickDocuments, 'files')
@@ -1156,21 +1129,25 @@ describe('registerDocsIpc — import path binding (D1)', () => {
 
   it('binds a PICKER import to the pickDocuments token (raw paths are ignored)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctx(db, workspacePath))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const dir = mkdtempSync(join(tmpdir(), 'hr-pick-'))
     const file = join(dir, 'picked.txt')
     writeFileSync(file, 'a picked library note with enough words to index here please')
+    const other = join(dir, 'other.txt')
+    writeFileSync(other, 'another real note the renderer names alongside the token here')
     const { token, paths } = await pick([file])
     expect(paths).toContain(file)
     expect(token).not.toBe('')
-    // Pass an EMPTY paths arg with the token: main imports what was picked, not what we passed.
-    const job = await runImport([], { pickerToken: token })
+    // Pass a DIFFERENT real file as the raw paths with the token: main imports what was picked, not what we passed.
+    const job = await runImport([other], { pickerToken: token })
     expect(job.documentIds).toHaveLength(1)
+    const titles = (db.prepare('SELECT title FROM documents').all() as Array<{ title: string }>).map((r) => r.title)
+    expect(titles).toEqual(['picked.txt'])
   })
 
   it('imports nothing for a forged/unknown token — even when raw paths name a real file', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctx(db, workspacePath))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const dir = mkdtempSync(join(tmpdir(), 'hr-forge-'))
     const file = join(dir, 'secret.txt')
     writeFileSync(file, 'a real, existing, supported-type file a renderer should not read at will')
@@ -1181,7 +1158,7 @@ describe('registerDocsIpc — import path binding (D1)', () => {
 
   it('treats a picker token as single-use (a replay imports nothing)', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctx(db, workspacePath))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const dir = mkdtempSync(join(tmpdir(), 'hr-once-'))
     const file = join(dir, 'once.txt')
     writeFileSync(file, 'a one-shot picked note with enough words to index here please now')
@@ -1192,7 +1169,7 @@ describe('registerDocsIpc — import path binding (D1)', () => {
 
   it('hardens the drag-drop seam (no token): keeps a real file, rejects a symlink', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctx(db, workspacePath))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const dir = mkdtempSync(join(tmpdir(), 'hr-drop-'))
     const real = join(dir, 'real.txt')
     writeFileSync(real, 'a genuinely dropped file with several indexable words here right now')
@@ -1219,28 +1196,6 @@ describe('registerDocsIpc — import path binding (D1)', () => {
 // Session 6 — Documents backend performance (DB-4, DB-5, DB-6, DB-7). Backend/perf only; sits on
 // top of Session 1's guards (shared files). Each test reddens if its fix is reverted.
 describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () => {
-  /** An embedder whose `embed` parks on a gate so an import job stays in-flight until released. */
-  function gatedEmbedder(): { embedder: Embedder; release: () => void; reached: () => boolean } {
-    const base = createMockEmbedder()
-    let release!: () => void
-    let reached = false
-    const gate = new Promise<void>((r) => {
-      release = r
-    })
-    const embedder: Embedder = {
-      id: base.id,
-      dimensions: base.dimensions,
-      embed: async (texts: string[]) => {
-        // `reached` flips the moment the import loop is AT the gated embed (about to park) — the
-        // deterministic "in-flight" gate tests poll instead of a fixed sleep (TS-1).
-        reached = true
-        await gate
-        return base.embed(texts)
-      }
-    }
-    return { embedder, release, reached: () => reached }
-  }
-
   // DB-4 (unit): the batch inserts one row per file, in order, sizes where statable. A nonexistent
   // path still queues a row (mirrors createQueuedDocument's insert-regardless) with a null size, so
   // no row is silently dropped and the id list aligns 1:1 with the input files.
@@ -1273,15 +1228,16 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
 
   // DB-4 (integration): a folder import queues EVERY row before the invoke RESOLVES — the batch
   // commits all N inserts in one BEGIN…COMMIT after the (asynchronous since #274) walk is awaited.
-  // Reverting to a lazy queue phase would make the count < N at resolution.
+  // Reverting to a lazy queue phase would make the count < N at resolution. The invoke names the
+  // FOLDER: the batch then sits behind the asynchronous walk (#274), which a file list never awaits.
   it('DB-4: a folder import queues all rows before importDocuments resolves', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const dir = mkdtempSync(join(tmpdir(), 'hr-batch-'))
     const files = Array.from({ length: 6 }, (_, i) => join(dir, `f${i}.txt`))
     files.forEach((f, i) => writeFileSync(f, `document number ${i} alpha beta gamma delta epsilon`))
 
-    const { result } = await invoke(handlers, IPC.importDocuments, files)
+    const { result } = await invoke(handlers, IPC.importDocuments, [dir])
     const job = result as ImportJob
     expect(job.documentIds).toHaveLength(6)
     // All six rows exist the instant the invoke returns — the batch queued them synchronously.
@@ -1294,19 +1250,17 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     expect(count).toBe(6)
 
     // Drive to completion so the lease/loop unwind cleanly, then confirm every row indexed.
-    for (let i = 0; i < hangPolls(200, 5); i++) {
-      const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
-      if ((s as ImportJobStatus).done) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await importDone(job.jobId)
     const docs = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
     expect(docs.filter((d) => job.documentIds.includes(d.id)).every((d) => d.status === 'indexed')).toBe(true)
   })
 
   // DB-5: on a mid-import poll (no `indexed` row) the embeddings⋈chunks join is pure waste — no
   // indexed row can be flagged stale. The early-out skips it; the chunk count is still correct and
-  // staleEmbeddings stays undefined. Teeth: a `db.prepare` spy proves the join SQL is never prepared.
-  it('DB-5: a mid-import list skips the embeddings join yet reports the chunk count', async () => {
+  // staleEmbeddings stays undefined. Teeth: a `db.prepare` counter proves the join SQL is never prepared,
+  // and the positive control (an `indexed` row whose vectors predate an embedder switch) shows the join
+  // DOES run then, and staleEmbeddings is built (the M7 path is unaffected by the early-out).
+  it('DB-5: a mid-import list skips the embeddings join yet reports the chunk count (an indexed row still joins and is flagged stale)', async () => {
     const { db, workspacePath } = freshWorkspace()
     const embedder = createMockEmbedder()
     const storeDir = documentsDir(workspacePath)
@@ -1318,42 +1272,24 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     await processDocument(db, storeDir, doc.id, { embedder })
     db.prepare("UPDATE documents SET status = 'embedding' WHERE id = ?").run(doc.id)
 
-    const JOIN_SQL = 'FROM embeddings e JOIN chunks c'
-    const prepareSpy = vi.spyOn(db, 'prepare')
-    const docs = listDocuments(db, embedder.id)
-    const joinPrepared = prepareSpy.mock.calls.some(
-      ([sql]) => typeof sql === 'string' && sql.includes(JOIN_SQL)
-    )
-    prepareSpy.mockRestore()
-
-    const info = docs.find((d) => d.id === doc.id)!
-    expect(info.chunkCount).toBeGreaterThan(0) // chunkCounts is always built — badge stays correct
-    expect(info.staleEmbeddings).toBeUndefined() // no indexed row → never flagged stale
+    const JOIN = /FROM embeddings e JOIN chunks c/
+    let docs: DocumentInfo[] = []
+    const midImport = await countPrepares(db, JOIN, async () => {
+      docs = listDocuments(db, embedder.id)
+    })
+    expect(docs.find((d) => d.id === doc.id)!.chunkCount).toBeGreaterThan(0) // chunkCounts is always built — badge stays correct
+    expect(docs.find((d) => d.id === doc.id)!.staleEmbeddings).toBeUndefined() // no indexed row → never flagged stale
     // TEETH: revert the `!force && rows.some(indexed)` guard → the full-corpus join runs on the poll.
-    expect(joinPrepared).toBe(false)
-  })
+    expect(midImport).toBe(0)
 
-  // DB-5 negative control: with an `indexed` row whose vectors predate an embedder switch, the join
-  // DOES run and staleEmbeddings is built (the M7 path is unaffected by the early-out).
-  it('DB-5: an indexed row still builds embeddedCounts and can be flagged stale', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    const indexer = createMockEmbedder()
-    const storeDir = documentsDir(workspacePath)
-    const file = join(workspacePath, 'kept.txt')
-    writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta')
-    const doc = createQueuedDocument(db, file)
-    await processDocument(db, storeDir, doc.id, { embedder: indexer })
-
-    const JOIN_SQL = 'FROM embeddings e JOIN chunks c'
-    const prepareSpy = vi.spyOn(db, 'prepare')
+    // Positive control on the SAME connection: the join is prepareCached (compiled once per connection), so seeing it
+    // compiled now also proves nothing earlier had compiled it — the negative above had teeth.
+    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run(doc.id)
     // The ACTIVE embedder reports a DIFFERENT id → the indexed doc's vectors no longer match.
-    const docs = listDocuments(db, 'a-different-model')
-    const joinPrepared = prepareSpy.mock.calls.some(
-      ([sql]) => typeof sql === 'string' && sql.includes(JOIN_SQL)
-    )
-    prepareSpy.mockRestore()
-
-    expect(joinPrepared).toBe(true) // an indexed row is present → the join is NOT skipped
+    const indexed = await countPrepares(db, JOIN, async () => {
+      docs = listDocuments(db, 'a-different-model')
+    })
+    expect(indexed).toBeGreaterThan(0) // an indexed row is present → the join is NOT skipped
     expect(docs.find((d) => d.id === doc.id)!.staleEmbeddings).toBe(true)
   })
 
@@ -1361,7 +1297,7 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
   // evicted → getImportJob returns the synthetic done:true; the newest keeps its real counts.
   it('DB-6: the jobs map is capped — the oldest done job is evicted, the newest survives', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const file = join(workspacePath, 'x.txt')
     writeFileSync(file, 'one small indexable document alpha beta gamma delta epsilon zeta')
     const jobIds: string[] = []
@@ -1381,13 +1317,13 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
   it('DB-6: an in-flight import job is never evicted by newer jobs', async () => {
     const { db, workspacePath } = freshWorkspace()
     const { embedder, release, reached } = gatedEmbedder()
-    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath, { embedder }))
     const file = join(workspacePath, 'slow.txt')
     writeFileSync(file, 'a slow-to-embed document alpha beta gamma delta epsilon zeta eta theta')
 
     // Start a real import; its embed parks on the gate, so the job stays in-flight (done:false).
     const gated = (await invoke(handlers, IPC.importDocuments, [file])).result as ImportJob
-    while (!reached()) await new Promise((r) => setTimeout(r, 1)) // loop is AT the gated embed (TS-1)
+    await until(reached, 'the import loop reaching the gated embed') // loop is AT the gated embed (TS-1)
     // Fire 16 EMPTY imports (instantly done) to exceed IMPORT_JOB_CAP with the gated job the oldest.
     for (let i = 0; i < 16; i++) await invoke(handlers, IPC.importDocuments, [])
 
@@ -1399,11 +1335,7 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     // gated one → it is evicted → getImportJob returns synthetic done:true → this reddens.
 
     release() // let the gated embed resolve, then drain so the loop/lease unwind cleanly
-    for (let i = 0; i < hangPolls(200, 5); i++) {
-      const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
-      if (s.done) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await importDone(gated.jobId)
   })
 
   // DB-7: the export text reader decrypts via decryptFileAsync (PERF-1), NOT the sync decryptFile;
@@ -1452,59 +1384,30 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
 // Tests only; each reddens if the guard/mechanism it pins regresses.
 describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/T-4)', () => {
   // T-3 (processing gate): while a document is being ingested it sits in `processing`, so
-  // delete / reindex / preview must all refuse with the friendly "still being processed" copy —
-  // the docs-side mirror of the chat "refuses to delete while streaming" test. A gated embedder
-  // parks the import at the embed phase so the row stays in `processing` for the assertions.
-  it('T-3: a document in `processing` blocks delete, reindex AND preview (still being processed)', async () => {
+  // delete / reindex / preview / the #90 original export must all refuse with the friendly "still being
+  // processed" copy — the docs-side mirror of the chat "refuses to delete while streaming" test. A gated
+  // embedder parks the import at the embed phase so the row stays in `processing` for the assertions.
+  // (The task-busy half — and its preview negative control — is doctasks-ipc.test.ts's 'busy-document
+  // guard', over a REAL DocTaskManager.)
+  it('T-3: a document in `processing` blocks delete, reindex, preview and original export (still being processed)', async () => {
     const { db, workspacePath } = freshWorkspace()
     const { embedder, release, reached } = gatedEmbedder()
-    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath, { embedder }))
     const file = join(workspacePath, 'slow.txt')
     writeFileSync(file, 'a slow-to-embed document alpha beta gamma delta epsilon zeta eta theta iota')
 
     const gated = (await invoke(handlers, IPC.importDocuments, [file])).result as ImportJob
     const id = gated.documentIds[0]
     // Loop is AT the gated embed → id in `processing` (deterministic gate, no fixed sleep — TS-1).
-    while (!reached()) await new Promise((r) => setTimeout(r, 1))
+    await until(reached, 'the import loop reaching the gated embed')
 
-    await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/still being processed/)
-    await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/still being processed/)
-    await expect(invoke(handlers, IPC.previewDocument, id)).rejects.toThrow(/still being processed/)
+    for (const channel of [IPC.deleteDocument, IPC.reindexDocument, IPC.previewDocument, IPC.exportDocumentOriginal]) {
+      await expect(invoke(handlers, channel, id), channel).rejects.toThrow(/still being processed/)
+    }
 
     // Release + drain so the loop/lease unwind cleanly (no leak into the next test).
     release()
-    for (let i = 0; i < hangPolls(400, 5); i++) {
-      const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
-      if (s.done) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
-  })
-
-  // T-3 (task-busy gate + negative control): a live doc task (summary/deep-index/translation)
-  // reports `isDocumentBusy → true`, so delete + reindex must refuse with "a task is running" —
-  // but previewDocument consults ONLY `requireNotProcessing`, NOT the task gate, so it still
-  // resolves. That asymmetry (preview is read-only, doesn't rewrite the stored copy) is the point.
-  it('T-3: a live doc-task blocks delete/reindex (task is running) but NOT preview (negative control)', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    let busy = false
-    const docTasks = {
-      isDocumentBusy: () => busy,
-      hasActiveTask: () => false,
-      maybeEnqueueTreeBuild: () => {}
-    }
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, docTasks))
-    const file = join(workspacePath, 'doc.txt')
-    writeFileSync(file, 'a document with enough words to index for the task-busy guard test right here')
-    const { documentIds } = await runImport([file])
-    const id = documentIds[0]
-
-    // A task now holds the document.
-    busy = true
-    await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/task is running/i)
-    await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/task is running/i)
-    // NEGATIVE CONTROL: preview is not gated on the task → it resolves with real content.
-    const preview = (await invoke(handlers, IPC.previewDocument, id)).result as DocumentPreview
-    expect(preview.segments.length).toBeGreaterThan(0)
+    await importDone(gated.jobId)
   })
 
   // GAP-5 (full-audit 2026-07-11) — the requireNoActiveTask mirror for SKILL runs: an in-flight run
@@ -1514,14 +1417,14 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
   it('GAP-5: a live skill run blocks delete/reindex with the friendly busy copy', async () => {
     const { db, workspacePath } = freshWorkspace()
     let skillBusy = false
-    const ctx = {
-      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true, {
+    const ctx = ctxWith(db, workspacePath, {
+      docTasks: {
         isDocumentBusy: () => false,
         hasActiveTask: () => false,
         maybeEnqueueTreeBuild: () => {}
-      }),
+      },
       skillRunActive: (documentId: string) => skillBusy && typeof documentId === 'string'
-    } as unknown as AppContext
+    })
     registerDocsIpc(ctx)
     const file = join(workspacePath, 'statement.txt')
     writeFileSync(file, 'a bank statement with enough words to index for the skill-run guard test here')
@@ -1559,8 +1462,8 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
         return out
       }
     }
-    const ctx = {
-      ...ctxWith(db, workspacePath, embedder, /* unlocked */ true),
+    const ctx = ctxWith(db, workspacePath, {
+      embedder,
       workspace: {
         isUnlocked: () => unlocked,
         beginDocumentWork: () => {
@@ -1568,10 +1471,9 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
           return () => {
             leaseDelta -= 1
           }
-        },
-        documentCipher: () => null
+        }
       }
-    } as unknown as AppContext
+    })
     registerDocsIpc(ctx)
 
     const f0 = join(workspacePath, 'f0.txt')
@@ -1584,13 +1486,7 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
 
     // Drive to done via getImportJob (it needs NO unlock, unlike listDocuments) since the workspace
     // locks itself mid-job.
-    let status: ImportJobStatus = { jobId: job.jobId, total: 2, completed: 0, failed: 0, done: false }
-    for (let i = 0; i < hangPolls(400, 5); i++) {
-      status = (await invoke(handlers, IPC.getImportJob, job.jobId)).result as ImportJobStatus
-      if (status.done) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
-    expect(status.done).toBe(true)
+    const status = await importDone(job.jobId)
     expect(status.completed).toBe(1) // only f0 finished before the lock landed
     expect(status.failed).toBe(0)
 
@@ -1639,21 +1535,11 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
 // The timed-out body then ran on into the next test's handlers, hence the misleading
 // `Unknown document` rejection in that log. The budget is now `testBudgetMs` (CI-aware).
 describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
-  async function waitTerminal(manager: DocTaskManager, jobId: string): Promise<string> {
-    const start = Date.now()
-    for (;;) {
-      const s = manager.getDocTask(jobId)
-      if (['done', 'failed', 'cancelled'].includes(s.state)) return s.state
-      if (Date.now() - start > hangBudgetMs(30_000)) throw new Error(`task never finished: ${s.state}`)
-      await new Promise((r) => setTimeout(r, 10))
-    }
-  }
-
   it('refuses startDocTask("ocr") while a gated re-index holds the document; admits after release', async () => {
     const { db, workspacePath } = freshWorkspace()
     const storeDir = documentsDir(workspacePath)
     const g = perFileGatedEmbedder()
-    const ctx = ctxWith(db, workspacePath, g.embedder, /* unlocked */ true)
+    const ctx = ctxWith(db, workspacePath, { embedder: g.embedder })
     registerDocsIpc(ctx)
     const engine: OcrEngine = {
       id: 'fake-tesseract',
@@ -1667,19 +1553,15 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     }
     // The live wiring shape: the predicate reads ctx late-bound (registerDocsIpc assigned
     // `ctx.docIngestionActive` above), exactly like main/index.ts.
-    const manager = new DocTaskManager({
-      getDb: () => db,
-      getRuntime: () => null,
-      getTranslator: () => null,
-      isChatStreaming: () => false,
-      getContextTokens: () => 4096,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({ embedder: g.embedder }),
-      beginDocumentWork: () => () => {},
-      getOcrEngine: () => engine,
-      rasterizePdf: rasterize,
-      isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false
-    })
+    const manager = docTaskManager(
+      { root: workspacePath, db, storeDir },
+      {
+        getIngestionDeps: () => ({ embedder: g.embedder }),
+        getOcrEngine: () => engine,
+        rasterizePdf: rasterize,
+        isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false
+      }
+    )
     ctx.docTasks = manager
 
     // A scan-detected PDF, made searchable once — the already-OCR'd re-run target, the one
@@ -1689,12 +1571,12 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     const info = createQueuedDocument(db, p)
     await processDocument(db, storeDir, info.id)
     const first = manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })
-    expect(await waitTerminal(manager, first.jobId)).toBe('done')
+    expect((await waitTerminal(manager, first.jobId, 30_000)).state).toBe('done')
 
     // Gate the embedder and park a re-index mid-embed — the doc sits in `processing`.
     g.setGating(true)
     const reindexP = invoke(handlers, IPC.reindexDocument, info.id)
-    await g.awaitParked()
+    await within(g.awaitParked(), 'the re-embed parking on the gate')
     expect(() => manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })).toThrow(
       TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
     )
@@ -1702,7 +1584,7 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     await reindexP
     // After the re-index settles, the redo admits and completes normally (no over-eager guard).
     const redo = manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })
-    expect(await waitTerminal(manager, redo.jobId)).toBe('done')
+    expect((await waitTerminal(manager, redo.jobId, 30_000)).state).toBe('done')
   }, testBudgetMs(60_000))
 })
 
@@ -1718,33 +1600,22 @@ describe('auto deep-index enqueue at import with a runtime up (#158 / DT-3)', ()
   it('the import-loop offer survives the wired BE-1 guard and enqueues the tree task', async () => {
     const { db, workspacePath } = freshWorkspace()
     const storeDir = documentsDir(workspacePath)
-    const ctx = ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true)
+    const ctx = ctxWith(db, workspacePath)
     registerDocsIpc(ctx)
     // A chat runtime IS up — the branch that enqueues a real tree task (the no-runtime
     // branch writes `tree_status='pending'` before any guard and never had the bug).
-    const runtime = {
-      modelId: 'chat-model',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      async *chatStream(): AsyncGenerator<string> {
-        yield 'ok'
-      }
-    }
+    const runtime = docTaskRuntime()
     // The live wiring shape (main/index.ts): the guard reads ctx late-bound.
-    const manager = new DocTaskManager({
-      getDb: () => db,
-      getRuntime: () => runtime,
-      getTranslator: () => null,
-      isChatStreaming: () => false,
-      // Small context ⇒ ~200-word summary windows ⇒ a ~3,000-word doc exceeds the 12-window
-      // ceiling (`planSummaryWindows().truncated`) and qualifies for the auto tree build.
-      getContextTokens: () => 1024,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({}),
-      beginDocumentWork: () => () => {},
-      isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false
-    })
+    const manager = docTaskManager(
+      { root: workspacePath, db, storeDir },
+      {
+        getRuntime: () => runtime,
+        // Small context ⇒ ~200-word summary windows ⇒ a ~3,000-word doc exceeds the 12-window
+        // ceiling (`planSummaryWindows().truncated`) and qualifies for the auto tree build.
+        getContextTokens: () => 1024,
+        isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false
+      }
+    )
     ctx.docTasks = manager
     const startSpy = vi.spyOn(manager, 'startDocTask')
 
@@ -1762,7 +1633,7 @@ describe('auto deep-index enqueue at import with a runtime up (#158 / DT-3)', ()
 
     // Hygiene: don't leak the enqueued build past the test.
     manager.cancelAllDocTasks()
-    await manager.awaitActiveTaskSettled()
+    await within(manager.awaitActiveTaskSettled(), 'the cancelled tree build settling')
   }, testBudgetMs(60_000))
 })
 
@@ -1800,15 +1671,13 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     const release = vi.fn()
     const beginDocumentWork = vi.fn(() => release)
     const audit = vi.fn()
-    const ctx = ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true)
-    ;(ctx.workspace as unknown as { beginDocumentWork: unknown }).beginDocumentWork = beginDocumentWork
-    ;(ctx as unknown as { audit: unknown }).audit = audit
-    registerDocsIpc(ctx)
+    registerDocsIpc(ctxWith(db, workspacePath, { workspace: { beginDocumentWork }, audit }))
 
     const { path, bytes } = binaryishSource(workspacePath, 'notes.txt')
     const job = await runImport([path])
     const id = job.documentIds[0]
     beginDocumentWork.mockClear() // the import loop held it too — count the EXPORT's hold alone
+    release.mockClear() // …and released it through the same shared `release`
 
     const dest = join(workspacePath, 'exported-notes.txt')
     saveDialogState.result = { canceled: false, filePath: dest }
@@ -1834,20 +1703,27 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     expect(Object.keys(meta)).toEqual(['documentId'])
     // The read was serialized against a password-change re-key (the import-job posture).
     expect(beginDocumentWork).toHaveBeenCalledTimes(1)
-    expect(release).toHaveBeenCalled()
+    expect(release).toHaveBeenCalledTimes(1)
   })
 
   it('exports the original of an ENCRYPTED stored doc and shreds the decrypt transient', async () => {
     const { db, workspacePath } = freshWorkspace()
     const storeDir = documentsDir(workspacePath)
-    const copy = (src: string, dest: string): void => writeFileSync(dest, readFileSync(src))
+    // A NON-identity fake cipher (XOR): an export that skipped the decrypt would hand back the
+    // scrambled `.enc` bytes, which the byte-equality check below then catches.
+    const flip = (src: string, dest: string): void =>
+      writeFileSync(dest, Buffer.from(readFileSync(src).map((b) => b ^ 0x5a)))
+    const decryptDests: string[] = []
     const cipher: DocumentCipher = {
-      encryptFile: copy,
-      decryptFile: copy,
-      encryptFileAsync: async (src, dest) => copy(src, dest),
-      decryptFileAsync: async (src, dest) => copy(src, dest)
+      encryptFile: flip,
+      decryptFile: flip,
+      encryptFileAsync: async (src, dest) => flip(src, dest),
+      decryptFileAsync: async (src, dest) => {
+        decryptDests.push(dest)
+        flip(src, dest)
+      }
     }
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), true, undefined, cipher))
+    registerDocsIpc(ctxWith(db, workspacePath, { cipher }))
 
     const { path, bytes } = binaryishSource(workspacePath, 'contract.txt')
     const job = await runImport([path])
@@ -1855,22 +1731,24 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     // The stored copy is the `.enc` artifact; the on-disk original is now redundant.
     expect(readdirSync(storeDir).every((n) => n.endsWith(ENCRYPTED_DOC_SUFFIX))).toBe(true)
     rmSync(path)
+    decryptDests.length = 0 // count the EXPORT's decrypt alone
 
     const dest = join(workspacePath, 'exported-contract.txt')
     saveDialogState.result = { canceled: false, filePath: dest }
     const { result } = await invoke(handlers, IPC.exportDocumentOriginal, id)
     expect(result).toBe(dest)
+    // Byte-for-byte the ORIGINAL — only possible if the `.enc` copy was decrypted.
     expect(readFileSync(dest).equals(bytes)).toBe(true)
-    // The decrypt transient (`.parse-export-bin-*`) was shredded — only the `.enc` remains.
+    // The export decrypted into one transient (`.parse-export-bin-*`) and shredded it — only the `.enc` remains.
+    expect(decryptDests).toHaveLength(1)
+    expect(existsSync(decryptDests[0])).toBe(false)
     expect(readdirSync(storeDir).every((n) => n.endsWith(ENCRYPTED_DOC_SUFFIX))).toBe(true)
   })
 
   it('cancel in the save dialog returns null: no file, no audit event', async () => {
     const { db, workspacePath } = freshWorkspace()
     const audit = vi.fn()
-    const ctx = ctxWith(db, workspacePath, createMockEmbedder(), true)
-    ;(ctx as unknown as { audit: unknown }).audit = audit
-    registerDocsIpc(ctx)
+    registerDocsIpc(ctxWith(db, workspacePath, { audit }))
     const { path } = binaryishSource(workspacePath, 'notes.txt')
     const job = await runImport([path])
     audit.mockClear()
@@ -1881,17 +1759,9 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     expect(audit).not.toHaveBeenCalled()
   })
 
-  it('refuses cleanly while the workspace is locked', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ false))
-    await expect(invoke(handlers, IPC.exportDocumentOriginal, 'any-id')).rejects.toThrow(
-      /Workspace is locked/
-    )
-  })
-
   it('missing stored copy AND missing original → the clear "no longer on disk" error', async () => {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     const { path } = binaryishSource(workspacePath, 'gone.txt')
     const job = await runImport([path])
     const id = job.documentIds[0]
@@ -1906,27 +1776,6 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
       /no longer on disk/
     )
   })
-
-  it('refuses while the document is still being processed (the T-3 gate)', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    const { embedder, release, reached } = gatedEmbedder()
-    registerDocsIpc(ctxWith(db, workspacePath, embedder, true))
-    const { path } = binaryishSource(workspacePath, 'slow.txt')
-    const gated = (await invoke(handlers, IPC.importDocuments, [path])).result as ImportJob
-    const id = gated.documentIds[0]
-    while (!reached()) await new Promise((r) => setTimeout(r, 1))
-
-    await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(
-      /still being processed/
-    )
-
-    release()
-    for (let i = 0; i < hangPolls(200, 5); i++) {
-      const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
-      if (s.done) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
-  })
 })
 
 // #570 / #571: a scan attached in a chat fails (scan detected) and is NOT filed — no link (N4),
@@ -1937,18 +1786,19 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
 describe('a scan attached in a chat, then made searchable in Documents (#570, #571)', () => {
   async function scanAttachedToChat(): Promise<{
     db: Db
+    workspacePath: string
     storeDir: string
     convId: string
     id: string
   }> {
     const { db, workspacePath } = freshWorkspace()
-    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    registerDocsIpc(ctxWith(db, workspacePath))
     // The attach-born chat's D71 scope: empty and explicit, narrowed by its attachments.
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
     const file = join(workspacePath, 'scan.pdf')
     writeFileSync(file, makeScanOnlyPdf(2))
     const job = await runImport([file], { destination: { kind: 'conversation', conversationId: conv.id } })
-    return { db, storeDir: documentsDir(workspacePath), convId: conv.id, id: job.documentIds[0] }
+    return { db, workspacePath, storeDir: documentsDir(workspacePath), convId: conv.id, id: job.documentIds[0] }
   }
   const pendingOf = (db: Db, id: string): string | null =>
     (db.prepare('SELECT pending_destination_json FROM documents WHERE id = ?').get(id) as {
@@ -1966,7 +1816,7 @@ describe('a scan attached in a chat, then made searchable in Documents (#570, #5
   })
 
   it('OCR from Documents links it to that chat by itself — Temporary, not Library, intent cleared', async () => {
-    const { db, storeDir, convId, id } = await scanAttachedToChat()
+    const { db, workspacePath, storeDir, convId, id } = await scanAttachedToChat()
     const engine: OcrEngine = {
       id: 'fake-tesseract',
       languages: ['deu', 'eng'],
@@ -1977,26 +1827,16 @@ describe('a scan attached in a chat, then made searchable in Documents (#570, #5
       for (let n = 1; n <= 2; n++) await o.onPage(n, Buffer.from([n]))
       return { pageCount: 2 }
     }
-    const manager = new DocTaskManager({
-      getDb: () => db,
-      getRuntime: () => null,
-      getTranslator: () => null,
-      isChatStreaming: () => false,
-      getContextTokens: () => 4096,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({ embedder: createMockEmbedder() }),
-      beginDocumentWork: () => () => {},
-      getOcrEngine: () => engine,
-      rasterizePdf: rasterize
-    })
+    const manager = docTaskManager(
+      { root: workspacePath, db, storeDir },
+      {
+        getIngestionDeps: () => ({ embedder: createMockEmbedder() }),
+        getOcrEngine: () => engine,
+        rasterizePdf: rasterize
+      }
+    )
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [id] })
-    const start = Date.now()
-    let state = manager.getDocTask(jobId).state
-    while (!['done', 'failed', 'cancelled'].includes(state)) {
-      if (Date.now() - start > hangBudgetMs(30_000)) throw new Error(`OCR task never finished: ${state}`)
-      await new Promise((r) => setTimeout(r, 10))
-      state = manager.getDocTask(jobId).state
-    }
+    const { state } = await waitTerminal(manager, jobId, 30_000)
     expect(state).toBe('done')
 
     const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]

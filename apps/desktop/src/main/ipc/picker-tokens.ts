@@ -19,8 +19,6 @@ export interface PickerTokens<T> {
   peek(token: unknown): T | undefined
   /** Spend the token and return its value; `undefined` for junk/unknown/spent. */
   consume(token: unknown): T | undefined
-  /** Live (unconsumed, unevicted) tokens. */
-  size(): number
 }
 
 export function createPickerTokens<T>(cap: number = PICKER_TOKEN_CAP): PickerTokens<T> {
@@ -48,9 +46,6 @@ export function createPickerTokens<T>(cap: number = PICKER_TOKEN_CAP): PickerTok
       const value = map.get(key)
       map.delete(key)
       return value
-    },
-    size() {
-      return map.size
     }
   }
 }

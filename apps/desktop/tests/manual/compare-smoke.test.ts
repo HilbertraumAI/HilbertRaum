@@ -18,8 +18,8 @@ import type { ChatMessage } from '../../src/main/services/runtime'
 
 // MANUAL R-T2 smoke, comparison half (Phase 35, wave-3 plan §14) — NOT CI.
 //
-// Runs the REAL pinned b9585 + a real chat GGUF (Qwen3-4B on the provisioned dev-box
-// drive) over representative comparison calls USING THE SHIPPING PROMPTS
+// Runs the REAL pinned llama-server (b9585 at the R-T2 run, 2026-06-11) + a real chat GGUF
+// (Qwen3-4B on the provisioned dev-box drive) over representative comparison calls USING THE SHIPPING PROMPTS
 // (compareSystemPrompt / compareFullPrompt / comparePairPrompt / compareReducePrompt /
 // COMPARE_TEMPERATURE) and records, for the plan §14 findings table:
 //   1. format adherence of the four-section report (mode a) over two FULL short docs —
@@ -195,7 +195,7 @@ const REDUCE_NOTES = [
     '- Only in B: An annual maintenance fee of 1,200 EUR, invoiced each January.'
 ]
 
-describe.skipIf(!enabled)('R-T2 (comparison half): real b9585 structured-compare behavior (manual)', () => {
+describe.skipIf(!enabled)('R-T2 (comparison half): real llama-server structured-compare behavior (manual)', () => {
   it(
     'runs the shipping prompts over representative comparisons and records the findings',
     { timeout: 1_200_000 },

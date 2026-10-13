@@ -43,9 +43,7 @@ import { useT, type I18n } from '../i18n'
 import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
 // DX-3 split (full-audit-2026-06-29 follow-up Phase 8): the per-row component, the section rail,
 // the preview modal, and the pure formatters now live in sibling `./documents/*` files —
-// relocation only, behavior unchanged. Re-exported below so the existing test import sites
-// (`friendlyMimeLabel` / `isRetryableFailure` / `__docRowRenderCounts` / the localStorage keys)
-// keep resolving against `DocumentsScreen`.
+// relocation only, behavior unchanged.
 import { DocRow } from './documents/DocRow'
 import { SectionRail } from './documents/SectionRail'
 import { PacksPanel } from './documents/PacksPanel'
@@ -66,9 +64,6 @@ import {
   type DocumentsMode,
   type RailCounts
 } from './documents/types'
-
-export { friendlyMimeLabel, isRetryableFailure, __docRowRenderCounts } from './documents/format'
-export { RAIL_COLLAPSED_KEY, LOCATIONS_MORE_KEY } from './documents/types'
 
 // F-31 (audit 2026-07-16): during a bulk import (or a re-index-all) files settle on almost every 400 ms
 // poll tick, and the completion-triggered `refresh()` re-runs the registered PF-5 whole-library

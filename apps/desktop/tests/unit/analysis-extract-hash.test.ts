@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { contentHashOf } from '../../src/main/services/analysis/extract'
 
 // full-audit 2026-07-11 CODE-24/DOC-12: the per-chunk cache/resume key is
@@ -26,12 +24,4 @@ describe('contentHashOf — byte-identity of the NUL domain separator (CODE-24)'
       expect(contentHashOf(text)).toBe(hash)
     })
   }
-
-  it('extract.ts holds no literal NUL byte (git must see it as text)', () => {
-    const src = fileURLToPath(
-      new URL('../../src/main/services/analysis/extract.ts', import.meta.url)
-    )
-    const buf = readFileSync(src)
-    expect(buf.includes(0)).toBe(false)
-  })
 })

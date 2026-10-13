@@ -112,11 +112,11 @@ export interface DocTaskDeps {
    */
   beginOccupancy?: () => () => void
   /**
-   * Overrides for the model-slot arbiter's post-chat resume delay (#399 D3(a)) — the ONLY
-   * reason this exists is that the delay is 90 seconds of wall clock, which no test can wait
-   * out. Tests inject a fake clock + timer here so the pause/resume contract is still exercised
-   * end to end through this manager. Absent/unwired ⇒ the shipped 90 s / 10 min constants, so
-   * partial test deps stay valid. Production never sets it.
+   * The model-slot arbiter's clock (`now` / `setTimer` / `clearTimer`) for the post-chat resume
+   * delay (#399 D3(a)) — the ONLY reason this exists is that the delay is 90 seconds of wall
+   * clock, which no test can wait out. Tests inject a fake clock + timer here so the pause/resume contract is still exercised
+   * end to end through this manager. It carries only the clock: the 90 s delay and the 10 min cap
+   * are always the shipped constants. Absent/unwired ⇒ the real clock. Production never sets it.
    */
   slotArbiterDeps?: ModelSlotArbiterDeps
   audit?: AuditRecorder

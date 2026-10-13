@@ -27,7 +27,8 @@ const ctx = {
   db: { marker: 'db' },
   paths: { workspacePath: '/ws' },
   workspace: { documentCipher: () => 'cipher' },
-  ocrEngine: 'ocr'
+  ocrEngine: 'ocr',
+  plaintextOps: 'plaintextOps'
 } as unknown as AppContext
 
 // The ExtractPreviewOptions is the 5th positional arg to extractDocumentPreview.
@@ -48,19 +49,14 @@ describe('buildDocumentSegmentReader', () => {
     expect(optsOf(calls.preview[2])).toEqual({})
   })
 
-  it('passes the resolved store dir, db, cipher and OCR engine through', async () => {
+  it('passes the store dir, db, cipher, OCR engine and plaintext-ops registry through and maps segments to DocumentChunkRead', async () => {
     const read = buildDocumentSegmentReader(ctx)
-    await read('doc-1', { layout: true })
+    const segments = await read('doc-1', { layout: true })
     const [db, storeDir, documentId, deps] = calls.preview[0]
     expect(db).toBe(ctx.db)
     expect(storeDir).toBe('/ws/store')
     expect(documentId).toBe('doc-1')
-    expect(deps).toEqual({ cipher: 'cipher', ocrEngine: 'ocr' })
-  })
-
-  it('maps preview segments to DocumentChunkRead (text/page/index)', async () => {
-    const read = buildDocumentSegmentReader(ctx)
-    const segments = await read('doc-1', { layout: true })
+    expect(deps).toEqual({ cipher: 'cipher', ocrEngine: 'ocr', plaintextOps: 'plaintextOps' })
     expect(segments).toEqual([{ text: 'row one', page: 3, index: 0 }])
   })
 })

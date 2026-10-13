@@ -3,17 +3,21 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
-import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { AppStatus, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { hangBudgetMs } from '../helpers/hang-budget'
+import { appStatus as baseAppStatus } from '../helpers/status'
 
 // Phase 34 renderer tests, reworked at TG-3 (translategemma plan D5/O2): the Translate row
 // action now opens a SOURCE + TARGET select pair over the curated 10-language set
 // (native-name labels), passes sourceLang in the startTask params, disables the primary
-// button for a same-language pair, remembers the session's last choice, and — when the
+// button for a same-language pair, keeps the chosen pair across a modal reopen, and — when the
 // translation model is not installed — disables the row item and offers the install deep
-// link to the AI Model screen. The polling busy state ("Translating… (n/m)") + cancel, the
-// new document with its provenance line, and Export are unchanged.
+// link to the AI Model screen. The polling busy state ("Translating… (n/m)"), the
+// new document with its provenance line, and Export are unchanged. The row Cancel and the
+// failed-task banner are kind-agnostic (DocumentSummary 'cancelling the busy task…',
+// DocumentsScreenPolish DR-7).
 
 function doc(over: Partial<DocumentInfo> = {}): DocumentInfo {
   return {
@@ -56,9 +60,7 @@ function task(over: Partial<DocTaskStatus> = {}): DocTaskStatus {
 }
 
 /** An AppStatus stub with the translation sidecar available unless overridden. */
-function appStatus(over: Partial<AppStatus> = {}): AppStatus {
-  return { ocrAvailable: false, translationAvailable: true, ...over } as AppStatus
-}
+const appStatus = (over: Partial<AppStatus> = {}): AppStatus => baseAppStatus({ translationAvailable: true, ...over })
 
 /** Open the per-row "⋯" overflow and click Translate (the modal opens). */
 async function openTranslateModal(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -88,7 +90,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup()
-  resetDocTaskStoreForTests()
+  clearDocTaskSession()
   vi.restoreAllMocks()
 })
 
@@ -137,32 +139,12 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
       progress: { stepsDone: 4, stepsTotal: 4 },
       resultRef: { documentId: 'd2' }
     })
-    expect(await screen.findByText('contract (Deutsch).md', undefined, { timeout: 3000 })).toBeInTheDocument()
+    expect(await screen.findByText('contract (Deutsch).md', undefined, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
     expect(screen.getByText(/Translated from/)).toBeInTheDocument()
     expect(screen.queryByText(/Translating…/)).not.toBeInTheDocument()
   })
 
-  it('passes any curated pair (fr → uk) through the params', async () => {
-    const user = userEvent.setup()
-    const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
-    stubApi({
-      getAppStatus: vi.fn(async () => appStatus()),
-      listDocuments: vi.fn(async () => [doc()]),
-      startDocTask,
-      getDocTask: vi.fn(async () => task())
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('contract.pdf')
-    await openTranslateModal(user)
-    await chooseAndStart(user, 'fr', 'uk')
-    expect(startDocTask).toHaveBeenCalledWith({
-      kind: 'translation',
-      documentIds: ['d1'],
-      params: { sourceLang: 'fr', targetLang: 'uk' }
-    })
-  })
-
-  it('disables Translate for a same-language pair and remembers the last choice on reopen', async () => {
+  it('disables Translate for a same-language pair and keeps the chosen pair across a modal reopen', async () => {
     const user = userEvent.setup()
     stubApi({
       getAppStatus: vi.fn(async () => appStatus()),
@@ -178,56 +160,14 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
     expect(screen.getByRole('button', { name: /^translate$/i })).toBeDisabled()
     expect(screen.getByText('Pick two different languages.')).toBeInTheDocument()
 
-    // A distinct target re-enables; cancel + reopen keeps the chosen pair (session memory).
+    // A distinct target re-enables; cancel + reopen keeps the chosen pair (the screen's modal state —
+    // the session memory is written only when a translation starts, DOC-7).
     await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), 'pl')
     expect(screen.getByRole('button', { name: /^translate$/i })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: /^cancel$/i }))
     await openTranslateModal(user)
     expect(screen.getByRole('combobox', { name: 'From' })).toHaveValue('pt')
     expect(screen.getByRole('combobox', { name: 'To' })).toHaveValue('pl')
-  })
-
-  it('cancelling the busy translation calls cancelDocTask', async () => {
-    const user = userEvent.setup()
-    const cancelDocTask = vi.fn(async () => {})
-    stubApi({
-      getAppStatus: vi.fn(async () => appStatus()),
-      listDocuments: vi.fn(async () => [doc()]),
-      startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
-      getDocTask: vi.fn(async () => task({ state: 'running' })),
-      cancelDocTask
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('contract.pdf')
-    await openTranslateModal(user)
-    await chooseAndStart(user, 'de', 'en')
-    await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
-    // full-audit 2026-07-11 CODE-47: pin the EXACT args — the row Cancel is the no-arg
-    // active-task fallback (`cancelActiveDocTask()` → `cancelDocTask(null)` server-side), so zero
-    // args is the truthful teeth-giving assertion; a stray/foreign jobId would redden this.
-    expect(cancelDocTask).toHaveBeenCalledWith()
-  })
-
-  it('surfaces the friendly failure copy (e.g. password change in progress)', async () => {
-    const user = userEvent.setup()
-    stubApi({
-      getAppStatus: vi.fn(async () => appStatus()),
-      listDocuments: vi.fn(async () => [doc()]),
-      startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
-      getDocTask: vi.fn(async () =>
-        task({
-          state: 'failed',
-          error: 'The workspace password is being changed right now. Try again in a moment.'
-        })
-      )
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('contract.pdf')
-    await openTranslateModal(user)
-    await chooseAndStart(user, 'de', 'en')
-    expect(
-      await screen.findByText(/password is being changed/i, undefined, { timeout: 3000 })
-    ).toBeInTheDocument()
   })
 
   it('model missing: Translate disables and the install item deep-links to the AI Model screen', async () => {

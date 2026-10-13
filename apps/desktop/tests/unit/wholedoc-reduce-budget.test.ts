@@ -56,14 +56,6 @@ describe('computeReduceBudget — adaptive, non-overflowing reduce output/notes 
     }
   }
 
-  it('large window (≥ 8 k) awards the FULL desired reserve to a normal-size deliverable', () => {
-    // A long brief with modest notes on an 8 k window gets the whole ANALYSIS reserve — the mid-sentence
-    // cut is gone (§4 done criteria: "typical briefs complete on ≥ 8 k windows").
-    const b = computeReduceBudget({ contextTokens: 8192, fenceTokens: 200, questionTokens: 40, notesTokens: 400 })
-    expect(b.reduceOutputCap).toBe(ANALYSIS_RESPONSE_RESERVE_TOKENS) // 3072
-    expect(b.notesTruncated).toBe(false)
-  })
-
   it("reproduces the plan's worked examples (fence+question ≈ 980, notes fit)", () => {
     // §4: "4096 → cap ≈ 2476, notes ≈ 512, fits exactly". With a realistic ~900-token fence + ~80-token
     // question, the MIN_NOTES reservation squeezes the cap to exactly 2476 and the notes budget to 512 —
@@ -79,6 +71,7 @@ describe('computeReduceBudget — adaptive, non-overflowing reduce output/notes 
     // §4: "8192 → cap 3072". The full desired reserve even with the big fence.
     const at8192 = computeReduceBudget({ contextTokens: 8192, fenceTokens: FENCE_BIG, questionTokens: Q_BIG, notesTokens: 300 })
     expect(at8192.reduceOutputCap).toBe(3072)
+    expect(at8192.notesTruncated).toBe(false)
   })
 
   it('notes-first: a large single-window document on a 4 k window keeps its notes; the OUTPUT yields', () => {

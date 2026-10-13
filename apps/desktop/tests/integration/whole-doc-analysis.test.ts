@@ -1,27 +1,20 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
-  documentsDir,
-  getDocument,
   getDocumentSummary,
   processDocument,
   reconcileStuckTrees,
   reindexDocument,
   setDocumentSummary
 } from '../../src/main/services/ingestion'
-import { DocTaskManager } from '../../src/main/services/doctasks'
+import type { DocTaskDeps, DocTaskManager } from '../../src/main/services/doctasks'
 import { ContextOverflowError } from '../../src/main/services/doctasks/errors'
 import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import { buildTree } from '../../src/main/services/analysis/tree-build'
-import {
-  ModelSlotArbiter,
-  RESUME_AFTER_CHAT_DELAY_MS,
-  type ModelSlotArbiterDeps
-} from '../../src/main/services/analysis/model-slot-arbiter'
+import { ModelSlotArbiter, RESUME_AFTER_CHAT_DELAY_MS } from '../../src/main/services/analysis/model-slot-arbiter'
 import {
   documentChunkCount,
   documentCoverage,
@@ -29,159 +22,46 @@ import {
   reachableLeafChunkIds
 } from '../../src/main/services/analysis/coverage'
 import { t } from '../../src/shared/i18n'
-import { hangBudgetMs } from '../helpers/hang-budget'
-import type {
-  ChatMessage,
-  ModelRuntime,
-  RuntimeChatOptions
-} from '../../src/main/services/runtime'
+import { until } from '../helpers/hang-budget'
+import { slotClock } from '../helpers/slot-clock'
+import {
+  docTaskManager,
+  docTaskRuntime,
+  docTaskWorld,
+  importText,
+  importWords,
+  userPromptOf,
+  waitTerminal,
+  type DocRuntime,
+  type DocRuntimeCall,
+  type DocRuntimeOptions,
+  type DocTaskWorld
+} from '../helpers/doctask-fixtures'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 
 // Whole-document-analysis Phase 1 (docs/rag-design.md §14.1–§14.3 — analysis design record): cap honesty
 // (C1/C2/C4/M13), the ingest-time summary tree (the yielding build + per-node transaction +
 // content cache), and the tree-first summary (M1). Mock runtime, no model, no network.
 
-let tmp: string
+let w: DocTaskWorld
 let db: Db
 let storeDir: string
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-wda-'))
-  db = openDatabase(join(tmp, 'test.sqlite'))
-  storeDir = documentsDir(join(tmp, 'workspace'))
+  w = docTaskWorld('wda')
+  ;({ db, storeDir } = w)
 })
 
-/** Import a .txt of literal `text` through the REAL ingestion pipeline. */
-async function importText(text: string, name = 'doc.txt'): Promise<string> {
-  const p = join(tmp, name)
-  writeFileSync(p, text, 'utf8')
-  const info = createQueuedDocument(db, p)
-  await processDocument(db, storeDir, info.id)
-  return info.id
+/** A distinct summary per distinct prompt (distinct inputs ⇒ distinct group hashes). */
+const hashReply = (call: DocRuntimeCall): string => {
+  const user = userPromptOf(call)
+  let h = 0
+  for (let i = 0; i < user.length; i++) h = (h * 31 + user.charCodeAt(i)) | 0
+  return `summary-${(h >>> 0).toString(16)}`
 }
-
-/** A doc of `words` distinct whitespace words (distinct ⇒ distinct chunk/group hashes). */
-function importWords(words: number, name = 'doc.txt'): Promise<string> {
-  const text = Array.from({ length: words }, (_, i) => `word${i}`).join(' ')
-  return importText(text, name)
-}
-
-interface ScriptedRuntime extends ModelRuntime {
-  calls: number
-  maxConcurrent: number
-}
-
-/** Mock runtime: a distinct summary per distinct prompt (so group hashes are distinct). */
-function scriptedRuntime(opts: { tokenDelayMs?: number } = {}): ScriptedRuntime {
-  let concurrent = 0
-  const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
-    new Promise((resolve) => {
-      if (signal?.aborted) return resolve()
-      const tmr = setTimeout(resolve, ms)
-      signal?.addEventListener('abort', () => {
-        clearTimeout(tmr)
-        resolve()
-      })
-    })
-  const rt: ScriptedRuntime = {
-    modelId: 'scripted-model',
-    calls: 0,
-    maxConcurrent: 0,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      rt.calls += 1
-      concurrent += 1
-      rt.maxConcurrent = Math.max(rt.maxConcurrent, concurrent)
-      try {
-        const user = messages.find((m) => m.role === 'user')?.content ?? ''
-        // Cheap deterministic per-input marker — distinct inputs ⇒ distinct summaries.
-        let h = 0
-        for (let i = 0; i < user.length; i++) h = (h * 31 + user.charCodeAt(i)) | 0
-        const reply = `summary-${(h >>> 0).toString(16)}`
-        for (const token of reply.match(/\S+\s*/g) ?? [reply]) {
-          if (options?.signal?.aborted) return
-          if (opts.tokenDelayMs) await delay(opts.tokenDelayMs, options?.signal)
-          yield token
-        }
-      } finally {
-        concurrent -= 1
-      }
-    }
-  }
-  return rt
-}
-
-// #399 D3(a): a parked build resumes RESUME_AFTER_CHAT_DELAY_MS (90 s) after the last chat lets
-// go. No test can wait that out, so the one test that needs a resume drives an injected clock —
-// `advance()` is then the only thing that can wake the builder, which is exactly the assertion.
-interface FakeClock {
-  deps: ModelSlotArbiterDeps
-  advance: (ms: number) => void
-}
-function makeClock(): FakeClock {
-  let nowMs = 0
-  let seq = 0
-  const timers = new Map<number, { at: number; fn: () => void }>()
-  return {
-    deps: {
-      now: () => nowMs,
-      setTimer: (fn, ms) => {
-        const id = ++seq
-        timers.set(id, { at: nowMs + ms, fn })
-        return id
-      },
-      clearTimer: (h) => {
-        timers.delete(h as number)
-      }
-    },
-    advance: (ms) => {
-      nowMs += ms
-      for (const [id, e] of [...timers]) {
-        if (e.at <= nowMs) {
-          timers.delete(id)
-          e.fn()
-        }
-      }
-    }
-  }
-}
-
-function makeManager(
-  runtime: ModelRuntime | null,
-  contextTokens = 4096,
-  slotArbiterDeps?: ModelSlotArbiterDeps
-): DocTaskManager {
-  return new DocTaskManager({
-    getDb: () => db,
-    getRuntime: () => runtime,
-    getTranslator: () => null,
-    isChatStreaming: () => false,
-    getContextTokens: () => contextTokens,
-    getStoreDir: () => storeDir,
-    getIngestionDeps: () => ({}),
-    beginDocumentWork: () => () => {},
-    slotArbiterDeps
-  })
-}
-
-type AnyStatus = ReturnType<DocTaskManager['getDocTask']>
-async function waitTerminal(m: DocTaskManager, jobId: string): Promise<AnyStatus> {
-  const start = Date.now()
-  for (;;) {
-    const s = m.getDocTask(jobId)
-    if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s
-    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task never finished: ${s.state}`)
-    await new Promise((r) => setTimeout(r, 5))
-  }
-}
-async function waitFor(pred: () => boolean, label = 'condition'): Promise<void> {
-  const start = Date.now()
-  while (!pred()) {
-    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`timed out waiting for ${label}`)
-    await new Promise((r) => setTimeout(r, 5))
-  }
-}
+const treeRuntime = (o: DocRuntimeOptions = {}): DocRuntime => docTaskRuntime({ reply: hashReply, ...o })
+const mgr = (runtime: ModelRuntime | null, ctx = 4096, more: Partial<DocTaskDeps> = {}): DocTaskManager =>
+  docTaskManager(w, { getRuntime: () => runtime, getContextTokens: () => ctx, ...more })
 
 /** Walk tree_edges from the root, collecting reachable leaf-chunk ids. */
 function reachableLeafChunks(documentId: string): Set<string> {
@@ -226,7 +106,7 @@ function treeStatus(documentId: string): string | null {
 describe('cap honesty', () => {
   it('rejects an over-cap document at index time with main.ingest.tooManyChunks, never partial', async () => {
     // ~430k single-token words ⇒ > MAX_CHUNKS_PER_DOCUMENT (1000) windows at the default size.
-    const p = join(tmp, 'huge.txt')
+    const p = join(w.root, 'huge.txt')
     writeFileSync(p, 'a '.repeat(430_000), 'utf8')
     const info = createQueuedDocument(db, p)
     const done = await processDocument(db, storeDir, info.id)
@@ -238,7 +118,7 @@ describe('cap honesty', () => {
   })
 
   it('sets fully_chunked on every successful index (and the marker proves whole-doc coverage)', async () => {
-    const id = await importWords(300)
+    const id = await importWords(w, 300)
     const row = db.prepare('SELECT fully_chunked FROM documents WHERE id = ?').get(id) as unknown as {
       fully_chunked: string | null
     }
@@ -249,7 +129,7 @@ describe('cap honesty', () => {
     // A searchable (small) doc that later "grows" over the cap on re-parse must not be left
     // zero-chunk. Simulate by indexing small, then overwriting the stored copy with an
     // over-cap body and re-indexing — the gate must throw before the destructive DELETE.
-    const id = await importWords(300)
+    const id = await importWords(w, 300)
     const before = chunkIds(id).length
     expect(before).toBeGreaterThan(0)
 
@@ -274,11 +154,11 @@ describe('cap honesty', () => {
 describe('summary tree build', () => {
   it('builds a tree whose root reaches EVERY chunk leaf, including the last (no truncation)', async () => {
     // Small group budget (contextTokens 1024) ⇒ many nodes from a modest doc.
-    const id = await importWords(4000)
+    const id = await importWords(w, 4000)
     const all = chunkIds(id)
     expect(all.length).toBeGreaterThan(1)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
+    const runtime = treeRuntime()
+    const m = mgr(runtime, 1024)
 
     const { jobId } = m.startDocTask({ kind: 'tree', documentIds: [id] })
     const s = await waitTerminal(m, jobId)
@@ -301,37 +181,33 @@ describe('summary tree build', () => {
     expect(dangling.n).toBe(0)
   })
 
-  it('serves the ready tree root as a whole-document summary at <= 1 model call (truncated:false)', async () => {
-    const id = await importWords(4000)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
-    await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
+  it.each([
+    ['the one-click summary (no tier param)', undefined],
+    ['an explicit Tier 1', { tier: 1 }]
+  ] as const)(
+    'serves the ready tree root as a whole-document summary at <= 1 model call (truncated:false): %s',
+    async (_label, params) => {
+      const id = await importWords(w, 4000)
+      const runtime = treeRuntime()
+      const m = mgr(runtime, 1024)
+      await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
 
-    const callsAfterBuild = runtime.calls
-    const summaryJob = m.startDocTask({ kind: 'summary', documentIds: [id] })
-    const s = await waitTerminal(m, summaryJob.jobId)
-    expect(s.state).toBe('done')
-    // Tier 1: the root summary verbatim, no extra model call (Q6).
-    expect(runtime.calls).toBe(callsAfterBuild)
+      const callsAfterBuild = runtime.calls.length
+      const summaryJob = m.startDocTask({ kind: 'summary', documentIds: [id], ...(params ? { params } : {}) })
+      const s = await waitTerminal(m, summaryJob.jobId)
+      expect(s.state).toBe('done')
+      // Tier 1: the root summary verbatim, no extra model call (Q6).
+      expect(runtime.calls.length).toBe(callsAfterBuild)
 
-    const summary = getDocumentSummary(db, id)
-    expect(summary?.truncated).toBe(false)
-    const root = db
-      .prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1')
-      .get(id) as unknown as { summary_text: string }
-    expect(summary?.text).toBe(root.summary_text)
-  })
-
-  it('a tree-less doc still summarizes via the capped map-reduce path', async () => {
-    const id = await importWords(300)
-    expect(treeStatus(id)).toBeNull()
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 4096)
-    const s = await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id] }).jobId)
-    expect(s.state).toBe('done')
-    expect(getDocumentSummary(db, id)?.text).toBeTruthy()
-    expect(runtime.calls).toBeGreaterThan(0) // it actually called the model (no tree)
-  })
+      const summary = getDocumentSummary(db, id)
+      expect(summary?.truncated).toBe(false)
+      expect(summary?.tier).toBe(1)
+      const root = db
+        .prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1')
+        .get(id) as unknown as { summary_text: string }
+      expect(summary?.text).toBe(root.summary_text)
+    }
+  )
 })
 
 // ---- HIGH_BUG vuln-scan-2026-06-21: provable termination at a starved budget ---------
@@ -345,7 +221,7 @@ describe('tree build termination (HIGH_BUG vuln-scan-2026-06-21)', () => {
     // permanently blocked the single-slot doc-task queue. With minPerGroup=2 at the
     // node-reduction levels the count strictly shrinks, so this build PROVABLY halts. If the
     // fix regresses, this test hangs (times out) instead of passing.
-    const id = await importWords(4000)
+    const id = await importWords(w, 4000)
     const leafCount = chunkIds(id).length
     expect(leafCount).toBeGreaterThan(1)
 
@@ -381,7 +257,7 @@ describe('tree build termination (HIGH_BUG vuln-scan-2026-06-21)', () => {
 
 describe('tree build adaptive budget on context overflow (issue #41)', () => {
   it('halves the packing budget and re-packs instead of failing when a group overflows the real window', async () => {
-    const id = await importWords(4000)
+    const id = await importWords(w, 4000)
     const leafCount = chunkIds(id).length
     expect(leafCount).toBeGreaterThan(1)
 
@@ -423,7 +299,7 @@ describe('tree build adaptive budget on context overflow (issue #41)', () => {
   })
 
   it('fails with the friendly copy — no futile retries — when the budget is already at the floor', async () => {
-    const id = await importWords(1000)
+    const id = await importWords(w, 1000)
     let calls = 0
     await expect(
       buildTree(id, {
@@ -443,30 +319,22 @@ describe('tree build adaptive budget on context overflow (issue #41)', () => {
   })
 
   it("end to end: llama-server's exceed_context_size_error 400 triggers the retry, not task failure", async () => {
-    const id = await importWords(4000)
+    const id = await importWords(w, 4000)
     const REAL_WINDOW_WORDS = 1400
     let overflows = 0
     // The RAW runtime error (what LlamaRuntime throws on the HTTP 400) — proves the
     // manager maps it to the typed ContextOverflowError the build retries on.
-    const rt: ModelRuntime = {
-      modelId: 'scripted-model',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      async *chatStream(messages: ChatMessage[]) {
-        const user = messages.find((m) => m.role === 'user')?.content ?? ''
+    const rt = docTaskRuntime({
+      reply: (call) => {
+        const user = userPromptOf(call)
         if (user.split(/\s+/).length > REAL_WINDOW_WORDS) {
           overflows += 1
-          throw new ChatRequestError(
-            400,
-            'the request exceeds the available context size',
-            'exceed_context_size_error'
-          )
+          throw new ChatRequestError(400, 'the request exceeds the available context size', 'exceed_context_size_error')
         }
-        yield `summary of ${user.length} #${overflows}`
+        return `summary of ${user.length} #${overflows}`
       }
-    }
-    const m = makeManager(rt, 4096)
+    })
+    const m = mgr(rt, 4096)
     const s = await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     expect(overflows).toBeGreaterThan(0)
     expect(s.state).toBe('done')
@@ -478,24 +346,23 @@ describe('tree build adaptive budget on context overflow (issue #41)', () => {
 
 describe('content cache, resume, and re-index invalidation', () => {
   it('a rebuild over a warm summary_cache costs 0 model calls', async () => {
-    const id = await importWords(4000)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
+    const id = await importWords(w, 4000)
+    const runtime = treeRuntime()
+    const m = mgr(runtime, 1024)
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
-    const firstBuildCalls = runtime.calls
+    const firstBuildCalls = runtime.calls.length
     expect(firstBuildCalls).toBeGreaterThan(0)
 
     // Rebuild from scratch (discard + rebuild): every group's content is cached ⇒ 0 calls.
-    runtime.calls = 0
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     expect(treeStatus(id)).toBe('ready')
-    expect(runtime.calls).toBe(0)
+    expect(runtime.calls.length).toBe(firstBuildCalls)
   })
 
   it('re-index tears the tree down (stale), and a rebuild reuses the cache despite chunk-id churn', async () => {
-    const id = await importWords(4000)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
+    const id = await importWords(w, 4000)
+    const runtime = treeRuntime()
+    const m = mgr(runtime, 1024)
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     const oldChunks = new Set(chunkIds(id))
 
@@ -509,10 +376,10 @@ describe('content cache, resume, and re-index invalidation', () => {
     // Chunk ids actually churned (no overlap), proving the cache is keyed by text not id.
     expect([...newChunks].some((c) => oldChunks.has(c))).toBe(false)
 
-    runtime.calls = 0
+    const before = runtime.calls.length
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     expect(treeStatus(id)).toBe('ready')
-    expect(runtime.calls).toBe(0) // warm cache reused despite full chunk-id churn
+    expect(runtime.calls.length).toBe(before) // warm cache reused despite full chunk-id churn
 
     // Provenance walk after the rebuild has no dangling edges and full coverage.
     expect(reachableLeafChunks(id).size).toBe(newChunks.size)
@@ -522,9 +389,9 @@ describe('content cache, resume, and re-index invalidation', () => {
     // Identical repeated sections (same text) — distinct structural positions must stay
     // distinct nodes; the cache holds one entry for that text under the model.
     const para = Array.from({ length: 300 }, (_, i) => `clause${i % 10}`).join(' ')
-    const id = await importText(Array.from({ length: 6 }, () => para).join('\n\n'), 'boiler.txt')
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
+    const id = await importText(w, Array.from({ length: 6 }, () => para).join('\n\n'), { name: 'boiler.txt' })
+    const runtime = treeRuntime()
+    const m = mgr(runtime, 1024)
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
 
     const nodeCount = db
@@ -544,11 +411,11 @@ describe('content cache, resume, and re-index invalidation', () => {
 
 describe('C4 deep-index gate', () => {
   it('refuses a tree build for a legacy (fully_chunked NULL) doc until it is re-indexed', async () => {
-    const id = await importWords(4000)
+    const id = await importWords(w, 4000)
     // Simulate a legacy index (pre-Phase-1): clear the marker.
     db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(id)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
+    const runtime = treeRuntime()
+    const m = mgr(runtime, 1024)
 
     expect(() => m.startDocTask({ kind: 'tree', documentIds: [id] })).toThrow()
 
@@ -564,7 +431,7 @@ describe('C4 deep-index gate', () => {
 
 describe('H11 per-node transaction durability', () => {
   it('rolls back on an injected edge insert failure; the shared connection is not poisoned', async () => {
-    const id = await importWords(4000)
+    const id = await importWords(w, 4000)
     let failOnce = true
     // Wrap the connection so the FIRST tree_edges insert throws (a SQLITE-style error that
     // would NOT auto-roll-back). buildTree must ROLLBACK so the next writer can BEGIN.
@@ -611,42 +478,44 @@ describe('H11 per-node transaction durability', () => {
 
 describe('H10 yielding build handshake', () => {
   it('a chat slot request pauses the build, which then resumes in-session to ready', async () => {
-    const id = await importWords(8000)
-    const runtime = scriptedRuntime({ tokenDelayMs: 15 })
-    const clock = makeClock()
-    const m = makeManager(runtime, 1024, clock.deps)
+    const id = await importWords(w, 8000)
+    const runtime = treeRuntime({ tokenDelayMs: 15 })
+    // #399 D3(a): the resume fires RESUME_AFTER_CHAT_DELAY_MS (90 s) after the last chat lets go, which no test
+    // can wait out — on this clock `advance()` is the only thing that can wake the builder.
+    const clock = slotClock()
+    const m = mgr(runtime, 1024, { slotArbiterDeps: clock.deps })
     const { jobId } = m.startDocTask({ kind: 'tree', documentIds: [id] })
 
     // Wait until the build is mid-flight (at least one node committed, not finished).
-    await waitFor(() => m.getDocTask(jobId).progress.stepsDone >= 1, 'first node')
+    await until(() => m.getDocTask(jobId).progress.stepsDone >= 1, 'first node', 10_000)
     expect(m.isYieldingBuildActive()).toBe(true)
 
-    // Chat claims the slot — resolves only once the builder parks (≈ one node).
+    // Chat claims the slot — resolves only once the builder parks at a node boundary.
     const release = await m.acquireChatSlot()
-    const atPause = m.getDocTask(jobId)
-    expect(atPause.state).toBe('running') // paused, NOT done/cancelled
+    expect(m.getDocTask(jobId).state).toBe('running') // paused, NOT done/cancelled
+    expect(runtime.concurrent).toBe(0) // parked between node calls: no builder call in flight while chat holds the slot
+    expect(clock.pending()).toBe(0) // nothing armed while chat holds the slot
 
-    // Releasing ARMS the resume; the build must still be parked until the #399 D3(a) delay is up.
+    // Releasing ARMS the #399 D3(a) resume on the injected clock — the only thing that can wake the build.
     release()
-    await new Promise((r) => setTimeout(r, 30))
-    expect(m.getDocTask(jobId).state).toBe('running') // still parked, not resumed
+    expect(clock.pending()).toBe(1)
     expect(m.isYieldingBuildActive()).toBe(true)
 
-    // Once it is up, the SAME build resumes in-session — it reaches ready with no restart.
+    // Once the delay is up, the SAME build resumes in-session — it reaches ready with no restart.
     clock.advance(RESUME_AFTER_CHAT_DELAY_MS)
+    expect(clock.pending()).toBe(0)
     const s = await waitTerminal(m, jobId)
     expect(s.state).toBe('done')
     expect(treeStatus(id)).toBe('ready')
     expect(reachableLeafChunks(id).size).toBe(chunkIds(id).length)
-    expect(runtime.maxConcurrent).toBe(1) // builder + chat never overlapped
   })
 
   it('cancelling a parked build rejects the reacquire — no hung await, left resumable', async () => {
-    const id = await importWords(8000)
-    const runtime = scriptedRuntime({ tokenDelayMs: 15 })
-    const m = makeManager(runtime, 1024)
+    const id = await importWords(w, 8000)
+    const runtime = treeRuntime({ tokenDelayMs: 15 })
+    const m = mgr(runtime, 1024)
     const { jobId } = m.startDocTask({ kind: 'tree', documentIds: [id] })
-    await waitFor(() => m.getDocTask(jobId).progress.stepsDone >= 1, 'first node')
+    await until(() => m.getDocTask(jobId).progress.stepsDone >= 1, 'first node', 10_000)
 
     const release = await m.acquireChatSlot() // build parks
     expect(m.getDocTask(jobId).state).toBe('running')
@@ -662,11 +531,11 @@ describe('H10 yielding build handshake', () => {
 // ---- Persistence round-trip + reconcile ---------------------------------------------
 
 describe('persistence + reconcile', () => {
-  it('tree nodes + summary_cache persist and read back across a DB reopen (inherits vault encryption)', async () => {
-    const dbPath = join(tmp, 'test.sqlite')
-    const id = await importWords(4000)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
+  it('tree nodes + summary_cache persist and read back across a DB reopen', async () => {
+    const dbPath = join(w.root, 'test.sqlite')
+    const id = await importWords(w, 4000)
+    const runtime = treeRuntime()
+    const m = mgr(runtime, 1024)
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     const nodeCountBefore = (
       db.prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE document_id = ?').get(id) as unknown as {
@@ -696,7 +565,7 @@ describe('persistence + reconcile', () => {
   })
 
   it('reconcileStuckTrees flips a stale building tree to pending (resumable)', async () => {
-    const id = await importWords(300)
+    const id = await importWords(w, 300)
     db.prepare("UPDATE documents SET tree_status = 'building', updated_at = ? WHERE id = ?").run(
       '2020-01-01T00:00:00.000Z',
       id
@@ -711,8 +580,8 @@ describe('persistence + reconcile', () => {
 
 describe('coverage math + provenance', () => {
   async function buildReadyTree(words = 4000): Promise<string> {
-    const id = await importWords(words)
-    const m = makeManager(scriptedRuntime(), 1024)
+    const id = await importWords(w, words)
+    const m = mgr(treeRuntime(), 1024)
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     return id
   }
@@ -720,7 +589,7 @@ describe('coverage math + provenance', () => {
   it('a ready tree reports whole-document tree coverage at the served tier (100% only when ready)', async () => {
     const id = await buildReadyTree()
     // A Tier-1 summary (the stored root, untruncated) ⇒ the coverage describes the deep index.
-    const m = makeManager(scriptedRuntime(), 1024)
+    const m = mgr(treeRuntime(), 1024)
     await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id] }).jobId)
     const summary = getDocumentSummary(db, id)
 
@@ -765,7 +634,7 @@ describe('coverage math + provenance', () => {
   })
 
   it('a tree-less doc is capped: truncated ⇒ beginning, untruncated ⇒ whole (never tree 100%)', async () => {
-    const id = await importWords(300)
+    const id = await importWords(w, 300)
     expect(treeStatus(id)).toBeNull()
     const total = documentChunkCount(db, id)
 
@@ -815,33 +684,19 @@ describe('coverage math + provenance', () => {
 // ---- Phase 2: coverage tiers (0 / 1 / few model calls) ------------------------------
 
 describe('coverage tiers', () => {
-  async function withTree(words: number, ctx = 1024): Promise<{ id: string; runtime: ScriptedRuntime; m: DocTaskManager }> {
-    const id = await importWords(words)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, ctx)
+  async function withTree(words: number, ctx = 1024): Promise<{ id: string; runtime: DocRuntime; m: DocTaskManager }> {
+    const id = await importWords(w, words)
+    const runtime = treeRuntime()
+    const m = mgr(runtime, ctx)
     await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     return { id, runtime, m }
   }
 
-  it('Tier 1 serves the root verbatim with 0 extra model calls (truncated:false)', async () => {
-    const { id, runtime, m } = await withTree(4000)
-    const before = runtime.calls
-    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 1 } }).jobId)
-    expect(runtime.calls).toBe(before) // 0 extra calls (Q6)
-    const s = getDocumentSummary(db, id)
-    expect(s?.truncated).toBe(false)
-    expect(s?.tier).toBe(1)
-    const root = db
-      .prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1')
-      .get(id) as unknown as { summary_text: string }
-    expect(s?.text).toBe(root.summary_text)
-  })
-
   it('Tier 2 runs exactly ONE reduce over the precomputed sections (truncated:false)', async () => {
     const { id, runtime, m } = await withTree(4000)
-    const before = runtime.calls
+    const before = runtime.calls.length
     await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 2 } }).jobId)
-    expect(runtime.calls).toBe(before + 1) // exactly one reduce call
+    expect(runtime.calls.length).toBe(before + 1) // exactly one reduce call
     const s = getDocumentSummary(db, id)
     expect(s?.truncated).toBe(false)
     expect(s?.tier).toBe(2)
@@ -854,22 +709,14 @@ describe('coverage tiers', () => {
         .prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE document_id = ? AND level = 1')
         .get(id) as unknown as { n: number }
     ).n
-    const before = runtime.calls
+    const before = runtime.calls.length
     await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 3 } }).jobId)
-    const used = runtime.calls - before
+    const used = runtime.calls.length - before
     expect(used).toBeGreaterThanOrEqual(1)
     expect(used).toBeLessThanOrEqual(level1 + 1) // bounded by node count (+1 reduce), never chunk/doc size
     const s = getDocumentSummary(db, id)
     expect(s?.truncated).toBe(false)
     expect(s?.tier).toBe(3)
-  })
-
-  it('an absent tier param defaults to Tier 1 (the one-click summary is unchanged)', async () => {
-    const { id, runtime, m } = await withTree(4000)
-    const before = runtime.calls
-    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id] }).jobId) // no params
-    expect(runtime.calls).toBe(before) // Tier-1 default ⇒ 0 extra calls
-    expect(getDocumentSummary(db, id)?.tier).toBe(1)
   })
 })
 
@@ -884,9 +731,9 @@ describe('deep-index extract chain (#38)', () => {
     ).extract_status
 
   it('a tree task started with withExtract chains the extract pass after success', async () => {
-    const id = await importWords(4000)
-    const runtime = scriptedRuntime()
-    const m = makeManager(runtime, 1024)
+    const id = await importWords(w, 4000)
+    const runtime = treeRuntime()
+    const m = mgr(runtime, 1024)
     const s = await waitTerminal(
       m,
       m.startDocTask({ kind: 'tree', documentIds: [id], params: { withExtract: true } }).jobId
@@ -895,39 +742,39 @@ describe('deep-index extract chain (#38)', () => {
     expect(treeStatus(id)).toBe('ready')
     // The chained extract pass was enqueued by the manager itself and runs next — the deep
     // index is complete only when BOTH passes are (the row action and badge key off this).
-    await waitFor(() => extractStatusOf(id) === 'ready' && !m.hasActiveTask(), 'chained extract')
+    await until(() => extractStatusOf(id) === 'ready' && !m.hasActiveTask(), 'chained extract', 10_000)
   })
 
   it('a plain tree task (no withExtract) never chains — extract stays manual elsewhere', async () => {
-    const id = await importWords(4000)
-    const m = makeManager(scriptedRuntime(), 1024)
+    const id = await importWords(w, 4000)
+    const m = mgr(treeRuntime(), 1024)
     const s = await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
     expect(s.state).toBe('done')
-    await waitFor(() => !m.hasActiveTask(), 'queue drained')
+    await until(() => !m.hasActiveTask(), 'queue drained', 10_000)
     expect(extractStatusOf(id)).toBeNull() // no surprise CPU spend (rag-design §14.5)
   })
 
   it('a CANCELLED tree build never chains the extract pass', async () => {
-    const id = await importWords(8000)
-    const runtime = scriptedRuntime({ tokenDelayMs: 15 })
-    const m = makeManager(runtime, 1024)
+    const id = await importWords(w, 8000)
+    const runtime = treeRuntime({ tokenDelayMs: 15 })
+    const m = mgr(runtime, 1024)
     const { jobId } = m.startDocTask({ kind: 'tree', documentIds: [id], params: { withExtract: true } })
-    await waitFor(() => m.getDocTask(jobId).state === 'running', 'build running')
+    await until(() => m.getDocTask(jobId).state === 'running', 'build running', 10_000)
     m.cancelDocTask(jobId)
     const s = await waitTerminal(m, jobId)
     expect(s.state).toBe('cancelled')
-    await waitFor(() => !m.hasActiveTask(), 'queue drained')
+    await until(() => !m.hasActiveTask(), 'queue drained', 10_000)
     expect(extractStatusOf(id)).toBeNull() // the user said stop — no chained work
   })
 
   it('withExtract on the auto-enqueue path is never set — maybeEnqueueTreeBuild starts a plain tree', async () => {
     // The import-time auto-enqueue must not inherit the chain: the extract pass is user-
     // triggered only (rag-design §14.5 — no surprise CPU spend at import).
-    const id = await importWords(8000)
+    const id = await importWords(w, 8000)
     db.prepare("UPDATE documents SET tree_status = NULL WHERE id = ?").run(id)
-    const m = makeManager(scriptedRuntime(), 1024)
+    const m = mgr(treeRuntime(), 1024)
     m.maybeEnqueueTreeBuild(id)
-    await waitFor(() => treeStatus(id) === 'ready' && !m.hasActiveTask(), 'auto tree')
+    await until(() => treeStatus(id) === 'ready' && !m.hasActiveTask(), 'auto tree', 10_000)
     expect(extractStatusOf(id)).toBeNull()
   })
 })

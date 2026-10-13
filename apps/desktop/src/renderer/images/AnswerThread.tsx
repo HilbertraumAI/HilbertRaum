@@ -39,7 +39,7 @@ const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
 }
 
 /**
- * Test probe (the `__docRowRenderCounts` pattern, DEV-only): TurnRow render counts by turn id,
+ * Test probe (DEV-only render counter): TurnRow render counts by turn id,
  * so a perf test can assert a SETTLED row's memo holds while a sibling turn streams (PF-7c).
  */
 export const __turnRowRenderCounts = new Map<string, number>()

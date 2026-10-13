@@ -80,10 +80,8 @@ export const MAX_PARK_DEFERRAL_MS = 600_000
 /** Opaque timer handle — the seam is injected so tests drive the delay without real sleeps. */
 type TimerHandle = unknown
 
-/** Test seams (#399): fake time in, no `setTimeout` in the unit tests. All optional. */
+/** The clock seam (#399): fake time in, so tests drive the SHIPPED delay + cap without sleeping. All optional. */
 export interface ModelSlotArbiterDeps {
-  resumeDelayMs?: number
-  maxParkDeferralMs?: number
   setTimer?: (fn: () => void, ms: number) => TimerHandle
   clearTimer?: (handle: TimerHandle) => void
   now?: () => number
@@ -106,15 +104,11 @@ export class ModelSlotArbiter {
   /** When the builder parked (`now()`), or null when it is not parked — the starvation clock. */
   private parkedAt: number | null = null
 
-  private readonly resumeDelayMs: number
-  private readonly maxParkDeferralMs: number
   private readonly setTimer: (fn: () => void, ms: number) => TimerHandle
   private readonly clearTimer: (handle: TimerHandle) => void
   private readonly now: () => number
 
   constructor(deps: ModelSlotArbiterDeps = {}) {
-    this.resumeDelayMs = deps.resumeDelayMs ?? RESUME_AFTER_CHAT_DELAY_MS
-    this.maxParkDeferralMs = deps.maxParkDeferralMs ?? MAX_PARK_DEFERRAL_MS
     this.setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
     this.clearTimer = deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>))
     this.now = deps.now ?? (() => Date.now())
@@ -304,7 +298,7 @@ export class ModelSlotArbiter {
     if (this.chatHolders > 0) this.chatHolders -= 1
     if (this.chatHolders !== 0 || !this.reacquireResolve) return
     const deferredFor = this.parkedAt === null ? 0 : this.now() - this.parkedAt
-    if (deferredFor >= this.maxParkDeferralMs) {
+    if (deferredFor >= MAX_PARK_DEFERRAL_MS) {
       this.resumeParkedBuild()
       return
     }
@@ -312,7 +306,7 @@ export class ModelSlotArbiter {
     this.resumeTimer = this.setTimer(() => {
       this.resumeTimer = null
       this.resumeParkedBuild()
-    }, this.resumeDelayMs)
+    }, RESUME_AFTER_CHAT_DELAY_MS)
   }
 
   /** Wake the parked builder, if one is still parked and the slot is still free. */

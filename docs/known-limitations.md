@@ -1138,8 +1138,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   long-lived portable drive from growing the table without bound, each tree build opportunistically
   evicts the oldest rows past **`SUMMARY_CACHE_MAX_ROWS`** (50 000 by default; env
   `HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS`) via `evictSummaryCache`. It is a cache, so an evicted row
-  only costs a future re-summarize, never data loss; the per-session evicted-row count is exposed
-  as content-free diagnostics (`summaryCacheEvictedThisSession`). v1 had no eviction at all (the
+  only costs a future re-summarize, never data loss; each pruning writes one content-free local log
+  line ("Summary cache pruned": rows evicted, rows kept, the session total). v1 had no eviction at all (the
   audit's DATA-3) — this bounds it cheaply rather than precisely (eviction runs once per build,
   not on a timer).
 - **"List every X" answers are exhaustive over the SECTIONS SCANNED — not guaranteed complete
@@ -2306,8 +2306,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   lopsided pair with many unmatched sections can overflow the reduce input — in which case it carries its
   own, document-neutral truncation notice instead.) The diff-driven mode (d) does NOT cap this way — it
   reads both documents whole — so a similar version pair is compared in full regardless of length (up to
-  the `wordDiff` `maxWords` guard, beyond which it falls back to these modes). Both documents stay fully
-  searchable. In the chat diff path, stored chunks overlap by ~80 tokens, so a change landing exactly in
+  the `wordDiff` `DEFAULT_MAX_WORDS` guard, beyond which it falls back to these modes). Both documents stay
+  fully searchable. In the chat diff path, stored chunks overlap by ~80 tokens, so a change landing exactly in
   an overlap region may be listed twice — cosmetic, never a missed change.
 - **Report section headings are English even for German documents.** The four headings
   are dictated verbatim so the report structure is deterministic (R-T2-probed: the 4B

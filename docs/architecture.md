@@ -270,8 +270,8 @@ noted below.
   token deltas through a 40 ms flush buffer (the ChatScreen `STREAM_FLUSH_MS` precedent; settle
   paths flush first so no token is lost, discard paths drop the buffer), and ImagesScreen got the
   FE-3 `useEventCallback` sweep over `onCopy`/`onTryAgain`/`onStop` — a settled `TurnRow` no longer
-  re-renders while a sibling turn streams (render-count-pinned via the `__docRowRenderCounts`
-  pattern). `translateSession` deliberately stays per-token (~4 tok/s — documented there). PF-7d:
+  re-renders while a sibling turn streams (render-count-pinned like the DocRow PERF-5 memo
+  tests). `translateSession` deliberately stays per-token (~4 tok/s — documented there). PF-7d:
   `ScopePopover` memoizes its `indexed`/`addableDocs`/collection derivations on
   `[docs, docIds, collections]`, so the (usually closed) composer-footer popover no longer
   re-filters the full docs list on every keystroke/stream flush.
@@ -770,7 +770,8 @@ behavior-preserving (equivalence-tested, teeth-checked). No schema/IPC/audit-pay
   (the same RAG-1 unit-vector fast path `VectorIndex` uses — stored vectors are L2-normalized, so
   cosine == dot) + a **running top-K** (descending score, ties broken by doc-B `chunk_index` order). The
   running top-K is byte-identical to a stable dot-sort + slice; on normalized vectors the dot ranking
-  equals the old cosine ranking (`tests/unit/compare-nearest-neighbors.test.ts` proves both links).
+  equals the old cosine ranking (`tests/unit/compare-nearest-neighbors.test.ts`: the running top-K equals a
+  dot-sort-slice, and the full helper equals the old cosine-sort-slice — so dot ranks like cosine here).
   Measured **2.2×** on a synthetic 1000×1000 compare. Mode-(c) `alignNodes` (node-vector cosine) is out
   of scope and unchanged.
 - **P6 — DEFERRED (the companion).** Dropping the per-search `(COUNT(*), MAX(rowid))` staleness signature
@@ -2665,9 +2666,11 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   `ctx.ocrEngine` LIVE (#410 — an in-app OCR install fills the slot mid-session); only the
   embedder stays captured.
 - **Concurrency (D26, RESOLVED): strict one-at-a-time, with one exception.** Tasks serialize
-  among themselves (one FIFO queue, one runner). A **non-yielding** task (`summary`,
-  `translation`, `compare`, `ocr`) **refuses to start while a chat answer streams** (it reads
-  the shared in-flight registry) but owns its own `AbortController` and is NEVER an entry in
+  among themselves (one FIFO queue, one runner). **Every** task kind **refuses to START while a
+  chat answer streams** (`startDocTask` reads the shared in-flight registry before any per-kind
+  check, so the yielding `tree`/`extract` builds and `categorize` refuse too; only a RUNNING
+  yielding build cedes the slot to a chat that arrives later — the exception below) but owns its
+  own `AbortController` and is NEVER an entry in
   the per-conversation map — `stopGeneration` cannot kill a task and a task cannot block a
   conversation key (fact §2.8). The inverse guard lives in the chat/RAG handlers: a message
   sent while a non-yielding task is active throws the shared `DOC_TASK_BUSY_MESSAGE`, which the
@@ -2772,9 +2775,11 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   300) / 1.3` input words per call). Both full texts fit ⇒ **mode (a)**: one
   structured-comparison call over both. Else **mode (b), section-matched**: doc A's
   chunks pack into half-budget windows (over-budget chunks split, pieces keep their
-  chunk id), each window's nearest doc-B chunks are retrieved via the EXISTING
-  `VectorIndex` scoped to doc B under the active embedder's id — STORED vectors only,
-  so the pairing is deterministic and costs nothing but cosine scans (top-3 neighbors
+  chunk id), each window's nearest doc-B chunks come from doc B's STORED vectors under
+  the active embedder's id, loaded and decoded once (RAG-2/ING-1) and ranked in memory by
+  the pure `compareNearestNeighbors` (P1: `dotProduct` on L2-normalized vectors, a running
+  top-K) — no `VectorIndex` search, so the pairing is deterministic and costs nothing but
+  dot products (top-3 neighbors
   per A-chunk, best-first fill of the other half-budget, presented in doc-B order);
   per-pair map calls use a deliberately smaller prefixed-bullets format
   (R-T2-confirmed), then one reduce merges the notes into the four dictated report
@@ -7728,8 +7733,9 @@ and lets the model dismiss low-salience/placeholder content ("Lorem ipsum") as "
 compare". In the chat path it was compounded by truncation: at the default 4096-token window
 `splitCompareBudget` gives each doc ~half, so a ~2-page version pair had **page 2 (where the change was)
 dropped** as the capped tail — the model never saw it. *Fix.* A new pure module **`services/diff`**
-computes a **Myers word-level diff** (`wordDiff`, O((N+M)·D) with a `maxEdits` cutoff + a `maxWords`
-guard, so it is near-linear for a real version pair and cheaply BAILS to null when the two diverge).
+computes a **Myers word-level diff** (`wordDiff`, O((N+M)·D) with a `DEFAULT_MAX_EDITS` cutoff + a
+`DEFAULT_MAX_WORDS` guard, so it is near-linear for a real version pair and cheaply BAILS to null when the
+two diverge).
 `isPreciseDiffUseful` (the single routing policy) drives compare by the diff ONLY when the pair is
 similar (some shared content, changed fraction ≤ 0.5); a rewrite / too-large / too-different pair returns
 null and falls through to the existing modes. Both compare paths gained a **diff-driven mode (d)**:
@@ -7749,8 +7755,8 @@ null and falls through to the existing modes. Both compare paths gained a **diff
 - *Tests.* `tests/unit/diff.test.ts` (the algorithm: the one-word-deletion regression, insert/replace/
   identical, the edit-cutoff → null, near-identical large texts, redline/model rendering);
   `doctasks-compare.test.ts` mode (d) block (one-word redline, identical short-circuit no model call,
-  rewrite → fallback); `rag-whole-doc-compare.test.ts` (chat diff path: exact changes reach the model,
-  identical, rewrite → whole-doc fallback).
+  rewrite → fallback, the SK-2 PARTIAL note past `DIFF_RENDER_MAX`); `rag-whole-doc-compare.test.ts`
+  (chat diff path: exact changes reach the model, identical, rewrite → whole-doc fallback).
 
 ### §21 Geometry-aware PDF bank-statement extraction (Phase 31, 2026-06-23, D50–D58)
 
@@ -8484,8 +8490,8 @@ audit read each of these and found them correct and well-tested; they are delibe
   groups touched `ctx.db` with no **explicit** `requireUnlocked()` preamble, so they fail-closed but
   surfaced the raw English vault string. §30 added the localized preamble to those four groups and
   **generalized** the structural test across the core/model/audit/rag/benchmark/collections modules — see
-  `tests/integration/ipc-lock-coverage.test.ts`; the rest (docs/doctasks/images) keep their own dedicated
-  locked-vault tests.)*
+  `tests/integration/ipc-lock-coverage.test.ts`; images (vision test campaign) and docs/doctasks (documents
+  test campaign) have since joined its `MODULES` loop, and chat keeps its own TEST-N8 test.)*
 - **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
   allow-list, CSP `connect-src 'self'`, OCR window deny-all.
 - **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
@@ -8556,7 +8562,7 @@ lives in **this section**. This ledger is the durable index — resolve a code c
 | TEST-6 (Info) | 3 | **docs-only / by-design** — the **S13b skill-trigger precision bar IS a live CI gate** (`fired-wrong == 0` ∧ `precision ≥ 0.95`, `skill-triggers.test.ts`); the remaining no-automated-floor gap is narrower: **RAG answer-quality + real-model output** (env-gated out of CI by design), caught only by the manual smoke matrix. *(Wording corrected Phase 7 / D1 — the original "owner-gated on D1" claim went stale once the S13b bar landed.)* | arch test-enforcement record TEST-6 |
 | **SEC-1 code half** (Low) | — | **accepted residual / open follow-up** — unlock-path rate-limit/attempt-counter + create-time strength meter/floor; deliberately **not** built in the docs-only close-out (a UI rate-limit doesn't bind the offline attacker that is the real threat; the at-rest KDF is the mitigation) | security-model.md residual note |
 | SEC-2 (Low) | — | **accepted residual / open follow-up** — `previewSkillPackage` stages path-/size-validated, finally-cleaned content to the shared OS `tmpdir()`; not an escape (skill packages aren't secret). Follow-up: stage under `userSkillsDir` for trust-zone consistency | this ledger |
-| SEC-3 (Info) | — | **accepted residual / open follow-up** — the dialog-opener IPCs (`pickDocuments`/`imageChooseImage`) mint a capability token pre-unlock, but every **consuming** handler is `requireUnlocked()`-gated so the token is inert until unlock; a consistency gap, not an exploit. *(Corrected 2026-09-03, #240 / PR #275: `pickSkillPackage` minted NO token at the time — it returned a raw path that `previewSkillPackage`/`importSkill` accepted unverified; since PR #275 it is unlock-gated and mints a token like the other two, via `src/main/ipc/picker-tokens.ts`.)* | this ledger |
+| SEC-3 (Info) | — | **accepted residual / open follow-up** — the dialog-opener IPCs (`pickDocuments`/`imageChooseImage`) mint a capability token pre-unlock, but every **consuming** handler is `requireUnlocked()`-gated so the token is inert until unlock; a consistency gap, not an exploit. *(Corrected 2026-09-03, #240 / PR #275: `pickSkillPackage` minted NO token at the time — it returned a raw path that `previewSkillPackage`/`importSkill` accepted unverified; since PR #275 it is unlock-gated and mints a token like the other two, via `src/main/ipc/picker-tokens.ts`. Corrected 2026-10-14: `imageChooseImage` is unlock-gated too since #119, so `pickDocuments` is the one dialog opener left ungated — tracked in #681; `ipc-lock-coverage.test.ts` lists it as the `registerDocsIpc` entry's exempt channel until then.)* | this ledger |
 | REL-5 (Low) | — | **non-reachable while the single-`DatabaseSync` architecture holds; promote to a real fix only if a second DB connection (e.g. a worker-thread reader) is introduced** — verified (follow-up Phase 6) architecturally non-reachable: exactly one live synchronous `DatabaseSync` connection per session (`db.ts`; others are transient open→seed→checkpoint→close), and all 15–20 `BEGIN…COMMIT` bodies are synchronous (the slow `await embed/generate` sits *outside* the txn). `BEGIN IMMEDIATE` would be a no-op without a second writer, so the `withTransaction(db, fn)` refactor stays deferred. **Precondition made explicit so a future worker-pool/second-connection change can't silently make it reachable** | this ledger; §37 (follow-up Phase 6 REL note) |
 | §5 INFO / by-design (CSV single-data-row, DOCX paragraph-split, `embedChunks` single-batch, `corpusNeedsReindex` double-scan, rerank-before-dedup cost) | — | **accepted (no change)** — low-severity edge/robustness notes; each acceptable as-is, recorded so the next audit skips them | this ledger (accepted residuals) |
 | PERF-5 Part B (list windowing), E5 `query:`/`passage:` prefix migration | — | **carried forward from §25 (still open)** — list virtualization re-deferred (no virt lib; variable-height rows + scroll/find/a11y behavior-sensitive); the prefix migration re-embeds the whole corpus (its own phase) and would re-enable a `ragMinSimilarity` floor | §25 accepted residuals (unchanged) |
@@ -8967,9 +8973,10 @@ bundles offline — no runtime fetch).
 
 > **Note (location, as of DX-3 — follow-up Phase 8, §38):** the behavior claims below are current, but
 > `DocumentsScreen.tsx` was subsequently split into `screens/documents/*` (`DocRow`, `SectionRail`,
-> `PreviewModal`, `format.tsx`, `types.ts`) — a behavior-preserving relocation; the windowing + the
-> `__docRowRenderCounts` seam described here are intact (the `DocRow` `React.memo` lives in
-> `screens/documents/DocRow.tsx` now).
+> `PreviewModal`, `format.tsx`, `types.ts`) — a behavior-preserving relocation; the windowing
+> described here is intact (the `DocRow` `React.memo` lives in `screens/documents/DocRow.tsx` now; the
+> `__docRowRenderCounts` seam was retired in 2026-10 — the PERF-5 tests count renders test-side,
+> `tests/helpers/render-counter.ts`).
 
 - **PERF-3 (Medium) — `listDocuments` no longer parses the full `ocr_json` blob per OCR'd row.** DB-8 (§
   Performance Wave P5) projected columns on the single-doc getters, but the **list** path still did
@@ -9000,8 +9007,8 @@ bundles offline — no runtime fetch).
   full-screen scroll behavior is unchanged (no inner-pane restructure that would alter scroll position /
   scroll-to). Variable row height (a failed-import error banner, a stale-embeddings notice, a wrapping chip
   cluster — `.doc-row` is `min-height: 56px`, not fixed) is handled by per-row `measureElement` over a 57px
-  estimate + overscan, so a taller row self-corrects. The `DocRow` `React.memo` + the `__docRowRenderCounts`
-  seam are untouched; a shared `renderRow` keeps the windowed and fallback paths' props wiring in one place.
+  estimate + overscan, so a taller row self-corrects. The `DocRow` `React.memo` is untouched (its render
+  counts have been read test-side since 2026-10, `tests/helpers/render-counter.ts`); a shared `renderRow` keeps the windowed and fallback paths' props wiring in one place.
   - **GATING (truthful, not a test sniff).** Windowing engages only once a real, laid-out viewport is
     resolved (`scrollEl != null && clientHeight > 0`). With no `.content` ancestor or a 0px viewport — a
     unit test rendering the screen standalone under jsdom, or first paint before layout — there is nothing
@@ -9737,7 +9744,7 @@ Per-finding disposition (fixed → session@commit / deferred·declined·accepted
 | **D-6** | LOW | S7 (this) | **doc fixed** — the chat-IPC enumeration replaced with a single-source pointer to `shared/ipc.ts` (chat group), noting `suggestSkills` is registered by the **skills** IPC (`registerSkillsIpc`), not `registerChatIpc`. |
 | **T-1** | HIGH (cov) | S2 `6e89879` | **tests** — renderer stream-recovery (`ChatStreamRecovery.test.tsx`): live bubble + locked composer + refresh-on-completion (folds CR-4), fresh-mount re-select + documents-mode mirror (folds CR-5), user-click-not-yanked. |
 | **T-2** | MED | S2 `6e89879` | **tests** — mid-stream conversation switch + Stop target (`ChatSwitchStop.test.tsx`): the non-active row is `disabled`, Stop aborts the streaming conversation — the invariant that keeps CR-9 safe. |
-| **T-3** | MED | S7 (this) | **tests** — docs-IPC guard preconditions (`docs-ipc.test.ts`): a gated embedder parks a doc in `processing` → delete/reindex/preview all reject `/still being processed/`; a `docTasks.isDocumentBusy → true` variant → delete/reindex reject `/task is running/i` with a **negative control** that preview resolves (pins the asymmetry). |
+| **T-3** | MED | S7 (this) | **tests** — docs-IPC guard preconditions (`docs-ipc.test.ts`): a gated embedder parks a doc in `processing` → delete/reindex/preview/original export all reject `/still being processed/`; the task-busy half lives in `doctasks-ipc.test.ts` 'busy-document guard' over a REAL DocTaskManager — delete/reindex of every source of a running summary or compare reject `/task is running/i`, with a **negative control** that preview resolves (pins the asymmetry). |
 | **T-4** | MED | S7 (this) | **tests** — import-loop lock-mid-job break (`docs-ipc.test.ts`): a custom ctx whose `isUnlocked` flips false inside the first file's embed → job `done`, `completed===1`, f1 non-terminal (raw SELECT), lease balanced; then backdate + unlock → `listDocuments` reconciles f1 → `failed`. **Teeth revert-confirmed** (drop the drain's `processing.delete` → f1 stays `embedding`). |
 | **T-5** | LOW | S5 `b38f819` | **tests** — compaction boundaries (`chat-compaction.test.ts`): region `=== MIN_COMPACTABLE_TURNS` proceeds vs `MIN−1` returns; size `=== threshold` proceeds vs `threshold−1` against the CB-3 `min(0.85·window, window−reserve)`. |
 | **T-6** | LOW | S7 (this) | **tests (de-mock)** — `ChatUnmount.test.tsx` drops the `clearTimeout(<exact id>)` spy for a behavioral assertion (advance past `STREAM_FLUSH_MS`, no setState-after-unmount warning) — refactor-robust across a `clearTimeout`→`mountedRef` change; keeps the (b) `listDocuments`-count assertion. |
@@ -10848,7 +10855,8 @@ crash, permanently outside CI) closed with Phase 1's boundary tests, which use R
 not defects):** source-text scan "wiring pins" (`window-security.test.ts`, `packaging.test.ts`,
 `skills-installer`, `third-party-notices`, `ocr.test.ts`, `rail-labels.test.ts`); the katex
 `package.json` compare across hoist locations in `assistant-markdown.test.tsx`; `as unknown as`
-private-field injection (`docs-ipc.test.ts`) — whoever touches those files converts the pin to a
+private-field injection (`chat-ipc.test.ts:933`; `docs-ipc.test.ts` moved to `ctxWith` overrides in the
+documents test campaign) — whoever touches those files converts the pin to a
 behavioural assertion where the change is small, else leaves a `// watch-item` comment. Fake timers:
 the 2026-08-22 flake class is fixed; remaining `advanceTimersByTimeAsync(0)` loops drain microtasks
 only; `FullSuiteGuard` converts dropped test FILES into a hard failure but cannot see dropped
@@ -12057,6 +12065,9 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   behind `import.meta.env.DEV`, so it no-ops in a production build (verified: `npm run build` clean);
   vitest runs with DEV true, so the PERF-5 memo test (`DocumentsScreen.test.tsx`, 48 green) still observes
   the bumps. No production behaviour change (the exported Map stays an empty no-op in prod).
+  *(Superseded 2026-10, documents-doctasks test campaign: the Map and its DEV write are gone; the PERF-5
+  tests wrap production's `DocRow` memo in a test-side counter through `vi.mock`,
+  `tests/helpers/render-counter.ts`, so nothing ships for the test.)*
 - **DX-5 — the sidecar crash → auto-fallback WIRING is pinned end-to-end
   (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proved the
   ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama (that unit
@@ -12075,9 +12086,9 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   sleep is replaced by `expect(await {rerank,embed}2).toBe('rejected')` — under the F19 `tearingDown`
   guard the racing call REFUSES on its own, so the absence is asserted by its settled outcome (a regression
   that spawned a second child instead resolves `'ok'` AND bumps the spawn count the final assertion still
-  checks). `doctasks.test.ts`: the 40 ms "let the stream start" sleep is replaced by
-  `while (runtime.concurrent === 0) await tick()` (the scripted runtime's observable in-flight count), so
-  the mid-stream cancel lands deterministically once a generation is genuinely running. These assert/await
+  checks). `doctasks.test.ts`: the 40 ms "let the stream start" sleep is replaced by a bounded
+  `until(() => runtime.concurrent > 0)` poll (`tests/helpers/hang-budget.ts`) on the scripted runtime's
+  observable in-flight count, so the mid-stream cancel lands deterministically once a generation is genuinely running. These assert/await
   an absence-or-start so they are un-teeth-checkable by nature, but no longer race the wall clock.
 
 `git diff src/` after Phase 7 = the single DX-2 DEV-guard line; every teeth-check neuter (hybrid.ts fusion
@@ -12129,13 +12140,15 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   ⋯ menu: `getByRole('menu')` opened with its `Re-index` item, the sibling row titles intact — then keeps the
   render-count deltas as a SECONDARY perf oracle. **Teeth:** dropping `memo(DocRow)` reds the delta assertions
   (perf oracle intact) while the behavioral assertions still pass (proving the two layers are independent); a
-  toggle/open regression would red the behavioral layer the counter could not catch.
+  toggle/open regression would red the behavioral layer the counter could not catch. *(Since 2026-10 the
+  deltas come from a test-side counter around production's memo, `tests/helpers/render-counter.ts`, so
+  the DX-2 DEV dependence is gone.)*
 - **T3 — injected-failure ROLLBACK coverage extended to the categorize persist and the ingestion chunk-insert loop
   (the two genuinely-untested high-blast-radius BEGIN…COMMIT sites).** Mirroring the `data-layer-hardening`
   gold standard (`deleteConversation`): wrap the **real** shared connection so one targeted `.run()` throws
   mid-transaction, drive the **real** function, and assert (a) NOTHING partial persisted AND (b) a subsequent
   `BEGIN/COMMIT` succeeds (the single shared `DatabaseSync` is not poisoned). **(i)** `doctasks-categorize.test.ts`
-  — the real `DocTaskManager`+`runCategorize` persist (handlers/categorize.ts:110); throw on the first
+  — the real `DocTaskManager`+`runCategorize` persist (handlers/categorize.ts, step (3)'s `BEGIN…COMMIT`); throw on the first
   `UPDATE bank_transactions SET category_id` → rows stay uncategorized, the in-txn `ensureBuiltinCategories` seed is
   rolled back (`bank_categories` count 0), the statement is never marked model-assisted, a fresh `BEGIN/COMMIT`
   opens, and a one-shot-recovered clean re-run categorizes normally. **(ii)** `ingestion.test.ts` — the real
@@ -12143,8 +12156,10 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   `INSERT INTO chunks` so a chunk is inserted-then-rolled-back → `chunkCount 0`, connection clean, clean re-process
   indexes. **Teeth:** neuter each handler's `ROLLBACK` → the dangling `BEGIN` poisons the connection / a partial
   row survives → both tests red; restored. *(Discovered — the audit's "only 1 of ~12 sites tested" is inaccurate:
-  `commitNode` already has the H11 injected-edge-insert rollback test (`whole-doc-analysis.test.ts:421`) and the
-  extraction insert has its own (`whole-doc-extract.test.ts:221`) — both driving the real function with the gold-
+  `commitNode` already has the H11 injected-edge-insert rollback test (`whole-doc-analysis.test.ts` 'H11 per-node
+  transaction durability › rolls back on an injected edge insert failure; the shared connection is not poisoned')
+  and the extraction insert has its own (`whole-doc-extract.test.ts` 'extract pass › rolls back on an injected
+  insert failure; the shared connection is not poisoned [H11]') — both driving the real function with the gold-
   standard assertions; T3 closes the categorize + ingestion gaps, the genuinely-missing pair.)*
 - **T5 (Low, backlog) — swept the integration suite for fixed `sleep(N)` that gate a CORRECTNESS premise; converted
   the cheap ones, recorded the residuals.** Most fixed-duration `setTimeout` are STATE-POLL loop intervals
@@ -12234,9 +12249,10 @@ message only. Suite **2669 passed / 41 skipped** (Phase-B baseline 2653/41 → *
   release-on-abort on BOTH paths — a single `release` closure (shared `released` latch with the returned fn, so
   the slot is given back EXACTLY once) plus `signal.addEventListener('abort', release, { once })`. The slow
   path's `waitForHandoff` still handles an abort WHILE PARKED and throws before the listener is installed.
-  Teeth: neuter the listener → the parked-build resume test reds (chatHolders stuck); the idempotency test pins
-  no double-decrement (a naive fix would resume the build prematurely). (`analysis/model-slot-arbiter.ts`;
-  `model-slot-arbiter.test.ts` ×2.)
+  Teeth: neuter the listener → the parked-build resume test reds (chatHolders stuck); the exactly-once test
+  ('a holder gives its slot back exactly once when %s (R2 — no double-release)') advances the whole #399 resume
+  delay while the other chat still holds, so a double decrement resumes the build there and reds it (a naive fix
+  would resume the build prematurely). (`analysis/model-slot-arbiter.ts`; `model-slot-arbiter.test.ts` ×2.)
 - **R3 (Medium, latent) — resident-cache reconcile mutated the live map in place before committing.** A throw
   mid-`reconcileDelta`/`reconcileFull` (a transient DB read error / truncated row) left the map half-mutated
   (some removed ids dropped, only some added ids decoded). Single-threaded synchrony means no search observes
@@ -13919,7 +13935,11 @@ under the `electron`-mocking suite:
   and vitest's CI `testTimeout` widening does **not** apply to a hand-rolled poll. It failed 3 of
   5 full-suite runs under load. Fixed as a labelled interlude commit: the poll bound became 30 s
   (a hang detector, never a timing proof) and the test carries an explicit 60 s budget — the same
-  value CI already uses. No semantics loosened. Same family as #84/#97/#101.
+  value CI already uses. No semantics loosened. Same family as #84/#97/#101. *(Since the 2026-10
+  documents/doctasks test campaign that test is gone: its service half duplicated `doctasks.test.ts`
+  'cancels a QUEUED task without running it; no-arg cancel hits the active task', and the #157 routing
+  it named is pinned at the IPC handler in `doctasks-ipc.test.ts`; the suite's poll bound is back to
+  the shared 10 s.)*
 - **(e) `ELECTRON_SKIP_BINARY_DOWNLOAD` is dead** and was removed from `ci.yml`: Electron ≥ 42
   reads it nowhere, so leaving it would advertise an effect it no longer has. CI needs no knob at
   all now — it never invokes the electron bin, and the rewritten postinstall exits 0 on a

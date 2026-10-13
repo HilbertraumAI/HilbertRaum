@@ -1686,7 +1686,7 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   total per/per category/itemize/tally + the DE stems kategorisier/gruppier/summier/aufschlüssel/
   aufsummier and the phrases Summe pro/Gesamtsumme/pro Kategorie/nach Kategorie — an aggregation over a
   document is a whole-document task by nature, so it must never silently run on top-k), fixed
-  precedence **explicit-button > compare(2 docs) > coverage-extract > tree-summary > relevance** (M7),
+  precedence **compare(2 docs) > coverage-extract > tree-summary > relevance** (M7),
   closed-vocab→type synonym map (the `amount` synonyms include expense(s)/spending/income/revenue +
   Ausgabe(n)/Einnahme(n)/Umsatz/Umsätze since #37); **low-confidence / no-extract-data /
   compare-without-2-docs → labelled relevance** (never an empty "no items" or a false "complete"). The
@@ -2114,7 +2114,11 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   wording — true for BOTH truncation causes (budget *and* render cap drop later changes, never whole
   later sections). The doctask surface (`doctasks/handlers/compare.ts`) adds an explicit PARTIAL note
   under the `## Exact changes` heading of the materialized report when the same cap fires. Pinned by
-  [`tests/unit/rag-compare-diff-truncation.test.ts`](../apps/desktop/tests/unit/rag-compare-diff-truncation.test.ts).
+  [`tests/unit/rag-compare-diff-truncation.test.ts`](../apps/desktop/tests/unit/rag-compare-diff-truncation.test.ts)
+  (the chat read: flag → PARTIAL prompt) and
+  [`tests/integration/doctasks-compare.test.ts`](../apps/desktop/tests/integration/doctasks-compare.test.ts)
+  'a change list past DIFF_RENDER_MAX materializes the PARTIAL note under the redline heading (SK-2)' (the
+  doctask note).
 - **(a)** both full texts fit one pass — the existing single call over both, already symmetric.
 - **(c) symmetric both-trees** — when BOTH docs have a `ready` tree under the same active embedder AND
   the smaller doc has ≤ `SYMMETRIC_COMPARE_CALL_CEILING` (24) level-1 sections. Align each tree's
@@ -2139,8 +2143,8 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   rather than always sacrificing the Only-B tail. The same belt in mode (b) (`runCompareSectionMatched`)
   also sets `truncated` now (it cuts the later doc-A windows, so the existing `compareTruncationNotice`
   "covers its beginning" wording applies) — the two paths are honest about condensing in parallel.
-- **(b) asymmetric A-driven** (the existing section-matched map-reduce over `VectorIndex`-scoped doc-B
-  neighbours) — the labelled fallback when the two docs are **not** both deeply indexed. The materialized
+- **(b) asymmetric A-driven** (the existing section-matched map-reduce over doc-B neighbours ranked in
+  memory from doc B's stored vectors — `compareNearestNeighbors`, architecture.md "Compare retrieval") — the labelled fallback when the two docs are **not** both deeply indexed. The materialized
   report now carries `compareAsymmetricNotice` ("one-directional — may under-report content found only in
   B; deeply index both for a complete two-way comparison"). v1 does **not** auto-build the missing tree —
   it falls back, labelled, and the user has the per-doc "Build deep index" action (the default; flagged).
@@ -2303,8 +2307,8 @@ notice).
 beginning-only (INPUT, tree territory); a deliverable long enough to still be cut after the 2-cap keeps the
 honest OUTPUT-truncated badge; 2–24 map calls (+ fold) of latency on a large analysis (with the Phase 3
 affordance). Tests: `rag-whole-doc-mapreduce.test.ts` (Phase 1 reach + Phase 2 `maxTokens` + Phase 3 notice +
-Phase 4 continuation/dedup/cap/abort + #2 fold-coverage/hard-ceiling), `rag-whole-doc-tree.test.ts` (the hard
-ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation), and
+Phase 4 continuation/cap/abort + #2 fold-coverage/hard-ceiling), `rag-whole-doc-tree.test.ts` (the hard
+ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation, and the shared engine's seam de-dup), and
 `tests/unit/wholedoc-reduce-budget.test.ts` (pure budget math).
 
 **§-anchor legend (retired plan → here).** `wholedoc-truncation-fix-plan §2` (invariants), `§3` (Phase 1 —

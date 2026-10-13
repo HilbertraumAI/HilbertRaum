@@ -1,11 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { retrieveCompareDiff, buildCompareDiffPrompt, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
 import { wordDiff, renderChangesForModel, renderRedline, DIFF_RENDER_MAX } from '../../src/main/services/diff'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
+import { openFreshDb } from '../helpers/db-fixtures'
 
 // Audit SK-2 (skills-audit-2026-07-07): the model-facing diff renderers cap the change list at
 // DIFF_RENDER_MAX and drop the LATER changes; before this fix the chat compare path passed no `max`
@@ -29,10 +27,6 @@ function stream(n: number, prefix: string): string {
 
 const BIG_BUDGET = 1_000_000 // tokens — far more than a 200-change render needs, so the budget never truncates.
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-cmpdiff-')), 'test.sqlite'))
-}
-
 /** Seed one document as a single chunk carrying the whole word stream. */
 function seedDoc(db: Db, id: string, text: string): void {
   const now = '2026-01-01T00:00:00.000Z'
@@ -47,7 +41,7 @@ function seedDoc(db: Db, id: string, text: string): void {
 }
 
 function compareOf(nChanges: number): { truncated: boolean; prompt: string } {
-  const db = freshDb()
+  const db = openFreshDb('cmpdiff')
   seedDoc(db, 'docA', stream(nChanges, 'A'))
   seedDoc(db, 'docB', stream(nChanges, 'B'))
   const result = retrieveCompareDiff(db, ['docA', 'docB'], BIG_BUDGET)
@@ -68,7 +62,7 @@ function compareOf(nChanges: number): { truncated: boolean; prompt: string } {
 
 describe('retrieveCompareDiff — the DIFF_RENDER_MAX render cap sets truncated (SK-2)', () => {
   it('>DIFF_RENDER_MAX changes within budget ⇒ truncated:true and a PARTIAL prompt (NOT "complete and exact")', () => {
-    const nChanges = DIFF_RENDER_MAX + 50 // 250 — over the render cap, well under DEFAULT_MAX_EDITS/maxWords.
+    const nChanges = DIFF_RENDER_MAX + 50 // 250 — over the render cap, well under DEFAULT_MAX_EDITS / DEFAULT_MAX_WORDS.
 
     // Budget-truncation must NOT be the cause: rendering ALL 250 changes costs far less than the budget,
     // so the ONLY reason this list is capped is the DIFF_RENDER_MAX render cap (else the test would pass
@@ -108,7 +102,7 @@ describe('retrieveCompareDiff — the budget covers changes + redline JOINTLY (C
 
   it('a ~200-one-word-change pair at a 4096-token window keeps the whole payload within budget', () => {
     const nChanges = 200
-    const db = freshDb()
+    const db = openFreshDb('cmpdiff')
     seedDoc(db, 'docA', stream(nChanges, 'A'))
     seedDoc(db, 'docB', stream(nChanges, 'B'))
     // The REAL budget the grounded compare path hands retrieveCompareDiff for a 4096-token window.
@@ -135,7 +129,7 @@ describe('retrieveCompareDiff — the budget covers changes + redline JOINTLY (C
     const budget = Math.floor((changesWords + redlineWords / 2) * 1.3)
     expect(changesWords * 1.3).toBeLessThanOrEqual(budget) // sanity: the list alone fits
 
-    const db = freshDb()
+    const db = openFreshDb('cmpdiff')
     seedDoc(db, 'docA', a)
     seedDoc(db, 'docB', b)
     const result = retrieveCompareDiff(db, ['docA', 'docB'], budget)

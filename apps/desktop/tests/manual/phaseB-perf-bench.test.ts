@@ -7,7 +7,8 @@ import {
   VectorIndex,
   cosineSimilarity,
   encodeVector,
-  invalidateResidentVectors
+  invalidateResidentVectors,
+  type Embedder
 } from '../../src/main/services/embeddings'
 import {
   compareNearestNeighbors,
@@ -131,6 +132,13 @@ describe.skipIf(!RUN)('Phase B P2 — unscoped search fast path vs scoped scan',
       .map((s) => Number(s.trim()))
       .filter((x) => Number.isFinite(x) && x > 0)
     const QUERIES = 20
+    const benchEmbedder: Embedder = {
+      id: 'bench-model',
+      dimensions: DIMS,
+      embed: async () => {
+        throw new Error('phaseB bench: search() takes the query vector, it never embeds')
+      }
+    }
     for (const n of SIZES) {
       const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-phaseb-'))
       const db = openDatabase(join(dir, 'b.sqlite'))
@@ -139,11 +147,11 @@ describe.skipIf(!RUN)('Phase B P2 — unscoped search fast path vs scoped scan',
         invalidateResidentVectors(db)
         const queries = Array.from({ length: QUERIES }, () => randUnit())
 
-        const fast = new VectorIndex(db, { id: 'bench-model', dimensions: DIMS } as never, {
+        const fast = new VectorIndex(db, benchEmbedder, {
           embeddingModelId: 'bench-model'
         })
         // Passing every doc id forces the unchanged scoped SQL candidate scan over the same universe.
-        const scoped = new VectorIndex(db, { id: 'bench-model', dimensions: DIMS } as never, {
+        const scoped = new VectorIndex(db, benchEmbedder, {
           embeddingModelId: 'bench-model',
           documentIds: docIds
         })

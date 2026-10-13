@@ -5,13 +5,13 @@ import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import {
   adoptActiveJob,
-  getTranslateSession,
-  resetTranslateSessionForTests
+  clearTranslateSession,
+  getTranslateSession
 } from '../../src/renderer/lib/translateSession'
 import {
+  clearFileTranslate,
   getFileTranslate,
-  translateDroppedFiles,
-  resetFileTranslateSessionForTests
+  translateDroppedFiles
 } from '../../src/renderer/lib/fileTranslateSession'
 import {
   getVisionSession,
@@ -60,8 +60,8 @@ const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
 
 afterEach(() => {
   cleanup()
-  resetTranslateSessionForTests()
-  resetFileTranslateSessionForTests()
+  clearTranslateSession()
+  clearFileTranslate()
   resetVisionSessionForTests()
   vi.restoreAllMocks()
 })

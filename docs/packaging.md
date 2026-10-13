@@ -934,8 +934,8 @@ vitest budget, and a hook is setup, not proof. Locally both stay at 15 s so a re
 fails fast at the desk.
 **A hand-rolled wall-clock bound does NOT widen with them** — a `Date.now() - start > N` poll
 guard, a fixture's own `waitFor` default, or a child-process `timeout` is invisible to vitest's
-config, so each one needs its own CI headroom (`doctasks-translation.test.ts` says so at its
-30 s hang detector). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
+config, so each one needs its own CI headroom (the header of `tests/helpers/hang-budget.ts`
+records the case that taught it). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
 far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
 #389).
 
@@ -1305,7 +1305,7 @@ default build and `--backend cpu`) to refresh the binary before these harnesses 
 | `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
 | `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |
 | `vision-smoke` | `HILBERTRAUM_VISION_SMOKE` | the vision sidecar (`--mmproj`) cold-starts, analyzes a fixture image, streams, reuses the prefill, idle-tears-down + cold-restarts |
-| `compare-smoke` | `HILBERTRAUM_COMPARE_SMOKE` | the compare doc-task pipeline end-to-end (the earlier chat-model `translation-smoke` went away with that pipeline; `translategemma-smoke` below covers translation) |
+| `compare-smoke` | `HILBERTRAUM_COMPARE_SMOKE` | the shipping compare prompts (mode-(a) full compare EN + DE, a mode-(b) pair map, a reduce over planted notes) on a real chat GGUF through a bare `LlamaRuntime`, printing the R-T2 format/placement/language findings — not the DocTaskManager pipeline (the earlier chat-model `translation-smoke` went away with the chat-model translation pipeline; `translategemma-smoke` below covers translation) |
 | `translategemma-smoke` | `HILBERTRAUM_TRANSLATEGEMMA_SMOKE` | the TranslateGemma sidecar (NO `--jinja`, raw `/completion`) LOADS on the pin (Vulkan **and** CPU safety-net), DE↔EN translates, keeps invoice numbers/model codes verbatim (numbers/dates localize), resists embedded-instruction injection, leaks no `<end_of_turn>`; prints tokens/sec + peak RSS. **The TG-2 go/no-go gate** — since TG-3 the doc-task's production translation backend. **Extended at TG-6:** per-language round-trip + verbatim-token check for the curated 10, `/tokenize` tokens-per-word (the planner-constant calibration), and a co-residency-RSS leg (translation + E5 + a resident chat, needs `models/{embeddings,chat}/*.gguf`). CPU-safety-net leg needs `runtime/llama.cpp/<os>/cpu/` |
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `resident-cache-real` | `HILBERTRAUM_RESIDENT_REAL` (the drive root) | real E5 vectors stored through the production codec on the drive: the resident cache's cold build, its warm scan, and a full `searchText` query (a real E5 query embed + the scan) |

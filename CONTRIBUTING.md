@@ -177,6 +177,36 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   during translation's GPU start is kept off the CPU rung by more than one check, so "one spawn"
   stayed true with the start-abort check deleted; only the device-fallback note, which that check
   alone prevents, showed the break.
+- **The doc-task world lives in `tests/helpers/doctask-fixtures.ts`**: `docTaskWorld` (temp root,
+  DB, document store), `importText` / `importWords` through the real ingestion pipeline,
+  `docTaskManager` on harmless default deps, `docTaskRuntime` (scripted, abort-aware, counts
+  concurrency) and `waitTerminal`. The ModelSlotArbiter fake clock is `tests/helpers/slot-clock.ts`.
+  Ten suites used to carry their own copies.
+- **A registrar's locked-vault proof is its `MODULES` entry in `ipc-lock-coverage.test.ts`**, which
+  drives every channel and names each exempt one with its reason. A hand-picked lock test in the
+  module's own suite drifts: docs-ipc's checked 5 of the 14 gated `docs:*` channels, and
+  doctasks-ipc's checked 1 of 3.
+- **An IPC copy of a service guard needs an IPC-specific risk** (routing, a sender check, the lock
+  gate, error mapping). doctasks-ipc re-proved the manager's "refuse while chat streams" and
+  "exactly two documents" checks through a handler that forwards them unchanged, while the one IPC
+  risk there, routing a cancel to the right task id (#157), had no test.
+- **When a delay starts guarding an action, negatives about that action must look past the delay.**
+  After #399 put a 90 s wait before a parked build resumes, "release is idempotent" and "only after
+  the last chat" only armed the fake timer, so `resumed === false` held with the guard deleted.
+  Advance the clock past the shipped delay, or assert the armed timer (`slotClock().pending()`).
+- **A fake cipher must change the bytes.** With an identity "cipher", an export that read the
+  `.enc` file without decrypting it returned the right bytes, and the test stayed green.
+- **Reset renderer stores with the production purge, not a test-only reset.** Call
+  `clearDocTaskSession()` / `clearFileTranslate()` / `clearTranslateSession()` after RTL
+  `cleanup()`. The removed `…ForTests` resets zeroed generation counters, which production never
+  does, so a stale callback from one test could match the next test's first generation.
+- **Measure a complexity bound in process CPU time, at an input a wrong walk cannot finish
+  quickly.** Vitest cannot time out synchronous code: an input no walk can finish hangs the fork
+  instead of failing. And at 1,000,000 pages a page-by-page walk passed in milliseconds.
+  `doctasks-windows`'s M-2 row walks 2e9 declared pages under `process.cpuUsage()`.
+- **Count memo re-renders on the test side.** `tests/helpers/render-counter.ts` wraps the
+  production `memo(...)` component (keeping its compare function) inside a `vi.mock`, so no
+  production module needs a DEV-only counter. Keep a positive control that shows the counter moves.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

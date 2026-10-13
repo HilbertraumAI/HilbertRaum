@@ -175,7 +175,7 @@ function failWith(message: string): void {
 /**
  * Map the doc-task's raw progress to the WINDOW counts the Translate view labels
  * ("Translating… (3/12)"). The translation doc-task's `stepsTotal` counts the model windows PLUS
- * the final materialize step (`planTranslationWindows`: `windows + 1`), so a 12-window document
+ * the final materialize step (`planTranslationBlocks`: `windows + 1`), so a 12-window document
  * would otherwise read "(3/13)". The materialize step is subtracted for DISPLAY (F-8) and
  * `windowsDone` is clamped to the window total — the materialize tick that pushes `stepsDone` to
  * `windows + 1` lands exactly as the task goes `done`, when the result panel (not this label) shows.
@@ -637,13 +637,4 @@ export function clearFileTranslate(): void {
   stopPolling()
   snapshot = { ...EMPTY }
   notify()
-}
-
-/** Test-only: drop module-level state between renderer tests. */
-export function resetFileTranslateSessionForTests(): void {
-  stopPolling()
-  snapshot = EMPTY
-  gen = 0
-  docTaskJobId = null
-  listeners.clear()
 }

@@ -27,19 +27,15 @@ describe('wordDiff — the core cases', () => {
   // identical — with n=m=0 the Myers d=0/k=0 iteration read v[1] on a length-1 Int32Array
   // (undefined), x=undefined poisoned the termination test, and myers fell through to the
   // too-different bail. Two empty texts are word-for-word identical per the DiffResult contract.
-  it('two empty texts are identical, with zero stats (F-23)', () => {
-    const r = wordDiff('', '')
+  it.each([
+    ['', ''],
+    ['   ', '\n']
+  ])('two zero-word texts (%j vs %j) are identical, with zero stats (F-23)', (a, b) => {
+    const r = wordDiff(a, b)
     expect(r).not.toBeNull()
     expect(r!.identical).toBe(true)
     expect(r!.changes).toHaveLength(0)
     expect(r!.ops).toHaveLength(0)
-    expect(r!.stats).toEqual({ added: 0, removed: 0, equal: 0 })
-  })
-
-  it('whitespace-only texts tokenize to zero words and are identical too (F-23)', () => {
-    const r = wordDiff('   ', '\n')
-    expect(r).not.toBeNull()
-    expect(r!.identical).toBe(true)
     expect(r!.stats).toEqual({ added: 0, removed: 0, equal: 0 })
   })
 
@@ -101,11 +97,13 @@ describe('wordDiff — the core cases', () => {
     ])
   })
 
-  it('returns null when the two texts exceed the edit cutoff (→ caller falls back)', () => {
-    const a = Array.from({ length: 400 }, (_, i) => `alpha${i}`).join(' ')
-    const b = Array.from({ length: 400 }, (_, i) => `beta${i}`).join(' ')
-    // 800 edits > a tiny cutoff → null.
-    expect(wordDiff(a, b, { maxEdits: 50 })).toBeNull()
+  it('returns null past the SHIPPED edit cutoff, and diffs right at it (→ caller falls back)', () => {
+    const distinct = (n: number, p: string): string => Array.from({ length: n }, (_, i) => `${p}${i}`).join(' ')
+    const a = Math.floor(DEFAULT_MAX_EDITS / 2)
+    const b = DEFAULT_MAX_EDITS - a
+    // All-distinct streams: the edit distance is the summed length.
+    expect(wordDiff(distinct(a, 'alpha'), distinct(b, 'beta'))).not.toBeNull() // exactly DEFAULT_MAX_EDITS edits
+    expect(wordDiff(distinct(a, 'alpha'), distinct(b + 1, 'beta'))).toBeNull() // ONE over: the bound is exact
   })
 
   it('near-identical large texts diff cheaply under the default cutoff (Myers is ~linear here)', () => {
@@ -116,7 +114,6 @@ describe('wordDiff — the core cases', () => {
     expect(r).not.toBeNull()
     expect(r!.changes).toHaveLength(1)
     expect(r!.changes[0].added).toEqual(['INSERTED'])
-    expect(DEFAULT_MAX_EDITS).toBeGreaterThan(2)
   })
 
   it('is symmetric in structure: swapping old/new swaps removed/added', () => {

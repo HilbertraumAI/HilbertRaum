@@ -144,8 +144,6 @@ export interface TranslationPlan {
   windows: string[]
   /** Output cap per window call: everything the input share leaves free. */
   windowMaxTokens: number
-  /** Model calls (windows) + the final materialize step. */
-  stepsTotal: number
 }
 
 /**
@@ -175,7 +173,7 @@ export function planTranslationWindows(
     TRANSLATION_MIN_OUTPUT_TOKENS,
     usable - Math.ceil(budgetWords * TRANSLATION_INPUT_TOKENS_PER_WORD)
   )
-  return { windows, windowMaxTokens, stepsTotal: windows.length + 1 }
+  return { windows, windowMaxTokens }
 }
 
 // ---- Completeness accounting (issue #58) -------------------------------------------------

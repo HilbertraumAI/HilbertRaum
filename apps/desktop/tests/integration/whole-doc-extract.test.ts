@@ -1,17 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import {
-  createQueuedDocument,
-  documentsDir,
-  getDocument,
-  processDocument,
-  reconcileStuckExtracts,
-  reindexDocument
-} from '../../src/main/services/ingestion'
-import { DocTaskManager } from '../../src/main/services/doctasks'
+import type { Db } from '../../src/main/services/db'
+import { getDocument, reconcileStuckExtracts, reindexDocument } from '../../src/main/services/ingestion'
+import type { DocTaskManager } from '../../src/main/services/doctasks'
 import {
   aggregateExtractions,
   extractDocument,
@@ -20,9 +10,20 @@ import {
 import { buildListingAnswer } from '../../src/main/services/analysis/listing-answer'
 import { ModelSlotArbiter } from '../../src/main/services/analysis/model-slot-arbiter'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { EXTRACT_RECORD_TYPES, type RetrievalScope } from '../../src/shared/types'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import {
+  docTaskManager,
+  docTaskRuntime,
+  docTaskWorld,
+  importText,
+  importWords,
+  userPromptOf,
+  waitTerminal,
+  type DocRuntime,
+  type DocRuntimeCall,
+  type DocRuntimeOptions,
+  type DocTaskWorld
+} from '../helpers/doctask-fixtures'
 
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 
@@ -30,106 +31,27 @@ const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, par
 // the query-time SQL aggregation. Mock runtime — a deterministic JSON-array reply driven by
 // `@@token@@` markers in the passage; no model, no network.
 
-let tmp: string
+let w: DocTaskWorld
 let db: Db
 let storeDir: string
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-wdx-'))
-  db = openDatabase(join(tmp, 'test.sqlite'))
-  storeDir = documentsDir(join(tmp, 'workspace'))
+  w = docTaskWorld('wdx')
+  ;({ db, storeDir } = w)
 })
 
-async function importText(text: string, name = 'doc.txt'): Promise<string> {
-  const p = join(tmp, name)
-  writeFileSync(p, text, 'utf8')
-  const info = createQueuedDocument(db, p)
-  await processDocument(db, storeDir, info.id)
-  return info.id
+/** The extract pass's mock: a JSON array of {type:'party', value} per `@@token@@` in the passage; `@@BADJSON@@`
+ *  replies unparseable (both attempts), exercising the unparsed-marker path (H7). */
+function extractReply(call: DocRuntimeCall): string {
+  const user = userPromptOf(call)
+  const at = user.indexOf('Passage:\n')
+  const passage = at >= 0 ? user.slice(at + 'Passage:\n'.length) : ''
+  if (passage.includes('@@BADJSON@@')) return 'sorry — I have no structured output for you here'
+  return JSON.stringify([...passage.matchAll(/@@(\w+)@@/g)].map((m) => ({ type: 'party', value: m[1] })))
 }
-
-function importWords(words: number, name = 'doc.txt'): Promise<string> {
-  const text = Array.from({ length: words }, (_, i) => `word${i}`).join(' ')
-  return importText(text, name)
-}
-
-interface ScriptedRuntime extends ModelRuntime {
-  calls: number
-  /** Per-call `chatStream` options — pins the D55 responseSchema contract (STR-1 §5.1). */
-  options: Array<RuntimeChatOptions | undefined>
-  /** Per-call user prompts — the prompt must keep DESCRIBING the JSON shape (llama.cpp does
-   *  not inject the schema into the prompt; the grammar only constrains decoding). */
-  userPrompts: string[]
-}
-
-/**
- * Mock runtime for the extract pass: replies with a JSON array of `{type:'party', value}` for
- * every `@@token@@` in the passage; `@@BADJSON@@` triggers an unparseable reply (both
- * attempts), exercising the unparsed-marker path (H7).
- */
-function extractRuntime(opts: { tokenDelayMs?: number } = {}): ScriptedRuntime {
-  const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
-    new Promise((resolve) => {
-      if (signal?.aborted) return resolve()
-      const tmr = setTimeout(resolve, ms)
-      signal?.addEventListener('abort', () => {
-        clearTimeout(tmr)
-        resolve()
-      })
-    })
-  const rt: ScriptedRuntime = {
-    modelId: 'extract-model',
-    calls: 0,
-    options: [],
-    userPrompts: [],
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      rt.calls += 1
-      rt.options.push(options)
-      const user = messages.find((m) => m.role === 'user')?.content ?? ''
-      rt.userPrompts.push(user)
-      const at = user.indexOf('Passage:\n')
-      const passage = at >= 0 ? user.slice(at + 'Passage:\n'.length) : ''
-      let reply: string
-      if (passage.includes('@@BADJSON@@')) {
-        reply = 'sorry — I have no structured output for you here'
-      } else {
-        const tokens = [...passage.matchAll(/@@(\w+)@@/g)].map((m) => m[1])
-        reply = JSON.stringify(tokens.map((t) => ({ type: 'party', value: t })))
-      }
-      if (opts.tokenDelayMs) await delay(opts.tokenDelayMs, options?.signal)
-      if (options?.signal?.aborted) return
-      yield reply
-    }
-  }
-  return rt
-}
-
-function makeManager(runtime: ModelRuntime | null, contextTokens = 4096): DocTaskManager {
-  return new DocTaskManager({
-    getDb: () => db,
-    getRuntime: () => runtime,
-    getTranslator: () => null,
-    isChatStreaming: () => false,
-    getContextTokens: () => contextTokens,
-    getStoreDir: () => storeDir,
-    getIngestionDeps: () => ({}),
-    beginDocumentWork: () => () => {}
-  })
-}
-
-type AnyStatus = ReturnType<DocTaskManager['getDocTask']>
-async function waitTerminal(m: DocTaskManager, jobId: string): Promise<AnyStatus> {
-  const start = Date.now()
-  for (;;) {
-    const s = m.getDocTask(jobId)
-    if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s
-    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task never finished: ${s.state}`)
-    await new Promise((r) => setTimeout(r, 5))
-  }
-}
+const extractRuntime = (o: DocRuntimeOptions = {}): DocRuntime =>
+  docTaskRuntime({ modelId: 'extract-model', tokens: 'whole', reply: extractReply, ...o })
+const mgr = (rt: DocRuntime): DocTaskManager => docTaskManager(w, { getRuntime: () => rt })
 
 const chunkCount = (id: string): number =>
   (db.prepare('SELECT COUNT(*) AS n FROM chunks WHERE document_id = ?').get(id) as { n: number }).n
@@ -143,15 +65,15 @@ const recordRows = (id: string): number =>
 
 describe('extract pass', () => {
   it('makes O(n) model calls (one per chunk) and marks every chunk scanned', async () => {
-    const id = await importWords(2000)
+    const id = await importWords(w, 2000)
     const n = chunkCount(id)
     expect(n).toBeGreaterThan(1)
     const rt = extractRuntime()
-    const m = makeManager(rt)
+    const m = mgr(rt)
     const { jobId } = m.startDocTask({ kind: 'extract', documentIds: [id] })
     const s = await waitTerminal(m, jobId)
     expect(s.state).toBe('done')
-    expect(rt.calls).toBe(n) // exactly one generate per chunk
+    expect(rt.calls.length).toBe(n) // exactly one generate per chunk
     expect(extractStatus(id)).toBe('ready')
     // Every chunk got exactly one __scan__ marker.
     const markers = (
@@ -165,33 +87,33 @@ describe('extract pass', () => {
   })
 
   it('records an unparsed marker (never drops the chunk) when a reply is unparseable [H7]', async () => {
-    const id = await importText('Intro text. @@BADJSON@@ trailing text.')
+    const id = await importText(w, 'Intro text. @@BADJSON@@ trailing text.')
     const rt = extractRuntime()
-    const m = makeManager(rt)
+    const m = mgr(rt)
     const { jobId } = m.startDocTask({ kind: 'extract', documentIds: [id] })
     expect((await waitTerminal(m, jobId)).state).toBe('done')
     // One retry then an unparsed marker → 2 calls for the one chunk.
-    expect(rt.calls).toBe(2)
+    expect(rt.calls.length).toBe(2)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     expect(listing.scannedChunks).toBe(1)
     expect(listing.unparsedChunks).toBe(1)
   })
 
   it('a warm cache makes a re-run cost 0 model calls (resume/idempotent)', async () => {
-    const id = await importWords(1500)
+    const id = await importWords(w, 1500)
     const rt = extractRuntime()
-    const m = makeManager(rt)
+    const m = mgr(rt)
     await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    const firstCalls = rt.calls
+    const firstCalls = rt.calls.length
     expect(firstCalls).toBeGreaterThan(0)
     // Second pass over the unchanged chunks: every chunk is cached via its __scan__ marker.
     await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    expect(rt.calls).toBe(firstCalls) // no additional generate calls
+    expect(rt.calls.length).toBe(firstCalls) // no additional generate calls
     expect(extractStatus(id)).toBe('ready')
   })
 
   it('re-extract is idempotent per chunk — the __scan__ marker count never doubles [DATA-3]', async () => {
-    const id = await importWords(1500)
+    const id = await importWords(w, 1500)
     const n = chunkCount(id)
     expect(n).toBeGreaterThan(1)
     const markerCount = (): number =>
@@ -204,13 +126,13 @@ describe('extract pass', () => {
       ).n
 
     // First pass: exactly one __scan__ marker per chunk.
-    const m1 = makeManager(extractRuntime())
+    const m1 = mgr(extractRuntime())
     await waitTerminal(m1, m1.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
     expect(markerCount()).toBe(n)
 
     // Second pass over the unchanged document: every chunk is a cache hit (matching marker) → it is
     // SKIPPED, so no new markers are written. The audit's concern — markers doubling per generation.
-    const m2 = makeManager(extractRuntime())
+    const m2 = mgr(extractRuntime())
     await waitTerminal(m2, m2.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
     expect(markerCount()).toBe(n) // still one per chunk, NOT 2n
 
@@ -224,7 +146,7 @@ describe('extract pass', () => {
       'Totally different chunk text for re-extraction.',
       firstChunk.id
     )
-    const m3 = makeManager(extractRuntime())
+    const m3 = mgr(extractRuntime())
     await waitTerminal(m3, m3.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
     expect(markerCount()).toBe(n) // the re-commit replaced the chunk's marker — no doubling
   })
@@ -233,22 +155,15 @@ describe('extract pass', () => {
     // A reasoning model can spend the whole 384-token budget on reasoning_content: the
     // manager's generate discards reasoning deltas, so attempt 1 collapses to ''. The retry
     // must raise the cap — at temperature 0 an identical retry is byte-identical.
-    const id = await importText('Payment of € 12,90 to @@acme@@ on 2026-01-01.')
-    const budgets: Array<number | undefined> = []
-    const rt: ScriptedRuntime = {
-      ...extractRuntime(),
-      calls: 0,
-      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
-        rt.calls += 1
-        budgets.push(options?.maxTokens)
-        // All reasoning, no content at the small cap; room to answer at the escalated cap.
-        if ((options?.maxTokens ?? 0) <= 384) return
-        yield '[{"type":"party","value":"acme"}]'
-      }
-    }
-    const m = makeManager(rt)
+    const id = await importText(w, 'Payment of € 12,90 to @@acme@@ on 2026-01-01.')
+    // All reasoning, no content at the small cap; room to answer at the escalated cap.
+    const rt = extractRuntime({
+      reply: (c) => ((c.options?.maxTokens ?? 0) <= 384 ? '' : '[{"type":"party","value":"acme"}]')
+    })
+    const m = mgr(rt)
     expect((await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)).state).toBe('done')
-    expect(rt.calls).toBe(2)
+    expect(rt.calls.length).toBe(2)
+    const budgets = rt.calls.map((c) => c.options?.maxTokens)
     expect(budgets[0]).toBe(384)
     expect(budgets[1]).toBeGreaterThan(384) // the escalated retry cap
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
@@ -261,13 +176,13 @@ describe('extract pass', () => {
     // tracks EXTRACT_RECORD_TYPES so a type-set change cannot silently drift the schema). The
     // schema rides on the retry too — and the prompt keeps describing the shape, because
     // llama-server does NOT inject the schema into the prompt (llama.cpp grammars/README).
-    const id = await importText('Intro text. @@BADJSON@@ trailing text.')
+    const id = await importText(w, 'Intro text. @@BADJSON@@ trailing text.')
     const rt = extractRuntime()
-    const m = makeManager(rt)
+    const m = mgr(rt)
     expect((await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)).state).toBe('done')
-    expect(rt.calls).toBe(2) // unparseable → one retry (the mock ignores the schema, like MockRuntime)
-    expect(rt.options).toHaveLength(2)
-    for (const o of rt.options) {
+    expect(rt.calls.length).toBe(2) // unparseable → one retry (the mock ignores the schema, like MockRuntime)
+    expect(rt.calls.map((c) => c.options)).toHaveLength(2)
+    for (const o of rt.calls.map((c) => c.options)) {
       expect(o?.responseSchemaName).toBe('extraction_items')
       const schema = o?.responseSchema
       expect(schema?.type).toBe('array')
@@ -277,7 +192,7 @@ describe('extract pass', () => {
       expect(schema?.items?.properties?.type?.enum).toEqual([...EXTRACT_RECORD_TYPES])
       expect(schema?.items?.properties?.value?.minLength).toBe(1)
     }
-    for (const p of rt.userPrompts) {
+    for (const p of rt.calls.map(userPromptOf)) {
       expect(p).toContain('Reply with ONLY a JSON array')
     }
   })
@@ -286,19 +201,12 @@ describe('extract pass', () => {
     // A grammar guarantees every EMITTED token fits the array shape; it cannot stop the token
     // cap from cutting the array mid-object. The #50 ladder therefore stays: attempt 1 fails
     // tolerant parse (no salvage), the escalated attempt salvages the complete leading items.
-    const id = await importText('Payment to @@acme@@ and @@globex@@.')
+    const id = await importText(w, 'Payment to @@acme@@ and @@globex@@.')
     const truncated = '[{"type":"party","value":"acme"},{"type":"party","value":"glo'
-    const rt: ScriptedRuntime = {
-      ...extractRuntime(),
-      calls: 0,
-      async *chatStream() {
-        rt.calls += 1
-        yield truncated
-      }
-    }
-    const m = makeManager(rt)
+    const rt = extractRuntime({ reply: () => truncated })
+    const m = mgr(rt)
     expect((await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)).state).toBe('done')
-    expect(rt.calls).toBe(2) // truncation is NOT salvaged on attempt 1 (partial-list guard)
+    expect(rt.calls.length).toBe(2) // truncation is NOT salvaged on attempt 1 (partial-list guard)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     expect(listing.unparsedChunks).toBe(0) // ok marker — the salvage recovered the leading item
     expect(listing.items.map((i) => i.value)).toEqual(['acme'])
@@ -312,12 +220,12 @@ describe('extract pass', () => {
   // replacement clean. The hash itself stays model-free (analysis-extract-hash.test.ts pins it
   // byte-identical; persisted rows must stay addressable).
   it('a model swap invalidates the scan cache — an explicit re-run under a different model re-extracts (F-01)', async () => {
-    const id = await importText('Payment to @@acme@@ and @@globex@@.')
+    const id = await importText(w, 'Payment to @@acme@@ and @@globex@@.')
     // Pass 1 under model A ('extract-model'): the chunk scans ok.
     const modelA = extractRuntime()
-    const mA = makeManager(modelA)
+    const mA = mgr(modelA)
     await waitTerminal(mA, mA.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    expect(modelA.calls).toBe(1)
+    expect(modelA.calls.length).toBe(1)
     const modelIds = (): string[] =>
       (
         db
@@ -327,58 +235,50 @@ describe('extract pass', () => {
     expect(modelIds()).toEqual(['extract-model'])
 
     // Pass 2 under model B: the old-model ok marker must be a cache MISS — the chunk is
-    // re-extracted and its rows now carry model B (replaced, never mixed). Same object as the
-    // factory returns (its chatStream closes over itself for `calls`), only the id differs.
-    const modelB = extractRuntime()
-    ;(modelB as { modelId: string }).modelId = 'stronger-model'
-    const mB = makeManager(modelB)
+    // re-extracted and its rows now carry model B (replaced, never mixed). A second runtime under a
+    // different model id.
+    const modelB = extractRuntime({ modelId: 'stronger-model' })
+    const mB = mgr(modelB)
     await waitTerminal(mB, mB.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    expect(modelB.calls).toBe(1) // generate ran again under the new model
+    expect(modelB.calls.length).toBe(1) // generate ran again under the new model
     expect(modelIds()).toEqual(['stronger-model']) // rows replaced — no mixed-model set
     expect(extractStatus(id)).toBe('ready')
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     expect(listing.items.map((i) => i.value).sort()).toEqual(['acme', 'globex'])
 
     // Same-model re-run stays a warm cache — the #50 economy holds (0 further calls).
-    const mB2 = makeManager(modelB)
+    const mB2 = mgr(modelB)
     await waitTerminal(mB2, mB2.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    expect(modelB.calls).toBe(1)
+    expect(modelB.calls.length).toBe(1)
   })
 
   it('an unparsed marker is NOT a cache hit — the next run retries the chunk [#50]', async () => {
-    const id = await importText('Once-broken chunk. @@BADJSON@@')
+    const id = await importText(w, 'Once-broken chunk. @@BADJSON@@')
     // Run 1: unparseable both attempts → unparsed marker (the poisoned state of #50).
     const bad = extractRuntime()
-    const m1 = makeManager(bad)
+    const m1 = mgr(bad)
     await waitTerminal(m1, m1.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
     expect(aggregateExtractions(db, { documentIds: [id] }, 'party').unparsedChunks).toBe(1)
 
     // Run 2 (e.g. after switching to a better model): the unparsed chunk is RETRIED, not
     // skipped, and its marker is REPLACED by an ok scan with the extracted items.
-    const good: ScriptedRuntime = {
-      ...extractRuntime(),
-      calls: 0,
-      async *chatStream() {
-        good.calls += 1
-        yield '[{"type":"party","value":"alice"}]'
-      }
-    }
-    const m2 = makeManager(good)
+    const good = extractRuntime({ reply: () => '[{"type":"party","value":"alice"}]' })
+    const m2 = mgr(good)
     await waitTerminal(m2, m2.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    expect(good.calls).toBe(1) // the unparsed chunk was a cache MISS
+    expect(good.calls.length).toBe(1) // the unparsed chunk was a cache MISS
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     expect(listing.unparsedChunks).toBe(0) // marker replaced, never doubled
     expect(listing.scannedChunks).toBe(1)
     expect(listing.items.map((i) => i.value)).toContain('alice')
 
     // Run 3 over the now-ok chunk: back to a warm cache, 0 calls.
-    const m3 = makeManager(good)
+    const m3 = mgr(good)
     await waitTerminal(m3, m3.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    expect(good.calls).toBe(1)
+    expect(good.calls.length).toBe(1)
   })
 
   it('rolls back on an injected insert failure; the shared connection is not poisoned [H11]', async () => {
-    const id = await importText('Body with @@alice@@ and @@bob@@.')
+    const id = await importText(w, 'Body with @@alice@@ and @@bob@@.')
     let failOnce = true
     const wrapped = {
       prepare(sql: string) {
@@ -423,12 +323,12 @@ describe('extract pass', () => {
 
 describe('aggregateExtractions', () => {
   async function extractOf(id: string): Promise<void> {
-    const m = makeManager(extractRuntime())
+    const m = mgr(extractRuntime())
     await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
   }
 
   it('GROUPs by normalized_value with counts + provenance, matching a planted ground-truth', async () => {
-    const id = await importText('Pay @@alice@@ then @@bob@@. Later @@alice@@ signs again.')
+    const id = await importText(w, 'Pay @@alice@@ then @@bob@@. Later @@alice@@ signs again.')
     await extractOf(id)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     const byValue = new Map(listing.items.map((i) => [i.value, i]))
@@ -441,21 +341,10 @@ describe('aggregateExtractions', () => {
     expect(listing.fullyChunked).toBe(true)
   })
 
-  it('aggregation is read-only — it makes ZERO model calls', async () => {
-    const id = await importText('@@alice@@ and @@bob@@.')
-    const rt = extractRuntime()
-    const m = makeManager(rt)
-    await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)
-    const before = rt.calls
-    aggregateExtractions(db, { documentIds: [id] }, 'party')
-    aggregateExtractions(db, { documentIds: [id] }, 'date')
-    expect(rt.calls).toBe(before)
-  })
-
   it('excludes an archived in-scope document [M3]', async () => {
-    const a = await importText('@@alice@@ only in A.', 'a.txt')
-    const b = await importText('@@zach@@ only in B.', 'b.txt')
-    const m = makeManager(extractRuntime())
+    const a = await importText(w, '@@alice@@ only in A.', { name: 'a.txt' })
+    const b = await importText(w, '@@zach@@ only in B.', { name: 'b.txt' })
+    const m = mgr(extractRuntime())
     await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [a] }).jobId)
     await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [b] }).jobId)
     db.prepare("UPDATE documents SET lifecycle = 'archived' WHERE id = ?").run(b)
@@ -468,7 +357,7 @@ describe('aggregateExtractions', () => {
   })
 
   it('the listing answer is honest — "sections scanned" + caveat, never bare "complete" [H7]', async () => {
-    const id = await importText('Pay @@alice@@ then @@bob@@ once.')
+    const id = await importText(w, 'Pay @@alice@@ then @@bob@@ once.')
     await extractOf(id)
     const answer = buildListingAnswer(db, aggregateExtractions(db, { documentIds: [id] }, 'party'), tr)
     expect(answer).toMatch(/sections scanned/)
@@ -482,8 +371,8 @@ describe('aggregateExtractions', () => {
     // true (neither doc is missing the marker), yet only A's chunks carry a `__scan__` marker
     // → scannedChunks < totalChunks. The over-claim the H7 invariant forbids is "across the
     // whole document"; the honest wording is "across N sections scanned".
-    const a = await importText('Pay @@alice@@ and @@bob@@.', 'a.txt')
-    const b = await importText('Some unrelated text with no tokens to extract.', 'b.txt')
+    const a = await importText(w, 'Pay @@alice@@ and @@bob@@.', { name: 'a.txt' })
+    const b = await importText(w, 'Some unrelated text with no tokens to extract.', { name: 'b.txt' })
     await extractOf(a) // NOT b
 
     const listing = aggregateExtractions(db, { documentIds: [a, b] }, 'party')
@@ -501,7 +390,7 @@ describe('aggregateExtractions', () => {
   })
 
   it('an unparsed section is surfaced in the listing answer, never silently dropped [H7]', async () => {
-    const id = await importText('@@BADJSON@@')
+    const id = await importText(w, '@@BADJSON@@')
     await extractOf(id)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     expect(listing.unparsedChunks).toBe(1)
@@ -511,7 +400,7 @@ describe('aggregateExtractions', () => {
   })
 
   it('an EMPTY listing dominated by unreadable sections carries the retry hint (+ skill hint for amounts) [#50]', async () => {
-    const id = await importText('@@BADJSON@@')
+    const id = await importText(w, '@@BADJSON@@')
     await extractOf(id)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'amount')
     expect(listing.items.length).toBe(0)
@@ -526,7 +415,7 @@ describe('aggregateExtractions', () => {
   })
 
   it('an empty listing over READABLE sections stays a plain honest "none found" — no hint [#50]', async () => {
-    const id = await importText('Plain text with nothing to extract and no tokens.')
+    const id = await importText(w, 'Plain text with nothing to extract and no tokens.')
     await extractOf(id)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'amount')
     expect(listing.items.length).toBe(0)
@@ -543,7 +432,7 @@ describe('aggregateExtractions', () => {
   it('#54: aggregationAsk LEADS a non-empty amount listing with the shape hint + skill pointer', async () => {
     // The scripted extract runtime only emits `party` records, so plant the amount row directly
     // (the extract pass supplies the scan markers; the row shape matches the pass's own inserts).
-    const id = await importText('Pay 12,50 EUR and 99,00 EUR today, plus some filler prose.')
+    const id = await importText(w, 'Pay 12,50 EUR and 99,00 EUR today, plus some filler prose.')
     await extractOf(id)
     const chunkId = (
       db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(id) as { id: string }
@@ -566,7 +455,7 @@ describe('aggregateExtractions', () => {
   })
 
   it('#54: a non-amount aggregation listing gets the generic hint WITHOUT the bank-skill pointer', async () => {
-    const id = await importText('Pay @@alice@@ then @@bob@@ once.')
+    const id = await importText(w, 'Pay @@alice@@ then @@bob@@ once.')
     await extractOf(id)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'party')
     expect(listing.items.length).toBeGreaterThan(0)
@@ -576,7 +465,7 @@ describe('aggregateExtractions', () => {
   })
 
   it('#54: the EMPTY branch keeps its own #50 hint pair — the aggregation hint never doubles it', async () => {
-    const id = await importText('@@BADJSON@@')
+    const id = await importText(w, '@@BADJSON@@')
     await extractOf(id)
     const listing = aggregateExtractions(db, { documentIds: [id] }, 'amount')
     expect(listing.items.length).toBe(0)
@@ -586,7 +475,7 @@ describe('aggregateExtractions', () => {
   })
 
   it('re-index cascades away the old rows [H1] and marks the pass stale', async () => {
-    const id = await importText('@@alice@@ and @@bob@@.')
+    const id = await importText(w, '@@alice@@ and @@bob@@.')
     await extractOf(id)
     expect(recordRows(id)).toBeGreaterThan(0)
     expect(extractStatus(id)).toBe('ready')

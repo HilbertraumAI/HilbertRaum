@@ -1,9 +1,9 @@
 import type { ExtractRecordType } from '../../../shared/types'
 
 // The task router (whole-document-analysis plan §4.4, Phase 3) — a PURE function that maps a
-// free-text question (or an explicit task button) to an answer engine. No DB, no model, no
-// I/O: the caller passes the facts (does a ready deep index exist? is there extracted data in
-// scope? how many documents are in scope?) and gets back an engine choice.
+// free-text question to an answer engine. No DB, no model, no I/O: the caller passes the facts
+// (does a ready deep index exist? is there extracted data in scope? how many documents are in
+// scope?) and gets back an engine choice.
 //
 // Honesty rules it enforces (H7/M7):
 //   - "list every / how many" AND the aggregation/categorization verbs (issue #37 —
@@ -33,18 +33,13 @@ import type { ExtractRecordType } from '../../../shared/types'
 //     Summe aller Zahlungen?") joins the aggregation route. "the list" / "der Liste" in a question-word
 //     question ("Welche Fristen stehen auf der Liste?") and "zählen zu / zählt als" / "count as" ask for
 //     no list.
-//   - Fixed precedence: explicit button > compare (needs 2 docs) > coverage-extract >
-//     tree-summary > relevance. A compare classified without 2 docs, or any low-confidence
-//     classification, falls back to relevance — never an empty result from a stray trigger word.
+//   - Fixed precedence: compare (needs 2 docs) > coverage-extract > tree-summary > relevance.
+//     A compare classified without 2 docs, or any low-confidence classification, falls back to
+//     relevance — never an empty result from a stray trigger word.
 
 export type RouteEngine = 'coverage-extract' | 'tree-summary' | 'compare' | 'relevance'
 
-/** An explicit task button the renderer already exposes (bypasses classification). */
-export type ExplicitTaskType = 'summary' | 'translate' | 'compare'
-
 export interface RouteInput {
-  /** Set when the user pressed an explicit task button (highest precedence). */
-  taskType?: ExplicitTaskType
   question: string
   /** Documents in the resolved scope — compare needs at least 2. */
   documentCount?: number
@@ -720,25 +715,13 @@ export function mapQuestionToRecordType(question: string): ExtractRecordType {
   return namedRecordType(question) ?? 'generic'
 }
 
-/** Classify a question / explicit button into an engine choice (pure; plan §4.4). */
+/** Classify a question into an engine choice (pure; plan §4.4). */
 export function routeQuestion(input: RouteInput): RouteDecision {
   const q = input.question ?? ''
   const docs = input.documentCount ?? 0
 
-  // 1. Explicit task buttons win outright.
-  if (input.taskType === 'compare') {
-    return docs >= 2
-      ? { engine: 'compare', confidence: 'high' }
-      : { engine: 'relevance', confidence: 'low', fallback: 'compare' }
-  }
-  if (input.taskType === 'summary' || input.taskType === 'translate') {
-    // Summarize/translate are served by their own task pipelines, not rag:ask — but for a
-    // routed summary, prefer the tree when present (degrades to the capped path otherwise).
-    return input.taskType === 'summary' && input.treeAvailable
-      ? { engine: 'tree-summary', confidence: 'high' }
-      : { engine: 'relevance', confidence: 'low' }
-  }
-
+  // Steps 2–5 keep their historical numbers ("the step-5 fallthrough" is cited in code and docs);
+  // step 1, explicit task buttons, is gone — the buttons start doc tasks, never rag:ask.
   const wantsCompare = COMPARE_RE.test(q)
   // #641: a plain list/count trigger counts only for a list request about a TYPED thing. An
   // explain request that carries a quantifier, or a "{X}" no extract type covers, never gets

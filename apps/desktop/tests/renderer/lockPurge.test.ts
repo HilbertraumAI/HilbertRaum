@@ -3,13 +3,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { purgeSessionStores } from '../../src/renderer/lib/lockPurge'
 import {
   adoptActiveJob,
-  getTranslateSession,
-  resetTranslateSessionForTests
+  clearTranslateSession,
+  getTranslateSession
 } from '../../src/renderer/lib/translateSession'
 import {
+  clearFileTranslate,
   getFileTranslate,
-  translateDroppedFiles,
-  resetFileTranslateSessionForTests
+  translateDroppedFiles
 } from '../../src/renderer/lib/fileTranslateSession'
 import {
   getVisionSession,
@@ -18,6 +18,7 @@ import {
   type SelectedImage
 } from '../../src/renderer/lib/visionSession'
 import type { ImageTurn } from '../../src/renderer/images'
+import type { DecodedImage } from '../../src/renderer/images/decode'
 import {
   getReviewSessionSnapshot,
   openReviewSession,
@@ -32,8 +33,10 @@ import type { DocTaskStatus, ImportJob, StartSkillRunResult } from '../../src/sh
 // `locked` flag that lock unmounts before it can fire). It now lives at the real seam,
 // `App.lockNow` → `purgeSessionStores`. This suite pins the helper: all FOUR module-level session
 // stores (text translation, document translation, vision, evidence review — EP-1 plan §7.5)
-// return to their EMPTY snapshots, and the mid-stream "stuck busy" shape is cleared (no
-// re-adoption of a job main has already aborted). The review store's FLUSH-before-lock ordering
+// return to their EMPTY snapshots — the text store is seeded with a re-adopted RUNNING job, so this
+// also clears the mid-stream "stuck busy" shape (TA-2); an adopt over the purged store with nothing
+// running stays idle (translateSession.test.ts 'adoptActiveJob is a no-op when main reports no
+// running job'). The review store's FLUSH-before-lock ordering
 // is pinned separately in ReviewLockSeam.test.tsx — this file covers the purge half.
 
 const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
@@ -42,7 +45,7 @@ const RUNNING_TRANSLATE = { jobId: 'j9', state: 'translating' as const, text: 'g
 
 function fakeImage(): SelectedImage {
   return {
-    decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as never,
+    decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as unknown as DecodedImage,
     name: 'secret.png',
     sizeBytes: 42
   }
@@ -51,8 +54,8 @@ function fakeImage(): SelectedImage {
 const HIST_TURN: ImageTurn = { id: 't1', question: 'what is this?', answer: 'a secret', state: 'done', error: null }
 
 afterEach(() => {
-  resetTranslateSessionForTests()
-  resetFileTranslateSessionForTests()
+  clearTranslateSession()
+  clearFileTranslate()
   resetVisionSessionForTests()
   resetReviewSessionForTests()
   vi.restoreAllMocks()
@@ -131,31 +134,6 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
       saveError: null
     })
   })
-
-  it('clears the stuck-busy text shape so a later adopt with no active job stays idle', async () => {
-    // A mid-stream text session locks while `translating: true`; main's `jobs.stop()` emits no
-    // `trError`, so before TA-2 the store returned after unlock stuck busy. Purge resets it, and a
-    // subsequent remount `adoptActiveJob()` (no active main job) must leave it idle, not re-stuck.
-    stubApi({
-      getActiveTranslateJob: vi.fn(async () => RUNNING_TRANSLATE),
-      onTranslateToken: vi.fn(() => () => {}),
-      onTranslateDone: vi.fn(() => () => {}),
-      onTranslateError: vi.fn(() => () => {})
-    })
-    await adoptActiveJob()
-    expect(getTranslateSession().translating).toBe(true)
-
-    purgeSessionStores()
-    expect(getTranslateSession().translating).toBe(false)
-    expect(getTranslateSession().state).toBe('idle')
-
-    // Main reports nothing running now (the job was aborted at lock) — adopt is a clean no-op.
-    stubApi({ getActiveTranslateJob: vi.fn(async () => null) })
-    await adoptActiveJob()
-    expect(getTranslateSession().activeJobId).toBeNull()
-    expect(getTranslateSession().translating).toBe(false)
-    expect(getTranslateSession().state).toBe('idle')
-  })
 })
 
 // SH-4 (frontend audit 2026-08-09, #149, subsumes DOC-9): the ids/counts-only WATCHER stores —
@@ -165,7 +143,7 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
 // a pending detail-request installId could pop a modal on the next Skills visit.
 describe('purgeSessionStores — watcher stores (SH-4)', () => {
   it('drops the active doc task, every skill run, and a pending skill-detail request', async () => {
-    const { startTask, getActiveDocTask, resetDocTaskStoreForTests } = await import(
+    const { startTask, getActiveDocTask, clearDocTaskSession } = await import(
       '../../src/renderer/lib/doctasks'
     )
     const { startSkillRun, getSkillRunsSnapshot, clearSkillRunSession } = await import(
@@ -223,7 +201,7 @@ describe('purgeSessionStores — watcher stores (SH-4)', () => {
     } finally {
       // Leave no state behind even if an assertion above failed (the production clears; nothing
       // here subscribed to the run store, so keeping its listeners changes nothing).
-      resetDocTaskStoreForTests()
+      clearDocTaskSession()
       clearSkillRunSession()
       clearSkillDetailRequest()
     }

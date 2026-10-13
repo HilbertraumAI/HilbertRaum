@@ -13,8 +13,9 @@ import {
 } from '../../src/main/services/ingestion'
 import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
 import { assertDownloadAllowed } from '../../src/main/services/downloads'
-import { DocTaskManager, isFriendlyTaskError } from '../../src/main/services/doctasks'
+import { isFriendlyTaskError } from '../../src/main/services/doctasks'
 import { buildWarnings } from '../../src/main/services/benchmark'
+import { docTaskManager } from '../helpers/doctask-fixtures'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
 
 // Phase 41 — the §3.3 two-rule boundary under a GERMAN-cached main-process language:
@@ -70,16 +71,7 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
 
   it('doc-task guard throws localize, and the friendly pass-through recognizes both languages', () => {
     applyUiLanguageSetting('de')
-    const manager = new DocTaskManager({
-      getDb: () => db,
-      getRuntime: () => null,
-      getTranslator: () => null,
-      isChatStreaming: () => false,
-      getContextTokens: () => 4096,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({}),
-      beginDocumentWork: () => () => {}
-    })
+    const manager = docTaskManager({ root: tmp, db, storeDir })
     let thrown = ''
     try {
       manager.startDocTask({ kind: 'summary', documentIds: ['some-doc'] })

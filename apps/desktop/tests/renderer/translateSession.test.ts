@@ -5,12 +5,11 @@ import {
   adoptActiveJob,
   clearTranslateSession,
   getTranslateSession,
-  resetTranslateSessionForTests,
   stopActive,
   translate
 } from '../../src/renderer/lib/translateSession'
-import { resetFileTranslateSessionForTests } from '../../src/renderer/lib/fileTranslateSession'
-import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { clearFileTranslate } from '../../src/renderer/lib/fileTranslateSession'
+import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { TranslateJob } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
 import { stubApi } from '../helpers/renderer'
@@ -21,15 +20,15 @@ import { stubApi } from '../helpers/renderer'
 // narrow `as unknown as TranslateJob` at exactly the violating field, not a blanket erasure.
 
 // Unit test for the Translate-view module store (TG-4, plan §2 D6): the remount recovery
-// (`adoptActiveJob`), the one-at-a-time guard, and the lock-time content purge. The TranslateScreen
-// renderer suite covers the happy translate→stream→copy path through this store; this file targets
-// the recovery/guard edges directly.
+// (`adoptActiveJob`), the one-at-a-time guard, and the generation guards. The lock-time content
+// purge is pinned in lockPurge.test.ts. The TranslateScreen renderer suite covers the happy
+// translate→stream→copy path through this store; this file targets the recovery/guard edges directly.
 
 afterEach(() => {
-  resetTranslateSessionForTests()
+  clearTranslateSession()
   // translate()'s cross-session start guard (L6a) reads the file + doc-task stores — reset them too.
-  resetFileTranslateSessionForTests()
-  resetDocTaskStoreForTests()
+  clearFileTranslate()
+  clearDocTaskSession()
 })
 
 describe('translateSession — remount recovery + guards', () => {
@@ -187,50 +186,6 @@ describe('translateSession — remount recovery + guards', () => {
     expect(snap.translating).toBe(false) // not wedged: Stop is no longer dead
   })
 
-  it('adoptActiveJob still adopts after the store was cleared — reload recovery is not broken', async () => {
-    // CONTROL for the "must not clobber a held session" block below: the ONLY store shape the adopt
-    // is meant for is an EMPTY one (that is exactly what a renderer reload leaves behind), and it
-    // must keep working there. Clear the store first so the emptiness is the real post-reload shape,
-    // then assert the full recovery: seed + resume the live stream.
-    const token: { fn?: (t: string) => void } = {}
-    stubApi({
-      getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j7', state: 'queued', text: 'Teil ' })),
-      onTranslateToken: vi.fn((_id: string, cb: (t: string) => void) => {
-        token.fn = cb
-        return () => {}
-      }),
-      onTranslateDone: vi.fn(() => () => {}),
-      onTranslateError: vi.fn(() => () => {})
-    })
-    clearTranslateSession()
-    expect(getTranslateSession().state).toBe('idle')
-    expect(getTranslateSession().output).toBe('')
-
-    await adoptActiveJob()
-    const snap = getTranslateSession()
-    expect(snap.activeJobId).toBe('j7')
-    expect(snap.output).toBe('Teil ')
-    expect(snap.state).toBe('translating')
-    expect(snap.translating).toBe(true) // Stop is live again
-    token.fn?.('zwei')
-    expect(getTranslateSession().output).toBe('Teil zwei') // polling/streaming resumed
-  })
-
-  it('clearTranslateSession drops resident content (workspace lock)', async () => {
-    stubApi({
-      getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
-      onTranslateToken: vi.fn(() => () => {}),
-      onTranslateDone: vi.fn(() => () => {}),
-      onTranslateError: vi.fn(() => () => {})
-    })
-    await adoptActiveJob()
-    expect(getTranslateSession().output).toBe('geheim')
-
-    clearTranslateSession()
-    expect(getTranslateSession().output).toBe('')
-    expect(getTranslateSession().activeJobId).toBeNull()
-    expect(getTranslateSession().state).toBe('idle')
-  })
 })
 
 // ---- The mount adopt runs on EVERY Translate mount, not only after a renderer reload ----
@@ -412,7 +367,7 @@ describe('translateSession — adoptActiveJob must not clobber a held session', 
 
     // The mount adopt is parked on the active-job read.
     const adoptPromise = adoptActiveJob()
-    await vi.waitFor(() => expect(api.getActiveTranslateJob).toHaveBeenCalled(), { timeout: 3000 })
+    expect(api.getActiveTranslateJob).toHaveBeenCalledTimes(1) // called before the adopt's first await
 
     // The user hits Translate in that window: translating, no job id yet.
     const translatePromise = translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
@@ -462,7 +417,7 @@ describe('translateSession — adoptActiveJob must not re-seed content a lock pu
 
     // The mount adopt is parked on the active-job read.
     const adoptPromise = adoptActiveJob()
-    await vi.waitFor(() => expect(api.getActiveTranslateJob).toHaveBeenCalled(), { timeout: 3000 })
+    expect(api.getActiveTranslateJob).toHaveBeenCalledTimes(1) // called before the adopt's first await
 
     clearTranslateSession() // the workspace locks in that window (the renderer lock seam)
     const purged = getTranslateSession()
@@ -496,7 +451,7 @@ describe('translateSession — adoptActiveJob must not re-seed content a lock pu
     stubApi(api)
 
     const adoptPromise = adoptActiveJob()
-    await vi.waitFor(() => expect(api.getActiveTranslateJob).toHaveBeenCalled(), { timeout: 3000 })
+    expect(api.getActiveTranslateJob).toHaveBeenCalledTimes(1) // called before the adopt's first await
 
     // The user runs their own translation and stops it while the adopt is still parked.
     await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })
@@ -532,8 +487,9 @@ describe('translateSession — adoptActiveJob must not re-seed content a lock pu
     stubApi(api)
 
     const adoptPromise = adoptActiveJob()
-    await vi.waitFor(() => expect(api.getActiveTranslateJob).toHaveBeenCalled(), { timeout: 3000 })
-    resolveActive({ jobId: 'j5', state: 'translating', text: 'Teil ' })
+    expect(api.getActiveTranslateJob).toHaveBeenCalledTimes(1) // called before the adopt's first await
+    // QUEUED, not translating: the text adopt accepts both (translateSession.ts:317); the base adopt above covers translating.
+    resolveActive({ jobId: 'j5', state: 'queued', text: 'Teil ' })
     await adoptPromise
 
     const snap = getTranslateSession()
