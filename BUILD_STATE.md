@@ -29,10 +29,10 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 _2026-10-13 — **#654 / #655 / #658 — a refused engine that runs again stops failing everything it latched; a whisper-cli Windows refuses at spawn is "can't run" (`fix/654-655-658-engine-verdict`).**
-#655: the verdict kept only its LAST reporting program (on a Kit, `cpu/`), so a healthy main-build start never cleared it: the 4B ran on the GPU under the banner. The store now keeps every
-reporter. #654: that clear re-armed no consumer, so imports kept failing on the embedder's latch; `rearmWhenChatEngineHeals` re-arms on every `runs` drop (owner: every path, `gone` excluded).
-#658: a synchronous `spawn EPERM` is classified like the `'error'` event; a cancelled call spawns nothing. Real app (scratch roots): master failed 3/3 legs, the fix passed 3/3 (#658 via a
-deny-execute ACL; SAC is off here). Record: "Engine load failures" §9. Open: none._
+#655: the verdict kept only its LAST reporting program (on a Kit, `cpu/`), so a healthy main-build start never cleared it: the 4B ran on the GPU under the banner. The store keeps every reporter
+(`cpu/` clears only as the latest, a review fix). #654: that clear re-armed no consumer, so imports kept failing; a `started` drop now re-arms them and restarts a demo-mode chat model (owner calls;
+`gone` excluded). #658: a synchronous `spawn EPERM` is classified like the `'error'` event; a cancelled or stopped call spawns nothing. Real app (scratch roots): master failed 4/4 legs, the fix passed
+4/4 (#658 via a deny-execute ACL; SAC is off here). Record: "Engine load failures" §9. Open: none._
 _2026-10-13 — **#656 — the runtime-ladder campaign's leftovers: one crash reported once, the untested wiring covered, the GPU suites host-independent (`fix/656-runtime-gpu-test-gaps`).**
 `LlamaServer` reported a healthy server's death twice when Node emitted `'exit'` after `'error'`; the chat crash handlers ignore a repeat only while their restart runs. One per-spawn flag
 now covers both handlers. New rows: kiwix-serve / kiwix-manage through the real verifier, `startEngineCheck`, the unlock heal before the auto-start, "Check again"'s `--version` / `--help` (b11146

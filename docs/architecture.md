@@ -4758,9 +4758,11 @@ becoming healthy (code N)` shape), for the heal.
     from "blame the GPU" to "blame the model".
 - A healthy start of a program that REPORTED the verdict clears it (`clearEngineProblemFor`): an
   intermittent block that went away, or a library installed since. The store keeps every reporting
-  program, not only the last one (#655, §9). A Windows Kit's `cpu/` build that never reported,
-  starting beside a damaged main folder, does not clear it. The clear re-arms the consumers (§5,
-  #654).
+  program, not only the last one (#655, §9). The `cpu/` safety net clears it only as the latest
+  reporter: it starts only after the main build failed, usually by a refusal that still stands. A
+  program that never reported does not clear it: a Windows Kit's `cpu/` build starting beside a
+  damaged main folder, or the main build beside a verdict only `cpu/` reported. The clear heals the
+  consumers (§5, #654).
 
 **The GPU probe** (`gpu.ts`) pipes stderr. A refusal resolves **`null`**, the #380 unknown: not
 cached, not persisted. It also reports the verdict. Before #530 it was cached and persisted as "no
@@ -4801,10 +4803,11 @@ graphics card".
 - **Read by** `AppStatus.engineProblems` (chat engine first). The payload-free
   `engine:problemsChanged` push, sent on a new, different or cleared verdict, makes mounted
   screens re-read it.
-- **Dropped with a cause** (#654, §9): `runs` (a reporting program started, or Check again found it
-  loads), `installed` (a new copy replaced it) or `gone` (it left the drive).
-  `rearmWhenChatEngineHeals`, subscribed once in `main/index.ts`, re-arms the chat engine's
-  consumers on `runs`.
+- **Dropped with a cause** (#654, §9): `started` (a reporting program started: a healthy start, the
+  probe answering), `rechecked` (Check again found it loads), `installed` (a new copy replaced it)
+  or `gone` (it left the drive). `rearmWhenChatEngineHeals`, subscribed once in `main/index.ts`,
+  heals a chat-engine `started` drop the way Check again heals its own: it re-arms the consumers and
+  restarts a model the demo runtime stands in for.
 
 **Check again** (`engine:recheck`, `ipc/engine-recheck.ts`) re-starts each family with a verdict.
 - Each engine gets an explicit spawn (`checkProgramLoads`): `llama-server --version` and
@@ -4816,8 +4819,7 @@ graphics card".
   joins the running pass.
 - A program the OS now accepts loses its verdict and is re-armed:
   - `rearmLlamaConsumers` clears the #372 model latches, the embedder's and reranker's
-    `startFailed`, the vision cooldown and a latched translator slot (since #654 through the
-    `runs` drop, the same path a healthy start takes);
+    `startFailed`, the vision cooldown and a latched translator slot;
   - the heal below runs;
   - the probe is invalidated, re-run and persisted for this computer;
   - a selected model standing in on the mock is restarted on the real engine (an active deep-index
@@ -4826,7 +4828,7 @@ graphics card".
 
 **The engine install hook** now runs the same `rearmLlamaConsumers` and clears the family's verdict.
 Before #530 it re-armed the model latches only, so a repaired engine still failed every import
-until a lock/unlock. It re-arms itself, verdict or not; its `installed` drop re-arms nothing more.
+until a lock/unlock. It re-arms itself, verdict or not; its `installed` drop heals nothing more.
 
 **The heal** (`healEngineLoadState`) runs at every session start (plaintext startup, unlock,
 create), before the auto-start reads the GPU flags. It clears a loader-caused `gpuAutoDisabled`
@@ -5008,30 +5010,39 @@ real app):
 1. Whenever the chat-engine verdict is dropped, the consumers are re-armed, whichever path drops it.
 2. Not on `gone`: the binary left the drive, nothing was healed, and a consumer re-armed against a
    missing binary only fails again.
+3. From the review: a healthy start that heals the engine also restarts a model the demo runtime
+   stands in for. Check again and an install already did. Without it, an import that was the first
+   engine start after the repair left the chat in demo mode with no banner to bring it back.
+4. From the review: `cpu/` clears the verdict only as the latest reporter. "Any reporter clears"
+   let a healthy `cpu/` start on the next ladder walk drop a verdict the main build had just
+   re-reported, hiding a still-damaged main build and its #532 reinstall offer.
 
 **As built.**
 - **The store** (`engine-load.ts`):
   - `StoredProblem.reporters` holds every program that reported since the verdict was recorded.
     The shown problem is the latest report, so the #532 `afterInstall` rule is unchanged.
-  - `clearEngineProblemFor` clears when the healthy program is any reporter.
+  - `clearEngineProblemFor` clears when the healthy program is a reporter. The `cpu/` net
+    (`runtime/llama.cpp/<os>/cpu/`) must also be the latest one (`lastReporter`).
   - `reportEngineProblem`'s program is required; every production reporter passed it already.
   - `clearEngineProblem(family, why)` tells `onEngineProblemDropped` listeners why the verdict went:
-    `runs`, `installed` or `gone`.
-- **The re-arm.**
+    `started`, `rechecked`, `installed` or `gone`. A listener that throws is caught.
+- **The heal.**
   - `rearmWhenChatEngineHeals(ctx)` (`engine-recheck.ts`, subscribed once in `main/index.ts`)
-    re-arms on a `llama_cpp` `runs` drop.
-  - Check again's own call went: its `loads` drop is a `runs` drop, so it re-arms exactly once.
-  - The install hook keeps its explicit call (it re-arms with no verdict too). Its `installed` drop
-    adds nothing.
+    answers a `llama_cpp` `started` drop. It re-arms the consumers and runs
+    `restartChatOnRealEngine` fire-and-forget.
+  - The restart leaves a start in flight alone, so the chat's own healthy start restarts nothing.
+  - The other drops heal where they happen, each once and in its own order. Check again (`rechecked`)
+    re-arms, heals, re-probes and then restarts. The install hook (`installed`) re-arms with or
+    without a verdict, then refreshes the probe and restarts. `gone` heals nothing.
   - The re-arm spawns nothing, so it cannot report into the store while the store notifies.
   - A consumer start in flight is not latched yet; if that start was refused, it re-latches and
     re-reports, which is true.
-- **The edge this accepts.** If `cpu/` reported before the main build and later starts healthy
-  beside a still-damaged main build, the verdict clears. The main build re-reports on its next
-  spawn, and Check again clears the whole family the same way.
+  - The #372 model latches are re-armed too (owner call 1). A model with a real GGUF fault walks
+    its ladder once more after the heal and latches again.
 - **whisper-cli** (`transcriber/cli.ts`): the spawn is wrapped. A thrown error and the `'error'` event
-  share `spawnFailure` (classify, log, verdict, `EngineCannotRunError`). A call whose signal already
-  fired spawns nothing: no gate wait, no hash, no model load.
+  share `spawnFailure` (classify, log, verdict, `EngineCannotRunError`). A cancelled call, or one
+  on a stopped transcriber (quit), spawns nothing. That is checked before the #516 gate and the hash,
+  and again after them: a `stop()` that lands while the call waits finds nothing in `active` to kill.
 
 **Real-app verification (2026-10-13, DesktopDiT, GTX 1070 Ti, dev build, scratch drive roots; D:
 was only read).**
@@ -5044,6 +5055,12 @@ was only read).**
   - Master: the banner with its demo note and the "answers are simulated" notice stayed, and the
     import failed.
   - The fix: both cleared and the import was indexed. No Check again and no restart in either case.
+- **Review F1**, the main build only, `llama.dll` removed. The chat start ended on the demo runtime.
+  With the DLL restored, an import was the first engine start: it was indexed and the verdict
+  cleared.
+  - Master: 120 s later the chat was still in demo mode, with no banner.
+  - The fix: the 4B was back on the GPU 7.1 s after the import, with one restart logged. The legs
+    above logged none: there the healthy start was the chat's own.
 - **#658**, a stand-in `whisper-cli.exe` with a deny-execute ACL. Node 24.13 throws `spawn EPERM`
   synchronously. Smart App Control is off on this box, so the ACL stands in for it at the same Node
   boundary.
@@ -5053,9 +5070,15 @@ was only read).**
     (`spawn error EPERM`), the import stored the voice-engine copy, and the speech-model card showed
     the hint.
 
-Tests: `engine-load-spawn.test.ts` "#655", `engine-recheck.test.ts` "#654" (its fake context
-subscribes as `main/index.ts` does, so the `gone` and voice rows guard the exclusions) and
-`transcriber.test.ts` (the thrown-refusal row, the clean-run heal, the pre-aborted call).
+Tests:
+- `engine-load-spawn.test.ts` "a healthy start: …": the #655 table, which includes the `cpu/`
+  rule and the never-reporter rule.
+- `engine-recheck.test.ts` "#654": the re-arm plus restart, and a voice-engine heal that touches
+  nothing of the chat engine. Its fake context subscribes as `main/index.ts` does, so the `gone` row
+  and Check again's exactly-once counts guard the other causes.
+- `engine-load.test.ts`: a throwing drop listener.
+- `transcriber.test.ts`: the thrown refusal, the clean-run heal, the pre-aborted call, and the
+  stop/cancel and already-cancelled rows at the #516 gate.
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 
