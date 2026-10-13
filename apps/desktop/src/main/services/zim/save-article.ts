@@ -60,8 +60,9 @@ export function articleDocumentTitle(articleTitle: string, archiveTitle: string 
 /**
  * The Markdown the import path parses: `# title`, an attribution block-quote, an honest notice
  * when the converter stopped short, then one `## label` section per viewer section (the
- * label-less lead stays plain). `MarkdownParser` turns each heading into a chunk
- * `section_label`, so a citation into the saved copy names the same section the viewer showed.
+ * label-less lead stays plain), and last the archive's license line, when it has one, as a
+ * `## License` section. `MarkdownParser` turns each heading into a chunk `section_label`, so a
+ * citation into the saved copy names the same section the viewer showed.
  */
 export function renderArticleMarkdown(
   article: PackArticle,
@@ -83,6 +84,11 @@ export function renderArticleMarkdown(
     }
     if (text.length > 0) lines.push(text, '')
   }
+  // The license line (#662) closes the copy under its own heading, where the viewer shows it too:
+  // without one the Markdown parser would file it under the last section (it used to arrive as
+  // `Weblinks` text), and in the attribution block above it would join the copy's first chunk.
+  const notice = article.notice?.replace(/\s+/g, ' ').trim()
+  if (notice) lines.push('## License', '', notice, '')
   return lines.join('\n')
 }
 

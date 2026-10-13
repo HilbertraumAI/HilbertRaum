@@ -46,7 +46,8 @@ describe('renderArticleMarkdown', () => {
       { label: 'Landwirtschaft', text: 'Methan entsteht in der Landwirtschaft.' },
       { label: 'Leer', text: '   ' }
     ],
-    partial: false
+    partial: false,
+    notice: null as string | null
   }
 
   it('writes an H1, an attribution quote naming the archive and the date, then one H2 per labelled section', () => {
@@ -61,6 +62,17 @@ describe('renderArticleMarkdown', () => {
     expect(md).not.toContain('Only the first part')
     // The lead (label-less) section never gets a heading of its own.
     expect(md).not.toContain('## intro')
+    expect(md).not.toContain('## License')
+  })
+
+  it('closes with the archive’s license line under its own heading, out of the attribution block (#662)', () => {
+    const notice = 'Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons Attribution-Share Alike 4.0 verfügbar.'
+    const md = renderArticleMarkdown({ ...article, notice }, { archiveTitle: 'Klimawandel von Wikipedia', savedAt: '2026-10-13T10:00:00.000Z' })
+    // Its own section after the article's last one, so the Markdown parser never files it under
+    // that section's label…
+    expect(md.endsWith(`\n## Leer\n\n## License\n\n${notice}\n`)).toBe(true)
+    // …and the copy's first chunk (title, attribution, lead) does not carry it.
+    expect(md.split('\n## ')[0]).not.toContain('Creative Commons')
   })
 
   it('states honestly when the converter stopped short, and copes with no archive title', () => {
@@ -71,7 +83,7 @@ describe('renderArticleMarkdown', () => {
 
   it('collapses whitespace inside titles and labels so headings stay single-line', () => {
     const md = renderArticleMarkdown(
-      { title: ' Zwei\n Zeilen ', sections: [{ label: 'Ab\nschnitt', text: 'x' }], partial: false },
+      { title: ' Zwei\n Zeilen ', sections: [{ label: 'Ab\nschnitt', text: 'x' }], partial: false, notice: null },
       { archiveTitle: 'P\nack', savedAt: '2026-09-07' }
     )
     expect(md.split('\n')[0]).toBe('# Zwei Zeilen')

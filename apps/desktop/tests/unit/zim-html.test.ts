@@ -421,9 +421,43 @@ describe('zimArticleToSegments — site furniture (#627)', () => {
     ['a footer paragraph with no end tag, ended by the next block', '<p class="footer">by A<div>Body.</div>', 'Body.'],
     ['a footer paragraph with no end tag, ended by the next list item', '<ul><li><p class="footer">foot<li>Item two</ul>', '-\n\n- Item two'],
     ['a footer paragraph ended by its parent’s end tag', '<div><p class="footer">by A</div><p>Body.</p>', 'Body.'],
-    ['a footer class written without quotes, as a minified page writes it', '<p>Body.</p><p class=footer>by A</p>', 'Body.']
+    ['a footer class written without quotes, as a minified page writes it', '<p>Body.</p><p class=footer>by A</p>', 'Body.'],
+    // #662: German Wikipedia's navigation boxes built as `div`s, the real class list; the tables
+    // nested inside the box (`wikitable erw-nav-zebra`, which `tables.ts` would keep) go with it.
+    [
+      'a German navigation box with the tables inside it (#662)',
+      '<p>Body.</p><div class="klappleiste mw-collapsible  navileiste erweiterte-navigationsleiste navigation-not-searchable center erw-nav-farbschema-grau" role="navigation">' +
+        '<div class="klappleiste-kopf">Versionen von Windows</div><div class="klappleiste-inhalt mw-collapsible-content">' +
+        '<table class="wikitable erw-nav-zebra"><tr><td class="erw-nav-gruppe"><b>NT-Linie</b></td><td class="hlist"><p>Windows NT 3.1 • Windows 2000</p></td></tr></table>' +
+        '<div class="erw-nav-leiste">Andere Projekte von Microsoft</div></div></div><p>After.</p>',
+      'Body.\n\nAfter.'
+    ],
+    [
+      'a plain German navigation box, which carries no extended-box class (#662)',
+      '<p>Body.</p><div class="klappleiste mw-collapsible  navileiste navigation-not-searchable center" role="navigation"><div class="klappleiste-kopf">Zeitzonen</div><p>A • B</p></div>',
+      'Body.'
+    ],
+    ['a navigation box marked only by its extended-box class (#662)', '<p>Body.</p><div class="erweiterte-navigationsleiste">A • B</div>', 'Body.'],
+    ['a navigation-box row on its own (#662)', '<p>Body.</p><div class="erw-nav-leiste">A • B</div>', 'Body.'],
+    // A stray `</p>` is no holder's end: HTML5 does not let it close the `div` (#662 review).
+    ['a footer block through a stray paragraph end tag inside it', '<div class="footer">by A</p>and B</div><p>Body.</p>', 'Body.'],
+    [
+      'a box holding a section of its own up to its own end tag, not that section’s (#662 review)',
+      '<section><div class="navileiste"><section>Inner</section>Tail</div><p>After.</p></section>',
+      'After.'
+    ]
   ])('drops %s', (_label, html, expected) => {
     expect(textOf(html)).toBe(expected)
+  })
+
+  // #662 review: the drop also ends at the end tag of an element holding it, as HTML5 closes an
+  // open `div` at its section's end — a box whose own `</div>` is missing must not take the
+  // rest of the article with it.
+  it('ends a dropped box whose own end tag is missing at its section’s end', () => {
+    const article = zimArticleToSegments(
+      '<h1>T</h1><section><p>Body.</p><div class="navileiste">A • B</section><section><h2>Weblinks</h2><p>Link.</p></section>'
+    )
+    expect(article.segments.map((s) => s.text)).toEqual(['Body.', 'Weblinks\n\nLink.'])
   })
 
   // The issue's draft matched a furniture WORD inside a class (`\bnav\b`, `\bfooter\b`). Each
@@ -435,12 +469,74 @@ describe('zimArticleToSegments — site furniture (#627)', () => {
       'Body.'
     ],
     [
-      'mwoffliner’s license line (zim-footer; dropping it would change the Wikipedia development set)',
-      '<p>Body.</p><div class="zim-footer">Dieser Artikel wurde von Wikipedia herausgegeben.</div>',
-      'Body.\n\nDieser Artikel wurde von Wikipedia herausgegeben.'
+      'a box whose class only contains a navigation-box word (erw-nav-farbschema-grau)',
+      '<div class="erw-nav-farbschema-grau">Kept.</div>',
+      'Kept.'
     ]
   ])('keeps %s: only a whole class token is furniture', (_label, html, expected) => {
     expect(textOf(html)).toBe(expected)
+  })
+
+  // #662: the generic classes German Wikipedia's navigation boxes also carry mark other boxes too.
+  it.each([
+    [
+      'the Normdaten box (navigation-not-searchable, but authority data)',
+      '<div id="normdaten" class="catlinks normdaten-typ-p navigation-not-searchable">Normdaten (Person): GND: 118540238</div>',
+      'Normdaten (Person): GND: 118540238'
+    ],
+    ['a collapsible box that is no navigation box (klappleiste)', '<div class="klappleiste mw-collapsible">Ausführliche Liste</div>', 'Ausführliche Liste']
+  ])('keeps %s', (_label, html, expected) => {
+    expect(textOf(html)).toBe(expected)
+  })
+})
+
+// Issue #662: mwoffliner appends its license line to every article, after the last section, so it
+// was delivered as that section's text (`Weblinks`) — into the last chunk, the viewer and a saved
+// copy. It is the only CC BY-SA notice the app shows, so it leaves the segments as `notice`.
+describe('zimArticleToSegments — the archive’s license line (#662)', () => {
+  const LICENSE =
+    'Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons Attribution-Share Alike 4.0 verfügbar, sofern nicht anders angegeben. Für die Mediendateien können zusätzliche Bedingungen gelten.'
+  // The real page tail (wikipedia_de_computer_nopic_2026-07, read through kiwix-serve 3.8.1).
+  const page =
+    '<h1>Windows NT 4.0</h1><p>Lead.</p><section><div class="mw-heading mw-heading2"><h2 id="Weblinks">Weblinks</h2></div><ul><li>Link</li></ul></section>' +
+    '</div><!--htdig_noindex--><div><div class="zim-footer">\n    Dieser Artikel wurde von <a class="external text" title="Zuletzt bearbeitet am 2026-01-08" ' +
+    'href="https://de.wikipedia.org/wiki/?title=Microsoft_Windows_NT_4.0&amp;oldid=263145340">Wikipedia</a> herausgegeben. Der Text ist unter ' +
+    '<a class="external text" href="https://creativecommons.org/licenses/by-sa/4.0/deed.de">Creative Commons Attribution-Share Alike 4.0</a> verfügbar, ' +
+    'sofern nicht anders angegeben. Für die Mediendateien können zusätzliche Bedingungen gelten.\n</div>\n</div><!--/htdig_noindex--></div>'
+
+  it('leaves the last section and returns the line as the notice', () => {
+    const article = zimArticleToSegments(page)
+    expect(article.segments).toEqual([
+      { text: 'Lead.', pageNumber: null, sectionLabel: null },
+      { text: 'Weblinks\n\n- Link', pageNumber: null, sectionLabel: 'Weblinks' }
+    ])
+    expect(article.notice).toBe(LICENSE)
+  })
+
+  it('is null on a page without one', () => {
+    expect(zimArticleToSegments('<h1>T</h1><p>Body.</p><div class="footer">by A</div>').notice).toBeNull()
+  })
+
+  it('reads as one line: entities decoded, block boundaries a space, a second line kept after the first', () => {
+    const article = zimArticleToSegments(
+      '<h1>T</h1><p>Body.</p><div class="zim-footer">\n  Text&nbsp;one<br>two\n    <div>three</div>&amp; four\n</div><p class="zim-footer">Second line.</p>'
+    )
+    expect(article.notice).toBe('Text one two three & four Second line.')
+    expect(article.segments.map((s) => s.text)).toEqual(['Body.'])
+  })
+
+  it('stays bounded when the element holds a megabyte of text, and says it was cut', () => {
+    const article = zimArticleToSegments(`<h1>T</h1><p>Body.</p><div class="zim-footer">${'Lizenz '.repeat(140_000)}</div><p>After.</p>`)
+    expect(article.notice!.length).toBeLessThanOrEqual(1500)
+    expect(article.notice!).toMatch(/^Lizenz Lizenz.* …$/)
+    expect(article.segments.map((s) => s.text)).toEqual(['Body.\n\nAfter.'])
+  })
+
+  it('drops the last word where the gather bound cuts, so no half entity survives (#662 review)', () => {
+    // Mostly whitespace, so the collapsed notice is short although the raw bound cut it inside
+    // `&amp;` — the cut must not leave `&am` behind, and the ellipsis still says it was cut.
+    const article = zimArticleToSegments(`<h1>T</h1><div class="zim-footer">A${' '.repeat(5_996)}B&amp;C D</div>`)
+    expect(article.notice).toBe('A …')
   })
 })
 

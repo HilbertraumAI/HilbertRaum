@@ -31,6 +31,9 @@ interface PackArticleView {
    *  input cap, the scan-work budget or unterminated markup). The viewer says so rather
    *  than presenting a partial extraction as the complete article. */
   partial: boolean
+  /** The archive's own license line (#662): no longer part of the last section's text, so the
+   *  viewer shows it after the article, as Wikipedia and the archive itself do. */
+  notice: string | null
 }
 
 type SaveState =
@@ -174,6 +177,7 @@ export function ArticleModal({
             ))}
           </div>
         )}
+        {phase === 'ready' && article?.notice && <p className="hint pack-article-notice">{article.notice}</p>}
       </div>
     </Modal>
   )

@@ -325,6 +325,9 @@ export interface PackArticle {
    *  unterminated markup — html.ts `ZimArticle.truncated`), so the viewer must not present
    *  the text as the complete article. */
   partial: boolean
+  /** The archive's own license line (html.ts `ZimArticle.notice`, #662), or null: shown after
+   *  the article in the viewer and in a saved copy's closing "License" section, never a section. */
+  notice: string | null
 }
 
 /** One `ensureServer` call's captured tuple, read BEFORE its first await. */
@@ -1595,7 +1598,12 @@ export class ZimService {
         }
         return { label: s.sectionLabel ?? null, text }
       })
-      return { title: article.title ?? articlePath, sections, partial: article.truncated !== null }
+      return {
+        title: article.title ?? articlePath,
+        sections,
+        partial: article.truncated !== null,
+        notice: article.notice
+      }
     } finally {
       op.release()
     }

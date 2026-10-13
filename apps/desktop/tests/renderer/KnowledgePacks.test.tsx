@@ -1394,7 +1394,7 @@ describe('ScopePopover — knowledge packs', () => {
 })
 
 describe('ArticleModal', () => {
-  it('renders the article sections from the main-resolved plain text', async () => {
+  it('renders the article sections from the main-resolved plain text, and the archive’s license line after them (#662)', async () => {
     stubApi({
       getPackArticle: async () => ({
         title: 'Treibhausgas',
@@ -1402,7 +1402,8 @@ describe('ArticleModal', () => {
           { label: null, text: 'Treibhausgase sind Spurengase.' },
           { label: 'Landwirtschaft', text: 'Methan entsteht in der Landwirtschaft.' }
         ],
-        partial: false
+        partial: false,
+        notice: 'Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons Attribution-Share Alike 4.0 verfügbar.'
       })
     })
     render(
@@ -1416,6 +1417,11 @@ describe('ArticleModal', () => {
     expect(await screen.findByText('Treibhausgase sind Spurengase.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Landwirtschaft' })).toBeInTheDocument()
     expect(screen.getByText(/From Klimawandel von Wikipedia/)).toBeInTheDocument()
+    // The license line closes the article, outside its last section rather than as its text.
+    const notice = screen.getByText(/^Dieser Artikel wurde von Wikipedia herausgegeben\./)
+    expect(notice.closest('section')).toBeNull()
+    const lastParagraph = screen.getByText('Methan entsteht in der Landwirtschaft.')
+    expect(lastParagraph.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('warns that only the first part is shown when the conversion was partial (H1 truncation)', async () => {
@@ -1423,7 +1429,8 @@ describe('ArticleModal', () => {
       getPackArticle: async () => ({
         title: 'Treibhausgas',
         sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
-        partial: true
+        partial: true,
+        notice: null
       })
     })
     render(
@@ -1830,7 +1837,8 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
         getPackArticle: async () => ({
           title: LONG_TITLE,
           sections: [{ label: null, text: 'Ein Absatz.' }],
-          partial: false
+          partial: false,
+          notice: null
         })
       })
       render(
@@ -1899,7 +1907,8 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
         getPackArticle: async () => ({
           title: 'Treibhausgas',
           sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
-          partial: false
+          partial: false,
+          notice: null
         })
       })
       render(<ArticleHarness />)
@@ -2079,7 +2088,8 @@ describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
   const article = {
     title: 'Treibhausgas',
     sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
-    partial: false
+    partial: false,
+    notice: null
   }
   const target = { packId: 'uuid-climate', articlePath: 'Treibhausgas', archiveTitle: 'Klimawandel von Wikipedia' }
 

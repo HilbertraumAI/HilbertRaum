@@ -25,7 +25,9 @@ import {
 // surface.
 //
 // Dropped subtrees: head, script/style/noscript (raw-text aware), figures/images, nav, a
-// `p`/`div`/`section` whose class token names site furniture (`FURNITURE_CLASS_TOKENS`, #627),
+// `p`/`div`/`section` whose class token names site furniture (`FURNITURE_CLASS_TOKENS`, #627 —
+// German Wikipedia's navigation boxes too, #662), mwoffliner's license line (dropped from the
+// segments but returned as `ZimArticle.notice`, #662),
 // and `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup> like
 // m<sup>2</sup> keeps its text, now marked — see the sup/sub rule below). A `<pre>` keeps its
 // indentation (PREFORMATTED TEXT, below) while every other whitespace run is collapsed.
@@ -252,35 +254,87 @@ const BLOCK = new Set([
 ])
 
 /**
- * Class tokens that name a hand-written site's own page furniture (#627). zimit/warc2zim
- * archives keep the crawled site's markup, and its footer is an ordinary element with a class —
- * `<p class="footer">` closes all 86 gobyexample pages — so no tag-name rule can see it.
+ * Class tokens that name page furniture, dropped with their subtree.
+ *
+ * - A hand-written site's own footer, menu and the like (#627). zimit/warc2zim archives keep
+ *   the crawled site's markup, and its footer is an ordinary element with a class —
+ *   `<p class="footer">` closes all 86 gobyexample pages — so no tag-name rule can see it.
+ * - German Wikipedia's navigation boxes built as `div`s (#662; `Vorlage:Navigationsleiste` and
+ *   its extended form), each a long list of related article titles: a question about Windows XP
+ *   matched the Windows 7 article's box. `tables.ts` drops the ones built as tables (`navbox`).
+ *   On 1,500 sampled German Wikipedia pages, `erweiterte-navigationsleiste` always comes with
+ *   `navileiste` (99 of 99) and `erw-nav-leiste` only ever marks a row inside one (45 of 45);
+ *   all three are named so a box carrying only one of them is still a box. The generic
+ *   MediaWiki class those boxes also carry, `navigation-not-searchable`, is deliberately NOT a
+ *   token: it also marks the Normdaten (authority data) and Rechtshinweis (legal notice) boxes
+ *   and inline pronunciation spans in running prose. Nor is `klappleiste`, the collapsible box.
  *
  * A whole class TOKEN must match, never a word inside one: `nav` inside `wy-nav-content` is the
- * Read the Docs theme's wrapper around the entire article, `footer` inside `zim-footer` is the
- * license line mwoffliner appends to every Wikipedia article, and `erw-nav-farbschema-grau`
- * marks German Wikipedia's navigation boxes — the issue's draft `\b(?:…)\b` pattern matched all
- * three. Measured over 2,672 sampled pages from 15 archives (1,500 of them German Wikipedia),
- * exact tokens drop gobyexample's footer (86/86) and lesscss.org's docs menu, and nothing else.
- * The two Wikipedia classes are #662: dropping them changes the development set. Applied to the
- * prose path only; `tables.ts` keeps its own classifier.
+ * Read the Docs theme's wrapper around the entire article, and `footer` inside `zim-footer` is
+ * the license line mwoffliner appends to every Wikipedia article (`NOTICE_CLASS_TOKENS`, kept as
+ * text) — the #627 draft's `\b(?:…)\b` pattern matched both. Measured over 2,672 sampled pages
+ * from 15 archives (1,500 of them German Wikipedia), exact tokens drop gobyexample's footer
+ * (86/86), lesscss.org's docs menu and the German navigation boxes (197 on 171 pages), and
+ * nothing else. Applied to the prose path only; `tables.ts` keeps its own classifier.
  */
-const FURNITURE_CLASS_TOKENS = new Set(['footer', 'site-footer', 'nav', 'navbar', 'menu', 'sidebar', 'breadcrumb', 'cookie'])
+const FURNITURE_CLASS_TOKENS = new Set([
+  'footer',
+  'site-footer',
+  'nav',
+  'navbar',
+  'menu',
+  'sidebar',
+  'breadcrumb',
+  'cookie',
+  'navileiste',
+  'erweiterte-navigationsleiste',
+  'erw-nav-leiste'
+])
 
-/** Every furniture token contains one of these: a cheap test on the raw attributes, so the
- *  class is parsed only where a token could match (most `div`s carry other classes). */
+/**
+ * The license line mwoffliner appends to every article it writes (#662): `div.zim-footer`,
+ * "Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons
+ * Attribution-Share Alike 4.0 verfügbar …" on 1,322 of 1,500 sampled German Wikipedia pages
+ * (the rest are redirect stubs) and on Alpine Linux's wiki too. It sits after the last section,
+ * so it used to be delivered as that section's text (`Weblinks`) — into the last chunk, the
+ * viewer and a saved copy. It is the only CC BY-SA notice the app shows for an article, so it
+ * leaves the segments like furniture but its text is kept as `ZimArticle.notice`, for the viewer
+ * and a saved copy to show apart from the article (owner call, 2026-10-13).
+ */
+const NOTICE_CLASS_TOKENS = new Set(['zim-footer'])
+
+/** Every furniture and notice token contains one of these: a cheap test on the raw attributes,
+ *  so the class is parsed only where a token could match (most `div`s carry other classes). */
 const FURNITURE_HINT = /footer|nav|menu|sidebar|breadcrumb|cookie/i
 
 /** The elements a furniture class is honoured on (#627). */
 const FURNITURE_ELEMENTS = new Set(['p', 'div', 'section'])
 
-function isFurnitureClass(classAttr: string | null): boolean {
-  if (classAttr === null) return false
+/** Elements that can hold a dropped `div`/`section` and whose end tag, when no element of that
+ *  name was opened inside the drop, closes it as well (#662 review). Only elements with a
+ *  required end tag, plus the cells and items a box sits in, and never `p`: a stray `</p>` is
+ *  common and HTML5 does not let it close a `div`. */
+const FURNITURE_HOLDER_TAGS = new Set([
+  'section', 'article', 'main', 'aside', 'blockquote', 'details', 'li', 'dd', 'td', 'th', 'body', 'html'
+])
+
+/** `'notice'` when a token is a license line's (it wins over a furniture token beside it),
+ *  `'drop'` for furniture, null otherwise. */
+function furnitureKind(classAttr: string | null): 'drop' | 'notice' | null {
+  if (classAttr === null) return null
+  let kind: 'drop' | null = null
   for (const token of classAttr.split(/\s+/)) {
-    if (FURNITURE_CLASS_TOKENS.has(token.toLowerCase())) return true
+    const lower = token.toLowerCase()
+    if (NOTICE_CLASS_TOKENS.has(lower)) return 'notice'
+    if (FURNITURE_CLASS_TOKENS.has(lower)) kind = 'drop'
   }
-  return false
+  return kind
 }
+
+/** The longest notice kept (#662): the real line is ~230 characters. The raw text gathered for it
+ *  is bounded too, so a page that puts megabytes inside the element costs no more than this. */
+const NOTICE_MAX_CHARS = 1500
+const NOTICE_RAW_MAX_CHARS = 4 * NOTICE_MAX_CHARS
 
 /** Start tags that end an open `<p>` (every start tag HTML5's tree builder answers with "close a
  *  p element"), so a dropped furniture `<p>` whose end tag is missing cannot swallow the rest of
@@ -832,6 +886,12 @@ export interface ZimArticle {
   /** Article title from the first <h1>, or null when the page has none. */
   title: string | null
   segments: ExtractedSegment[]
+  /**
+   * The archive's own license line (mwoffliner's `zim-footer`, #662), whitespace collapsed, or
+   * null when the page has none. Never part of `segments`, so retrieval never reads it; the
+   * article viewer and a saved copy show it apart from the article text.
+   */
+  notice: string | null
   /** null = the whole input was converted; otherwise why the output is partial. */
   truncated: ZimTruncation | null
   /**
@@ -925,9 +985,32 @@ export function* zimArticleSlices(
   // Site furniture (#627): a `p`/`div`/`section` whose class names the page's own footer,
   // navigation, menu, sidebar, breadcrumb or cookie notice is dropped with its subtree.
   // `furnitureTag` is the element that opened the drop; a `div`/`section` closes on its own
-  // matching end tag (same-name depth), a `p` also on anything HTML5 lets close it.
+  // matching end tag (same-name depth) or on the end tag of an element holding it (below), a `p`
+  // also on anything HTML5 lets close it.
   let furnitureDepth = 0
   let furnitureTag: string | null = null
+  // Holder elements (`FURNITURE_HOLDER_TAGS`) opened INSIDE the dropped element, per name: an end
+  // tag of one that was not opened inside belongs to an element holding the furniture, and closes
+  // it too, as HTML5 closes an open `div` at its section's end — so a box whose own end tag is
+  // missing costs the rest of its section, never the rest of the page (#662 review).
+  const furnitureHeld = new Map<string, number>()
+  // The license line (#662) is dropped the same way, but while `furnitureNotice` is set its text
+  // is gathered into `noticeBuf` (bounded by NOTICE_RAW_MAX_CHARS) instead of being discarded;
+  // `noticeClipped` records that the bound cut it.
+  let furnitureNotice = false
+  let noticeBuf = ''
+  let noticeClipped = false
+  const endFurniture = (): void => {
+    furnitureDepth = 0
+    furnitureTag = null
+    furnitureNotice = false
+    furnitureHeld.clear()
+  }
+  /** Appends to the notice until the bound has cut it (text runs are sized to it by the caller;
+   *  a separator past it is simply not written). */
+  const gatherNotice = (text: string): void => {
+    if (!noticeClipped && noticeBuf.length < NOTICE_RAW_MAX_CHARS) noticeBuf += text
+  }
   // Preformatted text (#627): `preDepth` counts open `<pre>`s, `pre` encodes their whitespace
   // while one is open (prose only — never into a heading), and `preInner` names the block
   // elements opened inside it, so the end tag of an element that HOLDS the `<pre>` can close a
@@ -1086,6 +1169,18 @@ export function* zimArticleSlices(
         }
         captionBuf += text
       }
+    } else if (furnitureNotice && !noticeClipped) {
+      // The license line's text (#662). Only what the notice still has room for is decoded, so
+      // a huge text run inside the element is never one long decode. Where the bound cuts, the
+      // last word goes too — it can be part of an entity or of a surrogate pair.
+      const to = Math.min(upto, textStart + Math.max(0, NOTICE_RAW_MAX_CHARS - noticeBuf.length))
+      let text = decodeEntities(input.slice(textStart, to))
+      if (to < upto) {
+        const lastBreak = text.search(/\s\S*$/)
+        text = lastBreak >= 0 ? text.slice(0, lastBreak) : ''
+      }
+      gatherNotice(text)
+      if (to < upto) noticeClipped = true
     }
     textStart = upto
   }
@@ -1300,22 +1395,42 @@ export function* zimArticleSlices(
       // prose state, and every tag inside it is consumed here. The break taken where it opened
       // already separates what follows it.
       if (furnitureTag !== 'p') {
-        if (name === furnitureTag && !selfClosing) {
-          furnitureDepth += isClose ? -1 : 1
-          if (furnitureDepth === 0) furnitureTag = null
+        let holderEnds = false
+        if (name === furnitureTag) {
+          if (!selfClosing) {
+            furnitureDepth += isClose ? -1 : 1
+            if (furnitureDepth === 0) {
+              endFurniture()
+              continue
+            }
+          }
+        } else if (FURNITURE_HOLDER_TAGS.has(name) && !selfClosing) {
+          const held = furnitureHeld.get(name) ?? 0
+          if (!isClose) furnitureHeld.set(name, held + 1)
+          else if (held > 0) furnitureHeld.set(name, held - 1)
+          else holderEnds = true
         }
-        continue
+        if (!holderEnds) {
+          // Inside a license line a block boundary still keeps two words apart (#662).
+          if (furnitureNotice && (name === 'br' || BLOCK.has(name))) gatherNotice(' ')
+          continue
+        }
+        // The end tag of an element holding the furniture ends it too, and is then handled as
+        // itself, below.
+        endFurniture()
+      } else {
+        if (isClose && name === 'p') {
+          endFurniture()
+          continue
+        }
+        // A `p` has an optional end tag: a block start tag, or the end tag of an element that
+        // can hold the `p`, ends it — and is then handled as itself, below.
+        if (!(isClose ? P_ENDING_END_TAGS.has(name) : P_ENDING_START_TAGS.has(name))) {
+          if (furnitureNotice && name === 'br') gatherNotice(' ')
+          continue
+        }
+        endFurniture()
       }
-      if (isClose && name === 'p') {
-        furnitureDepth = 0
-        furnitureTag = null
-        continue
-      }
-      // A `p` has an optional end tag: a block start tag, or the end tag of an element that
-      // can hold the `p`, ends it — and is then handled as itself, below.
-      if (!(isClose ? P_ENDING_END_TAGS.has(name) : P_ENDING_START_TAGS.has(name))) continue
-      furnitureDepth = 0
-      furnitureTag = null
     }
     if (mathDepth > 0) {
       if (name === 'math') mathDepth += isClose ? -1 : 1
@@ -1342,7 +1457,7 @@ export function* zimArticleSlices(
             const tidied = tidyWhole(captionBuf)
             resetCaption()
             const capped =
-              tidied.length <= FIGURE_CAPTION_MAX_CHARS ? tidied : capCaptionChars(tidied, FIGURE_CAPTION_MAX_CHARS)
+              tidied.length <= FIGURE_CAPTION_MAX_CHARS ? tidied : capChars(tidied, FIGURE_CAPTION_MAX_CHARS)
             if (capped.length > 0) {
               // Byte-for-byte the shape and flush order the kept-table path uses: flush the
               // pending prose first so the caption never fuses into the surrounding paragraph,
@@ -1405,19 +1520,23 @@ export function* zimArticleSlices(
       if (name === 'sup' && !selfClosing) supSkipDepth += isClose ? -1 : 1
       continue
     }
-    if (
+    const furniture =
       !isClose &&
       !selfClosing &&
       headingLevel === 0 &&
       pre === null && // inside a code block it is code, and its end tag must reach the `<pre>`
       FURNITURE_ELEMENTS.has(name) &&
-      FURNITURE_HINT.test(attrs) &&
-      isFurnitureClass(attrValue(attrs, 'class', { unquoted: true }))
-    ) {
+      FURNITURE_HINT.test(attrs)
+        ? furnitureKind(attrValue(attrs, 'class', { unquoted: true }))
+        : null
+    if (furniture !== null) {
       // Still a block boundary, so the text before and after the dropped element stays apart.
       emitBreak()
       furnitureDepth = 1
       furnitureTag = name
+      furnitureNotice = furniture === 'notice'
+      // A second license line on one page is kept too, after the first (#662).
+      if (furnitureNotice && noticeBuf.length > 0) gatherNotice(' ')
       continue
     }
 
@@ -1583,7 +1702,17 @@ export function* zimArticleSlices(
     truncated = { reason: 'maxChars', at: scanCut === null ? input.length : scanCut.at }
   }
 
-  return { title, segments, truncated, work, slices }
+  // One line of text: the source's own line breaks and block boundaries are only layout here. A
+  // notice the bounds cut ends in an ellipsis, so it is never shown as the whole line.
+  const noticeText = tidyWhole(noticeBuf).replace(WHITESPACE_RUN, ' ')
+  const notice =
+    noticeText.length === 0
+      ? null
+      : noticeClipped || noticeText.length > NOTICE_MAX_CHARS
+        ? `${capChars(noticeText, NOTICE_MAX_CHARS - 2).trimEnd()} …`
+        : noticeText
+
+  return { title, segments, notice, truncated, work, slices }
 }
 
 /**
@@ -1636,10 +1765,10 @@ export async function zimArticleToSegmentsAsync(
   }
 }
 
-/** Truncates a figure caption to `max` characters, never inside a UTF-16 surrogate pair —
- *  the same care tables.ts's own segment caps take (its `truncateToBudget`), duplicated
- *  rather than imported since that helper is not exported and this is the only caller here. */
-function capCaptionChars(text: string, max: number): string {
+/** Truncates a figure caption or a license notice to `max` characters, never inside a UTF-16
+ *  surrogate pair — the same care tables.ts's own segment caps take (its `truncateToBudget`),
+ *  duplicated rather than imported since that helper is not exported. */
+function capChars(text: string, max: number): string {
   let cut = max
   const prev = text.charCodeAt(cut - 1)
   const next = text.charCodeAt(cut)

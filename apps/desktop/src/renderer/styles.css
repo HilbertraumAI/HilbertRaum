@@ -2806,3 +2806,5 @@ code, pre, kbd { font-family: var(--font-mono); }
 .pack-article-body { max-width: 68ch; }
 .pack-article-heading { font-size: var(--text-md); margin: 14px 0 4px; }
 .pack-article-para { margin: 0 0 10px; white-space: pre-wrap; }
+/* #662: the archive's own license line closes the article, set apart from its last section. */
+.pack-article-notice { margin: 0; max-width: 68ch; padding-top: 8px; border-top: 1px solid var(--border); }
