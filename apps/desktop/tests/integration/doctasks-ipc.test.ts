@@ -110,7 +110,12 @@ beforeEach(() => {
 })
 
 describe('doctasks IPC (start / get / cancel)', () => {
-  it('cancel routes a present jobId to that exact task (queued too) and a call with no id to the active task (#157 DT-2)', async () => {
+  // The no-id forms: no argument is the wire shape of `window.api.cancelDocTask()` (the preload forwards
+  // `undefined`, the chat banner's cancel); '' is the handler's other "no id".
+  it.each([
+    { noId: 'no argument', args: [] as string[] },
+    { noId: 'an empty id', args: [''] }
+  ])('cancel routes a present jobId to that exact task (queued too) and $noId to the active task (#157 DT-2)', async ({ args }) => {
     const h = await makeHarness()
     const start = async (documentId: string): Promise<string> =>
       ((await invoke(handlers, IPC.startDocTask, { kind: 'summary', documentIds: [documentId] })).result as {
@@ -125,9 +130,7 @@ describe('doctasks IPC (start / get / cancel)', () => {
     await invoke(handlers, IPC.cancelDocTask, b) // a present id: exactly that task, queued or not
     expect(await stateOf(b)).toBe('cancelled')
     expect(await stateOf(a)).toBe('running') // never "the active task"
-    // No argument: the wire shape of `window.api.cancelDocTask()` (the preload forwards `undefined`) — the chat
-    // banner's cancel of the active task.
-    await invoke(handlers, IPC.cancelDocTask)
+    await invoke(handlers, IPC.cancelDocTask, ...args) // no id: the active task
     h.releaseGate()
     expect((await pollTerminal(a)).state).toBe('cancelled')
   })

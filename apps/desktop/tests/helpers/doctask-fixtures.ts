@@ -17,7 +17,7 @@ import { recordEvent } from '../../src/main/services/audit'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { AuditEventType } from '../../src/shared/types'
 import { tempRoot } from './db-fixtures'
-import { hangBudgetMs } from './hang-budget'
+import { until } from './hang-budget'
 
 export interface DocTaskWorld {
   /** The temp root: source files are written here. */
@@ -89,15 +89,20 @@ export function docTaskManager(w: DocTaskWorld, overrides: Partial<DocTaskDeps> 
 
 export type DocTaskStatusOf = ReturnType<DocTaskManager['getDocTask']>
 
-/** Poll until the task is done, failed or cancelled; a hang fails by name after `hangBudgetMs(localMs)`. */
+/**
+ * Poll until the task is done, failed or cancelled; a hang fails by name (with the last state) after
+ * `hangBudgetMs(localMs)`. Real time throughout (hang-budget's `until`), so it also works under fake timers.
+ */
 export async function waitTerminal(m: DocTaskManager, jobId: string, localMs = 10_000): Promise<DocTaskStatusOf> {
-  const start = Date.now()
-  for (;;) {
-    const s = m.getDocTask(jobId)
-    if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s
-    if (Date.now() - start > hangBudgetMs(localMs)) throw new Error(`task ${jobId} never finished: ${s.state}`)
-    await new Promise((r) => setTimeout(r, 5))
+  let s = m.getDocTask(jobId)
+  const terminal = (): boolean => {
+    s = m.getDocTask(jobId)
+    return s.state === 'done' || s.state === 'failed' || s.state === 'cancelled'
   }
+  await until(terminal, `task ${jobId} finishing`, localMs).catch(() => {
+    throw new Error(`task ${jobId} never finished: ${s.state}`)
+  })
+  return s
 }
 
 export interface DocRuntimeCall {
@@ -134,14 +139,19 @@ export function userPromptOf(call: DocRuntimeCall): string {
 
 /** A scripted chat runtime that records every call, counts concurrency and stops at an abort. */
 export function docTaskRuntime(o: DocRuntimeOptions = {}): DocRuntime {
+  // One task signal spans every token of every call, so each delay removes its abort listener again.
   const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
     new Promise((resolve) => {
       if (signal?.aborted) return resolve()
-      const t = setTimeout(resolve, ms)
-      signal?.addEventListener('abort', () => {
+      const onAbort = (): void => {
         clearTimeout(t)
         resolve()
-      })
+      }
+      const t = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, ms)
+      signal?.addEventListener('abort', onAbort, { once: true })
     })
   const rt: DocRuntime = {
     modelId: o.modelId ?? 'scripted-model',
