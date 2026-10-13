@@ -323,13 +323,13 @@ describe('createPlacementParser', () => {
 
 // PR #303 audit DR3, verified and now STANDING. Precisely what the fixtures show: verbosity 4
 // raises llama.cpp's load-time AND per-request DIAGNOSTIC logging — slot ids, token counts,
-// timings, sampler parameters and cache state, so every fixture DOES carry a complete request
-// cycle's metadata (`launch_slot_`, `new prompt, n_ctx_slot = 8192 … task.n_tokens = 2015`,
+// timings, sampler parameters and cache state, so every fixture that served a request (all but the
+// two load-only #653 captures) DOES carry a complete request cycle's metadata (`launch_slot_`, `new prompt, n_ctx_slot = 8192 … task.n_tokens = 2015`,
 // `print_timing`, `release`) — but no prompt or completion TEXT and no request body. "Verbosity 4
 // does not log requests" would be false; what is true is that it logs no content.
 //
-// These four fixtures are committed to a PUBLIC repo, so the check runs on every suite and is a
-// WHITELIST, not a blacklist: every line must fall into one of five known classes, so injected
+// These fixtures are committed to a PUBLIC repo, so the check runs on every suite and is a
+// WHITELIST, not a blacklist: every line must fall into one of six known classes, so injected
 // prose ANYWHERE in a future re-capture reddens here instead of shipping.
 describe('the committed load logs carry no request or prompt content (DR3)', () => {
   const NAMES = [
@@ -337,7 +337,10 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
     'placement-b9849-partial-18of33-np4.txt',
     'placement-b9849-partial-62of66-mtp.txt',
     'placement-b9849-full-49of49-swa.txt',
-    'placement-b11146-full-49of49-swa.txt' // #512: captured through the app's spawn, so ANSI-coloured
+    'placement-b11146-full-49of49-swa.txt', // #512: captured through the app's spawn, so ANSI-coloured
+    // #653: load-only captures (cut at the first `all slots are idle`, before any request).
+    'placement-b11146-gpuless-37of37-cpu.txt',
+    'placement-b11146-ngl0-0of37-compute.txt'
   ]
   /** The colour codes llama.cpp adds when it believes stderr is a terminal (see the #512 test above). */
   const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g')
@@ -353,6 +356,8 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
   const TIMESTAMPED = /^\d+\.\d\d\.\d\d\d\.\d\d\d [IWE] /
   /** `print_info: LF token              = 107 '` — a token literal whose value IS a newline. */
   const OPEN_TOKEN_LITERAL = /token\s*=\s*\d+ '$/
+  /** ggml-vulkan prints this one without the log prefix; the #653 capture hid the card with it. */
+  const HIDDEN_DEVICE_WARNING = /^ggml_vulkan: Invalid device index \d+ in GGML_VK_VISIBLE_DEVICES\.$/
 
   /**
    * The `example_format` block: from the line that opens it to the next line that is a lone
@@ -370,9 +375,10 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
   it.each(NAMES)('%s', (name) => {
     const text = fixture(name).replace(ANSI, '')
     for (const needle of FORBIDDEN) expect(`${name}: ${text.includes(needle)}`).toBe(`${name}: false`)
-    // Every slot line prints its conversation id; the app never sets one, so it is always empty.
+    // Every slot line prints its conversation id; the app never sets one, so it is always empty. A
+    // capture that served a request has them; a load-only one (#653) has no slot line to print one.
     const ids = text.match(/conv_id=[^|,\n]*/g) ?? []
-    expect(ids.length).toBeGreaterThan(0)
+    if (text.includes('launch_slot_')) expect(ids.length).toBeGreaterThan(0)
     for (const id of ids) expect(id.trim()).toBe('conv_id= (empty=1)')
     // The capture is the real thing: the verbosity the parser needs, and a load it can read.
     expect(text).toContain('verbosity = 4')
@@ -387,7 +393,7 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
       }
     })
 
-    // THE NET: every line is one of five classes. Anything else — a pasted prompt, a stray note,
+    // THE NET: every line is one of six classes. Anything else — a pasted prompt, a stray note,
     // an editor's comment — fails, naming the line.
     lines.forEach((l, i) => {
       const ok =
@@ -396,6 +402,7 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
         (open >= 0 && i > open && i <= close) || // (c) inside the canned template block
         l.startsWith('\t') || // (d) a tab-indented sampler-params continuation
         (l === "'" && OPEN_TOKEN_LITERAL.test(lines[i - 1] ?? '')) || // (e) a newline token literal
+        HIDDEN_DEVICE_WARNING.test(l) || // (f) ggml-vulkan's unprefixed warning in the #653 GPU-less capture
         (i === lines.length - 1 && l === '') // the file's trailing newline
       expect(`${name}:${i + 1} ${ok ? 'classified' : JSON.stringify(l.slice(0, 80))}`).toBe(`${name}:${i + 1} classified`)
     })
