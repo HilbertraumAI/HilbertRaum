@@ -16,8 +16,8 @@ import { log } from '../logging'
 // row inserted) — see `buildTree`.
 //
 // Privacy / offline posture: `summary_text` is content-class. Eviction deletes ROWS only — it
-// never reads, logs, or audits the text. The only thing surfaced is the integer evicted-row
-// count (content-free diagnostics), and the local log line carries counts only. No telemetry.
+// never reads, logs, or audits the text. The only thing surfaced is one local log line per pruning,
+// and it carries counts only (rows evicted, rows kept, the session total). No telemetry.
 
 /**
  * Default row cap. Sized so a very large library stays fully cached (a 1000-chunk document
@@ -26,13 +26,8 @@ import { log } from '../logging'
  */
 export const SUMMARY_CACHE_MAX_ROWS = 50_000
 
-/** Session-cumulative count of evicted rows — the content-free diagnostics counter (DATA-3). */
+/** Session-cumulative count of evicted rows — the log line's content-free `sessionTotal` (DATA-3). */
 let evictedThisSession = 0
-
-/** How many `summary_cache` rows eviction has pruned this session (diagnostics; never reset). */
-export function summaryCacheEvictedThisSession(): number {
-  return evictedThisSession
-}
 
 /** Resolve the effective cap: an explicit override, else the env tuning knob, else the default. */
 function resolveMaxRows(override?: number): number {
