@@ -32,7 +32,7 @@ _2026-10-13 — **#654 / #655 / #658 — a refused engine that runs again stops 
 #655: the verdict kept only its LAST reporting program (on a Kit, `cpu/`), so a healthy main-build start never cleared it: the 4B ran on the GPU under the banner. The store keeps every reporter
 (`cpu/` clears only as the latest, a review fix). #654: that clear re-armed no consumer, so imports kept failing; a `started` drop now re-arms them and restarts a demo-mode chat model (owner calls;
 `gone` excluded). #658: a synchronous `spawn EPERM` is classified like the `'error'` event; a cancelled or stopped call spawns nothing. Real app (scratch roots): master failed 4/4 legs, the fix passed
-4/4 (#658 via a deny-execute ACL; SAC is off). Record: "Engine load failures" §9. Open: a chat on the `cpu/` net stays there after the heal; #532 `afterInstall` vs a later `cpu/` report._
+4/4 (#658 via a deny-execute ACL; SAC is off). Record: "Engine load failures" §9. Open: a chat on the `cpu/` net stays there after the heal; #532 `afterInstall` vs a later `cpu/` report (#670)._
 _2026-10-13 — **#656 — the runtime-ladder campaign's leftovers: one crash reported once, the untested wiring covered, the GPU suites host-independent (`fix/656-runtime-gpu-test-gaps`).**
 `LlamaServer` reported a healthy server's death twice when Node emitted `'exit'` after `'error'`; the chat crash handlers ignore a repeat only while their restart runs. One per-spawn flag
 now covers both handlers. New rows: kiwix-serve / kiwix-manage through the real verifier, `startEngineCheck`, the unlock heal before the auto-start, "Check again"'s `--version` / `--help` (b11146

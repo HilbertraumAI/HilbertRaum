@@ -5057,7 +5057,7 @@ real app):
   - The heal's restart is a chat start. On a shared card it takes the card from a translation that
     started on it (#473 Phase 1, "a chat start takes the card first"), as Check again's restart did.
   - Unchanged from #532: on a Kit, a `cpu/` refusal after a reinstall replaces the main build's
-    `afterInstall` verdict, so the reinstall is offered again.
+    `afterInstall` verdict, so the reinstall is offered again (#670).
 
 **Real-app verification (2026-10-13, DesktopDiT, GTX 1070 Ti, dev build, scratch drive roots; D:
 was only read).**
