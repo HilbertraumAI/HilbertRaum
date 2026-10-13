@@ -161,7 +161,7 @@ const MODULES: Array<{
   //  - docs:pick — the accepted residual SEC-3 (Info) in architecture.md's follow-up-audit ledger: the dialog
   //    opens and mints a D1 token while locked; the token is inert until unlock because both consumers
   //    (importDocuments, importPreflight) are refused here. (The images picker is gated since #119, skills since
-  //    #240.) Gate it and this entry drops out of the exempt set.
+  //    #240.) Gate it (#681) and this entry drops out of the exempt set.
   //  - docs:getImportJob / docs:getActiveImportJob — in-memory import aggregates; a poll must still settle after a
   //    mid-job lock (docs-ipc T-4 drives getImportJob while locked).
   //  - docs:getReindexAllJob — the in-memory bulk re-index aggregate (the remount recovery read).
