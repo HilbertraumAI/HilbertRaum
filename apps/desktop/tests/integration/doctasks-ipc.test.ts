@@ -110,7 +110,7 @@ beforeEach(() => {
 })
 
 describe('doctasks IPC (start / get / cancel)', () => {
-  it('cancel routes a present jobId to that exact task (queued too) and an empty one to the active task (#157 DT-2)', async () => {
+  it('cancel routes a present jobId to that exact task (queued too) and a call with no id to the active task (#157 DT-2)', async () => {
     const h = await makeHarness()
     const start = async (documentId: string): Promise<string> =>
       ((await invoke(handlers, IPC.startDocTask, { kind: 'summary', documentIds: [documentId] })).result as {
@@ -125,7 +125,9 @@ describe('doctasks IPC (start / get / cancel)', () => {
     await invoke(handlers, IPC.cancelDocTask, b) // a present id: exactly that task, queued or not
     expect(await stateOf(b)).toBe('cancelled')
     expect(await stateOf(a)).toBe('running') // never "the active task"
-    await invoke(handlers, IPC.cancelDocTask, '') // '' is "no id": the chat banner's cancel of the active task
+    // No argument: the wire shape of `window.api.cancelDocTask()` (the preload forwards `undefined`) — the chat
+    // banner's cancel of the active task.
+    await invoke(handlers, IPC.cancelDocTask)
     h.releaseGate()
     expect((await pollTerminal(a)).state).toBe('cancelled')
   })
