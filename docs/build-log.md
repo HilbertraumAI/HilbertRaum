@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-05 #538/#574/#575/#576 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #654/#655/#658 entry). Its records are unchanged:
+`architecture.md` "OCR quality amendment" and design-guidelines §11.19. Its one open item, a sold drive needing `osd` for the gate, is
+enforced by `build-commercial-drive.ps1`, which refuses a drive missing any `ocr:` pin of `runtime-sources.yaml`, `osd` included.
+Citations of the form "BUILD_STATE 2026-10-05 #538/#574/#575/#576 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#538/#574/#575/#576 — OCR reads sideways pages upright, says when it was unsure, gives photos OCR metadata, and reads the scanned pages
+of a text PDF (`fix/538-574-575-576-ocr`).** Tesseract OSD in a lazily started legacy-core worker over a new pinned `ocr/osd.traineddata.gz` (4.3 MB; the
+"WASM core can't run legacy" premise was wrong) + an EXIF orientation marker (little-endian phone photos 0/68 → 68/68). Per-page confidence kept;
+meta `textPageCount` / `lowConfidencePageCount`; `scanned_pages_json` + per-page merge. Dev and packaged exe on DesktopDiT (SAC off): every test page
+68/68. Record: `architecture.md` "OCR quality amendment", design-guidelines §11.19. Open: sold drives need `osd` (`fetch-runtime --family ocr`) for the gate._
+
 ## 2026-10-13 — the closed 2026-10-05 #570–#573 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #656 entry). Its record is unchanged:
