@@ -5061,8 +5061,9 @@ restart, install. Three things blocked an in-app repair:
     is in flight) brings a model the demo runtime stands in for back on the engine. This applies
     to a first install too.
 - **A fresh copy that still fails.** A later `files-damaged` report about THAT program is stored
-  with `EngineProblem.afterInstall: true`. A report about another program of the family (the
-  `cpu/` net) and other reasons are stored as they are. The banner then says the files are
+  with `EngineProblem.afterInstall: true`. Other reasons are stored as they are, and so is a report
+  about another program of the family (the `cpu/` net) on its own. Since #670 (§10), a `cpu/`
+  refusal that follows the fresh copy's keeps the mark. The banner then says the files are
   probably not the cause, points Windows users to the Visual C++ Redistributable (the
   presence-only check in §7), and offers no second reinstall. Diagnostics says "reported damaged
   right after a fresh install".
@@ -5138,7 +5139,8 @@ real app):
 **As built.**
 - **The store** (`engine-load.ts`):
   - `StoredProblem.reporters` holds every program that reported since the verdict was recorded.
-    The shown problem is the latest report, so the #532 `afterInstall` rule is unchanged.
+    The shown problem is the latest report, so the #532 `afterInstall` rule is unchanged (#670
+    later kept the mark across reporters, §10).
   - `clearEngineProblemFor` clears when the healthy program is a reporter. The `cpu/` net
     (`runtime/llama.cpp/<os>/cpu/`) must also be the latest one (`lastReporter`).
   - `reportEngineProblem`'s program is required; every production reporter passed it already.
@@ -5174,8 +5176,8 @@ real app):
     restarted.
   - The heal's restart is a chat start. On a shared card it takes the card from a translation that
     started on it (#473 Phase 1, "a chat start takes the card first"), as Check again's restart did.
-  - Unchanged from #532: on a Kit, a `cpu/` refusal after a reinstall replaces the main build's
-    `afterInstall` verdict, so the reinstall is offered again (#670).
+  - ~~Unchanged from #532: on a Kit, a `cpu/` refusal after a reinstall replaces the main build's
+    `afterInstall` verdict, so the reinstall is offered again (#670).~~ Fixed by #670 (§10).
 
 **Real-app verification (2026-10-13, DesktopDiT, GTX 1070 Ti, dev build, scratch drive roots; D:
 was only read).**
@@ -5220,6 +5222,59 @@ Tests:
   does not read as a refusal.
 - `transcriber.test.ts`: the thrown refusal, the clean-run heal, the pre-aborted call, and the
   stop/cancel and already-cancelled rows at the #516 gate.
+
+### §10 #670 amendment — a fresh copy's refusal outlives the `cpu/` net's (2026-10-13)
+
+**The gap** (found by the review of #655, §9 residual). The store took `afterInstall` from the
+latest report alone, and the latest report is the one the screens show. On a Kit, after "Install
+the AI engine again":
+- the ladder's rungs 1–2 refuse the fresh main build, and that report is marked;
+- rung 3 then refuses the `cpu/` net, which the reinstall left as it was (§8 decision 2). The cause
+  that refuses a fresh, verified copy while every system DLL is present (an outdated Visual C++
+  Redistributable, §7) refuses `cpu/` too, and its unmarked report replaced the marked one;
+- the banner offered the reinstall again, with the damaged-files sentence instead of the Visual C++
+  one: the loop #532 closed. Each walk flipped the verdict twice (two `engine:problemsChanged`
+  pushes).
+
+**Decision (the issue's first option).** The mark belongs to the verdict. Once the fresh copy was
+refused as damaged, every later damaged-files report of that verdict carries `afterInstall`,
+whichever program it is about. A reinstall cannot help either program: it replaces only the copy
+that was just shown not to be the cause, and it never touches `cpu/`.
+- The second option, offering the reinstall only while the main build had reported without the
+  mark, fixes the offer only. The banner would still show the damaged-files sentence, and
+  `EngineProblem` would need a new field.
+
+**As built** (`engine-load.ts`). `StoredProblem.freshCopyDamaged`:
+- is set by a `files-damaged` report of the program `engineInstalled` remembered;
+- is inherited by every later report of the verdict;
+- goes with the verdict, on any drop and on a new install.
+
+`EngineProblem`, the IPC and the renderer are unchanged.
+- A `cpu/` refusal before the fresh copy's, or after a drop, is still stored as it is.
+- A report with another reason is shown as it is. The mark returns with the next damaged-files
+  report.
+
+**Real-app verification (2026-10-13, DesktopDiT, dev build).** Scratch Kit roots held the pinned
+b11146 main build and its `cpu/` net; D: was not touched.
+- With `llama.dll` removed from both builds, the startup check reported the main build as
+  `files-damaged`, and the app reinstalled it: download, SHA-256 check, a pre-clean that kept `cpu/`.
+- Then the fresh copy's `llama.dll` was removed as well. It exits 0xC0000135 while the system DLLs
+  are present, so it is `files-damaged`. An outdated runtime's missing entry point exits 0xC0000139
+  and gets the same verdict (§3).
+- A chat start was refused on rungs 1 and 2 (the fresh copy) and on rung 3 (`cpu/`), in that order.
+  - Master: the verdict had no `afterInstall`. The German banner offered "KI-Engine neu
+    installieren" again, with the reinstall sentence.
+  - The fix: `afterInstall: true`. The banner showed the Visual C++ sentence and only "Erneut prüfen".
+
+**Residuals (unchanged).**
+- A verdict that only `cpu/` reported still offers a reinstall that does not touch `cpu/` (§8).
+- The mark lasts for the session, like the verdict. After an app restart, the first refusal offers
+  the reinstall once more (`freshlyInstalled`, §8).
+- The handler's `repairable` check reads only the reason, so it would admit a reinstall request
+  for a marked verdict. The screen does not offer one.
+
+Tests: `engine-load.test.ts` "#670" covers the walk orders, the push count, a refusal for another
+reason in between, and the drop.
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 

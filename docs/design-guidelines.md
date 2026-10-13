@@ -1467,7 +1467,8 @@ Engineering record: `architecture.md` "Engine load failures" §8.
    sentence says the files are probably not the cause: on Windows it names an outdated Visual C++
    Redistributable, elsewhere it points to the troubleshooting guide. No second reinstall is
    offered; Check again remains. Diagnostics says "engine files reported damaged right after a
-   fresh install".
+   fresh install". On a Kit the `cpu/` net is refused right after the fresh copy; since #670 its
+   report keeps this sentence instead of bringing the reinstall back.
 5. **Copy:** `models.engineProblem.{filesDamagedReinstall, filesDamagedAfterInstall,
    filesDamagedAfterInstallWin, reinstall, voiceReinstall, reinstalled, voiceReinstalled}`,
    `diag.engine.reason.filesDamagedAfterInstall`, `main.engine.nothingToRepair` (en + de).

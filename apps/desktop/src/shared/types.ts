@@ -90,7 +90,9 @@ export interface EngineProblem {
    * #532: a `'files-damaged'` verdict about the very program this session's engine install just
    * put on the drive — a fresh copy, checked against its pinned SHA-256, that still does not load.
    * Its own files are then unlikely to be the cause (on Windows, often an outdated Visual C++
-   * Redistributable), so the UI stops offering another reinstall. Absent otherwise.
+   * Redistributable), so the UI stops offering another reinstall. #670: the verdict keeps it for
+   * every later damaged-files report until it is dropped, whichever program it is about (on a Kit,
+   * the `cpu/` net the ladder reaches next). Absent otherwise.
    */
   afterInstall?: boolean
 }
