@@ -216,6 +216,13 @@ describe('probeGpuDevices', () => {
     let child!: FakeProbeChild
     const spawn: SpawnFn = () => {
       child = new FakeProbeChild() // never exits on its own
+      // #653 review: Node emits 'error' (syscall `kill`) synchronously from a kill() that fails.
+      // The probe is settled before it kills, so that is never logged as a spawn failure.
+      child.kill = () => {
+        child.killed = true
+        child.emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM', syscall: 'kill' }))
+        return false
+      }
       return child
     }
     const warn = vi.spyOn(log, 'warn')
@@ -231,7 +238,7 @@ describe('probeGpuDevices', () => {
       expect(devices).toBeNull()
       expect(child.killed).toBe(true)
       // #653 (found on the real app): the killed child's own 'close' arrives after the probe settled.
-      // It is the kill, not a second non-answer, so nothing more is logged.
+      // It is the kill, not a second non-answer, so nothing more is logged — nor was the failed kill.
       child.emit('close', null, 'SIGKILL')
       expect(warn.mock.calls.map((c) => c[0])).toEqual([])
     } finally {

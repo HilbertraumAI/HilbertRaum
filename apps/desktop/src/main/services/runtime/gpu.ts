@@ -136,8 +136,11 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
 
   return new Promise<GpuDevice[] | null>((resolve) => {
     /** #653: the probe ran into something other than an answer or a refusal. Logs only; the caller resolves `null`. */
-    const logNoAnswer = (detail: string): void => {
-      log.warn('The device probe gave no answer; read as unknown, not "no graphics card"', { detail })
+    const logNoAnswer = (detail: string, stderrTail = ''): void => {
+      log.warn('The device probe gave no answer; read as unknown, not "no graphics card"', {
+        detail,
+        ...(stderrTail ? { stderr: stderrTail } : {})
+      })
     }
     /** #530: the OS refused the program — log once (local, path included) and record the verdict. */
     const recordRefusal = (failure: LoadFailure, detail: string): void => {
@@ -184,13 +187,14 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
       resolve(devices)
     }
     const timer = setTimeout(() => {
+      // #380: the driver never answered — UNKNOWN, not "no GPU". The child is still killed. Settled
+      // first (#653), so whatever the kill makes the child report next is never read as an answer.
+      finish(null)
       try {
         child.kill('SIGKILL')
       } catch {
         /* best-effort */
       }
-      // #380: the driver never answered — UNKNOWN, not "no GPU". The child is still killed.
-      finish(null)
     }, timeoutMs)
 
     child.stdout?.on('data', (chunk: unknown) => {
@@ -202,15 +206,15 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
       stderr = (stderr + String(chunk)).slice(-PROBE_STDERR_MAX)
     })
     child.once('error', (err: unknown) => {
-      // The kill-timeout already settled this probe (#380): what the killed child reports next
-      // is the kill, not an answer — and must not be logged as one (#653).
-      if (settled) return
       const refused = classifySpawnError(err, deps.platform)
       if (refused) {
         recordRefusal(refused, String(err))
         finish(null)
         return
       }
+      // The kill-timeout already settled this probe (#380): what the killed child reports next is
+      // the kill, not a second non-answer, and is not logged as one (#653).
+      if (settled) return
       logNoAnswer(pathFreeSpawnError(err)) // #653, as the synchronous throw above
       finish(null)
     })
@@ -225,7 +229,6 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
         finish(parseListDevices(stdout))
         return
       }
-      if (settled) return // the kill-timeout's own SIGKILL, as above
       const failure = classifyLoadFailure({
         exitCode: typeof code === 'number' ? code : null,
         signal: typeof signal === 'string' ? signal : null,
@@ -239,9 +242,13 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
         finish(null)
         return
       }
+      if (settled) return // the kill-timeout's own SIGKILL, as above
       // #653: it ran and died before answering (a driver crash during enumeration, say). Not an
       // engine verdict — the server may well start a moment later — and not "no device" either.
-      logNoAnswer(describeExit(typeof code === 'number' ? code : null, typeof signal === 'string' ? signal : null))
+      logNoAnswer(
+        describeExit(typeof code === 'number' ? code : null, typeof signal === 'string' ? signal : null),
+        stderr.trim().slice(-1000)
+      )
       finish(null)
     })
   })

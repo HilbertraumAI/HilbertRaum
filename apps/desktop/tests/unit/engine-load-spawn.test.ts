@@ -259,19 +259,34 @@ describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#5
   })
 
   // #653 review: the guard that keeps a timed-out probe's own kill from logging a second non-answer
-  // must not swallow an exit 0 that lands just after the kill-timeout. The program ran, so a refusal
-  // recorded against it is stale either way; the probe's own answer stays the timeout's `null`.
-  it('a probe that exits 0 just after its kill-timeout still clears a stale verdict (#653)', async () => {
+  // must not swallow what a late 'close' says about the program. An exit 0 proves it runs, so a
+  // refusal recorded against it is stale; a loader refusal (a cold drive's scan can push it past the
+  // bound) is still the verdict. The probe's own answer stays the timeout's `null` either way.
+  it.each([
+    {
+      name: 'an exit 0 still clears a stale verdict',
+      before: { family: 'llama_cpp', reason: 'blocked', os: 'win', exit: 'exit code 0xC0E90002' } as const,
+      code: 0,
+      after: null
+    },
+    { name: 'a loader refusal is still recorded', before: null, code: 0xc0000135, after: 'vc-runtime-missing' }
+  ])('after its kill-timeout, a late close still speaks for the program: $name (#653)', async ({ before, code, after }) => {
     vi.useFakeTimers()
     try {
-      reportEngineProblem({ family: 'llama_cpp', reason: 'blocked', os: 'win', exit: 'exit code 0xC0E90002' }, '/bin/llama-server')
+      if (before) reportEngineProblem(before, '/bin/llama-server')
       let child!: FakeChild
       const spawn: SpawnFn = () => (child = new FakeChild()) // exits only when the test says so
-      const probing = probeGpuDevices('/bin/llama-server', { spawn, timeoutMs: 20, verify: async () => 'skip-dev' })
+      const probing = probeGpuDevices('/bin/llama-server', {
+        spawn,
+        timeoutMs: 20,
+        platform: 'win32',
+        systemDllExists: () => false,
+        verify: async () => 'skip-dev'
+      })
       await vi.advanceTimersByTimeAsync(20)
       expect(await probing).toBeNull()
-      child.emit('close', 0, null)
-      expect(engineProblemFor('llama_cpp')).toBeNull()
+      child.emit('close', code, null)
+      expect(engineProblemFor('llama_cpp')?.reason ?? null).toBe(after)
     } finally {
       vi.useRealTimers()
     }

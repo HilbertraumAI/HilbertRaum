@@ -632,7 +632,6 @@ class LadderRuntime implements ModelRuntime {
         // that offloads 0 layers beside a listed card still holds its compute buffer there and
         // runs the prefill on it, so a driver crash can still hit it and §5.3 is its crash path.
         const devices = await probePromise
-        const reading = placement.reading()
         if (devices !== null && devices.length > 0) {
           this.backend = 'gpu'
           // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
@@ -682,6 +681,7 @@ class LadderRuntime implements ModelRuntime {
           // on the card — exactly the DR2 / M8.2 defect `displayDevice` exists to prevent on the
           // probe path. With no compute buffer line printed, the largest row is the better guess
           // than the first one, for the same reason.
+          const reading = placement.reading()
           const used =
             largestPlacementRow(reading.devices, (d) => d.computeMb ?? 0) ??
             largestPlacementRow(reading.devices, (d) => d.totalMb ?? 0)

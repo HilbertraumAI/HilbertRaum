@@ -331,6 +331,25 @@ describe('createPlacementParser', () => {
 // These fixtures are committed to a PUBLIC repo, so the check runs on every suite and is a
 // WHITELIST, not a blacklist: every line must fall into one of six known classes, so injected
 // prose ANYWHERE in a future re-capture reddens here instead of shipping.
+// #653: the start ladder labels a start `gpu` from its own log when the probe lists no device, and
+// the evidence is `holdsGpuBuffers()`. The real captures run through the ladder
+// (`runtime-ladder.test.ts`: full offload, GPU-less 37/37, 0/37, AMX, Metal mapped); these are the
+// edge rules no capture reaches. Handwritten.
+describe('holdsGpuBuffers — a buffer under a device the log lists as a GPU (#653)', () => {
+  const ROW = (label: string): string => `  - ${label} : NVIDIA GeForce RTX 3060 (12288 MiB, 11000 MiB free)`
+  it.each([
+    { name: 'a 0 MiB buffer on a listed device is no evidence', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 0.00 MiB'], gpu: false },
+    { name: 'a KV buffer alone counts', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 576.00 MiB'], gpu: true },
+    { name: 'a recurrent-state buffer alone counts', lines: [ROW('Vulkan0'), 'llama_memory_recurrent: Vulkan0 RS buffer size = 184.25 MiB'], gpu: true },
+    { name: 'device 1 does not claim a buffer of device 10', lines: [ROW('Vulkan1'), 'load_tensors: Vulkan10 model buffer size = 2375.91 MiB'], gpu: false },
+    { name: 'a host buffer never counts, even against a numberless row', lines: [ROW('Vulkan'), 'sched_reserve: Vulkan_Host compute buffer size = 14.01 MiB'], gpu: false }
+  ])('$name', ({ lines, gpu }) => {
+    const p = createPlacementParser()
+    p.onStderrData(lines.join('\n') + '\n')
+    expect(p.holdsGpuBuffers()).toBe(gpu)
+  })
+})
+
 describe('the committed load logs carry no request or prompt content (DR3)', () => {
   /** #653: load-only captures (cut at the first `all slots are idle`, before any request). */
   const LOAD_ONLY = ['placement-b11146-gpuless-37of37-cpu.txt', 'placement-b11146-ngl0-0of37-compute.txt']
