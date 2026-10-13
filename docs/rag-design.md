@@ -2307,8 +2307,8 @@ notice).
 beginning-only (INPUT, tree territory); a deliverable long enough to still be cut after the 2-cap keeps the
 honest OUTPUT-truncated badge; 2–24 map calls (+ fold) of latency on a large analysis (with the Phase 3
 affordance). Tests: `rag-whole-doc-mapreduce.test.ts` (Phase 1 reach + Phase 2 `maxTokens` + Phase 3 notice +
-Phase 4 continuation/dedup/cap/abort + #2 fold-coverage/hard-ceiling), `rag-whole-doc-tree.test.ts` (the hard
-ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation), and
+Phase 4 continuation/cap/abort + #2 fold-coverage/hard-ceiling), `rag-whole-doc-tree.test.ts` (the hard
+ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation, and the shared engine's seam de-dup), and
 `tests/unit/wholedoc-reduce-budget.test.ts` (pure budget math).
 
 **§-anchor legend (retired plan → here).** `wholedoc-truncation-fix-plan §2` (invariants), `§3` (Phase 1 —

@@ -12146,8 +12146,10 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   `INSERT INTO chunks` so a chunk is inserted-then-rolled-back → `chunkCount 0`, connection clean, clean re-process
   indexes. **Teeth:** neuter each handler's `ROLLBACK` → the dangling `BEGIN` poisons the connection / a partial
   row survives → both tests red; restored. *(Discovered — the audit's "only 1 of ~12 sites tested" is inaccurate:
-  `commitNode` already has the H11 injected-edge-insert rollback test (`whole-doc-analysis.test.ts:421`) and the
-  extraction insert has its own (`whole-doc-extract.test.ts:221`) — both driving the real function with the gold-
+  `commitNode` already has the H11 injected-edge-insert rollback test (`whole-doc-analysis.test.ts` 'H11 per-node
+  transaction durability › rolls back on an injected edge insert failure; the shared connection is not poisoned')
+  and the extraction insert has its own (`whole-doc-extract.test.ts` 'extract pass › rolls back on an injected
+  insert failure; the shared connection is not poisoned [H11]') — both driving the real function with the gold-
   standard assertions; T3 closes the categorize + ingestion gaps, the genuinely-missing pair.)*
 - **T5 (Low, backlog) — swept the integration suite for fixed `sleep(N)` that gate a CORRECTNESS premise; converted
   the cheap ones, recorded the residuals.** Most fixed-duration `setTimeout` are STATE-POLL loop intervals
