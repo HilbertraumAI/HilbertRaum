@@ -123,8 +123,10 @@ classifies as a load refusal is cleared (both fields) at every session start. No
 #532 (`architecture.md` "Engine load failures" §8): `EngineProblem` gained the additive-optional
 `afterInstall?: boolean` — a `'files-damaged'` verdict about the very program this session's
 engine install put on the drive (session-only, like the verdict; the UI then offers no second
-reinstall). The engine-downloader additions are listed under the downloader below. No new
-channel, no schema change.
+reinstall). Since #670 (§10 there) the verdict keeps it for every later `'files-damaged'` report
+until it is dropped, whichever program reports (on a Kit, the `cpu/` net); the shape is unchanged.
+The engine-downloader additions are listed under the downloader below. No new channel, no schema
+change.
 #634 (`rag-design.md` §12.4 "#634 amendment"): `documents.error_message` gained three
 persist-canonical English values for a search-model failure — `main.ingest.searchModelTimeout`,
 `…searchModelCannotStart`, `…searchModelFailed` (exact match, display-map translated) — and a lock

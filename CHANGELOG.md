@@ -62,6 +62,11 @@ from its first public `1.0.0` release onward.
   Text like `we&rsquo;ll` or `&raquo;` appeared in answers, in the article viewer and in saved
   copies, and a search for "we'll" did not find it. Typographic quotes, dashes, arrows, accented
   letters and common symbols are now decoded (#663).
+- **Installing the AI engine again is no longer offered a second time when it did not help.** On a
+  HilbertRaum AI Kit, when even the freshly installed engine would not start, the AI Model screen
+  still offered **Install the AI engine again**, because the Kit's CPU fallback build was refused
+  right after it. The banner now says, as intended, that the engine's files are probably not the
+  cause, and on Windows it points to the Microsoft Visual C++ Redistributable (#670).
 
 ## [0.1.63] — 2026-10-12
 
