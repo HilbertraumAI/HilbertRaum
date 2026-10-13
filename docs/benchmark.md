@@ -1486,7 +1486,11 @@ commit references, and added the changelog entry.
   49/49 start sits beside them since #512 (`placement-b11146-full-49of49-swa.txt`), taken through
   the app's own spawn — so it keeps the ANSI colour codes llama.cpp added on Windows when stdout is
   NUL (it reads NUL as a terminal; b9849 did the same) until #515 passed `--log-colors off`. The parser's
-  patterns are unanchored and read it unchanged. Still unwitnessed by any
+  patterns are unanchored and read it unchanged. Since #653 two load-only b11146 captures from the
+  GTX 1070 Ti sit there too: `placement-b11146-gpuless-37of37-cpu.txt` (rung 1 with every Vulkan
+  device hidden prints `offloaded 37/37 layers to GPU` with every buffer on the processor, so the
+  offload line is no evidence of a card) and `placement-b11146-ngl0-0of37-compute.txt` (0 layers
+  offloaded, but a Vulkan0 compute buffer: the card still runs the prefill). Still unwitnessed by any
   capture, so still handwritten from ggml's naming convention: CUDA and Metal devices, a
   `<Backend>_Host` **KV** buffer (M7), and two GPUs both holding weights (HW4 / #332).
 - **HW3** — the P10 review passed EN/DE layout at 880/1024/1280 px in both themes, the German

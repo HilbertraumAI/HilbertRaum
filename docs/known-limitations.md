@@ -2849,8 +2849,9 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   a machine with no `llama-server` — the probe is never called then); a probe that hits the bound
   answers "unknown" and is neither cached nor persisted, so the stored probe stands until the
   next start or check, and "Try GPU again" re-probes; and a start whose probe is unknown takes
-  its backend label from the load log's offload line instead of defaulting to `cpu`, naming the
-  device the start's own compute buffers landed on. A workspace with no stored result is
+  its backend label from the load log instead of defaulting to `cpu`, naming the device the
+  start's own compute buffers landed on. (It read the offload line until #653, which a PC with no
+  usable card prints as `offloaded 37/37 layers to GPU` too; it reads GPU buffers now.) A workspace with no stored result is
   sequenced the same way since #473 (2026-10-07). It used to fire no probe and let the ladder's
   own probe run beside the upload, on the reasoning that a timeout there answers "unknown" and
   the measurement behind the start re-probes on an idle driver — true only for a TIMEOUT: a probe
@@ -2860,6 +2861,18 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   the one-time sidecar-binary verification, which the start itself would wait on anyway; and
   "Try GPU again" against a still-wedged driver shows no change once the bound elapses — the
   unknown answer writes and pushes nothing, and the button has no busy state of its own.
+- **A crashed device probe labelled a card start CPU for the whole session — FIXED 2026-10-13
+  (#653).** A `--list-devices` child that crashed (a Vulkan driver dying during enumeration) or
+  could not be spawned answered "no graphics card". The session kept that answer and it overwrote
+  the stored probe, and it outranked the start's own load log. The chat header and Diagnostics said
+  CPU while the model ran on the card, the Performance screen judged against RAM, and a GPU crash
+  restarted on the same card and then stopped the model instead of falling back to the processor.
+  Now such a probe gives no answer (the stored probe stands), and a start whose log put buffers on
+  a card is labelled GPU from that log. Residuals:
+  - an answer of "no device" that the server contradicts (an enumeration race) labels the start
+    right but keeps the stored probe empty until the next probe answers;
+  - a drive that has never stored a probe still shows no card while every probe crashes;
+  - a probe that crashes every time costs one short crashing child per start or check.
 - **A USB bus reset while unlocked drops the decrypted working copy's WAL.** exFAT reported a
   lost delayed write on `workspace/hilbertraum.sqlite-wal` after a UASP device reset (#330 round
   trip); the restore that session had written was gone, the next unlock restored again, and
