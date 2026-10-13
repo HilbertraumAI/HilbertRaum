@@ -266,21 +266,30 @@ interface StoredProblem {
   /** The latest report — what the screens show. */
   problem: EngineProblem
   /**
-   * Every program the OS refused since the verdict was recorded (#655). A healthy start of ANY of
-   * them clears it (an intermittent block that went away, a library installed since). One program
-   * was not enough: on a Kit the probe, rungs 1–2 (main build) and rung 3 (`cpu/`) all report, so
-   * the main build — the one that runs once the fix is in — was forgotten. A program that never
-   * reported — a Windows Kit's `cpu/` build starting beside a damaged main folder — clears nothing.
+   * Every program the OS refused since the verdict was recorded (#655). One program was not
+   * enough: on a Kit the probe, rungs 1–2 (main build) and rung 3 (`cpu/`) all report, so the main
+   * build — the one that runs once the fix is in — was forgotten. A program that never reported — a
+   * Windows Kit's `cpu/` build starting beside a damaged main folder — clears nothing.
    */
   reporters: Set<string>
+  /** The program that reported last (`problem`'s). */
+  lastReporter: string
 }
 
 /**
- * Why a verdict was dropped (#654). `runs`: a program that reported it started (a healthy start, the
- * probe answered, "Check again"). `installed`: a new copy of the engine replaced it. `gone`: the
- * program left the drive — nothing was healed.
+ * Why a verdict was dropped (#654). `started`: a program that reported it started (a healthy start,
+ * the probe answered). `rechecked`: "Check again" found the engine loads. `installed`: a new copy of
+ * the engine replaced it. `gone`: the program left the drive — nothing was healed.
  */
-export type EngineVerdictDrop = 'runs' | 'installed' | 'gone'
+export type EngineVerdictDrop = 'started' | 'rechecked' | 'installed' | 'gone'
+
+/**
+ * The chat engine's pure-CPU safety net, `runtime/llama.cpp/<os>/cpu/` (`resolveCpuFallbackServerPath`):
+ * the ladder's rung 3, spawned only after the main build's rungs 1–2 failed.
+ */
+function isSafetyNet(family: EngineProblemFamily, binPath: string): boolean {
+  return family === 'llama_cpp' && /[\\/]cpu[\\/][^\\/]+$/.test(binPath)
+}
 
 const FAMILY_ORDER: EngineProblemFamily[] = ['llama_cpp', 'whisper_cpp']
 const problems = new Map<EngineProblemFamily, StoredProblem>()
@@ -321,7 +330,7 @@ export function reportEngineProblem(problem: EngineProblem, binPath: string): vo
   const stored: EngineProblem = afterInstall ? { ...problem, afterInstall: true } : problem
   const reporters = new Set(previous?.reporters)
   reporters.add(binPath)
-  problems.set(problem.family, { problem: stored, reporters })
+  problems.set(problem.family, { problem: stored, reporters, lastReporter: binPath })
   if (!previous || !sameProblem(previous.problem, stored)) notifyListeners()
 }
 
@@ -351,11 +360,22 @@ export function engineInstalled(family: EngineProblemFamily, binPath?: string | 
 }
 
 /**
- * The program at `binPath` just started (healthy, or the probe answered): if it is one of the
- * programs the family's verdict was reported against, the verdict is stale — drop it. Never throws.
+ * The program at `binPath` just started (healthy, or the probe answered): if the family's verdict is
+ * about it, the verdict is stale — drop it (an intermittent block that went away, a library installed
+ * since). Never throws.
+ * - A main build that reported clears it (#655), whatever reported after it: it is the engine
+ *   "Check again" checks and an install repairs.
+ * - The `cpu/` safety net clears it only as the LAST reporter. Rung 3 starts only after the main
+ *   build's rungs 1–2 failed, so a healthy `cpu/` start usually follows a fresh refusal of the main
+ *   build, which still stands (review of #655: a damaged main build would lose its verdict and the
+ *   #532 reinstall offer).
+ * - A program that never reported clears nothing.
  */
 export function clearEngineProblemFor(family: EngineProblemFamily, binPath: string): void {
-  if (problems.get(family)?.reporters.has(binPath)) clearEngineProblem(family, 'runs')
+  const stored = problems.get(family)
+  if (!stored?.reporters.has(binPath)) return
+  if (isSafetyNet(family, binPath) && stored.lastReporter !== binPath) return
+  clearEngineProblem(family, 'started')
 }
 
 /** Every current verdict, the chat engine first. */

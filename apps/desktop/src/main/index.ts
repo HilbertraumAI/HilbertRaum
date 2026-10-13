@@ -786,9 +786,10 @@ function initBackend(): void {
     // The replacement is a fresh instance: re-attach the Performance push to it.
     ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
   }
-  // #654: a refused chat engine that runs again — a healthy start, the probe answering, "Check
-  // again" — re-arms every consumer that latched the refusal (the embedder, reranker, vision and
-  // the translator slot above), so imports work again without a lock/unlock or a restart.
+  // #654: a refused chat engine that starts again — a healthy start, the probe answering — re-arms
+  // every consumer that latched the refusal (the embedder, reranker, vision and the translator slot
+  // above) and brings a model the demo runtime stands in for back on the engine, without a
+  // lock/unlock, a restart or "Check again".
   rearmWhenChatEngineHeals(ctx)
   ctx.onModelInstalled = (modelId) => {
     // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model FIRST —

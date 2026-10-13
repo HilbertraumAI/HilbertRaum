@@ -268,17 +268,21 @@ export class WhisperCliTranscriber implements Transcriber {
     opts: TranscribeOptions,
     onChild: (child: ChildProcess) => void
   ): Promise<{ code: number | null; stderrTail: string }> {
+    // #658: a call cancelled (the dictation deadline, a lock during the WAV write) or a transcriber
+    // stopped (quit) starts nothing — no model load it would kill at once. Checked before the waits
+    // below and again after them: a `stop()` that lands in between has nothing in `active` to kill,
+    // so a child spawned after it would outlive the app.
+    const cancelled = (): boolean => opts.signal?.aborted === true || this.stopped
+    if (cancelled()) throw new Error('Transcription was cancelled.')
     // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
     // packaged-build tamper is refused; the audio import then fails per-file with the
     // generic failure copy (the raw reason stays in the local log only).
-    // #658: a call already cancelled (the dictation deadline, a lock during the WAV write) waits on
-    // nothing and starts nothing — not the gate, the hash, or a model load it would kill at once.
-    if (opts.signal?.aborted) throw new Error('Transcription was cancelled.')
     // #516: an engine install replacing this folder holds spawns until its swap is over.
     await waitForEngineSpawns('whisper_cpp')
     if ((await verifyBinaryBeforeSpawn(this.binPath)) === 'mismatch') {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
+    if (cancelled()) throw new Error('Transcription was cancelled.')
     return new Promise((resolve, reject) => {
       let child: ChildProcess
       try {
@@ -342,9 +346,8 @@ export class WhisperCliTranscriber implements Transcriber {
 
       // REL-2: escalate to SIGKILL so a "Stop" / cancel can't be ignored by a wedged child.
       const onAbort = (): void => this.killWithEscalation(child)
-      // Already aborted at spawn time (rare): kill at once; otherwise arm the listener.
-      if (opts.signal?.aborted) onAbort()
-      else opts.signal?.addEventListener('abort', onAbort, { once: true })
+      // Not aborted yet: checked synchronously just before the spawn (#658).
+      opts.signal?.addEventListener('abort', onAbort, { once: true })
 
       child.on('error', (err) => {
         unregisterSidecarChild(child.pid) // CODE-11: gone/never started — off the kill list

@@ -7,10 +7,12 @@ import {
   classifyLoadFailureMessage,
   classifySpawnError,
   clearEngineProblem,
+  clearEngineProblemFor,
   pathFreeSpawnError,
   engineProblemFor,
   engineInstalled,
   isEngineCannotRunError,
+  onEngineProblemDropped,
   onEngineProblemsChanged,
   reportEngineProblem,
   resetEngineProblemsForTest
@@ -258,8 +260,8 @@ describe('the session verdict store', () => {
     expect(listener).toHaveBeenCalledTimes(1)
     reportEngineProblem({ ...gomp, reason: 'system-too-old', name: 'GLIBC_2.34' }, LLAMA)
     expect(listener).toHaveBeenCalledTimes(2)
-    clearEngineProblem('llama_cpp', 'runs')
-    clearEngineProblem('llama_cpp', 'runs') // nothing left to clear
+    clearEngineProblem('llama_cpp', 'started')
+    clearEngineProblem('llama_cpp', 'started') // nothing left to clear
     expect(listener).toHaveBeenCalledTimes(3)
     off()
     reportEngineProblem(gomp, LLAMA)
@@ -290,11 +292,17 @@ describe('the session verdict store', () => {
     expect(engineProblemFor('whisper_cpp')?.afterInstall).toBeUndefined()
   })
 
-  it('never lets a throwing listener break a report', () => {
+  // A clear runs inside LlamaServer.start()'s healthy path (#654): a listener that throws there must not fail it.
+  it('never lets a throwing listener break a report or a clear', () => {
     onEngineProblemsChanged(() => {
+      throw new Error('boom')
+    })
+    onEngineProblemDropped(() => {
       throw new Error('boom')
     })
     expect(() => reportEngineProblem(gomp, LLAMA)).not.toThrow()
     expect(engineProblemFor('llama_cpp')).toEqual(gomp)
+    expect(() => clearEngineProblemFor('llama_cpp', LLAMA)).not.toThrow()
+    expect(engineProblemFor('llama_cpp')).toBeNull()
   })
 })

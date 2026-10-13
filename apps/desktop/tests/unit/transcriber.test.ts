@@ -353,6 +353,27 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     expect(spawned).toHaveLength(1)
   })
 
+  // #658 review: a quit's stop() or a cancel that lands while the call waits on the gate (or the hash) starts
+  // nothing. stop() finds nothing in `active` to kill then, so a child spawned after it would outlive the app.
+  it.each<[string, (t: { stop(): Promise<void> }, c: AbortController) => unknown]>([
+    ['stop() (quit)', (t) => t.stop()],
+    ['a cancel', (_t, c) => c.abort()]
+  ])('%s while the call waits on the #516 gate spawns nothing', async (_label, end) => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-gate-end-'))
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })
+    const controller = new AbortController()
+    const release = holdEngineSpawns('whisper_cpp')
+    const call = transcriber.transcribe('a.mp3', { workDir, signal: controller.signal })
+    try {
+      await new Promise((r) => setImmediate(r)) // as above: the call is parked on the gate
+      await end(transcriber, controller)
+    } finally {
+      release()
+    }
+    await expect(within(call, 'the ended call settling')).rejects.toThrow(/cancelled/i)
+    expect(spawned).toHaveLength(0)
+  })
+
   // REL-1 (TEST-4): the threaded AbortSignal (now actually supplied by the ingestion call
   // site) arms the abort listener — aborting mid-transcription kills the in-flight child and
   // the call rejects "cancelled". Previously the listener existed but was never armed.

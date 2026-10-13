@@ -26,8 +26,8 @@ import { isModelStarting } from '../../shared/runtime-status'
  * Re-arm every chat-engine consumer that latched a failed start: the #372 model latches, the
  * embedder's and reranker's `startFailed`, the vision cooldown and a latched translator slot. Run
  * after a chat-engine install (a new binary — before #530 that re-armed the model latches only, so
- * a repaired engine still failed every import until a restart) and whenever the chat engine runs
- * again ({@link rearmWhenChatEngineHeals}).
+ * a repaired engine still failed every import until a restart), after a successful re-check, and
+ * when a program the OS had refused starts ({@link rearmWhenChatEngineHeals}, #654).
  */
 export function rearmLlamaConsumers(ctx: AppContext): void {
   clearModelLoadLatches()
@@ -41,19 +41,31 @@ export function rearmLlamaConsumers(ctx: AppContext): void {
   }
 }
 
+export interface HealDeps {
+  /** Test seam: the restart of a model the demo runtime stands in for (default: `restartChatOnRealEngine`). */
+  restartChat?: (ctx: AppContext) => Promise<void>
+}
+
 /**
- * #654: re-arm the chat-engine consumers whenever the chat engine's verdict is dropped because a
- * refused program runs now — a healthy `LlamaServer` start (chat or any sidecar), the device probe
- * answering, or "Check again". Before, only "Check again" re-armed, so after a healthy start the
- * banner was gone while every import still failed on the embedder's latch. Not on `gone` (the
- * program left the drive: nothing was healed, and a consumer re-armed against a missing binary only
- * fails again) and not on `installed` (the install hook re-arms on its own, verdict or not).
- * Subscribed once at startup (`main/index.ts`); returns the unsubscribe. The re-arm spawns
- * nothing, so it cannot feed a new verdict back into the store while the store notifies.
+ * #654: heal what a refusal of the chat engine left behind when a program that reported it STARTS —
+ * a healthy `LlamaServer` start (chat or any sidecar) or the device probe answering. Before, that
+ * dropped the verdict and nothing else: the banner and its Check again were gone while every import
+ * still failed on the embedder's latch, and a model the demo runtime stood in for stayed there. Now
+ * every consumer is re-armed and that model is restarted on the engine (owner calls 2026-10-13). A
+ * start already in flight is left alone (`restartChatOnRealEngine`), so the chat's own healthy start
+ * restarts nothing. The other drops heal elsewhere: "Check again" and an install re-arm and restart
+ * on their own, after their probe refresh; `gone` heals nothing (the program left the drive).
+ * Subscribed once at startup (`main/index.ts`); returns the unsubscribe. The re-arm spawns nothing,
+ * so it cannot feed a new verdict back into the store while the store notifies.
  */
-export function rearmWhenChatEngineHeals(ctx: AppContext): () => void {
+export function rearmWhenChatEngineHeals(ctx: AppContext, deps: HealDeps = {}): () => void {
   return onEngineProblemDropped((family, why) => {
-    if (family === 'llama_cpp' && why === 'runs') rearmLlamaConsumers(ctx)
+    if (family !== 'llama_cpp' || why !== 'started') return
+    rearmLlamaConsumers(ctx)
+    const restart = deps.restartChat ?? restartChatOnRealEngine
+    void restart(ctx).catch((err: unknown) => {
+      log.warn('Restarting the model after the AI engine ran again failed', { error: String(err) })
+    })
   })
 }
 
@@ -104,13 +116,12 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
     const family = problem.family
     try {
       const outcome = await recheckFamily(ctx, family, deps)
-      // 'loads': the verdict is dropped as `runs`, which re-arms the chat engine's consumers
-      // (`rearmWhenChatEngineHeals`). 'gone': the program left the drive — its verdict no longer
-      // describes anything (the missing-engine banner speaks now), but nothing was healed, so
-      // nothing is re-armed. 'unchecked': it could not be started at all (integrity check, a spawn
-      // error that says nothing about the loader) — the verdict stands.
+      // 'gone': the program left the drive — its verdict no longer describes anything (the
+      // missing-engine banner speaks now), but nothing was healed, so nothing is re-armed.
+      // 'unchecked': it could not be started at all (integrity check, a spawn error that says
+      // nothing about the loader) — the verdict stands.
       if (outcome === 'loads') {
-        clearEngineProblem(family, 'runs')
+        clearEngineProblem(family, 'rechecked')
         healed.push(family)
       } else if (outcome === 'gone') {
         clearEngineProblem(family, 'gone')
@@ -121,6 +132,7 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
   }
   if (healed.length > 0) log.info('Engine re-check: the operating system now starts it', { healed })
   if (healed.includes('llama_cpp')) {
+    rearmLlamaConsumers(ctx)
     // A compatibility-mode flag the refusal had set, and rows that still carry its raw line.
     healEngineLoadState(ctx, deps)
     // The device probe the refusal left unanswered: re-probe and persist the real answer for this

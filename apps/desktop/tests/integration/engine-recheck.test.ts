@@ -17,6 +17,7 @@ import type { EngineProblem } from '../../src/shared/types'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { rearmLlamaConsumers, rearmWhenChatEngineHeals, recheckEngines } from '../../src/main/ipc/engine-recheck'
 import {
+  clearEngineProblemFor,
   engineProblemFor,
   reportEngineProblem,
   resetEngineProblemsForTest
@@ -96,9 +97,10 @@ function makeCtx(root: string, probeBehavior: () => void, db: Db | null = null):
     workspace: { isUnlocked: () => db != null },
     db
   } as unknown as AppContext
+  const restartChat = vi.fn(async () => undefined)
   // As `main/index.ts` wires it (#654); `resetEngineProblemsForTest` drops the subscription.
-  rearmWhenChatEngineHeals(ctx)
-  return { ctx, probe, embedderReset, rerankerReset, visionReset, refreshTranslatorSlot, restartChat: vi.fn(async () => undefined) }
+  rearmWhenChatEngineHeals(ctx, { restartChat })
+  return { ctx, probe, embedderReset, rerankerReset, visionReset, refreshTranslatorSlot, restartChat }
 }
 
 /** A fake child that emits `stderr` (when given) then closes with `code` on the next microtask. */
@@ -310,7 +312,7 @@ describe('rearmWhenChatEngineHeals — a healthy start of the refused engine (#6
     return child
   }
 
-  it('re-arms every consumer the refusal latched', async () => {
+  it('re-arms every consumer the refusal latched and brings a demo-mode model back on the engine', async () => {
     reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     latchModelLoad('m', 'unknown model architecture')
     const f = makeCtx(driveRoot(), () => undefined)
@@ -331,9 +333,20 @@ describe('rearmWhenChatEngineHeals — a healthy start of the refused engine (#6
       expect(f.visionReset).toHaveBeenCalledTimes(1)
       expect(f.refreshTranslatorSlot).toHaveBeenCalledTimes(1)
       expect(modelLoadLatchReason('m')).toBeNull()
+      // The healthy start may be the embedder's while the chat model answers in demo mode (owner call).
+      expect(f.restartChat).toHaveBeenCalledTimes(1)
     } finally {
       await server.stop()
     }
+  })
+
+  it('a voice engine that runs again re-arms and restarts nothing of the chat engine', () => {
+    reportEngineProblem(WHISPER_PROBLEM, REFUSED_WHISPER)
+    const f = makeCtx(driveRoot(), () => undefined)
+    clearEngineProblemFor('whisper_cpp', REFUSED_WHISPER) // what a clean whisper-cli run does
+    expect(engineProblemFor('whisper_cpp')).toBeNull()
+    expect(f.embedderReset).not.toHaveBeenCalled()
+    expect(f.restartChat).not.toHaveBeenCalled()
   })
 })
 

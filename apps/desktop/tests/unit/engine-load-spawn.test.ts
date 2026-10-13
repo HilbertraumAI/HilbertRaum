@@ -178,18 +178,27 @@ describe('LlamaServer — a program the OS loader refused (#530)', () => {
   })
 
   // #655: on a Kit the probe and rungs 1–2 (main build) and rung 3 (cpu/) all report, cpu/ last. Once the
-  // fix is in, the main build runs on the graphics card — that clears it too.
-  it('a healthy start of the main build clears a verdict the cpu/ build reported last (#655)', async () => {
-    const main = 'C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe'
-    const problem = { family: 'llama_cpp', reason: 'vc-runtime-missing', os: 'win', name: 'msvcp140.dll', exit: 'exit code 0xC0000135' } as const
-    reportEngineProblem(problem, main)
-    reportEngineProblem(problem, 'C:\\Kit\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe')
+  // fix is in, the main build runs on the graphics card — that clears it. The cpu/ net starts only after the
+  // main build's rungs failed, so it clears only as the latest reporter: a main build that refused it again
+  // right before (still damaged) keeps the verdict and its #532 reinstall offer (review of #655).
+  const KIT_MAIN = 'C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe'
+  const KIT_CPU = 'C:\\Kit\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe'
+  it.each<[string, string[], string, boolean]>([
+    ['the main build clears a verdict the cpu/ build reported last (#655)', [KIT_MAIN, KIT_CPU], KIT_MAIN, true],
+    ['the cpu/ build keeps a verdict the main build reported after it', [KIT_MAIN, KIT_CPU, KIT_MAIN], KIT_CPU, false],
+    ['the cpu/ build clears a verdict it reported last (an intermittent block)', [KIT_MAIN, KIT_CPU], KIT_CPU, true]
+  ])('a healthy start: %s', async (_label, reporters, started, cleared) => {
+    const problem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' } as const
+    for (const binPath of reporters) reportEngineProblem(problem, binPath)
     const spawn: SpawnFn = () => new FakeChild()
     const healthy = (async () => ({ ok: true, status: 200 }) as Response) as typeof fetch
-    const s = server(spawn, { fetchImpl: healthy, binPath: main })
+    const s = server(spawn, { fetchImpl: healthy, binPath: started })
     await s.start()
-    expect(engineProblemFor('llama_cpp')).toBeNull()
-    await s.stop()
+    try {
+      expect(engineProblemFor('llama_cpp') === null).toBe(cleared)
+    } finally {
+      await s.stop()
+    }
   })
 
   it('a healthy start of ANOTHER program of the family (a cpu/ build) leaves the verdict', async () => {
