@@ -320,20 +320,22 @@ drop-in swap behind this interface.
 
 ### Embedding during ingestion
 
-The ingestion `embedding` step (`processDocument`) takes optional deps
-`{ embedder?, embeddingModelId? }`. When an embedder is present it embeds every chunk's text
-as a **single batch** (the 1000-chunk-per-file cap bounds the work) and inserts one
-`embeddings` row per chunk. The re-index path deletes a document's chunks **and** embeddings
-first, so re-embedding (e.g. after an embedding-model change) is clean. Rows are tagged with
-the active embedding model id (`settings.activeEmbeddingModelId`), falling back to
-`embedder.id` when no model is selected — so a model change is always detectable.
+The ingestion `embedding` step (`processDocument`) takes an optional `embedder` dep. When an
+embedder is present it embeds every chunk's text as a **single batch** (the 1000-chunk-per-file
+cap bounds the work) and inserts one `embeddings` row per chunk. The re-index path deletes a
+document's chunks **and** embeddings first, so re-embedding (e.g. after an embedding-model
+change) is clean. Rows are tagged with **`embedder.id`**, the id search scopes by, so a model
+change is always detectable. (As first built, the tag was `settings.activeEmbeddingModelId`
+with `embedder.id` as the fallback; §10 "Embedder-visibility honesty" stopped passing the setting
+into ingestion — it lives on as the selected manifest — and #660 removed the `embeddingModelId`
+override that no production caller set any more.)
 
 ### `embeddings` table (spec §8) + BLOB encoding (LOCKED)
 
 | Column | Notes |
 |---|---|
 | `chunk_id` | PK, FK → `chunks.id` |
-| `embedding_model_id` | active embedding model id, else `embedder.id` |
+| `embedding_model_id` | `embedder.id` of the embedder that produced the vector (§10) |
 | `vector_blob` | raw little-endian **Float32 bytes** of the vector |
 | `dimensions` | vector width (e.g. 384) |
 | `created_at` | ISO-8601 UTC |
@@ -793,7 +795,9 @@ corpus).
 `bge-reranker-v2-m3` (Apache-2.0; F16 GGUF — q8_0 of the XLM-R family crashes b9585,
 the recorded E5 lesson) behind the `Reranker` interface. `LlamaReranker` is the third
 `LlamaServer` composition: same b9585 binary, `--rerank --device none` (CPU pin; chat
-args never reach it), lazy start on first `rerank()`, `/v1/rerank` Jina shape
+args never reach it) — *as built in Phase 21; today `--device none` is the `cpu` posture's
+launch only, see "Device posture, as it stands" below* — lazy start on first `rerank()`,
+`/v1/rerank` Jina shape
 (`{ query, documents }` → `results: [{ index, relevance_score }]`, mapped back by
 `index`). Inputs are truncated by **approx-token cost** (query ≤ 160, doc ≤ **500 = the WHOLE chunk
 window**, `CHUNK_DEFAULTS.chunkSizeTokens`) to fit the context — via the CJK/Thai-aware
@@ -825,6 +829,17 @@ irrelevant best-chunk cosine distributions OVERLAP (E5 runs without query:/passa
 → everything lands in a narrow ~0.87–0.94 band), so no positive floor separates them without
 dropping real hits (§12.1 R3; `tests/manual/minsim-measure.test.ts`). Relevance separation
 is the reranker's job, not the floor's.
+
+**Device posture, as it stands (amends the Phase-21 text above and D9; #660).** `--device none`
+is the **`cpu` posture's** launch only. On the `gpu` posture the launch omits it, and
+llama-server's own `-ngl auto` + `--fit on` place the model — the app never passes `-ngl` (§17
+PR-B, step 4-4). The posture is `gpu` only when Settings allow the card (`gpuMode: 'auto'`, no
+`gpuAutoDisabled`), the reranker has not been demoted this session, no chat start is pending, no
+translation is on the card, and a usable card has room beside the committed chat model
+(`rag/device-posture.ts` `resolveRerankerDevicePosture`, Wave 8 step 4-8); `rerank()` resolves
+it per call and restarts a sidecar recorded under a different one. A GPU-posture start failure
+or a second unexpected exit demotes the session to `cpu` (#474). The binary is the shipped pin
+(b11146 since #512), no longer b9585. Code: `reranker/llama.ts`.
 
 ### Known retrieval-quality ceilings (DOC-N6, full audit 2026-06-28)
 
@@ -952,7 +967,7 @@ spread the distribution and make a floor meaningful; revisit only with a prefix 
 | # | Decision | Resolution |
 |---|---|---|
 | D8 | Reranker model + license | **bge-reranker-v2-m3** (Apache-2.0 base, HF-API-verified 2026-06-10) — GGUF `gpustack/bge-reranker-v2-m3-GGUF` `bge-reranker-v2-m3-FP16.gguf` (1 159 776 896 B). **FP16, not q8_0** (the recorded b9585 XLM-R q8_0 warmup crash, BUILD_STATE §9). Qwen3-Reranker-0.6B rejected: no official GGUF (HF 401), template-path dependency, slower causal arch. Manifest `role: reranker` with `download` block + approved `license_review` |
-| D9 | Sidecar lifecycle | Third **`LlamaServer` composition** (E5 pattern): `--rerank --device none` (CPU pin), lazy start, `stop()` on will-quit / `suspend()` on lock, NO chat args. **Factory default = `null`** (not a mock) ⇒ retrieval byte-identical (graceful-fallback rule). Query-time failure ⇒ log + fused order; start failure ⇒ session latch |
+| D9 | Sidecar lifecycle | Third **`LlamaServer` composition** (E5 pattern): `--rerank --device none` (CPU pin; *amended by §17 PR-B: `--device none` on the `cpu` posture only, see §11 "Device posture, as it stands"*), lazy start, `stop()` on will-quit / `suspend()` on lock, NO chat args. **Factory default = `null`** (not a mock) ⇒ retrieval byte-identical (graceful-fallback rule). Query-time failure ⇒ log + fused order; start failure ⇒ session latch |
 | D10 | Resource budget (8 GB) | ~1.3 GB RSS when active; lazy + opt-in-by-provisioning + CPU-pinned ⇒ 8 GB worst case ≈ 5.3 GB. NOT bundled for TINY. Latency bounded by the candidate cap + per-field truncation (q ≤ 160, doc ≤ **500 = whole chunk window**, raised from 320 by RAG-N3 / full audit 2026-06-28); real numbers in §12.3 |
 | D11 | Rerank placement + topKInitial | Between fusion and dedup — dedup keeps the best-by-rerank chunk per page. **`topKInitial` does NOT rise** when a reranker is active (CPU latency linear in candidates; the fused union already reaches ≤ 2×topKInitial; the settings knob remains for tuning) |
 | D12 | `minSimilarity` pre- vs post-rerank | **PRE-rerank, cosine-only** (status quo site + meaning): applied to vector hits before fusion. Rerank `relevance_score` is an unbounded logit — never compared to the floor. Keyword hits carry no cosine and bypass the floor by design. R3 measured ⇒ default stays 0 |

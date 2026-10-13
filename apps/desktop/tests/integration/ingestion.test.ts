@@ -471,7 +471,7 @@ describe('listDocuments stale-embedding flag', () => {
     const embedder = createMockEmbedder()
     const src = write('e.txt', 'alpha beta gamma delta epsilon zeta')
     const q = createQueuedDocument(db, src)
-    await processDocument(db, storeDir, q.id, { embedder, embeddingModelId: embedder.id })
+    await processDocument(db, storeDir, q.id, { embedder })
 
     // Active model matches the vectors → not stale.
     expect(listDocuments(db, embedder.id)[0].staleEmbeddings).toBe(false)
@@ -487,7 +487,7 @@ describe('listDocuments stale-embedding flag', () => {
     const embedder = createMockEmbedder()
     const src = write('f.txt', 'alpha beta gamma delta epsilon zeta')
     const q = createQueuedDocument(db, src)
-    await processDocument(db, storeDir, q.id, { embedder, embeddingModelId: embedder.id })
+    await processDocument(db, storeDir, q.id, { embedder })
 
     process.env.HR_FORCE_REINDEX = '1'
     try {

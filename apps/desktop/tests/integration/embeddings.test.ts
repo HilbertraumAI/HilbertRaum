@@ -329,10 +329,7 @@ describe('ingestion embedding step', () => {
     const src = write('notes.txt', Array.from({ length: 1200 }, (_, i) => `word${i}`).join(' '))
 
     const queued = createQueuedDocument(db, src)
-    const info = await processDocument(db, storeDir, queued.id, {
-      embedder,
-      embeddingModelId: 'test-embed-model'
-    })
+    const info = await processDocument(db, storeDir, queued.id, { embedder })
     expect(info.status).toBe('indexed')
     expect(info.chunkCount).toBeGreaterThan(1)
 
@@ -342,26 +339,11 @@ describe('ingestion embedding step', () => {
          FROM embeddings e JOIN chunks c ON c.id = e.chunk_id WHERE c.document_id = ?`
       )
       .all(queued.id) as Array<{ model: string; dims: number }>
-    // One embedding per chunk, all tagged with the active model id + correct dims.
+    // One embedding per chunk, all tagged with the embedder's own id (rag-design §10: the id
+    // search scopes by, never the selected manifest's) + correct dims.
     expect(rows).toHaveLength(info.chunkCount)
     expect(rows.every((r) => r.model === 'test-embed-model')).toBe(true)
     expect(rows.every((r) => r.dims === 384)).toBe(true)
-  })
-
-  it('falls back to embedder.id when no active embedding model is set', async () => {
-    const db = freshDb()
-    const storeDir = store()
-    const embedder = new MockEmbedder()
-    const src = write('a.txt', 'one two three four five')
-    const queued = createQueuedDocument(db, src)
-    await processDocument(db, storeDir, queued.id, { embedder, embeddingModelId: null })
-    const row = db
-      .prepare(
-        `SELECT e.embedding_model_id AS model FROM embeddings e
-         JOIN chunks c ON c.id = e.chunk_id WHERE c.document_id = ? LIMIT 1`
-      )
-      .get(queued.id) as { model: string }
-    expect(row.model).toBe(embedder.id)
   })
 
   it('skips embedding (pass-through) when no embedder is supplied', async () => {

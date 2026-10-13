@@ -37,8 +37,10 @@ import type { TranslationCpuCause, TranslationDeviceStatus } from '../../../shar
  * Pin the translation sidecar to a SINGLE server slot (plan §2 D8/D9). Translation windows are run
  * STRICTLY SEQUENTIALLY (the doc-task FIFO at TG-3, one window at a time in the view at TG-4), so a
  * single slot is correct — and it contains the Windows-Vulkan hang under PARALLEL translation load
- * (#25142, seen 2026-06-29 on Intel Arc). It also avoids the b9849 `n_slots = 4` + unified-KV
- * context split that starved the vision sidecar (RUNTIME-5).
+ * (#25142, seen 2026-06-29 on Intel Arc). It also avoids the default `n_slots = 4` + unified-KV
+ * context split that starved the vision sidecar (RUNTIME-5): found on b9849, still the default on
+ * the b11146 pin (measured 2026-10-13, #660: `n_slots = 4, kv_unified = 'true'` without the flag,
+ * `n_slots = 1, kv_unified = 'false'` with it).
  */
 export const TRANSLATION_SLOT_ARGS = ['--parallel', '1'] as const
 
@@ -56,15 +58,18 @@ export const TRANSLATION_BATCH_ARGS = ['--batch-size', '512', '--ubatch-size', '
 /**
  * Force-CPU device args — the translation analogue of the chat ladder's rung 2 (`--device none` is
  * the ONLY CPU-forcing mechanism; NEVER pass `-ngl`). Used whenever GPU must not be attempted:
- * `gpuMode: 'off'`, a persisted `gpuAutoDisabled`, or this runtime's own session fallback latch.
+ * `gpuMode: 'off'`, a persisted `gpuAutoDisabled`, this runtime's own session fallback latch, or
+ * the #473 headroom gate's processor verdict (`gpuHeadroom` below).
  *
  * History: TG-2 shipped the sidecar hard-pinned to these args (plan §2 D8) and TG-6 (2026-07-05)
  * kept the pin for v1 pending a GPU-drive re-smoke — GPU was deferred, NOT rejected. Issue #42
  * (2026-07-09) pulled it forward: the sidecar now honours the SAME Settings signals the chat ladder
  * reads (`gpuMode` + `gpuAutoDisabled`, injected via `TranslationGpuDeps`) and composes NO device
- * args on the GPU attempt (b9849 defaults ngl=auto + fit=on → VRAM-aware offload; on a GPU-less
- * machine that IS CPU mode). #25142 (the Windows-Vulkan hang under PARALLEL translation load) stays
- * contained by `--parallel 1` regardless of the device posture. See model-benchmarks.md §11.4.
+ * args on the GPU attempt (the pinned build's defaults `-ngl auto` + `--fit on` → VRAM-aware
+ * offload; unchanged from b9849 to b11146, re-checked against `--help` 2026-10-13, #660; on a
+ * GPU-less machine that IS CPU mode, though the load log still prints `offloaded N/N layers` there,
+ * #671). #25142 (the Windows-Vulkan hang under PARALLEL translation load) stays contained by
+ * `--parallel 1` regardless of the device posture. See model-benchmarks.md §11.4.
  */
 export const TRANSLATION_CPU_DEVICE_ARGS = ['--device', 'none'] as const
 
@@ -88,8 +93,8 @@ export type { TranslationDeviceStatus }
 
 /**
  * Match llama.cpp's load-log offload line across the naming drift (`llm_load_tensors:` on older
- * builds, `load_tensors:` on b9849): `… offloaded 48/49 layers to GPU`. The LAST match wins —
- * a retried load within one child would print it again.
+ * builds, `load_tensors:` on b9849 and b11146): `… offloaded 48/49 layers to GPU`. The LAST
+ * match wins — a retried load within one child would print it again.
  */
 const OFFLOAD_LINE_RE = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers to GPU/g
 
@@ -155,7 +160,7 @@ export const TRANSLATION_LOG_ARGS = ['-lv', '4'] as const
  * The full extra-arg set the translation sidecar launches with for one device posture (composed
  * from the named constants above so the runtime AND the manual smoke stay byte-identical — no
  * drift). NO `--jinja`, NOT the chat `CHAT_SERVER_ARGS`. 'auto' composes NO device args — the
- * chat-rung-1 posture (b9849 defaults ngl=auto + fit=on); 'cpu' forces `--device none`.
+ * chat-rung-1 posture (the pin's defaults `-ngl auto` + `--fit on`); 'cpu' forces `--device none`.
  */
 export function translationServerArgs(device: TranslationDevice): string[] {
   return [
@@ -641,8 +646,8 @@ export class TranslationRuntime {
       contextTokens: this.ctxTokens,
       // NO `--jinja` (the #20305 regression, plan §2 D2) and NOT CHAT_SERVER_ARGS. `--parallel 1`
       // (sequential windows; #25142) + the device posture (issue #42: 'auto' = NO device args →
-      // b9849 ngl=auto + fit=on VRAM-aware offload; 'cpu' = `--device none`) + `--chat-template
-      // gemma` (avoids the #20305 STARTUP crash — see TRANSLATION_TEMPLATE_ARGS).
+      // the pin's `-ngl auto` + `--fit on` VRAM-aware offload; 'cpu' = `--device none`) +
+      // `--chat-template gemma` (avoids the #20305 STARTUP crash — see TRANSLATION_TEMPLATE_ARGS).
       extraArgs: translationServerArgs(device),
       spawn: this.opts.spawn,
       fetchImpl: this.opts.fetchImpl,

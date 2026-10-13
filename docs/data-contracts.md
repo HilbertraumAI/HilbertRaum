@@ -672,10 +672,11 @@ head's own weights + KV.
   (SHA-256 tokens → signed buckets → L2-normalize), zero network. `MOCK_EMBEDDING_DIMENSIONS =
   384`, `MOCK_EMBEDDING_MODEL_ID = 'mock-embedder'`.
 - **Ingestion wiring:** `processDocument`/`reindexDocument` accept `IngestionDeps
-  { embedder?, embeddingModelId? }`; the `embedding` step embeds all chunks in one batch and
-  inserts `embeddings` rows. `registerDocsIpc` passes `ctx.embedder` +
-  `getSettings(db).activeEmbeddingModelId`. **`AppContext` now carries `embedder`** (created in
-  `main/index.ts`).
+  { embedder? }`; the `embedding` step embeds all chunks in one batch and inserts `embeddings`
+  rows tagged with `embedder.id`. `registerDocsIpc` passes `ctx.embedder` only (since rag-design
+  §10 it no longer passes the `activeEmbeddingModelId` setting into ingestion; the
+  `embeddingModelId` override no production caller set was removed by #660). **`AppContext` now
+  carries `embedder`** (created in `main/index.ts`).
 - **`embeddings` table** (spec §8, already existed): `chunk_id` PK, `embedding_model_id`,
   `vector_blob` (raw Float32 bytes), `dimensions`, `created_at`. No new IPC (askDocuments = Phase 6).
 

@@ -249,9 +249,11 @@ export const IPC = {
   // handlers requireUnlocked. No image/prompt/answer content is logged or audited.
   /** Is image understanding available (runtime + a verified vision model + projector)? */
   imageGetStatus: 'images:getStatus',
-  /** Open the OS picker filtered to png/jpg/jpeg; returns `{ path, name, sizeBytes }` or null. */
+  /** Open the OS picker (png/jpg/jpeg/webp, plus "All files"); returns `{ token, name, sizeBytes }`
+   *  or null. The absolute path stays in main; the token is one-time (D2). */
   imageChooseImage: 'images:chooseImage',
-  /** Read a picked image's bytes (main owns file I/O); re-validates extension + byte cap. */
+  /** Read a picked image's bytes by its picker token (main owns file I/O); re-validates
+   *  extension + byte cap. */
   imageReadBytes: 'images:readBytes',
   /** Start a one-at-a-time analyze (validates extension/cap/question); a second one is busy. */
   imageAnalyze: 'images:analyze',
