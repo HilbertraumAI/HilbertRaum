@@ -18,9 +18,9 @@ import { join } from 'node:path'
 // first."). It also asserts the read-only / in-memory channels (getLogTail, getRuntimeStatus)
 // STILL resolve when locked (pre-unlock diagnostics + runtime status must work at the gate).
 //
-// Modules with their own dedicated locked-vault rejection tests are not duplicated here:
-// chat (chat-ipc TEST-N8), docs (docs-ipc "M6"), doctasks (doctasks-ipc). Together with this
-// file every DB-touching IPC module is enumerated.
+// Modules with their own dedicated locked-vault rejection tests (chat's TEST-N8, translate,
+// dictation) and the pre-unlock modules are listed in COVERED_ELSEWHERE below, each with its
+// reason. Together with this file every DB-touching IPC module is enumerated.
 //
 // NOTE: this also SUBSUMES Phase-5 item T3 (rag:ask lock-rejection) — registerRagIpc is
 // driven here against a locked ctx, so T3 needs no separate test.
@@ -47,6 +47,8 @@ import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceR
 import { registerLocalApiIpc } from '../../src/main/ipc/registerLocalApiIpc'
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
 import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
+import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
+import { registerDocTasksIpc } from '../../src/main/ipc/registerDocTasksIpc'
 import { VisionService } from '../../src/main/services/vision'
 import { IPC } from '../../src/shared/ipc'
 import { initLogging } from '../../src/main/services/logging'
@@ -153,6 +155,37 @@ const MODULES: Array<{
         })
       ),
     exempt: new Set<string>([IPC.imageGetStatus])
+  },
+  // Documents: every DB-touching handler opens with requireUnlocked() — 14 channels, among them the old
+  // docs-ipc "M6" subset, the L-3 preflight gate and the #90 original export. Exempt, each read from its handler:
+  //  - docs:pick — the accepted residual SEC-3 (Info) in architecture.md's follow-up-audit ledger: the dialog
+  //    opens and mints a D1 token while locked; the token is inert until unlock because both consumers
+  //    (importDocuments, importPreflight) are refused here. (The images picker is gated since #119, skills since
+  //    #240.) Gate it and this entry drops out of the exempt set.
+  //  - docs:getImportJob / docs:getActiveImportJob — in-memory import aggregates; a poll must still settle after a
+  //    mid-job lock (docs-ipc T-4 drives getImportJob while locked).
+  //  - docs:getReindexAllJob — the in-memory bulk re-index aggregate (the remount recovery read).
+  //  - docs:cancelReindexAll — only STOPS work already running (aborts the loop at its next boundary) and touches no
+  //    ctx.db, the #420 cancelVerify rationale above.
+  {
+    name: 'registerDocsIpc',
+    register: registerDocsIpc,
+    exempt: new Set<string>([
+      IPC.pickDocuments,
+      IPC.getImportJob,
+      IPC.getActiveImportJob,
+      IPC.getReindexAllJob,
+      IPC.cancelReindexAll
+    ])
+  },
+  // Doc tasks: doctasks:start and the two read-only analysis channels (analysis:coverage, analysis:listAll) open with
+  // requireUnlocked(). The four lane channels only read or abort the manager's in-memory queue and never touch
+  // ctx.db: doctasks:get / doctasks:getActive / doctasks:listActive (a renderer poll that outlives a lock settles on
+  // the manager's own terminal state) and doctasks:cancel (only stops work; the lock path flushes the lane itself).
+  {
+    name: 'registerDocTasksIpc',
+    register: registerDocTasksIpc,
+    exempt: new Set<string>([IPC.getDocTask, IPC.getActiveDocTask, IPC.listActiveDocTasks, IPC.cancelDocTask])
   }
 ]
 
@@ -165,8 +198,6 @@ const MODULES: Array<{
 // is added uncovered reds this file (the exact drift it exists to catch).
 const COVERED_ELSEWHERE: Record<string, string> = {
   registerChatIpc: 'chat-ipc.test.ts (TEST-N8 locked-vault rejection)',
-  registerDocsIpc: 'docs-ipc.test.ts ("M6" locked-vault rejection)',
-  registerDocTasksIpc: 'doctasks-ipc.test.ts (locked-vault rejection)',
   registerTranslateIpc:
     'translate-ipc.test.ts (locked-vault rejection of translateStart — a start lazily respawns the suspended sidecar; cancel/getActive are safe non-DB reads, intentionally ungated)',
   registerWorkspaceIpc:
