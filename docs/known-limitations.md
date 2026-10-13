@@ -2872,7 +2872,13 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   - an answer of "no device" that the server contradicts (an enumeration race) labels the start
     right but keeps the stored probe empty until the next probe answers;
   - a drive that has never stored a probe still shows no card while every probe crashes;
-  - a probe that crashes every time costs one short crashing child per start or check.
+  - a probe that crashes every time costs one short crashing child per start or check (two for a
+    model with the speculative-decoding rung);
+  - like a timed-out one, a crashed probe at unlock leaves the model start's own probe to run beside
+    the weight upload, and an answer there is stored with the chat model already on the card
+    (harmless on NVIDIA/Windows, whose free figure does not move);
+  - a transient read failure while the packaged app hashes the engine still reads "no graphics card"
+    for the session (the integrity check reports it as a mismatch).
 - **A USB bus reset while unlocked drops the decrypted working copy's WAL.** exFAT reported a
   lost delayed write on `workspace/hilbertraum.sqlite-wal` after a UASP device reset (#330 round
   trip); the restore that session had written was gone, the next unlock restored again, and

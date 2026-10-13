@@ -3785,7 +3785,7 @@ adds is the safety machinery:
   seams settle the session's probe refresh BEFORE the auto-start (`FirstBenchmarkDecision.probed`),
   so on that path the answer is normally already in hand; when the probe lists no device (unknown,
   or since #653 an empty answer) the rung is labelled from this start's own load log — `gpu` when it
-  filed buffers on a graphics device (`holdsGpuBuffers`; never the offload line, which a GPU-less
+  filed buffers on a device its own `device_info` block lists as a GPU (`PlacementParser.holdsGpuBuffers`; never the offload line, which a GPU-less
   rung 1 prints as `offloaded 37/37 layers to GPU` too), named from the `device_info` rows — rather
   than defaulting to `cpu`. The probe labels the backend for the
   UI; it can't prove stable inference — the ladder is the actual guarantee.
@@ -4143,10 +4143,17 @@ persisting nothing; a healthy model starts on rung 1.
   "· GPU (Grafikkarte)" with VRAM unchanged.
 - **Owner calls (2026-10-13), all as recommended:**
   1. A probe that lists no device, whether it answered empty or gave no answer, yields to **GPU
-     buffers** in this start's load log (`placement.ts` `holdsGpuBuffers`: a model, KV, recurrent-state
-     or compute buffer on a device `isCpuDevice` does not claim). The start is then labelled `gpu` and
-     named like #380 did (the `device_info` row with the largest compute buffer). The same rule replaces
-     #380's `gpuLayers > 0`. A log that is silent or shows only CPU buffers never overrides.
+     buffers** in this start's load log. The start is then labelled `gpu` and named like #380 did (the
+     `device_info` row with the largest compute buffer). The same rule replaces #380's
+     `gpuLayers > 0`. A log that is silent or shows only CPU buffers never overrides.
+     - The evidence is `PlacementParser.holdsGpuBuffers()`: a model, KV, recurrent-state or compute
+       buffer of more than 0 MiB, filed under a label the log's own `device_info` block lists as a
+       GPU, or under `<label>_<suffix>` (a mapped buffer). A CPU-side label never counts.
+     - It is a method, not a field of the reading, because the reading is the persisted
+       `ModelPlacement` shape.
+     - The first version counted any buffer `isCpuDevice` does not claim. The review caught that this
+       is a blacklist: ggml's CPU backend has an `AMX` buffer type (Sapphire Rapids; the shipped
+       `ggml-cpu-sapphirerapids.dll` carries the name), which would have labelled a GPU-less Xeon `gpu`.
   2. **The mirror stays.** A listed card with `offloaded 0/N layers` is labelled `gpu`. Measured with
      `-ngl 0`: the start still reserves a 91 MiB Vulkan0 compute buffer and runs the prefill on the card
      (74 % load, 302 tok/s against 56 with `--device none`). A driver crash can still hit it, and §5.3,
@@ -4170,10 +4177,13 @@ persisting nothing; a healthy model starts on rung 1.
   - The root cause (3) keeps a crash out of the stored `gpuProbe`, so the tile, the memory class, the ★
     pick, the profile and the #473 gates keep this machine's last real answer.
   - #669's `reprobeGpu` now writes nothing on a crash.
-  - A probe that crashes every time costs one crashing child per caller (each start, refresh, check or
-    "Try GPU again"), bounded at 10 s. The server would then crash at the same point too.
-  - The kill-timeout's own SIGKILL is not logged as a second non-answer (the `'error'` / `'close'`
-    handlers return once the probe has settled).
+  - A probe that crashes every time costs one crashing child per caller, bounded at 10 s. That means
+    each refresh, check or "Try GPU again", and each model start: two for a model with the MTP rung,
+    since the speculative check's `null` drops itself before rung 1 asks again. The server would then
+    crash at the same point too.
+  - The kill-timeout's own SIGKILL is not logged as a second non-answer: the `'error'` / `'close'`
+    handlers return once the probe has settled. The exception is an exit 0, which still clears a stale
+    refusal verdict, because the program ran.
 - **Real app (DesktopDiT, GTX 1070 Ti, b11146, the 4B).** A wrapper in a scratch root ran
   `--list-devices` as an exit 0xC0000005 and everything else as the real server, inside a kill-on-close
   Job Object. Launch 1 stored the card; launch 2 crashed the probe.
@@ -4183,15 +4193,26 @@ persisting nothing; a healthy model starts on rung 1.
   - Fix: the stored card stood, the header read "· GPU (NVIDIA GeForce GTX 1070 Ti)" with the placement
     `gpu`. The first kill took §5.3 (compatibility mode, `--device none`, `gpuAutoDisabled`); the second
     took #599's one CPU restart.
-- **Residual.** An exit-0 empty answer the server contradicts (an enumeration race, a pin bump that
-  changes the device-line shape) is labelled correctly for the start, but the stored probe keeps `[]`
-  until the next probe answers. A drive that has never stored a probe still shows no card on the tile
-  while its probes crash.
+- **Residuals:**
+  - An exit-0 empty answer the server contradicts (an enumeration race, a pin bump that changes the
+    device-line shape) labels the start correctly, but the stored probe keeps `[]` until the next probe
+    answers.
+  - A drive that has never stored a probe still shows no card on the tile while its probes crash.
+  - **Like a timeout (#380), a crash at the unlock refresh leaves the ladder's own probe to run beside
+    the weight upload.** An answer there becomes the session's and can be persisted with the chat model
+    already on the card. That is the baseline #473 sequenced the unlock probe to avoid. It is rare, and
+    harmless on NVIDIA/Windows, whose free figure does not move (#318). Caching a crash's unknown for the
+    session would close it, against owner call 3's "not cached".
+  - The binary verifier reports a transient read failure (an antivirus lock while hashing) as
+    `mismatch`, so the probe answers `[]`: "no GPU" for the session. The integrity paths keep `[]` by
+    owner call 3.
 - **Tests:**
-  - `runtime-ladder.test.ts`: real b11146 captures for the empty and unknown answers yielding to GPU
-    buffers, the GPU-less rung 1, and the 0/37 mirror;
-  - `gpu.test.ts`: crashes and EMFILE resolve `null`;
-  - `engine-load-spawn.test.ts`: no verdict for an unclassified exit;
+  - `runtime-ladder.test.ts`:
+    - real b11146 captures for the empty and unknown answers yielding to GPU buffers, the GPU-less
+      rung 1, and the 0/37 mirror;
+    - handwritten rows for an `AMX` buffer (cpu) and a Metal mapped buffer (gpu);
+  - `gpu.test.ts`: crashes and EMFILE resolve `null`; the kill's own `close` logs nothing;
+  - `engine-load-spawn.test.ts`: no verdict for an unclassified exit; a late exit 0 clears a stale verdict;
   - `placement-parser.test.ts`: the DR3 content guard covers the two new captures.
 
 *Interaction with #320* (excluding a hybrid laptop's iGPU with `--device` at launch): **decided
@@ -4378,7 +4399,7 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder once its CPU control probe confirms a *device* fault (§5.2, #312); cleared by "Try GPU again". A model no rung can load writes neither field, nor does a program the OS loader refused (#530) — and a pair a refusal wrote before #530 is cleared at the next session start (`healEngineLoadState`) |
 | Models blamed as unloadable this session (#372) | `factory.ts` module state (`Map<modelId, reason>`, the #182 `speculativeSuppressed` idiom) — never persisted; a latched model's next start spawns no rung. Cleared per model by "Verify checksum" / a completed download of it, for every model by a chat-engine install or a successful engine "Check again" (#530), and by an app restart — **not** by "Try GPU again" (§5.2) |
 | `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run. **Decision 6 amended (#380, 2026-09-08):** its one exception is a probe that TIMED OUT — that is not an answer but the absence of one, so it writes nothing and pushes nothing, the stored stamped probe stands until the next start / check / "Try GPU again", and the summary the run uses comes from this machine's record (`eligibleDevicesFor`), which is what decision 6 actually requires. Persisting the empty stamped probe there was the #330 failure: the driver was busy with the weight upload, and a card machine was recorded as having none. **#530:** a program the OS loader refused is the same kind of non-answer — the probe resolves `null` and records the engine verdict instead of persisting "no graphics card". **#653:** so is a probe that crashed (any other non-zero exit or signal) or could not be spawned — `null`, no verdict, nothing written; before, it stamped `[]` over a card machine's record (§5.2 "#653 amendment") |
-| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` is the shared `displayDevice(devices)` pick (PR #303 audit M8.2: the budget device, else the largest non-integrated one, else the first listed — an earlier `devices[0]` rule named the iGPU on a hybrid box while the model ran on the dGPU), display only; it is not necessarily the budget device the picker or the Performance tile use. When the probe lists no device — UNKNOWN (#380), or since #653 an empty answer — both the backend and the name come from this start's own load log instead: `gpu` when it filed a buffer on a graphics device (`holdsGpuBuffers`; until #653 this read `gpuLayers > 0`, which a GPU-less rung 1 prints as 37/37 too), named from the `device_info` row that took the largest COMPUTE buffer (else the largest row). Never the FIRST row: the parser keeps them in LOG order, which is not the order the fit used — on the `ryzen-7-5800h-rtx-3060-laptop-6gb-14gb` evidence `Vulkan0` is the iGPU, listed first and given no buffers at all, while every buffer went to the RTX at `Vulkan1`. `displayDevice` itself cannot be reused there: it takes `GpuDevice[]`, whose `totalMb` is non-null, and a `PlacementDevice`'s is nullable |
+| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` is the shared `displayDevice(devices)` pick (PR #303 audit M8.2: the budget device, else the largest non-integrated one, else the first listed — an earlier `devices[0]` rule named the iGPU on a hybrid box while the model ran on the dGPU), display only; it is not necessarily the budget device the picker or the Performance tile use. When the probe lists no device — UNKNOWN (#380), or since #653 an empty answer — both the backend and the name come from this start's own load log instead: `gpu` when it filed a buffer on a device its own `device_info` block lists as a GPU (`PlacementParser.holdsGpuBuffers`; until #653 this read `gpuLayers > 0`, which a GPU-less rung 1 prints as 37/37 too), named from the `device_info` row that took the largest COMPUTE buffer (else the largest row). Never the FIRST row: the parser keeps them in LOG order, which is not the order the fit used — on the `ryzen-7-5800h-rtx-3060-laptop-6gb-14gb` evidence `Vulkan0` is the iGPU, listed first and given no buffers at all, while every buffer went to the RTX at `Vulkan1`. `displayDevice` itself cannot be reused there: it takes `GpuDevice[]`, whose `totalMb` is non-null, and a `PlacementDevice`'s is nullable |
 
 **Runtime record (PR #308 audit, 2026-09-06; the `-np` half DECIDED 2026-09-07), not a picker
 change.** The chat server used to run on b9849's default **four unified slots** (`n_slots = 4`,
