@@ -3,7 +3,6 @@ import {
   alignNodes,
   comparePairOutputCap,
   COMPARE_OUTPUT_TOKENS,
-  SYMMETRIC_COMPARE_CALL_CEILING,
   SYMMETRIC_MATCH_MIN_SCORE,
   type AlignNode
 } from '../../src/main/services/doctasks/compare'
@@ -95,9 +94,5 @@ describe('comparePairOutputCap', () => {
     expect(few).toBeLessThanOrEqual(COMPARE_OUTPUT_TOKENS)
     expect(many).toBeGreaterThanOrEqual(128) // never below the floor
     expect(many).toBeLessThanOrEqual(few)
-  })
-
-  it('exposes a CPU ceiling for the symmetric path', () => {
-    expect(SYMMETRIC_COMPARE_CALL_CEILING).toBeGreaterThan(0)
   })
 })

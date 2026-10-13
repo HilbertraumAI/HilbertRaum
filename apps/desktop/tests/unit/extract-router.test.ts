@@ -45,12 +45,6 @@ describe('routeQuestion — coverage-extract classification', () => {
     expect(mapQuestionToRecordType('list everything important')).toBe('generic')
   })
 
-  it('falls back to relevance (low confidence) when no extract data exists — never a false complete', () => {
-    const d = routeQuestion({ ...base, extractAvailable: false, question: 'list every date' })
-    expect(d.engine).toBe('relevance')
-    expect(d.confidence).toBe('low')
-  })
-
   // Issue #37: aggregation/categorization questions are whole-document tasks by nature — no
   // top-k short of "all chunks" yields a correct per-category sum. They must classify as
   // coverage, EN and DE, including the exact phrasing from the incident (which carries NO
@@ -71,36 +65,6 @@ describe('routeQuestion — coverage-extract classification', () => {
       expect(d.engine, q).toBe('coverage-extract')
       expect(d.confidence, q).toBe('high')
     }
-  })
-
-  it('an aggregation question WITHOUT extract data falls back marked fallback:"coverage" (#38 hint gate)', () => {
-    const d = routeQuestion({
-      ...base,
-      extractAvailable: false,
-      question: 'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf'
-    })
-    expect(d.engine).toBe('relevance')
-    expect(d.confidence).toBe('low')
-    expect(d.fallback).toBe('coverage')
-  })
-
-  it('the compare fallback is marked fallback:"compare", ordinary questions carry no fallback', () => {
-    expect(
-      routeQuestion({
-        question: 'what is the difference here',
-        documentCount: 1,
-        treeAvailable: false,
-        extractAvailable: false
-      }).fallback
-    ).toBe('compare')
-    expect(
-      routeQuestion({
-        question: 'what does the contract say about termination?',
-        documentCount: 1,
-        treeAvailable: false,
-        extractAvailable: false
-      }).fallback
-    ).toBeUndefined()
   })
 
   it('maps expense/income vocabulary to the amount type (EN + DE)', () => {
@@ -135,23 +99,18 @@ describe('routeQuestion — inflected German phrasings reach their engines (BE-3
       ['Gib mir einen Überblick', 'tree-summary'],
       // compare: stems
       ['Vergleiche die beiden Verträge', 'compare'],
-      ['Unterschiede zwischen den Verträgen', 'compare']
+      ['Unterschiede zwischen den Verträgen', 'compare'],
+      // EN controls: English classification is byte-identical; DE control: the aggregation route (correct pre-fix)
+      ['List every deadline', 'coverage-extract'],
+      ['Summarize the whole document', 'tree-summary'],
+      ['Compare the two contracts', 'compare'],
+      ['Kategorisiere die Ausgaben', 'coverage-extract']
     ]
     for (const [q, engine] of rows) {
       const d = routeQuestion({ ...base, question: q })
       expect(d.engine, q).toBe(engine)
       expect(d.confidence, q).toBe('high')
     }
-  })
-
-  it('EN controls: English classification is byte-identical', () => {
-    expect(routeQuestion({ ...base, question: 'List every deadline' }).engine).toBe('coverage-extract')
-    expect(routeQuestion({ ...base, question: 'Summarize the whole document' }).engine).toBe('tree-summary')
-    expect(routeQuestion({ ...base, question: 'Compare the two contracts' }).engine).toBe('compare')
-  })
-
-  it('DE control: the aggregation route (already correct pre-fix) keeps working', () => {
-    expect(routeQuestion({ ...base, question: 'Kategorisiere die Ausgaben' }).engine).toBe('coverage-extract')
   })
 
   it('the LEADING stem boundary stays: "Erzähle" must not fire the zähl stem', () => {
@@ -654,37 +613,6 @@ describe('routeQuestion — precedence + non-coverage', () => {
     expect(d.engine).toBe('compare')
   })
 
-  it('a compare question without two documents falls back to relevance', () => {
-    const d = routeQuestion({
-      question: 'what is the difference here',
-      documentCount: 1,
-      treeAvailable: false,
-      extractAvailable: false
-    })
-    expect(d.engine).toBe('relevance')
-    expect(d.confidence).toBe('low')
-  })
-
-  it('explicit task buttons win outright', () => {
-    expect(
-      routeQuestion({
-        taskType: 'summary',
-        question: 'anything',
-        treeAvailable: true,
-        extractAvailable: false
-      }).engine
-    ).toBe('tree-summary')
-    expect(
-      routeQuestion({
-        taskType: 'compare',
-        question: 'anything',
-        documentCount: 2,
-        treeAvailable: false,
-        extractAvailable: false
-      }).engine
-    ).toBe('compare')
-  })
-
   it('routes "summarize / overview" to tree-summary only when a tree is ready', () => {
     expect(
       routeQuestion({ question: 'summarize this document', treeAvailable: true, extractAvailable: false })
@@ -694,17 +622,6 @@ describe('routeQuestion — precedence + non-coverage', () => {
       routeQuestion({ question: 'summarize this document', treeAvailable: false, extractAvailable: false })
         .engine
     ).toBe('relevance')
-  })
-
-  it('an ordinary question routes to relevance, byte-unchanged (high confidence)', () => {
-    const d = routeQuestion({
-      question: 'what does the contract say about termination?',
-      documentCount: 1,
-      treeAvailable: true,
-      extractAvailable: true
-    })
-    expect(d.engine).toBe('relevance')
-    expect(d.confidence).toBe('high')
   })
 })
 
@@ -828,11 +745,14 @@ describe('isClassificationTrigger (#80) — golden set', () => {
   })
 
   it('trigger (b): low-confidence fallbacks — coverage without extract data, compare without two docs', () => {
-    const noExtract = route('kategorisiere alle transaktionen und erstelle eine summe pro kategorie', {
-      extractAvailable: false
-    })
-    expect(noExtract).toEqual({ engine: 'relevance', confidence: 'low', fallback: 'coverage' })
-    expect(isClassificationTrigger(noExtract, 'kategorisiere alle transaktionen und erstelle eine summe pro kategorie')).toBe(true)
+    for (const q of [
+      'kategorisiere alle transaktionen und erstelle eine summe pro kategorie', // #54 verbatim
+      'kategorisiere die ausgaben und erstelle eine summe pro kategorie auf' // #37 verbatim — the #38 hint gate
+    ]) {
+      const noExtract = route(q, { extractAvailable: false })
+      expect(noExtract, q).toEqual({ engine: 'relevance', confidence: 'low', fallback: 'coverage' })
+      expect(isClassificationTrigger(noExtract, q), q).toBe(true)
+    }
 
     // A PLAIN list ask that fell back also triggers — the router provably could not serve it.
     const plainNoExtract = route('list every deadline', { extractAvailable: false })
@@ -854,6 +774,11 @@ describe('isClassificationTrigger (#80) — golden set', () => {
       const d = route(q)
       expect(d, q).toEqual({ engine: 'relevance', confidence: 'high' })
       expect(isClassificationTrigger(d, q), q).toBe(false)
+    }
+    // The same fallthrough without extract data (#38: no fallback key) and with a ready deep index.
+    for (const over of [{ extractAvailable: false }, { treeAvailable: true }]) {
+      const q = 'what does the contract say about termination?'
+      expect(route(q, over), JSON.stringify(over)).toEqual({ engine: 'relevance', confidence: 'high' })
     }
   })
 
