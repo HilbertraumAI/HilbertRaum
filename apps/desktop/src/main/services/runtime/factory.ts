@@ -203,8 +203,9 @@ export interface GpuLadderDeps {
   onGpuFailure?: (reason: string) => void
   /**
    * Probe used to label a rung-1 start 'gpu' vs 'cpu' (inject the session cache).
-   * `null` means UNKNOWN (the probe hit its kill-timeout, #380) — NOT "no device": the
-   * label then comes from this start's own load log instead.
+   * `null` means UNKNOWN (its kill-timeout, #380; a refused program, #530; a crash or a failed
+   * spawn, #653) — NOT "no device". When it lists no device, a start whose own load log filed
+   * buffers on a graphics device is labelled gpu from that log instead (#653).
    */
   probeDevices?: (binPath: string) => Promise<GpuDevice[] | null>
   /** Resolve the rung-3 safety-net binary (default: `<os>/cpu/llama-server[.exe]`). */
@@ -348,7 +349,7 @@ function cancelledStartError(): Error {
 
 /**
  * The `device_info` row with the largest `pick`, or null when the list is empty or every value
- * is zero. Used by the #380 unknown-probe label to name the device a start actually landed on.
+ * is zero. Used by the #380 / #653 load-log label to name the device a start actually landed on.
  * The shared `displayDevice` cannot be reused here: it takes `GpuDevice[]`, whose `totalMb` is
  * non-null, while a `PlacementDevice`'s is nullable (the log need not have printed it).
  */
@@ -459,8 +460,8 @@ class LadderRuntime implements ModelRuntime {
       // #380: the concurrent kick-off STAYS — but it is no longer the only guard against a
       // wrong label. The unlock seams now settle this session's probe refresh BEFORE the
       // auto-start is called, so on the path that produced the #330 mislabel the cached
-      // answer is already in hand here; and when the probe IS unknown (its 10 s bound), the
-      // label falls back to this start's own load log below rather than to "cpu".
+      // answer is already in hand here; and when the probe lists no device (unknown, or since
+      // #653 an empty answer), this start's own GPU buffers below still label it rather than "cpu".
       const probe = this.deps.gpu.probeDevices ?? ((bin: string) => probeGpuDevices(bin))
       // #182: the speculative rung is the ONE rung that must know the device BEFORE it
       // spawns — its whole justification is measured on a fully offloaded GPU start, and
@@ -623,12 +624,16 @@ class LadderRuntime implements ModelRuntime {
       }
 
       this.inner = runtime
+      /** #653: why a GPU label came from this start's own log rather than the probe (onSelect). */
+      let labelNote = ''
       if (probePromise) {
-        // The rung-1 binary auto-offloads when a device exists; the (cached) probe is
-        // what names the backend for the UI. Empty probe ⇒ this start IS CPU mode.
+        // The rung-1 binary auto-offloads when a device exists; a probe that LISTS one labels
+        // the start gpu and names it. Owner call 2 (#653): never demoted by the log — a start
+        // that offloads 0 layers beside a listed card still holds its compute buffer there and
+        // runs the prefill on it, so a driver crash can still hit it and §5.3 is its crash path.
         const devices = await probePromise
-        if (devices !== null) {
-          this.backend = devices.length > 0 ? 'gpu' : 'cpu'
+        if (devices !== null && devices.length > 0) {
+          this.backend = 'gpu'
           // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
           // shared `displayDevice` one — the budget device (the largest USEFUL card), else the
           // largest device that does not look integrated even when it is under the usable gate
@@ -646,13 +651,26 @@ class LadderRuntime implements ModelRuntime {
           // the fit's own "device 0" was Vulkan1), so an app-side `--device` would change nothing
           // and would break the ladder's "`--device none` is the only device argument" contract.
           this.gpuName = displayDevice(devices)?.device.name ?? null
-        } else {
-          // #380: the probe timed out under this very load — UNKNOWN, not "no device". (On the
-          // #330 round trip a `--list-devices` that takes 1.07 s idle took 7.7 s beside the
-          // weight upload.) The server's own log already said where the weights went, so label
-          // from it rather than call a card-speed start "cpu" and push that verdict into the
-          // chat header, Diagnostics, the persisted `ModelPlacement`, the #322 speed identity
-          // and the §5.3 crash auto-fallback gate.
+        } else if (placement.holdsGpuBuffers()) {
+          // #380 / #653: the probe gave no answer (`null`: its 10 s bound under this very load —
+          // on the #330 round trip a `--list-devices` that takes 1.07 s idle took 7.7 s beside the
+          // weight upload —, a crash, a refused program) or an EMPTY one, yet this start's own log
+          // filed buffers on a device its `device_info` block lists as a graphics card (the parser's
+          // `holdsGpuBuffers`). That is first-hand evidence about THIS start, so
+          // it labels it, rather than call a card-speed start "cpu" and push that verdict into
+          // the chat header, Diagnostics, the persisted `ModelPlacement`, the #322 speed identity,
+          // the #473 chat share and the §5.3 crash auto-fallback gate. Owner call 1 (#653): the
+          // evidence is a GPU BUFFER, never the offload line, which b9849 and b11146 both print as
+          // `offloaded 37/37 layers to GPU` on a machine with no usable device, and never a CPU-side
+          // buffer the `isCpuDevice` blacklist misses (ggml's `AMX` on a Sapphire Rapids CPU).
+          // Before #653 the unknown path read that line, so a GPU-less PC whose probe gave no
+          // answer was labelled gpu; and an empty answer outranked the log, so a card start whose
+          // probe child crashed was labelled cpu for the whole session.
+          this.backend = 'gpu'
+          labelNote =
+            devices === null
+              ? ', from the load log: the device probe gave no answer'
+              : ', from the load log: the device probe listed no device'
           //
           // The NAME is the device this start's COMPUTE BUFFERS landed on — never `devices[0]`.
           // `placement.ts` pushes the `device_info` rows in LOG order, which is not the order the
@@ -661,21 +679,24 @@ class LadderRuntime implements ModelRuntime {
           // iGPU, listed FIRST and given no buffers at all, while every buffer went to `Vulkan1`,
           // the RTX 3060 Laptop. Naming the first row would credit the iGPU for a start that ran
           // on the card — exactly the DR2 / M8.2 defect `displayDevice` exists to prevent on the
-          // probe path. With no buffer line printed at all, the largest row is the better guess
+          // probe path. With no compute buffer line printed, the largest row is the better guess
           // than the first one, for the same reason.
           const reading = placement.reading()
-          this.backend = (reading.gpuLayers ?? 0) > 0 ? 'gpu' : 'cpu'
           const used =
             largestPlacementRow(reading.devices, (d) => d.computeMb ?? 0) ??
             largestPlacementRow(reading.devices, (d) => d.totalMb ?? 0)
-          this.gpuName = this.backend === 'gpu' ? ((used ?? reading.devices[0])?.name ?? null) : null
+          this.gpuName = (used ?? reading.devices[0])?.name ?? null
+        } else {
+          // No device listed (or no answer) and nothing of this start on a card: CPU mode.
+          this.backend = 'cpu'
+          this.gpuName = null
         }
       } else {
         this.backend = 'cpu'
         this.gpuName = null
       }
       this.labelled = true
-      this.deps.onSelect?.('llama', this.opts, `started via ${rung.label} (backend: ${this.backend})`)
+      this.deps.onSelect?.('llama', this.opts, `started via ${rung.label} (backend: ${this.backend}${labelNote})`)
       // benchmark.md "Your model": what this start's log said about where the model landed.
       // Recorded after the backend label so the observation carries the same verdict the UI
       // shows; the observer (IPC layer) persists it. Never throws into the start.
@@ -795,7 +816,7 @@ class LadderRuntime implements ModelRuntime {
     if (devices === null) {
       return {
         ok: false,
-        reason: 'device probe gave no answer (timed out, or the engine could not start) — cannot check VRAM headroom'
+        reason: 'device probe gave no answer (timed out, crashed, or the engine could not start) — cannot check VRAM headroom'
       }
     }
     if (devices.length === 0) {
@@ -1127,8 +1148,8 @@ export function createCpuCrashAutoRestart(deps: {
   notify?: (message: string) => void
 }): (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void {
   const restarted = new Set<string>()
-  // Overlapping reports while a restart or stop is in flight are the same crash (a sidecar can
-  // report one exit twice: 'error', then 'exit').
+  // Overlapping reports while a restart or stop is in flight are the same crash. (`LlamaServer`
+  // reports one death once since #656; this guard still keeps a re-entrant report out.)
   let busy = false
   return (opts, info) => {
     if (busy) return

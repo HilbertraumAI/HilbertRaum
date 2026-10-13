@@ -15,14 +15,16 @@ vi.mock('electron', () => ({
 import type { AppContext } from '../../src/main/services/context'
 import type { EngineProblem } from '../../src/shared/types'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { rearmLlamaConsumers, recheckEngines } from '../../src/main/ipc/engine-recheck'
+import { rearmLlamaConsumers, rearmWhenChatEngineHeals, recheckEngines } from '../../src/main/ipc/engine-recheck'
 import {
+  clearEngineProblemFor,
   engineProblemFor,
   reportEngineProblem,
   resetEngineProblemsForTest
 } from '../../src/main/services/runtime/engine-load'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import {
+  LlamaServer,
   llamaOsDir,
   llamaServerBinaryName,
   type ChildProcessLike,
@@ -39,6 +41,9 @@ const LLAMA_PROBLEM: EngineProblem = {
   exit: 'exit code 127'
 }
 const WHISPER_PROBLEM: EngineProblem = { ...LLAMA_PROBLEM, family: 'whisper_cpp' }
+// The programs the verdicts were reported against (any path: the re-check resolves the drive's own).
+const REFUSED_LLAMA = '/drive/runtime/llama.cpp/linux/llama-server'
+const REFUSED_WHISPER = '/drive/runtime/whisper.cpp/linux/whisper-cli'
 
 const dirs: string[] = []
 const dbs: Db[] = []
@@ -92,7 +97,10 @@ function makeCtx(root: string, probeBehavior: () => void, db: Db | null = null):
     workspace: { isUnlocked: () => db != null },
     db
   } as unknown as AppContext
-  return { ctx, probe, embedderReset, rerankerReset, visionReset, refreshTranslatorSlot, restartChat: vi.fn(async () => undefined) }
+  const restartChat = vi.fn(async () => undefined)
+  // As `main/index.ts` wires it (#654); `resetEngineProblemsForTest` drops the subscription.
+  rearmWhenChatEngineHeals(ctx, { restartChat })
+  return { ctx, probe, embedderReset, rerankerReset, visionReset, refreshTranslatorSlot, restartChat }
 }
 
 /** A fake child that emits `stderr` (when given) then closes with `code` on the next microtask. */
@@ -138,7 +146,7 @@ describe('recheckEngines — the chat engine (#530)', () => {
     '/media/x/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
 
   it('a program the OS still refuses keeps the verdict and re-arms nothing', async () => {
-    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     latchModelLoad('m', 'unknown model architecture')
     const f = makeCtx(driveRoot(), () => undefined)
     const result = await recheckEngines(f.ctx, {
@@ -157,10 +165,14 @@ describe('recheckEngines — the chat engine (#530)', () => {
   })
 
   it('a program the OS now starts loses the verdict and every consumer is re-armed', async () => {
-    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     latchModelLoad('m', 'unknown model architecture')
     const f = makeCtx(driveRoot(), () => undefined)
-    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn: closingSpawn(0), verify: verified })
+    const spawn = vi.fn(closingSpawn(0))
+    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn, verify: verified })
+    // #656: `--version` exits at once. Started with no arguments, b11146 runs a router-mode server
+    // on 127.0.0.1:8080 until killed, so the check would hold a port for its whole 10 s bound.
+    expect(spawn.mock.calls.map(([bin, args]) => [bin.endsWith(llamaServerBinaryName()), args])).toEqual([[true, ['--version']]])
     expect(result.problems).toEqual([])
     expect(engineProblemFor('llama_cpp')).toBeNull()
     expect(f.embedderReset).toHaveBeenCalledTimes(1)
@@ -172,7 +184,7 @@ describe('recheckEngines — the chat engine (#530)', () => {
   })
 
   it('a binary that could not even be checked (integrity mismatch) keeps the verdict — never "runs again"', async () => {
-    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     const f = makeCtx(driveRoot(), () => undefined)
     const spawn = vi.fn(closingSpawn(0))
     const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn, verify: async () => 'mismatch' })
@@ -182,7 +194,7 @@ describe('recheckEngines — the chat engine (#530)', () => {
   })
 
   it('a Windows spawn refusal (EPERM — policy / security software) is still a refusal', async () => {
-    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     const f = makeCtx(driveRoot(), () => undefined)
     const spawn: SpawnFn = () => {
       throw Object.assign(new Error('spawn EPERM'), { code: 'EPERM' })
@@ -193,7 +205,7 @@ describe('recheckEngines — the chat engine (#530)', () => {
   })
 
   it('two clicks share one pass (single flight): one spawn, one restart', async () => {
-    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     const f = makeCtx(driveRoot(), () => undefined)
     const spawn = vi.fn(closingSpawn(0))
     const deps = { restartChat: f.restartChat, spawn, verify: verified }
@@ -212,7 +224,7 @@ describe('recheckEngines — the chat engine (#530)', () => {
       gpuLastError:
         '2026-09-30T10:00:00.000Z — llama-server exited before becoming healthy (code 127) — last output: /m/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory'
     })
-    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     const f = makeCtx(driveRoot(), () => undefined, db)
     await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn: closingSpawn(0), verify: verified, platform: 'linux' })
     const s = getSettings(db)
@@ -224,7 +236,7 @@ describe('recheckEngines — the chat engine (#530)', () => {
   })
 
   it('an absent chat-engine binary clears the verdict (the missing-engine banner takes over)', async () => {
-    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     const f = makeCtx(driveRoot({ llama: false }), () => undefined)
     const result = await recheckEngines(f.ctx, { restartChat: f.restartChat })
     expect(result.problems).toEqual([])
@@ -245,21 +257,19 @@ describe('recheckEngines — the chat engine (#530)', () => {
 
 describe('recheckEngines — the voice engine (#530)', () => {
   it('a voice engine the OS now starts loses its verdict; the chat consumers are not re-armed', async () => {
-    reportEngineProblem(WHISPER_PROBLEM)
+    reportEngineProblem(WHISPER_PROBLEM, REFUSED_WHISPER)
     const f = makeCtx(driveRoot({ whisper: true }), () => undefined)
-    const result = await recheckEngines(f.ctx, {
-      restartChat: f.restartChat,
-      spawn: closingSpawn(0),
-      verify: verified,
-      platform: 'linux'
-    })
+    const spawn = vi.fn(closingSpawn(0))
+    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn, verify: verified, platform: 'linux' })
+    // #656: the voice engine is started with `--help`, which prints its usage and exits.
+    expect(spawn.mock.calls.map(([bin, args]) => [bin.endsWith(whisperCliBinaryName()), args])).toEqual([[true, ['--help']]])
     expect(result.problems).toEqual([])
     expect(f.embedderReset).not.toHaveBeenCalled()
     expect(f.restartChat).not.toHaveBeenCalled()
   })
 
   it('a voice engine the OS still refuses keeps its verdict', async () => {
-    reportEngineProblem(WHISPER_PROBLEM)
+    reportEngineProblem(WHISPER_PROBLEM, REFUSED_WHISPER)
     const f = makeCtx(driveRoot({ whisper: true }), () => undefined)
     const result = await recheckEngines(f.ctx, {
       restartChat: f.restartChat,
@@ -272,10 +282,120 @@ describe('recheckEngines — the voice engine (#530)', () => {
   })
 
   it('an absent voice binary clears the verdict', async () => {
-    reportEngineProblem(WHISPER_PROBLEM)
+    reportEngineProblem(WHISPER_PROBLEM, REFUSED_WHISPER)
     const f = makeCtx(driveRoot(), () => undefined)
     const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, verify: verified })
     expect(result.problems).toEqual([])
+  })
+})
+
+// #654: the refused chat engine runs again without "Check again" — the user installed the missing
+// library and started the model. Before, the healthy start dropped the verdict (banner gone) while the
+// embedder's latch kept failing every import with "The AI engine can't run on this computer".
+describe('rearmWhenChatEngineHeals — a healthy start of the refused engine (#654)', () => {
+  /** A child that runs until killed; the kill ends it like a real process. */
+  const runningSpawn: SpawnFn = () => {
+    const child = new EventEmitter() as EventEmitter & ChildProcessLike
+    Object.assign(child, {
+      pid: 6,
+      killed: false,
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: () => {
+        queueMicrotask(() => {
+          child.emit('exit', 0, null)
+          child.emit('close', 0, null)
+        })
+        return true
+      }
+    })
+    return child
+  }
+
+  it('re-arms every consumer the refusal latched and brings a demo-mode model back on the engine', async () => {
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
+    latchModelLoad('m', 'unknown model architecture')
+    const f = makeCtx(driveRoot(), () => undefined)
+    const server = new LlamaServer({
+      binPath: REFUSED_LLAMA,
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn: runningSpawn,
+      fetchImpl: (async () => ({ ok: true, status: 200 }) as Response) as typeof fetch,
+      findPort: async () => 50910,
+      healthIntervalMs: 1
+    })
+    await server.start()
+    try {
+      expect(engineProblemFor('llama_cpp')).toBeNull()
+      expect(f.embedderReset).toHaveBeenCalledTimes(1)
+      expect(f.rerankerReset).toHaveBeenCalledTimes(1)
+      expect(f.visionReset).toHaveBeenCalledTimes(1)
+      expect(f.refreshTranslatorSlot).toHaveBeenCalledTimes(1)
+      expect(modelLoadLatchReason('m')).toBeNull()
+      // The healthy start may be the embedder's while the chat model answers in demo mode (owner call).
+      await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+    } finally {
+      await server.stop()
+    }
+  })
+
+  // The refused probes persisted nothing: the ladder the restart walks must read this computer's answer (#380).
+  it('with an unlocked workspace the probe is re-run and persisted before the restart', async () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-recheck-db-')), 'test.sqlite'))
+    seedSettings(db)
+    dbs.push(db)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
+    const f = makeCtx(driveRoot(), () => undefined, db)
+    clearEngineProblemFor('llama_cpp', REFUSED_LLAMA) // a reporting program started healthy
+    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+    expect(f.probe.invalidate).toHaveBeenCalledTimes(1)
+    expect(f.probe).toHaveBeenCalledTimes(1)
+    expect(f.probe.mock.invocationCallOrder[0]).toBeLessThan(f.restartChat.mock.invocationCallOrder[0])
+  })
+
+  // The usual trigger: the chat model's own healthy start. Nothing to restart, and a probe now would run
+  // beside its weight upload (#473).
+  it('the chat model starting re-arms the consumers but neither probes nor restarts', async () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-recheck-db-')), 'test.sqlite'))
+    seedSettings(db)
+    dbs.push(db)
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
+    const f = makeCtx(driveRoot(), () => undefined, db)
+    Object.assign(f.ctx.runtime, {
+      status: () => ({ backend: 'mock', modelId: 'm', running: true, healthy: true, port: null, message: '', startingModelId: 'm' })
+    })
+    clearEngineProblemFor('llama_cpp', REFUSED_LLAMA)
+    expect(f.embedderReset).toHaveBeenCalledTimes(1)
+    expect(f.probe.invalidate).not.toHaveBeenCalled() // a re-probe drops the cache synchronously
+    // One macrotask: a chained probe or restart would have been called by now.
+    await new Promise((r) => setImmediate(r))
+    expect(f.probe).not.toHaveBeenCalled()
+    expect(f.restartChat).not.toHaveBeenCalled()
+  })
+
+  // A healthy start that lands while "Check again" checks (an import, say) heals it; Check again then
+  // finds nothing left to heal instead of re-arming, re-probing and restarting a second time.
+  it('a healthy start during Check again is healed once', async () => {
+    reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
+    const f = makeCtx(driveRoot(), () => undefined)
+    const healthyStartDuringCheck: SpawnFn = (...args) => {
+      clearEngineProblemFor('llama_cpp', REFUSED_LLAMA)
+      return closingSpawn(0)(...args)
+    }
+    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn: healthyStartDuringCheck, verify: verified })
+    expect(result.problems).toEqual([])
+    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+    expect(f.embedderReset).toHaveBeenCalledTimes(1)
+  })
+
+  it('a voice engine that runs again re-arms and restarts nothing of the chat engine', () => {
+    reportEngineProblem(WHISPER_PROBLEM, REFUSED_WHISPER)
+    const f = makeCtx(driveRoot(), () => undefined)
+    clearEngineProblemFor('whisper_cpp', REFUSED_WHISPER) // what a clean whisper-cli run does
+    expect(engineProblemFor('whisper_cpp')).toBeNull()
+    expect(f.embedderReset).not.toHaveBeenCalled()
+    expect(f.restartChat).not.toHaveBeenCalled()
   })
 })
 

@@ -1839,7 +1839,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         rung-1 server dying before its GPU probe resolves keeps its pre-#599 path).
         `createCpuCrashAutoRestart` restarts once per model id (`main.runtime.crashRestarting`),
         then calls `stopCrashed` (`main.runtime.crashStopped`). Overlapping reports while a restart
-        or stop is in flight count once (a sidecar can report one exit as 'error', then 'exit'), and
+        or stop is in flight count once (since #656 `LlamaServer` itself reports one death once —
+        Node may emit 'exit' after 'error' — so the guard only keeps a re-entrant report out), and
         a crash during a lock does nothing — the restart is neither spent nor announced. It is wired
         in `main/index.ts` through the AUD-02 `guardedCrashRestart` the GPU and speculative
         handlers now share, and audits `runtime_crashed`.
@@ -3764,8 +3765,11 @@ adds is the safety machinery:
 - **`services/runtime/gpu.ts`** — `probeGpuDevices(binPath)` spawns the drive's own
   `llama-server --list-devices` (offline, no model, sub-second, kill-timeout-bounded (10 s);
   resolves on the child's `close` event so late-buffered stdout is never truncated; never
-  throws — any failure → `[]`, **except** the kill-timeout → `null`, "unknown": the driver never
-  answered, which is not the same fact as "this machine has no device" (#380, 2026-09-08)) and
+  throws — an exit 0 is the answer (the devices, or `[]`), and everything else that is not an
+  answer resolves `null`, "unknown", which is not the same fact as "this machine has no device":
+  the kill-timeout (the driver never answered, #380, 2026-09-08), a program the OS refused (#530),
+  a crash or a failed spawn (#653, 2026-10-13); only a binary the integrity check refuses still
+  reads `[]`) and
   `parseListDevices` parses it (pure, fixture-tested). The
   spawn passes **`windowsHide: true`** (REL-7) so the once-per-session probe never flashes a
   console window on Windows, and the child is **`unref()`'d** right after spawn (REL-8): the
@@ -3779,9 +3783,11 @@ adds is the safety machinery:
   re-probe during the wedge still rides the one child. The ladder kicks
   the probe off concurrently with the rung-1 server start, and since #380 the three post-unlock
   seams settle the session's probe refresh BEFORE the auto-start (`FirstBenchmarkDecision.probed`),
-  so on that path the answer is normally already in hand; when the probe IS unknown the rung is
-  labelled from this start's own load log (`placement.reading().gpuLayers > 0` ⇒ `gpu`, named from
-  the `device_info` rows) rather than defaulting to `cpu`. The probe labels the backend for the
+  so on that path the answer is normally already in hand; when the probe lists no device (unknown,
+  or since #653 an empty answer) the rung is labelled from this start's own load log — `gpu` when it
+  filed buffers on a device its own `device_info` block lists as a GPU (`PlacementParser.holdsGpuBuffers`; never the offload line, which a GPU-less
+  rung 1 prints as `offloaded 37/37 layers to GPU` too), named from the `device_info` rows — rather
+  than defaulting to `cpu`. The probe labels the backend for the
   UI; it can't prove stable inference — the ladder is the actual guarantee.
 - **The start ladder** (`factory.ts`, §5.2): rung 1 = default binary, default args (GPU
   auto-offload; on a GPU-less machine this *is* CPU mode) → rung 2 = same binary, **`--device
@@ -3908,7 +3914,7 @@ start ladder" subsection above; **§ numbers below are stable — code comments 
 | CPU-only safety net | Also ship the pure-CPU build at `runtime/llama.cpp/<os>/cpu/` (+16/+15 MB) — rung 3 of the ladder | Last-resort escape if `ggml-vulkan`'s mere presence destabilizes a machine (AV/loader edge cases) |
 | User control | **GPU is always the default**; only a detected problem (the ladder) moves a machine to CPU. Settings has a "Use GPU acceleration" toggle (default on); Diagnostics has "Try GPU again" | Zero-technical-knowledge rule |
 | `-ngl` strategy | **Pass nothing** — b9585 defaults to `-ngl auto` + `--fit on` (VRAM-aware auto-offload). CPU is forced with `--device none`, never `-ngl 0` | Upstream owns VRAM fitting (§3) |
-| GPU detection | **Both**: a `--list-devices` probe (labels the backend for UI/profile) **and** the try-then-fallback start ladder (the actual guarantee). A probe that hits its 10 s bound is **unknown**, not "no device": the rung is then labelled from the load log's offload line (#380, 2026-09-08) | The probe can't prove inference works; the ladder can't name the GPU |
+| GPU detection | **Both**: a `--list-devices` probe (labels the backend for UI/profile) **and** the try-then-fallback start ladder (the actual guarantee). A probe that hits its 10 s bound, crashes or cannot be spawned is **unknown**, not "no device" (#380, 2026-09-08; #653); a probe that lists no device yields to GPU buffers in the start's own load log, never to its offload line (#653, 2026-10-13) | The probe can't prove inference works; the ladder can't name the GPU |
 | First-start CPU-vs-GPU auto-benchmark | **Not built** | v1 trusts llama.cpp auto-offload even on weak iGPUs; §8's honest copy covers the modest-gain case |
 | macOS | **No change** — arm64 already runs Metal with auto-offload; mac/x64 + win/arm64 are out of scope (Intel Macs documented in `known-limitations.md`) | Upstream ships mac/x64 with Metal off; macOS has no Vulkan |
 | Embedder (E5) | **Forced CPU** (`--device none`) | See §7 |
@@ -4019,7 +4025,7 @@ start(model), settings.gpuMode = 'auto' (default)
 │           and only past the probe/VRAM precondition — MTP record §4). Rung 1 IS its fallback.
 ├─ Rung 1 — default binary, NO -ngl/--device args (auto-offload; GPU-less machine ⇒ already CPU)
 │           the cached probe runs CONCURRENTLY with the server start and labels backend gpu|cpu
-│           an UNKNOWN probe (its 10 s bound) labels from this start's load log instead (#380)
+│           a probe that lists no device yields to this start's GPU buffers (#380, #653)
 ├─ Rung 2 — same binary + `--device none`   (after rung-1 spawn error / exit / health timeout)
 ├─ Rung 3 — pure-CPU safety-net build <os>/cpu/llama-server (if present)
 └─ Rung 4 — MockRuntime (existing graceful-fallback rule — never stuck)
@@ -4114,6 +4120,113 @@ persisting nothing; a healthy model starts on rung 1.
   classifies as a refusal.
 - **Record:** "Engine load failures — design record" below.
 
+**#653 amendment (2026-10-13) — a start's own GPU buffers label it; a probe that crashed is unknown.**
+- **The defect.** `probeGpuDevices` resolved `[]` ("no graphics card") for any non-zero exit the
+  loader classifier did not know (a Vulkan driver crashing during enumeration: Windows 0xC0000005, a
+  Linux SIGSEGV) and for any spawn error that was not a refusal (EMFILE, EAGAIN, ENOMEM, a POSIX
+  ENOENT or EACCES). The session cache kept that answer and `probeAndPersistGpu` stamped it, and the
+  ladder let an empty answer outrank the start's own load log. A card start was labelled `cpu` for
+  the whole session:
+  - the chat header and Diagnostics said CPU, and the placement record read `backend: 'cpu'` beside
+    37/37 layers on the card;
+  - the stored probe was overwritten, so the Performance snapshot named no device and judged against
+    RAM (memory class `cpu`, the ★ from RAM), and the #473 card gates switched off;
+  - a mid-session GPU crash took #599's restart on the same GPU rung, then the stop, instead of this
+    record's §5.3 fallback;
+  - #669's heal re-probe (`reprobeGpu`) could re-stamp a card machine as having none.
+- **A measurement that changed the rule.** On the GTX 1070 Ti box, b11146 and b9849 both print
+  `offloaded 37/37 layers to GPU` on rung 1 with every Vulkan device hidden
+  (`GGML_VK_VISIBLE_DEVICES=7`, the stand-in for a GPU-less PC) and under `--device none`. Every
+  buffer was on the processor (`CPU_REPACK`), the card load was 0 % and the prefill ran at 54–56 tok/s.
+  So the offload line is no evidence of a card. #380's unknown-probe label read it, which mislabelled
+  a GPU-less PC whose probe gave no answer as `gpu`: on the real app, master showed
+  "· GPU (Grafikkarte)" with VRAM unchanged.
+- **Owner calls (2026-10-13), all as recommended:**
+  1. A probe that lists no device, whether it answered empty or gave no answer, yields to **GPU
+     buffers** in this start's load log. The start is then labelled `gpu` and named like #380 did (the
+     `device_info` row with the largest compute buffer). The same rule replaces #380's
+     `gpuLayers > 0`. A log that is silent or shows only CPU buffers never overrides.
+     - The evidence is `PlacementParser.holdsGpuBuffers()`: a model, KV, recurrent-state or compute
+       buffer of more than 0 MiB, filed under a label the log's own `device_info` block lists as a
+       GPU, or under `<label>_<suffix>` (a mapped buffer). A CPU-side label never counts.
+     - It is a method, not a field of the reading, because the reading is the persisted
+       `ModelPlacement` shape.
+     - The first version counted any buffer `isCpuDevice` does not claim. The review caught that this
+       is a blacklist: ggml's CPU backend has an `AMX` buffer type (Sapphire Rapids; the shipped
+       `ggml-cpu-sapphirerapids.dll` carries the name), which would have labelled a GPU-less Xeon `gpu`.
+  2. **The mirror stays.** A listed card with `offloaded 0/N layers` is labelled `gpu`. Measured with
+     `-ngl 0`: the start still reserves a 91 MiB Vulkan0 compute buffer and runs the prefill on the card
+     (74 % load, 302 tok/s against 56 with `--device none`). A driver crash can still hit it, and §5.3,
+     which really removes the card, is the right path for it. The Performance screen already shows the
+     0/N split.
+  3. **The root cause.** The probe resolves `null` (unknown) for any non-refusal non-zero exit or signal
+     and any non-refusal spawn error. That answer is not cached and not persisted, so the stored probe
+     stands, and it is logged once ("The device probe gave no answer"). It records no engine verdict:
+     the engine ran, and the server may well start a moment later. Only an exit 0 is an answer: the
+     parsed devices, or `[]` when it printed none (b11146 writes `(none)` under the header, b9849 the
+     header alone, both captured). A binary the integrity check refuses still reads `[]`.
+     **Rejected:** treating an exit 0 with unparsed lines as unknown. A driver that writes to stdout
+     would make every probe on that machine unknown, and the pin-bump case it would catch is already
+     caught by the b11146 capture test and the re-capture rule.
+  4. The Translate screen's device hint reads the same offload line. On a GPU-less PC it would claim
+     the card. That is filed as #671, not fixed here.
+- **What each part changes.**
+  - The label (1) fixes, for this start, everything that reads `RuntimeStatus.backend` and the
+    placement: the header, Diagnostics, the stored placement, the #322 speed identity, the #473 chat
+    share and the §5.3 crash gate.
+  - The root cause (3) keeps a crash out of the stored `gpuProbe`, so the tile, the memory class, the ★
+    pick, the profile and the #473 gates keep this machine's last real answer.
+  - #669's `reprobeGpu` now writes nothing on a crash.
+  - A probe that crashes every time costs one crashing child per caller, bounded at 10 s. That means
+    each refresh, check or "Try GPU again", and each model start: two for a model with the MTP rung,
+    since the speculative check's `null` drops itself before rung 1 asks again. The server would then
+    crash at the same point too.
+  - The kill-timeout settles the probe before it kills. Its own SIGKILL, or an error from a kill
+    that failed, is then not logged as a second non-answer. What a late `close` says about the program
+    still counts: an exit 0 clears a stale refusal verdict, because the program ran, and a loader
+    refusal is still recorded as the verdict. The crash log carries the stderr tail, as the refusal
+    log does.
+- **Real app (DesktopDiT, GTX 1070 Ti, b11146, the 4B).** A wrapper in a scratch root ran
+  `--list-devices` as an exit 0xC0000005 and everything else as the real server, inside a kill-on-close
+  Job Object. Launch 1 stored the card; launch 2 crashed the probe.
+  - Master: stored probe `[]`, live snapshot without a device, chat header "· CPU", Diagnostics "CPU",
+    placement `cpu` with 37/37 layers while VRAM rose 2.2 → 5.5 GB. Killing the server restarted it on
+    the same GPU rung; a second kill stopped the model.
+  - Fix: the stored card stood, the header read "· GPU (NVIDIA GeForce GTX 1070 Ti)" with the placement
+    `gpu`. The first kill took §5.3 (compatibility mode, `--device none`, `gpuAutoDisabled`); the second
+    took #599's one CPU restart.
+- **Residuals:**
+  - An exit-0 empty answer the server contradicts (an enumeration race, a pin bump that changes the
+    device-line shape) labels the start correctly. But `[]` stays the session's cached answer and the
+    stored probe until "Try GPU again" or the next session. The ladder's dependency is a bare
+    function, so it cannot invalidate the cache.
+  - A probe that lists a card is never demoted (owner call 2). So a start that holds no GPU buffer at
+    all reads `gpu`: an eGPU unplugged after the session's probe, say.
+  - The persisted gpu/cpu MiB split (`gpuModelMb`, …) still uses the `isCpuDevice` blacklist, so an
+    `AMX` buffer would count as card memory in the placement figures and the #473 chat share. This
+    predates #653 and is a follow-up candidate; the label no longer reads it.
+  - A drive that has never stored a probe still shows no card on the tile while its probes crash.
+  - **Like a timeout (#380), a crash at the unlock refresh leaves the ladder's own probe to run beside
+    the weight upload.** An answer there becomes the session's and can be persisted with the chat model
+    already on the card. That is the baseline #473 sequenced the unlock probe to avoid. It is rare, and
+    harmless on NVIDIA/Windows, whose free figure does not move (#318). Caching a crash's unknown for the
+    session would close it, against owner call 3's "not cached".
+  - The binary verifier reports a transient read failure (an antivirus lock while hashing) as
+    `mismatch`, so the probe answers `[]`: "no GPU" for the session. The integrity paths keep `[]` by
+    owner call 3.
+- **Tests:**
+  - `runtime-ladder.test.ts`:
+    - real b11146 captures for the empty and unknown answers yielding to GPU buffers, the GPU-less
+      rung 1, and the 0/37 mirror;
+    - handwritten rows for an `AMX` buffer (cpu) and a Metal mapped buffer (gpu);
+  - `gpu.test.ts`: crashes and EMFILE resolve `null`; neither the kill's own `close` nor a failed
+    kill logs anything;
+  - `engine-load-spawn.test.ts`: no verdict for an unclassified exit; after the timeout, a late exit 0
+    clears a stale verdict and a late refusal records one;
+  - `placement-parser.test.ts`: `holdsGpuBuffers`' edge rules (0 MiB, KV-only, RS-only, `Vulkan1` vs
+    `Vulkan10`, a host buffer against a numberless row); the DR3 content guard covers the two new
+    captures.
+
 *Interaction with #320* (excluding a hybrid laptop's iGPU with `--device` at launch): **decided
 2026-09-07 — it does not land**; the fit already drops the integrated device by type (runtime
 record above), so rung *construction* is unchanged and this interaction is moot. Had it landed, a
@@ -4130,8 +4243,11 @@ the suspect, not the device.)
 
 A GPU-backed `llama-server` can die *after* it became healthy — a driver crash, VRAM stolen by
 another process. `LlamaServer`'s `onUnexpectedExit` hook fires (only for a healthy server dying
-outside `stop()`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
-was `gpu`** (its `onUnexpectedExit`; a non-GPU exit goes to `onCpuCrash` since #599). `createGpuCrashAutoFallback` then, in order: persists
+outside `stop()`, and once per death: #656 — its `'error'` and `'exit'` handlers share one per-spawn
+`reportUnexpectedExit`, because Node may emit `'exit'` after `'error'`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
+was `gpu`** (its `onUnexpectedExit`; a non-GPU exit goes to `onCpuCrash` since #599). Since #653
+that label is `gpu` for a start whose own log put buffers on a card even when the probe listed none;
+before, a crashed probe sent a card start's GPU crash down #599's same-rung restart (§5.2 "#653 amendment"). `createGpuCrashAutoFallback` then, in order: persists
 `gpuAutoDisabled` + `gpuLastError`, surfaces the friendly compatibility-mode notice, and restarts
 the model once at CPU — so the user's *next* message just works.
 
@@ -4294,8 +4410,8 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder once its CPU control probe confirms a *device* fault (§5.2, #312); cleared by "Try GPU again". A model no rung can load writes neither field, nor does a program the OS loader refused (#530) — and a pair a refusal wrote before #530 is cleared at the next session start (`healEngineLoadState`) |
 | Models blamed as unloadable this session (#372) | `factory.ts` module state (`Map<modelId, reason>`, the #182 `speculativeSuppressed` idiom) — never persisted; a latched model's next start spawns no rung. Cleared per model by "Verify checksum" / a completed download of it, for every model by a chat-engine install or a successful engine "Check again" (#530), and by an app restart — **not** by "Try GPU again" (§5.2) |
-| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run. **Decision 6 amended (#380, 2026-09-08):** its one exception is a probe that TIMED OUT — that is not an answer but the absence of one, so it writes nothing and pushes nothing, the stored stamped probe stands until the next start / check / "Try GPU again", and the summary the run uses comes from this machine's record (`eligibleDevicesFor`), which is what decision 6 actually requires. Persisting the empty stamped probe there was the #330 failure: the driver was busy with the weight upload, and a card machine was recorded as having none. **#530:** a program the OS loader refused is the same kind of non-answer — the probe resolves `null` and records the engine verdict instead of persisting "no graphics card" |
-| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` is the shared `displayDevice(devices)` pick (PR #303 audit M8.2: the budget device, else the largest non-integrated one, else the first listed — an earlier `devices[0]` rule named the iGPU on a hybrid box while the model ran on the dGPU), display only; it is not necessarily the budget device the picker or the Performance tile use. When the probe is UNKNOWN (#380) both the backend and the name come from this start's own load log instead — `gpuLayers > 0` ⇒ `gpu`, named from the `device_info` row that took the largest COMPUTE buffer (else the largest row). Never the FIRST row: the parser keeps them in LOG order, which is not the order the fit used — on the `ryzen-7-5800h-rtx-3060-laptop-6gb-14gb` evidence `Vulkan0` is the iGPU, listed first and given no buffers at all, while every buffer went to the RTX at `Vulkan1`. `displayDevice` itself cannot be reused there: it takes `GpuDevice[]`, whose `totalMb` is non-null, and a `PlacementDevice`'s is nullable |
+| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run. **Decision 6 amended (#380, 2026-09-08):** its one exception is a probe that TIMED OUT — that is not an answer but the absence of one, so it writes nothing and pushes nothing, the stored stamped probe stands until the next start / check / "Try GPU again", and the summary the run uses comes from this machine's record (`eligibleDevicesFor`), which is what decision 6 actually requires. Persisting the empty stamped probe there was the #330 failure: the driver was busy with the weight upload, and a card machine was recorded as having none. **#530:** a program the OS loader refused is the same kind of non-answer — the probe resolves `null` and records the engine verdict instead of persisting "no graphics card". **#653:** so is a probe that crashed (any other non-zero exit or signal) or could not be spawned — `null`, no verdict, nothing written; before, it stamped `[]` over a card machine's record (§5.2 "#653 amendment") |
+| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` is the shared `displayDevice(devices)` pick (PR #303 audit M8.2: the budget device, else the largest non-integrated one, else the first listed — an earlier `devices[0]` rule named the iGPU on a hybrid box while the model ran on the dGPU), display only; it is not necessarily the budget device the picker or the Performance tile use. When the probe lists no device — UNKNOWN (#380), or since #653 an empty answer — both the backend and the name come from this start's own load log instead: `gpu` when it filed a buffer on a device its own `device_info` block lists as a GPU (`PlacementParser.holdsGpuBuffers`; until #653 this read `gpuLayers > 0`, which a GPU-less rung 1 prints as 37/37 too), named from the `device_info` row that took the largest COMPUTE buffer (else the largest row). Never the FIRST row: the parser keeps them in LOG order, which is not the order the fit used — on the `ryzen-7-5800h-rtx-3060-laptop-6gb-14gb` evidence `Vulkan0` is the iGPU, listed first and given no buffers at all, while every buffer went to the RTX at `Vulkan1`. `displayDevice` itself cannot be reused there: it takes `GpuDevice[]`, whose `totalMb` is non-null, and a `PlacementDevice`'s is nullable |
 
 **Runtime record (PR #308 audit, 2026-09-06; the `-np` half DECIDED 2026-09-07), not a picker
 change.** The chat server used to run on b9849's default **four unified slots** (`n_slots = 4`,
@@ -4404,7 +4520,7 @@ estimator (≈ 2.8 GiB, derived from the shipped `bge-reranker-v2-m3` manifest a
 `RERANKER_HEADROOM_FLOOR_MIB`). An unknown or empty probe, no useful device, no budget figure, no
 active chat model, or an unresolvable manifest all mean `'cpu'` — a machine cannot earn the GPU
 posture by failing to report. `gpuUsefulForProfile` keeps every other job it has (the profile
-bump above, the Models ★, the graphics tile, `memoryClassOf`); only the reranker's own posture
+bump above, the Models ★, the graphics tile); only the reranker's own posture
 question is re-sourced. **Disclosed limit:** the project's 12 GiB measurement machine (RTX 3080
 Ti) has ample headroom for both models at once, so on it the new gate behaves identically to
 step 4-4's — the step's acceptance read confirms no regression there, but cannot validate the
@@ -4736,7 +4852,7 @@ caller's old handling byte for byte.
 | exit 0xC0000135 / 0xC0000139 / 0xC000007B with a VC++ DLL absent from `%SystemRoot%\System32` | `vc-runtime-missing` (`name` = that DLL) |
 | … with all three present | `files-damaged` |
 | exit 0xC0E90002 | `blocked` (code integrity / Smart App Control) |
-| Windows spawn error EPERM / `UNKNOWN` / EACCES (`classifySpawnError` — policy, security software, quarantine) | `blocked` |
+| Windows spawn error EPERM / `UNKNOWN` / EACCES (`classifySpawnError` — policy, security software, quarantine); only an error of the spawn (`syscall` `spawn…`), never a failed `kill()` the child's `'error'` event also reports (#658 review) | `blocked` |
 
 `classifyLoadFailureMessage` applies the same classifier to a stored message (the `exited before
 becoming healthy (code N)` shape), for the heal.
@@ -4754,17 +4870,23 @@ becoming healthy (code N)` shape), for the heal.
   rows).
   - Review fix: the bare `launch` signature matched on every rung, so a Windows block had moved
     from "blame the GPU" to "blame the model".
-- A healthy start clears a verdict recorded against THE SAME binary (`clearEngineProblemFor`): an
-  intermittent block that went away. A Windows Kit's `cpu/` build starting beside a damaged main
-  folder does not clear it.
+- A healthy start of a program that REPORTED the verdict clears it (`clearEngineProblemFor`): an
+  intermittent block that went away, or a library installed since. The store keeps every reporting
+  program, not only the last one (#655, §9). The `cpu/` safety net clears it only as the latest
+  reporter: it starts only after the main build failed, usually by a refusal that still stands. A
+  program that never reported does not clear it: a Windows Kit's `cpu/` build starting beside a
+  damaged main folder, or the main build beside a verdict only `cpu/` reported. The clear heals the
+  consumers (§5, #654).
 
 **The GPU probe** (`gpu.ts`) pipes stderr. A refusal resolves **`null`**, the #380 unknown: not
 cached, not persisted. It also reports the verdict. Before #530 it was cached and persisted as "no
-graphics card".
+graphics card". Since #653 a probe that crashed or could not be spawned for another reason resolves
+`null` too, but records no verdict: the engine ran (or may run a moment later), so nothing tells the
+user it cannot (GPU record §5.2 "#653 amendment").
 
 **whisper-cli** (`transcriber/cli.ts`) classifies on `'close'` and throws the typed error for the
 `whisper_cpp` family. The signal branch now keeps the stderr tail, and the spawn passes
-`windowsHide`.
+`windowsHide`. A spawn error is classified whether Node throws it or emits it (#658, §9).
 
 **Consumers:**
 - **Chat ladder.** A refused rung is never held as a GPU verdict and never sets the #312 control
@@ -4797,6 +4919,11 @@ graphics card".
 - **Read by** `AppStatus.engineProblems` (chat engine first). The payload-free
   `engine:problemsChanged` push, sent on a new, different or cleared verdict, makes mounted
   screens re-read it.
+- **Dropped with a cause** (#654, §9): `started` (a reporting program started: a healthy start, the
+  probe answering), `rechecked` (Check again found it loads), `installed` (a new copy replaced it)
+  or `gone` (it left the drive). `rearmWhenChatEngineHeals`, subscribed once in `main/index.ts`,
+  heals a chat-engine `started` drop the way Check again heals its own: it re-arms the consumers and,
+  when a model answers from the demo runtime, re-runs and persists the probe and then restarts it.
 
 **Check again** (`engine:recheck`, `ipc/engine-recheck.ts`) re-starts each family with a verdict.
 - Each engine gets an explicit spawn (`checkProgramLoads`): `llama-server --version` and
@@ -4817,7 +4944,7 @@ graphics card".
 
 **The engine install hook** now runs the same `rearmLlamaConsumers` and clears the family's verdict.
 Before #530 it re-armed the model latches only, so a repaired engine still failed every import
-until a lock/unlock.
+until a lock/unlock. It re-arms itself, verdict or not; its `installed` drop heals nothing more.
 
 **The heal** (`healEngineLoadState`) runs at every session start (plaintext startup, unlock,
 create), before the auto-start reads the GPU flags. It clears a loader-caused `gpuAutoDisabled`
@@ -4978,6 +5105,119 @@ verdict gate, the demo-runtime install and restart, the payload rows), `engine-d
 `EngineProblem.test.tsx` "Install the engine again (#532)" (offer, order, progress, toast, the
 gate rows, no offer, the voice hint and its attribution, the Diagnostics line) and
 `ModelsScreen.test.tsx` (the deep-link rows).
+
+### §9 #654 / #655 / #658 amendment — the verdict heals on a healthy start (2026-10-13)
+
+**The gaps** (found by the runtime-ladder and sidecar-services test campaigns, reproduced on the
+real app):
+- **#655.** The store kept only the LAST reporting program. On a Kit the probe and rungs 1–2 (main
+  build) report, then rung 3 (`cpu/`). Once the fix was in, the main build ran on the graphics card,
+  but its healthy start matched nothing, so the banner and the Performance tile's "could not be
+  checked" stayed until Check again. That contradicted §4.
+- **#654.** A healthy start or an answering probe dropped the verdict but re-armed no consumer. Only
+  Check again and the install hook did. The banner went away while every import kept failing on the
+  embedder's latch ("The AI engine can't run on this computer"). The reranker stayed latched until a
+  restart. That contradicted §5.
+- **#658.** Node throws EPERM and `UNKNOWN` from `spawn()` instead of emitting `'error'`. The
+  whisper-cli spawn had no `try`, so a policy or security-software refusal never became a verdict.
+  Dictation read "could not be transcribed", and an import stored the generic failure.
+
+**Owner calls (2026-10-13; the first posted on #654).**
+1. Whenever the chat-engine verdict is dropped, the consumers are re-armed, whichever path drops it.
+2. Not on `gone`: the binary left the drive, nothing was healed, and a consumer re-armed against a
+   missing binary only fails again.
+3. From the review: a healthy start that heals the engine also restarts a model the demo runtime
+   stands in for. Check again and an install already did. Without it, an import that was the first
+   engine start after the repair left the chat in demo mode with no banner to bring it back.
+4. From the review: `cpu/` clears the verdict only as the latest reporter. "Any reporter clears"
+   let a healthy `cpu/` start on the next ladder walk drop a verdict the main build had just
+   re-reported, hiding a still-damaged main build and its #532 reinstall offer.
+
+**As built.**
+- **The store** (`engine-load.ts`):
+  - `StoredProblem.reporters` holds every program that reported since the verdict was recorded.
+    The shown problem is the latest report, so the #532 `afterInstall` rule is unchanged.
+  - `clearEngineProblemFor` clears when the healthy program is a reporter. The `cpu/` net
+    (`runtime/llama.cpp/<os>/cpu/`) must also be the latest one (`lastReporter`).
+  - `reportEngineProblem`'s program is required; every production reporter passed it already.
+  - `clearEngineProblem(family, why)` tells `onEngineProblemDropped` listeners why the verdict went:
+    `started`, `rechecked`, `installed` or `gone`. A listener that throws is caught. It returns
+    whether there was a verdict to drop.
+- **The heal.**
+  - `rearmWhenChatEngineHeals(ctx)` (`engine-recheck.ts`, subscribed once in `main/index.ts`)
+    answers a `llama_cpp` `started` drop. It re-arms the consumers. Then, only if a model answers
+    from the demo runtime with no start in flight, it re-runs and persists the probe (`reprobeGpu`)
+    and runs `restartChatOnRealEngine` in the background. The refused probes persisted nothing,
+    and the ladder must read this computer's answer (#380).
+  - The chat's own healthy start, the usual trigger, therefore neither restarts nor probes beside
+    its weight upload (#473).
+  - The other drops heal where they happen, each once and in its own order. Check again (`rechecked`)
+    re-arms, heals, re-probes and then restarts. It does all that only for a verdict it dropped itself:
+    a healthy start that landed during the check has already healed it. The install hook (`installed`)
+    re-arms with or without a verdict, then refreshes the probe and restarts. `gone` heals nothing.
+  - The re-arm spawns nothing, so it cannot report into the store while the store notifies.
+  - A consumer start in flight is not latched yet; if that start was refused, it re-latches and
+    re-reports, which is true.
+  - The #372 model latches are re-armed too (owner call 1). A model with a real GGUF fault walks
+    its ladder once more after the heal and latches again.
+- **whisper-cli** (`transcriber/cli.ts`): the spawn is wrapped. A thrown error and the `'error'` event
+  share `spawnFailure` (classify, log, verdict, `EngineCannotRunError`). A cancelled call, or one
+  on a stopped transcriber (quit), spawns nothing. That is checked before the #516 gate and the hash,
+  and again after them: a `stop()` that lands while the call waits finds nothing in `active` to kill.
+  `classifySpawnError` now reads only errors of the spawn. Before, a failed `kill()` on a cancel would
+  have recorded a false "Windows refused to start it".
+- **Residuals.**
+  - A chat on the `cpu/` net (rung 3) stays there after the heal. The status cannot tell rung 3 from
+    rung 2 (§8), and rung 2 is also compatibility mode after a GPU fault, so only the demo runtime is
+    restarted.
+  - The heal's restart is a chat start. On a shared card it takes the card from a translation that
+    started on it (#473 Phase 1, "a chat start takes the card first"), as Check again's restart did.
+  - Unchanged from #532: on a Kit, a `cpu/` refusal after a reinstall replaces the main build's
+    `afterInstall` verdict, so the reinstall is offered again (#670).
+
+**Real-app verification (2026-10-13, DesktopDiT, GTX 1070 Ti, dev build, scratch drive roots; D:
+was only read).**
+- **#654**, the main build only: `llama.dll` was removed, giving a startup `files-damaged` and a
+  failed import. With the DLL restored, the 4B started on the GPU and the verdict cleared.
+  - Master: the next import still failed with the engine copy.
+  - The fix: it was indexed.
+- **#655**, a Kit with `cpu/`, both DLLs removed. The main build reported from the probe, an import
+  and rungs 1–2, then rung 3 reported from `cpu/`. With the DLLs restored, the 4B ran on the GPU.
+  - Master: the banner with its demo note and the "answers are simulated" notice stayed, and the
+    import failed.
+  - The fix: both cleared and the import was indexed. No Check again and no restart in either case.
+- **Review F1**, the main build only, `llama.dll` removed. The chat start ended on the demo runtime.
+  With the DLL restored, an import was the first engine start: it was indexed and the verdict
+  cleared.
+  - Master: 120 s later the chat was still in demo mode, with no banner.
+  - The fix: the 4B was back on the GPU 4.1 s after the import, with one restart logged. The probe
+    (the 1070 Ti, 7,490 MiB free) was persisted 1 ms before that restart. The legs above logged no
+    restart: there the healthy start was the chat's own.
+- **#658**, a stand-in `whisper-cli.exe` with a deny-execute ACL. Node 24.13 throws `spawn EPERM`
+  synchronously. Smart App Control is off on this box, so the ACL stands in for it at the same Node
+  boundary.
+  - Master: dictation said "could not be transcribed", the import stored the generic failure, and
+    no verdict was recorded.
+  - The fix: dictation said the voice engine can't run, the verdict was `whisper_cpp` `blocked`
+    (`spawn error EPERM`), the import stored the voice-engine copy, and the speech-model card showed
+    the hint.
+
+Tests:
+- `engine-load-spawn.test.ts` "a healthy start: …": the #655 table, which includes the `cpu/`
+  rule and the never-reporter rule.
+- `engine-recheck.test.ts` "#654" covers:
+  - the re-arm plus restart;
+  - the probe re-run before that restart;
+  - the chat's own start, which neither probes nor restarts;
+  - a healthy start during Check again, healed once;
+  - a voice-engine heal that touches nothing of the chat engine.
+
+  Its fake context subscribes as `main/index.ts` does, so the `gone` row and Check again's
+  exactly-once counts guard the other causes.
+- `engine-load.test.ts`: a throwing drop listener, and a failed kill that `classifySpawnError`
+  does not read as a refusal.
+- `transcriber.test.ts`: the thrown refusal, the clean-run heal, the pre-aborted call, and the
+  stop/cancel and already-cancelled rows at the #516 gate.
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 
@@ -11519,6 +11759,10 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   `LlamaServer` copies, and removed `LlamaServer`'s `verifyBinary` option: it always calls the real verifier.
   The sidecar-services test campaign did the same for whisper-cli: it retired the injected-verdict copy in
   `transcriber.test.ts` and removed `WhisperCliOptions.verifyBinary`.
+  #656 added the knowledge packs' `kiwix-serve` (`KiwixServer.ensureStarted`: no port, no child) and
+  `kiwix-manage` (`kiwixManageAdd`: a `verify` error, `not-spawned`). Their `verifyBinary` option stays: no
+  production caller passes it, but the ZIM suites inject verdicts through it, and one uses it to hold a
+  start inside the verify step, so retiring it is a ZIM test pass of its own.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
@@ -11692,8 +11936,8 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   style), starts it to healthy on a GPU-reporting probe (backend `'gpu'`), then emits a REAL `'exit'`
   (code 134 + a stderr tail) and asserts the §5.3 GPU crash auto-fallback fired: persisted failure
   carrying `code 134` + the tail, the compatibility-mode notice, and ONE CPU restart of the same model.
-  Teeth: drop the `this.opts.onUnexpectedExit?.()` call in `LlamaServer`'s `'exit'` handler (or its
-  `ready && !stopping` gate) → no crash reaches the ladder → `restarts`/`persisted` stay empty → reds
+  Teeth: drop the `this.opts.onUnexpectedExit?.()` call in `LlamaServer`'s `'exit'` handler (since #656
+  its `reportUnexpectedExit()` call) (or its `ready && !stopping` gate) → no crash reaches the ladder → `restarts`/`persisted` stay empty → reds
   (verified).
 - **DX-6 — three settle-window real sleeps converted to deterministic waits (no count change).**
   `reranker.test.ts` / `e5-embedder.test.ts`: the fixed 25 ms "nothing spawned in the teardown window"
@@ -15639,9 +15883,9 @@ Four refusals, all of which **skip** the rung (no spawn, no failure, no GPU blam
    for the discrete card (#473). A machine with no usable card skips the rung.
 3. **Weight size unknown** — a failed file stat means the VRAM check cannot be made. Refuse
    rather than guess.
-4. **Device probe gave no answer** — its 10 s bound (#380) or an engine the OS refused (#530): the
-   VRAM headroom cannot be established, so unknown answers no (never the #380 load-log label, which
-   only names a start after the fact).
+4. **Device probe gave no answer** — its 10 s bound (#380), an engine the OS refused (#530), or a
+   probe that crashed or could not be spawned (#653): the VRAM headroom cannot be established, so
+   unknown answers no (never the #380 / #653 load-log label, which only names a start after the fact).
 
 ### §5 Failure handling: never let a speed-up cost the GPU
 

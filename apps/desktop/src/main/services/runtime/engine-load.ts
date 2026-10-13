@@ -99,7 +99,7 @@ function defaultSystemDllExists(dll: string): boolean {
 }
 
 /** How the program ended, for Diagnostics: `exit code 127`, `exit code 0xC0000135`, `signal SIGABRT`. */
-function describeExit(exitCode: number | null, signal: string | null): string {
+export function describeExit(exitCode: number | null, signal: string | null): string {
   if (exitCode != null) {
     const unsigned = exitCode >>> 0
     return unsigned > 0xffff ? `exit code 0x${unsigned.toString(16).toUpperCase()}` : `exit code ${exitCode}`
@@ -187,11 +187,15 @@ const WINDOWS_REFUSED_SPAWN_CODES = new Set(['EPERM', 'UNKNOWN', 'EACCES'])
  * code integrity, an application-control policy or security software surface from Node as EPERM /
  * `UNKNOWN` / EACCES (synchronously or via the `'error'` event) instead of an exit code: the same
  * "the OS refused the program" class as 0xC0E90002, so `blocked`. Elsewhere (ENOENT, a POSIX EACCES)
- * nothing here can say WHY, so null keeps the old handling.
+ * nothing here can say WHY, so null keeps the old handling. Only an error OF the spawn: a child's
+ * `'error'` event also reports a failed `kill()` (`syscall: 'kill'`, EPERM on Windows), which says
+ * nothing about whether the program may run (Node 24: a spawn error's syscall is `spawn` or
+ * `spawn <path>`, measured).
  */
 export function classifySpawnError(err: unknown, platform: NodeJS.Platform = process.platform): LoadFailure | null {
   if (platform !== 'win32') return null
-  const code = (err as { code?: unknown } | null)?.code
+  const { code, syscall } = (err ?? {}) as { code?: unknown; syscall?: unknown }
+  if (typeof syscall === 'string' && !syscall.startsWith('spawn')) return null
   if (typeof code !== 'string' || !WINDOWS_REFUSED_SPAWN_CODES.has(code)) return null
   return { reason: 'blocked', os: 'win', exit: `spawn error ${code}` }
 }
@@ -263,18 +267,38 @@ export function isEngineCannotRunError(err: unknown): err is EngineCannotRunErro
 // about a system library belongs to the drive, and a wrong verdict must not outlive the process.
 
 interface StoredProblem {
+  /** The latest report — what the screens show. */
   problem: EngineProblem
   /**
-   * The program the OS refused, when the reporter knows it. A healthy start of THAT program clears
-   * the verdict (an intermittent block that went away); a different program of the same family
-   * starting — a Windows Kit's `cpu/` build beside a damaged main folder — does not.
+   * Every program the OS refused since the verdict was recorded (#655). One program was not
+   * enough: on a Kit the probe, rungs 1–2 (main build) and rung 3 (`cpu/`) all report, so the main
+   * build — the one that runs once the fix is in — was forgotten. A program that never reported — a
+   * Windows Kit's `cpu/` build starting beside a damaged main folder — clears nothing.
    */
-  binPath?: string
+  reporters: Set<string>
+  /** The program that reported last (`problem`'s). */
+  lastReporter: string
+}
+
+/**
+ * Why a verdict was dropped (#654). `started`: a program that reported it started (a healthy start,
+ * the probe answered). `rechecked`: "Check again" found the engine loads. `installed`: a new copy of
+ * the engine replaced it. `gone`: the program left the drive — nothing was healed.
+ */
+export type EngineVerdictDrop = 'started' | 'rechecked' | 'installed' | 'gone'
+
+/**
+ * The chat engine's pure-CPU safety net, `runtime/llama.cpp/<os>/cpu/` (`resolveCpuFallbackServerPath`):
+ * the ladder's rung 3, spawned only after the main build's rungs 1–2 failed.
+ */
+function isSafetyNet(family: EngineProblemFamily, binPath: string): boolean {
+  return family === 'llama_cpp' && /[\\/]cpu[\\/][^\\/]+$/.test(binPath)
 }
 
 const FAMILY_ORDER: EngineProblemFamily[] = ['llama_cpp', 'whisper_cpp']
 const problems = new Map<EngineProblemFamily, StoredProblem>()
 const listeners = new Set<() => void>()
+const dropListeners = new Set<(family: EngineProblemFamily, why: EngineVerdictDrop) => void>()
 /**
  * #532: the program each family's engine install put on the drive THIS session — a fresh copy,
  * checked against its pinned SHA-256 before it was unpacked. A "its own files are damaged" verdict
@@ -302,20 +326,33 @@ function notifyListeners(): void {
   }
 }
 
-/** Record that this engine cannot run (first-hand evidence from a spawn). Never throws. */
-export function reportEngineProblem(problem: EngineProblem, binPath?: string): void {
+/** Record that the program at `binPath` cannot run (first-hand evidence from a spawn). Never throws. */
+export function reportEngineProblem(problem: EngineProblem, binPath: string): void {
   const previous = problems.get(problem.family)
   // #532: the classifier never sets `afterInstall`; only the store knows the program is a fresh copy.
-  const afterInstall =
-    problem.reason === 'files-damaged' && binPath != null && freshlyInstalled.get(problem.family) === binPath
+  const afterInstall = problem.reason === 'files-damaged' && freshlyInstalled.get(problem.family) === binPath
   const stored: EngineProblem = afterInstall ? { ...problem, afterInstall: true } : problem
-  problems.set(problem.family, { problem: stored, ...(binPath ? { binPath } : {}) })
+  const reporters = new Set(previous?.reporters)
+  reporters.add(binPath)
+  problems.set(problem.family, { problem: stored, reporters, lastReporter: binPath })
   if (!previous || !sameProblem(previous.problem, stored)) notifyListeners()
 }
 
-/** The engine started (or is gone): drop its verdict. Never throws. */
-export function clearEngineProblem(family: EngineProblemFamily): void {
-  if (problems.delete(family)) notifyListeners()
+/**
+ * The engine started, was replaced or is gone (`why`): drop its verdict. True when there was one to
+ * drop. Never throws.
+ */
+export function clearEngineProblem(family: EngineProblemFamily, why: EngineVerdictDrop): boolean {
+  if (!problems.delete(family)) return false
+  notifyListeners()
+  for (const listener of [...dropListeners]) {
+    try {
+      listener(family, why)
+    } catch {
+      /* a listener must never break a spawn site's start path */
+    }
+  }
+  return true
 }
 
 /**
@@ -327,16 +364,26 @@ export function clearEngineProblem(family: EngineProblemFamily): void {
 export function engineInstalled(family: EngineProblemFamily, binPath?: string | null): void {
   if (binPath) freshlyInstalled.set(family, binPath)
   else freshlyInstalled.delete(family)
-  clearEngineProblem(family)
+  clearEngineProblem(family, 'installed')
 }
 
 /**
- * The program at `binPath` just started (healthy, or the probe answered): if the family's verdict was
- * about THAT program, it is stale — drop it. Never throws.
+ * The program at `binPath` just started (healthy, or the probe answered): if the family's verdict is
+ * about it, the verdict is stale — drop it (an intermittent block that went away, a library installed
+ * since). Never throws.
+ * - A main build that reported clears it (#655), whatever reported after it: it is the engine
+ *   "Check again" checks and an install repairs.
+ * - The `cpu/` safety net clears it only as the LAST reporter. Rung 3 starts only after the main
+ *   build's rungs 1–2 failed, so a healthy `cpu/` start usually follows a fresh refusal of the main
+ *   build, which still stands (review of #655: a damaged main build would lose its verdict and the
+ *   #532 reinstall offer).
+ * - A program that never reported clears nothing.
  */
 export function clearEngineProblemFor(family: EngineProblemFamily, binPath: string): void {
   const stored = problems.get(family)
-  if (stored && stored.binPath === binPath) clearEngineProblem(family)
+  if (!stored?.reporters.has(binPath)) return
+  if (isSafetyNet(family, binPath) && stored.lastReporter !== binPath) return
+  clearEngineProblem(family, 'started')
 }
 
 /** Every current verdict, the chat engine first. */
@@ -360,9 +407,21 @@ export function onEngineProblemsChanged(listener: () => void): () => void {
   }
 }
 
+/**
+ * Subscribe to dropped verdicts, with the family and why (#654: the chat engine's consumers are
+ * re-armed when it runs again). Returns the unsubscribe.
+ */
+export function onEngineProblemDropped(listener: (family: EngineProblemFamily, why: EngineVerdictDrop) => void): () => void {
+  dropListeners.add(listener)
+  return () => {
+    dropListeners.delete(listener)
+  }
+}
+
 /** Test reset: forget every verdict, listener and install. */
 export function resetEngineProblemsForTest(): void {
   problems.clear()
   listeners.clear()
+  dropListeners.clear()
   freshlyInstalled.clear()
 }

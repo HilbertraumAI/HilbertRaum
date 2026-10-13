@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
   EngineCannotRunError,
@@ -177,6 +177,32 @@ describe('LlamaServer — a program the OS loader refused (#530)', () => {
     await s.stop()
   })
 
+  // #655: on a Kit the probe and rungs 1–2 (main build) and rung 3 (cpu/) all report, cpu/ last. Once the
+  // fix is in, the main build runs on the graphics card — that clears it. The cpu/ net starts only after the
+  // main build's rungs failed, so it clears only as the latest reporter: a main build that refused it again
+  // right before (still damaged) keeps the verdict and its #532 reinstall offer (review of #655).
+  const KIT_MAIN = 'C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe'
+  const KIT_CPU = 'C:\\Kit\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe'
+  it.each<[string, string[], string, boolean]>([
+    ['the main build clears a verdict the cpu/ build reported last (#655)', [KIT_MAIN, KIT_CPU], KIT_MAIN, true],
+    ['the cpu/ build keeps a verdict the main build reported after it', [KIT_MAIN, KIT_CPU, KIT_MAIN], KIT_CPU, false],
+    ['the cpu/ build clears a verdict it reported last (an intermittent block)', [KIT_MAIN, KIT_CPU], KIT_CPU, true],
+    // Rungs 1–2 failed for a reason that is not the loader's; only cpu/ was refused (and still is).
+    ['the main build leaves a verdict only the cpu/ build reported', [KIT_CPU], KIT_MAIN, false]
+  ])('a healthy start: %s', async (_label, reporters, started, cleared) => {
+    const problem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' } as const
+    for (const binPath of reporters) reportEngineProblem(problem, binPath)
+    const spawn: SpawnFn = () => new FakeChild()
+    const healthy = (async () => ({ ok: true, status: 200 }) as Response) as typeof fetch
+    const s = server(spawn, { fetchImpl: healthy, binPath: started })
+    await s.start()
+    try {
+      expect(engineProblemFor('llama_cpp') === null).toBe(cleared)
+    } finally {
+      await s.stop()
+    }
+  })
+
   it('a healthy start of ANOTHER program of the family (a cpu/ build) leaves the verdict', async () => {
     reportEngineProblem(
       { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' },
@@ -206,7 +232,9 @@ describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#5
     expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1' })
   })
 
-  it('still answers [] for a non-zero exit that is not the loader’s (the old contract)', async () => {
+  // #653: a non-zero exit that is not the loader's is no answer either (`null`, gpu.test.ts) — but it
+  // is no refusal: the engine ran, so no verdict is recorded and nothing tells the user it cannot run.
+  it('a non-zero exit that is not the loader’s is unknown too, and records no verdict (#653)', async () => {
     const spawn: SpawnFn = () => {
       const child = new FakeChild()
       queueMicrotask(() => {
@@ -215,7 +243,7 @@ describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#5
       })
       return child
     }
-    expect(await probeGpuDevices('/bin/llama-server', { spawn, platform: 'linux', verify: async () => 'skip-dev' })).toEqual([])
+    expect(await probeGpuDevices('/bin/llama-server', { spawn, platform: 'linux', verify: async () => 'skip-dev' })).toBeNull()
     expect(engineProblemFor('llama_cpp')).toBeNull()
   })
 
@@ -228,6 +256,40 @@ describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#5
     }
     expect(await probeGpuDevices('/bin/llama-server', { spawn, verify: async () => 'skip-dev' })).toEqual([])
     expect(engineProblemFor('llama_cpp')).toBeNull()
+  })
+
+  // #653 review: the guard that keeps a timed-out probe's own kill from logging a second non-answer
+  // must not swallow what a late 'close' says about the program. An exit 0 proves it runs, so a
+  // refusal recorded against it is stale; a loader refusal (a cold drive's scan can push it past the
+  // bound) is still the verdict. The probe's own answer stays the timeout's `null` either way.
+  it.each([
+    {
+      name: 'an exit 0 still clears a stale verdict',
+      before: { family: 'llama_cpp', reason: 'blocked', os: 'win', exit: 'exit code 0xC0E90002' } as const,
+      code: 0,
+      after: null
+    },
+    { name: 'a loader refusal is still recorded', before: null, code: 0xc0000135, after: 'vc-runtime-missing' }
+  ])('after its kill-timeout, a late close still speaks for the program: $name (#653)', async ({ before, code, after }) => {
+    vi.useFakeTimers()
+    try {
+      if (before) reportEngineProblem(before, '/bin/llama-server')
+      let child!: FakeChild
+      const spawn: SpawnFn = () => (child = new FakeChild()) // exits only when the test says so
+      const probing = probeGpuDevices('/bin/llama-server', {
+        spawn,
+        timeoutMs: 20,
+        platform: 'win32',
+        systemDllExists: () => false,
+        verify: async () => 'skip-dev'
+      })
+      await vi.advanceTimersByTimeAsync(20)
+      expect(await probing).toBeNull()
+      child.emit('close', code, null)
+      expect(engineProblemFor('llama_cpp')?.reason ?? null).toBe(after)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a Windows spawn refusal (the error event) is UNKNOWN plus the verdict, not "no graphics card"', async () => {

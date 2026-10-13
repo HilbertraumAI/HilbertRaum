@@ -7,7 +7,7 @@ import {
   type LoadCheck,
   type LoadCheckDeps
 } from '../services/engine-health'
-import { clearEngineProblem, engineProblems } from '../services/runtime/engine-load'
+import { clearEngineProblem, engineProblems, onEngineProblemDropped } from '../services/runtime/engine-load'
 import { clearModelLoadLatches } from '../services/runtime/factory'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -26,7 +26,8 @@ import { isModelStarting } from '../../shared/runtime-status'
  * Re-arm every chat-engine consumer that latched a failed start: the #372 model latches, the
  * embedder's and reranker's `startFailed`, the vision cooldown and a latched translator slot. Run
  * after a chat-engine install (a new binary — before #530 that re-armed the model latches only, so
- * a repaired engine still failed every import until a restart) and after a successful re-check.
+ * a repaired engine still failed every import until a restart), after a successful re-check, and
+ * when a program the OS had refused starts ({@link rearmWhenChatEngineHeals}, #654).
  */
 export function rearmLlamaConsumers(ctx: AppContext): void {
   clearModelLoadLatches()
@@ -41,6 +42,50 @@ export function rearmLlamaConsumers(ctx: AppContext): void {
 }
 
 /**
+ * #654: heal what a refusal of the chat engine left behind when a program that reported it STARTS —
+ * a healthy `LlamaServer` start (chat or any sidecar) or the device probe answering. Before, that
+ * dropped the verdict and nothing else: the banner and its Check again were gone while every import
+ * still failed on the embedder's latch, and a model the demo runtime stood in for stayed there. Now
+ * every consumer is re-armed, and that model comes back on the engine the way Check again brings it
+ * back: the device probe re-run and persisted first (the refused probes persisted nothing, and the
+ * ladder must read this computer's answer, #380), then the restart (owner calls 2026-10-13). Only when
+ * that model really is on the demo runtime with no start in flight: the chat's own healthy start, the
+ * usual trigger, neither restarts nor probes beside its weight upload (#473). The other drops heal
+ * elsewhere: "Check again" and an install re-arm and restart on their own; `gone` heals nothing (the
+ * program left the drive). Subscribed once at startup (`main/index.ts`); returns the unsubscribe. The
+ * re-arm spawns nothing, so it cannot feed a new verdict back into the store while the store notifies.
+ */
+export function rearmWhenChatEngineHeals(ctx: AppContext, deps: Pick<RecheckDeps, 'restartChat'> = {}): () => void {
+  return onEngineProblemDropped((family, why) => {
+    if (family !== 'llama_cpp' || why !== 'started') return
+    rearmLlamaConsumers(ctx)
+    if (!demoRuntimeStandsIn(ctx)) return
+    const restart = deps.restartChat ?? restartChatOnRealEngine
+    void reprobeGpu(ctx)
+      .then(() => restart(ctx))
+      .catch((err: unknown) => {
+        log.warn('Restarting the model after the AI engine ran again failed', { error: String(err) })
+      })
+  })
+}
+
+/** A selected model answers from the demo runtime and no start is in flight. */
+function demoRuntimeStandsIn(ctx: AppContext): boolean {
+  const status = ctx.runtime.status()
+  return status.backend === 'mock' && status.modelId != null && !isModelStarting(status)
+}
+
+/**
+ * The device probe the refusal left unanswered: re-probe and persist the real answer for this
+ * computer (the cache is dropped first so no earlier answer stands in for it). Admission-gated.
+ */
+async function reprobeGpu(ctx: AppContext): Promise<void> {
+  if (!workspaceAdmitsWork(ctx.workspace)) return
+  ctx.probeGpu?.invalidate()
+  await probeAndPersistGpu(ctx)
+}
+
+/**
  * Bring the selected model back on the real engine when the demo runtime is standing in for it
  * (the walk ended on the mock because every rung was refused, or the engine was missing). Run
  * fire-and-forget by the re-check and, since #532, after a chat-engine install: a model load takes
@@ -49,9 +94,8 @@ export function rearmLlamaConsumers(ctx: AppContext): void {
  * left alone — it walks the ladder on the engine as it now is, and a second start would cut it off.
  */
 export async function restartChatOnRealEngine(ctx: AppContext): Promise<void> {
-  const status = ctx.runtime.status()
-  const modelId = status.modelId
-  if (status.backend !== 'mock' || !modelId || isModelStarting(status)) return
+  const modelId = ctx.runtime.status().modelId
+  if (!demoRuntimeStandsIn(ctx) || !modelId) return
   if (!workspaceAdmitsWork(ctx.workspace)) return
   log.info('The real AI engine is on the drive — restarting the selected model on it', { modelId })
   ctx.docTasks?.abortActiveBuild()
@@ -87,12 +131,17 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
     const family = problem.family
     try {
       const outcome = await recheckFamily(ctx, family, deps)
-      // 'gone': the program left the drive — its verdict no longer describes anything (the
-      // missing-engine banner speaks now), but nothing was healed, so nothing is re-armed.
-      // 'unchecked': it could not be started at all (integrity check, a spawn error that says
-      // nothing about the loader) — the verdict stands.
-      if (outcome === 'loads' || outcome === 'gone') clearEngineProblem(family)
-      if (outcome === 'loads') healed.push(family)
+      // 'loads': healed here — unless a healthy start dropped the verdict while the check ran, whose
+      // own heal (`rearmWhenChatEngineHeals`) already re-armed and restarted; a second pass would
+      // re-probe beside that restart's weight upload. 'gone': the program left the drive — its
+      // verdict no longer describes anything (the missing-engine banner speaks now), but nothing was
+      // healed, so nothing is re-armed. 'unchecked': it could not be started at all (integrity
+      // check, a spawn error that says nothing about the loader) — the verdict stands.
+      if (outcome === 'loads') {
+        if (clearEngineProblem(family, 'rechecked')) healed.push(family)
+      } else if (outcome === 'gone') {
+        clearEngineProblem(family, 'gone')
+      }
     } catch (err) {
       log.warn('Engine re-check failed', { family, error: String(err) })
     }
@@ -102,12 +151,7 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
     rearmLlamaConsumers(ctx)
     // A compatibility-mode flag the refusal had set, and rows that still carry its raw line.
     healEngineLoadState(ctx, deps)
-    // The device probe the refusal left unanswered: re-probe and persist the real answer for this
-    // computer (the cache is dropped first so no earlier answer stands in for it).
-    if (workspaceAdmitsWork(ctx.workspace)) {
-      ctx.probeGpu?.invalidate()
-      await probeAndPersistGpu(ctx)
-    }
+    await reprobeGpu(ctx)
     const restart = deps.restartChat ?? restartChatOnRealEngine
     void restart(ctx).catch((err: unknown) => {
       log.warn('Restarting the model after the engine re-check failed', { error: String(err) })
@@ -118,9 +162,11 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
 
 /**
  * Start the family's program just far enough to know whether the OS accepts it. An explicit spawn
- * rather than the GPU probe: the probe answers `[]` for a binary it could not even run (a failed
- * integrity check, a spawn error), which would read as "loads" — `checkProgramLoads` tells those
- * apart as 'unchecked'.
+ * rather than the GPU probe: the probe answers `[]` for a binary it never ran (a failed integrity
+ * check, which would read as "loads") and the same `null` for a refusal as for a crash or a spawn
+ * error (#653). `checkProgramLoads` tells them apart: a failed integrity check or a non-refusal
+ * spawn error is 'unchecked', a crash is 'loads' (the loader accepted the program), a refusal is
+ * 'refused'.
  */
 async function recheckFamily(
   ctx: AppContext,

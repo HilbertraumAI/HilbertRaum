@@ -14,7 +14,8 @@ import { join } from 'node:path'
 //    the next session re-checks, and a successful manual run ends the re-check;
 //  - the late-write guard: a lock, or a lock + re-unlock, completing during the drive/speed
 //    legs refuses the persist;
-//  - the production seams (`registerWorkspaceIpc` unlock/create) run the split in that order.
+//  - the production seams (`registerWorkspaceIpc` unlock/create) run the split in that order,
+//    after the #530 heal of a GPU flag that an engine load refusal had set.
 //
 // Every wait here is on a real completion seam (the fake runtime's start gate, the scheduler's
 // outcome promise, a `vi.waitFor` on persisted state); the only clock is the injected deferral
@@ -1307,6 +1308,39 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
     await rt.startReached
     expect(probe.calls()).toBe(0)
+    rt.finishStart()
+    ctrl.lock()
+  })
+
+  // #530 / #656: before #530 a missing system library failed every GPU rung, and the ladder stored
+  // that as a GPU fault (`gpuAutoDisabled` + the loader line). The unlock seam heals it BEFORE the
+  // model auto-start reads the flags, or the session's first start would run on the processor.
+  it('unlock clears a compatibility-mode flag an engine load refusal set, before the model auto-start (#530)', async () => {
+    let flagsAtStart: { gpuAutoDisabled: boolean; gpuLastError: string | null } | null = null
+    const vault: { ctx?: AppContext } = {}
+    const rt = fakeRuntime({
+      onStart: () => {
+        const s = getSettings(vault.ctx!.db)
+        flagsAtStart = { gpuAutoDisabled: s.gpuAutoDisabled, gpuLastError: s.gpuLastError }
+      }
+    })
+    const known = hereResult()
+    const { ctrl, ctx } = lockedVault(
+      {
+        lastBenchmark: known,
+        benchmarkHistory: [known],
+        activeModelId: CHAT_MODEL,
+        gpuAutoDisabled: true,
+        gpuLastError:
+          '2026-09-30T10:00:00.000Z — llama-server exited before becoming healthy (code 127) — last output: /media/x/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory'
+      },
+      rt
+    )
+    vault.ctx = ctx
+
+    await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
+    await rt.startReached
+    expect(flagsAtStart).toEqual({ gpuAutoDisabled: false, gpuLastError: null })
     rt.finishStart()
     ctrl.lock()
   })

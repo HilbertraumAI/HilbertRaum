@@ -27,12 +27,62 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-05 #516 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #627 entry). Its record is unchanged:
+`architecture.md` "In-app engine updates". Its one open item, a quick translation in flight at the pause being cut off, stays
+recorded there and in `known-limitations.md` "Engine updates (#516) can cut off a quick translation". Citations of the form
+"BUILD_STATE 2026-10-05 #516 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
+`older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
+archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the
+CODE-13 race). Fixed: the plain install re-installed outdated engines (refused while a model ran; a downgrade of newer ones) — now missing only. Quiet notice (§11.20),
+Diagnostics row, `fetch-runtime` note. Owner: offer + report, pause/resume, cpu/ too, Kits same gates. Real app verified twice (b9849 → b11146, ~5–6 s downtime;
+busy refusal; the 1070 Ti's b9849 hung mid-chat, b11146 answered). Record: `architecture.md` "In-app engine updates". Open: a quick translation in flight at the
+pause is cut off. Found, pre-existing, now fixed: a chat sidecar hung before its response headers escaped the CB-5 watchdog (record §5; #594)._
+
+## 2026-10-13 — the closed 2026-10-05 #580 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #627 entry). Its record is unchanged: the
+Skills record §21 "#580 amendment". It named no open item. Citations of the form "BUILD_STATE 2026-10-05 #580 entry" now
+resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#580 — redaction masks the union of overlapping proposals (`fix/580-redaction-overlap`).** "Jane" before "Jane Doe" left the surname visible (.txt + DOCX),
+and a partial overlap ("Anna Berg" + "Berg GmbH") left " GmbH" in either order: `applySpans` keeps the first of two overlapping spans. `verifyAndSweepEntities` now merges
+occurrences into disjoint regions; counts are regions; the edit tool's comment corrected. Record: Skills record §21 "#580 amendment". Open: none._
+
+## 2026-10-13 — the closed 2026-10-05 #532 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #653 entry). Its records are unchanged:
+`architecture.md` "Engine load failures" §8 and design-guidelines §11.17. It named no open item; the `afterInstall` residual found
+later (a later `cpu/` report overwrites it) is #670, cited in the #654/#655/#658 entry. Citations of the form "BUILD_STATE 2026-10-05
+#532 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#532 — "Install the AI engine again" for an engine whose own files are damaged (`fix/532-engine-reinstall`).** `downloadEngine({ families,
+reinstall: true })`, admitted only for a `files-damaged` verdict; the demo runtime no longer counts as "engine in use" (CODE-13 polish, also first installs); the
+model restarts on the engine after any chat-engine install; a fresh copy refused again carries `afterInstall` (no loop; Windows → VC++ hint). Owner: offline Kits
+disabled + reason, main build only (`cpu/` kept), voice engine too, one click. Real app on DesktopDiT (DE/EN, light/dark). Record: "Engine load failures" §8, §11.17._
+
+## 2026-10-13 — the closed 2026-10-05 #538/#574/#575/#576 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #654/#655/#658 entry). Its records are unchanged:
+`architecture.md` "OCR quality amendment" and design-guidelines §11.19. Its one open item, a sold drive needing `osd` for the gate, is
+enforced by `build-commercial-drive.ps1`, which refuses a drive missing any `ocr:` pin of `runtime-sources.yaml`, `osd` included.
+Citations of the form "BUILD_STATE 2026-10-05 #538/#574/#575/#576 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#538/#574/#575/#576 — OCR reads sideways pages upright, says when it was unsure, gives photos OCR metadata, and reads the scanned pages
+of a text PDF (`fix/538-574-575-576-ocr`).** Tesseract OSD in a lazily started legacy-core worker over a new pinned `ocr/osd.traineddata.gz` (4.3 MB; the
+"WASM core can't run legacy" premise was wrong) + an EXIF orientation marker (little-endian phone photos 0/68 → 68/68). Per-page confidence kept;
+meta `textPageCount` / `lowConfidencePageCount`; `scanned_pages_json` + per-page merge. Dev and packaged exe on DesktopDiT (SAC off): every test page
+68/68. Record: `architecture.md` "OCR quality amendment", design-guidelines §11.19. Open: sold drives need `osd` (`fetch-runtime --family ocr`) for the gate._
+
 ## 2026-10-13 — the closed 2026-10-05 #570–#573 entry retired verbatim (preamble budget)
 
-Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #627 entry). Its record is
-unchanged: `design-guidelines.md` §11.18 and `architecture.md` doc-org §4 "#571 amendment"; the residual it names (deleting
-a chat's only attachment still widens it) is as written below. Citations of the form "BUILD_STATE 2026-10-05 #570–#573 entry"
-now resolve here. Text below is byte-identical to what was removed.
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #656 entry). Its record is unchanged:
+design-guidelines §11.18, `architecture.md` doc-org §4 "#571 amendment" (which keeps its open residual: deleting a chat's only
+attachment still widens it) and rag-design §13.2. Citations of the form "BUILD_STATE 2026-10-05 #570–#573 entry" now resolve
+here. Text below is byte-identical to what was removed.
 
 _2026-10-05 — **#570–#573 — a file attached in a chat that can't be read yet (`fix/570-chat-failed-attachment`).** The chat names a scan (or a photo without
 the OCR files) and offers Go to Documents, held for its own chat (design-guidelines §11.18); `resolveScope` / `listAttachments` count a chat's unfiled attachments, so a

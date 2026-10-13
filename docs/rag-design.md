@@ -4719,7 +4719,7 @@ this step resolves exactly those three.
   impure seam in `main/index.ts`, never inside this pure module). An unknown or empty probe, no
   useful device, no budget figure, no active chat model or an unresolvable manifest all mean
   `'cpu'`. `gpuUsefulForProfile` keeps every other job (the profile bump, the Models ★, the
-  graphics tile, `memoryClassOf`); only the posture question is re-sourced. See
+  graphics tile); only the posture question is re-sourced. See
   `architecture.md` GPU record §7 for the full derivation and the small-card disclosure.
   **#473 amendment (2026-10-12, ruling 3):** the chat model's side of the subtraction is now
   `chatGraphicsShareMib` (`models.ts`) — this session's measured footprint of the running model
@@ -5519,6 +5519,21 @@ outstanding. Once all of that holds, the change merges and is tagged the same da
 text-only change (docs, comments, no code) skips the read entirely. A floor miss is
 a stop: the change does not ship on a miss, and a miss is never cleared by taking a
 second, more favourable read.
+
+**Stage A: the word check (owner decision, 2026-10-13, #627).** For a change confined to
+the article converter (`zim/html.ts` and the modules it loads), the read is preceded by
+`scripts/zim-dev-set-diff.mjs`. The script converts every article of the development cache
+with the converter before and after the change, and compares each article's title, its
+segment count and labels, and the words of every segment.
+- **All identical:** the read is identical by construction, so the change ships on that
+  report and no read runs. Admission's lead and wide windows, the chunks, the overlap
+  picker, the reranker and the prompt all read words, never whitespace. Only the latency
+  floors sit outside the check, and they move by the conversion's own measured cost.
+- **Any article's words change:** the full read runs as above.
+
+Both steps are mechanical. The maintainer runs them, or an agent on the machine that holds
+the harness orchestrates them. Either way, only the scripts' summaries are reported; the
+cached articles never leave that machine.
 
 ## 18. Knowledge-pack retrieval research — the confirmation read and its outcome (design record, 2026-09-19)
 

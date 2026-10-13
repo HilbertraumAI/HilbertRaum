@@ -31,7 +31,8 @@ function makeServer(opts: {
   probeResults?: boolean[] | ((port: number) => Promise<boolean>)
   ports?: number[]
   failFirstChild?: 'bind-race' | 'enoent' | 'exit-42'
-  /** #339 P8-1: the pre-spawn verifier seam (default: the harness's always-`ok`). */
+  /** #339 P8-1: the pre-spawn verifier seam (default: the real verifier, which answers
+   *  `skip-dev` here because no test enables enforcement; binary-verify-spawn.test.ts does). */
   verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
 }): Harness {
   const calls: Array<{ command: string; args: string[] }> = []

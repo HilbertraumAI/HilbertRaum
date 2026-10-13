@@ -323,21 +323,43 @@ describe('createPlacementParser', () => {
 
 // PR #303 audit DR3, verified and now STANDING. Precisely what the fixtures show: verbosity 4
 // raises llama.cpp's load-time AND per-request DIAGNOSTIC logging — slot ids, token counts,
-// timings, sampler parameters and cache state, so every fixture DOES carry a complete request
-// cycle's metadata (`launch_slot_`, `new prompt, n_ctx_slot = 8192 … task.n_tokens = 2015`,
+// timings, sampler parameters and cache state, so every fixture that served a request (all but the
+// two load-only #653 captures) DOES carry a complete request cycle's metadata (`launch_slot_`, `new prompt, n_ctx_slot = 8192 … task.n_tokens = 2015`,
 // `print_timing`, `release`) — but no prompt or completion TEXT and no request body. "Verbosity 4
 // does not log requests" would be false; what is true is that it logs no content.
 //
-// These four fixtures are committed to a PUBLIC repo, so the check runs on every suite and is a
-// WHITELIST, not a blacklist: every line must fall into one of five known classes, so injected
+// These fixtures are committed to a PUBLIC repo, so the check runs on every suite and is a
+// WHITELIST, not a blacklist: every line must fall into one of six known classes, so injected
 // prose ANYWHERE in a future re-capture reddens here instead of shipping.
+// #653: the start ladder labels a start `gpu` from its own log when the probe lists no device, and
+// the evidence is `holdsGpuBuffers()`. The real captures run through the ladder
+// (`runtime-ladder.test.ts`: full offload, GPU-less 37/37, 0/37, AMX, Metal mapped); these are the
+// edge rules no capture reaches. Handwritten.
+describe('holdsGpuBuffers — a buffer under a device the log lists as a GPU (#653)', () => {
+  const ROW = (label: string): string => `  - ${label} : NVIDIA GeForce RTX 3060 (12288 MiB, 11000 MiB free)`
+  it.each([
+    { name: 'a 0 MiB buffer on a listed device is no evidence', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 0.00 MiB'], gpu: false },
+    { name: 'a KV buffer alone counts', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 576.00 MiB'], gpu: true },
+    { name: 'a recurrent-state buffer alone counts', lines: [ROW('Vulkan0'), 'llama_memory_recurrent: Vulkan0 RS buffer size = 184.25 MiB'], gpu: true },
+    { name: 'device 1 does not claim a buffer of device 10', lines: [ROW('Vulkan1'), 'load_tensors: Vulkan10 model buffer size = 2375.91 MiB'], gpu: false },
+    { name: 'a host buffer never counts, even against a numberless row', lines: [ROW('Vulkan'), 'sched_reserve: Vulkan_Host compute buffer size = 14.01 MiB'], gpu: false }
+  ])('$name', ({ lines, gpu }) => {
+    const p = createPlacementParser()
+    p.onStderrData(lines.join('\n') + '\n')
+    expect(p.holdsGpuBuffers()).toBe(gpu)
+  })
+})
+
 describe('the committed load logs carry no request or prompt content (DR3)', () => {
+  /** #653: load-only captures (cut at the first `all slots are idle`, before any request). */
+  const LOAD_ONLY = ['placement-b11146-gpuless-37of37-cpu.txt', 'placement-b11146-ngl0-0of37-compute.txt']
   const NAMES = [
     'placement-b9849-partial-20of33-hybrid.txt',
     'placement-b9849-partial-18of33-np4.txt',
     'placement-b9849-partial-62of66-mtp.txt',
     'placement-b9849-full-49of49-swa.txt',
-    'placement-b11146-full-49of49-swa.txt' // #512: captured through the app's spawn, so ANSI-coloured
+    'placement-b11146-full-49of49-swa.txt', // #512: captured through the app's spawn, so ANSI-coloured
+    ...LOAD_ONLY
   ]
   /** The colour codes llama.cpp adds when it believes stderr is a terminal (see the #512 test above). */
   const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g')
@@ -353,6 +375,8 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
   const TIMESTAMPED = /^\d+\.\d\d\.\d\d\d\.\d\d\d [IWE] /
   /** `print_info: LF token              = 107 '` — a token literal whose value IS a newline. */
   const OPEN_TOKEN_LITERAL = /token\s*=\s*\d+ '$/
+  /** ggml-vulkan prints this one without the log prefix; the #653 capture hid the card with it. */
+  const HIDDEN_DEVICE_WARNING = /^ggml_vulkan: Invalid device index \d+ in GGML_VK_VISIBLE_DEVICES\.$/
 
   /**
    * The `example_format` block: from the line that opens it to the next line that is a lone
@@ -370,9 +394,11 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
   it.each(NAMES)('%s', (name) => {
     const text = fixture(name).replace(ANSI, '')
     for (const needle of FORBIDDEN) expect(`${name}: ${text.includes(needle)}`).toBe(`${name}: false`)
-    // Every slot line prints its conversation id; the app never sets one, so it is always empty.
+    // Every slot line prints its conversation id; the app never sets one, so it is always empty. A
+    // capture that served a request has them; a load-only one (#653) has no slot line to print one.
     const ids = text.match(/conv_id=[^|,\n]*/g) ?? []
-    expect(ids.length).toBeGreaterThan(0)
+    if (LOAD_ONLY.includes(name)) expect(ids).toEqual([])
+    else expect(ids.length).toBeGreaterThan(0)
     for (const id of ids) expect(id.trim()).toBe('conv_id= (empty=1)')
     // The capture is the real thing: the verbosity the parser needs, and a load it can read.
     expect(text).toContain('verbosity = 4')
@@ -387,7 +413,7 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
       }
     })
 
-    // THE NET: every line is one of five classes. Anything else — a pasted prompt, a stray note,
+    // THE NET: every line is one of six classes. Anything else — a pasted prompt, a stray note,
     // an editor's comment — fails, naming the line.
     lines.forEach((l, i) => {
       const ok =
@@ -396,6 +422,7 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
         (open >= 0 && i > open && i <= close) || // (c) inside the canned template block
         l.startsWith('\t') || // (d) a tab-indented sampler-params continuation
         (l === "'" && OPEN_TOKEN_LITERAL.test(lines[i - 1] ?? '')) || // (e) a newline token literal
+        HIDDEN_DEVICE_WARNING.test(l) || // (f) ggml-vulkan's unprefixed warning in the #653 GPU-less capture
         (i === lines.length - 1 && l === '') // the file's trailing newline
       expect(`${name}:${i + 1} ${ok ? 'classified' : JSON.stringify(l.slice(0, 80))}`).toBe(`${name}:${i + 1} classified`)
     })

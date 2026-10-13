@@ -31,14 +31,12 @@ import {
   BENCHMARK_TOKEN_TARGET
 } from '../../src/main/services/benchmark'
 import { t } from '../../src/shared/i18n'
-import { gpuUsefulForProfile } from '../../src/shared/gpu-rules'
 import type {
   ChatMessage,
   ModelRuntime,
   RuntimeChatOptions,
   RuntimeTimings
 } from '../../src/main/services/runtime'
-import type { GpuDevice } from '../../src/shared/types'
 
 // A switchable RAM pin (PR #308 audit plan T-item 3): the §6.6 seam test below needs the machine
 // RAM to be a KNOWN input, not the host's — the rest of this file keeps the real figure (the
@@ -142,42 +140,6 @@ describe('classifyProfile', () => {
     expect(classifyProfile(0)).toBe('UNKNOWN')
     expect(classifyProfile(Number.NaN)).toBe('UNKNOWN')
     expect(classifyProfile(-4)).toBe('UNKNOWN')
-  })
-})
-
-// ---- GPU profile-bump gate (Phase 16, architecture.md GPU record §8) -----------------
-
-describe('gpuUsefulForProfile', () => {
-  const dev = (name: string, totalMb: number): GpuDevice => ({ id: 'Vulkan0', name, totalMb, freeMb: totalMb })
-
-  it('qualifies a discrete GPU at or above the VRAM floor', () => {
-    expect(gpuUsefulForProfile([dev('NVIDIA GeForce RTX 3080 Ti', 12300)])).toBe(true)
-    expect(gpuUsefulForProfile([dev('AMD Radeon RX 6700 XT', 12272)])).toBe(true)
-  })
-
-  it('an iGPU reporting 16 GB of SHARED memory does NOT qualify (the §8 case)', () => {
-    expect(gpuUsefulForProfile([dev('Intel(R) Iris(R) Xe Graphics', 16000)])).toBe(false)
-    expect(gpuUsefulForProfile([dev('AMD Radeon(TM) Graphics', 16000)])).toBe(false)
-  })
-
-  it('a small discrete GPU (under the floor) does not qualify', () => {
-    expect(gpuUsefulForProfile([dev('NVIDIA GeForce GTX 1650', 4096)])).toBe(false)
-    // …but a 6 GB laptop card does since #321 lowered the floor to 5,120 (this is the profile
-    // bump moving such a laptop one step up — the accepted blast radius of that decision).
-    expect(gpuUsefulForProfile([dev('NVIDIA GeForce RTX 3060 Laptop GPU', 5994)])).toBe(true)
-  })
-
-  it('no devices → not useful', () => {
-    expect(gpuUsefulForProfile([])).toBe(false)
-  })
-
-  it('any one qualifying device among several is enough', () => {
-    expect(
-      gpuUsefulForProfile([
-        dev('Intel(R) UHD Graphics 630', 16000),
-        dev('NVIDIA GeForce RTX 3080 Ti', 12300)
-      ])
-    ).toBe(true)
   })
 })
 

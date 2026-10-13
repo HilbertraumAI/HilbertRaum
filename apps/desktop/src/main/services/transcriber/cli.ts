@@ -268,6 +268,12 @@ export class WhisperCliTranscriber implements Transcriber {
     opts: TranscribeOptions,
     onChild: (child: ChildProcess) => void
   ): Promise<{ code: number | null; stderrTail: string }> {
+    // #658: a call cancelled (the dictation deadline, a lock during the WAV write) or a transcriber
+    // stopped (quit) starts nothing — no model load it would kill at once. Checked before the waits
+    // below and again after them: a `stop()` that lands in between has nothing in `active` to kill,
+    // so a child spawned after it would outlive the app.
+    const cancelled = (): boolean => opts.signal?.aborted === true || this.stopped
+    if (cancelled()) throw new Error('Transcription was cancelled.')
     // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
     // packaged-build tamper is refused; the audio import then fails per-file with the
     // generic failure copy (the raw reason stays in the local log only).
@@ -276,9 +282,19 @@ export class WhisperCliTranscriber implements Transcriber {
     if ((await verifyBinaryBeforeSpawn(this.binPath)) === 'mismatch') {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
+    if (cancelled()) throw new Error('Transcription was cancelled.')
     return new Promise((resolve, reject) => {
-      // windowsHide (#530): every other sidecar spawn already passed it; this one never did.
-      const child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+      let child: ChildProcess
+      try {
+        // windowsHide (#530): every other sidecar spawn already passed it; this one never did.
+        child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+      } catch (err) {
+        // #658: Node throws SYNCHRONOUSLY for spawn errors outside its short async list — EPERM and
+        // `UNKNOWN` among them, how a Windows policy or security software refuses the program
+        // (measured: a deny-execute ACL throws `spawn EPERM`). Nothing was registered yet.
+        reject(this.spawnFailure(err))
+        return
+      }
       onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup
       // CODE-11 (full-audit 2026-07-11): make the child reachable by the crash-exit reap —
       // a hard uncaughtException skips suspend()/stop(), and on Windows the child survives.
@@ -330,28 +346,14 @@ export class WhisperCliTranscriber implements Transcriber {
 
       // REL-2: escalate to SIGKILL so a "Stop" / cancel can't be ignored by a wedged child.
       const onAbort = (): void => this.killWithEscalation(child)
-      // Already aborted at spawn time (rare): kill at once; otherwise arm the listener.
-      if (opts.signal?.aborted) onAbort()
-      else opts.signal?.addEventListener('abort', onAbort, { once: true })
+      // Not aborted yet: checked synchronously just before the spawn (#658).
+      opts.signal?.addEventListener('abort', onAbort, { once: true })
 
       child.on('error', (err) => {
         unregisterSidecarChild(child.pid) // CODE-11: gone/never started — off the kill list
         clearWatchdog()
         opts.signal?.removeEventListener('abort', onAbort)
-        // #530: a Windows refusal by policy / security software is the voice engine's verdict.
-        const refused = classifySpawnError(err, this.platform)
-        if (refused) {
-          const problem = { family: 'whisper_cpp' as const, ...refused }
-          log.warn('whisper-cli cannot run on this computer — the operating system refused to start it', {
-            problem: describeLoadFailure(refused),
-            binPath: this.binPath,
-            error: String(err)
-          })
-          reportEngineProblem(problem, this.binPath)
-          reject(new EngineCannotRunError('whisper-cli', problem))
-          return
-        }
-        reject(err)
+        reject(this.spawnFailure(err))
       })
       child.on('close', (code, signal) => {
         unregisterSidecarChild(child.pid) // CODE-11: dead — off the crash-reap kill list
@@ -389,6 +391,24 @@ export class WhisperCliTranscriber implements Transcriber {
         }
       })
     })
+  }
+
+  /**
+   * #530: what a spawn error rejects with — thrown synchronously (#658) or emitted as `'error'`. A
+   * Windows refusal by policy / security software is the voice engine's verdict and the typed error;
+   * anything else is passed on as it came.
+   */
+  private spawnFailure(err: unknown): unknown {
+    const refused = classifySpawnError(err, this.platform)
+    if (!refused) return err
+    const problem = { family: 'whisper_cpp' as const, ...refused }
+    log.warn('whisper-cli cannot run on this computer — the operating system refused to start it', {
+      problem: describeLoadFailure(refused),
+      binPath: this.binPath,
+      error: String(err)
+    })
+    reportEngineProblem(problem, this.binPath)
+    return new EngineCannotRunError('whisper-cli', problem)
   }
 
   /**

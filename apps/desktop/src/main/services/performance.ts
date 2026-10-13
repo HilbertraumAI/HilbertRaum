@@ -173,16 +173,6 @@ export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
 }
 
 /**
- * The memory class with the GPU flags at their defaults (GPU on, not auto-disabled) — a thin
- * wrapper over `nextStartMemory` for callers that hold no settings. Production consumers pass
- * the flags through `nextStartMemory` instead, so a switched-off card never classes a machine
- * `discrete`.
- */
-export function memoryClassOf(platform: string, arch: string, devices: readonly GpuDevice[]): MemoryClass {
-  return nextStartMemory({ platform, arch, devices, gpuMode: 'auto', gpuAutoDisabled: false }).memoryClass
-}
-
-/**
  * The devices this machine may take from the persisted probe (PR #303 audit M8.3, owner
  * decision G3): those of `settings.gpuProbe` when it is stamped with THIS machine's key or
  * unstamped (a legacy probe, unverifiable until a local refresh replaces it); NOTHING when it
