@@ -463,8 +463,9 @@ describe('LlamaServer', () => {
 
   // M-C1: a post-ready 'error' WITHOUT an 'exit' (process gone via ECHILD/EPIPE) is
   // still a mid-session death — it must fire onUnexpectedExit so the GPU auto-fallback
-  // runs and stop() doesn't hang waiting on an 'exit' that never comes.
-  it('fires onUnexpectedExit when a healthy server emits "error" without "exit"', async () => {
+  // runs and stop() doesn't hang waiting on an 'exit' that never comes. #656: Node may still
+  // emit 'exit' after the 'error'; that is the same death and is not reported a second time.
+  it('fires onUnexpectedExit once when a healthy server emits "error", with or without a trailing "exit" (#656)', async () => {
     const { spawn, child } = fakeSpawn()
     const { fetchImpl } = healthFetch(0)
     const exits: UnexpectedExitInfo[] = []
@@ -480,6 +481,8 @@ describe('LlamaServer', () => {
     })
     await server.start()
     child.emit('error', new Error('read ECHILD')) // dies without ever emitting 'exit'
+    expect(exits).toHaveLength(1)
+    child.emit('exit', 1, null) // …or Node delivers the exit afterwards
     expect(exits).toHaveLength(1)
   })
 
