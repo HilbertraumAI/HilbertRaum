@@ -57,6 +57,7 @@ import { TranslateJobService } from './services/translation/jobs'
 import { createLocalApiServer, maybeStartLocalApi } from './services/local-api/lifecycle'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerEngineIpc } from './ipc/registerEngineIpc'
+import { rearmWhenChatEngineHeals } from './ipc/engine-recheck'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import {
   registerBenchmarkIpc,
@@ -785,6 +786,10 @@ function initBackend(): void {
     // The replacement is a fresh instance: re-attach the Performance push to it.
     ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
   }
+  // #654: a refused chat engine that runs again — a healthy start, the probe answering, "Check
+  // again" — re-arms every consumer that latched the refusal (the embedder, reranker, vision and
+  // the translator slot above), so imports work again without a lock/unlock or a restart.
+  rearmWhenChatEngineHeals(ctx)
   ctx.onModelInstalled = (modelId) => {
     // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model FIRST —
     // before any statement below can return early or throw (the download manager swallows the

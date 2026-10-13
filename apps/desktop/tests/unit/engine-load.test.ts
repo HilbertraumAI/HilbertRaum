@@ -253,16 +253,16 @@ describe('the session verdict store', () => {
   it('notifies on a new or different verdict and on a clear — not on a repeat', () => {
     const listener = vi.fn()
     const off = onEngineProblemsChanged(listener)
-    reportEngineProblem(gomp)
-    reportEngineProblem(gomp) // the same refusal again (every spawn re-reports it)
+    reportEngineProblem(gomp, LLAMA)
+    reportEngineProblem(gomp, LLAMA) // the same refusal again (every spawn re-reports it)
     expect(listener).toHaveBeenCalledTimes(1)
-    reportEngineProblem({ ...gomp, reason: 'system-too-old', name: 'GLIBC_2.34' })
+    reportEngineProblem({ ...gomp, reason: 'system-too-old', name: 'GLIBC_2.34' }, LLAMA)
     expect(listener).toHaveBeenCalledTimes(2)
-    clearEngineProblem('llama_cpp')
-    clearEngineProblem('llama_cpp') // nothing left to clear
+    clearEngineProblem('llama_cpp', 'runs')
+    clearEngineProblem('llama_cpp', 'runs') // nothing left to clear
     expect(listener).toHaveBeenCalledTimes(3)
     off()
-    reportEngineProblem(gomp)
+    reportEngineProblem(gomp, LLAMA)
     expect(listener).toHaveBeenCalledTimes(3)
   })
 
@@ -294,7 +294,7 @@ describe('the session verdict store', () => {
     onEngineProblemsChanged(() => {
       throw new Error('boom')
     })
-    expect(() => reportEngineProblem(gomp)).not.toThrow()
+    expect(() => reportEngineProblem(gomp, LLAMA)).not.toThrow()
     expect(engineProblemFor('llama_cpp')).toEqual(gomp)
   })
 })

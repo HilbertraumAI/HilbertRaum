@@ -7,7 +7,7 @@ import {
   type LoadCheck,
   type LoadCheckDeps
 } from '../services/engine-health'
-import { clearEngineProblem, engineProblems } from '../services/runtime/engine-load'
+import { clearEngineProblem, engineProblems, onEngineProblemDropped } from '../services/runtime/engine-load'
 import { clearModelLoadLatches } from '../services/runtime/factory'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -26,7 +26,8 @@ import { isModelStarting } from '../../shared/runtime-status'
  * Re-arm every chat-engine consumer that latched a failed start: the #372 model latches, the
  * embedder's and reranker's `startFailed`, the vision cooldown and a latched translator slot. Run
  * after a chat-engine install (a new binary — before #530 that re-armed the model latches only, so
- * a repaired engine still failed every import until a restart) and after a successful re-check.
+ * a repaired engine still failed every import until a restart) and whenever the chat engine runs
+ * again ({@link rearmWhenChatEngineHeals}).
  */
 export function rearmLlamaConsumers(ctx: AppContext): void {
   clearModelLoadLatches()
@@ -38,6 +39,22 @@ export function rearmLlamaConsumers(ctx: AppContext): void {
   } catch (err) {
     log.warn('Re-arming the AI engine consumers failed', { error: String(err) })
   }
+}
+
+/**
+ * #654: re-arm the chat-engine consumers whenever the chat engine's verdict is dropped because a
+ * refused program runs now — a healthy `LlamaServer` start (chat or any sidecar), the device probe
+ * answering, or "Check again". Before, only "Check again" re-armed, so after a healthy start the
+ * banner was gone while every import still failed on the embedder's latch. Not on `gone` (the
+ * program left the drive: nothing was healed, and a consumer re-armed against a missing binary only
+ * fails again) and not on `installed` (the install hook re-arms on its own, verdict or not).
+ * Subscribed once at startup (`main/index.ts`); returns the unsubscribe. The re-arm spawns
+ * nothing, so it cannot feed a new verdict back into the store while the store notifies.
+ */
+export function rearmWhenChatEngineHeals(ctx: AppContext): () => void {
+  return onEngineProblemDropped((family, why) => {
+    if (family === 'llama_cpp' && why === 'runs') rearmLlamaConsumers(ctx)
+  })
 }
 
 /**
@@ -87,19 +104,23 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
     const family = problem.family
     try {
       const outcome = await recheckFamily(ctx, family, deps)
-      // 'gone': the program left the drive — its verdict no longer describes anything (the
-      // missing-engine banner speaks now), but nothing was healed, so nothing is re-armed.
-      // 'unchecked': it could not be started at all (integrity check, a spawn error that says
-      // nothing about the loader) — the verdict stands.
-      if (outcome === 'loads' || outcome === 'gone') clearEngineProblem(family)
-      if (outcome === 'loads') healed.push(family)
+      // 'loads': the verdict is dropped as `runs`, which re-arms the chat engine's consumers
+      // (`rearmWhenChatEngineHeals`). 'gone': the program left the drive — its verdict no longer
+      // describes anything (the missing-engine banner speaks now), but nothing was healed, so
+      // nothing is re-armed. 'unchecked': it could not be started at all (integrity check, a spawn
+      // error that says nothing about the loader) — the verdict stands.
+      if (outcome === 'loads') {
+        clearEngineProblem(family, 'runs')
+        healed.push(family)
+      } else if (outcome === 'gone') {
+        clearEngineProblem(family, 'gone')
+      }
     } catch (err) {
       log.warn('Engine re-check failed', { family, error: String(err) })
     }
   }
   if (healed.length > 0) log.info('Engine re-check: the operating system now starts it', { healed })
   if (healed.includes('llama_cpp')) {
-    rearmLlamaConsumers(ctx)
     // A compatibility-mode flag the refusal had set, and rows that still carry its raw line.
     healEngineLoadState(ctx, deps)
     // The device probe the refusal left unanswered: re-probe and persist the real answer for this

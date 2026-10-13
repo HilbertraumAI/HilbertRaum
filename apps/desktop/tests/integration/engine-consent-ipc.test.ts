@@ -383,8 +383,8 @@ describe('engine load verdicts over IPC (#530)', () => {
     const d = makeDrive()
     const resetStartFailure = vi.fn()
     Object.assign(d.ctx, { embedder: { resetStartFailure }, reranker: { resetStartFailure }, vision: { resetStartFailure } })
-    reportEngineProblem(LLAMA_PROBLEM)
-    reportEngineProblem({ ...LLAMA_PROBLEM, family: 'whisper_cpp' })
+    reportEngineProblem(LLAMA_PROBLEM, '/drive/runtime/llama.cpp/linux/llama-server')
+    reportEngineProblem({ ...LLAMA_PROBLEM, family: 'whisper_cpp' }, '/drive/runtime/whisper.cpp/linux/whisper-cli')
     const { result } = await invoke(d.handlers, IPC.downloadEngine)
     expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
     await vi.waitFor(() => expect(resetStartFailure).toHaveBeenCalledTimes(3))
@@ -395,8 +395,8 @@ describe('engine load verdicts over IPC (#530)', () => {
 
   it('a completed voice-engine install drops only the voice verdict', async () => {
     const d = makeDrive({ withWhisper: true })
-    reportEngineProblem(LLAMA_PROBLEM)
-    reportEngineProblem({ ...LLAMA_PROBLEM, family: 'whisper_cpp' })
+    reportEngineProblem(LLAMA_PROBLEM, '/drive/runtime/llama.cpp/linux/llama-server')
+    reportEngineProblem({ ...LLAMA_PROBLEM, family: 'whisper_cpp' }, '/drive/runtime/whisper.cpp/linux/whisper-cli')
     const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['whisper_cpp'] })
     expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
     expect(engineProblemFor('whisper_cpp')).toBeNull()
@@ -449,7 +449,7 @@ describe('downloadEngine({ families, reinstall }) — the damaged-files repair (
   ])('is refused with %s — nothing is fetched', async (_label, problem) => {
     const d = makeDrive()
     await installChatEngine(d)
-    if (problem) reportEngineProblem(problem)
+    if (problem) reportEngineProblem(problem, '/drive/runtime/refused-program')
     await expect(
       invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
     ).rejects.toThrow(/nothing to repair/i)

@@ -177,6 +177,21 @@ describe('LlamaServer — a program the OS loader refused (#530)', () => {
     await s.stop()
   })
 
+  // #655: on a Kit the probe and rungs 1–2 (main build) and rung 3 (cpu/) all report, cpu/ last. Once the
+  // fix is in, the main build runs on the graphics card — that clears it too.
+  it('a healthy start of the main build clears a verdict the cpu/ build reported last (#655)', async () => {
+    const main = 'C:\\Kit\\runtime\\llama.cpp\\win\\llama-server.exe'
+    const problem = { family: 'llama_cpp', reason: 'vc-runtime-missing', os: 'win', name: 'msvcp140.dll', exit: 'exit code 0xC0000135' } as const
+    reportEngineProblem(problem, main)
+    reportEngineProblem(problem, 'C:\\Kit\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe')
+    const spawn: SpawnFn = () => new FakeChild()
+    const healthy = (async () => ({ ok: true, status: 200 }) as Response) as typeof fetch
+    const s = server(spawn, { fetchImpl: healthy, binPath: main })
+    await s.start()
+    expect(engineProblemFor('llama_cpp')).toBeNull()
+    await s.stop()
+  })
+
   it('a healthy start of ANOTHER program of the family (a cpu/ build) leaves the verdict', async () => {
     reportEngineProblem(
       { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' },
