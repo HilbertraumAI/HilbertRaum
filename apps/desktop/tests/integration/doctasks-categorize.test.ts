@@ -1,51 +1,40 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
+import type { Db } from '../../src/main/services/db'
 import { BANK_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/bank-statement'
 import { buildToolRunner, toSkillToolAudit } from '../../src/main/services/skills/tool-runs'
-import { DocTaskManager, type DocTaskDeps } from '../../src/main/services/doctasks'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import type { DocTaskManager } from '../../src/main/services/doctasks'
+import {
+  docTaskManager,
+  docTaskRuntime,
+  docTaskWorld,
+  importText,
+  userPromptOf,
+  waitTerminal,
+  type DocRuntimeCall,
+  type DocTaskWorld
+} from '../helpers/doctask-fixtures'
 
 // Phase 33 — the `categorize` document task (the bank-statement LLM categorizer's lane). CI posture:
 // zero model, zero network — a scripted runtime (or none, for the deterministic fallback). Covers:
 // the model path persists `category_id`; the no-runtime path degrades to the deterministic rule pass;
 // and the (D) ordering fix — categorize AUTO-EXTRACTS when no statement exists yet.
 
-let tmp: string
-let db: Db
-let storeDir: string
-
+let w: DocTaskWorld
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-doccat-'))
-  db = openDatabase(join(tmp, 'test.sqlite'))
-  storeDir = documentsDir(join(tmp, 'workspace'))
+  w = docTaskWorld('doccat')
 })
-
-/** Ingest a .txt with explicit content (newlines preserved in the parser segments). */
-async function importText(content: string, name = 'statement.txt'): Promise<string> {
-  const p = join(tmp, name)
-  writeFileSync(p, content, 'utf8')
-  const info = createQueuedDocument(db, p)
-  const done = await processDocument(db, storeDir, info.id, {})
-  expect(done.status).toBe('indexed')
-  return info.id
-}
 
 /** Seed a bank_statements row + transactions directly (skips the auto-extract path). Stamped with the
  *  CURRENT extractor version so the doctask treats it as fresh (not stale → no A9 re-extraction). */
 function seedStatement(documentId: string, rows: Array<{ desc: string; amount: number }>): string {
   const stmtId = randomUUID()
   const now = new Date().toISOString()
-  db.prepare(
+  w.db.prepare(
     `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance, extractor_version, created_at)
      VALUES (?, ?, NULL, NULL, NULL, 'EUR', NULL, NULL, ?, ?)`
   ).run(stmtId, documentId, BANK_EXTRACTOR_VERSION, now)
-  const ins = db.prepare(
+  const ins = w.db.prepare(
     `INSERT INTO bank_transactions (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
      VALUES (?, ?, NULL, ?, '2026-03-01', NULL, ?, ?, 'EUR', NULL, NULL, ?)`
   )
@@ -53,57 +42,22 @@ function seedStatement(documentId: string, rows: Array<{ desc: string; amount: n
   return stmtId
 }
 
-/** A scripted runtime that maps each batch row's description to a category via `map`. */
-function scriptedRuntime(map: (desc: string) => string): ModelRuntime {
-  return {
-    modelId: 'mock',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      const user = messages[1].content
-      const lines = user.split('\n').filter((l) => /^\d+\t/.test(l))
-      const assignments = lines.map((l) => {
-        const [idx, , ...rest] = l.split('\t')
-        return { index: Number(idx), category: map(rest.join('\t')) }
-      })
-      const text = JSON.stringify({ assignments })
-      for (const tok of text.match(/\S+\s*/g) ?? [text]) {
-        if (options?.signal?.aborted) return
-        yield tok
-      }
-    }
-  }
-}
-
-function makeManager(runtime: ModelRuntime | null): DocTaskManager {
-  const deps: DocTaskDeps = {
-    getDb: () => db,
-    getRuntime: () => runtime,
-    getTranslator: () => null,
-    isChatStreaming: () => false,
-    getContextTokens: () => 4096,
-    getStoreDir: () => storeDir,
-    getIngestionDeps: () => ({}),
-    beginDocumentWork: () => () => {}
-  }
-  return new DocTaskManager(deps)
-}
-
-async function waitTerminal(mgr: DocTaskManager, jobId: string): Promise<ReturnType<DocTaskManager['getDocTask']>> {
-  const start = Date.now()
-  for (;;) {
-    const s = mgr.getDocTask(jobId)
-    if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s
-    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task ${jobId} never finished: ${s.state}`)
-    await new Promise((r) => setTimeout(r, 10))
+/** The categorizer's batch reply: each prompt row's description mapped to a category via `map`. */
+function batchReply(map: (desc: string) => string): (call: DocRuntimeCall) => string {
+  return (call) => {
+    const lines = userPromptOf(call).split('\n').filter((l) => /^\d+\t/.test(l))
+    const assignments = lines.map((l) => {
+      const [idx, , ...rest] = l.split('\t')
+      return { index: Number(idx), category: map(rest.join('\t')) }
+    })
+    return JSON.stringify({ assignments })
   }
 }
 
 /** The persisted category name per row (LEFT JOIN), in row order. */
 function persistedCategories(statementId: string): Array<string | null> {
   return (
-    db
+    w.db
       .prepare(
         `SELECT c.name AS name FROM bank_transactions t
          LEFT JOIN bank_categories c ON c.id = t.category_id
@@ -115,7 +69,7 @@ function persistedCategories(statementId: string): Array<string | null> {
 
 /** The persisted model-assisted flag for a statement (Phase 33 / A8): 1 = LLM consulted, 0 = deterministic. */
 function categorizedByModel(statementId: string): number | null {
-  const row = db
+  const row = w.db
     .prepare('SELECT categorized_by_model AS flag FROM bank_statements WHERE id = ?')
     .get(statementId) as { flag: number | null } | undefined
   return row?.flag ?? null
@@ -123,13 +77,14 @@ function categorizedByModel(statementId: string): number | null {
 
 describe('categorize doctask — model path', () => {
   it('persists model-assigned categories (incl. the richer taxonomy)', async () => {
-    const docId = await importText('Umsätze EUR\nplaceholder')
+    const docId = await importText(w, 'Umsätze EUR\nplaceholder', { name: 'statement.txt' })
     const stmtId = seedStatement(docId, [
       { desc: 'Gebühr Kontofuehrung', amount: -3.5 }, // prefiltered → Fees (no model)
       { desc: 'REWE Markt', amount: -45.9 },
       { desc: 'Amazon Bestellung', amount: -20 }
     ])
-    const mgr = makeManager(scriptedRuntime((d) => (d.includes('REWE') ? 'Groceries' : 'Shopping')))
+    const runtime = docTaskRuntime({ reply: batchReply((d) => (d.includes('REWE') ? 'Groceries' : 'Shopping')) })
+    const mgr = docTaskManager(w, { getRuntime: () => runtime })
     const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
     const status = await waitTerminal(mgr, jobId)
 
@@ -142,12 +97,13 @@ describe('categorize doctask — model path', () => {
   it('records model-assisted even when every model label happens to be in the rule set (A8)', async () => {
     // The model assigns ONLY rule-set categories (Income/Transfer) — the old name-based heuristic would
     // miss this and label the breakdown deterministic. The persisted flag is the truthful signal.
-    const docId = await importText('Umsätze EUR\nplaceholder')
+    const docId = await importText(w, 'Umsätze EUR\nplaceholder', { name: 'statement.txt' })
     const stmtId = seedStatement(docId, [
       { desc: 'Acme Werk', amount: 2500 }, // model → Income (in the rule set, but model-assigned)
       { desc: 'Max Mustermann', amount: -100 } // model → Transfer (also in the rule set)
     ])
-    const mgr = makeManager(scriptedRuntime((d) => (d.includes('Acme') ? 'Income' : 'Transfer')))
+    const runtime = docTaskRuntime({ reply: batchReply((d) => (d.includes('Acme') ? 'Income' : 'Transfer')) })
+    const mgr = docTaskManager(w, { getRuntime: () => runtime })
     const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
     const status = await waitTerminal(mgr, jobId)
 
@@ -159,12 +115,12 @@ describe('categorize doctask — model path', () => {
 
 describe('categorize doctask — no runtime (deterministic fallback)', () => {
   it('degrades to the deterministic rule pass and still persists category_id', async () => {
-    const docId = await importText('Umsätze EUR\nplaceholder')
+    const docId = await importText(w, 'Umsätze EUR\nplaceholder', { name: 'statement.txt' })
     const stmtId = seedStatement(docId, [
       { desc: 'Gehalt ACME', amount: 2500 }, // Income rule
       { desc: 'Unklare Buchung', amount: -9.99 } // negative sign → Spending
     ])
-    const mgr = makeManager(null)
+    const mgr = docTaskManager(w)
     const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
     const status = await waitTerminal(mgr, jobId)
 
@@ -179,25 +135,27 @@ describe('categorize doctask — A9 staleness re-extraction', () => {
   it('re-extracts (replacing) a statement from an outdated extractor, then categorizes the fresh rows', async () => {
     // A bank-statement-shaped doc with real rows, plus a pre-existing STALE statement (NULL version)
     // whose single row is bogus — the doctask must re-extract (replace) and categorize the corrected rows.
-    const docId = await importText('Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Gebühr -3,50')
+    const docId = await importText(w, 'Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Gebühr -3,50', {
+      name: 'statement.txt'
+    })
     const staleId = randomUUID()
     const now = new Date().toISOString()
-    db.prepare(
+    w.db.prepare(
       `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance, extractor_version, created_at)
        VALUES (?, ?, NULL, NULL, NULL, 'EUR', NULL, NULL, NULL, ?)`
     ).run(staleId, docId, now)
-    db.prepare(
+    w.db.prepare(
       `INSERT INTO bank_transactions (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
        VALUES (?, ?, NULL, 0, '2026-03-01', NULL, 'BOGUS STALE ROW', 1, 'EUR', NULL, NULL, ?)`
     ).run(randomUUID(), staleId, now)
 
-    const mgr = makeManager(null) // deterministic — the point is the re-extraction
+    const mgr = docTaskManager(w) // deterministic — the point is the re-extraction
     const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
     const status = await waitTerminal(mgr, jobId)
     expect(status.state).toBe('done')
 
     // The stale statement was REPLACED: exactly one remains, a fresh id at the current version.
-    const stmts = db
+    const stmts = w.db
       .prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?')
       .all(docId) as Array<{ id: string; v: number }>
     expect(stmts.length).toBe(1)
@@ -215,8 +173,8 @@ describe('categorize doctask — extract does not auto-categorize (U-2)', () => 
     // the extract through the tool-run dispatch with a FULLY functional doctask lane available — the
     // old Phase-33 auto-offer would have enqueued a `categorize` job here; now nothing touches the lane.
     const text = 'Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Gebühr -3,50'
-    const docId = await importText(text)
-    const mgr = makeManager(null)
+    const docId = await importText(w, text, { name: 'statement.txt' })
+    const mgr = docTaskManager(w)
     // Spy on the REAL manager: record every job the extract asks it to start (synchronous — the old
     // auto-offer called startDocTask inside the runner before it returned, so a regression is caught).
     const started: Array<{ kind: string }> = []
@@ -226,7 +184,7 @@ describe('categorize doctask — extract does not auto-categorize (U-2)', () => 
       return realStart(req)
     }) as DocTaskManager['startDocTask']
     const runner = buildToolRunner(
-      db,
+      w.db,
       'extract_transactions',
       { skillInstallId: 'app:bank-statement', conversationId: '', documentId: docId },
       toSkillToolAudit(),
@@ -238,7 +196,7 @@ describe('categorize doctask — extract does not auto-categorize (U-2)', () => 
     // The doctask lane was never asked to do anything — no hidden model run.
     expect(started).toHaveLength(0)
     // The freshly-extracted rows stay UNcategorized until the user explicitly taps "Categorize".
-    const stmt = db
+    const stmt = w.db
       .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC LIMIT 1')
       .get(docId) as { id: string }
     expect(persistedCategories(stmt.id).every((c) => c === null)).toBe(true)
@@ -249,11 +207,11 @@ describe('categorize doctask — persist rollback (T3: no partial categorization
   it('rolls back the category_id persist on an injected mid-transaction failure; connection not poisoned', async () => {
     // Drive the REAL categorize handler (via the REAL DocTaskManager). Seed a fresh statement so the
     // auto-extract path is skipped and the only `UPDATE bank_transactions SET category_id` is the
-    // step-(3) persist (handlers/categorize.ts:110 BEGIN…COMMIT). Mirror the data-layer-hardening
+    // step-(3) persist (handlers/categorize.ts, step (3)'s BEGIN…COMMIT). Mirror the data-layer-hardening
     // gold standard (deleteConversation): wrap the connection so the FIRST persist UPDATE throws
     // mid-transaction — after BEGIN + the in-txn `ensureBuiltinCategories` seed — and assert (a)
     // nothing partial persisted AND (b) the shared connection is not poisoned.
-    const docId = await importText('Umsätze EUR\nplaceholder')
+    const docId = await importText(w, 'Umsätze EUR\nplaceholder', { name: 'statement.txt' })
     const stmtId = seedStatement(docId, [
       { desc: 'REWE Markt', amount: -45.9 },
       { desc: 'Amazon Bestellung', amount: -20 }
@@ -262,7 +220,7 @@ describe('categorize doctask — persist rollback (T3: no partial categorization
     // Everything except the targeted row UPDATE hits the real connection (so BEGIN/COMMIT/ROLLBACK and
     // the category seed are genuine); the throw is ONE-shot so a later clean run recovers fully.
     let failOnce = true
-    const wrapped = new Proxy(db as object, {
+    const wrapped = new Proxy(w.db as object, {
       get(target, prop) {
         if (prop === 'prepare') {
           return (sql: string) => {
@@ -282,18 +240,8 @@ describe('categorize doctask — persist rollback (T3: no partial categorization
       }
     }) as unknown as Db
 
-    const runtime = scriptedRuntime((d) => (d.includes('REWE') ? 'Groceries' : 'Shopping'))
-    const deps: DocTaskDeps = {
-      getDb: () => wrapped,
-      getRuntime: () => runtime,
-      getTranslator: () => null,
-      isChatStreaming: () => false,
-      getContextTokens: () => 4096,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({}),
-      beginDocumentWork: () => () => {}
-    }
-    const mgr = new DocTaskManager(deps)
+    const runtime = docTaskRuntime({ reply: batchReply((d) => (d.includes('REWE') ? 'Groceries' : 'Shopping')) })
+    const mgr = docTaskManager(w, { getDb: () => wrapped, getRuntime: () => runtime })
     const status = await waitTerminal(mgr, mgr.startDocTask({ kind: 'categorize', documentIds: [docId] }).jobId)
 
     // (a) The task FAILED and NOTHING partial persisted: the rows are still uncategorized, the
@@ -302,14 +250,14 @@ describe('categorize doctask — persist rollback (T3: no partial categorization
     expect(status.state).toBe('failed')
     expect(persistedCategories(stmtId)).toEqual([null, null])
     expect(categorizedByModel(stmtId)).toBeNull()
-    const catCount = (db.prepare('SELECT COUNT(*) AS n FROM bank_categories').get() as { n: number }).n
+    const catCount = (w.db.prepare('SELECT COUNT(*) AS n FROM bank_categories').get() as { n: number }).n
     expect(catCount).toBe(0)
 
     // (b) The shared connection is NOT poisoned — a fresh transaction opens cleanly (it would throw
     // "cannot start a transaction within a transaction" if a BEGIN were left dangling by the failure).
     expect(() => {
-      db.exec('BEGIN')
-      db.exec('COMMIT')
+      w.db.exec('BEGIN')
+      w.db.exec('COMMIT')
     }).not.toThrow()
 
     // A clean re-run (the injection was one-shot) categorizes + persists normally — full recovery.
@@ -323,15 +271,17 @@ describe('categorize doctask — auto-extract (the (D) ordering fix)', () => {
   it('extracts the statement first when none exists, then categorizes', async () => {
     // A bank-statement-shaped .txt with NO prior extraction — clicking categorize before extract.
     const docId = await importText(
-      'Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Miete -800,00\n2026-03-03 Gebühr -3,50'
+      w,
+      'Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Miete -800,00\n2026-03-03 Gebühr -3,50',
+      { name: 'statement.txt' }
     )
-    const mgr = makeManager(null) // deterministic — the point is the auto-extract, not the model
+    const mgr = docTaskManager(w) // deterministic — the point is the auto-extract, not the model
     const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
     const status = await waitTerminal(mgr, jobId)
     expect(status.state).toBe('done')
 
     // A statement was created by the auto-extract, and its rows carry categories.
-    const stmt = db
+    const stmt = w.db
       .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC LIMIT 1')
       .get(docId) as { id: string } | undefined
     expect(stmt).toBeTruthy()
