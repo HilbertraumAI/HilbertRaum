@@ -16,7 +16,6 @@ import {
   ACTIVE_STATUSES,
   TASK_BUSY_LABEL,
   TASK_BUSY_TITLE,
-  __docRowRenderCounts,
   badgeFor,
   isRetryableFailure,
   metaLine,
@@ -77,8 +76,7 @@ export const DocRow = memo(function DocRow({
   onKeepInLibrary,
   onSetLifecycle,
   onRemoveFromCollection,
-  setConfirmDelete,
-  __onRender
+  setConfirmDelete
 }: {
   d: DocumentInfo
   /** Per-row boolean — NOT the whole `selected` Set (PERF-5). */
@@ -147,15 +145,7 @@ export const DocRow = memo(function DocRow({
   onSetLifecycle: (id: string, lifecycle: DocumentLifecycle) => void
   onRemoveFromCollection: (documentId: string, collectionId: string) => void
   setConfirmDelete: (d: DocumentInfo | null) => void
-  /** Perf-test seam (PERF-5): an optional render probe; undefined (a no-op) in production. */
-  __onRender?: (id: string) => void
 }): JSX.Element {
-  // Perf-test render probe (PERF-5): bumps the module-scoped per-id counter so the memoization test
-  // can assert an untouched row did NOT re-render. A Map write — effectively free; production
-  // behaviour is identical with or without it.
-  if (import.meta.env.DEV) __docRowRenderCounts.set(d.id, (__docRowRenderCounts.get(d.id) ?? 0) + 1) // DX-2: DEV-only, no-ops in prod
-  __onRender?.(d.id)
-
   // Per-row derived values (moved inside DocRow, PERF-5) — pure functions of `d` + the stable
   // inputs (t/tCount/lang/sourcesById/ocrAvailable). Byte-identical output to the former inline map.
   const status = badgeFor(d, t)

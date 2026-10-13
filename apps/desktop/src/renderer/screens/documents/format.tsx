@@ -17,7 +17,7 @@ import { unsupportedTypeExt } from '../../lib/displayMap'
  * file — an unsupported type, or a file too large / too many sections to index — where a
  * re-index would just fail the same way. Matched against the persist-canonical English in
  * `documents.error_message` (the value the D-L4 display map localizes), so the offered action
- * stays honest. Exported for the renderer test.
+ * stays honest.
  */
 export function isRetryableFailure(errorMessage: string | null | undefined): boolean {
   const msg = errorMessage ?? ''
@@ -50,15 +50,6 @@ export const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
   'chunking',
   'embedding'
 ])
-
-/**
- * Perf-test seam (PERF-5): a module-scoped per-id render counter that {@link DocRow} bumps in its
- * body. It lets the memoization test assert that an unrelated parent re-render (toggling another
- * row's selection / opening another row's ⋯ menu) re-renders ONLY the affected row. It is a Map
- * write per row render — effectively free — and is the ONLY observability hook here; production
- * behaviour is identical with or without it. Reset by the test between renders.
- */
-export const __docRowRenderCounts = new Map<string, number>()
 
 /**
  * PERF-2 (= PERF-5 Part B; full-audit-2026-06-29 follow-up, Phase 4) — list windowing.

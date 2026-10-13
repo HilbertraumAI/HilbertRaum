@@ -32,7 +32,7 @@ function sameRuntime(a: RuntimeStatus | null, b: RuntimeStatus | null): boolean 
   return a != null && b != null && a.running === b.running && a.modelId === b.modelId && a.backend === b.backend
 }
 
-/** Test probe (the `__docRowRenderCounts` pattern, DEV-only): HomeScreen render count. */
+/** Test probe (DEV-only render counter): HomeScreen render count. */
 export const __homeScreenRenderCount = { value: 0 }
 
 export function HomeScreen({ onNavigate }: Props): JSX.Element {

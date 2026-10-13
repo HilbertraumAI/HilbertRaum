@@ -270,8 +270,8 @@ noted below.
   token deltas through a 40 ms flush buffer (the ChatScreen `STREAM_FLUSH_MS` precedent; settle
   paths flush first so no token is lost, discard paths drop the buffer), and ImagesScreen got the
   FE-3 `useEventCallback` sweep over `onCopy`/`onTryAgain`/`onStop` — a settled `TurnRow` no longer
-  re-renders while a sibling turn streams (render-count-pinned via the `__docRowRenderCounts`
-  pattern). `translateSession` deliberately stays per-token (~4 tok/s — documented there). PF-7d:
+  re-renders while a sibling turn streams (render-count-pinned like the DocRow PERF-5 memo
+  tests). `translateSession` deliberately stays per-token (~4 tok/s — documented there). PF-7d:
   `ScopePopover` memoizes its `indexed`/`addableDocs`/collection derivations on
   `[docs, docIds, collections]`, so the (usually closed) composer-footer popover no longer
   re-filters the full docs list on every keystroke/stream flush.
@@ -8973,9 +8973,10 @@ bundles offline — no runtime fetch).
 
 > **Note (location, as of DX-3 — follow-up Phase 8, §38):** the behavior claims below are current, but
 > `DocumentsScreen.tsx` was subsequently split into `screens/documents/*` (`DocRow`, `SectionRail`,
-> `PreviewModal`, `format.tsx`, `types.ts`) — a behavior-preserving relocation; the windowing + the
-> `__docRowRenderCounts` seam described here are intact (the `DocRow` `React.memo` lives in
-> `screens/documents/DocRow.tsx` now).
+> `PreviewModal`, `format.tsx`, `types.ts`) — a behavior-preserving relocation; the windowing
+> described here is intact (the `DocRow` `React.memo` lives in `screens/documents/DocRow.tsx` now; the
+> `__docRowRenderCounts` seam was retired in 2026-10 — the PERF-5 tests count renders test-side,
+> `tests/helpers/render-counter.ts`).
 
 - **PERF-3 (Medium) — `listDocuments` no longer parses the full `ocr_json` blob per OCR'd row.** DB-8 (§
   Performance Wave P5) projected columns on the single-doc getters, but the **list** path still did
@@ -9006,8 +9007,8 @@ bundles offline — no runtime fetch).
   full-screen scroll behavior is unchanged (no inner-pane restructure that would alter scroll position /
   scroll-to). Variable row height (a failed-import error banner, a stale-embeddings notice, a wrapping chip
   cluster — `.doc-row` is `min-height: 56px`, not fixed) is handled by per-row `measureElement` over a 57px
-  estimate + overscan, so a taller row self-corrects. The `DocRow` `React.memo` + the `__docRowRenderCounts`
-  seam are untouched; a shared `renderRow` keeps the windowed and fallback paths' props wiring in one place.
+  estimate + overscan, so a taller row self-corrects. The `DocRow` `React.memo` is untouched (its render
+  counts have been read test-side since 2026-10, `tests/helpers/render-counter.ts`); a shared `renderRow` keeps the windowed and fallback paths' props wiring in one place.
   - **GATING (truthful, not a test sniff).** Windowing engages only once a real, laid-out viewport is
     resolved (`scrollEl != null && clientHeight > 0`). With no `.content` ancestor or a 0px viewport — a
     unit test rendering the screen standalone under jsdom, or first paint before layout — there is nothing
@@ -12064,6 +12065,9 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   behind `import.meta.env.DEV`, so it no-ops in a production build (verified: `npm run build` clean);
   vitest runs with DEV true, so the PERF-5 memo test (`DocumentsScreen.test.tsx`, 48 green) still observes
   the bumps. No production behaviour change (the exported Map stays an empty no-op in prod).
+  *(Superseded 2026-10, documents-doctasks test campaign: the Map and its DEV write are gone; the PERF-5
+  tests wrap production's `DocRow` memo in a test-side counter through `vi.mock`,
+  `tests/helpers/render-counter.ts`, so nothing ships for the test.)*
 - **DX-5 — the sidecar crash → auto-fallback WIRING is pinned end-to-end
   (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proved the
   ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama (that unit
@@ -12136,7 +12140,9 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   ⋯ menu: `getByRole('menu')` opened with its `Re-index` item, the sibling row titles intact — then keeps the
   render-count deltas as a SECONDARY perf oracle. **Teeth:** dropping `memo(DocRow)` reds the delta assertions
   (perf oracle intact) while the behavioral assertions still pass (proving the two layers are independent); a
-  toggle/open regression would red the behavioral layer the counter could not catch.
+  toggle/open regression would red the behavioral layer the counter could not catch. *(Since 2026-10 the
+  deltas come from a test-side counter around production's memo, `tests/helpers/render-counter.ts`, so
+  the DX-2 DEV dependence is gone.)*
 - **T3 — injected-failure ROLLBACK coverage extended to the categorize persist and the ingestion chunk-insert loop
   (the two genuinely-untested high-blast-radius BEGIN…COMMIT sites).** Mirroring the `data-layer-hardening`
   gold standard (`deleteConversation`): wrap the **real** shared connection so one targeted `.run()` throws
