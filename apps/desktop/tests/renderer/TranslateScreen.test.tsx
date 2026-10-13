@@ -25,9 +25,11 @@ import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 afterEach(() => {
   cleanup()
   // The production clears (lib/lockPurge.ts runs the same three). They keep the DOC-7 last-language-pair
-  // memory by design, so a row starts from the pair the previous translating row used. Every EN row here
-  // translates de → en; rows that assert a pair either run first ('types text, translates…', the EN-UI
-  // default pin) or assert relative to the selects.
+  // memory by design, so a row starts from the pair the previous translating row used, and the order of
+  // the rows matters: the EN rows translate de → en until a German-UI row records en → de.
+  // A row that asserts a literal pair must run before any row that translates another pair ('types text,
+  // translates…' is the EN-UI default pin, 'drops a document…' the document path's); other rows assert
+  // relative to the selects.
   clearTranslateSession()
   clearFileTranslate()
   clearDocTaskSession()

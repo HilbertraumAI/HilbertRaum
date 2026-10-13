@@ -99,10 +99,11 @@ describe('wordDiff — the core cases', () => {
 
   it('returns null past the SHIPPED edit cutoff, and diffs right at it (→ caller falls back)', () => {
     const distinct = (n: number, p: string): string => Array.from({ length: n }, (_, i) => `${p}${i}`).join(' ')
-    const half = Math.floor(DEFAULT_MAX_EDITS / 2)
+    const a = Math.floor(DEFAULT_MAX_EDITS / 2)
+    const b = DEFAULT_MAX_EDITS - a
     // All-distinct streams: the edit distance is the summed length.
-    expect(wordDiff(distinct(half, 'alpha'), distinct(half, 'beta'))).not.toBeNull() // exactly DEFAULT_MAX_EDITS edits
-    expect(wordDiff(distinct(half, 'alpha'), distinct(half + 1, 'beta'))).toBeNull() // ONE over: the bound is exact
+    expect(wordDiff(distinct(a, 'alpha'), distinct(b, 'beta'))).not.toBeNull() // exactly DEFAULT_MAX_EDITS edits
+    expect(wordDiff(distinct(a, 'alpha'), distinct(b + 1, 'beta'))).toBeNull() // ONE over: the bound is exact
   })
 
   it('near-identical large texts diff cheaply under the default cutoff (Myers is ~linear here)', () => {

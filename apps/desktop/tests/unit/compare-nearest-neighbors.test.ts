@@ -99,7 +99,7 @@ describe('compareNearestNeighbors (P1) — running top-K is byte-identical to do
 })
 
 describe('compareNearestNeighbors (P1) — dotProduct ranks like cosine on L2-normalized vectors', () => {
-  it('… and so the full new helper equals the full old cosine path (the chained guarantee)', () => {
+  it('the full helper equals the old cosine sort + slice for every topK across many queries (the chained guarantee)', () => {
     for (const topK of [1, 3, 5, 12]) {
       for (let q = 0; q < 50; q++) {
         const vec = unitVec(q)
