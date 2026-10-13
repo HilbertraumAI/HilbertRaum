@@ -2530,7 +2530,10 @@ prompt content (DR3)") allows it only inside that block, so a future re-capture 
 prompt fails the suite. Second, the four logs committed as test fixtures
 (`apps/desktop/tests/fixtures/placement-b9849-*.txt`) are HAND-redacted raw captures of the app's
 argv — a human replaced the drive path with `<drive>` — and are evidence about what llama.cpp
-prints, not about the sidecar's redaction. The sidecar's own guarantee is exactly the one above:
+prints, not about the sidecar's redaction. The same holds for the later b11146 captures: the #512
+one, and two load-only ones from #653, cut before any request, whose model path a script replaced
+with `<drive>` and refused to write while any home-directory path remained. The guard reads all
+seven. The sidecar's own guarantee is exactly the one above:
 the in-memory 4,000-character tail cap plus `redactExactKey` at the drain and
 `redactSidecarSecrets` at read time, with nothing written to disk.
 

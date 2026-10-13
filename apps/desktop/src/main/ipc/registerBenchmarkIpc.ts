@@ -92,8 +92,9 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * the previous machine's devices, and they decided the memory class, the VRAM budget and the
  * graphics tile there. Readers go through `eligibleGpuProbe`. The write rules, as merged from
  * the two audits: EVERY path that reaches the write persists THIS session's answer, stamped —
- * a probe that resolves (an empty list included: `probeGpuDevices` maps its failures to `[]` by
- * contract — except its kill-timeout, which resolves `null`, the #380 exception below), a probe
+ * a probe that resolves (an empty list included — `probeGpuDevices` answers `[]` only for an exit 0
+ * that named no device or a binary the integrity check refused; everything else that is not an
+ * answer resolves `null`, the #380 exception below), a probe
  * that CANNOT run (no binary resolves, no session probe) and a probe that
  * THREW all replace the old result with `{ devices, probedAt, machineKey: hereKey }` and notify
  * (PR #308 audit decision 6, findings R3/R5; GPU record §5.4). #303's "no binary → no write"
@@ -116,6 +117,11 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * there would be exactly the #330 failure: the driver never answered under the weight upload,
  * and a card machine was recorded (and labelled, and RAM-classed) as having none. Every OTHER
  * path is unchanged — an empty list, a missing binary and a thrower all still write.
+ *
+ * #530 and #653 widen what `null` covers, not this rule: a program the OS refused, and a probe
+ * that crashed (a Vulkan driver dying during enumeration) or could not be spawned (EMFILE, …), are
+ * not answers either. Before #653 the crash wrote `[]` here — and so did #669's heal re-probe
+ * (`reprobeGpu`), which could re-stamp a card machine as having none.
  */
 export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let devices: GpuDevice[] = []
@@ -153,13 +159,13 @@ export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkI
       // FAILURE plus attempt a (refused) empty write — neither is true here, so return the empty
       // summary without touching the DB at all.
       if (!workspaceAdmitsWork(ctx.workspace)) {
-        log.info('GPU probe gave no answer (timed out, or the engine could not start); workspace locked meanwhile')
+        log.info('GPU probe gave no answer (timed out, crashed, or the engine could not start); workspace locked meanwhile')
         return gpuSummary(
           [],
           nextStartMemory({ platform: process.platform, arch: process.arch, devices: [], gpuMode, gpuAutoDisabled })
         )
       }
-      log.info('GPU probe gave no answer (timed out, or the engine could not start — #530); the stored probe stands until the next start or check')
+      log.info('GPU probe gave no answer (timed out, crashed, or the engine could not start — #530, #653); the stored probe stands until the next start or check')
       devices = eligibleDevicesFor(getSettings(ctx.db), hereKey)
     } else {
       devices = probed
@@ -665,7 +671,10 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
     // first run never stored a result (failed, cancelled by a lock) auto-started its model beside
     // the ladder's own probe — and a probe that answered mid-upload was cached and persisted with
     // the chat model already on the card, a baseline the reranker gate then subtracted chat from
-    // twice. Only a TIMED-OUT probe was ever re-taken on an idle driver.
+    // twice. Only a TIMED-OUT probe was ever re-taken on an idle driver. A probe that gives no
+    // answer HERE (a timeout, a refusal, since #653 a crash) still leaves the ladder's own probe
+    // to run beside the upload, and an answer there is the session's: accepted, rare, and on
+    // NVIDIA/Windows harmless (its free figure does not move, #318).
     probed = probeAndPersistGpu(ctx).then(
       () => undefined,
       () => undefined
@@ -877,8 +886,9 @@ export function maybeRunFirstBenchmark(ctx: AppContext): Promise<FirstBenchmarkO
  * pulled) stays the session's answer and would keep labeling the machine wrongly. Invalidate
  * the cache, clear the flags (and push — A-D1), re-probe + persist, and hand the renderer the
  * fresh settings. Since #380 a probe that TIMED OUT is not cached at all (it resolves `null`
- * and drops its own entry), so this button is no longer the only escape from a wedged driver —
- * it is the user's override for an answer that is stale rather than absent.
+ * and drops its own entry; since #653 so does one that crashed or could not be spawned), so
+ * this button is no longer the only escape from a wedged driver — it is the user's override for
+ * an answer that is stale rather than absent.
  *
  * #182: the session latch that switches the speculative rung off after one bad attempt is
  * the same shape of sticky, hardware-derived "no" — this button is the user asking for the
@@ -892,11 +902,12 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
   // The cleared flags are snapshot inputs of their own (`cpuOnly` → the resident rows, the
   // effective class, the verdict), so this write pushes right here (PR #303 audit A-D1): the
   // probe's own push follows its WRITE — on this branch every path writes (PR #308 decision 6:
-  // the empty stamped probe when the probe cannot run or threw) EXCEPT the timed-out probe,
-  // which is unknown and writes nothing (#380), but only after the probe has run, and under
-  // #303's no-write paths the screen used to keep its processor-forced rows until something
-  // else pushed. The second push, after the re-probe's write, is idempotent — the renderer
-  // serialises its refetches; a timed-out re-probe simply leaves this first push as the only one.
+  // the empty stamped probe when the probe cannot run or threw) EXCEPT a probe that gave no
+  // answer — timed out (#380), refused (#530), crashed or failed to spawn (#653) — which is
+  // unknown and writes nothing, but only after the probe has run, and under #303's no-write
+  // paths the screen used to keep its processor-forced rows until something else pushed. The
+  // second push, after the re-probe's write, is idempotent — the renderer serialises its
+  // refetches; a re-probe that gives no answer simply leaves this first push as the only one.
   notifyPerformanceChanged()
   await probeAndPersistGpu(ctx)
   return getSettings(ctx.db)

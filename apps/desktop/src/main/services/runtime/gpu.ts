@@ -7,7 +7,9 @@ import {
   classifyLoadFailure,
   classifySpawnError,
   clearEngineProblemFor,
+  describeExit,
   describeLoadFailure,
+  pathFreeSpawnError,
   reportEngineProblem,
   type LoadFailure
 } from './engine-load'
@@ -21,10 +23,12 @@ import type { ChildProcessLike, SpawnFn } from './sidecar'
 //
 // The probe can prove enumeration only, never stable inference — the start LADDER in
 // factory.ts is the actual guarantee; this feeds the UI label, Diagnostics, and the
-// conservative classifyProfile bump. Never throws: any failure → `[]` (an ANSWER: "this
-// machine enumerates no device") EXCEPT the kill-timeout → `null` (UNKNOWN: the driver
-// never answered), which is never cached and never persisted (#380), and a program the OS
-// loader refused → `null` too, recorded as the session's engine verdict (#530).
+// conservative classifyProfile bump. Never throws. An exit 0 is an ANSWER — the parsed list, `[]`
+// when it names no device ("this machine enumerates no device"). Everything that is not an answer
+// resolves `null` (UNKNOWN), which is never cached and never persisted: the kill-timeout (the
+// driver never answered, #380), a program the OS loader refused (recorded as the session's engine
+// verdict, #530), and since #653 a crash (any other non-zero exit or signal) or a spawn that failed
+// for another reason. Only a binary the integrity check refuses still reads `[]`.
 
 /**
  * Kill the probe child after this long; a wedged driver must not stall startup.
@@ -90,21 +94,29 @@ const PROBE_STDERR_MAX = 4000
 
 /**
  * Spawn `<binPath> --list-devices`, parse stdout, and resolve the device list. Bounded
- * by a kill-timeout; NEVER throws/rejects — a missing binary, spawn error, non-zero exit
- * or a failed pre-spawn integrity check all resolve to `[]`, which reads as "no usable
- * GPU" because that is what those cases MEAN: the machine answered, and the answer was
- * nothing.
+ * by a kill-timeout; NEVER throws/rejects. An exit 0 is the machine's answer: the devices it
+ * printed, or `[]` when it printed none (b11146 writes `(none)` under the header, b9849 the
+ * header alone), which reads as "no usable GPU". A failed pre-spawn integrity check resolves
+ * `[]` too (owner call 3, #653: the integrity paths keep `[]`). For a tampered binary that is
+ * right — it will not run here, for the probe or for the server. The verifier also reports a
+ * transient read failure (an antivirus lock while hashing) as `mismatch`, and that one then reads
+ * "no GPU" for the session although the server may start a moment later: a known residual.
  *
- * The kill-timeout is the one case that is not an answer, so it resolves `null` — UNKNOWN
- * (#380). Callers must not read `null` as "no GPU": the session cache drops it (the next
- * caller re-probes), `probeAndPersistGpu` writes nothing (the stored probe stands) and the
- * start ladder labels the rung from the load log instead.
- *
- * #530: a program the OS loader REFUSED (a missing system library, a system too old, a missing
- * Windows runtime, a code-integrity block) is not an answer either — the engine never ran, so it
- * could not have enumerated anything. It resolves `null` like the timeout, and the refusal is
- * recorded as the session's engine verdict (`engine-load.ts`). Before #530 it was cached and
- * persisted as "no graphics card", which fed the Performance tile, the ★ pick and the profile.
+ * Every other outcome is not an answer and resolves `null` — UNKNOWN. Callers must not read
+ * `null` as "no GPU": the session cache drops it (the next caller re-probes),
+ * `probeAndPersistGpu` writes nothing (the stored probe stands) and the start ladder labels
+ * the rung from this start's own load log instead. The cases:
+ *  - the kill-timeout (#380): the driver never answered, under a weight upload say;
+ *  - a program the OS loader REFUSED (#530: a missing system library, a system too old, a
+ *    missing Windows runtime, a code-integrity block) — the engine never ran, and the refusal
+ *    is recorded as the session's engine verdict (`engine-load.ts`);
+ *  - #653: any other non-zero exit or signal (a Vulkan driver crashing during enumeration:
+ *    Windows 0xC0000005, a Linux SIGSEGV) and a spawn that failed for any other reason (EMFILE,
+ *    EAGAIN, ENOMEM, a POSIX ENOENT or EACCES). Before #653 these resolved `[]`, which was
+ *    cached for the session and persisted as "no graphics card": the Performance tile read
+ *    "None", the ★ pick and the memory class came from RAM, the #473 card gates switched off,
+ *    and a card start was labelled cpu (so a GPU crash took the #599 path, not §5.3).
+ * Before #380 / #530 the first two were cached and persisted the same way.
  */
 export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promise<GpuDevice[] | null> {
   const spawn = deps.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts))
@@ -113,7 +125,7 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
 
   // #516: an engine install replacing this folder holds spawns until its swap is over.
   await waitForEngineSpawns('llama_cpp')
-  // Refuse a tampered binary the same way a missing one reads: no GPU. Never throws.
+  // Refuse a tampered binary: no GPU (see the note above for a transient read failure). Never throws.
   let verification: BinaryVerifyResult
   try {
     verification = await verify(binPath)
@@ -123,6 +135,13 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
   if (verification === 'mismatch') return []
 
   return new Promise<GpuDevice[] | null>((resolve) => {
+    /** #653: the probe ran into something other than an answer or a refusal. Logs only; the caller resolves `null`. */
+    const logNoAnswer = (detail: string, stderrTail = ''): void => {
+      log.warn('The device probe gave no answer; read as unknown, not "no graphics card"', {
+        detail,
+        ...(stderrTail ? { stderr: stderrTail } : {})
+      })
+    }
     /** #530: the OS refused the program — log once (local, path included) and record the verdict. */
     const recordRefusal = (failure: LoadFailure, detail: string): void => {
       log.warn('The device probe could not start the AI engine — the operating system refused it', {
@@ -149,7 +168,9 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
         resolve(null)
         return
       }
-      resolve([])
+      // #653: the probe never ran, so nothing was enumerated — not "no graphics card".
+      logNoAnswer(pathFreeSpawnError(err))
+      resolve(null)
       return
     }
     // REL-8: detach from the parent event loop so a wedged probe (cold/hung driver) can never
@@ -166,13 +187,14 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
       resolve(devices)
     }
     const timer = setTimeout(() => {
+      // #380: the driver never answered — UNKNOWN, not "no GPU". The child is still killed. Settled
+      // first (#653), so whatever the kill makes the child report next is never read as an answer.
+      finish(null)
       try {
         child.kill('SIGKILL')
       } catch {
         /* best-effort */
       }
-      // #380: the driver never answered — UNKNOWN, not "no GPU". The child is still killed.
-      finish(null)
     }, timeoutMs)
 
     child.stdout?.on('data', (chunk: unknown) => {
@@ -190,14 +212,19 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
         finish(null)
         return
       }
-      finish([])
+      // The kill-timeout already settled this probe (#380): what the killed child reports next is
+      // the kill, not a second non-answer, and is not logged as one (#653).
+      if (settled) return
+      logNoAnswer(pathFreeSpawnError(err)) // #653, as the synchronous throw above
+      finish(null)
     })
     // Resolve on 'close', not 'exit': 'exit' can fire while probe output is still
     // buffered in the pipe (Node delivers it afterwards), which would truncate the
     // parse into a false-empty device list. 'close' fires only after stdio drained.
     child.once('close', (code: unknown, signal: unknown) => {
       if (code === 0) {
-        // #530: the program ran — a refusal recorded against THIS binary is stale.
+        // #530: the program ran — a refusal recorded against THIS binary is stale. Even when it
+        // exited just as the kill-timeout settled the probe: it still proves the program runs.
         clearEngineProblemFor('llama_cpp', binPath)
         finish(parseListDevices(stdout))
         return
@@ -215,7 +242,14 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
         finish(null)
         return
       }
-      finish([])
+      if (settled) return // the kill-timeout's own SIGKILL, as above
+      // #653: it ran and died before answering (a driver crash during enumeration, say). Not an
+      // engine verdict — the server may well start a moment later — and not "no device" either.
+      logNoAnswer(
+        describeExit(typeof code === 'number' ? code : null, typeof signal === 'string' ? signal : null),
+        stderr.trim().slice(-1000)
+      )
+      finish(null)
     })
   })
 }
@@ -230,8 +264,9 @@ export interface CachedGpuProbe {
    *
    * #380: a probe that TIMED OUT no longer needs this button — it resolves `null`
    * ("unknown") and drops itself from the cache the moment it settles, so the next
-   * caller re-probes on its own. `invalidate()` remains the user's override for a
-   * cached ANSWER (`[]` or a device list).
+   * caller re-probes on its own (since #653 so does a probe that crashed or failed to
+   * spawn). `invalidate()` remains the user's override for a cached ANSWER (`[]` or a
+   * device list).
    */
   invalidate(): void
 }
@@ -241,8 +276,9 @@ export interface CachedGpuProbe {
  * session (§5.1 "cached"), until `invalidate()`. The same cached fn feeds the start
  * ladder, Diagnostics, and the benchmark injection so they never disagree in-session.
  *
- * An ANSWER is cached (a device list, or `[]`); an UNKNOWN (`null`, the kill-timeout) is
- * NOT — the entry is dropped once it settles so the next caller re-probes (#380). The
+ * An ANSWER is cached (a device list, or `[]`); an UNKNOWN (`null`: the kill-timeout, a refusal,
+ * a crash, a failed spawn) is NOT — the entry is dropped once it settles so the next caller
+ * re-probes (#380, #530, #653). The
  * drop is identity-guarded, so it can never remove a NEWER entry filed for the same
  * binary in between.
  */

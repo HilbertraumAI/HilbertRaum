@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-05 #532 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #653 entry). Its records are unchanged:
+`architecture.md` "Engine load failures" §8 and design-guidelines §11.17. It named no open item; the `afterInstall` residual found
+later (a later `cpu/` report overwrites it) is #670, cited in the #654/#655/#658 entry. Citations of the form "BUILD_STATE 2026-10-05
+#532 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#532 — "Install the AI engine again" for an engine whose own files are damaged (`fix/532-engine-reinstall`).** `downloadEngine({ families,
+reinstall: true })`, admitted only for a `files-damaged` verdict; the demo runtime no longer counts as "engine in use" (CODE-13 polish, also first installs); the
+model restarts on the engine after any chat-engine install; a fresh copy refused again carries `afterInstall` (no loop; Windows → VC++ hint). Owner: offline Kits
+disabled + reason, main build only (`cpu/` kept), voice engine too, one click. Real app on DesktopDiT (DE/EN, light/dark). Record: "Engine load failures" §8, §11.17._
+
 ## 2026-10-13 — the closed 2026-10-05 #538/#574/#575/#576 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #654/#655/#658 entry). Its records are unchanged:
