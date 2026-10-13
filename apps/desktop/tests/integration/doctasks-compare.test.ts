@@ -1,15 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
-  documentsDir,
   getDocument,
   getDocumentOrigin,
   listDocuments,
-  processDocument,
   readStoredDocumentText,
   type IngestionDeps
 } from '../../src/main/services/ingestion'
@@ -17,7 +14,6 @@ import {
   COMPARE_MAP_CALL_CEILING,
   COMPARE_OUTPUT_TOKENS,
   COMPARE_TEMPERATURE,
-  DocTaskManager,
   TASK_COMPARE_PICK_TWO_MESSAGE,
   TASK_COMPARE_REINDEX_MESSAGE,
   TASK_DOCUMENT_NOT_READY_MESSAGE,
@@ -25,169 +21,71 @@ import {
   compareBudgetWords,
   compareTruncationNotice,
   compareRedlineHeading,
-  type DocTaskDeps
+  type DocTaskDeps,
+  type DocTaskManager
 } from '../../src/main/services/doctasks'
-import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
-import type { AuditEventType } from '../../src/shared/types'
+import { DIFF_RENDER_MAX } from '../../src/main/services/diff'
+import { listAuditEvents } from '../../src/main/services/audit'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
-import { hangBudgetMs } from '../helpers/hang-budget'
-import type {
-  ChatMessage,
-  ModelRuntime,
-  RuntimeChatOptions
-} from '../../src/main/services/runtime'
+import { until } from '../helpers/hang-budget'
+import {
+  dbAudit,
+  docTaskManager,
+  docTaskRuntime,
+  docTaskWorld,
+  importText,
+  importWords,
+  userPromptOf,
+  waitTerminal,
+  type DocRuntime,
+  type DocRuntimeCall,
+  type DocRuntimeOptions,
+  type DocTaskStatusOf,
+  type DocTaskWorld
+} from '../helpers/doctask-fixtures'
 
 // Phase 35 — the compare document task (wave-3 plan §8, decisions D28 + D37):
 // two-document validation, the auto mode switch by token math (single-pass full
 // compare vs section-matched map/reduce), the D37 segments-not-chunks input, the
 // embedder-visibility (staleEmbeddings) guard, deterministic vector pairing, the map
 // ceiling + honest truncation notice, report materialization with both-source
-// provenance, cancel-persists-nothing, the lease around exactly the materialize step,
-// and the ids-only audit events. CI posture: zero model, zero network.
+// provenance, cancel-persists-nothing, and the ids-only audit events (the materialize
+// lease is the shared `materializeDocument`'s, pinned in doctasks-translation.test.ts).
+// CI posture: zero model, zero network.
 
-let tmp: string
+let w: DocTaskWorld
 let db: Db
 let storeDir: string
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-doccmp-'))
-  db = openDatabase(join(tmp, 'test.sqlite'))
-  storeDir = documentsDir(join(tmp, 'workspace'))
+  w = docTaskWorld('doccmp')
+  ;({ db, storeDir } = w)
 })
-
-/** Import a .txt of `words` unique whitespace words through the REAL ingestion pipeline. */
-async function importDoc(
-  words: number,
-  name: string,
-  prefix: string,
-  deps: IngestionDeps = {}
-): Promise<string> {
-  const text = Array.from({ length: words }, (_, i) => `${prefix}${i}`).join(' ')
-  const p = join(tmp, name)
-  writeFileSync(p, text, 'utf8')
-  const info = createQueuedDocument(db, p)
-  const done = await processDocument(db, storeDir, info.id, deps)
-  expect(done.status).toBe('indexed')
-  return info.id
-}
-
-/** Import a .txt with EXACT text (for the diff path — two similar version strings). */
-async function importText(name: string, text: string, deps: IngestionDeps = {}): Promise<string> {
-  const p = join(tmp, name)
-  writeFileSync(p, text, 'utf8')
-  const info = createQueuedDocument(db, p)
-  const done = await processDocument(db, storeDir, info.id, deps)
-  expect(done.status).toBe('indexed')
-  return info.id
-}
 
 const REPORT =
   '## What both documents share\n- A shared point.\n\n## What differs between them\n- A difference.'
 
-interface ScriptedRuntimeOptions {
-  /** Reply per call; throwing fails that call. Default: per-prompt-kind canned replies. */
-  reply?: (call: { messages: ChatMessage[]; options?: RuntimeChatOptions }) => string
-  /** Delay (ms) before each token — lets cancel land mid-stream. */
-  tokenDelayMs?: number
-}
-
-interface ScriptedRuntime extends ModelRuntime {
-  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }>
-}
-
-function promptOf(call: { messages: ChatMessage[] }): string {
-  return call.messages[call.messages.length - 1]?.content ?? ''
-}
-
 /** Canned replies per call shape: pair notes for map calls, the REPORT otherwise. */
-function defaultReply(call: { messages: ChatMessage[] }): string {
-  return promptOf(call).includes('section by section') ? '- Same: a note.' : REPORT
+const compareReply = (call: DocRuntimeCall): string =>
+  userPromptOf(call).includes('section by section') ? '- Same: a note.' : REPORT
+const compareRuntime = (o: DocRuntimeOptions = {}): DocRuntime => docTaskRuntime({ reply: compareReply, ...o })
+/** Mode (b) needs a small window and an embedder the stored vectors are visible to. */
+const MODE_B: Partial<DocTaskDeps> = {
+  getContextTokens: () => 1024,
+  getIngestionDeps: () => ({ embedder: createMockEmbedder() })
 }
 
-function scriptedRuntime(opts: ScriptedRuntimeOptions = {}): ScriptedRuntime {
-  const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
-    new Promise((resolve) => {
-      if (signal?.aborted) return resolve()
-      const t = setTimeout(resolve, ms)
-      signal?.addEventListener('abort', () => {
-        clearTimeout(t)
-        resolve()
-      })
-    })
-  const runtime: ScriptedRuntime = {
-    modelId: 'scripted-model',
-    calls: [],
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      const call = { messages, options }
-      runtime.calls.push(call)
-      const text = opts.reply ? opts.reply(call) : defaultReply(call)
-      for (const token of text.match(/\S+\s*/g) ?? [text]) {
-        if (options?.signal?.aborted) return
-        if (opts.tokenDelayMs) await delay(opts.tokenDelayMs, options?.signal)
-        yield token
-      }
-    }
-  }
-  return runtime
-}
-
-interface ManagerOptions {
-  runtime?: ModelRuntime | null
-  contextTokens?: number
-  audit?: boolean
-  ingestionDeps?: () => IngestionDeps
-  beginDocumentWork?: DocTaskDeps['beginDocumentWork']
-}
-
-function makeManager(opts: ManagerOptions = {}): DocTaskManager {
-  return new DocTaskManager({
-    getDb: () => db,
-    getRuntime: () => (opts.runtime === undefined ? null : opts.runtime),
-    getTranslator: () => null,
-    isChatStreaming: () => false,
-    getContextTokens: () => opts.contextTokens ?? 4096,
-    getStoreDir: () => storeDir,
-    getIngestionDeps: opts.ingestionDeps ?? (() => ({})),
-    beginDocumentWork: opts.beginDocumentWork ?? (() => () => {}),
-    audit: opts.audit
-      ? (type, message, metadata) => recordEvent(db, type as AuditEventType, message, metadata)
-      : undefined
-  })
-}
-
-async function waitTerminal(
-  manager: DocTaskManager,
-  jobId: string
-): Promise<ReturnType<DocTaskManager['getDocTask']>> {
-  const start = Date.now()
-  for (;;) {
-    const status = manager.getDocTask(jobId)
-    if (status.state === 'done' || status.state === 'failed' || status.state === 'cancelled') {
-      return status
-    }
-    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task ${jobId} never finished: ${status.state}`)
-    await new Promise((r) => setTimeout(r, 10))
-  }
-}
-
-async function runCompare(
-  manager: DocTaskManager,
-  a: string,
-  b: string
-): Promise<ReturnType<DocTaskManager['getDocTask']>> {
+async function runCompare(manager: DocTaskManager, a: string, b: string): Promise<DocTaskStatusOf> {
   const { jobId } = manager.startDocTask({ kind: 'compare', documentIds: [a, b] })
   return waitTerminal(manager, jobId)
 }
 
 describe('validation (exactly two distinct ready documents)', () => {
   it('refuses one, three, or duplicate document ids with friendly copy', async () => {
-    const a = await importDoc(50, 'a.txt', 'alpha')
-    const b = await importDoc(50, 'b.txt', 'beta')
-    const manager = makeManager({ runtime: scriptedRuntime() })
+    const a = await importWords(w, 50, { name: 'a.txt', prefix: 'alpha' })
+    const b = await importWords(w, 50, { name: 'b.txt', prefix: 'beta' })
+    const manager = docTaskManager(w, { getRuntime: () => compareRuntime() })
     for (const ids of [[a], [a, b, a], [a, a], []]) {
       expect(() => manager.startDocTask({ kind: 'compare', documentIds: ids })).toThrow(
         TASK_COMPARE_PICK_TWO_MESSAGE
@@ -196,11 +94,11 @@ describe('validation (exactly two distinct ready documents)', () => {
   })
 
   it('refuses when either document is not ready', async () => {
-    const a = await importDoc(50, 'a.txt', 'alpha')
-    const p = join(tmp, 'pending.txt')
+    const a = await importWords(w, 50, { name: 'a.txt', prefix: 'alpha' })
+    const p = join(w.root, 'pending.txt')
     writeFileSync(p, 'hello world', 'utf8')
     const queued = createQueuedDocument(db, p)
-    const manager = makeManager({ runtime: scriptedRuntime() })
+    const manager = docTaskManager(w, { getRuntime: () => compareRuntime() })
     expect(() =>
       manager.startDocTask({ kind: 'compare', documentIds: [a, queued.id] })
     ).toThrow(TASK_DOCUMENT_NOT_READY_MESSAGE)
@@ -215,11 +113,12 @@ describe('mode (a) — small-docs full compare (D37: re-extracted segments)', ()
     // 600 unique words each: more than one 500-token chunk, so the STORED chunks
     // overlap by ~80 tokens — but the prompt must carry each word exactly ONCE (D37:
     // segments, not chunks). At ctx 4096 the budget is 2526 words, so 1200 total
-    // still fits a single pass.
-    const a = await importDoc(600, 'a.txt', 'alpha')
-    const b = await importDoc(600, 'b.txt', 'beta')
-    const runtime = scriptedRuntime()
-    const manager = makeManager({ runtime, audit: true })
+    // still fits a single pass. No embedder anywhere in this world (import or manager):
+    // mode (a) must not need vectors — the guard only mode (b) runs.
+    const a = await importWords(w, 600, { name: 'a.txt', prefix: 'alpha' })
+    const b = await importWords(w, 600, { name: 'b.txt', prefix: 'beta' })
+    const runtime = compareRuntime()
+    const manager = docTaskManager(w, { getRuntime: () => runtime, audit: dbAudit(db) })
 
     const status = await runCompare(manager, a, b)
     expect(status.state).toBe('done')
@@ -230,7 +129,7 @@ describe('mode (a) — small-docs full compare (D37: re-extracted segments)', ()
 
     // The single prompt carries both documents' full texts — every word exactly once
     // (chunk concatenation would duplicate the ~80-token overlap, e.g. alpha450).
-    const prompt = promptOf(runtime.calls[0])
+    const prompt = userPromptOf(runtime.calls[0])
     expect(prompt).toContain('Document A ("a.txt")')
     expect(prompt).toContain('Document B ("b.txt")')
     for (const probe of ['alpha450 ', 'alpha0 ', 'beta450 ']) {
@@ -269,14 +168,6 @@ describe('mode (a) — small-docs full compare (D37: re-extracted segments)', ()
     // No transient survived.
     expect(readdirSync(storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
   })
-
-  it('mode (a) needs NO vectors — two small docs without an embedder still compare', async () => {
-    const a = await importDoc(80, 'a.txt', 'alpha')
-    const b = await importDoc(80, 'b.txt', 'beta')
-    const manager = makeManager({ runtime: scriptedRuntime() })
-    const status = await runCompare(manager, a, b)
-    expect(status.state).toBe('done')
-  })
 })
 
 describe('mode (d) — diff-driven compare (similar version pairs, the what-changed case)', () => {
@@ -286,15 +177,15 @@ describe('mode (d) — diff-driven compare (similar version pairs, the what-chan
     const base = Array.from({ length: 300 }, (_, i) => `word${i}`)
     const withWord = base.slice(0, 150).concat(['tempor'], base.slice(150)).join(' ')
     const without = base.join(' ')
-    const a = await importText('v1.txt', withWord)
-    const b = await importText('v2.txt', without)
-    const rt = scriptedRuntime()
-    const status = await runCompare(makeManager({ runtime: rt }), a, b)
+    const a = await importText(w, withWord, { name: 'v1.txt' })
+    const b = await importText(w, without, { name: 'v2.txt' })
+    const rt = compareRuntime()
+    const status = await runCompare(docTaskManager(w, { getRuntime: () => rt }), a, b)
 
     expect(status.state).toBe('done')
     // Exactly ONE model call — to INTERPRET the deterministic change list (not eyeball two walls).
     expect(rt.calls).toHaveLength(1)
-    const prompt = promptOf(rt.calls[0])
+    const prompt = userPromptOf(rt.calls[0])
     expect(prompt).toContain('deterministic word-level comparison')
     expect(prompt).toContain('Removed: "tempor"') // the exact change is handed to the model
     // The materialized document leads with the deterministic redline showing the exact deletion.
@@ -302,14 +193,15 @@ describe('mode (d) — diff-driven compare (similar version pairs, the what-chan
     expect(text).toContain(compareRedlineHeading())
     expect(text).toContain('~~tempor~~')
     expect(text).not.toContain('covers the beginning')
+    expect(text).not.toContain('This change list is PARTIAL') // one change: the full list is shown
   })
 
   it('identical documents: deterministic "textually identical" report, NO model call', async () => {
     const same = Array.from({ length: 200 }, (_, i) => `same${i}`).join(' ')
-    const a = await importText('id1.txt', same)
-    const b = await importText('id2.txt', same)
-    const rt = scriptedRuntime()
-    const status = await runCompare(makeManager({ runtime: rt }), a, b)
+    const a = await importText(w, same, { name: 'id1.txt' })
+    const b = await importText(w, same, { name: 'id2.txt' })
+    const rt = compareRuntime()
+    const status = await runCompare(docTaskManager(w, { getRuntime: () => rt }), a, b)
 
     expect(status.state).toBe('done')
     expect(rt.calls).toHaveLength(0) // the word diff is ground truth — no model needed
@@ -318,15 +210,32 @@ describe('mode (d) — diff-driven compare (similar version pairs, the what-chan
     expect(text).toContain('textually identical')
   })
 
+  it('a change list past DIFF_RENDER_MAX materializes the PARTIAL note under the redline heading (SK-2)', async () => {
+    // DIFF_RENDER_MAX + 1 one-word changes, three equal words apart: a version pair (changed share ≈ 0.4) whose
+    // capped list still fits an 8 k window's per-call budget, so mode (d) runs and its render cap fires.
+    const version = (p: string): string =>
+      Array.from({ length: DIFF_RENDER_MAX + 1 }, (_, i) => `${p}${i}`).join(' keep keep keep ')
+    const a = await importText(w, version('A'), { name: 'v1.txt' })
+    const b = await importText(w, version('B'), { name: 'v2.txt' })
+    const rt = compareRuntime()
+    const status = await runCompare(docTaskManager(w, { getRuntime: () => rt, getContextTokens: () => 8192 }), a, b)
+    expect(status.state).toBe('done')
+    expect(userPromptOf(rt.calls[0])).toContain('(+1 further change(s) not listed)') // mode (d), capped list
+    const { text } = await readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
+    const heading = text.indexOf(compareRedlineHeading())
+    expect(heading).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf('> **This change list is PARTIAL**')).toBeGreaterThan(heading) // under the heading
+  })
+
   it('a full rewrite (all words differ) falls back to the thematic modes — NOT a giant redline', async () => {
     // 100% different → the diff is abandoned (equal share 0) and the existing single-pass mode runs.
-    const a = await importText('r1.txt', Array.from({ length: 120 }, (_, i) => `aa${i}`).join(' '))
-    const b = await importText('r2.txt', Array.from({ length: 120 }, (_, i) => `bb${i}`).join(' '))
-    const rt = scriptedRuntime()
-    const status = await runCompare(makeManager({ runtime: rt }), a, b)
+    const a = await importText(w, Array.from({ length: 120 }, (_, i) => `aa${i}`).join(' '), { name: 'r1.txt' })
+    const b = await importText(w, Array.from({ length: 120 }, (_, i) => `bb${i}`).join(' '), { name: 'r2.txt' })
+    const rt = compareRuntime()
+    const status = await runCompare(docTaskManager(w, { getRuntime: () => rt }), a, b)
 
     expect(status.state).toBe('done')
-    const prompt = promptOf(rt.calls[0])
+    const prompt = userPromptOf(rt.calls[0])
     expect(prompt).toContain('Compare document A') // mode (a) fallback, not the diff prompt
     const { text } = await readStoredDocumentText(db, storeDir, status.resultRef?.documentId as string)
     expect(text).not.toContain(compareRedlineHeading())
@@ -342,51 +251,45 @@ describe('the mode switch (token math boundary)', () => {
 
     // wordsA + wordsB == budget → mode (a): exactly one model call.
     const half = Math.floor(budget / 2)
-    const a1 = await importDoc(half, 'a1.txt', 'alpha', { embedder })
-    const b1 = await importDoc(budget - half, 'b1.txt', 'beta', { embedder })
-    const rt1 = scriptedRuntime()
+    const a1 = await importWords(w, half, { name: 'a1.txt', prefix: 'alpha', deps: { embedder } })
+    const b1 = await importWords(w, budget - half, { name: 'b1.txt', prefix: 'beta', deps: { embedder } })
+    const rt1 = compareRuntime()
     const status1 = await runCompare(
-      makeManager({ runtime: rt1, contextTokens: ctx, ingestionDeps: deps }),
+      docTaskManager(w, { getRuntime: () => rt1, getContextTokens: () => ctx, getIngestionDeps: deps }),
       a1,
       b1
     )
     expect(status1.state).toBe('done')
     expect(rt1.calls).toHaveLength(1)
-    expect(promptOf(rt1.calls[0])).toContain('Compare document A')
+    expect(userPromptOf(rt1.calls[0])).toContain('Compare document A')
 
     // One word more → mode (b): map call(s) + a reduce.
-    const a2 = await importDoc(half + 1, 'a2.txt', 'gamma', { embedder })
-    const b2 = await importDoc(budget - half, 'b2.txt', 'delta', { embedder })
-    const rt2 = scriptedRuntime()
+    const a2 = await importWords(w, half + 1, { name: 'a2.txt', prefix: 'gamma', deps: { embedder } })
+    const b2 = await importWords(w, budget - half, { name: 'b2.txt', prefix: 'delta', deps: { embedder } })
+    const rt2 = compareRuntime()
     const status2 = await runCompare(
-      makeManager({ runtime: rt2, contextTokens: ctx, ingestionDeps: deps }),
+      docTaskManager(w, { getRuntime: () => rt2, getContextTokens: () => ctx, getIngestionDeps: deps }),
       a2,
       b2
     )
     expect(status2.state).toBe('done')
     expect(rt2.calls.length).toBeGreaterThan(1)
-    expect(promptOf(rt2.calls[0])).toContain('section by section')
-    expect(promptOf(rt2.calls[rt2.calls.length - 1])).toContain('comparison notes')
+    expect(userPromptOf(rt2.calls[0])).toContain('section by section')
+    expect(userPromptOf(rt2.calls[rt2.calls.length - 1])).toContain('comparison notes')
   })
 })
 
 describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
   it('pairs each A window with retrieved doc-B excerpts; pairing is deterministic', async () => {
-    const ctx = 1024
     const embedder = createMockEmbedder()
-    const a = await importDoc(150, 'a.txt', 'alpha', { embedder })
-    const b = await importDoc(150, 'b.txt', 'beta', { embedder })
-    const deps = (): IngestionDeps => ({ embedder: createMockEmbedder() })
+    const a = await importWords(w, 150, { name: 'a.txt', prefix: 'alpha', deps: { embedder } })
+    const b = await importWords(w, 150, { name: 'b.txt', prefix: 'beta', deps: { embedder } })
 
     const run = async (): Promise<string[]> => {
-      const rt = scriptedRuntime()
-      const status = await runCompare(
-        makeManager({ runtime: rt, contextTokens: ctx, ingestionDeps: deps }),
-        a,
-        b
-      )
+      const rt = compareRuntime()
+      const status = await runCompare(docTaskManager(w, { getRuntime: () => rt, ...MODE_B }), a, b)
       expect(status.state).toBe('done')
-      return rt.calls.map(promptOf)
+      return rt.calls.map(userPromptOf)
     }
 
     const first = await run()
@@ -410,21 +313,12 @@ describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
   })
 
   it('caps the map calls at the ceiling and adds the honest truncation notice', async () => {
-    const ctx = 1024
     const embedder = createMockEmbedder()
     // ~1640 words of chunk text → far more A windows than the ceiling permits.
-    const a = await importDoc(1400, 'a.txt', 'alpha', { embedder })
-    const b = await importDoc(150, 'b.txt', 'beta', { embedder })
-    const rt = scriptedRuntime()
-    const status = await runCompare(
-      makeManager({
-        runtime: rt,
-        contextTokens: ctx,
-        ingestionDeps: () => ({ embedder: createMockEmbedder() })
-      }),
-      a,
-      b
-    )
+    const a = await importWords(w, 1400, { name: 'a.txt', prefix: 'alpha', deps: { embedder } })
+    const b = await importWords(w, 150, { name: 'b.txt', prefix: 'beta', deps: { embedder } })
+    const rt = compareRuntime()
+    const status = await runCompare(docTaskManager(w, { getRuntime: () => rt, ...MODE_B }), a, b)
     expect(status.state).toBe('done')
     expect(rt.calls).toHaveLength(COMPARE_MAP_CALL_CEILING + 1) // capped maps + reduce
     expect(status.progress.stepsTotal).toBe(COMPARE_MAP_CALL_CEILING + 2)
@@ -433,13 +327,12 @@ describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
   })
 
   it('skips a physically truncated stored vector instead of failing the whole compare [DATA-2]', async () => {
-    const ctx = 1024
     const embedder = createMockEmbedder()
     // ~1200 words each → multiple stored chunks per doc, so truncating ONE vector still leaves
     // valid pairing candidates. Mode (b) decodes BOTH sides' stored vectors (manager.ts compare
     // path), the two call sites DATA-2 flags.
-    const a = await importDoc(1200, 'a.txt', 'alpha', { embedder })
-    const b = await importDoc(1200, 'b.txt', 'beta', { embedder })
+    const a = await importWords(w, 1200, { name: 'a.txt', prefix: 'alpha', deps: { embedder } })
+    const b = await importWords(w, 1200, { name: 'b.txt', prefix: 'beta', deps: { embedder } })
 
     // Physically truncate the FIRST stored vector of each document (a partial write). The
     // `dimensions` column still claims 384, so the dimension guard doesn't catch it — the OLD
@@ -460,22 +353,13 @@ describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
       )
     }
 
-    const status = await runCompare(
-      makeManager({
-        runtime: scriptedRuntime(),
-        contextTokens: ctx,
-        ingestionDeps: () => ({ embedder: createMockEmbedder() })
-      }),
-      a,
-      b
-    )
+    const status = await runCompare(docTaskManager(w, { getRuntime: () => compareRuntime(), ...MODE_B }), a, b)
     // The corrupt rows were skipped and the compare completed — no thrown RangeError.
     expect(status.state).toBe('done')
     expect(getDocument(db, status.resultRef?.documentId as string)?.status).toBe('indexed')
   })
 
   it('fails friendly when either document is invisible to the active embedder (stale vectors)', async () => {
-    const ctx = 1024
     // Vectors exist, but under a LEGACY embedder id — the active (mock) embedder
     // cannot see them, so the pairing would silently come up empty. Fail friendly.
     const legacy: Embedder = {
@@ -483,35 +367,19 @@ describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
       dimensions: 4,
       embed: async (texts: string[]) => texts.map(() => new Float32Array([1, 0, 0, 0]))
     }
-    const a = await importDoc(150, 'a.txt', 'alpha', { embedder: legacy })
-    const b = await importDoc(150, 'b.txt', 'beta', { embedder: legacy })
-    const rt = scriptedRuntime()
-    const status = await runCompare(
-      makeManager({
-        runtime: rt,
-        contextTokens: ctx,
-        ingestionDeps: () => ({ embedder: createMockEmbedder() })
-      }),
-      a,
-      b
-    )
+    const a = await importWords(w, 150, { name: 'a.txt', prefix: 'alpha', deps: { embedder: legacy } })
+    const b = await importWords(w, 150, { name: 'b.txt', prefix: 'beta', deps: { embedder: legacy } })
+    const rt = compareRuntime()
+    const status = await runCompare(docTaskManager(w, { getRuntime: () => rt, ...MODE_B }), a, b)
     expect(status.state).toBe('failed')
     expect(status.error).toBe(TASK_COMPARE_REINDEX_MESSAGE)
     expect(rt.calls).toHaveLength(0) // failed BEFORE any model call
     expect(listDocuments(db)).toHaveLength(2) // nothing materialized
 
     // Same answer when the documents have no vectors at all.
-    const c = await importDoc(150, 'c.txt', 'gamma')
-    const d = await importDoc(150, 'd.txt', 'delta')
-    const status2 = await runCompare(
-      makeManager({
-        runtime: scriptedRuntime(),
-        contextTokens: ctx,
-        ingestionDeps: () => ({ embedder: createMockEmbedder() })
-      }),
-      c,
-      d
-    )
+    const c = await importWords(w, 150, { name: 'c.txt', prefix: 'gamma' })
+    const d = await importWords(w, 150, { name: 'd.txt', prefix: 'delta' })
+    const status2 = await runCompare(docTaskManager(w, { getRuntime: () => compareRuntime(), ...MODE_B }), c, d)
     expect(status2.state).toBe('failed')
     expect(status2.error).toBe(TASK_COMPARE_REINDEX_MESSAGE)
   })
@@ -519,46 +387,19 @@ describe('mode (b) — section-matched compare (vectors + map/reduce)', () => {
 
 describe('cancellation persists nothing', () => {
   it('cancel mid-compare leaves no output document and no transient files', async () => {
-    const a = await importDoc(600, 'a.txt', 'alpha')
-    const b = await importDoc(600, 'b.txt', 'beta')
-    const runtime = scriptedRuntime({ tokenDelayMs: 5 })
-    const manager = makeManager({ runtime })
+    const a = await importWords(w, 600, { name: 'a.txt', prefix: 'alpha' })
+    const b = await importWords(w, 600, { name: 'b.txt', prefix: 'beta' })
+    const runtime = compareRuntime({ tokenDelayMs: 5 })
+    const manager = docTaskManager(w, { getRuntime: () => runtime })
     const { jobId } = manager.startDocTask({ kind: 'compare', documentIds: [a, b] })
-    const start = Date.now()
-    while (manager.getDocTask(jobId).state !== 'running' || runtime.calls.length === 0) {
-      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('task never started')
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await until(
+      () => manager.getDocTask(jobId).state === 'running' && runtime.calls.length > 0,
+      'the compare call started'
+    )
     manager.cancelDocTask(jobId)
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('cancelled')
     expect(listDocuments(db)).toHaveLength(2) // the two sources only
     expect(readdirSync(storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
-  })
-})
-
-describe('the Phase-32 lease (held around exactly the materialize step)', () => {
-  it('acquires the lease AFTER the model call(s), releases it after import', async () => {
-    const a = await importDoc(80, 'a.txt', 'alpha')
-    const b = await importDoc(80, 'b.txt', 'beta')
-    const runtime = scriptedRuntime()
-    let acquired = 0
-    let released = 0
-    let callsAtAcquire = -1
-    const manager = makeManager({
-      runtime,
-      beginDocumentWork: () => {
-        acquired += 1
-        callsAtAcquire = runtime.calls.length
-        return () => {
-          released += 1
-        }
-      }
-    })
-    const status = await runCompare(manager, a, b)
-    expect(status.state).toBe('done')
-    expect(acquired).toBe(1)
-    expect(released).toBe(1)
-    expect(callsAtAcquire).toBe(1) // mode (a): the single compare call had finished
   })
 })

@@ -7751,8 +7751,8 @@ null and falls through to the existing modes. Both compare paths gained a **diff
 - *Tests.* `tests/unit/diff.test.ts` (the algorithm: the one-word-deletion regression, insert/replace/
   identical, the edit-cutoff → null, near-identical large texts, redline/model rendering);
   `doctasks-compare.test.ts` mode (d) block (one-word redline, identical short-circuit no model call,
-  rewrite → fallback); `rag-whole-doc-compare.test.ts` (chat diff path: exact changes reach the model,
-  identical, rewrite → whole-doc fallback).
+  rewrite → fallback, the SK-2 PARTIAL note past `DIFF_RENDER_MAX`); `rag-whole-doc-compare.test.ts`
+  (chat diff path: exact changes reach the model, identical, rewrite → whole-doc fallback).
 
 ### §21 Geometry-aware PDF bank-statement extraction (Phase 31, 2026-06-23, D50–D58)
 

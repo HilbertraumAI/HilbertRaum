@@ -2114,7 +2114,11 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   wording — true for BOTH truncation causes (budget *and* render cap drop later changes, never whole
   later sections). The doctask surface (`doctasks/handlers/compare.ts`) adds an explicit PARTIAL note
   under the `## Exact changes` heading of the materialized report when the same cap fires. Pinned by
-  [`tests/unit/rag-compare-diff-truncation.test.ts`](../apps/desktop/tests/unit/rag-compare-diff-truncation.test.ts).
+  [`tests/unit/rag-compare-diff-truncation.test.ts`](../apps/desktop/tests/unit/rag-compare-diff-truncation.test.ts)
+  (the chat read: flag → PARTIAL prompt) and
+  [`tests/integration/doctasks-compare.test.ts`](../apps/desktop/tests/integration/doctasks-compare.test.ts)
+  'a change list past DIFF_RENDER_MAX materializes the PARTIAL note under the redline heading (SK-2)' (the
+  doctask note).
 - **(a)** both full texts fit one pass — the existing single call over both, already symmetric.
 - **(c) symmetric both-trees** — when BOTH docs have a `ready` tree under the same active embedder AND
   the smaller doc has ≤ `SYMMETRIC_COMPARE_CALL_CEILING` (24) level-1 sections. Align each tree's

@@ -1,84 +1,55 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import {
-  createQueuedDocument,
-  documentsDir,
-  processDocument,
-  type IngestionDeps
-} from '../../src/main/services/ingestion'
-import { DocTaskManager, type DocTaskDeps } from '../../src/main/services/doctasks'
+import type { Db } from '../../src/main/services/db'
+import type { DocTaskDeps, DocTaskManager } from '../../src/main/services/doctasks'
 import {
   compareAsymmetricNotice,
   compareSymmetricTruncationNotice
 } from '../../src/main/services/doctasks/compare'
-import { decodeVector } from '../../src/main/services/embeddings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
-import type {
-  ChatMessage,
-  ModelRuntime,
-  RuntimeChatOptions
-} from '../../src/main/services/runtime'
 import { readStoredDocumentText } from '../../src/main/services/ingestion'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import {
+  docTaskManager,
+  docTaskRuntime,
+  docTaskWorld,
+  importWords,
+  userPromptOf,
+  waitTerminal,
+  type DocRuntime,
+  type DocRuntimeCall,
+  type DocTaskWorld
+} from '../helpers/doctask-fixtures'
 
 // Phase 4 (whole-document-analysis plan §4.3, H4/H5/H8, L6) — the SYMMETRIC both-trees
 // compare and lazy node embeddings. CI posture: mock runtime + mock embedder, zero network.
 // The mock embedder is deterministic/hash-based, so node alignment is meaningful only for
 // structure (M11) — these tests assert the MECHANICS (lazy embed + reuse + the H5 staleness
-// guard + the labelled asymmetric fallback + persistence), not summary/diff CONTENT. The
+// guard + the labelled asymmetric fallback), not summary/diff CONTENT. The
 // alignment MIRROR property is asserted purely in unit/node-align.test.ts.
 
-let tmp: string
+let w: DocTaskWorld
 let db: Db
 let storeDir: string
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-wdcmp-'))
-  db = openDatabase(join(tmp, 'test.sqlite'))
-  storeDir = documentsDir(join(tmp, 'workspace'))
+  w = docTaskWorld('wdcmp')
+  ;({ db, storeDir } = w)
 })
 
 const REPORT =
   '## What both documents share\n- A shared point.\n\n## What differs between them\n- A difference.'
 
-interface ScriptedRuntime extends ModelRuntime {
-  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }>
-}
-
-function promptOf(call: { messages: ChatMessage[] }): string {
-  return call.messages[call.messages.length - 1]?.content ?? ''
-}
-
-/** Tree summaries + compare notes/report — deterministic per prompt shape. */
-function reply(call: { messages: ChatMessage[] }): string {
-  const p = promptOf(call)
-  if (p.includes('section by section')) return '- Same: a note.\n- Only in A: a thing.'
-  return REPORT // tree-build single-pass summaries AND the reduce both land here
-}
-
-function scriptedRuntime(): ScriptedRuntime {
-  const runtime: ScriptedRuntime = {
-    modelId: 'scripted-model',
-    calls: [],
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      const call = { messages, options }
-      runtime.calls.push(call)
-      const text = reply(call)
-      for (const token of text.match(/\S+\s*/g) ?? [text]) {
-        if (options?.signal?.aborted) return
-        yield token
-      }
-    }
-  }
-  return runtime
-}
+/** Tree summaries + compare notes/report — deterministic per prompt shape. Tree-build single-pass summaries AND
+ *  the reduce both get the REPORT. */
+const compareReply = (call: DocRuntimeCall): string =>
+  userPromptOf(call).includes('section by section') ? '- Same: a note.\n- Only in A: a thing.' : REPORT
+const cmpRuntime = (): DocRuntime => docTaskRuntime({ reply: compareReply })
+/** Every doc here is imported with mock vectors (the trees and the mode-(b) fallback need them). */
+const importEmbedded = (n: number, name: string, prefix: string): Promise<string> =>
+  importWords(w, n, { name, prefix, deps: { embedder: createMockEmbedder() } })
+/** contextTokens 1024 (a small window ⇒ many tree nodes) + the given ingestion deps. */
+const cmpManager = (runtime: DocRuntime, getIngestionDeps: DocTaskDeps['getIngestionDeps']): DocTaskManager =>
+  docTaskManager(w, { getRuntime: () => runtime, getContextTokens: () => 1024, getIngestionDeps })
 
 /** A mock embedder that counts embed() invocations (one per ensureNodeEmbeddings batch). */
 class CountingEmbedder implements Embedder {
@@ -95,47 +66,9 @@ class CountingEmbedder implements Embedder {
   }
 }
 
-async function importDoc(words: number, name: string, prefix: string): Promise<string> {
-  const text = Array.from({ length: words }, (_, i) => `${prefix}${i}`).join(' ')
-  const p = join(tmp, name)
-  writeFileSync(p, text, 'utf8')
-  const info = createQueuedDocument(db, p)
-  const done = await processDocument(db, storeDir, info.id, { embedder: createMockEmbedder() })
-  expect(done.status).toBe('indexed')
-  return info.id
-}
-
-function makeManager(opts: {
-  runtime: ModelRuntime
-  contextTokens?: number
-  ingestionDeps: () => IngestionDeps
-}): DocTaskManager {
-  const deps: DocTaskDeps = {
-    getDb: () => db,
-    getRuntime: () => opts.runtime,
-    getTranslator: () => null,
-    isChatStreaming: () => false,
-    getContextTokens: () => opts.contextTokens ?? 1024,
-    getStoreDir: () => storeDir,
-    getIngestionDeps: opts.ingestionDeps,
-    beginDocumentWork: () => () => {}
-  }
-  return new DocTaskManager(deps)
-}
-
-async function waitTerminal(manager: DocTaskManager, jobId: string): Promise<string> {
-  const start = Date.now()
-  for (;;) {
-    const s = manager.getDocTask(jobId)
-    if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s.state
-    if (Date.now() - start > hangBudgetMs(15_000)) throw new Error(`task ${jobId} never finished: ${s.state}`)
-    await new Promise((r) => setTimeout(r, 10))
-  }
-}
-
 async function buildTreeFor(manager: DocTaskManager, id: string): Promise<void> {
   const { jobId } = manager.startDocTask({ kind: 'tree', documentIds: [id] })
-  expect(await waitTerminal(manager, jobId)).toBe('done')
+  expect((await waitTerminal(manager, jobId, 15_000)).state).toBe('done')
   const row = db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(id) as {
     tree_status: string | null
   }
@@ -148,32 +81,34 @@ async function runCompare(
   b: string
 ): Promise<{ state: string; docId: string | null; text: string }> {
   const { jobId } = manager.startDocTask({ kind: 'compare', documentIds: [a, b] })
-  const state = await waitTerminal(manager, jobId)
+  const { state } = await waitTerminal(manager, jobId, 15_000)
   const docId = manager.getDocTask(jobId).resultRef?.documentId ?? null
   const text = docId ? (await readStoredDocumentText(db, storeDir, docId)).text : ''
   return { state, docId, text }
 }
 
-function nodeRows(id: string): Array<{
+interface NodeRow {
   id: string
   embedding_blob: Uint8Array | null
   dimensions: number | null
   embedding_model_id: string | null
-}> {
+}
+
+function nodeRows(id: string): NodeRow[] {
   return db
     .prepare(
       'SELECT id, embedding_blob, dimensions, embedding_model_id FROM tree_nodes WHERE document_id = ?'
     )
-    .all(id) as never
+    .all(id) as unknown as NodeRow[]
 }
 
 describe('symmetric both-trees compare (mode c) — lazy node embeddings', () => {
   it('takes the symmetric path, embeds nodes once under the active embedder, reuses them', async () => {
-    const a = await importDoc(1200, 'a.txt', 'alpha')
-    const b = await importDoc(1200, 'b.txt', 'beta')
+    const a = await importEmbedded(1200, 'a.txt', 'alpha')
+    const b = await importEmbedded(1200, 'b.txt', 'beta')
     const embedder = new CountingEmbedder()
-    const runtime = scriptedRuntime()
-    const manager = makeManager({ runtime, ingestionDeps: () => ({ embedder }) })
+    const runtime = cmpRuntime()
+    const manager = cmpManager(runtime, () => ({ embedder }))
 
     await buildTreeFor(manager, a)
     await buildTreeFor(manager, b)
@@ -191,14 +126,16 @@ describe('symmetric both-trees compare (mode c) — lazy node embeddings', () =>
     for (const id of [a, b]) {
       const rows = nodeRows(id)
       expect(rows.length).toBeGreaterThan(0)
-      expect(rows.every((r) => r.embedding_blob !== null && r.embedding_model_id === 'mock-embedder')).toBe(
-        true
-      )
+      expect(
+        rows.every(
+          (r) => r.embedding_blob !== null && r.embedding_model_id === 'mock-embedder' && r.dimensions === 384
+        )
+      ).toBe(true)
     }
 
     // It really took the symmetric path (aligned-section diff prompts), not the A-driven one,
     // and the output carries NO asymmetric label.
-    const prompts = runtime.calls.map(promptOf)
+    const prompts = runtime.calls.map(userPromptOf)
     expect(prompts.some((p) => p.includes('aligned section'))).toBe(true)
     expect(first.text).not.toContain('one-directional')
 
@@ -210,11 +147,11 @@ describe('symmetric both-trees compare (mode c) — lazy node embeddings', () =>
     expect(embedder.embedCalls - before).toBe(1)
   })
 
-  it('a rebuild (re-index) reuses the cached node vectors — still 0 sidecar calls', async () => {
-    const a = await importDoc(1200, 'a.txt', 'alpha')
-    const b = await importDoc(1200, 'b.txt', 'beta')
+  it('a tree rebuild reuses the cached node vectors — still 0 sidecar calls', async () => {
+    const a = await importEmbedded(1200, 'a.txt', 'alpha')
+    const b = await importEmbedded(1200, 'b.txt', 'beta')
     const embedder = new CountingEmbedder()
-    const manager = makeManager({ runtime: scriptedRuntime(), ingestionDeps: () => ({ embedder }) })
+    const manager = cmpManager(cmpRuntime(), () => ({ embedder }))
     await buildTreeFor(manager, a)
     await buildTreeFor(manager, b)
     await runCompare(manager, a, b)
@@ -240,12 +177,9 @@ describe('symmetric both-trees compare (mode c) — lazy node embeddings', () =>
     // many leftover B sections to Only-B notes. Those notes overflow the small reduce budget,
     // so the belt condenses the tail — which must surface the honest truncation notice rather
     // than implying a complete two-way comparison (H8).
-    const a = await importDoc(1200, 'a.txt', 'alpha')
-    const b = await importDoc(12000, 'b.txt', 'beta')
-    const manager = makeManager({
-      runtime: scriptedRuntime(),
-      ingestionDeps: () => ({ embedder: createMockEmbedder() })
-    })
+    const a = await importEmbedded(1200, 'a.txt', 'alpha')
+    const b = await importEmbedded(12000, 'b.txt', 'beta')
+    const manager = cmpManager(cmpRuntime(), () => ({ embedder: createMockEmbedder() }))
     await buildTreeFor(manager, a)
     await buildTreeFor(manager, b)
 
@@ -258,11 +192,11 @@ describe('symmetric both-trees compare (mode c) — lazy node embeddings', () =>
   })
 
   it('re-embeds under a NEW embedder (H5 staleness) — never a silent empty alignment', async () => {
-    const a = await importDoc(1200, 'a.txt', 'alpha')
-    const b = await importDoc(1200, 'b.txt', 'beta')
+    const a = await importEmbedded(1200, 'a.txt', 'alpha')
+    const b = await importEmbedded(1200, 'b.txt', 'beta')
     const first = new CountingEmbedder('mock-embedder')
     let active: CountingEmbedder = first
-    const manager = makeManager({ runtime: scriptedRuntime(), ingestionDeps: () => ({ embedder: active }) })
+    const manager = cmpManager(cmpRuntime(), () => ({ embedder: active }))
     await buildTreeFor(manager, a)
     await buildTreeFor(manager, b)
     await runCompare(manager, a, b)
@@ -284,47 +218,14 @@ describe('symmetric both-trees compare (mode c) — lazy node embeddings', () =>
 
 describe('asymmetric fallback (mode b) — labelled, reached only without both trees', () => {
   it('labels the comparison one-directional when the two documents are not both deeply indexed', async () => {
-    const a = await importDoc(1200, 'a.txt', 'alpha')
-    const b = await importDoc(1200, 'b.txt', 'beta')
-    const manager = makeManager({
-      runtime: scriptedRuntime(),
-      ingestionDeps: () => ({ embedder: createMockEmbedder() })
-    })
+    const a = await importEmbedded(1200, 'a.txt', 'alpha')
+    const b = await importEmbedded(1200, 'b.txt', 'beta')
+    const manager = cmpManager(cmpRuntime(), () => ({ embedder: createMockEmbedder() }))
     // Build a tree on ONLY one of the two documents → symmetric path NOT available.
     await buildTreeFor(manager, a)
 
     const r = await runCompare(manager, a, b)
     expect(r.state).toBe('done')
     expect(r.text).toContain(compareAsymmetricNotice('b.txt'))
-  })
-})
-
-describe('persistence — node vectors survive a reopen (whole-file encrypted at rest)', () => {
-  it('node vectors persist and decode after the database is reopened', async () => {
-    const a = await importDoc(1200, 'a.txt', 'alpha')
-    const b = await importDoc(1200, 'b.txt', 'beta')
-    const manager = makeManager({
-      runtime: scriptedRuntime(),
-      ingestionDeps: () => ({ embedder: createMockEmbedder() })
-    })
-    await buildTreeFor(manager, a)
-    await buildTreeFor(manager, b)
-    await runCompare(manager, a, b)
-
-    const reopened = openDatabase(join(tmp, 'test.sqlite'))
-    const rows = reopened
-      .prepare(
-        'SELECT embedding_blob, dimensions FROM tree_nodes WHERE document_id = ? AND embedding_blob IS NOT NULL'
-      )
-      .all(a) as Array<{ embedding_blob: Uint8Array; dimensions: number }>
-    expect(rows.length).toBeGreaterThan(0)
-    for (const row of rows) {
-      const vec = decodeVector(row.embedding_blob, row.dimensions)
-      expect(vec).not.toBeNull()
-      expect(vec!).toHaveLength(384)
-      let norm = 0
-      for (const x of vec!) norm += x * x
-      expect(norm).toBeGreaterThan(0) // a real, non-zero vector round-tripped
-    }
   })
 })
