@@ -934,8 +934,8 @@ vitest budget, and a hook is setup, not proof. Locally both stay at 15 s so a re
 fails fast at the desk.
 **A hand-rolled wall-clock bound does NOT widen with them** — a `Date.now() - start > N` poll
 guard, a fixture's own `waitFor` default, or a child-process `timeout` is invisible to vitest's
-config, so each one needs its own CI headroom (`doctasks-translation.test.ts` says so at its
-30 s hang detector). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
+config, so each one needs its own CI headroom (the header of `tests/helpers/hang-budget.ts`
+records the case that taught it). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
 far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
 #389).
 

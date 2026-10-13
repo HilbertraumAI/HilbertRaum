@@ -2665,9 +2665,11 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   `ctx.ocrEngine` LIVE (#410 — an in-app OCR install fills the slot mid-session); only the
   embedder stays captured.
 - **Concurrency (D26, RESOLVED): strict one-at-a-time, with one exception.** Tasks serialize
-  among themselves (one FIFO queue, one runner). A **non-yielding** task (`summary`,
-  `translation`, `compare`, `ocr`) **refuses to start while a chat answer streams** (it reads
-  the shared in-flight registry) but owns its own `AbortController` and is NEVER an entry in
+  among themselves (one FIFO queue, one runner). **Every** task kind **refuses to START while a
+  chat answer streams** (`startDocTask` reads the shared in-flight registry before any per-kind
+  check, so the yielding `tree`/`extract` builds and `categorize` refuse too; only a RUNNING
+  yielding build cedes the slot to a chat that arrives later — the exception below) but owns its
+  own `AbortController` and is NEVER an entry in
   the per-conversation map — `stopGeneration` cannot kill a task and a task cannot block a
   conversation key (fact §2.8). The inverse guard lives in the chat/RAG handlers: a message
   sent while a non-yielding task is active throws the shared `DOC_TASK_BUSY_MESSAGE`, which the
@@ -12076,9 +12078,9 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   sleep is replaced by `expect(await {rerank,embed}2).toBe('rejected')` — under the F19 `tearingDown`
   guard the racing call REFUSES on its own, so the absence is asserted by its settled outcome (a regression
   that spawned a second child instead resolves `'ok'` AND bumps the spawn count the final assertion still
-  checks). `doctasks.test.ts`: the 40 ms "let the stream start" sleep is replaced by
-  `while (runtime.concurrent === 0) await tick()` (the scripted runtime's observable in-flight count), so
-  the mid-stream cancel lands deterministically once a generation is genuinely running. These assert/await
+  checks). `doctasks.test.ts`: the 40 ms "let the stream start" sleep is replaced by a bounded
+  `until(() => runtime.concurrent > 0)` poll (`tests/helpers/hang-budget.ts`) on the scripted runtime's
+  observable in-flight count, so the mid-stream cancel lands deterministically once a generation is genuinely running. These assert/await
   an absence-or-start so they are un-teeth-checkable by nature, but no longer race the wall clock.
 
 `git diff src/` after Phase 7 = the single DX-2 DEV-guard line; every teeth-check neuter (hybrid.ts fusion
@@ -12136,7 +12138,7 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   gold standard (`deleteConversation`): wrap the **real** shared connection so one targeted `.run()` throws
   mid-transaction, drive the **real** function, and assert (a) NOTHING partial persisted AND (b) a subsequent
   `BEGIN/COMMIT` succeeds (the single shared `DatabaseSync` is not poisoned). **(i)** `doctasks-categorize.test.ts`
-  — the real `DocTaskManager`+`runCategorize` persist (handlers/categorize.ts:110); throw on the first
+  — the real `DocTaskManager`+`runCategorize` persist (handlers/categorize.ts, step (3)'s `BEGIN…COMMIT`); throw on the first
   `UPDATE bank_transactions SET category_id` → rows stay uncategorized, the in-txn `ensureBuiltinCategories` seed is
   rolled back (`bank_categories` count 0), the statement is never marked model-assisted, a fresh `BEGIN/COMMIT`
   opens, and a one-shot-recovered clean re-run categorizes normally. **(ii)** `ingestion.test.ts` — the real
@@ -12235,9 +12237,10 @@ message only. Suite **2669 passed / 41 skipped** (Phase-B baseline 2653/41 → *
   release-on-abort on BOTH paths — a single `release` closure (shared `released` latch with the returned fn, so
   the slot is given back EXACTLY once) plus `signal.addEventListener('abort', release, { once })`. The slow
   path's `waitForHandoff` still handles an abort WHILE PARKED and throws before the listener is installed.
-  Teeth: neuter the listener → the parked-build resume test reds (chatHolders stuck); the idempotency test pins
-  no double-decrement (a naive fix would resume the build prematurely). (`analysis/model-slot-arbiter.ts`;
-  `model-slot-arbiter.test.ts` ×2.)
+  Teeth: neuter the listener → the parked-build resume test reds (chatHolders stuck); the exactly-once test
+  ('a holder gives its slot back exactly once when %s (R2 — no double-release)') advances the whole #399 resume
+  delay while the other chat still holds, so a double decrement resumes the build there and reds it (a naive fix
+  would resume the build prematurely). (`analysis/model-slot-arbiter.ts`; `model-slot-arbiter.test.ts` ×2.)
 - **R3 (Medium, latent) — resident-cache reconcile mutated the live map in place before committing.** A throw
   mid-`reconcileDelta`/`reconcileFull` (a transient DB read error / truncated row) left the map half-mutated
   (some removed ids dropped, only some added ids decoded). Single-threaded synchrony means no search observes
@@ -13920,7 +13923,11 @@ under the `electron`-mocking suite:
   and vitest's CI `testTimeout` widening does **not** apply to a hand-rolled poll. It failed 3 of
   5 full-suite runs under load. Fixed as a labelled interlude commit: the poll bound became 30 s
   (a hang detector, never a timing proof) and the test carries an explicit 60 s budget — the same
-  value CI already uses. No semantics loosened. Same family as #84/#97/#101.
+  value CI already uses. No semantics loosened. Same family as #84/#97/#101. *(Since the 2026-10
+  documents/doctasks test campaign that test is gone: its service half duplicated `doctasks.test.ts`
+  'cancels a QUEUED task without running it; no-arg cancel hits the active task', and the #157 routing
+  it named is pinned at the IPC handler in `doctasks-ipc.test.ts`; the suite's poll bound is back to
+  the shared 10 s.)*
 - **(e) `ELECTRON_SKIP_BINARY_DOWNLOAD` is dead** and was removed from `ci.yml`: Electron ≥ 42
   reads it nowhere, so leaving it would advertise an effect it no longer has. CI needs no knob at
   all now — it never invokes the electron bin, and the rewritten postinstall exits 0 on a

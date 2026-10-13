@@ -9,9 +9,9 @@
 // CI because the windows runners are starved (#458, #101), but **a hand-rolled bound is
 // invisible to that config and does not widen with it**. So the suite's own hang detectors
 // stayed at their desk-tight values on the one platform that needed slack, and fired on work
-// that was merely slow. `doctasks-translation.test.ts` documented this at its 30 s detector
-// after it flaked 3 of 4 runs; this module generalises the fix instead of waiting for each
-// bound to be bitten in turn.
+// that was merely slow. `doctasks-translation.test.ts` once documented this at a 30 s detector
+// after it flaked 3 of 4 runs (that suite now uses the shared 10 s `waitTerminal`); this module
+// generalises the fix instead of waiting for each bound to be bitten in turn.
 //
 // Deliberately NOT for timing PROOFS. If a test asserts that something completed *within* a
 // budget as evidence about the code (the FTS 500 ms bound, #84; the `probeTimeoutMs` seam
