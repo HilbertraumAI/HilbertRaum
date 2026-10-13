@@ -16,6 +16,7 @@ import {
   EngineCannotRunError,
   engineProblemFor,
   isEngineCannotRunError,
+  reportEngineProblem,
   resetEngineProblemsForTest
 } from '../../src/main/services/runtime/engine-load'
 import {
@@ -114,13 +115,15 @@ function makeStubbornChild(diesOn: ReadonlyArray<NodeJS.Signals>): StubbornChild
 }
 
 /** A transcriber whose spawn records argv + options, then (next macrotask) writes `json` (if given) to the
- *  `-of` path, emits `stderrText` and closes with (exitCode, signal) — or emits `error` instead. */
+ *  `-of` path, emits `stderrText` and closes with (exitCode, signal) — or emits `error` instead, or (`thrown`)
+ *  throws it from the spawn call itself, as Node does for codes outside its async list (#658). */
 function fakeCliTranscriber(opts: {
   json?: unknown
   stderrText?: string
   exitCode?: number | null
   signal?: NodeJS.Signals | null
   error?: Error
+  thrown?: Error
   vadModelPath?: string
   platform?: NodeJS.Platform
 }): { transcriber: ReturnType<typeof createWhisperCliTranscriber>; spawned: string[][]; spawnOptions: SpawnOptions[] } {
@@ -136,6 +139,7 @@ function fakeCliTranscriber(opts: {
     spawnImpl: (_cmd: string, args: string[], o: SpawnOptions): ChildProcess => {
       spawned.push(args)
       spawnOptions.push(o)
+      if (opts.thrown) throw opts.thrown
       const child = makeFakeChild()
       setImmediate(() => {
         if (opts.error) return void child.emit('error', opts.error)
@@ -378,8 +382,9 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
       controller.abort()
     }
     await expect(within(call, 'the aborted transcription settling')).rejects.toThrow(/cancelled/i)
-    // No child left running: killed if one was spawned (a pre-spawn abort check may skip the spawn).
-    expect(heldChild === null || heldChild.killed).toBe(true)
+    // No child left running. #658: a call cancelled before it began starts no whisper-cli at all.
+    if (preAborted) expect(heldChild).toBeNull()
+    else expect(heldChild?.killed).toBe(true)
   })
 
   // REL-2: a whisper-cli wedged in native code can ignore SIGTERM and never emit 'close'.
@@ -520,13 +525,26 @@ describe('WhisperCliTranscriber — OS loader refusal (#530)', () => {
     expect(engineProblemFor('whisper_cpp')).toBeNull()
   })
 
-  it('a Windows spawn refusal (the error event, EACCES) is the typed "blocked" verdict', async () => {
-    const refusal = Object.assign(new Error('spawn C:\\Kit\\runtime\\whisper.cpp\\win\\whisper-cli.exe EACCES'), { code: 'EACCES' })
-    const { transcriber } = fakeCliTranscriber({ error: refusal, platform: 'win32' })
+  // Node defers only EACCES / EAGAIN / EMFILE / ENFILE / ENOENT to the 'error' event; EPERM and UNKNOWN are
+  // THROWN by spawn (#658 — measured: a deny-execute ACL on Windows throws `spawn EPERM`).
+  it.each<[string, 'error' | 'thrown', string]>([
+    ['the error event', 'error', 'EACCES'],
+    ['a synchronous throw (#658)', 'thrown', 'EPERM']
+  ])('a Windows spawn refusal (%s, %s) is the typed "blocked" verdict', async (_how, how, code) => {
+    const refusal = Object.assign(new Error(`spawn C:\\Kit\\runtime\\whisper.cpp\\win\\whisper-cli.exe ${code}`), { code })
+    const { transcriber } = fakeCliTranscriber({ [how]: refusal, platform: 'win32' })
     const err = await transcriber.transcribe('a.wav', { workDir: workDir() }).catch((e: unknown) => e)
     expect(isEngineCannotRunError(err)).toBe(true)
-    expect((err as EngineCannotRunError).problem).toEqual({ family: 'whisper_cpp', reason: 'blocked', os: 'win', exit: 'spawn error EACCES' })
+    expect((err as EngineCannotRunError).problem).toEqual({ family: 'whisper_cpp', reason: 'blocked', os: 'win', exit: `spawn error ${code}` })
     expect(engineProblemFor('whisper_cpp')?.reason).toBe('blocked')
+  })
+
+  // The #530 heal at this spawn site: whisper-cli ran, so a refusal recorded against it is stale.
+  it('a clean run clears a verdict recorded against the same program', async () => {
+    reportEngineProblem({ family: 'whisper_cpp', reason: 'blocked', os: 'win', exit: 'spawn error EPERM' }, 'C:/fake/whisper-cli.exe')
+    const { transcriber } = fakeCliTranscriber({ json: WHISPER_JSON })
+    expect(await transcriber.transcribe('a.wav', { workDir: workDir() })).toHaveLength(2)
+    expect(engineProblemFor('whisper_cpp')).toBeNull()
   })
 
   it('spawns with windowsHide: true', async () => {
