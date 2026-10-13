@@ -5504,6 +5504,61 @@ checked against its tree manifest first; under the shipping rule below no full r
 `known-limitations.md` "Site furniture and code blocks (#627)"; undecoded typographic entities
 (`&rsquo;`, measured on the same archives) are #663.
 
+**Wikipedia's license line and German navigation boxes (#662, 2026-10-13).** Two pieces of page
+furniture #627's exact tokens left alone, on purpose, because they change the development set:
+mwoffliner's license line (`div.zim-footer`, "Dieser Artikel wurde von Wikipedia herausgegeben. Der
+Text ist unter Creative Commons Attribution-Share Alike 4.0 verfügbar …"), on 1,322 of 1,500 sampled
+German Wikipedia pages (the other 178 are redirect stubs) and 146 of 150 Alpine Linux wiki pages; and
+German Wikipedia's navigation boxes built as `div`s, 197 boxes on 171 pages, each a long list of related
+article titles. The license line sits after the last `<section>` (1,322 of 1,322), so it was delivered as
+that section's text (`Weblinks`, `Einzelnachweise`): into the last chunk, the viewer and a saved copy. Owner
+calls of 2026-10-13, all as recommended:
+- **The license line leaves the text but stays visible.** It is the only CC BY-SA notice the app shows
+  for an article. The converter drops it like furniture and returns its text as `ZimArticle.notice`
+  (`NOTICE_CLASS_TOKENS` in `html.ts`; one line, entities decoded, block boundaries a space, at most
+  1,500 characters kept and 6,000 gathered, so an element holding megabytes costs no more; a cut
+  notice loses its last, possibly broken, word and ends in ` …`). `getArticle`
+  carries it as `PackArticle.notice`; `ArticleModal` shows it after the article as one muted line
+  (design-guidelines §11.15), and `renderArticleMarkdown` closes a saved copy with a `## License`
+  section. Not in the copy's attribution block (the issue's draft): a saved copy is itself retrieved
+  text, and the block sits in its first chunk, beside the lead; under its own heading the Markdown
+  parser gives it a chunk of its own instead of the last section's label.
+- **Navigation boxes are three exact tokens:** `navileiste`, `erweiterte-navigationsleiste`,
+  `erw-nav-leiste`, added to `FURNITURE_CLASS_TOKENS`. In the sample the second always comes with
+  `navileiste` (99 of 99) and the third only marks a row inside one (45 of 45); 98 boxes carry
+  `navileiste` alone. The tables inside a box (`wikitable erw-nav-zebra`, which `tables.ts` keeps) go
+  with it. Not `navigation-not-searchable`: it also marks the Normdaten and Rechtshinweis boxes and
+  inline pronunciation spans. Not `klappleiste`, the generic collapsible box.
+- **A dropped `div`/`section` also ends at its holder's end tag** (review pass). Until now only its
+  own end tag ended it, so a box whose `</div>` was missing dropped the rest of the article, now
+  on nearly every Wikipedia page's path. HTML5 closes an open `div` at the end of the section
+  holding it; the drop does the same for `FURNITURE_HOLDER_TAGS` (sectioning elements, cells, list
+  items, `body`; never `p`, whose stray end tag HTML5 ignores), counting the ones opened inside it.
+  Identical output on all 2,672 measured pages, which are well-formed.
+- **Normdaten, Rechtshinweis, Schwesterprojekte:** a follow-up with its own read (#673; 1,549, 96 and
+  4,187 words in the sample). Undecoded entities (#663) ship separately: on the Wikipedia sample every
+  apparent hit is a literal the source escaped, so #663 needs only stage A.
+**Measured (2026-10-13, master `76ce5acf` against the fix, the 2,672 pages of #627's 15 archives):**
+on every page the fix reads, segment by segment, exactly the words master reads once the license line
+and the navigation boxes are cut out of the source — 2,672 of 2,672, so nothing else is lost — and the
+notice holds exactly the license line's words on 1,322 of 1,322 Wikipedia and 146 of 146 Alpine pages.
+The other 13 archives are byte-identical, with no notice. German Wikipedia: 35,694 license words
+(1.8 %) and 62,839 navigation-box words (3.2 %) leave the text; chunks 14,303 → 14,151, 1,474 changed,
+on 1,322 pages (every one's last chunk); the admission lead (`segments.slice(0, 1)`) changes on 19
+pages (18 short articles with no heading, whose lead held the license line, and one navigation box);
+the segment count on 97 (a box's tables were segments of their own).
+Cost (`scripts/zim-html-perf.mjs`, i7-8700, three runs each): the 1 MiB worst case 51.2–52.1 ms
+against 52.7–53.5 ms, the 60-article batch 65.9–70.1 against 65.2–68.2 ms: no measurable change.
+Real app (dev build, a scratch drive root with both archives, `getPackArticle`, `savePackArticle`,
+`previewDocument`): master delivered the license line in the last section of 3 of 3 articles read and
+filed it under `Einzelnachweise` in the saved copy; the fix returned it as the notice on 3 of 3, its
+text nowhere in the sections, the navigation boxes gone (Windows NT 4.0 11,028 → 10,713 words, 40 → 37
+sections; System 7 5,241 → 5,012, 22 → 20), and the saved copy holds it only under `License`.
+**Acceptance read:** stage A cannot pass: words change on almost every development-set article by
+design, so the full read on the 200-question development set runs, on the machine that holds the
+harness. Residuals: `known-limitations.md` "Wikipedia's license line and German navigation boxes
+(#662)".
+
 ### Shipping rule for knowledge-pack changes
 
 Every change to knowledge-pack retrieval or delivery now ships under one standing

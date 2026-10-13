@@ -51,7 +51,13 @@ from its first public `1.0.0` release onward.
 - **Knowledge packs made from ordinary websites leave out the site's own footer and menu, and code
   keeps its indentation.** A page from such an archive used to end in the site's footer line ("by …
   | source | license" on every page of a Go tutorial), and a code example lost every leading space
-  in the article viewer and in a saved copy. Wikipedia packs read as before (#627).
+  in the article viewer and in a saved copy (#627).
+- **Wikipedia knowledge packs no longer treat the license line and navigation boxes as article
+  text.** Every Wikipedia article ended in its Creative Commons notice, which was read and searched
+  as part of the article's last section, and German articles carried their navigation boxes, long
+  lists of related article titles, so a question about one Windows version also matched the articles
+  about the others. The navigation boxes are left out now. The license line is shown below
+  the article in the viewer, and a saved copy ends with it in a section of its own, *License* (#662).
 
 ## [0.1.63] — 2026-10-12
 

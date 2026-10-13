@@ -119,6 +119,9 @@ Packs are **per chat and off by default**. In a documents chat, open the sources
   pack's row under *Documents → Knowledge packs* opens such a chat directly.
 - **Read the source:** answers cite pack articles the way they cite documents, and *Open
   article* shows the article text offline — including from an evidence review's archive row.
+  The archive's own license line (Wikipedia's Creative Commons notice) is shown below the
+  article and kept out of the text answers are drawn from; German Wikipedia's navigation boxes
+  are left out too.
 - **See what each pack did:** a "Knowledge packs:" line under the answer names every ticked
   pack — searched (and how much it contributed), or not searched, with a short reason.
 - **A pack you cannot tick always says why** — file missing, a different archive at that

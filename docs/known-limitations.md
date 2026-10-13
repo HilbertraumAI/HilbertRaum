@@ -3594,9 +3594,8 @@ reports and phase plans were working papers; their full text lives in git histor
     their sidebars that way; Sphinx's default HTML5 writer uses `<aside>`,
     which the rule leaves alone. Neither direction was seen in the 2,672
     pages measured.
-  - On Wikipedia archives, mwoffliner's license line (`div.zim-footer`) and
-    German navigation boxes built as `div`s are still delivered as text
-    (#662): dropping them changes the development set.
+  - Wikipedia's license line and German navigation boxes are #662's (the next
+    entry).
   - The indentation reaches the article viewer and a saved copy only. The
     chunker splits on whitespace, so retrieval, the reranker, the prompt and
     citation snippets read code as one flat line, as before. The viewer shows
@@ -3613,3 +3612,30 @@ reports and phase plans were working papers; their full text lives in git histor
     collapses as before.
   - Named entities the converter does not know (`&rsquo;`, `&ldquo;`,
     `&raquo;`, …) are delivered verbatim on hand-written sites (#663).
+- **Wikipedia's license line and German navigation boxes (#662).** mwoffliner's
+  license line (`div.zim-footer`) is no longer article text: it is returned
+  apart (`PackArticle.notice`), shown after the article in the viewer and
+  closing a saved copy as a `## License` section. German Wikipedia's
+  navigation boxes built as `div`s (`navileiste`, `erweiterte-navigationsleiste`,
+  `erw-nav-leiste`) are dropped. Residuals:
+  - Three more German Wikipedia boxes are still delivered as text: Normdaten
+    (authority data), Rechtshinweis (a legal-topics notice) and Schwesterprojekte
+    (sister-project links), #673. They share the class
+    `navigation-not-searchable` with the navigation boxes, which is why that
+    class is not part of the rule.
+  - Measured on German Wikipedia and Alpine Linux's wiki only. Another
+    Wikipedia's navigation boxes built as `div`s under other class names are
+    still delivered; the ones built as tables were already dropped (`navbox`).
+  - The notice is plain text: its links (the article's revision on Wikipedia,
+    the license deed) are not kept, as no link target is (#416). It is one line
+    of at most 1,500 characters, in the archive's language (shown without a
+    `lang` attribute, like the article text above it); a longer one is cut and
+    ends in "…", and a second license line on one page is appended to the
+    first. An article cut short before its end has none.
+  - A saved copy's `License` section is ordinary document text: a documents
+    chat can retrieve and cite it, and ten saved Wikipedia articles are ten
+    such sections. Before, the same line sat inside each copy's last section.
+    An article that has a "License" section of its own then has two.
+  - A copy saved before this change keeps the license line inside its last
+    section. Saving the article again answers "already saved"; delete the copy
+    on the Documents screen and save it again to get the new shape.
