@@ -1,4 +1,15 @@
-import { attrValue, decodeEntities, tidyWhole, RAW_TEXT, SKIP_SUBTREE } from './html'
+import {
+  attrValue,
+  decodeEntities,
+  dropPlaceholders,
+  indexAtVisible,
+  PreformattedWhitespace,
+  restorePreformatted,
+  tidyWhole,
+  visibleLength,
+  RAW_TEXT,
+  SKIP_SUBTREE
+} from './html'
 import { normalizeMath } from './math'
 import { REF_SUP_CLASS_RE, SUB_MARK, SUP_MARK, lastCharOf, shouldMark } from './supsub'
 
@@ -100,6 +111,11 @@ export const TABLE_MAX_GRID_CELLS = 6_000
  *  semantics, exercised at the column/grid caps above -- cannot multiply into an unbounded
  *  amount of work before packing ever gets a chance to cut it down. */
 export const TABLE_MAX_RAW_CHARS = 50_000
+
+/** Whitespace a table's code blocks may keep in all (#627) — the caps count visible characters
+ *  only, so this bounds the rest: a delivered table is at most this much longer than its caps
+ *  allow. Measured: the most any real table kept was 534 (gobyexample, over 2,672 pages). */
+export const TABLE_MAX_KEPT_WHITESPACE = 6_000
 
 /** Layout/decoration tables carry one of these classes and are still dropped, unchanged. */
 const LAYOUT_TABLE_CLASS_RE = /\b(?:navbox|vertical-navbox|metadata|ambox|toc|sistersitebox)\b/i
@@ -254,8 +270,8 @@ function inlineNestedTable(table: RetainedTable): { text: string; workUnits: num
   const parts: string[] = []
   if (table.caption) parts.push(table.caption)
   parts.push(...lines)
-  let charsUsed = table.caption.length
-  for (const line of lines) charsUsed += line.length
+  let charsUsed = visibleLength(table.caption)
+  for (const line of lines) charsUsed += visibleLength(line)
   return { text: parts.join('; '), workUnits: cellsPlaced + charsUsed, gridTruncated }
 }
 
@@ -303,6 +319,26 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
 
   const active = (): TableContext => stack[stack.length - 1]
 
+  // A `<pre>` inside the open cell or caption keeps its indentation (#627): its text runs go
+  // through html.ts's encoder, whose placeholders survive `tidyWhole` and are restored only once
+  // `serializeTable` has packed the segments. Every cell, row, caption and table boundary ends
+  // it, so a `<pre>` left open cannot leak into the next cell.
+  let pre: PreformattedWhitespace | null = null
+  let preDepth = 0
+  const endPre = (): void => {
+    pre = null
+    preDepth = 0
+  }
+  // The caps count visible characters only, so the whitespace a table's code keeps is bounded
+  // on its own: one budget for the whole outermost table, nested ones included. Past it, code
+  // whitespace collapses again as it did before #627.
+  const keptBudget = { left: TABLE_MAX_KEPT_WHITESPACE }
+  const endsWithNewline = (): boolean => {
+    const ctx = active()
+    const buf = ctx.inCaption ? ctx.caption : (ctx.cell?.text ?? '')
+    return buf.endsWith('\n')
+  }
+
   // The sup/sub marker a `<sup>`/`<sub>` open tag ARMED, still waiting for the element's own
   // text (#488). One rule in one module: the marker is written only where `shouldMark` holds —
   // the last character already in the cell/caption buffer against the first character of the
@@ -320,7 +356,8 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   const appendText = (raw: string): void => {
     if (raw.length === 0 || refSkipDepth > 0 || droppedDepth > 0 || mathSkipDepth > 0 || subtreeSkipDepth > 0) return
     const ctx = active()
-    const text = decodeEntities(raw)
+    const decoded = dropPlaceholders(decodeEntities(raw))
+    const text = pre !== null && (ctx.inCaption || ctx.cell) ? pre.encode(decoded) : decoded
     if (ctx.inCaption) {
       // The pending separator is appended FIRST, so a marker is judged against it and a
       // separated run therefore never marks -- the same answer prose gives after a space.
@@ -424,6 +461,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
 
     if (name === 'table') {
       pendingMark = null // a table boundary ends the current mark run (#488)
+      endPre() // …and any open `<pre>` (#627)
       if (!isClose) {
         if (!selfClosing) {
           // Issue #478: a nested table's OWN class is checked against the same
@@ -489,6 +527,20 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       continue
     }
 
+    if (name === 'pre') {
+      // Transparent in the text, as it always was; it only switches the whitespace rule (#627).
+      if (!selfClosing) {
+        if (!isClose) {
+          preDepth += 1
+          if (pre === null) pre = new PreformattedWhitespace(false, keptBudget)
+        } else if (preDepth > 0) {
+          preDepth -= 1
+          if (preDepth === 0) pre = null
+        }
+      }
+      continue
+    }
+
     if (name === 'sup') {
       // <sup class="mw-ref"> citation brackets stay dropped, same as prose (html.ts's
       // supSkipDepth). An ordinary <sup> ARMS the readable convention: a literal `^`
@@ -523,8 +575,10 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     }
     if (name === 'caption' || name === 'tr' || name === 'td' || name === 'th') {
       // A cell, row or caption boundary ends the current mark run (#488): an armed marker
-      // belongs to the sup/sub's own text and can never cross into the next buffer.
+      // belongs to the sup/sub's own text and can never cross into the next buffer. It ends an
+      // open `<pre>` for the same reason (#627).
       pendingMark = null
+      endPre()
     }
     if (name === 'caption') {
       const ctx = active()
@@ -570,8 +624,16 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     }
     if (!isClose && (name === 'br' || name === 'p' || name === 'div' || name === 'li')) {
       // A SPACE, not a newline (issue #478): table-derived text is one line per data row by
-      // contract, and an intra-cell break must not split that line in two.
-      appendLiteral(' ')
+      // contract, and an intra-cell break must not split that line in two. Inside a `<pre>` it
+      // is a line of the code block, like the newlines its text already carries (#627): a `<br>`
+      // always, a block tag only where the line has not just ended.
+      if (pre !== null) {
+        const hard = name === 'br'
+        pre.lineBreak(!hard)
+        if (hard || !endsWithNewline()) appendLiteral('\n')
+      } else {
+        appendLiteral(' ')
+      }
     }
     if (!isClose && RAW_TEXT.has(name) && !selfClosing) {
       // #485: a <style>/<script> body is not markup -- without this, its declaration/source
@@ -608,7 +670,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       // raw TeX `<annotation>` source, since neither reaches the cell text once the subtree
       // below is suppressed.
       const alt = attrValue(attrs, 'alttext')
-      if (alt) appendLiteral(` ${normalizeMath(decodeEntities(alt))} `)
+      if (alt) appendLiteral(` ${normalizeMath(dropPlaceholders(decodeEntities(alt)))} `)
       if (!selfClosing) mathSkipDepth = 1
       continue
     }
@@ -777,7 +839,7 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
   let contentCapped = false
 
   const chargeLine = (line: string): boolean => {
-    if (totalChars + line.length > TABLE_MAX_RAW_CHARS) {
+    if (totalChars + visibleLength(line) > TABLE_MAX_RAW_CHARS) {
       contentCapped = true
       // Issue #478: a line that alone exceeds the remaining budget used to be dropped whole
       // (e.g. a nested table's own inline text saturating this table's raw-char budget could
@@ -787,12 +849,12 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
       const kept = truncateToBudget(line, TABLE_MAX_RAW_CHARS - totalChars)
       if (kept.length > 0) {
         lines.push(kept)
-        totalChars += kept.length
+        totalChars += visibleLength(kept)
       }
       return false
     }
     lines.push(line)
-    totalChars += line.length
+    totalChars += visibleLength(line)
     return true
   }
 
@@ -873,19 +935,19 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
       // to `Column N` exactly as an unheaded column always has.
       const key = rowHeader ?? (colKey && !colKey.isGroup ? colKey.text : null) ?? `Column ${c + 1}`
       const pair = `${key}: ${value}`
-      if (totalChars + pair.length > TABLE_MAX_RAW_CHARS) {
+      if (totalChars + visibleLength(pair) > TABLE_MAX_RAW_CHARS) {
         contentCapped = true
         // Issue #478: same truncate-not-drop rule as `chargeLine` above -- a single pair alone
         // exceeding the remaining budget still delivers its in-budget prefix, not nothing.
         const kept = truncateToBudget(pair, TABLE_MAX_RAW_CHARS - totalChars)
         if (kept.length > 0) {
           parts.push(kept)
-          totalChars += kept.length
+          totalChars += visibleLength(kept)
         }
         break
       }
       parts.push(pair)
-      totalChars += pair.length
+      totalChars += visibleLength(pair)
     }
     if (parts.length > 0) lines.push(parts.join('; '))
   }
@@ -907,7 +969,8 @@ function isLowSurrogate(cc: number): boolean {
  *  alone exceeds the budget still delivers its in-budget prefix, not nothing. */
 function truncateToBudget(text: string, remaining: number): string {
   if (remaining <= 0) return ''
-  let cut = Math.min(remaining, text.length)
+  // Counted in visible characters: kept preformatted whitespace is never charged (#627).
+  let cut = indexAtVisible(text, remaining)
   while (cut > 0 && isHighSurrogate(text.charCodeAt(cut - 1)) && isLowSurrogate(text.charCodeAt(cut))) {
     cut -= 1
   }
@@ -922,13 +985,16 @@ function truncateToBudget(text: string, remaining: number): string {
  *  left past the pair boundary, losing no character and keeping every piece well-formed UTF-16. */
 const LONG_LINE_CUT = ' [cut]'
 function splitLongLine(line: string, maxChars: number): string[] {
-  if (line.length <= maxChars) return [line]
+  if (visibleLength(line) <= maxChars) return [line]
   const budget = Math.max(1, maxChars - LONG_LINE_CUT.length)
   const pieces: string[] = []
   let rest = line
-  while (rest.length > maxChars) {
-    let cut = rest.lastIndexOf('; ', budget)
-    if (cut <= 0) cut = budget
+  // Lengths and the cut are visible characters, so kept preformatted whitespace (#627) never
+  // moves a split; a pair boundary is searched up to the visible budget, wherever it sits raw.
+  while (visibleLength(rest) > maxChars) {
+    const rawBudget = indexAtVisible(rest, budget)
+    let cut = rest.lastIndexOf('; ', indexAtVisible(rest, budget + 1) - 1)
+    if (cut <= 0) cut = rawBudget
     while (cut > 0 && isHighSurrogate(rest.charCodeAt(cut - 1)) && isLowSurrogate(rest.charCodeAt(cut))) {
       cut -= 1
     }
@@ -962,13 +1028,13 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
 
   const segments: string[] = []
   let current: string[] = captionLine ? [captionLine] : []
-  let currentChars = captionLine ? captionLine.length : 0
+  let currentChars = captionLine ? visibleLength(captionLine) : 0
   let charsUsed = currentChars
   let consumed = 0
   let cutForSegments = false
 
   outer: for (const rawLine of lines) {
-    charsUsed += rawLine.length
+    charsUsed += visibleLength(rawLine)
     // Issue #478: a single record line can itself be large enough to span every segment this
     // table is allowed (its value alone approaches TABLE_MAX_RAW_CHARS, far above the
     // TABLE_MAX_SEGMENTS x TABLE_SEGMENT_MAX_CHARS output budget -- e.g. a nested table's
@@ -979,7 +1045,7 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
     // reached the output.
     let linePiecesEmitted = false
     for (const piece of splitLongLine(rawLine, TABLE_SEGMENT_MAX_CHARS)) {
-      const extra = (current.length > 0 ? 1 : 0) + piece.length
+      const extra = (current.length > 0 ? 1 : 0) + visibleLength(piece)
       if (currentChars + extra > TABLE_SEGMENT_MAX_CHARS && current.length > 0) {
         if (segments.length + 1 >= TABLE_MAX_SEGMENTS) {
           cutForSegments = true
@@ -991,7 +1057,7 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
         currentChars = 0
       }
       current.push(piece)
-      currentChars += piece.length + 1
+      currentChars += visibleLength(piece) + 1
       linePiecesEmitted = true
     }
     consumed += 1
@@ -1019,7 +1085,8 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
 
   // Canonical form (P1b's invariant, every segment the converter produces): an empty cell
   // value leaves a trailing space after its key's colon (`Column 2: `), which `tidyWhole`
-  // collapses/trims exactly like the rest of html.ts's output does.
-  const texts = segments.map((s) => tidyWhole(s)).filter((s) => s.length > 0)
+  // collapses/trims exactly like the rest of html.ts's output does. Kept preformatted
+  // whitespace is restored only after it (#627), so the tidy cannot collapse it.
+  const texts = segments.map((s) => restorePreformatted(tidyWhole(s))).filter((s) => s.length > 0)
   return { segments: texts, workUnits: cellsPlaced + charsUsed + table.nestedWork }
 }
