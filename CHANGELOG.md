@@ -48,6 +48,10 @@ from its first public `1.0.0` release onward.
 - **Figure captions in knowledge packs now read like the text around them.** A caption showed
   `H2O` and `m2` where the article text shows `H_2O` and `m^2`, and it kept citation numbers such
   as `[2]` that the rest of the article leaves out (#488).
+- **Knowledge packs made from ordinary websites leave out the site's own footer and menu, and code
+  keeps its indentation.** A page from such an archive used to end in the site's footer line ("by …
+  | source | license" on every page of a Go tutorial), and a code example lost every leading space
+  in the article viewer and in a saved copy. Wikipedia packs read as before (#627).
 
 ## [0.1.63] — 2026-10-12
 
