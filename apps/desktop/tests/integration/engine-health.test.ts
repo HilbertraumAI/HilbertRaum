@@ -1,18 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// #530 — the session side of "an engine the OS loader refuses to start": healing what the app
-// wrote before the fix (gpuAutoDisabled + failed document rows), the `checkProgramLoads` probe,
-// and how an ingestion failure persists the canonical path-free row text. #634 — the same for a
-// search-model failure: the row text by kind, and the heal of rows written before it.
+// #530 — the session side of "an engine the OS loader refuses to start": the startup check,
+// healing what the app wrote before the fix (gpuAutoDisabled + failed document rows), the
+// `checkProgramLoads` probe, and how an ingestion failure persists the canonical path-free row
+// text. #634 — the same for a search-model failure: the row text by kind, and the heal of rows
+// written before it.
 
 import { t, type MessageKey } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { checkProgramLoads, healEngineLoadState } from '../../src/main/services/engine-health'
+import { checkProgramLoads, healEngineLoadState, startEngineCheck } from '../../src/main/services/engine-health'
 import {
   EngineCannotRunError,
   engineProblemFor,
@@ -24,7 +25,12 @@ import { createQueuedDocument, documentsDir, processDocument } from '../../src/m
 import type { Embedder } from '../../src/main/services/embeddings'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { EmbedderError } from '../../src/main/services/embeddings/errors'
-import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
+import {
+  llamaServerBinaryName,
+  llamaServerDir,
+  type ChildProcessLike,
+  type SpawnFn
+} from '../../src/main/services/runtime/sidecar'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 
@@ -75,6 +81,36 @@ function addDoc(db: Db, status: string, errorMessage: string | null): string {
 }
 const rowMessage = (db: Db, id: string): string | null =>
   (db.prepare('SELECT error_message AS m FROM documents WHERE id = ?').get(id) as { m: string | null }).m
+
+describe('startEngineCheck (#530, #656)', () => {
+  it('starts the session device probe on the drive’s chat engine with no workspace open; nothing to probe, nothing started; a failing probe never escapes', async () => {
+    // A plain function, not `vi.fn`: a spy attaches its own handler to the promise it returns, which
+    // would hide the unhandled rejection this row exists to catch.
+    const probed: string[] = []
+    const probeGpu = Object.assign(
+      async (bin: string): Promise<null> => {
+        probed.push(bin)
+        throw new Error('driver wedged')
+      },
+      { invalidate: () => undefined }
+    )
+    const check = (rootPath: string): void =>
+      startEngineCheck({ paths: { rootPath }, isDev: false, probeGpu } as unknown as AppContext)
+
+    // No chat engine for this OS on the drive: no probe (it would spawn nothing useful).
+    check(tmp())
+    expect(probed).toEqual([])
+
+    const root = tmp()
+    mkdirSync(llamaServerDir(root), { recursive: true })
+    const bin = join(llamaServerDir(root), llamaServerBinaryName())
+    writeFileSync(bin, '')
+    expect(() => check(root)).not.toThrow()
+    expect(probed).toEqual([bin])
+    // Fire-and-forget: the rejection is swallowed inside the check (vitest fails a run on an unhandled one).
+    await new Promise((r) => setImmediate(r))
+  })
+})
 
 describe('healEngineLoadState (#530)', () => {
   it.each<{ shape: string; gpuLastError: string | null; opts: typeof LINUX | typeof WIN; cleared: boolean }>([

@@ -32,11 +32,17 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
-import { buildPerformanceSnapshot, runAndPersistBenchmark, tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
+import {
+  buildPerformanceSnapshot,
+  probeAndPersistGpu,
+  runAndPersistBenchmark,
+  tryGpuAgain
+} from '../../src/main/ipc/registerBenchmarkIpc'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { classifyProfile, detectSystem } from '../../src/main/services/benchmark'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
+import { log } from '../../src/main/services/logging'
 import { machineKey, memoryClassOf, resetPerformanceForTests } from '../../src/main/services/performance'
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
@@ -81,7 +87,10 @@ beforeEach(() => {
 
 // TH2: every root/DB in this file (including via the `cardMachine`/`withLog` helpers below)
 // comes from the fixture's `freshRoot`/`seededDb` — safe to add the shared teardown.
-afterEach(closePerformanceFixture)
+afterEach(async () => {
+  vi.restoreAllMocks()
+  await closePerformanceFixture()
+})
 
 const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 15_000 }
 const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 22_000 }
@@ -478,6 +487,42 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
       expect(getSettings(db).gpuProbe).toEqual(before)
       expect(buildPerformanceSnapshot(ctxWith(root, db)).currentGpu).toBeNull()
     })
+  })
+
+  it('a probe that gives NO answer after the workspace locked: no write, no push, an empty summary, and no false "probe failed" warning (#656)', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    withBinary(root)
+    const before = probe([RTX], here())
+    updateSettings(db, { gpuProbe: before })
+    let unlocked = true
+    const pending = deferred<GpuDevice[] | null>()
+    const ctx = ctxWith(root, db, {
+      workspace: { isUnlocked: () => unlocked, isLocking: () => false },
+      probeGpu: fakeProbe(() => pending.promise)
+    })
+    // As in production, the database is out of reach once the lock completed.
+    Object.defineProperty(ctx, 'db', {
+      get: () => {
+        if (!unlocked) throw new Error('Workspace is locked')
+        return db
+      }
+    })
+    const spy = performanceChangedSpy()
+    const warn = vi.spyOn(log, 'warn')
+
+    const run = probeAndPersistGpu(ctx)
+    unlocked = false // "Lock now" completes while the driver is still enumerating…
+    pending.resolve(null) // …and the probe then hits its kill-timeout (#380): unknown, not "no device"
+    const summary = await run
+
+    expect(summary).toMatchObject({ name: null, totalMb: null, useful: false })
+    expect(spy).not.toHaveBeenCalled()
+    // Nothing failed: the probe did not answer and the lock refused the read. Without the
+    // admission check the settings read threw into the "GPU probe failed" path.
+    expect(warn).not.toHaveBeenCalled()
+    unlocked = true
+    expect(getSettings(db).gpuProbe).toEqual(before)
   })
 })
 
