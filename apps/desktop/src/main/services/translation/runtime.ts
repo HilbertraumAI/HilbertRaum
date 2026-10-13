@@ -8,6 +8,8 @@ import {
 } from '../runtime/sidecar'
 import { isEngineCannotRunError } from '../runtime/engine-load'
 import { RuntimeUnresponsiveError, isRuntimeUnresponsiveError } from '../runtime/llama'
+import { createPlacementParser } from '../runtime/placement'
+import { translationRanOnProcessor } from '../../../shared/runtime-status'
 import { log } from '../logging'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
@@ -68,8 +70,9 @@ export const TRANSLATION_BATCH_ARGS = ['--batch-size', '512', '--ubatch-size', '
  * args on the GPU attempt (the pinned build's defaults `-ngl auto` + `--fit on` → VRAM-aware
  * offload; unchanged from b9849 to b11146, re-checked against `--help` 2026-10-13, #660; on a
  * GPU-less machine that IS CPU mode, though the load log still prints `offloaded N/N layers` there,
- * #671). #25142 (the Windows-Vulkan hang under PARALLEL translation load) stays contained by
- * `--parallel 1` regardless of the device posture. See model-benchmarks.md §11.4.
+ * so the start's own GPU buffers say where it ran, #671). #25142 (the Windows-Vulkan hang under
+ * PARALLEL translation load) stays contained by `--parallel 1` regardless of the device posture. See
+ * model-benchmarks.md §11.4.
  */
 export const TRANSLATION_CPU_DEVICE_ARGS = ['--device', 'none'] as const
 
@@ -83,23 +86,15 @@ export type TranslationDevice = 'auto' | 'cpu'
  * roughly CPU speed — indistinguishable from "GPU not working" without this record. The layer
  * split is parsed from the server's own load log (`load_tensors: offloaded X/Y layers to GPU`,
  * the only place the real fit outcome is reported — `/props` does not carry it); null when the
- * line wasn't seen (a forced-CPU start on a GPU-less machine prints none). With liveness added
- * this becomes the wire shape `TranslationDeviceStatus` (shared/types.ts — the Translate
- * screen's #36-style device hint); last-known values survive the idle teardown (`live: false`)
- * so a finished run stays explainable, and reset only with the instance (app restart).
+ * line wasn't seen. The line alone says nothing about a card (#671): a start with no usable
+ * graphics device, and a forced-CPU one, print `offloaded 49/49 layers to GPU` too, so
+ * `gpuBuffers` carries the evidence — the chat label's since #653. With liveness added this
+ * becomes the wire shape `TranslationDeviceStatus` (shared/types.ts — the Translate screen's
+ * #36-style device hint); last-known values survive the idle teardown (`live: false`) so a
+ * finished run stays explainable, and reset only with the instance (app restart).
  */
 export type TranslationStartInfo = Omit<TranslationDeviceStatus, 'live'>
 export type { TranslationDeviceStatus }
-
-/**
- * Match llama.cpp's load-log offload line across the naming drift (`llm_load_tensors:` on older
- * builds, `load_tensors:` on b9849 and b11146): `… offloaded 48/49 layers to GPU`. The LAST
- * match wins — a retried load within one child would print it again.
- */
-const OFFLOAD_LINE_RE = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers to GPU/g
-
-/** How much rolling stderr to keep for the offload parse (a chunk boundary can split the line). */
-const OFFLOAD_PARSE_WINDOW = 512
 
 /**
  * The Settings-driven GPU signals, injected exactly like the chat ladder's `GpuLadderDeps`
@@ -418,7 +413,8 @@ export class TranslationRuntime {
   private gpuFellBack = false
   /**
    * The observed outcome of the LAST successful cold start (issue #42 reopen) — device posture +
-   * the offload split parsed from the server's load log. Kept across the idle teardown (the
+   * the offload split parsed from the server's load log, and whether that log put a buffer on a
+   * graphics device (#671). Kept across the idle teardown (the
    * Translate screen's hint must stay explainable after a run finishes); null until the first
    * successful start of this instance.
    */
@@ -605,13 +601,21 @@ export class TranslationRuntime {
    * before the kill settles. `resolveDevice()` is re-read live rather than cached per attempt:
    * it is pure over the current settings/latch state, so a start that already fell back from
    * 'auto' to 'cpu' (`gpuFellBack` latched first) is correctly read as no longer occupying the
-   * card for the remainder of that same load. A forced-CPU sidecar never occupies the card.
+   * card for the remainder of that same load. A forced-CPU sidecar never occupies the card, nor
+   * (#671) a started one whose load log put no buffer on a graphics device.
    */
   gpuOccupied(): boolean {
     if (this.starting) return (this.startingDevice ?? this.resolveDevice()) === 'auto'
-    if (this.server) return this.lastStart?.device === 'auto'
-    if (this.teardownPromise || this.idleTeardownPromise) return this.lastStart?.device === 'auto'
+    if (this.server || this.teardownPromise || this.idleTeardownPromise) return this.lastStartOnCard()
     return false
+  }
+
+  /**
+   * Did the last successful start load onto a graphics device? Its posture, unless its own load log
+   * printed buffers and none on a graphics device (#671: a PC with no usable card under 'auto').
+   */
+  private lastStartOnCard(): boolean {
+    return this.lastStart != null && !translationRanOnProcessor(this.lastStart)
   }
 
   /** One launch attempt at one device posture; installs `this.server` on success. */
@@ -620,26 +624,18 @@ export class TranslationRuntime {
     startSignal?: AbortSignal,
     cpuCause: TranslationCpuCause | null = null
   ): Promise<void> {
-    // Parse the server's own load log for the offload outcome (issue #42 reopen): under the
+    // Read the server's own load log for where the start landed (issue #42 reopen): under the
     // 'auto' posture llama.cpp `--fit` can silently land a PARTIAL offload (a resident chat
     // model took the VRAM) that decodes at ~CPU speed, and the offload line is the only place
-    // the real split is reported. Rolling window because a chunk boundary can split the line.
-    let offloadWindow = ''
-    let gpuLayers: number | null = null
-    let totalLayers: number | null = null
-    const parseOffload = (text: string): void => {
-      // CODE-22 (full-audit 2026-07-11): match on the UNSLICED window+chunk FIRST — a single large
-      // stderr chunk carrying the offload line plus >OFFLOAD_PARSE_WINDOW bytes of trailing log
-      // used to slice the line away before it was ever matched (the hint then degraded to
-      // "unknown" permanently). The rolling window exists ONLY to bridge a chunk boundary; a
-      // retained-window re-match on the next chunk is harmless (same values, last match wins).
-      const haystack = offloadWindow + text
-      for (const m of haystack.matchAll(OFFLOAD_LINE_RE)) {
-        gpuLayers = Number(m[1])
-        totalLayers = Number(m[2])
-      }
-      offloadWindow = haystack.slice(-OFFLOAD_PARSE_WINDOW)
-    }
+    // the real split is reported. #671: the chat runtime's parser, so the split comes with the
+    // evidence the chat label uses since #653 — GPU buffers, never the line, which a start with
+    // no usable graphics device prints as `N/N layers` too. It reassembles lines across chunks,
+    // so a line split by a chunk boundary or buried in one large chunk is read (CODE-22). Fed until
+    // the start lands: the reading is taken once, and the per-request lines after it need no parse.
+    const placement = createPlacementParser()
+    let loaded = false
+    /** Set once the start lands: whether a crash of this child takes the GPU fallback (#671). */
+    let ranOnProcessor = device === 'cpu'
     const server = new LlamaServer({
       binPath: this.opts.binPath,
       modelPath: this.opts.modelPath,
@@ -666,24 +662,39 @@ export class TranslationRuntime {
       // only for a healthy child dying outside `stop()`, so a lock/quit kill never trips it.
       // Issue #42: a GPU-composed sidecar dying on its own additionally arms the session CPU
       // latch — the next cold start pins `--device none` instead of crash-looping the GPU across
-      // a doc-task's per-window retries (the chat §5.3 auto-fallback, session-scoped).
+      // a doc-task's per-window retries (the chat §5.3 auto-fallback, session-scoped). #671: not
+      // when this start's own log put nothing on a graphics device — it ran on the processor, and
+      // its crash is no GPU fault (chat's #599 rule for a CPU-mode crash).
       onUnexpectedExit: () => {
         if (this.server === server) {
           this.server = null
           this.emitResidencyChange()
         }
-        if (device === 'auto') {
+        if (!ranOnProcessor) {
           this.noteDeviceFallback('GPU-composed translation sidecar exited unexpectedly mid-session')
         }
       },
-      onStderrData: parseOffload
+      onStderrData: (text) => {
+        if (!loaded) placement.onStderrData(text)
+      }
     })
     await server.start()
+    loaded = true
     this.server = server
     // Record + report the observed outcome ONCE per successful cold start (issue #42 reopen).
-    // A parse miss stays honest as null (e.g. a forced-CPU start on a GPU-less machine prints
-    // no offload line); the hook is observability-only and must never break the start path.
-    this.lastStart = { device, gpuLayers, totalLayers, ...(device === 'cpu' && cpuCause ? { cpuCause } : {}) }
+    // A parse miss stays honest as null; the hook is observability-only and must never break the
+    // start path. #671: `gpuBuffers` is the parser's `gpuBufferEvidence` — absent when the log gives
+    // nothing to judge by.
+    const { gpuLayers, totalLayers } = placement.reading()
+    const gpuBuffers = placement.gpuBufferEvidence()
+    this.lastStart = {
+      device,
+      gpuLayers,
+      totalLayers,
+      ...(gpuBuffers != null ? { gpuBuffers } : {}),
+      ...(device === 'cpu' && cpuCause ? { cpuCause } : {})
+    }
+    ranOnProcessor = translationRanOnProcessor(this.lastStart)
     this.emitResidencyChange()
     try {
       this.opts.onStarted?.(this.lastStart)
@@ -904,7 +915,8 @@ export class TranslationRuntime {
    * it once, and the retry cold-starts after this kill — on the processor while the chat start is
    * still in flight (the headroom gate). A GPU-posture cold start in flight is let finish first, for
    * at most `YIELD_START_WAIT_MS`: aborting it would reach a document task as a cancel. A sidecar on
-   * the processor, or none, is left alone.
+   * the processor, or none, is left alone — so is a GPU-posture one whose own load log put no buffer
+   * on a graphics device (#671).
    */
   async yieldGpu(): Promise<void> {
     if (this.stopped || this.tearingDown) return
@@ -913,13 +925,15 @@ export class TranslationRuntime {
     }
     // A soft kill already under way (the idle teardown, #605's) still holds the card until the
     // child exits — the chat start must not size itself while it does.
-    if (this.idleTeardownPromise && this.lastStart?.device === 'auto') {
+    if (this.idleTeardownPromise && this.lastStartOnCard()) {
       await this.idleTeardownPromise.catch(() => undefined)
     }
     const server = this.server
-    if (server == null || this.lastStart?.device !== 'auto' || this.stopped || this.tearingDown) return
-    // A GPU-posture start that put nothing on the card (a machine without one) holds nothing to give.
-    if (this.lastStart.gpuLayers === 0) return
+    if (server == null || !this.lastStartOnCard() || this.stopped || this.tearingDown) return
+    // A start that offloaded no layer is left alone too (#473). It still holds its compute buffer
+    // on the card (91 MiB for the 4B at `-ngl 0`, measured in #653), which the chat start then
+    // sizes itself beside; #671 leaves that as it was.
+    if (this.lastStart?.gpuLayers === 0) return
     log.info('Translation sidecar leaves the graphics card for a chat model start')
     await this.softTeardown(server).catch(() => undefined)
   }

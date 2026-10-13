@@ -361,9 +361,10 @@ describe('buildPerformanceSnapshot', () => {
     const snap = buildPerformanceSnapshot(ctx)
     const rows = snap.placement.models
     expect(rows[0]).toMatchObject({ role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', loaded: true, lifetime: 'session' })
-    // The catalog's translation model, live, with its observed split; pinned roles say cpu.
+    // The catalog's translation model, live; pinned roles say cpu. Its split shows only on a row that
+    // says 'gpu', which depends on this host's class (#671) — pinned in performance-gpu.test.ts.
     const tr = rows.find((r) => r.role === 'translation')
-    expect(tr).toMatchObject({ loaded: true, lifetime: 'idle', gpuLayers: 20, totalLayers: 49 })
+    expect(tr).toMatchObject({ loaded: true, lifetime: 'idle' })
     expect(tr?.modelId).toBeTruthy()
     expect(rows.find((r) => r.role === 'vision')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'idle' })
     // A fake without the optional `devicePosture` member reports 'cpu' (Wave 8 ruling (d), the

@@ -1,0 +1,207 @@
+# issue671-b11146-translategemma, the translation sidecar's GPU posture (no device args) on a machine with NO usable graphics device (GTX 1070 Ti hidden with GGML_VK_VISIBLE_DEVICES=7, the stand-in for a GPU-less PC) — env: GGML_VK_VISIBLE_DEVICES=7 — argv: <drive>\runtime\llama.cpp\win\llama-server.exe --host 127.0.0.1 --port 50434 --model <drive>\models\translation\translategemma-12b-it-q4.gguf --ctx-size 4096 --threads 6 --log-colors off --parallel 1 --batch-size 512 --ubatch-size 512 --chat-template gemma -lv 4
+[34m0.00.001.605[0m [32mI [0msrv  llama_server: initializing ...
+ggml_vulkan: Invalid device index 7 in GGML_VK_VISIBLE_DEVICES.
+0.00.183.940 I cmn  common_param: common_params_print_info: build 11146 (7fe450e19) with Clang 20.1.8 for Windows x86_64
+0.00.183.948 I cmn  common_param: common_params_print_info: verbosity = 4 (adjust with the `-lv N` CLI arg)
+0.00.183.950 I cmn  common_param: device_info:
+0.00.183.962 I cmn  common_param:   - CPU     : Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (32710 MiB, 5793 MiB free)
+0.00.183.991 I cmn  common_param: system_info: n_threads = 6 (n_threads_batch = 6) / 12 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.00.184.082 I srv  init_listene: running without SSL
+0.00.184.234 I srv  init_listene: api_keys: ****73f5
+0.00.184.446 I srv          init: using 11 threads for HTTP server
+0.00.188.820 I srv    load_model: loading model '<drive>\models\translation\translategemma-12b-it-q4.gguf'
+0.00.188.827 I srv    load_model: local path '<drive>\models\translation\translategemma-12b-it-q4.gguf'
+0.00.188.847 I cmn  common_init_: fitting params to device memory ...
+0.00.188.848 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)
+0.00.188.906 I common_params_fit_impl: getting device memory data for initial parameters:
+0.00.707.534 I common_memory_breakdown_print: | memory breakdown [MiB] | total   free    self   model   context   compute    unaccounted |
+0.00.707.542 I common_memory_breakdown_print: |   - Host               |                 2907 =  2045 +     736 +     126                |
+0.00.707.542 I common_memory_breakdown_print: |   - CPU_REPACK         |                 4910 =  4910 +       0 +       0                |
+0.00.732.714 I common_params_fit_impl: projected to use 2907 MiB of host memory vs. 32710 MiB of total host memory
+0.00.732.722 I common_params_fit_impl: will leave 29802 >= 1024 MiB of system memory, no changes needed
+0.00.732.790 I common_fit_params: successfully fit params to free device memory
+0.00.732.800 I common_fit_params: fitting params to free memory took 0.54 seconds
+0.00.798.413 I llama_model_loader: loaded meta data with 46 key-value pairs and 626 tensors from <drive>\models\translation\translategemma-12b-it-q4.gguf (version GGUF V3 (latest))
+0.00.798.455 I llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+0.00.798.458 I llama_model_loader: - kv   0:                       general.architecture str              = gemma3
+0.00.798.459 I llama_model_loader: - kv   1:                               general.type str              = model
+0.00.798.460 I llama_model_loader: - kv   2:                     general.sampling.top_k i32              = 64
+0.00.798.465 I llama_model_loader: - kv   3:                     general.sampling.top_p f32              = 0.950000
+0.00.798.466 I llama_model_loader: - kv   4:                               general.name str              = Translategemma 12b It
+0.00.798.467 I llama_model_loader: - kv   5:                           general.finetune str              = it
+0.00.798.467 I llama_model_loader: - kv   6:                           general.basename str              = translategemma
+0.00.798.468 I llama_model_loader: - kv   7:                         general.size_label str              = 12B
+0.00.798.469 I llama_model_loader: - kv   8:                            general.license str              = gemma
+0.00.798.477 I llama_model_loader: - kv   9:                               general.tags arr[str,1]       = ["image-text-to-text"]
+0.00.798.478 I llama_model_loader: - kv  10:                         gemma3.block_count u32              = 48
+0.00.798.479 I llama_model_loader: - kv  11:                      gemma3.context_length u32              = 131072
+0.00.798.479 I llama_model_loader: - kv  12:                    gemma3.embedding_length u32              = 3840
+0.00.798.480 I llama_model_loader: - kv  13:                 gemma3.feed_forward_length u32              = 15360
+0.00.798.480 I llama_model_loader: - kv  14:                gemma3.attention.head_count u32              = 16
+0.00.798.481 I llama_model_loader: - kv  15:             gemma3.attention.head_count_kv u32              = 8
+0.00.798.481 I llama_model_loader: - kv  16:                   gemma3.rope.scaling.type str              = linear
+0.00.798.483 I llama_model_loader: - kv  17:                 gemma3.rope.scaling.factor f32              = 8.000000
+0.00.798.484 I llama_model_loader: - kv  18:    gemma3.attention.layer_norm_rms_epsilon f32              = 0.000001
+0.00.798.485 I llama_model_loader: - kv  19:                gemma3.attention.key_length u32              = 256
+0.00.798.486 I llama_model_loader: - kv  20:              gemma3.attention.value_length u32              = 256
+0.00.798.487 I llama_model_loader: - kv  21:                      gemma3.rope.freq_base f32              = 1000000.000000
+0.00.798.487 I llama_model_loader: - kv  22:            gemma3.attention.sliding_window u32              = 1024
+0.00.798.488 I llama_model_loader: - kv  23:                       tokenizer.ggml.model str              = llama
+0.00.798.488 I llama_model_loader: - kv  24:                         tokenizer.ggml.pre str              = default
+0.00.848.927 I llama_model_loader: - kv  25:                      tokenizer.ggml.tokens arr[str,262208]  = ["<pad>", "<eos>", "<bos>", "<unk>", ...
+0.00.980.874 I llama_model_loader: - kv  26:                      tokenizer.ggml.scores arr[f32,262208]  = [-1000.000000, -1000.000000, -1000.00...
+0.00.999.624 I llama_model_loader: - kv  27:                  tokenizer.ggml.token_type arr[i32,262208]  = [3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, ...
+0.00.999.632 I llama_model_loader: - kv  28:                tokenizer.ggml.bos_token_id u32              = 2
+0.00.999.633 I llama_model_loader: - kv  29:                tokenizer.ggml.eos_token_id u32              = 1
+0.00.999.634 I llama_model_loader: - kv  30:            tokenizer.ggml.unknown_token_id u32              = 3
+0.00.999.635 I llama_model_loader: - kv  31:            tokenizer.ggml.padding_token_id u32              = 0
+0.00.999.636 I llama_model_loader: - kv  32:               tokenizer.ggml.add_bos_token bool             = true
+0.00.999.636 I llama_model_loader: - kv  33:               tokenizer.ggml.add_sep_token bool             = false
+0.00.999.637 I llama_model_loader: - kv  34:               tokenizer.ggml.add_eos_token bool             = false
+0.00.999.654 I llama_model_loader: - kv  35:                    tokenizer.chat_template str              = {%- set languages = {\n    "aa": "Afar...
+0.00.999.654 I llama_model_loader: - kv  36:            tokenizer.ggml.add_space_prefix bool             = false
+0.00.999.655 I llama_model_loader: - kv  37:               general.quantization_version u32              = 2
+0.00.999.656 I llama_model_loader: - kv  38:                          general.file_type u32              = 15
+0.00.999.658 I llama_model_loader: - kv  39:                                general.url str              = https://huggingface.co/mradermacher/t...
+0.00.999.659 I llama_model_loader: - kv  40:              mradermacher.quantize_version str              = 2
+0.00.999.660 I llama_model_loader: - kv  41:                  mradermacher.quantized_by str              = mradermacher
+0.00.999.661 I llama_model_loader: - kv  42:                  mradermacher.quantized_at str              = 2026-01-16T08:19:25+01:00
+0.00.999.663 I llama_model_loader: - kv  43:                  mradermacher.quantized_on str              = nico1
+0.00.999.665 I llama_model_loader: - kv  44:                         general.source.url str              = https://huggingface.co/google/transla...
+0.00.999.666 I llama_model_loader: - kv  45:                  mradermacher.convert_type str              = hf
+0.00.999.667 I llama_model_loader: - type  f32:  289 tensors
+0.00.999.667 I llama_model_loader: - type q4_K:  288 tensors
+0.00.999.667 I llama_model_loader: - type q6_K:   49 tensors
+0.00.999.669 I print_info: file format = GGUF V3 (latest)
+0.00.999.669 I print_info: file type   = Q4_K - Medium
+0.00.999.673 I print_info: file size   = 6.79 GiB (4.96 BPW) 
+0.01.115.369 I load: 6242 unused tokens
+0.01.116.293 W load: control-looking token:    212 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.01.162.813 I load: printing all EOG tokens:
+0.01.162.822 I load:   - 1 ('<eos>')
+0.01.162.823 I load:   - 106 ('<end_of_turn>')
+0.01.162.824 I load:   - 212 ('</s>')
+0.01.163.591 I load: special tokens cache size = 6415
+0.01.188.198 I load: token to piece cache size = 1.9446 MB
+0.01.188.217 I print_info: arch                  = gemma3
+0.01.188.218 I print_info: vocab_only            = 0
+0.01.188.219 I print_info: no_alloc              = 0
+0.01.188.219 I print_info: n_ctx_train           = 131072
+0.01.188.220 I print_info: n_embd_inp            = 3840
+0.01.188.221 I print_info: n_embd                = 3840
+0.01.188.221 I print_info: n_embd_out            = 3840
+0.01.188.222 I print_info: n_layer               = 48
+0.01.188.223 I print_info: n_layer_all           = 48
+0.01.188.236 I print_info: n_head                = 16
+0.01.188.241 I print_info: n_head_kv             = 8
+0.01.188.241 I print_info: n_rot                 = 256
+0.01.188.242 I print_info: n_swa                 = 1024
+0.01.188.243 I print_info: is_swa_any            = 1
+0.01.188.243 I print_info: non_causal_type       = 0
+0.01.188.244 I print_info: n_embd_head_k         = 256
+0.01.188.245 I print_info: n_embd_head_v         = 256
+0.01.188.249 I print_info: n_gqa                 = 2
+0.01.188.253 I print_info: n_embd_k_gqa          = 2048
+0.01.188.257 I print_info: n_embd_v_gqa          = 2048
+0.01.188.258 I print_info: f_norm_eps            = 0.0e+00
+0.01.188.260 I print_info: f_norm_rms_eps        = 1.0e-06
+0.01.188.261 I print_info: f_clamp_kqv           = 0.0e+00
+0.01.188.261 I print_info: f_max_alibi_bias      = 0.0e+00
+0.01.188.262 I print_info: f_logit_scale         = 0.0e+00
+0.01.188.263 I print_info: f_attn_scale          = 6.2e-02
+0.01.188.265 I print_info: f_attn_value_scale    = 0.0000
+0.01.188.268 I print_info: n_ff                  = 15360
+0.01.188.269 I print_info: n_expert              = 0
+0.01.188.270 I print_info: n_expert_used         = 0
+0.01.188.270 I print_info: n_expert_groups       = 0
+0.01.188.271 I print_info: n_group_used          = 0
+0.01.188.272 I print_info: causal attn           = 1
+0.01.188.272 I print_info: pooling type          = -1
+0.01.188.273 I print_info: rope type             = 2
+0.01.188.274 I print_info: rope scaling          = linear
+0.01.188.275 I print_info: freq_base_train       = 1000000.0
+0.01.188.277 I print_info: freq_scale_train      = 0.125
+0.01.188.278 I print_info: freq_base_swa         = 10000.0
+0.01.188.279 I print_info: freq_scale_swa        = 1
+0.01.188.279 I print_info: n_embd_head_k_swa     = 256
+0.01.188.280 I print_info: n_embd_head_v_swa     = 256
+0.01.188.281 I print_info: n_rot_swa             = 256
+0.01.188.281 I print_info: n_ctx_orig_yarn       = 131072
+0.01.188.282 I print_info: rope_yarn_log_mul     = 0.0000
+0.01.188.283 I print_info: rope_finetuned        = unknown
+0.01.188.284 I print_info: model type            = 12B
+0.01.188.285 I print_info: model params          = 11.77 B
+0.01.188.286 I print_info: general.name          = Translategemma 12b It
+0.01.188.287 I print_info: vocab type            = SPM
+0.01.188.288 I print_info: n_vocab               = 262208
+0.01.188.289 I print_info: n_merges              = 0
+0.01.188.290 I print_info: BOS token             = 2 '<bos>'
+0.01.188.290 I print_info: EOS token             = 1 '<eos>'
+0.01.188.291 I print_info: EOT token             = 106 '<end_of_turn>'
+0.01.188.292 I print_info: UNK token             = 3 '<unk>'
+0.01.188.293 I print_info: PAD token             = 0 '<pad>'
+0.01.188.294 I print_info: LF token              = 248 '<0x0A>'
+0.01.188.295 I print_info: EOG token             = 1 '<eos>'
+0.01.188.295 I print_info: EOG token             = 106 '<end_of_turn>'
+0.01.188.296 I print_info: EOG token             = 212 '</s>'
+0.01.188.297 I print_info: max token length      = 48
+0.01.188.299 I load_tensors: loading model tensors, this can take a while... (load_mode = mmap)
+0.02.867.102 I load_tensors: offloading output layer to GPU
+0.02.867.112 I load_tensors: offloading 47 repeating layers to GPU
+0.02.867.112 I load_tensors: offloaded 49/49 layers to GPU
+0.02.867.116 I load_tensors:   CPU_Mapped model buffer size =  6956.32 MiB
+0.02.867.118 I load_tensors:   CPU_REPACK model buffer size =  4910.62 MiB
+0.15.670.566 I cmn  common_init_: added <eos> logit bias = -inf
+0.15.670.577 I cmn  common_init_: added <end_of_turn> logit bias = -inf
+0.15.670.580 I cmn  common_init_: added </s> logit bias = -inf
+0.15.672.413 I llama_context: constructing llama_context
+0.15.672.426 I llama_context: n_seq_max             = 1
+0.15.672.427 I llama_context: n_ctx                 = 4096
+0.15.672.428 I llama_context: n_ctx_seq             = 4096
+0.15.672.428 I llama_context: n_batch               = 512
+0.15.672.429 I llama_context: n_ubatch              = 512
+0.15.672.430 I llama_context: causal_attn           = 1
+0.15.672.431 I llama_context: flash_attn            = auto
+0.15.672.431 I llama_context: kv_unified            = false
+0.15.672.434 I llama_context: freq_base             = 1000000.0
+0.15.672.437 I llama_context: freq_scale            = 0.125
+0.15.672.438 I llama_context: n_rs_seq              = 0
+0.15.672.439 I llama_context: n_outputs_max         = 1
+0.15.672.439 I llama_context: n_outputs_max_per_seq = 1
+0.15.672.441 I llama_context: n_ctx_seq (4096) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+0.15.673.023 I llama_context:        CPU  output buffer size =     1.00 MiB
+0.15.673.029 I llama_kv_cache_iswa: creating non-SWA KV cache, size = 4096 cells
+0.15.673.164 I llama_kv_cache:        CPU KV buffer size =   256.00 MiB
+0.15.977.267 I llama_kv_cache: size =  256.00 MiB (  4096 cells,   8 layers,  1/1 seqs), K (f16):  128.00 MiB, V (f16):  128.00 MiB
+0.15.977.283 I llama_kv_cache: attn_rot_k = 0, n_embd_head_k_all = 256
+0.15.977.283 I llama_kv_cache: attn_rot_v = 0, n_embd_head_k_all = 256
+0.15.977.288 I llama_kv_cache_iswa: creating     SWA KV cache, size = 1536 cells
+0.15.977.428 I llama_kv_cache:        CPU KV buffer size =   480.00 MiB
+0.16.772.314 I llama_kv_cache: size =  480.00 MiB (  1536 cells,  40 layers,  1/1 seqs), K (f16):  240.00 MiB, V (f16):  240.00 MiB
+0.16.772.333 I llama_kv_cache: attn_rot_k = 0, n_embd_head_k_all = 256
+0.16.772.334 I llama_kv_cache: attn_rot_v = 0, n_embd_head_k_all = 256
+0.16.772.351 I sched_reserve: reserving ...
+0.16.775.234 I resolve_fused_ops: Flash Attention enabled
+0.16.775.242 I resolve_fused_ops: resolving fused DeepSeek V4 HC support:
+0.16.776.271 I resolve_fused_ops: fused DeepSeek V4 HC pre enabled
+0.16.777.279 I resolve_fused_ops: fused DeepSeek V4 HC comb enabled
+0.16.778.274 I resolve_fused_ops: fused DeepSeek V4 HC post enabled
+0.16.783.993 I sched_reserve:        CPU compute buffer size =   126.02 MiB
+0.16.784.004 I sched_reserve: graph: nodes = 1927, splits = 1, input objects = 4, input tensors = 9
+0.16.784.005 I sched_reserve: reserve took 11.65 ms, sched copies = 1
+0.16.784.694 I cmn          init: llama threadpool init, n_threads = 6
+0.16.784.717 I cmn  common_init_: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+0.20.787.731 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 4096, kv_unified = 'false'
+0.20.788.239 I spec common_specu: no implementations specified for speculative decoding
+0.20.788.393 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 4096
+0.20.788.495 I srv    load_model: prompt cache is enabled, size limit: 8192 MiB
+0.20.788.496 I srv    load_model: use `--cache-ram 0` to disable the prompt cache
+0.20.788.498 I srv    load_model: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+0.20.788.500 I srv    load_model: context checkpoints enabled, max = 32, min spacing = 8192
+0.20.789.700 I srv          init: idle slots will be saved to prompt cache upon starting a new task
+0.20.792.667 I srv          init: init: chat template, example_format: 'gemma'
+0.20.793.701 I srv          init: init: chat template, thinking = 0
+0.20.793.716 I srv          init: preserve_reasoning kwarg: not supported by template
+0.20.794.870 I srv  llama_server: model loaded
+0.20.794.884 I srv  llama_server: listening on http://127.0.0.1:50434
+0.20.795.302 I srv  update_slots: all slots are idle

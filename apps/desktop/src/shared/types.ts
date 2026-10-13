@@ -210,7 +210,7 @@ export interface LocalApiConnectionInfo {
  * by `TranslationRuntime.deviceStatus()` in `main/services/translation/runtime.ts`). The layer
  * split is parsed from llama.cpp's own load log (`load_tensors: offloaded X/Y layers to GPU`) —
  * the only place the real `--fit` outcome is reported; null when the server printed no offload
- * line (e.g. a forced-CPU start on a GPU-less machine).
+ * line. The line is no evidence of a card on its own (#671): see `gpuBuffers`.
  */
 export interface TranslationDeviceStatus {
   /** The launch posture: 'auto' = GPU auto-offload (no device args), 'cpu' = forced `--device none`. */
@@ -219,6 +219,17 @@ export interface TranslationDeviceStatus {
   gpuLayers: number | null
   /** The model's total layer count from the same log line, or null. */
   totalLayers: number | null
+  /**
+   * #671: did the same load log put any of the model's buffers — weights, context cache, recurrent
+   * state or compute — on a device its own `device_info` block lists as a graphics device
+   * (`PlacementParser.holdsGpuBuffers`, the evidence the chat label uses since #653)? `false` when
+   * every buffer it printed was under a CPU-side label: a start with no usable graphics device, and
+   * one under `--device none`, print `offloaded 49/49 layers to GPU` all the same, so such a start
+   * ran on the processor whatever the split says. Absent when there is nothing to judge by: no
+   * buffer line, or one under a label that is neither CPU-side nor a listed GPU
+   * (`PlacementParser.gpuBufferEvidence`). Read through `translationRanOnProcessor`.
+   */
+  gpuBuffers?: boolean
   /** Is the sidecar currently up? False after the 2-min idle teardown / lock / a crash. */
   live: boolean
   /**
@@ -2689,8 +2700,9 @@ export interface ObservedAnswerSpeed {
  * Where one model's start actually put it (benchmark.md "Your model"), parsed from
  * llama.cpp's load log by `runtime/placement.ts`: the layer split (`offloaded X/Y layers to
  * GPU`), the per-device model buffers, the context-cache buffers, and on Apple Silicon the
- * memory Metal lets the GPU take. Every figure is null when its line was not printed (a
- * forced-CPU start prints no offload line). MiB throughout, as the log prints them.
+ * memory Metal lets the GPU take. Every figure is null when its line was not printed (a log
+ * below verbosity 4 prints none; a forced-CPU start does print the offload line, as `N/N`, #671).
+ * MiB throughout, as the log prints them.
  */
 export interface ModelPlacement {
   modelId: string

@@ -334,25 +334,39 @@ describe('createPlacementParser', () => {
 // #653: the start ladder labels a start `gpu` from its own log when the probe lists no device, and
 // the evidence is `holdsGpuBuffers()`. The real captures run through the ladder
 // (`runtime-ladder.test.ts`: full offload, GPU-less 37/37, 0/37, AMX, Metal mapped); these are the
-// edge rules no capture reaches. Handwritten.
-describe('holdsGpuBuffers — a buffer under a device the log lists as a GPU (#653)', () => {
+// edge rules no capture reaches. Handwritten. #671: `gpuBufferEvidence` is the same rule read both
+// ways, for the translation sidecar, which has no probe to fall back on: `false` only when every
+// buffer is CPU-side, `null` when nothing (or an unlisted label) leaves it open. Its real captures run
+// through `translation-runtime.test.ts`.
+describe('holdsGpuBuffers / gpuBufferEvidence — a buffer under a device the log lists as a GPU (#653, #671)', () => {
   const ROW = (label: string): string => `  - ${label} : NVIDIA GeForce RTX 3060 (12288 MiB, 11000 MiB free)`
   it.each([
-    { name: 'a 0 MiB buffer on a listed device is no evidence', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 0.00 MiB'], gpu: false },
-    { name: 'a KV buffer alone counts', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 576.00 MiB'], gpu: true },
-    { name: 'a recurrent-state buffer alone counts', lines: [ROW('Vulkan0'), 'llama_memory_recurrent: Vulkan0 RS buffer size = 184.25 MiB'], gpu: true },
-    { name: 'device 1 does not claim a buffer of device 10', lines: [ROW('Vulkan1'), 'load_tensors: Vulkan10 model buffer size = 2375.91 MiB'], gpu: false },
-    { name: 'a host buffer never counts, even against a numberless row', lines: [ROW('Vulkan'), 'sched_reserve: Vulkan_Host compute buffer size = 14.01 MiB'], gpu: false }
-  ])('$name', ({ lines, gpu }) => {
+    { name: 'a 0 MiB buffer on a listed device is no evidence', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 0.00 MiB'], gpu: false, evidence: null },
+    { name: 'a KV buffer alone counts', lines: [ROW('Vulkan0'), 'llama_kv_cache: Vulkan0 KV buffer size = 576.00 MiB'], gpu: true, evidence: true },
+    { name: 'a recurrent-state buffer alone counts', lines: [ROW('Vulkan0'), 'llama_memory_recurrent: Vulkan0 RS buffer size = 184.25 MiB'], gpu: true, evidence: true },
+    { name: 'device 1 does not claim a buffer of device 10', lines: [ROW('Vulkan1'), 'load_tensors: Vulkan10 model buffer size = 2375.91 MiB'], gpu: false, evidence: null },
+    { name: 'a host buffer never counts, even against a numberless row', lines: [ROW('Vulkan'), 'sched_reserve: Vulkan_Host compute buffer size = 14.01 MiB'], gpu: false, evidence: false },
+    { name: 'every buffer CPU-side, the offload line beside them (#671)', lines: ['load_tensors: offloaded 49/49 layers to GPU', 'load_tensors: CPU_REPACK model buffer size = 4910.62 MiB', 'llama_kv_cache: CPU KV buffer size = 256.00 MiB'], gpu: false, evidence: false },
+    { name: 'a card buffer with no device_info row to place it leaves it open (#671)', lines: ['load_tensors: Vulkan0 model buffer size = 5638.32 MiB', 'load_tensors: CPU_Mapped model buffer size = 2105.69 MiB'], gpu: false, evidence: null },
+    { name: 'the offload line alone leaves it open (#671)', lines: ['load_tensors: offloaded 49/49 layers to GPU'], gpu: false, evidence: null }
+  ])('$name', ({ lines, gpu, evidence }) => {
     const p = createPlacementParser()
     p.onStderrData(lines.join('\n') + '\n')
     expect(p.holdsGpuBuffers()).toBe(gpu)
+    expect(p.gpuBufferEvidence()).toBe(evidence)
   })
 })
 
 describe('the committed load logs carry no request or prompt content (DR3)', () => {
-  /** #653: load-only captures (cut at the first `all slots are idle`, before any request). */
-  const LOAD_ONLY = ['placement-b11146-gpuless-37of37-cpu.txt', 'placement-b11146-ngl0-0of37-compute.txt']
+  /** #653, #671: load-only captures (cut at the first `all slots are idle`, before any request). */
+  const LOAD_ONLY = [
+    'placement-b11146-gpuless-37of37-cpu.txt',
+    'placement-b11146-ngl0-0of37-compute.txt',
+    // #671: the translation sidecar's own argv (TranslateGemma, `translationServerArgs`).
+    'placement-b11146-translategemma-gpuless-49of49-cpu.txt',
+    'placement-b11146-translategemma-partial-39of49.txt',
+    'placement-b11146-translategemma-devnone-49of49-cpu.txt'
+  ]
   const NAMES = [
     'placement-b9849-partial-20of33-hybrid.txt',
     'placement-b9849-partial-18of33-np4.txt',

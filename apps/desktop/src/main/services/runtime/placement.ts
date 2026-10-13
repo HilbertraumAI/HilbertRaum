@@ -2,10 +2,10 @@ import type { ModelPlacement, PlacementDevice } from '../../../shared/types'
 
 // Where a model's start actually put it (benchmark.md "Your model"). llama.cpp's load log
 // is the only place the real outcome of `--fit` is reported: the layer split, the bytes each
-// device holds for the weights, and the context-cache buffers. The translation sidecar
-// already reads the offload line for its device hint; this parser reads the whole set for
-// the chat runtime and hands one observation per successful start to the observer below
-// (the read-speed.ts idiom: a module-level latch plus one persister registered by the IPC
+// device holds for the weights, and the context-cache buffers. This parser reads the whole set,
+// for the chat runtime and for the translation sidecar's device hint (its split and
+// `holdsGpuBuffers`, #671). For chat, one observation per successful start goes to the observer
+// below (the read-speed.ts idiom: a module-level latch plus one persister registered by the IPC
 // layer, so producers never touch settings).
 //
 // Lines, across the naming drift between builds (`llm_load_tensors:` / `load_tensors:`,
@@ -122,6 +122,16 @@ export interface PlacementParser {
    * purpose: the reading is the persisted `ModelPlacement` shape.
    */
   holdsGpuBuffers: () => boolean
+  /**
+   * #671: `holdsGpuBuffers` as evidence BOTH ways, for a reader that has no probe to fall back on
+   * (the translation sidecar). `true` = GPU buffers; `false` = the log filed buffers and every one
+   * under a CPU-side label (`CPU`, `CPU_Mapped`, `CPU_REPACK`, `<Backend>_Host`), as a start with no
+   * usable graphics device or under `--device none` does (both still print `offloaded 49/49 layers
+   * to GPU`); `null` = nothing to judge by: no buffer filed, or one under a label that is neither
+   * CPU-side nor a listed GPU — ggml's `AMX`, or a `device_info` block this parser cannot read,
+   * which must not turn a start on the card into "the processor".
+   */
+  gpuBufferEvidence: () => boolean | null
 }
 
 function isCpuDevice(name: string): boolean {
@@ -226,6 +236,12 @@ export function createPlacementParser(): PlacementParser {
       if (r.gpuFreeAtStartMb == null) r.gpuFreeAtStartMb = Number(dev[4])
     }
   }
+  // A CPU-side label never counts, even one a row label would match by prefix (`Vulkan_Host`
+  // against a numberless `Vulkan` row; ggml numbers its devices today, so this is a backstop).
+  const holdsGpuBuffers = (): boolean =>
+    [...bufferLabels].some(
+      (label) => !isCpuDevice(label) && rows.some((row) => label === row.label || label.startsWith(`${row.label}_`))
+    )
   return {
     onStderrData: (text) => {
       pending += text
@@ -252,12 +268,11 @@ export function createPlacementParser(): PlacementParser {
         devices: rows.map((row) => ({ ...row, computeMb: byLabel.get(row.label) ?? null }))
       }
     },
-    // A CPU-side label never counts, even one a row label would match by prefix (`Vulkan_Host`
-    // against a numberless `Vulkan` row; ggml numbers its devices today, so this is a backstop).
-    holdsGpuBuffers: () =>
-      [...bufferLabels].some(
-        (label) => !isCpuDevice(label) && rows.some((row) => label === row.label || label.startsWith(`${row.label}_`))
-      )
+    holdsGpuBuffers,
+    gpuBufferEvidence: () => {
+      if (holdsGpuBuffers()) return true
+      return bufferLabels.size > 0 && [...bufferLabels].every(isCpuDevice) ? false : null
+    }
   }
 }
 

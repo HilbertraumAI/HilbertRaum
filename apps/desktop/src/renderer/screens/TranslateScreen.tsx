@@ -24,6 +24,7 @@ import { TranslateDropZone } from '../translate/TranslateDropZone'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
+import { translationRanOnProcessor } from '@shared/runtime-status'
 import {
   TRANSLATION_LANGUAGE_CODES,
   TRANSLATION_NATIVE_NAMES,
@@ -202,7 +203,9 @@ export function TranslateScreen({
   // are the same two keys as before; only what each says did.
   const deviceHint = ((): { text: string; title: string; remedy?: string } | null => {
     if (!device) return null
-    if (device.device === 'cpu') {
+    // #671: a GPU-posture start whose own load log put no buffer on a graphics device ran on the
+    // processor — its split is no evidence (a PC with no usable card prints `49/49 layers` too).
+    if (translationRanOnProcessor(device)) {
       // #473: the headroom gate chose the processor — name why, as the starved forms below do.
       // Only "beside the chat model" has an action; the other two resolve on their own or not at all.
       if (device.cpuCause === 'beside-chat') {

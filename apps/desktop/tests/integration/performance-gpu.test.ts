@@ -622,7 +622,8 @@ describe('capability is not execution (DR1)', () => {
   it('GPU on: chat and translation say gpu; bothOnCard needs chat resident on the GPU with layers and the translation live with layers', () => {
     const on = cardMachine({ placement: {} })
     expect(rowOf(on.placement, 'chat').device).toBe('gpu')
-    expect(rowOf(on.placement, 'translation').device).toBe('gpu')
+    // A live sidecar on the card carries its observed split.
+    expect(rowOf(on.placement, 'translation')).toMatchObject({ device: 'gpu', gpuLayers: 20, totalLayers: 49 })
     expect(on.placement.totals.bothOnCard).toBe(true)
     // The estimate/measurement for the card, not the processor.
     expect(on.placement.verdict.kind).toBe('gpu')
@@ -715,11 +716,20 @@ describe('capability is not execution (DR1)', () => {
     expect(off.placement.vramMb).toBeNull()
   })
 
-  it('a translation sidecar forced to --device none says cpu while chat keeps the card', () => {
-    const forced = cardMachine({ placement: {}, translation: { device: 'cpu', gpuLayers: null, totalLayers: null, live: true } })
-    expect(rowOf(forced.placement, 'chat').device).toBe('gpu')
-    expect(rowOf(forced.placement, 'translation').device).toBe('cpu')
-    expect(forced.placement.totals.bothOnCard).toBe(false)
+  // #671: the offload line is no evidence of a card. A forced `--device none` start and a GPU-posture
+  // start with no usable device both print `offloaded 49/49 layers to GPU`, every buffer on the
+  // processor: the row says processor, shows no "on the card" split, and counts in the RAM total.
+  it.each([
+    ['forced to --device none', { device: 'cpu', gpuLayers: 49, totalLayers: 49, live: true }],
+    ['whose GPU-posture start put no buffer on a graphics device', { device: 'auto', gpuLayers: 49, totalLayers: 49, gpuBuffers: false, live: true }]
+  ] as const)('a translation sidecar %s says cpu while chat keeps the card', (_name, translation) => {
+    const tr = cardMachine({ placement: {}, translation })
+    expect(rowOf(tr.placement, 'chat').device).toBe('gpu')
+    expect(rowOf(tr.placement, 'translation')).toMatchObject({ device: 'cpu', gpuLayers: null, totalLayers: null })
+    expect(tr.placement.totals.bothOnCard).toBe(false)
+    const without = cardMachine({ placement: {}, translation: null })
+    const sizeMb = (rowOf(tr.placement, 'translation').sizeOnDiskGb ?? 0) * 1024
+    expect(Math.abs((tr.placement.totals.ramAllMb ?? 0) - (without.placement.totals.ramAllMb ?? 0) - sizeMb)).toBeLessThanOrEqual(1)
   })
 
   it('a matching start OBSERVED on the CPU backend puts the chat row on the processor and judges it against RAM', () => {
@@ -736,7 +746,9 @@ describe('capability is not execution (DR1)', () => {
     const none = cardMachine({ settings: { gpuProbe: probe([IRIS], here()) } })
     expect(none.placement.memoryClass).toBe('cpu')
     expect(rowOf(none.placement, 'chat').device).toBe('cpu')
-    expect(rowOf(none.placement, 'translation').device).toBe('cpu')
+    // #671: a row that says processor claims no layers on the card, whatever the sidecar printed
+    // (here a live 20/49 start, which on such a PC can only be the integrated GPU's).
+    expect(rowOf(none.placement, 'translation')).toMatchObject({ device: 'cpu', gpuLayers: null, totalLayers: null })
     expect(none.placement.totals.bothOnCard).toBe(false)
   })
 })
