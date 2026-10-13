@@ -1,0 +1,77 @@
+<!-- synthetic fixture written for HilbertRaum on 2026-10-13; models the HTML shape of a zimit/warc2zim capture of a code-tutorial site, from the measured structure of such pages (issue #627: every code block sits in a `<td class="code">` cell beside a `<td class="docs">` cell of a classless `<table>`, highlighted as one `<span class="line">` per line, and the page ends in a `<p class="footer">`); no third-party text is included; license: GPL-3.0-or-later (repository license) -->
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Code by Example: Counters</title>
+    <link rel=stylesheet href="site.css">
+  </head>
+  <script>
+      var copyState = "copy-script-never-shown";
+  </script>
+  <body>
+    <div class="example" id="counters">
+      <h2><a href="./">Code by Example</a>: Counters</h2>
+      <table>
+        <tr>
+          <td class="docs">
+            <p>A counter is the smallest program that still has state worth reading. This page builds one
+step by step, so every fragment on the right is short enough to follow on its own while the text on the
+left says why it is written that way.</p>
+          </td>
+          <td class="code empty leading">
+          </td>
+        </tr>
+        <tr>
+          <td class="docs">
+            <p>The counter keeps its running total in a field and grows it by a fixed step, so the same
+value always produces the same sequence however often the program is run.</p>
+          </td>
+          <td class="code leading">
+          <pre class="chroma"><code><span class="line"><span class="cl"><span class="kd">func</span> <span class="nf">count</span><span class="p">(</span><span class="nx">step</span> <span class="kt">int</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">total</span> <span class="o">:=</span> <span class="mi">0</span>
+</span></span><span class="line"><span class="cl">    <span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">total</span> <span class="o">+=</span> <span class="nx">step</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="k">return</span> <span class="nx">total</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+          </td>
+        </tr>
+        <tr>
+          <td class="docs">
+            <p>Calling it twice with different steps shows that nothing is shared between calls: each call
+starts again from zero, which is the property the next example takes away on purpose.</p>
+          </td>
+          <td class="code">
+          <pre class="chroma"><code><span class="line"><span class="cl">    <span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nf">count</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span></span></span></code></pre>
+          </td>
+        </tr>
+      </table>
+      <table>
+        <tr>
+          <td class="docs">
+          </td>
+          <td class="code leading">
+          <pre class="chroma"><code><span class="line"><span class="cl"><span class="gp">$</span> go run counters.go
+</span></span><span class="line"><span class="cl"><span class="go">6</span></span></span></code></pre>
+          </td>
+        </tr>
+        <tr>
+          <td class="docs">
+            <p>A counter that has to remember its total between calls needs somewhere to keep it, and the
+choice of that place is what the next example is about. Until then, the function above is the whole
+idea: a loop, a running total and a value handed back to the caller once the loop is done.</p>
+          </td>
+          <td class="code empty">
+          </td>
+        </tr>
+      </table>
+      <p class="next">
+        Next example: <a href="closures-by-hand" rel="next">Closures by hand</a>.
+      </p>
+    <p class="footer">
+      by <a href="https://example.org/a">footer-never-shown</a> | <a href="https://example.org/src">source</a> | <a href="https://example.org/license">license</a>
+    </p>
+    </div>
+  </body>
+</html>

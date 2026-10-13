@@ -27,6 +27,31 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-05 #516 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #627 entry). Its record is unchanged:
+`architecture.md` "In-app engine updates". Its one open item, a quick translation in flight at the pause being cut off, stays
+recorded there and in `known-limitations.md` "Engine updates (#516) can cut off a quick translation". Citations of the form
+"BUILD_STATE 2026-10-05 #516 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
+`older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
+archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the
+CODE-13 race). Fixed: the plain install re-installed outdated engines (refused while a model ran; a downgrade of newer ones) — now missing only. Quiet notice (§11.20),
+Diagnostics row, `fetch-runtime` note. Owner: offer + report, pause/resume, cpu/ too, Kits same gates. Real app verified twice (b9849 → b11146, ~5–6 s downtime;
+busy refusal; the 1070 Ti's b9849 hung mid-chat, b11146 answered). Record: `architecture.md` "In-app engine updates". Open: a quick translation in flight at the
+pause is cut off. Found, pre-existing, now fixed: a chat sidecar hung before its response headers escaped the CB-5 watchdog (record §5; #594)._
+
+## 2026-10-13 — the closed 2026-10-05 #580 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #627 entry). Its record is unchanged: the
+Skills record §21 "#580 amendment". It named no open item. Citations of the form "BUILD_STATE 2026-10-05 #580 entry" now
+resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#580 — redaction masks the union of overlapping proposals (`fix/580-redaction-overlap`).** "Jane" before "Jane Doe" left the surname visible (.txt + DOCX),
+and a partial overlap ("Anna Berg" + "Berg GmbH") left " GmbH" in either order: `applySpans` keeps the first of two overlapping spans. `verifyAndSweepEntities` now merges
+occurrences into disjoint regions; counts are regions; the edit tool's comment corrected. Record: Skills record §21 "#580 amendment". Open: none._
+
 ## 2026-10-13 — the closed 2026-10-05 #532 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #653 entry). Its records are unchanged:

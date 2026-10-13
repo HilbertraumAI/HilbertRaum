@@ -29,7 +29,13 @@ Provenance for every file in this directory (PR #294 → issue #301, Phase 1 / f
   accepted-answer block, vote/user-info tables). No third-party text; license:
   GPL-3.0-or-later. Added Phase 1 (T02-b, finding H1).
 
-All four synthetic files are attributed in their own first-line HTML comment (producer modelled,
+- **zimit-code-table-page.html** — synthetic fixture written for HilbertRaum on 2026-10-13
+  (issue #627); models the shape a zimit/warc2zim capture of a code-tutorial site was measured
+  to have: every code block in a `<td class="code">` cell beside a `<td class="docs">` cell of
+  a classless `<table>`, highlighted one `<span class="line">` per line, and the page ending in
+  a `<p class="footer">`. No third-party text; license: GPL-3.0-or-later.
+
+All five synthetic files are attributed in their own first-line HTML comment (producer modelled,
 no third-party content, license) and are written entirely for this repository from public
 knowledge of each producer's output shape — no copied Wikipedia, MDN, Stack Exchange or other
 third-party prose.

@@ -5438,6 +5438,72 @@ counting. Measured old against new converter: 0 of the 949 + 1,024 cached Wikipe
 change (none carries a `<figure>`), and 1 caption in the 488 articles from seven other archives
 changes: a `[2]` bracket is dropped.
 
+**Site furniture and code blocks on archives that are not Wikipedia (#627, 2026-10-13).** Two
+gaps, both measured on the archives the issue named (`gobyexample.com_en_all_2026-05`,
+`devdocs_en_q_2026-07`, read through `/raw` from the pinned kiwix-serve 3.8.1): every one of
+gobyexample's 86 pages delivered its `<p class="footer">` line, and 0 of 1,720 / 0 of 38
+indented code lines kept their indentation. Owner calls of 2026-10-13, all as recommended:
+- **Furniture is a whole class token.** A `p`/`div`/`section` whose class has a token equal to
+  `footer`, `site-footer`, `nav`, `navbar`, `menu`, `sidebar`, `breadcrumb` or `cookie` is
+  dropped with its subtree, in the prose path only (`html.ts` `FURNITURE_CLASS_TOKENS`). The
+  issue's draft — those words matched anywhere in the class (`\b…\b`) — was measured first and
+  refused. It also matched mwoffliner's `zim-footer` license line on 1,322 of 1,500 sampled
+  German Wikipedia pages and German navigation boxes (`erw-nav-farbschema-grau`), both of which
+  would change the development set. It would also match the Read the Docs theme's wrappers
+  around the entire article (`wy-grid-for-nav`, `wy-nav-content`), dropping the article itself.
+  Over 2,672 sampled pages from 15 archives, exact tokens drop gobyexample's footer (86/86) and
+  lesscss.org's docs menu (7/9) and nothing else; the two Wikipedia classes are #662. A
+  furniture `p` also ends where HTML5 ends one — at a block start tag or its parent's end tag —
+  so one without an end tag cannot swallow the page.
+- **Code keeps its indentation inside its own segment, in prose and in kept tables.**
+  gobyexample's code is all in table cells (898 of 898 `<pre>`), so a prose-only capture, as
+  drafted, would have left it at 0. A `<pre>`'s whitespace is carried through the tidy as two
+  placeholder noncharacters (U+FDD0 space, U+FDD1 tab) and restored once the text is final:
+  `IncrementalTidy.push` in prose, the end of `serializeTable` in a table (`PreformattedWhitespace`
+  in `html.ts`). Indentation and tabs are kept whole; a gap inside a line keeps one real space
+  plus the rest; trailing whitespace is dropped; a block tag inside the block ends the line
+  (never a blank one, a source newline right after it included) while each `<br>` is a break of
+  its own; CRLF is one break even across a text-piece boundary; one kept run is capped at 256.
+  In a table cell the first line follows the column key (`docs: code`), so indentation is kept
+  from the second line on. The table caps count visible characters only (`visibleLength`), so
+  a cut lands exactly where it did before; the whitespace a table keeps is bounded on its own
+  (`TABLE_MAX_KEPT_WHITESPACE` = 6,000 per outermost table, against 534 for the most any
+  measured table kept). A `<pre>` left open closes at the end tag of an element holding it,
+  and furniture cannot start inside one; an unquoted `class=footer` (a minified page) counts.
+- **Why in-segment, not a segment of its own (the issue's draft).** The shared chunker splits on
+  whitespace (`atomize`), so indentation never reaches retrieval, the reranker, the prompt or a
+  citation snippet whatever the converter emits. What reads it is the article viewer
+  (`pre-wrap`) and a saved copy. A segment per code block would have repeated the section heading
+  in both (`ArticleModal` and `renderArticleMarkdown` print a heading per segment, as they already
+  do around a table) and narrowed the admission lead (`segments.slice(0, 1)` in `arm.ts`) on a
+  page whose code sits before its first heading.
+**Measured (2026-10-13, master `661e7157` against the fix, same pages):** with the
+placeholders removed the text is what the collapse produced before, so across the 2,672 pages
+title, `work`, `slices` and truncation are identical everywhere; per-segment word sequences are
+identical on every page except the 86 gobyexample (the footer's 10 words) and 7 lesscss pages
+(the menu); 2,207 pages are byte-identical and 372 change whitespace only — on the 1,500 German
+Wikipedia pages, 0 words change and 118 pages change whitespace inside code. Indented lines
+delivered: gobyexample 0 → 1,273 of 1,720 (the rest are first lines of a cell's code block),
+devdocs Q 0 → 38 of 38, and every prose `<pre>` line of the other archives (devhints 1,976,
+alpinelinux 1,424, lesscss 1,095, ethanweed 762); table cut markers unchanged (PEPs 11,
+Wikipedia sample 66). Real app (dev build, scratch drive root, both packs registered,
+`getPackArticle`): master delivered the footer on both gobyexample articles read and 0 indented
+lines; the fix, no footer and 8 + 8 + 38 indented lines. Cost on this machine (i7-8700,
+`scripts/zim-html-perf.mjs`, which loads the converter again — its extension-less imports had
+stopped it; three runs each, final code): per-slice p95 0.98–1.33 ms against master's
+0.81–0.88 ms — still under the 1.67 ms early-warning line, which is set for a faster P-core than
+this one; the 60-article batch +5–8 % (73.4–75.0 → 77.3–80.7 ms); the 1 MiB families 0–12 %
+(`deep-nesting` the most, 45.1–48.2 → 50.7–52.7 ms: every `div` now asks whether it is
+furniture); and +8 % on 1,890 code-heavy real pages (1,465 → 1,585 ms, ≈ 0.06 ms per article,
+the code-block encoding itself about a fifth of it). **Acceptance read (2026-10-13): Stage A
+identical**, as the sample predicted. `scripts/zim-dev-set-diff.mjs`, run on the machine that
+holds the development cache, found the same words in all 949 core200 articles (936 identical,
+13 whitespace-only) and in all 1,024 of the second development cache (1,011 and 13), each cache
+checked against its tree manifest first; under the shipping rule below no full read runs (PR
+#664). Residuals:
+`known-limitations.md` "Site furniture and code blocks (#627)"; undecoded typographic entities
+(`&rsquo;`, measured on the same archives) are #663.
+
 ### Shipping rule for knowledge-pack changes
 
 Every change to knowledge-pack retrieval or delivery now ships under one standing

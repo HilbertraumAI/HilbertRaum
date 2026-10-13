@@ -4,9 +4,12 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_SLICE_WORK,
   IncrementalTidy,
+  PRE_SPACE,
+  PRE_TAB,
   TEXT_PIECE_CHARS,
   attrValue,
   decodeEntities,
+  restorePreformatted,
   tidyWhole,
   zimArticleSlices,
   zimArticleToSegments,
@@ -17,6 +20,7 @@ import {
   TABLE_MAX_COLSPAN,
   TABLE_MAX_COLUMNS,
   TABLE_MAX_GRID_CELLS,
+  TABLE_MAX_KEPT_WHITESPACE,
   TABLE_MAX_RAW_CHARS,
   TABLE_MAX_ROWSPAN,
   TABLE_MAX_SEGMENTS,
@@ -389,6 +393,178 @@ describe('zimArticleToSegments — figure captions', () => {
     // Exactly once: this class-based path is untouched, so there is no second, duplicate
     // delivery mechanism for the same text.
     expect(all.match(/already delivered as prose/g) ?? []).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// Issue #627: two gaps on archives that are not Wikipedia. A zimit capture keeps the crawled
+// site's own furniture (gobyexample ends every page in `<p class="footer">`), and a code
+// block lost every leading space. Measured on the real archives: the footer reached 86 of 86
+// gobyexample pages, and 0 of 1,720 / 0 of 38 indented lines survived (gobyexample, whose code
+// all sits in table cells / devdocs_en_q, whose code is prose `<pre>`).
+// ---------------------------------------------------------------------------------------
+describe('zimArticleToSegments — site furniture (#627)', () => {
+  const textOf = (html: string): string =>
+    zimArticleToSegments(`<h1>T</h1>${html}`)
+      .segments.map((s) => s.text)
+      .join('\n')
+
+  it.each([
+    ['a footer paragraph (the gobyexample shape)', '<p>Body.</p><p class="footer">by A and B | source | license</p>', 'Body.'],
+    [
+      'a sidebar whose nested blocks share its own tag',
+      '<div class="sidebar hidden-print"><div>Overview</div><div><div>Mixins</div></div></div><p>Body.</p>',
+      'Body.'
+    ],
+    ['the token anywhere in the class list, in any case', '<section class="Layout COOKIE">We use cookies.</section><p>Body.</p>', 'Body.'],
+    ['a nav block and keeps the text on either side apart', 'Before<div class="nav">menu</div>After', 'Before\nAfter'],
+    ['a footer paragraph with no end tag, ended by the next block', '<p class="footer">by A<div>Body.</div>', 'Body.'],
+    ['a footer paragraph with no end tag, ended by the next list item', '<ul><li><p class="footer">foot<li>Item two</ul>', '-\n\n- Item two'],
+    ['a footer paragraph ended by its parent’s end tag', '<div><p class="footer">by A</div><p>Body.</p>', 'Body.'],
+    ['a footer class written without quotes, as a minified page writes it', '<p>Body.</p><p class=footer>by A</p>', 'Body.']
+  ])('drops %s', (_label, html, expected) => {
+    expect(textOf(html)).toBe(expected)
+  })
+
+  // The issue's draft matched a furniture WORD inside a class (`\bnav\b`, `\bfooter\b`). Each
+  // row here is a real class that pattern catches and that is not furniture to drop.
+  it.each([
+    [
+      'the Read the Docs theme’s wrappers around the whole article (wy-…-nav-…)',
+      '<div class="wy-grid-for-nav"><section class="wy-nav-content-wrap"><div class="wy-nav-content"><p>Body.</p></div></section></div>',
+      'Body.'
+    ],
+    [
+      'mwoffliner’s license line (zim-footer; dropping it would change the Wikipedia development set)',
+      '<p>Body.</p><div class="zim-footer">Dieser Artikel wurde von Wikipedia herausgegeben.</div>',
+      'Body.\n\nDieser Artikel wurde von Wikipedia herausgegeben.'
+    ]
+  ])('keeps %s: only a whole class token is furniture', (_label, html, expected) => {
+    expect(textOf(html)).toBe(expected)
+  })
+})
+
+describe('zimArticleToSegments — preformatted text (#627)', () => {
+  const textOf = (html: string): string =>
+    zimArticleToSegments(html)
+      .segments.map((s) => s.text)
+      .join('\n')
+  const words = (text: string): string => text.split(/\s+/).filter(Boolean).join(' ')
+
+  it.each([
+    [
+      'indentation, tabs and a gap inside a line are kept; trailing whitespace is not',
+      '<p>Before.</p><pre>func f() {\n    i := 0\n\tif i  == 0 {   \n\t\treturn\n\t}\n}</pre><p>After.</p>',
+      'Before.\n\nfunc f() {\n    i := 0\n\tif i  == 0 {\n\t\treturn\n\t}\n}\n\nAfter.'
+    ],
+    [
+      'a highlighter’s spans split the indentation off the code it indents',
+      '<pre><code><span class="line"><span class="cl">for {\n</span></span><span class="line"><span class="cl">    <span class="nx">x</span>++\n</span></span><span class="line"><span class="cl">}</span></span></code></pre>',
+      'for {\n    x++\n}'
+    ],
+    ['CRLF line endings are one line break each', '<pre>a {\r\n  b\r\n}</pre>', 'a {\n  b\n}'],
+    [
+      'lines laid out as block elements: one line break each, even with source newlines between them',
+      '<pre><div>a {</div>\n<div>  b</div>\n<div>}</div></pre>',
+      'a {\n  b\n}'
+    ],
+    ['a <br> is a line break of its own: two make a blank line', '<pre>a<br>   b<br><br>   c</pre>', 'a\n   b\n\n   c'],
+    ['an unterminated <pre> keeps its whitespace to the end of the page', '<p>Before.</p><pre>x {\n    y', 'Before.\n\nx {\n    y'],
+    [
+      'the end tag of the element holding a <pre> left open closes it: prose after it collapses again',
+      '<div><pre>x {\n    y</div><p>After   with\n      gaps.</p>',
+      'x {\n    y\n\nAfter with\ngaps.'
+    ],
+    [
+      '…even past an inner block whose own end tag is missing',
+      '<ul><li><pre>a\n  b<p>c</li><li>  next   item</li></ul>',
+      '-\na\n  b\nc\n\n- next item'
+    ],
+    [
+      'a kept table inside a <pre> takes the whitespace read before it along',
+      '<pre>  a\n  <table><tr><th>h</th><td>v</td></tr></table>   b</pre>',
+      '  a\nh: v\n   b'
+    ],
+    ['a furniture class inside a <pre> is code: the block still ends at its end tag', '<pre>a\n<div class="nav">x</pre>tail', 'a\nx\ntail']
+  ])('%s', (_label, html, expected) => {
+    expect(textOf(html)).toBe(expected)
+  })
+
+  it('a <pre> in a kept table cell keeps its indentation from its second line on — the first follows the column key', () => {
+    const html =
+      '<table><tr><td class="docs"><p>Doc text.</p></td><td class="code"><pre><code>func f() {\n    return 1\n}</code></pre></td></tr>' +
+      '<tr><td class="docs"><p>More.</p></td><td class="code"><pre>    g()</pre></td></tr></table>'
+    expect(textOf(html)).toBe('Doc text.: func f() {\n    return 1\n}\nMore.: g()')
+    // A `<pre>` its cell never closes ends with the cell: the next cell's text is collapsed.
+    const unclosed = '<table><tr><td>Key</td><td><pre>a {\n  b</td></tr><tr><td>Next</td><td>x\n      y</td></tr></table>'
+    expect(textOf(unclosed)).toBe('Key: a {\n  b\nNext: x\ny')
+  })
+
+  it('page text cannot inject kept whitespace: the two placeholder code units are dropped from it', () => {
+    const html =
+      '<pre>a&#xFDD1;b\n&#xFDD0;  c</pre>' +
+      '<table><caption>c<math alttext="&#xFDD1;"></math>d</caption><tr><th>h</th><td><pre>x\n&#xFDD0; y</pre></td></tr></table>'
+    expect(textOf(html)).toBe('ab\n  c\nCaption: c d\nh: x\n y')
+  })
+
+  it('keeps its whitespace across a text-piece boundary (CRLF and indentation split between two pieces)', () => {
+    for (const offset of [-6, -5, -4, -3, -2, -1, 0, 1]) {
+      const lead = 'x'.repeat(TEXT_PIECE_CHARS + offset)
+      expect(textOf(`<pre>${lead}\r\n    y</pre>`), `offset ${offset}`).toBe(`${lead}\n    y`)
+    }
+  })
+
+  // The invariant the design rests on: only whitespace moves. Every consumer of the delivered
+  // text that splits on whitespace — the chunker, admission's lead and wide windows, the overlap
+  // picker, the reranker, the prompt — must read exactly what it read when a `<pre>` was an
+  // ordinary block, and the scan's own accounting must not change. Before #627 a `<pre>` was a
+  // `<div>` to the prose scanner and transparent (an unknown inline tag, `<xmp>` here) to the
+  // table parser, so those renames are the pre-#627 behaviour; both are three letters, so the
+  // input length and the `work` count line up.
+  it('changes no word, segment, label or scan count: what retrieval reads is unchanged', () => {
+    const asBefore = (html: string, inTables: boolean): string =>
+      html.replace(/<(\/?)pre\b/gi, inTables ? '<$1xmp' : '<$1div')
+    const inputs: Array<[string, string, boolean]> = [
+      ['stackexchange-question.html', readFileSync(join(__dirname, '../fixtures/zim/stackexchange-question.html'), 'utf8'), false],
+      ['zimit-code-table-page.html', readFileSync(join(__dirname, '../fixtures/zim/zimit-code-table-page.html'), 'utf8'), true],
+      ['the gap rule', '<h1>T</h1><pre>a  =  1\n\tb\t=\t2\n  c   = 3   \n</pre>', false],
+      // A gap keeps one real space for the caps' sake: this line is hard-split at a visible
+      // length, and a split in another place would cut other words.
+      ['a gappy code line past the segment cap', `<table><tr><th>k</th><td><pre>${'ab  '.repeat(800)}</pre></td></tr></table>`, true]
+    ]
+    for (const [label, html, inTables] of inputs) {
+      const now = zimArticleToSegments(html)
+      const before = zimArticleToSegments(asBefore(html, inTables))
+      expect([now.title, now.work, now.slices, now.truncated], label).toEqual([before.title, before.work, before.slices, before.truncated])
+      expect(now.segments.map((s) => s.sectionLabel), label).toEqual(before.segments.map((s) => s.sectionLabel))
+      expect(now.segments.map((s) => words(s.text)), label).toEqual(before.segments.map((s) => words(s.text)))
+      // …and the input really exercises the feature: some whitespace did change.
+      expect(now.segments.map((s) => s.text), label).not.toEqual(before.segments.map((s) => s.text))
+    }
+  })
+
+  it('never charges kept indentation to a table cap: the table is cut exactly where its collapsed text is', () => {
+    // Twenty rows of deeply indented code: 2,468 characters once collapsed, well under the
+    // 4 × 1,500 table budget, and 12,068 as delivered — twice over it, were the indentation
+    // charged.
+    const deep = ' '.repeat(120)
+    const row = (k: number): string =>
+      `<tr><td class="docs"><p>Step ${k} explains the loop below in a sentence of ordinary length.</p></td>` +
+      `<td class="code"><pre>func step${k}() {\n${deep}a := ${k}\n${deep}b := a + ${k}\n${deep}c := b * ${k}\n${deep}return c\n}</pre></td></tr>`
+    const html = `<table>${Array.from({ length: 20 }, (_, k) => row(k)).join('')}</table>`
+    const now = zimArticleToSegments(html)
+    const before = zimArticleToSegments(html.replace(/<(\/?)pre\b/gi, '<$1xmp'))
+    const delivered = now.segments.map((s) => s.text.length).reduce((a, b) => a + b)
+    const collapsed = before.segments.map((s) => s.text.length).reduce((a, b) => a + b)
+    expect(delivered).toBeGreaterThan(TABLE_MAX_SEGMENTS * TABLE_SEGMENT_MAX_CHARS)
+    expect(now.segments.length).toBe(before.segments.length)
+    expect(now.segments.map((s) => words(s.text))).toEqual(before.segments.map((s) => words(s.text)))
+    expect(textOf(html)).not.toContain('source rows shown')
+    expect(now.work).toBe(before.work)
+    // …and what it keeps is bounded on its own: this table's code carries 9,600 characters of
+    // indentation, and past TABLE_MAX_KEPT_WHITESPACE the rest collapses as it did before.
+    expect(delivered - collapsed).toBeGreaterThan(0)
+    expect(delivered - collapsed).toBeLessThanOrEqual(TABLE_MAX_KEPT_WHITESPACE)
   })
 })
 
@@ -1472,6 +1648,16 @@ const NON_WIKIPEDIA: ReadonlyArray<{
     omits: ['devdocs-nav-never-shown', 'devdocs-style-never-shown']
   },
   {
+    // #627: a code-tutorial zimit capture — code in the cells of classless tables, then a
+    // `<p class="footer">`. Its delivered code keeps its indentation and the footer is gone.
+    file: 'zimit-code-table-page.html',
+    title: 'Code by Example: Counters',
+    contains: ['The counter keeps its running total in a field', '\n        total += step\n'],
+    minSegments: 1,
+    minChars: 1000,
+    omits: ['footer-never-shown', 'copy-script-never-shown']
+  },
+  {
     file: 'stackexchange-question.html',
     title: 'How do I bound lookahead in a hand-rolled HTML scanner?',
     contains: [
@@ -1907,13 +2093,13 @@ describe('IncrementalTidy — the whole-string tidy, applied piece by piece', ()
     for (let i = 0; i < count; i += 1) parts.push(TOKENS[Math.floor(next() * TOKENS.length)]!)
     return parts.join('')
   }
-  const drive = (whole: string, pieceSizes: number[]): string => {
+  const drive = (whole: string, pieceSizes: number[], restore = false): string => {
     const inc = new IncrementalTidy()
     let at = 0
     let k = 0
     while (at < whole.length) {
       const size = Math.max(1, pieceSizes[k % pieceSizes.length]!)
-      inc.push(whole.slice(at, at + size))
+      inc.push(whole.slice(at, at + size), restore)
       at += size
       k += 1
     }
@@ -1926,6 +2112,12 @@ describe('IncrementalTidy — the whole-string tidy, applied piece by piece', ()
     for (let t = 0; t < 400; t += 1) {
       const whole = build(next)
       const expected = tidyWhole(whole)
+      // Kept preformatted whitespace (#627) is content to the tidy and restored after it, piece
+      // by piece: the same split must equal the whole-string tidy, then the restore.
+      const kept = whole.replace(/a/g, PRE_SPACE).replace(/9/g, PRE_TAB)
+      expect(drive(kept, [1 + (t % 5)], true), `${JSON.stringify(kept)} restored`).toBe(
+        restorePreformatted(tidyWhole(kept))
+      )
       // Split size 1 — the worst case for a carry — plus a handful of random sizes and the
       // degenerate "one piece" case.
       const splits: number[][] = [
@@ -1979,7 +2171,10 @@ describe('IncrementalTidy — the whole-string tidy, applied piece by piece', ()
     }
   })
 
-  it('P1b every segment the converter produces is already in canonical (tidyWhole) form', () => {
+  // A `<pre>` keeps its whitespace on purpose (#627, "preformatted text" above), so the
+  // canonical form is checked with every `<pre>` read as the block it is to the prose rules.
+  it('P1b every prose segment the converter produces is already in canonical (tidyWhole) form', () => {
+    const asProse = (html: string): string => html.replace(/<(\/?)pre\b/gi, '<$1div')
     const inputs: Array<[string, string]> = [
       ...NON_WIKIPEDIA.map(
         (f): [string, string] => [
@@ -1991,7 +2186,7 @@ describe('IncrementalTidy — the whole-string tidy, applied piece by piece', ()
       ...FAMILIES.map((f): [string, string] => [f.what, megabyte(f.unit)])
     ]
     for (const [label, html] of inputs) {
-      const a = zimArticleToSegments(html)
+      const a = zimArticleToSegments(asProse(html))
       for (const s of a.segments) {
         expect(s.text, `${label}: segment is canonical`).toBe(tidyWhole(s.text))
         expect(s.text, `${label}: no leading/trailing whitespace`).toBe(s.text.trim())

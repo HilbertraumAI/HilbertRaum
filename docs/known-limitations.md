@@ -3581,3 +3581,35 @@ reports and phase plans were working papers; their full text lives in git histor
   Since 2026-10-07 a caption's superscripts, subscripts and citation
   brackets follow the prose convention (#488) too: before, a caption read
   `H2O` and `m2` and kept `[2]`, where the text around it read `H_2O`.
+- **Site furniture and code blocks (#627).** A crawled site's footer, menu or
+  sidebar is dropped when a `p`, `div` or `section` carries one of eight
+  class tokens exactly (`footer`, `site-footer`, `nav`, `navbar`, `menu`,
+  `sidebar`, `breadcrumb`, `cookie`), and a `<pre>` code block keeps its
+  indentation. Residuals:
+  - Furniture marked any other way is still delivered: a prefixed class
+    (`bd-sidebar`, `left-sidebar`, `footer-article-items`), an `<aside>`, a
+    `<footer>` element (still only a block boundary), a `ul.menu`. In the
+    other direction, a content box whose class is exactly `sidebar` is
+    dropped — DocBook and docutils' HTML4 writer (Sphinx before 2.0) render
+    their sidebars that way; Sphinx's default HTML5 writer uses `<aside>`,
+    which the rule leaves alone. Neither direction was seen in the 2,672
+    pages measured.
+  - On Wikipedia archives, mwoffliner's license line (`div.zim-footer`) and
+    German navigation boxes built as `div`s are still delivered as text
+    (#662): dropping them changes the development set.
+  - The indentation reaches the article viewer and a saved copy only. The
+    chunker splits on whitespace, so retrieval, the reranker, the prompt and
+    citation snippets read code as one flat line, as before. The viewer shows
+    it in the reading font, not a monospace one; a blank line inside a code
+    block starts a new paragraph there; and a saved copy loses the indentation
+    of a section's first line when the section starts with code (it trims the
+    section text).
+  - In a kept table the first line of a cell's code block follows the column
+    key (`docs: code`) and is not indented; later lines are. A gap inside a
+    line keeps its width but its first character becomes a space (a lone tab
+    mid-line reads as one space), and a single kept run is capped at 256
+    characters. A kept table keeps at most 6,000 characters of such
+    whitespace in all (`TABLE_MAX_KEPT_WHITESPACE`); past that its code
+    collapses as before.
+  - Named entities the converter does not know (`&rsquo;`, `&ldquo;`,
+    `&raquo;`, …) are delivered verbatim on hand-written sites (#663).

@@ -2139,7 +2139,9 @@ recomputed from the registry at every reconciliation and mutation, from the reso
 library build, `null` until this session computed one and after a lock; absent on an older main —
 never a database read, so the channel stays lock-exempt) · `packs:getArticle` (`PackArticle | null` — plain sectioned
 TEXT, never HTML, carrying the converter's superscript/subscript markers (`m^2`, `10^6`, `H_2O` — #488,
-rag-design §17), which the retrieval matchers fold back out but the viewer shows as delivered;
+rag-design §17), which the retrieval matchers fold back out but the viewer shows as delivered; whitespace
+is collapsed everywhere except inside a `<pre>` code block, whose lines keep their indentation (#627 —
+so a section's text can start with spaces), and a crawled site's own footer/menu is not in it;
 the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
 alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
 contract-refused target returns `null` and the locator does not change; both requests carry

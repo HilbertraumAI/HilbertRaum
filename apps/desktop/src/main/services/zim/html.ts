@@ -24,9 +24,11 @@ import {
 // plain-text viewer, never innerHTML, so a permissive scanner cannot become an injection
 // surface.
 //
-// Dropped subtrees: head, script/style/noscript (raw-text aware), figures/images, nav, and
-// `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup> like
-// m<sup>2</sup> keeps its text, now marked — see the sup/sub rule below).
+// Dropped subtrees: head, script/style/noscript (raw-text aware), figures/images, nav, a
+// `p`/`div`/`section` whose class token names site furniture (`FURNITURE_CLASS_TOKENS`, #627),
+// and `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup> like
+// m<sup>2</sup> keeps its text, now marked — see the sup/sub rule below). A `<pre>` keeps its
+// indentation (PREFORMATTED TEXT, below) while every other whitespace run is collapsed.
 // `<math>` emits its alttext normalised to plain text
 // (`math.ts`, #340) and skips the MathML subtree; the `<img>` fallback that follows is
 // dropped with all images, so each formula appears exactly once.
@@ -249,6 +251,56 @@ const BLOCK = new Set([
   'tr'
 ])
 
+/**
+ * Class tokens that name a hand-written site's own page furniture (#627). zimit/warc2zim
+ * archives keep the crawled site's markup, and its footer is an ordinary element with a class —
+ * `<p class="footer">` closes all 86 gobyexample pages — so no tag-name rule can see it.
+ *
+ * A whole class TOKEN must match, never a word inside one: `nav` inside `wy-nav-content` is the
+ * Read the Docs theme's wrapper around the entire article, `footer` inside `zim-footer` is the
+ * license line mwoffliner appends to every Wikipedia article, and `erw-nav-farbschema-grau`
+ * marks German Wikipedia's navigation boxes — the issue's draft `\b(?:…)\b` pattern matched all
+ * three. Measured over 2,672 sampled pages from 15 archives (1,500 of them German Wikipedia),
+ * exact tokens drop gobyexample's footer (86/86) and lesscss.org's docs menu, and nothing else.
+ * The two Wikipedia classes are #662: dropping them changes the development set. Applied to the
+ * prose path only; `tables.ts` keeps its own classifier.
+ */
+const FURNITURE_CLASS_TOKENS = new Set(['footer', 'site-footer', 'nav', 'navbar', 'menu', 'sidebar', 'breadcrumb', 'cookie'])
+
+/** Every furniture token contains one of these: a cheap test on the raw attributes, so the
+ *  class is parsed only where a token could match (most `div`s carry other classes). */
+const FURNITURE_HINT = /footer|nav|menu|sidebar|breadcrumb|cookie/i
+
+/** The elements a furniture class is honoured on (#627). */
+const FURNITURE_ELEMENTS = new Set(['p', 'div', 'section'])
+
+function isFurnitureClass(classAttr: string | null): boolean {
+  if (classAttr === null) return false
+  for (const token of classAttr.split(/\s+/)) {
+    if (FURNITURE_CLASS_TOKENS.has(token.toLowerCase())) return true
+  }
+  return false
+}
+
+/** Start tags that end an open `<p>` (every start tag HTML5's tree builder answers with "close a
+ *  p element"), so a dropped furniture `<p>` whose end tag is missing cannot swallow the rest of
+ *  the page. */
+const P_ENDING_START_TAGS = new Set([
+  'address', 'article', 'aside', 'blockquote', 'center', 'dd', 'details', 'dialog', 'dir', 'div',
+  'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5',
+  'h6', 'header', 'hgroup', 'hr', 'li', 'listing', 'main', 'menu', 'nav', 'ol', 'p', 'plaintext',
+  'pre', 'search', 'section', 'summary', 'table', 'ul', 'xmp'
+])
+
+/** End tags of elements that can hold a `<p>`: their end also ends it. */
+const P_ENDING_END_TAGS = new Set([
+  ...BLOCK, 'aside', 'body', 'details', 'dialog', 'fieldset', 'figcaption', 'figure', 'form',
+  'html', 'li', 'nav', 'td', 'th'
+])
+
+/** End tags that close a `<pre>` they hold when its own end tag is missing (#627). */
+const PRE_ANCESTOR_END_TAGS = new Set(['li', 'td', 'th', 'body', 'html'])
+
 const NAMED_ENTITIES: Record<string, string> = {
   amp: '&',
   lt: '<',
@@ -381,9 +433,10 @@ function isNameChar(cc: number): boolean {
  * prefixes and no closing quote (PR #294 review H1). This walks the attribute list once —
  * O(attrs.length) — and keeps the old contract: only a QUOTED value is returned, an
  * unquoted or valueless occurrence is skipped and the search continues, `null` when the
- * name never carries a quoted value.
+ * name never carries a quoted value. `unquoted: true` also returns an unquoted value — a
+ * minified page writes `<p class=footer>`, and the furniture rule (#627) must still see it.
  */
-export function attrValue(attrs: string, name: string): string | null {
+export function attrValue(attrs: string, name: string, opts?: { unquoted?: boolean }): string | null {
   const want = name.toLowerCase()
   const n = attrs.length
   let i = 0
@@ -416,8 +469,10 @@ export function attrValue(attrs: string, name: string): string | null {
       i = close + 1
       continue
     }
-    // Unquoted value: outside the supported contract — skip it and keep looking.
+    // Unquoted value: outside the default contract — skip it and keep looking.
+    const valueAt = j
     while (j < n && !isSpace(attrs.charCodeAt(j))) j += 1
+    if (opts?.unquoted === true && attrName === want) return attrs.slice(valueAt, j)
     i = j
   }
   return null
@@ -527,7 +582,8 @@ export class IncrementalTidy {
     this.pendingNewlines = seedTrailingNewlines
   }
 
-  push(raw: string): void {
+  /** `restore`: the text carries kept preformatted whitespace (#627), restored once tidied. */
+  push(raw: string, restore = false): void {
     if (raw.length === 0) return
     const text = raw.replace(INVISIBLES, '')
     const n = text.length
@@ -548,11 +604,193 @@ export class IncrementalTidy {
     if (this.started && (this.pending || a > 0)) {
       this.out += canonicalWhitespace(Math.min(2, this.pendingNewlines + countNewlines(text, 0, a)))
     }
-    this.out += text.slice(a, b).replace(WHITESPACE_RUN, canonicalRun)
+    // Kept preformatted whitespace (#627) is content to the rules above and is restored only
+    // now, piece by piece, so it never needs a whole-segment pass at flush.
+    const kept = text.slice(a, b).replace(WHITESPACE_RUN, canonicalRun)
+    this.out += restore ? restorePreformatted(kept) : kept
     this.started = true
     this.pending = b < n
     this.pendingNewlines = b < n ? countNewlines(text, b, n) : 0
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// PREFORMATTED TEXT (#627) — code blocks keep their indentation
+// ---------------------------------------------------------------------------------------
+// Every whitespace run used to be collapsed, `<pre>` included, so a code block kept its line
+// breaks but lost every leading space: 0 of 1,720 indented Go lines on gobyexample, 0 of 38
+// indented JavaScript lines on devdocs_en_q. The whitespace a `<pre>` needs is now carried
+// through the tidy as two placeholder code units that no whitespace rule touches, and
+// restored to real spaces and tabs once the text is final (`IncrementalTidy.push` in prose,
+// `serializeTable` in a kept table).
+//
+// The invariant this rests on: with the placeholders removed, the text is exactly what the
+// collapse produced before. A line's indentation and its trailing whitespace become
+// placeholders or nothing (the collapse deleted both), and a run inside a line keeps one real
+// space and carries the rest. So every consumer that splits on whitespace — the chunker,
+// admission, the overlap picker, the reranker, the prompt, citation snippets — reads the same
+// words as before; only the article viewer and a saved copy show the indentation. Code also
+// stays inside its own segment: flushing it as a segment of its own would repeat the heading
+// in the viewer and the saved Markdown, and would narrow the admission lead
+// (`segments.slice(0, 1)` in arm.ts) on a page whose code sits before its first heading.
+
+/** Stands for a kept space inside preformatted text: a noncharacter (U+FDD0), reserved for
+ *  internal use by Unicode and never valid in interchanged text. */
+export const PRE_SPACE = '﷐'
+/** Stands for a kept tab inside preformatted text (U+FDD1, also a noncharacter). */
+export const PRE_TAB = '﷑'
+const PRE_PLACEHOLDERS = /[﷐﷑]/g
+const restorePlaceholder = (ch: string): string => (ch === PRE_SPACE ? ' ' : '\t')
+
+/** Two `indexOf` probes rather than a regex: on a one-byte string (most text) V8 answers a
+ *  search for a two-byte character without scanning, and every table length pays this check. */
+function hasPlaceholder(text: string): boolean {
+  return text.indexOf(PRE_SPACE) !== -1 || text.indexOf(PRE_TAB) !== -1
+}
+
+/** Turns kept-whitespace placeholders back into the spaces and tabs they stand for. */
+export function restorePreformatted(text: string): string {
+  return hasPlaceholder(text) ? text.replace(PRE_PLACEHOLDERS, restorePlaceholder) : text
+}
+
+/** Removes the two placeholder code units from page text before it is encoded, so a page that
+ *  happens to contain them can never inject whitespace. */
+export function dropPlaceholders(text: string): string {
+  return hasPlaceholder(text) ? text.replace(PRE_PLACEHOLDERS, '') : text
+}
+
+/** The length the table caps see: kept preformatted whitespace is not charged, so a cap cuts a
+ *  table exactly where it cut it before #627. */
+export function visibleLength(text: string): number {
+  if (!hasPlaceholder(text)) return text.length
+  let kept = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const cc = text.charCodeAt(i)
+    if (cc === 0xfdd0 || cc === 0xfdd1) kept += 1
+  }
+  return text.length - kept
+}
+
+/** The index in `text` at which `budget` visible characters have been passed — the raw cut a
+ *  visible-length budget maps to. */
+export function indexAtVisible(text: string, budget: number): number {
+  if (!hasPlaceholder(text)) return Math.min(budget, text.length)
+  let seen = 0
+  let i = 0
+  while (i < text.length && seen < budget) {
+    const cc = text.charCodeAt(i)
+    if (cc !== 0xfdd0 && cc !== 0xfdd1) seen += 1
+    i += 1
+  }
+  return i
+}
+
+/** Longest kept whitespace run: real indentation never comes near it, and the cap keeps a
+ *  whitespace-only pathology from turning into an equally large output. */
+export const PRE_MAX_KEPT_RUN = 256
+
+const isPreSpace = (cc: number): boolean => cc === CH_SPACE || cc === CH_TAB || cc === 0xa0
+
+/**
+ * Encodes the text runs of one preformatted block (#627). Spaces and tabs are held until the
+ * next visible character says what they are: indentation at the start of a line (kept whole),
+ * a gap inside a line (one real space plus the rest kept), or trailing whitespace (dropped —
+ * a line break or the end of the block follows). State carries across text runs, so a run of
+ * indentation that a syntax highlighter's `<span>` closes is still indentation.
+ *
+ * `indentFirstLine` is false in a table cell, where the first line follows a column key
+ * (`docs: code`), so only later lines keep their indentation there.
+ */
+export class PreformattedWhitespace {
+  private lineStart = true
+  private seenText = false
+  private pending = ''
+  private afterCR = false
+  private absorbNewline = false
+  private readonly indentFirstLine: boolean
+  private readonly budget: { left: number } | null
+
+  /** `budget`, when given, is shared and spent by every placeholder written: once it is gone,
+   *  whitespace is ordinary again (collapsed), so a kept table stays bounded (#627). */
+  constructor(indentFirstLine: boolean, budget: { left: number } | null = null) {
+    this.indentFirstLine = indentFirstLine
+    this.budget = budget
+  }
+
+  /** One decoded text run of the block, encoded. */
+  encode(text: string): string {
+    let out = ''
+    const n = text.length
+    let i = 0
+    while (i < n) {
+      const cc = text.charCodeAt(i)
+      if (cc === CH_LF || cc === CH_CR) {
+        // CRLF is one line break, even when a piece boundary or a tag falls between the two;
+        // and a newline that only follows a block tag's own break is that break, not a second.
+        if (!(cc === CH_LF && this.afterCR)) {
+          this.pending = ''
+          if (this.absorbNewline) this.absorbNewline = false
+          else out += '\n'
+          this.lineStart = true
+        }
+        this.afterCR = cc === CH_CR
+        i += 1
+        continue
+      }
+      this.afterCR = false
+      if (isPreSpace(cc)) {
+        let j = i
+        while (j < n && isPreSpace(text.charCodeAt(j))) j += 1
+        const room = PRE_MAX_KEPT_RUN - this.pending.length
+        if (room > 0) this.pending += text.slice(i, Math.min(j, i + room))
+        i = j
+        continue
+      }
+      let j = i + 1
+      while (j < n) {
+        const c = text.charCodeAt(j)
+        if (c === CH_LF || c === CH_CR || isPreSpace(c)) break
+        j += 1
+      }
+      out += this.settle() + text.slice(i, j)
+      this.lineStart = false
+      this.seenText = true
+      this.absorbNewline = false
+      i = j
+    }
+    return out
+  }
+
+  /** A line break that comes from markup. A block boundary (`soft`) ends the line, so a source
+   *  newline right after it adds nothing; a `<br>` is a break of its own — two make a blank line. */
+  lineBreak(soft: boolean): void {
+    this.pending = ''
+    this.lineStart = true
+    this.afterCR = false
+    this.absorbNewline = soft
+  }
+
+  private settle(): string {
+    const ws = this.pending
+    if (ws.length === 0) return ''
+    this.pending = ''
+    const atLineStart = this.lineStart
+    // At a line start the whole run is kept (bar a table cell's first line); inside a line, one
+    // real space stays so the words stay apart, and the rest is kept.
+    const kept = atLineStart ? (this.indentFirstLine || this.seenText ? ws.length : 0) : ws.length - 1
+    if (kept === 0) return ' '
+    if (this.budget !== null) {
+      if (this.budget.left < kept) return ' '
+      this.budget.left -= kept
+    }
+    return atLineStart ? toPlaceholders(ws) : ` ${toPlaceholders(ws.slice(1))}`
+  }
+}
+
+function toPlaceholders(ws: string): string {
+  let out = ''
+  for (let i = 0; i < ws.length; i += 1) out += ws.charCodeAt(i) === CH_TAB ? PRE_TAB : PRE_SPACE
+  return out
 }
 
 export interface ZimConvertOptions {
@@ -684,6 +922,25 @@ export function* zimArticleSlices(
   // skipped exactly like SKIP_SUBTREE, but `table` is no longer in that shared set (a kept
   // table needs its own branch below), so it gets its own depth counter.
   let tableDropDepth = 0
+  // Site furniture (#627): a `p`/`div`/`section` whose class names the page's own footer,
+  // navigation, menu, sidebar, breadcrumb or cookie notice is dropped with its subtree.
+  // `furnitureTag` is the element that opened the drop; a `div`/`section` closes on its own
+  // matching end tag (same-name depth), a `p` also on anything HTML5 lets close it.
+  let furnitureDepth = 0
+  let furnitureTag: string | null = null
+  // Preformatted text (#627): `preDepth` counts open `<pre>`s, `pre` encodes their whitespace
+  // while one is open (prose only — never into a heading), and `preInner` names the block
+  // elements opened inside it, so the end tag of an element that HOLDS the `<pre>` can close a
+  // `<pre>` left unclosed — an inner `<p>` or `<li>` whose end tag is missing included. Each
+  // entry is popped at most once, so the stack is linear in the tags it saw.
+  let preDepth = 0
+  let pre: PreformattedWhitespace | null = null
+  let preInner: string[] = []
+  const closePre = (): void => {
+    preDepth = 0
+    pre = null
+    preInner = []
+  }
   // A figure's caption text should reach a segment even though the
   // image and the rest of the figure subtree stay dropped — mirrors the kept-table path's own
   // `<caption>` handling. `skipIsFigure` is true only while the CURRENTLY OPEN skip (skipDepth
@@ -740,7 +997,8 @@ export function* zimArticleSlices(
     endMarkRun()
   }
 
-  const emit = (raw: string): void => {
+  /** `preformatted`: `raw` is encoded preformatted text whose placeholders the body restores. */
+  const emit = (raw: string, preformatted = false): void => {
     if (raw.length === 0) return
     let text = raw
     if (pendingMark !== null) {
@@ -754,14 +1012,22 @@ export function* zimArticleSlices(
       headingBuf += text
       headingNewlines = trailingNewlines(text, headingNewlines)
     } else {
-      body.push(text)
+      body.push(text, preformatted)
     }
     lastEmittedChar = lastCharOf(text)
   }
 
-  /** A block boundary: one newline, unless two already terminate the text. */
-  const emitBreak = (): void => {
+  /** A block boundary: one newline, unless two already terminate the text. Inside
+   *  preformatted text a block boundary ends the line, never adds a blank one, while a `<br>`
+   *  (`hard`) is always a line break of its own (#627). */
+  const emitBreak = (hard = false): void => {
     endMarkRun()
+    if (pre !== null && headingLevel === 0) {
+      pre.lineBreak(!hard)
+      if (!hard && body.carryNewlines >= 1) return
+      emit('\n')
+      return
+    }
     if ((headingLevel > 0 ? headingNewlines : body.carryNewlines) >= 2) return
     emit('\n')
   }
@@ -774,7 +1040,7 @@ export function* zimArticleSlices(
   let textStart = 0
   const emitTextUpTo = function* (upto: number): Generator<void, void, void> {
     if (upto <= textStart) return
-    if (skipDepth === 0 && supSkipDepth === 0 && mathDepth === 0 && tableDropDepth === 0) {
+    if (skipDepth === 0 && supSkipDepth === 0 && mathDepth === 0 && tableDropDepth === 0 && furnitureDepth === 0) {
       let from = textStart
       while (from < upto) {
         let to = from + TEXT_PIECE_CHARS
@@ -794,7 +1060,9 @@ export function* zimArticleSlices(
         } else {
           to = upto
         }
-        emit(decodeEntities(input.slice(from, to)))
+        const text = decodeEntities(input.slice(from, to))
+        if (pre !== null && headingLevel === 0) emit(pre.encode(dropPlaceholders(text)), true)
+        else emit(text)
         from = to
         // One piece is the indivisible unit of emission work, so every piece that is not the
         // last of the run ends a slice. A run of at most TEXT_PIECE_CHARS is one piece and
@@ -1027,6 +1295,28 @@ export function* zimArticleSlices(
     }
 
     // ---- token handling (extraction semantics unchanged) ------------------------
+    if (furnitureDepth > 0) {
+      // Nothing else can be open while furniture is dropped: it starts only from the plain
+      // prose state, and every tag inside it is consumed here. The break taken where it opened
+      // already separates what follows it.
+      if (furnitureTag !== 'p') {
+        if (name === furnitureTag && !selfClosing) {
+          furnitureDepth += isClose ? -1 : 1
+          if (furnitureDepth === 0) furnitureTag = null
+        }
+        continue
+      }
+      if (isClose && name === 'p') {
+        furnitureDepth = 0
+        furnitureTag = null
+        continue
+      }
+      // A `p` has an optional end tag: a block start tag, or the end tag of an element that
+      // can hold the `p`, ends it — and is then handled as itself, below.
+      if (!(isClose ? P_ENDING_END_TAGS.has(name) : P_ENDING_START_TAGS.has(name))) continue
+      furnitureDepth = 0
+      furnitureTag = null
+    }
     if (mathDepth > 0) {
       if (name === 'math') mathDepth += isClose ? -1 : 1
       continue
@@ -1115,6 +1405,21 @@ export function* zimArticleSlices(
       if (name === 'sup' && !selfClosing) supSkipDepth += isClose ? -1 : 1
       continue
     }
+    if (
+      !isClose &&
+      !selfClosing &&
+      headingLevel === 0 &&
+      pre === null && // inside a code block it is code, and its end tag must reach the `<pre>`
+      FURNITURE_ELEMENTS.has(name) &&
+      FURNITURE_HINT.test(attrs) &&
+      isFurnitureClass(attrValue(attrs, 'class', { unquoted: true }))
+    ) {
+      // Still a block boundary, so the text before and after the dropped element stays apart.
+      emitBreak()
+      furnitureDepth = 1
+      furnitureTag = name
+      continue
+    }
 
     if (!isClose && SKIP_SUBTREE.has(name)) {
       if (!selfClosing) {
@@ -1126,8 +1431,10 @@ export function* zimArticleSlices(
     if (!isClose && name === 'table') {
       if (selfClosing) continue // no body — nothing to classify or capture
       // A table's text is delivered as its own segments (or dropped): either way it is a
-      // segment break, so no armed marker and no `prev` character crosses it (#488).
+      // segment break, so no armed marker and no `prev` character crosses it (#488) — nor
+      // whitespace a `<pre>` holding it had read but not yet placed (#627).
       endMarkRun()
+      pre?.lineBreak(true)
       const cls = attrValue(attrs, 'class')
       if (!emitTables || isLayoutTableClass(cls)) {
         tableDropDepth = 1
@@ -1207,7 +1514,9 @@ export function* zimArticleSlices(
     if (h) {
       // Both halves switch which buffer `emit` writes into, so both end the current mark run
       // (#488): the heading starts with nothing to its left, and the body resumes after one.
+      // The same holds for a `<pre>`'s unplaced whitespace (#627).
       endMarkRun()
+      pre?.lineBreak(true)
       if (!isClose) {
         headingLevel = Number(h[1])
         headingBuf = ''
@@ -1230,7 +1539,31 @@ export function* zimArticleSlices(
       continue
     }
 
-    if (name === 'br' || BLOCK.has(name)) emitBreak()
+    if (name === 'pre' && !selfClosing) {
+      // #627: a `<pre>` is still a block boundary, taken OUTSIDE the block on both sides.
+      if (!isClose) {
+        emitBreak()
+        preDepth += 1
+        if (pre === null) pre = new PreformattedWhitespace(true)
+      } else {
+        if (preDepth > 0) preDepth -= 1
+        if (preDepth === 0) closePre()
+        emitBreak()
+      }
+      continue
+    }
+    if (pre !== null && !selfClosing && (BLOCK.has(name) || PRE_ANCESTOR_END_TAGS.has(name))) {
+      // Block markup inside a `<pre>` (a highlighter's line `<div>`s) is matched to its own end
+      // tag; an end tag nothing inside opened belongs to an element holding the `<pre>`.
+      if (!isClose) {
+        preInner.push(name)
+      } else {
+        const at = preInner.lastIndexOf(name)
+        if (at >= 0) preInner.length = at
+        else closePre()
+      }
+    }
+    if (name === 'br' || BLOCK.has(name)) emitBreak(name === 'br')
     if (!isClose && name === 'li') emit('\n- ')
     if (isClose && name === 'li') emit('\n')
   }
