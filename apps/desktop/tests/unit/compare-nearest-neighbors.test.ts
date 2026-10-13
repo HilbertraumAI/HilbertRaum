@@ -8,11 +8,10 @@ import { cosineSimilarity, dotProduct } from '../../src/main/services/embeddings
 //
 //   Test A (algorithm, EXACT — no float luck): the running top-K returns byte-identically what a
 //           stable descending dot-sort + slice returns. This pins the selection algorithm.
-//   Test B (cosine→dot ranking on L2-normalized vectors): a full dot-sort-slice selects the same
-//           ids as the old full cosine-sort-slice. This is the RAG-1 invariant the swap rests on
-//           (cosine == dot for unit vectors), and the teeth-check shows it depends on normalization.
-//
-// Chained, A∘B = "new dotProduct+running-topK == old cosineSimilarity+sort+slice". Pure + offline.
+//   The chained test: the full new helper selects the same ids as the old full cosine-sort-slice.
+//           Together with Test A it implies a dot-sort-slice ranks like cosine on these
+//           L2-normalized vectors — the RAG-1 invariant the swap rests on (cosine == dot for unit
+//           vectors). Pure + offline.
 
 const DIM = 16
 
@@ -100,15 +99,6 @@ describe('compareNearestNeighbors (P1) — running top-K is byte-identical to do
 })
 
 describe('compareNearestNeighbors (P1) — dotProduct ranks like cosine on L2-normalized vectors', () => {
-  it('the dot-sort-slice selection equals the old cosine-sort-slice for every topK across many queries', () => {
-    for (const topK of [1, 3, 5, 12]) {
-      for (let q = 0; q < 50; q++) {
-        const vec = unitVec(q)
-        expect(dotSortSlice(corpus, vec, topK)).toEqual(oldCosineSortSlice(corpus, vec, topK))
-      }
-    }
-  })
-
   it('… and so the full new helper equals the full old cosine path (the chained guarantee)', () => {
     for (const topK of [1, 3, 5, 12]) {
       for (let q = 0; q < 50; q++) {

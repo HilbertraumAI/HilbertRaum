@@ -770,7 +770,8 @@ behavior-preserving (equivalence-tested, teeth-checked). No schema/IPC/audit-pay
   (the same RAG-1 unit-vector fast path `VectorIndex` uses — stored vectors are L2-normalized, so
   cosine == dot) + a **running top-K** (descending score, ties broken by doc-B `chunk_index` order). The
   running top-K is byte-identical to a stable dot-sort + slice; on normalized vectors the dot ranking
-  equals the old cosine ranking (`tests/unit/compare-nearest-neighbors.test.ts` proves both links).
+  equals the old cosine ranking (`tests/unit/compare-nearest-neighbors.test.ts`: the running top-K equals a
+  dot-sort-slice, and the full helper equals the old cosine-sort-slice — so dot ranks like cosine here).
   Measured **2.2×** on a synthetic 1000×1000 compare. Mode-(c) `alignNodes` (node-vector cosine) is out
   of scope and unchanged.
 - **P6 — DEFERRED (the companion).** Dropping the per-search `(COUNT(*), MAX(rowid))` staleness signature
