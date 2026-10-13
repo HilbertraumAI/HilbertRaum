@@ -56,6 +56,7 @@ import { IPC } from '../../src/shared/ipc'
 import { checksumCacheStats, clearChecksumCache, primeChecksum } from '../../src/main/services/models'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, AppStatus, GpuDevice, ModelInfo, RuntimeStatus, WorkspaceStateInfo } from '../../src/shared/types'
 import { RuntimeManager } from '../../src/main/services/runtime'
@@ -1075,6 +1076,47 @@ describe('registerModelIpc', () => {
     reg(ctx2)
     const { result: stoppedResult } = await invoke(handlers, IPC.getRuntimeStatus)
     expect((stoppedResult as { gpuAutoDisabled?: boolean }).gpuAutoDisabled).toBeUndefined()
+  })
+
+  // #107 / #656: the "Starting…" window carries an expected load time: the bytes the start reads
+  // over this drive's effective read speed (#108). The sample is read once per window, so the 2.5 s
+  // status poll costs no settings read; a sample that lands mid-window counts from the next one.
+  it('getRuntimeStatus estimates a start from the drive’s read speed, read once per load window (#107)', async () => {
+    resetEffectiveReadForTests()
+    const stopped: RuntimeStatus = { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
+    const loading = (bytesTotal: number | null): RuntimeStatus => ({
+      ...stopped,
+      message: 'Starting',
+      startingModelId: 'qwen3-4b-instruct-q4',
+      starting: { elapsedMs: 1_000, bytesTotal }
+    })
+    let current = loading(4e9)
+    const ctx = {
+      db: seededDb(),
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: { status: () => structuredClone(current), activeModelId: () => null }
+    } as unknown as AppContext
+    reg(ctx)
+    const expectedMs = async (): Promise<number | null | undefined> =>
+      ((await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus).starting?.expectedMs
+    try {
+      // No sample on this computer yet (a fresh install): no estimate, the line stays indeterminate.
+      expect(await expectedMs()).toBeUndefined()
+      recordChecksumRead(500e6, 5_000, 'other-model') // 100 MB/s
+      expect(await expectedMs()).toBeUndefined() // the window already read its sample
+      current = stopped
+      await expectedMs() // the window ends
+      current = loading(4e9)
+      expect(await expectedMs()).toBe(40_000) // 4 GB at 100 MB/s
+      current = loading(null) // a weight that could not be measured
+      expect(await expectedMs()).toBeUndefined()
+    } finally {
+      current = stopped
+      await expectedMs()
+      resetEffectiveReadForTests()
+    }
   })
 
   it('verifyModel reports the fresh install state and throws on an unknown id', async () => {

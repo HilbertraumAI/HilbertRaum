@@ -1145,8 +1145,8 @@ function buildPlacement(
   // configuration forces the processor — the RAM estimate, "Will run on the processor", never
   // "Should fit in graphics memory" for a card the start would not use, DR1), and `cpu` for a
   // matching start OBSERVED on the CPU backend (the ladder fell through under 'auto'), which is
-  // judged against RAM too, as its row says. `memoryClassOf` — the profile bump's gate — is
-  // unchanged (G4).
+  // judged against RAM too, as its row says. The profile bump's gate (`gpuUsefulForProfile`, all
+  // devices) is unchanged (G4).
   const effectiveClass: MemoryClass = observed?.backend === 'cpu' ? 'cpu' : memoryClass
   const verdict = placementVerdict({
     memoryClass: effectiveClass,

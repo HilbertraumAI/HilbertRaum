@@ -732,8 +732,8 @@ source for all three.
 **Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
 is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
 size on disk and the context it launches with, then gives one verdict against this computer's
-**memory class** (`nextStartMemory` in `services/performance.ts`; `memoryClassOf` is its
-flags-at-default wrapper): `discrete` = a usable graphics card whose VRAM is the budget;
+**memory class** (`nextStartMemory` in `services/performance.ts`; its test-only flags-at-default
+wrapper `memoryClassOf` was removed in #656): `discrete` = a usable graphics card whose VRAM is the budget;
 `unified` = Apple Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
 `recommendedMaxWorkingSetSize` when the load log printed it, else 75 % of RAM (the Memory tile is
 labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
@@ -755,8 +755,8 @@ branches). `looksIntegrated` knows the current names (`Intel(R) Graphics (ARL)`,
 at all (its shared figure is not the card's own): null everywhere, the RAM pick. The same helper
 (`nextStartMemoryFor`) feeds `probeAndPersistGpu` (so `BenchmarkResult.gpu` / `gpuVramMb` name
 it), `pickerMemoryFor` (the `listModels` ★ and the live recommendation) and this row, so the
-Performance and Models screens can never mean different cards. `memoryClassOf` itself and the
-hardware-profile bump (`gpuUsefulForProfile`) are unchanged — as is the runtime, which still never
+Performance and Models screens can never mean different cards. The hardware-profile bump
+(`gpuUsefulForProfile`) is unchanged — as is the runtime, which still never
 passes `-ngl` and lets `--fit` decide. The `displayDevice` rule (the budget device when there
 is one, else the largest discrete-looking card even under the gate, else the integrated one — since
 2026-09-07; before that, `devices[0]` whenever nothing was usable, i.e. the iGPU on a hybrid laptop)
@@ -1385,7 +1385,7 @@ audit row above.
 
 | ID | Disposition | Facts as fixed | Evidence |
 |---|---|---|---|
-| A-D1 | fixed P10 `ab01e14b` | `tryGpuAgain` now pushes `performance:changed` right after it clears `gpuAutoDisabled`/`gpuLastError`, before the re-probe, so the cleared flags reach the screen even when the re-probe cannot run; the probe's own successful-write push follows as a second, idempotent notification. | `performance-notify.test.ts` `it.each`: "\"Try GPU again\" pushes the cleared flags even when the probe cannot run — %s (A-D1)" (cases "no binary for this OS (the probe is never called)", "a rejecting probe") |
+| A-D1 | fixed P10 `ab01e14b` | `tryGpuAgain` now pushes `performance:changed` right after it clears `gpuAutoDisabled`/`gpuLastError`, before the re-probe, so the cleared flags reach the screen even when the re-probe cannot run; the probe's own successful-write push follows as a second, idempotent notification. | `performance-gpu.test.ts` `it.each`: "\"Try GPU again\": the first push re-arms this machine’s card on the screen even when the probe cannot run — %s (A-D1)" (cases "no binary for this OS (the probe is never called)", "a rejecting probe"; moved from `performance-notify.test.ts` in #656, where it read the memory class from the host) |
 | A-D2 | fixed P10 `ab01e14b` | The late-write guard's rejection (a lock, a lock in progress, or a lock-and-re-unlock landing between the benchmark legs and the persist) now throws the localized `tMain('main.benchmark.lockedDuringRun')` message (new EN/DE pair), never a raw English string; the pre-run refusal keeps its own separate `main.benchmark.locked` key. | `first-benchmark-scheduler.test.ts` describe "the late-write guard (runAndPersistBenchmark)": `it.each` "%s between the legs and the persist: rejects, writes nothing, the idle push still follows the release" (cases "a lock completed", "a lock under way (DB open, latch armed)"); "a lock AND a re-unlock between the legs and the persist: rejects (the epoch moved); the same session persists"; "through the scheduler, a refused late persist is a \"failed\" outcome" |
 | A-D3 | fixed P10 `ab01e14b` | `attributedGpuFigures` falls back to the legacy first-device figures only when `rows == null` (a placement persisted before per-device rows existed); with any `devices` array present — one row or several — it matches strictly by the selected device's name, returning nulls rather than another device's figures on a mismatch or no selection. | `performance.test.ts` "a lone row that IS the selected device: its own figures, not the legacy summary (A-D3)"; "a lone row that is NOT the selected device (an iGPU-only log beside a selected dGPU), or none selected: null (A-D3)" |
 | A-D4 | fixed P10 `ab01e14b` | `read-speed.ts`'s `record()` stamps samples from a monotonically increasing clock: a reading at or before the previously accepted sample's `at` is bumped forward by 1 ms, so two real samples landing in the same millisecond stay distinct to every downstream identity check (`persistedSampleMemo`, `effectiveReadPatch`, `mergeSampleIntoResult`); rejected samples never advance the clock. | `read-speed.test.ts` describe "strictly increasing sample timestamps (PR #303 audit A-D4)"; `performance-persistence.test.ts` describe "strictly increasing sample timestamps (A-D4): same-millisecond samples stay distinct to the persister" — "a model load in the same millisecond as the checksum before it reaches BOTH destinations"; "a checksum in the same millisecond as the model load before it is a distinct, lower-ranked sample: both destinations keep the load" |

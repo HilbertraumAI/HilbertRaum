@@ -1839,7 +1839,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         rung-1 server dying before its GPU probe resolves keeps its pre-#599 path).
         `createCpuCrashAutoRestart` restarts once per model id (`main.runtime.crashRestarting`),
         then calls `stopCrashed` (`main.runtime.crashStopped`). Overlapping reports while a restart
-        or stop is in flight count once (a sidecar can report one exit as 'error', then 'exit'), and
+        or stop is in flight count once (since #656 `LlamaServer` itself reports one death once —
+        Node may emit 'exit' after 'error' — so the guard only keeps a re-entrant report out), and
         a crash during a lock does nothing — the restart is neither spent nor announced. It is wired
         in `main/index.ts` through the AUD-02 `guardedCrashRestart` the GPU and speculative
         handlers now share, and audits `runtime_crashed`.
@@ -4130,7 +4131,8 @@ the suspect, not the device.)
 
 A GPU-backed `llama-server` can die *after* it became healthy — a driver crash, VRAM stolen by
 another process. `LlamaServer`'s `onUnexpectedExit` hook fires (only for a healthy server dying
-outside `stop()`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
+outside `stop()`, and once per death: #656 — its `'error'` and `'exit'` handlers share one per-spawn
+`reportUnexpectedExit`, because Node may emit `'exit'` after `'error'`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
 was `gpu`** (its `onUnexpectedExit`; a non-GPU exit goes to `onCpuCrash` since #599). `createGpuCrashAutoFallback` then, in order: persists
 `gpuAutoDisabled` + `gpuLastError`, surfaces the friendly compatibility-mode notice, and restarts
 the model once at CPU — so the user's *next* message just works.
@@ -4404,7 +4406,7 @@ estimator (≈ 2.8 GiB, derived from the shipped `bge-reranker-v2-m3` manifest a
 `RERANKER_HEADROOM_FLOOR_MIB`). An unknown or empty probe, no useful device, no budget figure, no
 active chat model, or an unresolvable manifest all mean `'cpu'` — a machine cannot earn the GPU
 posture by failing to report. `gpuUsefulForProfile` keeps every other job it has (the profile
-bump above, the Models ★, the graphics tile, `memoryClassOf`); only the reranker's own posture
+bump above, the Models ★, the graphics tile); only the reranker's own posture
 question is re-sourced. **Disclosed limit:** the project's 12 GiB measurement machine (RTX 3080
 Ti) has ample headroom for both models at once, so on it the new gate behaves identically to
 step 4-4's — the step's acceptance read confirms no regression there, but cannot validate the
@@ -11519,6 +11521,10 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   `LlamaServer` copies, and removed `LlamaServer`'s `verifyBinary` option: it always calls the real verifier.
   The sidecar-services test campaign did the same for whisper-cli: it retired the injected-verdict copy in
   `transcriber.test.ts` and removed `WhisperCliOptions.verifyBinary`.
+  #656 added the knowledge packs' `kiwix-serve` (`KiwixServer.ensureStarted`: no port, no child) and
+  `kiwix-manage` (`kiwixManageAdd`: a `verify` error, `not-spawned`). Their `verifyBinary` option stays: no
+  production caller passes it, but the ZIM suites inject verdicts through it, and one uses it to hold a
+  start inside the verify step, so retiring it is a ZIM test pass of its own.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
@@ -11692,8 +11698,8 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   style), starts it to healthy on a GPU-reporting probe (backend `'gpu'`), then emits a REAL `'exit'`
   (code 134 + a stderr tail) and asserts the §5.3 GPU crash auto-fallback fired: persisted failure
   carrying `code 134` + the tail, the compatibility-mode notice, and ONE CPU restart of the same model.
-  Teeth: drop the `this.opts.onUnexpectedExit?.()` call in `LlamaServer`'s `'exit'` handler (or its
-  `ready && !stopping` gate) → no crash reaches the ladder → `restarts`/`persisted` stay empty → reds
+  Teeth: drop the `this.opts.onUnexpectedExit?.()` call in `LlamaServer`'s `'exit'` handler (since #656
+  its `reportUnexpectedExit()` call) (or its `ready && !stopping` gate) → no crash reaches the ladder → `restarts`/`persisted` stay empty → reds
   (verified).
 - **DX-6 — three settle-window real sleeps converted to deterministic waits (no count change).**
   `reranker.test.ts` / `e5-embedder.test.ts`: the fixed 25 ms "nothing spawned in the teardown window"

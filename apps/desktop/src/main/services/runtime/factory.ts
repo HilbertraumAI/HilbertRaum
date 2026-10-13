@@ -1127,8 +1127,8 @@ export function createCpuCrashAutoRestart(deps: {
   notify?: (message: string) => void
 }): (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void {
   const restarted = new Set<string>()
-  // Overlapping reports while a restart or stop is in flight are the same crash (a sidecar can
-  // report one exit twice: 'error', then 'exit').
+  // Overlapping reports while a restart or stop is in flight are the same crash. (`LlamaServer`
+  // reports one death once since #656; this guard still keeps a re-entrant report out.)
   let busy = false
   return (opts, info) => {
     if (busy) return

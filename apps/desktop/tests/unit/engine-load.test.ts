@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   EngineCannotRunError,
   classifyLoadFailure,
+  classifyLoadFailureMessage,
   classifySpawnError,
   clearEngineProblem,
   pathFreeSpawnError,
@@ -114,6 +117,21 @@ describe('classifyLoadFailure — what it must NOT claim', () => {
     expect(classifyLoadFailure({ exitCode: 0xc0000005, signal: null, stderr: '', platform: 'win32', systemDllExists: () => true })).toBeNull()
     expect(classifyLoadFailure({ exitCode: 0xc0000409, signal: null, stderr: '', platform: 'win32', systemDllExists: () => true })).toBeNull()
   })
+
+  // #656: the strings above are hand-written. These are REAL b11146 start-failure tails (Windows, the
+  // app's argv and stdio; paths → <drive>): a corrupt GGUF on the GPU and the CPU rung, a colour-coded
+  // one, and a bad `--device`. Each names engine DLLs and drive paths, and none is a loader refusal —
+  // neither where a spawn site classifies the tail nor where the session heal reads a stored error.
+  it.each(['broken-gguf-gpu', 'broken-gguf-cpu', 'broken-gguf-gpu-coloured', 'bad-device'])(
+    'returns null for the real b11146 start-failure tail "%s"',
+    (name) => {
+      const stderr = readFileSync(join(__dirname, '..', 'fixtures', `start-failure-b11146-${name}.txt`), 'utf8')
+      const win = { platform: 'win32' as const, systemDllExists: () => true }
+      expect(classifyLoadFailure({ exitCode: 1, signal: null, stderr, ...win })).toBeNull()
+      const stored = `2026-10-03T16:26:00.000Z — llama-server exited before becoming healthy (code 1) — last output: ${stderr}`
+      expect(classifyLoadFailureMessage(stored, win)).toBeNull()
+    }
+  )
 })
 
 describe('classifyLoadFailure — Windows (exit codes as Node reports them)', () => {

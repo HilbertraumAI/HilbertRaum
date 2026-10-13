@@ -160,7 +160,11 @@ describe('recheckEngines — the chat engine (#530)', () => {
     reportEngineProblem(LLAMA_PROBLEM)
     latchModelLoad('m', 'unknown model architecture')
     const f = makeCtx(driveRoot(), () => undefined)
-    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn: closingSpawn(0), verify: verified })
+    const spawn = vi.fn(closingSpawn(0))
+    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn, verify: verified })
+    // #656: `--version` exits at once. Started with no arguments, b11146 runs a router-mode server
+    // on 127.0.0.1:8080 until killed, so the check would hold a port for its whole 10 s bound.
+    expect(spawn.mock.calls.map(([bin, args]) => [bin.endsWith(llamaServerBinaryName()), args])).toEqual([[true, ['--version']]])
     expect(result.problems).toEqual([])
     expect(engineProblemFor('llama_cpp')).toBeNull()
     expect(f.embedderReset).toHaveBeenCalledTimes(1)
@@ -247,12 +251,10 @@ describe('recheckEngines — the voice engine (#530)', () => {
   it('a voice engine the OS now starts loses its verdict; the chat consumers are not re-armed', async () => {
     reportEngineProblem(WHISPER_PROBLEM)
     const f = makeCtx(driveRoot({ whisper: true }), () => undefined)
-    const result = await recheckEngines(f.ctx, {
-      restartChat: f.restartChat,
-      spawn: closingSpawn(0),
-      verify: verified,
-      platform: 'linux'
-    })
+    const spawn = vi.fn(closingSpawn(0))
+    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn, verify: verified, platform: 'linux' })
+    // #656: the voice engine is started with `--help`, which prints its usage and exits.
+    expect(spawn.mock.calls.map(([bin, args]) => [bin.endsWith(whisperCliBinaryName()), args])).toEqual([[true, ['--help']]])
     expect(result.problems).toEqual([])
     expect(f.embedderReset).not.toHaveBeenCalled()
     expect(f.restartChat).not.toHaveBeenCalled()

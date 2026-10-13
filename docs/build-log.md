@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-05 #570–#573 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #656 entry). Its record is unchanged:
+design-guidelines §11.18, `architecture.md` doc-org §4 "#571 amendment" (which keeps its open residual: deleting a chat's only
+attachment still widens it) and rag-design §13.2. Citations of the form "BUILD_STATE 2026-10-05 #570–#573 entry" now resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#570–#573 — a file attached in a chat that can't be read yet (`fix/570-chat-failed-attachment`).** The chat names a scan (or a photo without
+the OCR files) and offers Go to Documents, held for its own chat (design-guidelines §11.18); `resolveScope` / `listAttachments` count a chat's unfiled attachments, so a
+failed attach no longer widens to the whole corpus (partial index, no migration; `architecture.md` doc-org §4 #571 amendment, rag-design §13.2); scan rows lose Try
+again and Retry all skips them; one-shot "‹ Back to chat"; Translate parity. The OCR rejoin is pinned. Open: deleting a chat's only attachment still widens it._
+
 ## 2026-10-12 — the closed 2026-10-04 #567 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #473 Phase 0 entry). Its record is

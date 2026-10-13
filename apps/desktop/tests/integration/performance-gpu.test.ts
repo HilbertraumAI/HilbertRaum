@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -32,12 +32,18 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
-import { buildPerformanceSnapshot, runAndPersistBenchmark, tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
+import {
+  buildPerformanceSnapshot,
+  probeAndPersistGpu,
+  runAndPersistBenchmark,
+  tryGpuAgain
+} from '../../src/main/ipc/registerBenchmarkIpc'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { classifyProfile, detectSystem } from '../../src/main/services/benchmark'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
-import { machineKey, memoryClassOf, resetPerformanceForTests } from '../../src/main/services/performance'
+import { log } from '../../src/main/services/logging'
+import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
@@ -72,6 +78,22 @@ import {
   seededDb
 } from '../helpers/performance-fixture'
 
+// #656: pinned, not inherited from the host. The memory class reads process.platform /
+// process.arch, and every probe here is a Vulkan Windows/Linux machine: on an Apple Silicon host
+// the class is `unified` and its device the LARGEST one listed, so a hybrid fixture would name
+// its iGPU there. The placeholder binary below is named for the same pinned platform. Apple
+// Silicon's own branch is pinned in performance.test.ts (`nextStartMemory`); see also #332.
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch')
+beforeAll(() => {
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+  Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
+})
+afterAll(() => {
+  if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
+  if (archDescriptor) Object.defineProperty(process, 'arch', archDescriptor)
+})
+
 beforeEach(() => {
   resetPerformanceForTests()
   resetEffectiveReadForTests()
@@ -81,7 +103,10 @@ beforeEach(() => {
 
 // TH2: every root/DB in this file (including via the `cardMachine`/`withLog` helpers below)
 // comes from the fixture's `freshRoot`/`seededDb` — safe to add the shared teardown.
-afterEach(closePerformanceFixture)
+afterEach(async () => {
+  vi.restoreAllMocks()
+  await closePerformanceFixture()
+})
 
 const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 15_000 }
 const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 22_000 }
@@ -145,8 +170,7 @@ describe('one eligible source: the selected device (M8.2)', () => {
     // With a usable card the display device IS the budget device.
     expect(snap.graphicsDevice).toEqual({ name: RTX.name, totalMb: RTX.totalMb, useful: true })
     expect(snap.placement.vramMb).toBe(RTX.totalMb)
-    expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [IRIS, RTX]))
-    expect(snap.placement.memoryClass).not.toBe('cpu')
+    expect(snap.placement.memoryClass).toBe('discrete')
     // The fold-in replaces NAME and memory together: never the old iGPU name with the dGPU's figure.
     expect(snap.current?.gpu).toBe(RTX.name)
     expect(snap.current?.gpuVramMb).toBe(RTX.totalMb)
@@ -166,7 +190,7 @@ describe('one eligible source: the selected device (M8.2)', () => {
     expect(snap.currentGpu).toBeNull()
     expect(snap.graphicsDevice).toEqual({ name: IRIS.name, totalMb: IRIS.totalMb, useful: false })
     expect(snap.placement.vramMb).toBeNull()
-    expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [IRIS]))
+    expect(snap.placement.memoryClass).toBe('cpu')
     expect(snap.current?.gpu).toBeNull()
     expect(snap.current?.gpuVramMb).toBeUndefined()
   })
@@ -203,7 +227,7 @@ describe('one eligible source: the selected device (M8.2)', () => {
     // 4,096 MiB is under the gate even at 5,120: no budget device for ANY consumer…
     expect(snap.currentGpu).toBeNull()
     expect(snap.placement.vramMb).toBeNull()
-    expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [RADEON_IGPU, gtx1650]))
+    expect(snap.placement.memoryClass).toBe('cpu')
     expect(snap.current?.gpu).toBeNull()
     expect(snap.current?.gpuVramMb).toBeUndefined()
     // …and the graphics tile still names it with its OWN memory — never the iGPU listed first,
@@ -277,7 +301,7 @@ describe('probe identity (M8.3, G3)', () => {
     expect(snap.current?.gpuVramMb).toBeUndefined()
     expect(snap.current?.gpu).toBeNull()
     expect(snap.placement.vramMb).toBeNull()
-    expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, []))
+    expect(snap.placement.memoryClass).toBe('cpu')
     expect(snap.graphicsDevice).toBeNull() // the tile never names another machine's card (#327 class)
     // The raw settings still hold the devices — nothing was deleted, they are just not this machine's.
     expect(getSettings(db).gpuProbe).toEqual(probe([RTX], FOREIGN_KEY))
@@ -352,6 +376,39 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     expect(Number.isNaN(new Date(written.probedAt).getTime())).toBe(false)
     // Pushed after the flag clear (the old probe still in place) and again after the write (A-D1).
     expect(spy.mock.results.map((r) => r.value)).toEqual([probe([RTX], FOREIGN_KEY), written])
+  })
+
+  // A-D1 through the SNAPSHOT the screen reads, not just the settings: the flag-clear push already
+  // shows this machine's card re-armed (chat row 'gpu'); the probe write's push then shows it
+  // gone, because a probe that cannot run persists the empty stamped answer (decision 6). Moved
+  // here from performance-notify.test.ts (#656), where it read the class from the host.
+  it.each<[label: string, binary: boolean, probeImpl: () => Promise<GpuDevice[]>]>([
+    ['no binary for this OS (the probe is never called)', false, async () => [RTX]],
+    [
+      'a rejecting probe',
+      true,
+      async () => {
+        throw new Error('driver wedged')
+      }
+    ]
+  ])('"Try GPU again": the first push re-arms this machine’s card on the screen even when the probe cannot run — %s (A-D1)', async (_label, binary, probeImpl) => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const before = probe([RTX], here())
+    updateSettings(db, { gpuProbe: before, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+    if (binary) withBinary(root)
+    const ctx = ctxWith(root, db, { probeGpu: fakeProbe(probeImpl) })
+    const chatDevice = (): string => buildPerformanceSnapshot(ctx).placement.models.find((r) => r.role === 'chat')!.device
+    expect(chatDevice()).toBe('cpu') // the auto-disable forces the processor before the button
+    const spy = performanceChangedSpy(() => ({ gpuAutoDisabled: getSettings(db).gpuAutoDisabled, chat: chatDevice() }))
+
+    await tryGpuAgain(ctx)
+
+    expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { gpuAutoDisabled: false, chat: 'gpu' },
+      { gpuAutoDisabled: false, chat: 'cpu' }
+    ])
+    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [], machineKey: here() })
   })
 
   it('a probe-only refresh drops the cached answer first, then writes the devices stamped with this machine and pushes', async () => {
@@ -478,6 +535,42 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
       expect(getSettings(db).gpuProbe).toEqual(before)
       expect(buildPerformanceSnapshot(ctxWith(root, db)).currentGpu).toBeNull()
     })
+  })
+
+  it('a probe that gives NO answer after the workspace locked: no write, no push, an empty summary, and no false "probe failed" warning (#656)', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    withBinary(root)
+    const before = probe([RTX], here())
+    updateSettings(db, { gpuProbe: before })
+    let unlocked = true
+    const pending = deferred<GpuDevice[] | null>()
+    const ctx = ctxWith(root, db, {
+      workspace: { isUnlocked: () => unlocked, isLocking: () => false },
+      probeGpu: fakeProbe(() => pending.promise)
+    })
+    // As in production, the database is out of reach once the lock completed.
+    Object.defineProperty(ctx, 'db', {
+      get: () => {
+        if (!unlocked) throw new Error('Workspace is locked')
+        return db
+      }
+    })
+    const spy = performanceChangedSpy()
+    const warn = vi.spyOn(log, 'warn')
+
+    const run = probeAndPersistGpu(ctx)
+    unlocked = false // "Lock now" completes while the driver is still enumerating…
+    pending.resolve(null) // …and the probe then hits its kill-timeout (#380): unknown, not "no device"
+    const summary = await run
+
+    expect(summary).toMatchObject({ name: null, totalMb: null, useful: false })
+    expect(spy).not.toHaveBeenCalled()
+    // Nothing failed: the probe did not answer and the lock refused the read. Without the
+    // admission check the settings read threw into the "GPU probe failed" path.
+    expect(warn).not.toHaveBeenCalled()
+    unlocked = true
+    expect(getSettings(db).gpuProbe).toEqual(before)
   })
 })
 
@@ -616,8 +709,8 @@ describe('capability is not execution (DR1)', () => {
     expect(off.placement.verdict.budgetMb).toBe(off.placement.ramMb)
     // The #303 P5 rule kept the HARDWARE class here; merged with #308 (decision 6) the snapshot's
     // class and card describe the next start, which the switched-off card takes no part in —
-    // the same answer `pickerMemoryFor` gives the Models ★ (`memoryClassOf`, the profile bump's
-    // gate, is the unchanged flags-at-default wrapper).
+    // the same answer `pickerMemoryFor` gives the Models ★ (the profile bump still follows the
+    // hardware, `gpuUsefulForProfile`).
     expect(off.placement.memoryClass).toBe('cpu')
     expect(off.placement.vramMb).toBeNull()
   })
@@ -637,18 +730,15 @@ describe('capability is not execution (DR1)', () => {
     expect(observedCpu.placement.verdict).toMatchObject({ kind: 'cpu', estimated: false, budgetMb: observedCpu.placement.ramMb })
   })
 
-  it.skipIf(process.platform === 'darwin' && process.arch === 'arm64')(
-    'no usable card, GPU on: both rows say cpu and nothing counts as on the card',
-    () => {
-      // An integrated-only probe under 'auto' is a cpu CLASS without a forced configuration (`cpuForced`
-      // false) — the rows still stay off the card (DR1). Apple Silicon is unified (the iGPU IS the pool).
-      const none = cardMachine({ settings: { gpuProbe: probe([IRIS], here()) } })
-      expect(none.placement.memoryClass).toBe('cpu')
-      expect(rowOf(none.placement, 'chat').device).toBe('cpu')
-      expect(rowOf(none.placement, 'translation').device).toBe('cpu')
-      expect(none.placement.totals.bothOnCard).toBe(false)
-    }
-  )
+  it('no usable card, GPU on: both rows say cpu and nothing counts as on the card', () => {
+    // An integrated-only probe under 'auto' is a cpu CLASS without a forced configuration (`cpuForced`
+    // false) — the rows still stay off the card (DR1).
+    const none = cardMachine({ settings: { gpuProbe: probe([IRIS], here()) } })
+    expect(none.placement.memoryClass).toBe('cpu')
+    expect(rowOf(none.placement, 'chat').device).toBe('cpu')
+    expect(rowOf(none.placement, 'translation').device).toBe('cpu')
+    expect(none.placement.totals.bothOnCard).toBe(false)
+  })
 })
 
 describe('free/compute attribution to the selected device (DR2)', () => {
@@ -679,24 +769,21 @@ describe('free/compute attribution to the selected device (DR2)', () => {
 })
 
 describe('everything loaded at once (DR5)', () => {
-  it.skipIf(process.platform === 'darwin' && process.arch === 'arm64')(
-    'discrete: the processor rows plus the observed chat spill and the live translation spill',
-    () => {
-      const { placement: p } = cardMachine({ placement: { gpuLayers: 30, totalLayers: 41, cpuModelMb: 1900, cpuKvMb: 200 } })
-      expect(p.memoryClass).toBe('discrete')
-      expect(p.verdict).toMatchObject({ kind: 'partial', estimated: false, spillMb: 2100 })
-      const tr = rowOf(p, 'translation')
-      const pinned = p.models.filter((r) => r.device === 'cpu').reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)
-      const translationSpill = (tr.sizeOnDiskGb ?? 0) * 1024 * (1 - 20 / 49)
-      expect(p.totals.ramAllMb).toBe(Math.round(pinned + 2100 + translationSpill))
-      // Chat weights on the card are NOT counted against RAM.
-      expect(p.totals.ramAllMb).toBeLessThan(Math.round(p.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
+  it('discrete: the processor rows plus the observed chat spill and the live translation spill', () => {
+    const { placement: p } = cardMachine({ placement: { gpuLayers: 30, totalLayers: 41, cpuModelMb: 1900, cpuKvMb: 200 } })
+    expect(p.memoryClass).toBe('discrete')
+    expect(p.verdict).toMatchObject({ kind: 'partial', estimated: false, spillMb: 2100 })
+    const tr = rowOf(p, 'translation')
+    const pinned = p.models.filter((r) => r.device === 'cpu').reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)
+    const translationSpill = (tr.sizeOnDiskGb ?? 0) * 1024 * (1 - 20 / 49)
+    expect(p.totals.ramAllMb).toBe(Math.round(pinned + 2100 + translationSpill))
+    // Chat weights on the card are NOT counted against RAM.
+    expect(p.totals.ramAllMb).toBeLessThan(Math.round(p.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
 
-      // GPU off: every row is on the processor → the plain sum again.
-      const off = cardMachine({ settings: { gpuMode: 'off' } }).placement
-      expect(off.totals.ramAllMb).toBe(Math.round(off.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
-    }
-  )
+    // GPU off: every row is on the processor → the plain sum again.
+    const off = cardMachine({ settings: { gpuMode: 'off' } }).placement
+    expect(off.totals.ramAllMb).toBe(Math.round(off.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
+  })
 })
 
 describe('"Try GPU again" and the session latches (#182, #372)', () => {
