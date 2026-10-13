@@ -62,7 +62,7 @@ node scripts/generate-third-party-notices.mjs
 @radix-ui/react-use-size@1.1.2
 @radix-ui/react-visually-hidden@1.2.5
 @radix-ui/rect@1.1.2
-@streamdown/math@1.0.2
+@streamdown/math@1.0.3
 @tanstack/react-virtual@3.14.13
 @tanstack/virtual-core@3.17.11
 @types/debug@4.1.13
@@ -137,7 +137,7 @@ loose-envify@1.4.0
 lop@0.4.2
 mammoth@1.13.0
 markdown-table@3.0.4
-marked@17.0.6
+marked@18.1.1
 mdast-util-find-and-replace@3.0.2
 mdast-util-from-markdown@2.0.3
 mdast-util-gfm@3.1.0
@@ -191,7 +191,7 @@ pako@1.0.11
 papaparse@5.7.0
 parse-entities@4.0.2
 parse5@7.3.0
-pdfjs-dist@6.3.289
+pdfjs-dist@6.4.299
 process-nextick-args@2.0.1
 property-information@7.2.0
 react@18.3.1
@@ -210,13 +210,13 @@ remark-math@6.0.0
 remark-parse@11.0.0
 remark-rehype@11.1.2
 remark-stringify@11.0.0
-remend@1.3.1
+remend@1.4.0
 safe-buffer@5.1.2
 scheduler@0.23.2
 setimmediate@1.0.5
 space-separated-tokens@2.0.2
 sprintf-js@1.0.3
-streamdown@2.6.0
+streamdown@2.7.0
 string_decoder@1.1.1
 stringify-entities@4.0.4
 style-to-js@1.1.21
@@ -1341,7 +1341,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### @streamdown/math@1.0.2
+### @streamdown/math@1.0.3
 
 - License: Apache-2.0
 - Author: Hayden Bleasel <hayden.bleasel@vercel.com>
@@ -4374,13 +4374,13 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### marked@17.0.6
+### marked@18.1.1
 
 - License: MIT
 - Author: Christopher Jeffrey
-- Repository: git://github.com/markedjs/marked
+- Repository: https://github.com/markedjs/marked
 
-#### `LICENSE.md`
+#### `LICENSE`
 
 ```
 # License information
@@ -6168,7 +6168,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### pdfjs-dist@6.3.289
+### pdfjs-dist@6.4.299
 
 - License: Apache-2.0
 - Repository: https://github.com/mozilla/pdf.js
@@ -7464,7 +7464,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### remend@1.3.1
+### remend@1.4.0
 
 - License: Apache-2.0
 - Author: Hayden Bleasel <hayden.bleasel@vercel.com>
@@ -7650,7 +7650,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### streamdown@2.6.0
+### streamdown@2.7.0
 
 - License: Apache-2.0
 - Author: Hayden Bleasel <hayden.bleasel@vercel.com>
