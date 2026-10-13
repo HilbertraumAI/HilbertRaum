@@ -142,6 +142,38 @@ describe('the GPU start ladder', () => {
     }
   )
 
+  // #653 review: nor is "any buffer `isCpuDevice` does not claim" evidence — that rule is a blacklist,
+  // and ggml's CPU backend has extra buffer types it does not name: `AMX` on a Sapphire Rapids CPU
+  // (the shipped `ggml-cpu-sapphirerapids.dll` carries the name). Only a buffer under a device the
+  // log's own `device_info` block lists as a graphics card counts. Handwritten from ggml's naming (no
+  // AMX machine captured), on the GPU-less capture's buffer lines.
+  it.each([
+    { name: 'no answer', probe: null },
+    { name: 'an empty answer', probe: [] as GpuDevice[] }
+  ])(
+    'an AMX model buffer on a PC with no graphics card reads cpu when the probe gave $name (#653)',
+    async ({ probe }) => {
+      const h = ladderHarness({
+        probe,
+        stderr: [
+          [
+            '  - CPU     : Intel(R) Xeon(R) w5-3435X (65212 MiB, 60000 MiB free)',
+            'load_tensors: offloaded 37/37 layers to GPU',
+            'load_tensors:          AMX model buffer size =  1683.28 MiB',
+            'load_tensors:   CPU_Mapped model buffer size =  2362.55 MiB',
+            'llama_kv_cache:        CPU KV buffer size =   576.00 MiB',
+            'sched_reserve:        CPU compute buffer size =    84.01 MiB',
+            ''
+          ].join('\n')
+        ]
+      })
+      const runtime = h.factory(opts)
+      await runtime.start()
+      expect(runtime.backend).toBe('cpu')
+      expect(runtime.gpuName).toBeNull()
+    }
+  )
+
   // #653 owner call 2 (the mirror): a listed card with "offloaded 0/37 layers" stays gpu. Real
   // capture: the card still holds the compute buffer and ran the prefill (74 % load, 302 tok/s
   // against 56 with `--device none`), so a driver crash can still hit it and §5.3 — not #599's

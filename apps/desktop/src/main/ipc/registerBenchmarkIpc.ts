@@ -671,7 +671,10 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
     // first run never stored a result (failed, cancelled by a lock) auto-started its model beside
     // the ladder's own probe — and a probe that answered mid-upload was cached and persisted with
     // the chat model already on the card, a baseline the reranker gate then subtracted chat from
-    // twice. Only a TIMED-OUT probe was ever re-taken on an idle driver.
+    // twice. Only a TIMED-OUT probe was ever re-taken on an idle driver. A probe that gives no
+    // answer HERE (a timeout, a refusal, since #653 a crash) still leaves the ladder's own probe
+    // to run beside the upload, and an answer there is the session's: accepted, rare, and on
+    // NVIDIA/Windows harmless (its free figure does not move, #318).
     probed = probeAndPersistGpu(ctx).then(
       () => undefined,
       () => undefined
@@ -883,8 +886,9 @@ export function maybeRunFirstBenchmark(ctx: AppContext): Promise<FirstBenchmarkO
  * pulled) stays the session's answer and would keep labeling the machine wrongly. Invalidate
  * the cache, clear the flags (and push — A-D1), re-probe + persist, and hand the renderer the
  * fresh settings. Since #380 a probe that TIMED OUT is not cached at all (it resolves `null`
- * and drops its own entry), so this button is no longer the only escape from a wedged driver —
- * it is the user's override for an answer that is stale rather than absent.
+ * and drops its own entry; since #653 so does one that crashed or could not be spawned), so
+ * this button is no longer the only escape from a wedged driver — it is the user's override for
+ * an answer that is stale rather than absent.
  *
  * #182: the session latch that switches the speculative rung off after one bad attempt is
  * the same shape of sticky, hardware-derived "no" — this button is the user asking for the
@@ -898,11 +902,12 @@ export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
   // The cleared flags are snapshot inputs of their own (`cpuOnly` → the resident rows, the
   // effective class, the verdict), so this write pushes right here (PR #303 audit A-D1): the
   // probe's own push follows its WRITE — on this branch every path writes (PR #308 decision 6:
-  // the empty stamped probe when the probe cannot run or threw) EXCEPT the timed-out probe,
-  // which is unknown and writes nothing (#380), but only after the probe has run, and under
-  // #303's no-write paths the screen used to keep its processor-forced rows until something
-  // else pushed. The second push, after the re-probe's write, is idempotent — the renderer
-  // serialises its refetches; a timed-out re-probe simply leaves this first push as the only one.
+  // the empty stamped probe when the probe cannot run or threw) EXCEPT a probe that gave no
+  // answer — timed out (#380), refused (#530), crashed or failed to spawn (#653) — which is
+  // unknown and writes nothing, but only after the probe has run, and under #303's no-write
+  // paths the screen used to keep its processor-forced rows until something else pushed. The
+  // second push, after the re-probe's write, is idempotent — the renderer serialises its
+  // refetches; a re-probe that gives no answer simply leaves this first push as the only one.
   notifyPerformanceChanged()
   await probeAndPersistGpu(ctx)
   return getSettings(ctx.db)

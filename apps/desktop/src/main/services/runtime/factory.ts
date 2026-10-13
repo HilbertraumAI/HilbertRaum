@@ -13,7 +13,7 @@ import type {
 } from './index'
 import { createMockRuntime } from './mock'
 import { createLlamaRuntime, RuntimeConnectionLostError } from './llama'
-import { createPlacementParser, holdsGpuBuffers, recordModelPlacement } from './placement'
+import { createPlacementParser, recordModelPlacement } from './placement'
 import { probeGpuDevices } from './gpu'
 import { displayDevice, primaryUsefulDevice } from '../../../shared/gpu-rules'
 import { startModelPrefetch, type ModelPrefetch } from './prefetch'
@@ -652,16 +652,18 @@ class LadderRuntime implements ModelRuntime {
           // the fit's own "device 0" was Vulkan1), so an app-side `--device` would change nothing
           // and would break the ladder's "`--device none` is the only device argument" contract.
           this.gpuName = displayDevice(devices)?.device.name ?? null
-        } else if (holdsGpuBuffers(reading)) {
+        } else if (placement.holdsGpuBuffers()) {
           // #380 / #653: the probe gave no answer (`null`: its 10 s bound under this very load —
           // on the #330 round trip a `--list-devices` that takes 1.07 s idle took 7.7 s beside the
           // weight upload —, a crash, a refused program) or an EMPTY one, yet this start's own log
-          // filed buffers on a graphics device. That is first-hand evidence about THIS start, so
+          // filed buffers on a device its `device_info` block lists as a graphics card (the parser's
+          // `holdsGpuBuffers`). That is first-hand evidence about THIS start, so
           // it labels it, rather than call a card-speed start "cpu" and push that verdict into
           // the chat header, Diagnostics, the persisted `ModelPlacement`, the #322 speed identity,
           // the #473 chat share and the §5.3 crash auto-fallback gate. Owner call 1 (#653): the
           // evidence is a GPU BUFFER, never the offload line, which b9849 and b11146 both print as
-          // `offloaded 37/37 layers to GPU` on a machine with no usable device (`holdsGpuBuffers`).
+          // `offloaded 37/37 layers to GPU` on a machine with no usable device, and never a CPU-side
+          // buffer the `isCpuDevice` blacklist misses (ggml's `AMX` on a Sapphire Rapids CPU).
           // Before #653 the unknown path read that line, so a GPU-less PC whose probe gave no
           // answer was labelled gpu; and an empty answer outranked the log, so a card start whose
           // probe child crashed was labelled cpu for the whole session.

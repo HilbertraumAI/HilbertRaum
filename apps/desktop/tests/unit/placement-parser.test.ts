@@ -332,15 +332,15 @@ describe('createPlacementParser', () => {
 // WHITELIST, not a blacklist: every line must fall into one of six known classes, so injected
 // prose ANYWHERE in a future re-capture reddens here instead of shipping.
 describe('the committed load logs carry no request or prompt content (DR3)', () => {
+  /** #653: load-only captures (cut at the first `all slots are idle`, before any request). */
+  const LOAD_ONLY = ['placement-b11146-gpuless-37of37-cpu.txt', 'placement-b11146-ngl0-0of37-compute.txt']
   const NAMES = [
     'placement-b9849-partial-20of33-hybrid.txt',
     'placement-b9849-partial-18of33-np4.txt',
     'placement-b9849-partial-62of66-mtp.txt',
     'placement-b9849-full-49of49-swa.txt',
     'placement-b11146-full-49of49-swa.txt', // #512: captured through the app's spawn, so ANSI-coloured
-    // #653: load-only captures (cut at the first `all slots are idle`, before any request).
-    'placement-b11146-gpuless-37of37-cpu.txt',
-    'placement-b11146-ngl0-0of37-compute.txt'
+    ...LOAD_ONLY
   ]
   /** The colour codes llama.cpp adds when it believes stderr is a terminal (see the #512 test above). */
   const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g')
@@ -378,7 +378,8 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
     // Every slot line prints its conversation id; the app never sets one, so it is always empty. A
     // capture that served a request has them; a load-only one (#653) has no slot line to print one.
     const ids = text.match(/conv_id=[^|,\n]*/g) ?? []
-    if (text.includes('launch_slot_')) expect(ids.length).toBeGreaterThan(0)
+    if (LOAD_ONLY.includes(name)) expect(ids).toEqual([])
+    else expect(ids.length).toBeGreaterThan(0)
     for (const id of ids) expect(id.trim()).toBe('conv_id= (empty=1)')
     // The capture is the real thing: the verbosity the parser needs, and a load it can read.
     expect(text).toContain('verbosity = 4')

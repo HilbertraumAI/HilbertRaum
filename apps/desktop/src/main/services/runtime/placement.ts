@@ -105,6 +105,23 @@ export interface PlacementParser {
   onStderrData: (text: string) => void
   /** The reading so far. */
   reading: () => PlacementReading
+  /**
+   * #653: did this start put anything on a graphics device? True when the log filed a model, KV,
+   * recurrent-state or compute buffer of more than 0 MiB under a device its own `device_info` block
+   * lists as a GPU (that label, or `<label>_<suffix>`, a mapped buffer of it).
+   *
+   * NOT the offload line. b9849 and b11146 print `offloaded 37/37 layers to GPU` on a machine with
+   * no usable device and under `--device none`, every buffer on the processor (`CPU_REPACK`), so the
+   * layer count says nothing about a card (`placement-b11146-gpuless-37of37-cpu.txt`). Nor "any
+   * buffer `isCpuDevice` does not claim": that rule is a blacklist, and ggml's CPU backend has extra
+   * buffer types it does not name, such as `AMX` on a Sapphire Rapids CPU (the shipped
+   * `ggml-cpu-sapphirerapids.dll` carries it). A start that offloads 0 layers beside a visible card
+   * still reserves its compute buffer there and runs the prefill on it
+   * (`placement-b11146-ngl0-0of37-compute.txt`: 74 % card load, 302 tok/s against 56 with
+   * `--device none`), so that buffer counts as the card in use. Not a field of the reading on
+   * purpose: the reading is the persisted `ModelPlacement` shape.
+   */
+  holdsGpuBuffers: () => boolean
 }
 
 function isCpuDevice(name: string): boolean {
@@ -113,21 +130,6 @@ function isCpuDevice(name: string): boolean {
 }
 
 const round2 = (mb: number): number => Math.round(mb * 100) / 100
-
-/**
- * #653: did this start put anything on a graphics device? True when the log filed a model, KV,
- * recurrent-state or compute buffer under a GPU device (any name `isCpuDevice` does not claim).
- *
- * NOT the offload line. b9849 and b11146 print `offloaded 37/37 layers to GPU` on a machine with no
- * usable device and under `--device none`, every buffer on the processor (`CPU_REPACK`), so the
- * layer count says nothing about a card (`placement-b11146-gpuless-37of37-cpu.txt`). A start that
- * offloads 0 layers beside a visible card still reserves its compute buffer there and runs the
- * prefill on it (`placement-b11146-ngl0-0of37-compute.txt`: 74 % card load, 302 tok/s against 56
- * with `--device none`), so that buffer counts as the card in use.
- */
-export function holdsGpuBuffers(reading: PlacementReading): boolean {
-  return [reading.gpuModelMb, reading.gpuKvMb, reading.gpuRsMb, reading.gpuComputeMb].some((mb) => (mb ?? 0) > 0)
-}
 
 /** One parser per start attempt: a retried rung gets a fresh reading. */
 export function createPlacementParser(): PlacementParser {
@@ -150,12 +152,17 @@ export function createPlacementParser(): PlacementParser {
   const computeByLabel = new Map<string, number>()
   /** The OPEN context's largest compute buffer per device label (one buffer per context per backend). */
   const openContext = new Map<string, number>()
+  /** #653: the labels every non-empty model / KV / RS / compute buffer was filed under. */
+  const bufferLabels = new Set<string>()
   let pending = ''
   const add = (
     key: 'gpuModelMb' | 'cpuModelMb' | 'gpuKvMb' | 'cpuKvMb' | 'gpuRsMb' | 'cpuRsMb' | 'gpuComputeMb',
     mb: number
   ): void => {
     r[key] = round2((r[key] ?? 0) + mb)
+  }
+  const filed = (label: string, mb: number): void => {
+    if (mb > 0) bufferLabels.add(label)
   }
   /** Bank the open context's buffers and start a fresh one (contexts SUM, lines within one MAX). */
   const closeContext = (): void => {
@@ -175,16 +182,19 @@ export function createPlacementParser(): PlacementParser {
     const model = MODEL_BUFFER_RE.exec(text)
     if (model) {
       add(isCpuDevice(model[1]) ? 'cpuModelMb' : 'gpuModelMb', Number(model[2]))
+      filed(model[1], Number(model[2]))
       return
     }
     const kv = KV_BUFFER_RE.exec(text)
     if (kv) {
       add(isCpuDevice(kv[1]) ? 'cpuKvMb' : 'gpuKvMb', Number(kv[2]))
+      filed(kv[1], Number(kv[2]))
       return
     }
     const rs = RS_BUFFER_RE.exec(text)
     if (rs) {
       add(isCpuDevice(rs[1]) ? 'cpuRsMb' : 'gpuRsMb', Number(rs[2]))
+      filed(rs[1], Number(rs[2]))
       return
     }
     if (CONTEXT_START_RE.test(text)) {
@@ -193,6 +203,7 @@ export function createPlacementParser(): PlacementParser {
     }
     const compute = COMPUTE_BUFFER_RE.exec(text)
     if (compute) {
+      filed(compute[1], Number(compute[2]))
       // The `<Backend>_Host` compute buffer is host memory and appears on full offloads too,
       // so it is dropped rather than counted as spill.
       if (!isCpuDevice(compute[1])) {
@@ -240,7 +251,12 @@ export function createPlacementParser(): PlacementParser {
         gpuComputeMb,
         devices: rows.map((row) => ({ ...row, computeMb: byLabel.get(row.label) ?? null }))
       }
-    }
+    },
+    // A CPU-side label never counts, even one that shares a row's prefix (`Vulkan_Host`).
+    holdsGpuBuffers: () =>
+      [...bufferLabels].some(
+        (label) => !isCpuDevice(label) && rows.some((row) => label === row.label || label.startsWith(`${row.label}_`))
+      )
   }
 }
 

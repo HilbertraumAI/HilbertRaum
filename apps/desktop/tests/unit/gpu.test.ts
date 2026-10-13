@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCachedGpuProbe, parseListDevices, probeGpuDevices } from '../../src/main/services/runtime/gpu'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import { log } from '../../src/main/services/logging'
 import { until } from '../helpers/hang-budget'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 
@@ -217,16 +218,25 @@ describe('probeGpuDevices', () => {
       child = new FakeProbeChild() // never exits on its own
       return child
     }
-    const probe = probeGpuDevices('/bin/llama-server', {
-      spawn,
-      timeoutMs: 20,
-      verify: async () => 'skip-dev'
-    })
-    // Flush the pre-spawn verify() microtask (arming the timer), then trip the kill-timeout.
-    await vi.advanceTimersByTimeAsync(20)
-    const devices = await probe
-    expect(devices).toBeNull()
-    expect(child.killed).toBe(true)
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      const probe = probeGpuDevices('/bin/llama-server', {
+        spawn,
+        timeoutMs: 20,
+        verify: async () => 'skip-dev'
+      })
+      // Flush the pre-spawn verify() microtask (arming the timer), then trip the kill-timeout.
+      await vi.advanceTimersByTimeAsync(20)
+      const devices = await probe
+      expect(devices).toBeNull()
+      expect(child.killed).toBe(true)
+      // #653 (found on the real app): the killed child's own 'close' arrives after the probe settled.
+      // It is the kill, not a second non-answer, so nothing more is logged.
+      child.emit('close', null, 'SIGKILL')
+      expect(warn.mock.calls.map((c) => c[0])).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 
