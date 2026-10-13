@@ -45,9 +45,10 @@ function countAsNever(dir: string): number {
 // (typed stub bags + the shared tests/helpers/status.ts fixtures) → 50. PR #303 audit P5
 // retyped the gpuProbe size-cap fixture (settings-write-gate.test.ts) → 49. The sidecar-services
 // test campaign dropped the vision suites' fake spawn / fetch casts → 45. The documents-doctasks
-// campaign removed 1 (lockPurge fakeImage) → 44. LOWER this when you remove casts; the test fails
+// campaign removed 6 (lockPurge's fakeImage, docs-ipc's smart-view arg, one in doctasks, whole-doc-compare's node
+// rows, phaseB-perf-bench's two stubs) → 39. LOWER this when you remove casts; the test fails
 // if it ever climbs (a new `as never` was added).
-const BASELINE = 44
+const BASELINE = 39
 
 describe('F-41 `as never` ratchet (audit-2026-07-16)', () => {
   it('the number of `as never` casts under tests/ never exceeds the recorded baseline', () => {
