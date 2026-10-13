@@ -1686,7 +1686,7 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   total per/per category/itemize/tally + the DE stems kategorisier/gruppier/summier/aufschlüssel/
   aufsummier and the phrases Summe pro/Gesamtsumme/pro Kategorie/nach Kategorie — an aggregation over a
   document is a whole-document task by nature, so it must never silently run on top-k), fixed
-  precedence **explicit-button > compare(2 docs) > coverage-extract > tree-summary > relevance** (M7),
+  precedence **compare(2 docs) > coverage-extract > tree-summary > relevance** (M7),
   closed-vocab→type synonym map (the `amount` synonyms include expense(s)/spending/income/revenue +
   Ausgabe(n)/Einnahme(n)/Umsatz/Umsätze since #37); **low-confidence / no-extract-data /
   compare-without-2-docs → labelled relevance** (never an empty "no items" or a false "complete"). The
