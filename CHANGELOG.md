@@ -58,6 +58,10 @@ from its first public `1.0.0` release onward.
   lists of related article titles, so a question about one Windows version also matched the articles
   about the others. The navigation boxes are left out now. The license line is shown below
   the article in the viewer, and a saved copy ends with it in a section of its own, *License* (#662).
+- **Knowledge packs made from ordinary websites show quotation marks and arrows as characters.**
+  Text like `we&rsquo;ll` or `&raquo;` appeared in answers, in the article viewer and in saved
+  copies, and a search for "we'll" did not find it. Typographic quotes, dashes, arrows, accented
+  letters and common symbols are now decoded (#663).
 
 ## [0.1.63] — 2026-10-12
 

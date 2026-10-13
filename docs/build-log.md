@@ -39,6 +39,17 @@ record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `ret
 `prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
 CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605: fixed, above)._
 
+## 2026-10-13 — the closed 2026-10-06 #599 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #663 entry). Its record is unchanged:
+`architecture.md` CB-5 "#599 amendment" (with GPU §5.3 and design-guidelines §11.22). Citations of the form
+"BUILD_STATE 2026-10-06 #599 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-06 — **#599 — a frozen or crashed chat model no longer reads "running, healthy" (`feat/599-runtime-liveness`, stacked on #600).** Status reads re-probe
+`/health` (cached 10 s); an answer the CB-5 watchdog ended marks the model unresponsive until it answers again. The AI Model card says "Not responding" + Restart (offered,
+never automatic). A CPU-mode crash restarts the model once per model per session, then leaves it stopped, each with a notice. "Is starting" counts from the start request
+(chat, documents, doc tasks, the local API). Owner calls as recommended. Record: CB-5 "#599 amendment", GPU §5.3, design-guidelines §11.22. Retired the #594 entry._
+
 ## 2026-10-13 — the closed 2026-10-05 #516 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #627 entry). Its record is unchanged:

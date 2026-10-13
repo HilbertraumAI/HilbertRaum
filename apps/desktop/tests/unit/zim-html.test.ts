@@ -2321,6 +2321,36 @@ describe('decodeEntities', () => {
     expect(decodeEntities('&#1114112;')).toBe('&#1114112;')
     expect(decodeEntities('&#xD800;')).toBe('&#xD800;')
   })
+
+  // #663: hand-written pages (zimit archives) delivered `we&rsquo;ll` — 1,680 such sequences in
+  // 15 htdp.org pages, `&raquo;` on every PEP page. The table is HTML 4.01's 252 names + `apos`.
+  it.each([
+    ['the typographic names the archives were measured with', 'we&rsquo;ll &lsquo;a&rsquo; &ldquo;b&rdquo; &raquo; &larr;&rarr; &bull; &copy;', 'we’ll ‘a’ “b” » ←→ • ©'],
+    ['both ends of the Latin-1 run and its letters, case-sensitively', '&iexcl;&yuml; &Auml;&auml;&szlig;', '¡ÿ Ääß'],
+    ['names that carry digits', 'x&sup2; &frac12; &there4;', 'x² ½ ∴'],
+    ['symbols, Greek and the special set', '&fnof; &Omega;&sigmaf; &diams; &euro; &bdquo;', 'ƒ Ως ♦ € „'],
+    ['`lang`/`rang` at the code points browsers decode (HTML5), not HTML 4.01’s', '&lang;a&rang;', '⟨a⟩'],
+    // Wikipedia's words must not move: the 19 names known before #663 decode exactly as before,
+    // the five exceptions to the code point included (a space as a space, a soft hyphen as nothing).
+    [
+      'the 19 names known before, exactly as before',
+      '&amp;&lt;&gt;&quot;&apos;|&nbsp;|&thinsp;|&ensp;|&emsp;|&shy;|&ndash;&mdash;&hellip;&middot;&deg;&times;&minus;&prime;&Prime;',
+      '&<>"\'| | | | ||–—…·°×−′″'
+    ],
+    // …and a zero-width joiner or direction mark to its code point, like its numeric form and the
+    // literal character (the review found an override would treat the forms differently).
+    ['the zero-width joiners and direction marks as their own characters', '&zwnj;&#8204; &zwj; &lrm;&#x200E; &rlm;', '‌‌ ‍ ‎‎ ‏']
+  ])('decodes %s (#663)', (_label, input, expected) => {
+    expect(decodeEntities(input)).toBe(expected)
+  })
+
+  it.each([
+    ['in one pass, so an escaped entity stays the literal text a page about HTML means', '&amp;rsquo; &amp;amp;', '&rsquo; &amp;'],
+    ['an HTML5-only name', '&ZeroWidthSpace; &lbrack;', '&ZeroWidthSpace; &lbrack;'],
+    ['a name an object inherits — it decoded to the function’s source text', '&toString; &constructor; &valueOf;', '&toString; &constructor; &valueOf;']
+  ])('leaves verbatim %s (#663)', (_label, input, expected) => {
+    expect(decodeEntities(input)).toBe(expected)
+  })
 })
 
 // Full real-article sanity checks against uncommitted mwoffliner output. Run with

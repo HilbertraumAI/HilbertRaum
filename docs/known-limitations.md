@@ -3594,8 +3594,8 @@ reports and phase plans were working papers; their full text lives in git histor
     their sidebars that way; Sphinx's default HTML5 writer uses `<aside>`,
     which the rule leaves alone. Neither direction was seen in the 2,672
     pages measured.
-  - Wikipedia's license line and German navigation boxes are #662's (the next
-    entry).
+  - Wikipedia's license line and German navigation boxes: "Wikipedia's
+    license line and German navigation boxes (#662)", below.
   - The indentation reaches the article viewer and a saved copy only. The
     chunker splits on whitespace, so retrieval, the reranker, the prompt and
     citation snippets read code as one flat line, as before. The viewer shows
@@ -3610,8 +3610,7 @@ reports and phase plans were working papers; their full text lives in git histor
     characters. A kept table keeps at most 6,000 characters of such
     whitespace in all (`TABLE_MAX_KEPT_WHITESPACE`); past that its code
     collapses as before.
-  - Named entities the converter does not know (`&rsquo;`, `&ldquo;`,
-    `&raquo;`, …) are delivered verbatim on hand-written sites (#663).
+  - Named entities: "Named entities (#663)", below.
 - **Wikipedia's license line and German navigation boxes (#662).** mwoffliner's
   license line (`div.zim-footer`) is no longer article text: it is returned
   apart (`PackArticle.notice`), shown after the article in the viewer and
@@ -3639,3 +3638,17 @@ reports and phase plans were working papers; their full text lives in git histor
   - A copy saved before this change keeps the license line inside its last
     section. Saving the article again answers "already saved"; delete the copy
     on the Documents screen and save it again to get the new shape.
+- **Named entities (#663).** The converter decodes HTML 4.01's 252 named
+  entities plus `&apos;` (typographic quotes, dashes, arrows, Latin-1 letters,
+  Greek, math symbols, `&euro;`) and numeric references (`&#8217;`,
+  `&#x2019;`). Residuals:
+  - HTML5's further ~2,000 names (`&ZeroWidthSpace;`, `&lbrack;`, `&check;`,
+    the math names) are delivered verbatim, as is any unknown name. So are an
+    upper-case hex reference (`&#X2019;`) and a legacy name written without
+    its semicolon (`&copy 2024`), which browsers accept. None of these was
+    seen in the delivered text of the 2,672 pages from 15 archives measured.
+  - Decoding is single-pass by design: `&amp;rsquo;` reads `&rsquo;`, the
+    literal text a page about HTML means.
+  - `&nbsp;`, `&ensp;`, `&emsp;` and `&thinsp;` read as ordinary spaces and
+    `&shy;` as nothing, as before #663; their numeric forms and the literal
+    characters decode to the characters themselves.
