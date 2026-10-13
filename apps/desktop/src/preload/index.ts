@@ -645,6 +645,8 @@ const api = {
     sections: Array<{ label: string | null; text: string }>
     /** True when only the first part of the article could be converted. */
     partial: boolean
+    /** The archive's own license line, shown after the article; null when it has none (#662). */
+    notice: string | null
   } | null> =>
     ipcRenderer.invoke(IPC.getPackArticle, packId, articlePath),
   /** Save one pack article as a document (#340 Tier-2); the main side re-reads the text. */

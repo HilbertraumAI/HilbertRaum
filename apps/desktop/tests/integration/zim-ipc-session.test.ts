@@ -2613,4 +2613,41 @@ describe('#340 Tier-2 — packs:saveArticle files the article as a real document
       await h.close()
     }
   })
+
+  it('#662 the archive’s license line reaches the viewer apart from the article, and a saved copy as its own closing "License" chunk', async () => {
+    const h = await sessionHarness()
+    try {
+      const alpha = await h.registerPack('alpha-license.zim')
+      h.ctx.embedder = new MockEmbedder()
+      const library = (await h.svc.ensureServer(h.db())) as ServedLibrary
+      const entryUrl = `/raw/${encodeURIComponent(library.names.get(alpha)!)}/content/${encodeArticlePath('A/Alpha')}`
+      const license =
+        'Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons Attribution-Share Alike 4.0 verfügbar, sofern nicht anders angegeben.'
+      // mwoffliner's page tail: the license line after the last section, outside it.
+      const html =
+        '<html><body><h1>Alpha and the climate</h1><p>' +
+        'Alpha is a test archive article about the climate. '.repeat(40) +
+        '</p><section><h2>Weblinks</h2><ul><li>Offizielle Website</li></ul></section>' +
+        `<div><div class="zim-footer">\n    ${license}\n</div></div></body></html>`
+      h.hooks.respond = (url) => (url === entryUrl ? { status: 200, body: html } : null)
+
+      const viewed = (await invoke(handlers, IPC.getPackArticle, alpha, 'A/Alpha')).result as {
+        sections: Array<{ label: string | null; text: string }>
+        notice: string | null
+      }
+      expect(viewed.notice).toBe(license)
+      expect(viewed.sections.at(-1)).toEqual({ label: 'Weblinks', text: '- Offizielle Website' })
+
+      const saved = (await invoke(handlers, IPC.savePackArticle, alpha, 'A/Alpha')).result as { documentId: string }
+      const chunks = h.db()
+        .prepare('SELECT text, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+        .all(saved.documentId) as Array<{ text: string; section_label: string | null }>
+      // Only the copy's last chunk carries the license, and under its own label — never the
+      // Weblinks section's, and not the first chunk the attribution block sits in.
+      expect(chunks.filter((c) => c.text.includes('Creative Commons')).map((c) => c.section_label)).toEqual(['License'])
+      expect(chunks.at(-1)!.section_label).toBe('License')
+    } finally {
+      await h.close()
+    }
+  })
 })

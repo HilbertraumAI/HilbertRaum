@@ -2141,7 +2141,10 @@ never a database read, so the channel stays lock-exempt) · `packs:getArticle` (
 TEXT, never HTML, carrying the converter's superscript/subscript markers (`m^2`, `10^6`, `H_2O` — #488,
 rag-design §17), which the retrieval matchers fold back out but the viewer shows as delivered; whitespace
 is collapsed everywhere except inside a `<pre>` code block, whose lines keep their indentation (#627 —
-so a section's text can start with spaces), and a crawled site's own footer/menu is not in it;
+so a section's text can start with spaces), and a crawled site's own footer/menu is not in it, nor are
+German Wikipedia's navigation boxes (#662); `PackArticle.notice: string | null` (#662) is the archive's own
+license line (mwoffliner's `zim-footer`, one line, at most 1,500 characters, a cut one ending in ` …`), never a section — the
+viewer shows it after the article and a saved copy ends with it as a `## License` section;
 the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
 alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
 contract-refused target returns `null` and the locator does not change; both requests carry

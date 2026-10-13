@@ -1254,6 +1254,17 @@ is structural rather than a flag — and the affordance is additionally gated on
 callback, which only `ChatScreen` supplies. That is the card-level counterpart to the viewer's
 `canSave={false}`; both are pinned by tests.
 
+**The archive's license line (2026-10-13, #662):** mwoffliner ends every Wikipedia article with a
+license line ("Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons
+Attribution-Share Alike 4.0 verfügbar …"). It used to arrive as the text of the article's last
+section (`Weblinks`), so the viewer showed it as part of that section. It is now `PackArticle.notice`,
+and `ArticleModal` shows it **after the article body**, where Wikipedia and the archive itself put
+it: one muted line (`.hint.pack-article-notice`), set apart by a top rule, never under a section
+heading, and never above the article, where every article would open with two lines of boilerplate.
+It is the archive's own text, verbatim and in the archive's language, with no label of ours and no
+new copy key. A saved copy ends the same way, in a closing `## License` section (rag-design §17
+"#662"). Owner call, 2026-10-13.
+
 ---
 
 ### 11.16 Documents rail declutter + Knowledge packs as a mode of Documents — design record (IMPLEMENTED 2026-09-09)

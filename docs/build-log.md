@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-13 — the closed 2026-10-06 #598 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #662 entry). Its record is unchanged:
+`architecture.md` CB-5 "#598 amendment". Its open items (a 27B/31B on CPU can exceed 10 min per batch) stay recorded there; translation's
+watchdog, the other one, was fixed by #605. Citations of the form "BUILD_STATE 2026-10-06 #598 entry" now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
+record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
+`prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
+CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605: fixed, above)._
+
 ## 2026-10-13 — the closed 2026-10-06 #599 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #663 entry). Its record is unchanged:

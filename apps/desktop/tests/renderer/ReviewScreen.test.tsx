@@ -979,7 +979,8 @@ describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6,
     const getPackArticle = vi.fn(async () => ({
       title: 'Treibhausgas',
       sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
-      partial: false
+      partial: false,
+      notice: null
     }))
     stubReviewApi({ getEvidenceReview: vi.fn(async () => archiveDetail()), getPackArticle })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
