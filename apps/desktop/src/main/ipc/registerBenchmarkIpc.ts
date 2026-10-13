@@ -45,7 +45,7 @@ import type { Db } from '../services/db'
 import { modelBusyLane, modelBusyMessageKey, type ModelBusyLane } from './model-busy'
 import { log } from '../services/logging'
 import { perfEnabled, perfMark, perfMs } from '../services/perf'
-import { isModelStarting } from '../../shared/runtime-status'
+import { isModelStarting, translationRanOnProcessor } from '../../shared/runtime-status'
 
 // IPC for the hardware benchmark + model recommendation (spec §9.1, §11).
 //
@@ -1071,7 +1071,8 @@ function buildPlacement(
   // with no usable card AND when the GPU is switched off or auto-disabled — so a row goes to
   // the card only under a card class; chat says 'cpu' as well when the matching observed start
   // landed on the CPU backend, translation when its sidecar's posture is the forced
-  // `--device none` (`deviceStatus().device === 'cpu'`, the session fallback latch).
+  // `--device none` (`deviceStatus().device === 'cpu'`, the session fallback latch) or its last
+  // start's load log put no buffer on a graphics device (`gpuBuffers === false`, #671).
   const byRole = (role: ModelManifest['role']): ModelManifest | undefined => manifests.find((m) => m.role === role)
   const embeddingsManifest = settings.activeEmbeddingModelId
     ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
@@ -1079,7 +1080,10 @@ function buildPlacement(
   const cardEligible = memoryClass !== 'cpu'
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
-  const translationDevice: ResidentModelRow['device'] = cardEligible && translation?.device !== 'cpu' ? 'gpu' : 'cpu'
+  // #671: a start whose own load log put no buffer on a graphics device ran on the processor, and
+  // its `N/N layers` split is no evidence: a forced-CPU start and a PC with no usable card print it.
+  const translationDevice: ResidentModelRow['device'] =
+    cardEligible && !(translation != null && translationRanOnProcessor(translation)) ? 'gpu' : 'cpu'
   const chatResident = chatModelResident(ctx, activeId)
   // #476: Wave 8 ruling (d)'s resident posture (`Reranker.devicePosture()`, the `isLoaded?`
   // pattern) — the SAME two reads the 'reranker' row below uses, hoisted so `rerankerOnCard` can
@@ -1104,8 +1108,9 @@ function buildPlacement(
       device: translationDevice,
       loaded: translation?.live ?? false,
       lifetime: 'idle',
-      gpuLayers: translation?.live ? translation.gpuLayers : null,
-      totalLayers: translation?.live ? translation.totalLayers : null
+      // A row that says processor claims no layers on the card (#671), whatever the sidecar printed.
+      gpuLayers: translation?.live && translationDevice === 'gpu' ? translation.gpuLayers : null,
+      totalLayers: translation?.live && translationDevice === 'gpu' ? translation.totalLayers : null
     },
     {
       role: 'vision',

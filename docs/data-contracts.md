@@ -1970,7 +1970,13 @@ whole renderer-visible surface.
   precedent). #473 (2026-10-12) adds the optional `TranslationDeviceStatus.cpuCause?:
   TranslationCpuCause` (`'beside-chat' | 'chat-starting' | 'too-large'`): why the headroom gate
   put a start on the processor, absent when Settings or the session latch chose it
-  (`architecture.md` GPU record §9). PR #268 (#232): `AppStatus.ocrState?: OcrState`
+  (`architecture.md` GPU record §9). #671 (2026-10-13) adds the optional
+  `TranslationDeviceStatus.gpuBuffers?: boolean`: did the start's load log put a buffer on a
+  graphics device (`PlacementParser.gpuBufferEvidence`)? `false` (every buffer under a
+  processor-side label) means it ran on the processor whatever `gpuLayers` says (a start with no
+  usable device, or under `--device none`, prints `49/49 layers` too); absent when there is nothing
+  to judge by. Readers go through `translationRanOnProcessor` (`shared/runtime-status.ts`;
+  `architecture.md` translation record, "#671 amendment"). PR #268 (#232): `AppStatus.ocrState?: OcrState`
   (`'available' | 'probing' | 'unavailable' | 'missing'`, additive-optional, same precedent) says
   WHY `ocrAvailable` is what it is — `ocrAvailable` itself now reads the engine's execution state
   (false while a packaged build's startup execution probe runs and after any worker failure), no

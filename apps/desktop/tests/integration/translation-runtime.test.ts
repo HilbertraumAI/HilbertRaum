@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { EventEmitter, getEventListeners } from 'node:events'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   TranslationRuntime,
   isRequestTimeoutError,
@@ -93,6 +95,12 @@ const base = {
 }
 
 const translateOpts: TranslateOptions = { sourceLang: 'de', targetLang: 'en', text: 'Guten Tag.' }
+
+const fixture = (name: string): string => readFileSync(join(__dirname, '..', 'fixtures', name), 'utf8')
+/** #671: real b11146 load logs of this sidecar's argv (TranslateGemma), captured on the GTX 1070 Ti box. */
+const GPULESS_LOG = 'placement-b11146-translategemma-gpuless-49of49-cpu.txt'
+const DEVNONE_LOG = 'placement-b11146-translategemma-devnone-49of49-cpu.txt'
+const PARTIAL_LOG = 'placement-b11146-translategemma-partial-39of49.txt'
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
@@ -643,6 +651,27 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
     expect(deviceOf(calls[1].args)).toBe('auto')
     await rt.stop()
   })
+
+  // #671: chat's #599 rule — a crash of a start that ran on the processor is no GPU fault, even under
+  // the GPU posture (a PC with no usable card, whose log still reads `offloaded 49/49 layers to GPU`).
+  it('a GPU-posture sidecar whose load log put nothing on a graphics device dying mid-session does NOT latch the session to CPU', async () => {
+    const { spawn, calls, children } = fakeSpawn(() => spawnedChild([fixture(GPULESS_LOG)]))
+    const fallbacks: string[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    await rt.translate(translateOpts)
+    expect(rt.deviceStatus()).toMatchObject({ device: 'auto', gpuBuffers: false })
+    children[0].crash(134)
+    await tick()
+    expect(fallbacks).toEqual([])
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[1].args)).toBe('auto')
+    await rt.stop()
+  })
 })
 
 // Issue #42 reopen — cold-start observability: the runtime parses llama.cpp's own load log
@@ -703,20 +732,21 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
     await rt.stop()
   })
 
-  it("a forced-CPU start reports device 'cpu' with an honest null split (no offload line printed)", async () => {
-    const { spawn } = fakeSpawn(() => spawnedChild(['load_all: model loaded\n']))
-    const { fetchImpl } = translationFetch()
+  // #671: the offload line is no evidence of a card. Real b11146 load logs of this sidecar's own argv
+  // (TranslateGemma): with no usable graphics device, and under `--device none` beside one, it prints
+  // `offloaded 49/49 layers to GPU` with every buffer on the processor; on the GTX 1070 Ti the fit
+  // places 39 of 49 layers, with the model, KV and compute buffers on Vulkan0.
+  it.each<[string, string, TranslationGpuDeps, Record<string, unknown>]>([
+    ['a GPU-posture start with no usable graphics device', GPULESS_LOG, {}, { device: 'auto', gpuLayers: 49, totalLayers: 49, gpuBuffers: false }],
+    ['a forced-CPU start beside a visible card', DEVNONE_LOG, { getGpuMode: () => 'off' }, { device: 'cpu', gpuLayers: 49, totalLayers: 49, gpuBuffers: false }],
+    ['a GPU-posture start the card took 39 layers of', PARTIAL_LOG, {}, { device: 'auto', gpuLayers: 39, totalLayers: 49, gpuBuffers: true }]
+  ])('%s: the split as printed, and whether the log put a buffer on a graphics device (#671)', async (_name, log, gpu, expected) => {
+    const { spawn } = fakeSpawn(() => spawnedChild([fixture(log)]))
     const started: unknown[] = []
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      gpu: { getGpuMode: () => 'off' },
-      onStarted: (info) => started.push(info)
-    })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl, gpu, onStarted: (info) => started.push(info) })
     await rt.translate(translateOpts)
-    expect(started).toEqual([{ device: 'cpu', gpuLayers: null, totalLayers: null }])
-    expect(rt.deviceStatus()).toEqual({ device: 'cpu', gpuLayers: null, totalLayers: null, live: true })
+    expect(started).toEqual([expected])
+    expect(rt.deviceStatus()).toEqual({ ...expected, live: true })
     await rt.stop()
   })
 
@@ -1096,13 +1126,18 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
     await rt.stop()
   })
 
-  it('(residency) true once the GPU-posture sidecar is resident', async () => {
-    const { spawn } = fakeSpawn()
+  // #671: resident, a GPU-posture sidecar occupies the card unless its own load log put no buffer on a
+  // graphics device — with none usable it still reads `offloaded 49/49 layers to GPU`.
+  it.each([
+    ['true once the GPU-posture sidecar is resident', [], true],
+    ['false when its load log put no buffer on a graphics device (#671)', [fixture(GPULESS_LOG)], false]
+  ] as const)('(residency) %s', async (_name, log, occupied) => {
+    const { spawn } = fakeSpawn(() => spawnedChild([...log]))
     const { fetchImpl } = translationFetch()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     await rt.translate(translateOpts)
-    expect(rt.gpuOccupied()).toBe(true)
-    expect(rt.deviceStatus()?.live).toBe(true)
+    expect(rt.gpuOccupied()).toBe(occupied)
+    expect(rt.deviceStatus()).toMatchObject({ device: 'auto', live: true })
     await rt.stop()
   })
 
@@ -1301,21 +1336,14 @@ describe('#473 — the headroom gate and yieldGpu', () => {
     await rt.stop()
   })
 
-  it('yieldGpu leaves a GPU-posture sidecar that put nothing on the card (0 layers) alone', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const children: FakeChild[] = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => stderr.emit('data', 'load_tensors: offloaded 0/49 layers to GPU\n'))
-      children.push(child)
-      return child
-    }
+  it.each([
+    ['offloaded no layer', 'load_tensors: offloaded 0/49 layers to GPU\n'],
+    ['put no buffer on a graphics device (#671: with none usable it prints 49/49)', fixture(GPULESS_LOG)]
+  ])('yieldGpu leaves a GPU-posture sidecar that %s alone', async (_name, log) => {
+    const { spawn, children } = fakeSpawn(() => spawnedChild([log]))
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl })
     await rt.translate(translateOpts)
-    expect(rt.deviceStatus()?.gpuLayers).toBe(0)
+    expect(rt.deviceStatus()?.device).toBe('auto')
     await rt.yieldGpu()
     expect(children[0].killed).toBe(false)
     await rt.stop()

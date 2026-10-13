@@ -241,6 +241,20 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
     expect(container.querySelector('.translate-device-hint')).toBeNull()
   })
 
+  // #671: on a PC with no usable graphics card the GPU posture starts on the processor, and the load
+  // log still reads `offloaded 49/49 layers to GPU`; only the missing GPU buffers tell.
+  it('#671: a GPU-posture start that put no buffer on a graphics device says processor, whatever its split', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'auto', gpuLayers: 49, totalLayers: 49, gpuBuffers: false, live: true } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    })
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+    expect(await screen.findByText(t('en', 'translate.device.cpu'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'translate.device.gpu', { done: 49, total: 49 }))).toBeNull()
+  })
+
   // #473: a processor start the headroom gate chose names its reason, like the starved forms; only
   // "beside the chat model" has something the user can do about it.
   it.each([

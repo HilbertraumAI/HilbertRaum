@@ -372,7 +372,7 @@ describe('normalizeModelPlacement', () => {
     expect(normalizeModelPlacement({ ...placement(), totalLayers: Number.NaN })?.totalLayers).toBeNull()
   })
 
-  it('accepts an ALL-NULL reading with valid required fields (a forced-CPU start prints none)', () => {
+  it('accepts an ALL-NULL reading with valid required fields (a log below verbosity 4 prints none)', () => {
     const bare = placement({
       backend: 'cpu',
       gpuLayers: null,
