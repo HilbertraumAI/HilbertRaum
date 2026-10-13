@@ -7,24 +7,23 @@ import {
   cancelFileTranslation,
   adoptActiveFileTranslation,
   resetFileTranslation,
-  clearFileTranslate,
-  resetFileTranslateSessionForTests
+  clearFileTranslate
 } from '../../src/renderer/lib/fileTranslateSession'
 import {
   startTask,
   getActiveDocTask,
   isDocTaskTerminal,
-  resetDocTaskStoreForTests
+  clearDocTaskSession
 } from '../../src/renderer/lib/doctasks'
 import {
   translate,
   getTranslateSession,
-  resetTranslateSessionForTests
+  clearTranslateSession
 } from '../../src/renderer/lib/translateSession'
 import type { DocTaskStatus, TranslateJob, ImportJobStatus } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
 import { stubApi } from '../helpers/renderer'
-import { testBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
 // (no `as never` erasure) — a rename of any mocked method or its return shape reddens typecheck.
@@ -36,9 +35,9 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // wait on the module snapshot with vi.waitFor.
 
 afterEach(() => {
-  resetFileTranslateSessionForTests()
-  resetTranslateSessionForTests()
-  resetDocTaskStoreForTests()
+  clearFileTranslate()
+  clearTranslateSession()
+  clearDocTaskSession()
   vi.restoreAllMocks()
 })
 
@@ -96,7 +95,7 @@ describe('fileTranslateSession — happy path', () => {
       destination: { kind: 'temporary' }
     })
 
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
     const snap = getFileTranslate()
     expect(snap.output).toBe('Hello world.')
     expect(snap.resultDocumentId).toBe('gen1')
@@ -114,7 +113,7 @@ describe('fileTranslateSession — happy path', () => {
     const api = happyApi()
     stubApi(api)
     await translatePickedFile(CHOICE)
-    await vi.waitFor(() => expect(api.importDocuments).toHaveBeenCalled(), { timeout: 5000 })
+    await vi.waitFor(() => expect(api.importDocuments).toHaveBeenCalled(), { timeout: hangBudgetMs(5000) })
     expect(api.importDocuments).toHaveBeenCalledWith(['C:\\docs\\a.pdf'], {
       destination: { kind: 'temporary' },
       pickerToken: 'tok1'
@@ -131,13 +130,13 @@ describe('fileTranslateSession — happy path', () => {
     }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
     expect(getFileTranslate().gaps).toEqual(gaps)
   }, testBudgetMs(8000))
 
   it('the window label EXCLUDES the materialize step on a fresh start (a 2-window doc shows 1/2, not 1/3) — F-8', async () => {
     // The doc-task's stepsTotal counts the model windows PLUS the final materialize step
-    // (`planTranslationWindows`: windows + 1). The Translate view speaks in WINDOWS, so a 2-window
+    // (`planTranslationBlocks`: windows + 1). The Translate view speaks in WINDOWS, so a 2-window
     // document (stepsTotal 3) at window 1 must read "(1/2)", never "(1/3)". Display-only.
     const api = {
       ...happyApi(),
@@ -145,7 +144,7 @@ describe('fileTranslateSession — happy path', () => {
     }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().windowsTotal).toBe(2), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().windowsTotal).toBe(2), { timeout: hangBudgetMs(5000) })
     const snap = getFileTranslate()
     expect(snap.state).toBe('translating')
     expect(snap.windowsDone).toBe(1) // window 1 of 2 — the materialize step is not counted
@@ -177,7 +176,7 @@ describe('fileTranslateSession — reject + guard paths', () => {
     const api = { ...happyApi(), importDocuments: vi.fn(async () => ({ jobId: 'imp1', documentIds: [] })) }
     stubApi(api)
     await translateDroppedFiles([new File(['x'], 'a.xyz')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().error).toBe('unsupported'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().error).toBe('unsupported'), { timeout: hangBudgetMs(5000) })
     expect(api.startDocTask).not.toHaveBeenCalled()
   }, testBudgetMs(8000))
 
@@ -216,13 +215,13 @@ describe('fileTranslateSession — reject + guard paths', () => {
     }
     stubApi(globalApi)
     await startTask('summary', 'doc9')
-    await vi.waitFor(() => expect(isDocTaskTerminal(getActiveDocTask()?.status ?? null)).toBe(true), { timeout: 3000 })
+    await vi.waitFor(() => expect(isDocTaskTerminal(getActiveDocTask()?.status ?? null)).toBe(true), { timeout: hangBudgetMs(3000) })
 
     const api = happyApi()
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
     // Proceeds to import (not blocked with docTaskBusy).
-    await vi.waitFor(() => expect(api.importDocuments).toHaveBeenCalled(), { timeout: 3000 })
+    await vi.waitFor(() => expect(api.importDocuments).toHaveBeenCalled(), { timeout: hangBudgetMs(3000) })
     expect(getFileTranslate().error).not.toBe('docTaskBusy')
   }, testBudgetMs(8000))
 
@@ -235,7 +234,7 @@ describe('fileTranslateSession — reject + guard paths', () => {
     stubApi(api)
 
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(startDocTask).toHaveBeenCalled(), { timeout: 5000 })
+    await vi.waitFor(() => expect(startDocTask).toHaveBeenCalled(), { timeout: hangBudgetMs(5000) })
     // The start round-trip is in flight; the panel is still 'importing' (translating is set AFTER).
     expect(getFileTranslate().state).toBe('importing')
 
@@ -243,7 +242,7 @@ describe('fileTranslateSession — reject + guard paths', () => {
     cancelFileTranslation()
     expect(getFileTranslate().state).toBe('cancelled')
     resolveStart({ jobId: 'task1' })
-    await vi.waitFor(() => expect(cancelDocTask).toHaveBeenCalled(), { timeout: 5000 })
+    await vi.waitFor(() => expect(cancelDocTask).toHaveBeenCalledWith('task1'), { timeout: hangBudgetMs(5000) })
   }, testBudgetMs(8000))
 })
 
@@ -263,7 +262,7 @@ describe('fileTranslateSession — lifecycle', () => {
     const api = happyApi()
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
     clearFileTranslate()
     const snap = getFileTranslate()
     expect(snap.state).toBe('idle')
@@ -378,7 +377,7 @@ describe('fileTranslateSession — doc-task terminal + failure edges', () => {
     const api = { ...happyApi(), getDocTask: vi.fn(async () => docTask({ state: 'failed', error: 'Kaputt' })) }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: hangBudgetMs(5000) })
     expect(getFileTranslate().errorMessage).toBe('Kaputt')
     expect(getFileTranslate().busy).toBe(false)
   }, testBudgetMs(8000))
@@ -387,7 +386,7 @@ describe('fileTranslateSession — doc-task terminal + failure edges', () => {
     const api = { ...happyApi(), getDocTask: vi.fn(async () => docTask({ state: 'failed' })) }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: hangBudgetMs(5000) })
     expect(getFileTranslate().error).toBe('runtimeFailed')
   }, testBudgetMs(8000))
 
@@ -395,35 +394,8 @@ describe('fileTranslateSession — doc-task terminal + failure edges', () => {
     const api = { ...happyApi(), getDocTask: vi.fn(async () => docTask({ state: 'cancelled' })) }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('cancelled'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('cancelled'), { timeout: hangBudgetMs(5000) })
     expect(getFileTranslate().busy).toBe(false)
-  }, testBudgetMs(8000))
-
-  it('an import-poll rejection fails with a friendly message', async () => {
-    const api = {
-      ...happyApi(),
-      getImportJob: vi.fn(async () => {
-        throw new Error('import boom')
-      })
-    }
-    stubApi(api)
-    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
-    expect(getFileTranslate().errorMessage).toBeTruthy()
-    expect(api.startDocTask).not.toHaveBeenCalled()
-  }, testBudgetMs(8000))
-
-  it('a doc-task-poll rejection fails with a friendly message', async () => {
-    const api = {
-      ...happyApi(),
-      getDocTask: vi.fn(async () => {
-        throw new Error('task boom')
-      })
-    }
-    stubApi(api)
-    await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
-    expect(getFileTranslate().errorMessage).toBeTruthy()
   }, testBudgetMs(8000))
 
   it('a previewDocument failure surfaces as a friendly error (not a blank done panel)', async () => {
@@ -435,22 +407,25 @@ describe('fileTranslateSession — doc-task terminal + failure edges', () => {
     }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('failed'), { timeout: hangBudgetMs(5000) })
     expect(getFileTranslate().errorMessage).toBeTruthy()
   }, testBudgetMs(8000))
 
   // FE-3 (ocr-audit 2026-07-18): imported-but-nothing-ingested no longer collapses to
   // 'unsupported' (the file IS a supported type) — the session reads the failed row's reason
-  // via listDocuments; with no readable row (unstubbed here) it lands the generic
+  // via listDocuments; with the failed row unreadable (the list read throws) it lands the generic
   // import-failed frame. The scanned/real-message branches are covered in TranslateScreen tests.
   it('an import that ingests nothing (completed === 0) fails as importFailed when the row is unreadable', async () => {
     const api = {
       ...happyApi(),
-      getImportJob: vi.fn(async () => ({ jobId: 'imp1', total: 1, completed: 0, failed: 1, done: true }))
+      getImportJob: vi.fn(async () => ({ jobId: 'imp1', total: 1, completed: 0, failed: 1, done: true })),
+      listDocuments: vi.fn(async () => {
+        throw new Error('locked')
+      })
     }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().error).toBe('importFailed'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().error).toBe('importFailed'), { timeout: hangBudgetMs(5000) })
     expect(api.startDocTask).not.toHaveBeenCalled()
   }, testBudgetMs(8000))
 })
@@ -501,7 +476,7 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     expect(seeded.windowsDone).toBe(2)
     expect(seeded.windowsTotal).toBe(4)
 
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
     const snap = getFileTranslate()
     expect(snap.output).toBe('Adopted translation.')
     expect(snap.resultDocumentId).toBe('gen1')
@@ -601,7 +576,7 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
     }
     stubApi(api)
     await translateDroppedFiles([new File(['%PDF'], 'a.pdf')], CHOICE)
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
     const settled = getFileTranslate()
 
     // The user goes elsewhere, a translation doc-task is running again, and they come back: the
@@ -677,7 +652,7 @@ describe('fileTranslateSession — adoptActiveFileTranslation (reload recovery)'
 
     // Mount adopt starts; it is parked on the active-task read.
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
+    expect(api.listActiveDocTasks).toHaveBeenCalledTimes(1) // the adopt calls it before its first await
 
     // The user drops two files in that window — rejected on the spot, panel goes terminal.
     await translateDroppedFiles([new File(['a'], 'a.pdf'), new File(['b'], 'b.pdf')], CHOICE)
@@ -728,7 +703,7 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
 
     // The mount adopt is parked on the active-task read.
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
+    expect(api.listActiveDocTasks).toHaveBeenCalledTimes(1) // the adopt calls it before its first await
 
     clearFileTranslate() // the workspace locks in that window (the renderer lock seam)
     const purged = getFileTranslate()
@@ -762,7 +737,7 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     stubApi(api)
 
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
+    expect(api.listActiveDocTasks).toHaveBeenCalledTimes(1) // the adopt calls it before its first await
 
     // The user drops a document, stops it, then dismisses the cancelled panel — all while the
     // active-task read is still parked.
@@ -813,7 +788,7 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     stubApi(api)
 
     const adoptPromise = adoptActiveFileTranslation()
-    await vi.waitFor(() => expect(api.listActiveDocTasks).toHaveBeenCalled(), { timeout: 3000 })
+    expect(api.listActiveDocTasks).toHaveBeenCalledTimes(1) // the adopt calls it before its first await
     resolveActive([docTask({ jobId: 'task1', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } })])
     await adoptPromise
 
@@ -823,7 +798,7 @@ describe('fileTranslateSession — the adopt must not re-seed a session that was
     expect(seeded.windowsDone).toBe(2)
     expect(seeded.windowsTotal).toBe(4) // the materialize step is not a window
 
-    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: 5000 })
+    await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
     expect(getFileTranslate().output).toBe('Adopted translation.')
     expect(getFileTranslate().resultDocumentId).toBe('gen1')
   }, testBudgetMs(8000))
@@ -899,6 +874,7 @@ describe('fileTranslateSession — poll-failure tolerance (#157 / DT-4)', () => 
       expect(getFileTranslate().state).toBe('translating')
       await vi.advanceTimersByTimeAsync(400) // failure 3 — give up honestly
       expect(getFileTranslate().state).toBe('failed')
+      expect(getFileTranslate().errorMessage).toBe('ipc broke')
       // Give-up also cancels the backend task (exact-id): the renderer's terminal state and the
       // backend agree — no invisible decode materializing a document behind a "failed" panel.
       expect(api.cancelDocTask).toHaveBeenCalledWith('task1')
@@ -956,6 +932,7 @@ describe('fileTranslateSession — poll-failure tolerance (#157 / DT-4)', () => 
       expect(getFileTranslate().state).toBe('importing') // failure 2 tolerated
       await vi.advanceTimersByTimeAsync(400)
       expect(getFileTranslate().state).toBe('failed') // failure 3 — honest give-up
+      expect(getFileTranslate().errorMessage).toBe('ipc broke') // the friendly IPC message, not a code
       expect(api.startDocTask).not.toHaveBeenCalled()
       expect(api.cancelDocTask).not.toHaveBeenCalled()
     } finally {
@@ -1010,7 +987,7 @@ describe('fileTranslateSession — picker edges (#163 / T-8)', () => {
   it('a multi-path pick is rejected multiDrop before any import', async () => {
     const api = {
       ...happyApi(),
-      pickDocuments: vi.fn(async () => ({ token: 'tok1', paths: ['C:\a.pdf', 'C:\b.pdf'] }))
+      pickDocuments: vi.fn(async () => ({ token: 'tok1', paths: ['C:\\a.pdf', 'C:\\b.pdf'] }))
     }
     stubApi(api)
     expect(await translatePickedFile(CHOICE)).toBe('started')

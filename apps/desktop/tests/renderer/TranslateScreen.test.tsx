@@ -3,14 +3,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
-import { resetTranslateSessionForTests } from '../../src/renderer/lib/translateSession'
-import { resetFileTranslateSessionForTests } from '../../src/renderer/lib/fileTranslateSession'
-import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
+import { clearTranslateSession } from '../../src/renderer/lib/translateSession'
+import { clearFileTranslate } from '../../src/renderer/lib/fileTranslateSession'
+import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { en, t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import type { AppStatus, DocTaskStatus, DocumentInfo, TranslateJob } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
-import { testBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
 // (no `as never` erasure). The `appStatus`/`docTask` builders return the real shared types and
@@ -24,9 +24,13 @@ import { testBudgetMs } from '../helpers/hang-budget'
 
 afterEach(() => {
   cleanup()
-  resetTranslateSessionForTests()
-  resetFileTranslateSessionForTests()
-  resetDocTaskStoreForTests()
+  // The production clears (lib/lockPurge.ts runs the same three). They keep the DOC-7 last-language-pair
+  // memory by design, so a row starts from the pair the previous translating row used. Every EN row here
+  // translates de → en; rows that assert a pair either run first ('types text, translates…', the EN-UI
+  // default pin) or assert relative to the selects.
+  clearTranslateSession()
+  clearFileTranslate()
+  clearDocTaskSession()
 })
 
 function appStatus(over: Partial<AppStatus> = {}): AppStatus {
@@ -115,19 +119,6 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
     ).toBeInTheDocument()
   })
 
-  it('a PARTIAL offload shows the near-CPU-speed form with the contention tooltip (the reopened-#42 case)', async () => {
-    stubApi({
-      getAppStatus: vi.fn(async () =>
-        appStatus({ translationDevice: { device: 'auto', gpuLayers: 12, totalLayers: 49, live: false } })
-      ),
-      getActiveTranslateJob: vi.fn(async () => null)
-    })
-    render(<TranslateScreen onNavigate={vi.fn()} />)
-    const hint = await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
-    // The tooltip carries the remedy; the fact line itself carries the cause (#42).
-    expect(hint).toHaveAttribute('title', t('en', 'translate.device.partialTitle'))
-  })
-
   // #42 (owner decision 2026-09-08, "no runtime change — fix the copy"): before this, the two
   // starved fact lines stated only the SYMPTOM ("about processor speed"), leaving a user who
   // reads no further with nothing to act on. The cause now rides the fact line in BOTH locales,
@@ -161,18 +152,6 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
         }
       })
     }
-
-    it('a fully-starved fit renders the cause on screen, not only in the tooltip', async () => {
-      stubApi({
-        getAppStatus: vi.fn(async () =>
-          appStatus({ translationDevice: { device: 'auto', gpuLayers: 0, totalLayers: 49, live: false } })
-        ),
-        getActiveTranslateJob: vi.fn(async () => null)
-      })
-      render(<TranslateScreen onNavigate={vi.fn()} />)
-      const hint = await screen.findByText(t('en', 'translate.device.gpuNone', { total: 49 }))
-      expect(hint.textContent).toMatch(/usually by the chat model/i)
-    })
   })
 
   it('CODE-23: a fully-starved fit (0 layers) says processor, not "partly on the graphics card"', async () => {
@@ -214,7 +193,8 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
       getActiveTranslateJob: vi.fn(async () => null)
     })
     render(<TranslateScreen onNavigate={vi.fn()} />)
-    await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
+    const hint = await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
+    expect(hint).toHaveAttribute('title', t('en', 'translate.device.partialTitle')) // the tooltip too, not only
     // The remedy ("a smaller chat model frees memory…") is reachable WITHOUT a pointer hover —
     // a title attribute on a non-focusable <p> is invisible to keyboard/touch/screen readers.
     expect(screen.getByText(t('en', 'translate.device.partialTitle'))).toBeInTheDocument()
@@ -285,6 +265,8 @@ describe('TranslateScreen — translate → stream → copy', () => {
     await user.type(input, 'Hallo Welt.')
     await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
 
+    // The file's first translating row: no earlier row wrote the session's last choice, so the selects
+    // start at the EN-UI default pair — this row pins that default.
     expect(s.translateStart).toHaveBeenCalledWith(
       expect.objectContaining({ sourceLang: 'de', targetLang: 'en', text: 'Hallo Welt.' })
     )
@@ -356,12 +338,13 @@ describe('TranslateScreen — language selects', () => {
 
     const from = (await screen.findByLabelText(t('en', 'translate.from'))) as HTMLSelectElement
     const to = screen.getByLabelText(t('en', 'translate.to')) as HTMLSelectElement
-    expect(from.value).toBe('de')
-    expect(to.value).toBe('en')
-
+    // The starting pair is the session's last choice (DOC-7 memory the production clears keep), so the
+    // swap is asserted against whatever the selects start at.
+    const [src, dst] = [from.value, to.value]
+    expect(src).not.toBe(dst)
     await user.click(screen.getByRole('button', { name: t('en', 'translate.swap') }))
-    expect(from.value).toBe('en')
-    expect(to.value).toBe('de')
+    expect(from.value).toBe(dst)
+    expect(to.value).toBe(src)
   })
 
   it('disables Translate and hints when source equals target', async () => {
@@ -371,8 +354,9 @@ describe('TranslateScreen — language selects', () => {
     render(<TranslateScreen onNavigate={() => {}} />)
 
     await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
-    // Make the target match the source (both 'de').
-    await user.selectOptions(screen.getByLabelText(t('en', 'translate.to')), 'de')
+    // Make the target match the source, whatever pair the session memory starts at.
+    const from = screen.getByLabelText(t('en', 'translate.from')) as HTMLSelectElement
+    await user.selectOptions(screen.getByLabelText(t('en', 'translate.to')), from.value)
     expect(screen.getByRole('button', { name: t('en', 'translate.action') })).toBeDisabled()
     expect(screen.getByText(t('en', 'translate.err.sameLang'))).toBeInTheDocument()
     expect(s.translateStart).not.toHaveBeenCalled()
@@ -476,11 +460,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     const pdf = new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })
     act(() => dropOnZone([pdf]))
 
-    // The dropped file is imported into the Temporary destination (no picker token).
     await waitFor(() => expect(f.importDocuments).toHaveBeenCalled())
-    expect(f.importDocuments).toHaveBeenCalledWith(['C:\\docs\\a.pdf'], {
-      destination: { kind: 'temporary' }
-    })
     // Then the translation doc-task runs over the ingested document with the chosen languages.
     await waitFor(() => expect(f.startDocTask).toHaveBeenCalled())
     expect(f.startDocTask).toHaveBeenCalledWith({
@@ -490,7 +470,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     })
     // The materialized Markdown lands in the output panel.
     const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
-    expect(await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })).toBeInTheDocument()
+    expect(await within(outPanel).findByText('Hello world.', {}, { timeout: hangBudgetMs(8000) })).toBeInTheDocument()
   }, testBudgetMs(10000))
 
   it('translates a document via the choose-a-document picker path', async () => {
@@ -502,32 +482,10 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
     await user.click(screen.getByRole('button', { name: t('en', 'translate.drop.choose') }))
     await waitFor(() => expect(f.pickDocuments).toHaveBeenCalledWith('files'))
-    // A picked import carries the one-time capability token back to main (D1).
-    await waitFor(() =>
-      expect(f.importDocuments).toHaveBeenCalledWith(['C:\\docs\\a.pdf'], {
-        destination: { kind: 'temporary' },
-        pickerToken: 'tok1'
-      })
-    )
+    await waitFor(() => expect(f.importDocuments).toHaveBeenCalled())
     const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
-    expect(await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })).toBeInTheDocument()
+    expect(await within(outPanel).findByText('Hello world.', {}, { timeout: hangBudgetMs(8000) })).toBeInTheDocument()
   }, testBudgetMs(10000))
-
-  it('rejects a multi-file drop with a friendly banner (no import)', async () => {
-    const f = fileStubs()
-    stubApi(f.api)
-    render(<TranslateScreen onNavigate={() => {}} />)
-    await screen.findByLabelText(t('en', 'translate.input.label'))
-
-    act(() =>
-      dropOnZone([
-        new File(['a'], 'a.pdf', { type: 'application/pdf' }),
-        new File(['b'], 'b.pdf', { type: 'application/pdf' })
-      ])
-    )
-    expect(await screen.findByText(t('en', 'translate.file.err.multiDrop'))).toBeInTheDocument()
-    expect(f.importDocuments).not.toHaveBeenCalled()
-  })
 
   it('a rejected multi-drop keeps the existing text result (restored when the banner is dismissed)', async () => {
     // Combine the text stubs (for a text translation) with the file stubs' getDroppedFilePath.
@@ -559,17 +517,6 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     await user.click(screen.getByRole('button', { name: t('en', 'common.dismiss') }))
     expect(await within(outPanel).findByText('Hello world.')).toBeInTheDocument()
   })
-
-  it('shows a friendly error when the dropped file type is unsupported (nothing imported)', async () => {
-    const f = fileStubs({ documentIds: [] }) // main imported nothing supported
-    stubApi(f.api)
-    render(<TranslateScreen onNavigate={() => {}} />)
-    await screen.findByLabelText(t('en', 'translate.input.label'))
-
-    act(() => dropOnZone([new File(['x'], 'a.xyz', { type: '' })]))
-    expect(await screen.findByText(t('en', 'translate.file.err.unsupported'))).toBeInTheDocument()
-    expect(f.startDocTask).not.toHaveBeenCalled()
-  }, testBudgetMs(10000))
 
   // ---- FE-3 (OCR-R P2): honest handoff when a SUPPORTED file imports but INGESTION fails ----
   // A PDF imports fine, then ingestion fails: an image-only scan with no text, or a corrupt/
@@ -613,7 +560,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
     // The new scan copy points at the Documents "Make searchable (OCR)" action.
     expect(
-      await screen.findByText(t('en', 'translate.file.err.scanned'), {}, { timeout: 8000 })
+      await screen.findByText(t('en', 'translate.file.err.scanned'), {}, { timeout: hangBudgetMs(8000) })
     ).toBeInTheDocument()
     // #570 parity: and a button takes the user there.
     fireEvent.click(screen.getByRole('button', { name: t('en', 'translate.file.err.scannedAction') }))
@@ -624,38 +571,35 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     expect(f.startDocTask).not.toHaveBeenCalled()
   }, testBudgetMs(10000))
 
-  it('FE-3: a corrupt/encrypted PDF surfaces its localized real failure, not "unsupported" (DE)', async () => {
+  // Both failure messages are persist-canonical ENGLISH (D-L4): a failed row's ingestion reason (FE-3)
+  // and a doc-task's error (CODE-42, full-audit 2026-07-11). The banner routes them through
+  // localizeServerCopy like DocumentsScreen does (DR-7 parity) — rendered under the real I18nProvider
+  // forced to German. Neither is a scan, so no button to Documents either.
+  it.each([
+    {
+      label: 'FE-3: a corrupt/encrypted PDF (imported, ingestion failed)',
+      key: 'main.ingest.parseTimeout',
+      api: () => ({
+        ...fileStubs({ documentIds: ['d1'] }).api,
+        getImportJob: importFailedJob(),
+        listDocuments: vi.fn(async () => [failedDoc({ scanDetected: false, errorMessage: en['main.ingest.parseTimeout'] })])
+      })
+    },
+    {
+      label: 'CODE-42: a persisted-English doc-task failure',
+      key: 'main.chat.docTaskBusy',
+      api: () => fileStubs({ terminal: docTask({ state: 'failed', error: en['main.chat.docTaskBusy'] }) }).api
+    }
+  ] as const)('$label surfaces its localized real message in the German UI, never the raw English or "unsupported"', async ({ key, api }) => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     try {
-      const f = fileStubs({ documentIds: ['d1'] })
-      const listDocuments = vi.fn(async () => [
-        failedDoc({ scanDetected: false, errorMessage: en['main.ingest.parseTimeout'] })
-      ])
-      stubApi({ ...f.api, getImportJob: importFailedJob(), listDocuments })
-      render(
-        <I18nProvider>
-          <TranslateScreen onNavigate={() => {}} />
-        </I18nProvider>
-      )
+      stubApi(api())
+      render(<I18nProvider><TranslateScreen onNavigate={() => {}} /></I18nProvider>)
       await screen.findByLabelText(t('de', 'translate.input.label'))
-
-      act(() =>
-        dropOnZone(
-          [new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })],
-          t('de', 'translate.drop.title')
-        )
-      )
-
-      // The German real message shows — routed through localizeServerCopy, not the raw English
-      // constant, and not the misleading "unsupported" copy.
-      expect(
-        await screen.findByText(t('de', 'main.ingest.parseTimeout'), {}, { timeout: 8000 })
-      ).toBeInTheDocument()
-      expect(screen.queryByText(en['main.ingest.parseTimeout'])).not.toBeInTheDocument()
-      // Not a scan: no button to Documents (the fix is not there).
-      expect(
-        screen.queryByRole('button', { name: t('de', 'translate.file.err.scannedAction') })
-      ).not.toBeInTheDocument()
+      act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })], t('de', 'translate.drop.title')))
+      expect(await screen.findByText(t('de', key), {}, { timeout: hangBudgetMs(8000) })).toBeInTheDocument()
+      expect(screen.queryByText(en[key])).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: t('de', 'translate.file.err.scannedAction') })).not.toBeInTheDocument()
       expect(screen.queryByText(t('de', 'translate.file.err.unsupported'))).not.toBeInTheDocument()
     } finally {
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
@@ -687,46 +631,13 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
     act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
     const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
-    await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })
+    await within(outPanel).findByText('Hello world.', {}, { timeout: hangBudgetMs(8000) })
 
     await user.click(screen.getByRole('button', { name: t('en', 'translate.file.export') }))
     expect(f.exportDocument).toHaveBeenCalledWith('gen1')
 
     await user.click(screen.getByRole('button', { name: t('en', 'translate.file.show') }))
     expect(onNavigate).toHaveBeenCalledWith('documents')
-  }, testBudgetMs(10000))
-
-  it('CODE-42: a persisted-English doc-task failure message localizes in the German UI', async () => {
-    // Doc-task failure messages are persist-canonical ENGLISH (D-L4); the banner must route
-    // them through localizeServerCopy like DocumentsScreen does (DR-7 parity — full-audit
-    // 2026-07-11 CODE-42). Rendered under the real I18nProvider forced to German.
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    try {
-      const f = fileStubs({
-        terminal: docTask({ state: 'failed', error: en['main.chat.docTaskBusy'] })
-      })
-      stubApi(f.api)
-      render(
-        <I18nProvider>
-          <TranslateScreen onNavigate={() => {}} />
-        </I18nProvider>
-      )
-      await screen.findByLabelText(t('de', 'translate.input.label'))
-
-      act(() =>
-        dropOnZone(
-          [new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })],
-          t('de', 'translate.drop.title')
-        )
-      )
-      // The German banner copy shows — not the raw persisted English constant.
-      expect(
-        await screen.findByText(t('de', 'main.chat.docTaskBusy'), {}, { timeout: 8000 })
-      ).toBeInTheDocument()
-      expect(screen.queryByText(en['main.chat.docTaskBusy'])).not.toBeInTheDocument()
-    } finally {
-      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
-    }
   }, testBudgetMs(10000))
 
   it('surfaces a truncated hint when only the start of a long translation is shown', async () => {
@@ -737,7 +648,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
     act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
     expect(
-      await screen.findByText(t('en', 'translate.file.truncated'), {}, { timeout: 8000 })
+      await screen.findByText(t('en', 'translate.file.truncated'), {}, { timeout: hangBudgetMs(8000) })
     ).toBeInTheDocument()
   }, testBudgetMs(10000))
 
@@ -757,7 +668,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
       })
     })
     stubApi(f.api)
-    render(<TranslateScreen onNavigate={() => {}} />)
+    const { container } = render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
     act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
@@ -766,29 +677,26 @@ describe('TranslateScreen — document translation (TG-5)', () => {
       await screen.findByText(
         t('en', 'translate.file.gapPages.other', { count: 3, pages: '3–4, 7' }),
         {},
-        { timeout: 8000 }
+        { timeout: hangBudgetMs(8000) }
       )
     ).toBeInTheDocument()
     expect(
       screen.getByText(t('en', 'translate.file.failedParts.other', { count: 2 }))
     ).toBeInTheDocument()
+    // The selector the complete-translation row below relies on sees exactly these two warnings.
+    expect(container.querySelectorAll('.translate-pane .hint.warn')).toHaveLength(2)
   }, testBudgetMs(10000))
 
   it('#58: a complete translation shows NO completeness warning', async () => {
     const f = fileStubs()
     stubApi(f.api)
-    render(<TranslateScreen onNavigate={() => {}} />)
+    const { container } = render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
     act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
     const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
-    await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })
-    expect(
-      screen.queryByText(t('en', 'translate.file.gapPages.one', { count: 1, pages: '3' }))
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByText(t('en', 'translate.file.failedParts.one', { count: 1 }))
-    ).not.toBeInTheDocument()
+    await within(outPanel).findByText('Hello world.', {}, { timeout: hangBudgetMs(8000) })
+    expect(container.querySelector('.translate-pane .hint.warn')).toBeNull() // no gap or failed-parts warning of any count
   }, testBudgetMs(10000))
 })
 
