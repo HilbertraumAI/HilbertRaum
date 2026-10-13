@@ -1,22 +1,17 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
-  documentsDir,
   getDocument,
   getDocumentOrigin,
   listDocuments,
   processDocument,
   readStoredDocumentText,
-  reindexDocument,
-  type IngestionDeps
+  reindexDocument
 } from '../../src/main/services/ingestion'
 import {
-  DocTaskManager,
   TASK_GENERIC_FAILURE_MESSAGE,
   TASK_TRANSLATION_NO_MODEL_MESSAGE,
   TASK_TRANSLATION_TARGET_MESSAGE,
@@ -24,7 +19,8 @@ import {
   missingPageNotice,
   translationAttributionLine,
   translationBudgetWords,
-  type DocTaskDeps
+  type DocTaskManager,
+  type PageGap
 } from '../../src/main/services/doctasks'
 import { makeMixedPdf } from '../helpers/fixtures'
 import type { Translator } from '../../src/main/services/translation'
@@ -38,7 +34,7 @@ import {
   encryptFileAsync,
   type DocumentCipher
 } from '../../src/main/services/workspace-vault'
-import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
+import { listAuditEvents } from '../../src/main/services/audit'
 import {
   addToCollection,
   createCollection,
@@ -46,7 +42,12 @@ import {
   fileDocumentByDestination,
   getBuiltinCollection
 } from '../../src/main/services/collections'
-import type { AuditEventType, GeneratedProvenance } from '../../src/shared/types'
+import type {
+  GeneratedProvenance,
+  StartDocTaskRequest,
+  TranslationSourceLang,
+  TranslationTargetLang
+} from '../../src/shared/types'
 import type { Embedder } from '../../src/main/services/embeddings'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { OcrEngine } from '../../src/main/services/ocr'
@@ -54,7 +55,16 @@ import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
-import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
+import { until } from '../helpers/hang-budget'
+import {
+  dbAudit,
+  docTaskManager,
+  docTaskWorld,
+  importWords,
+  waitTerminal,
+  type DocTaskStatusOf,
+  type DocTaskWorld
+} from '../helpers/doctask-fixtures'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
 // TG-3 (translategemma plan §2 D3/D9): translation runs on the TranslateGemma SIDECAR (a
@@ -69,30 +79,10 @@ import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 // guard covering the freshly created output document, and the ids-only audit events. CI
 // posture: zero model, zero network — scripted translators throughout.
 
-let tmp: string
-let db: Db
-let storeDir: string
-
+let w: DocTaskWorld
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-doctr-'))
-  db = openDatabase(join(tmp, 'test.sqlite'))
-  storeDir = documentsDir(join(tmp, 'workspace'))
+  w = docTaskWorld('doctr')
 })
-
-/** Import a .txt of `words` unique whitespace words through the REAL ingestion pipeline. */
-async function importDoc(
-  words: number,
-  name = 'doc.txt',
-  deps: IngestionDeps = {}
-): Promise<string> {
-  const text = Array.from({ length: words }, (_, i) => `word${i}`).join(' ')
-  const p = join(tmp, name)
-  writeFileSync(p, text, 'utf8')
-  const info = createQueuedDocument(db, p)
-  const done = await processDocument(db, storeDir, info.id, deps)
-  expect(done.status).toBe('indexed')
-  return info.id
-}
 
 interface ScriptedTranslatorOptions {
   /** Reply per call; throwing fails that call. Default: a perfect echo translator. */
@@ -168,53 +158,22 @@ function stubChatRuntime(): ModelRuntime {
   }
 }
 
-interface ManagerOptions {
-  translator?: Translator | null
-  runtime?: ModelRuntime | null
-  contextTokens?: number
-  audit?: boolean
-  ingestionDeps?: () => IngestionDeps
-  beginDocumentWork?: DocTaskDeps['beginDocumentWork']
+/** The translation request for one document (en → de unless the pair is given). */
+function translateReq(
+  documentId: string,
+  sourceLang: TranslationSourceLang = 'en',
+  targetLang: TranslationTargetLang = 'de'
+): StartDocTaskRequest {
+  return { kind: 'translation', documentIds: [documentId], params: { sourceLang, targetLang } }
 }
 
-function makeManager(opts: ManagerOptions = {}): DocTaskManager {
-  return new DocTaskManager({
-    getDb: () => db,
-    // Translation ignores the chat runtime since TG-3 — most tests here run WITHOUT one
-    // (the O2 "chat model absent" posture); the guard test injects one explicitly.
-    getRuntime: () => (opts.runtime === undefined ? null : opts.runtime),
-    getTranslator: () => (opts.translator === undefined ? null : opts.translator),
-    isChatStreaming: () => false,
-    getContextTokens: () => opts.contextTokens ?? 4096,
-    getStoreDir: () => storeDir,
-    getIngestionDeps: opts.ingestionDeps ?? (() => ({})),
-    beginDocumentWork: opts.beginDocumentWork ?? (() => () => {}),
-    audit: opts.audit
-      ? (type, message, metadata) => recordEvent(db, type as AuditEventType, message, metadata)
-      : undefined
-  })
-}
-
-async function waitTerminal(
-  manager: DocTaskManager,
-  jobId: string
-): Promise<ReturnType<DocTaskManager['getDocTask']>> {
-  const start = Date.now()
-  for (;;) {
-    const status = manager.getDocTask(jobId)
-    if (status.state === 'done' || status.state === 'failed' || status.state === 'cancelled') {
-      return status
-    }
-    // 30 s, not 10: this is a HANG DETECTOR, not a timing proof — every timing assertion in
-    // this file lives in an explicit expect(), never in this bound. The #157 (DT-2) case below
-    // translates a 600-unit doc at tokenDelayMs 5 and measures ~9.4 s in isolation, i.e. 6%
-    // headroom under a 10 s bound; under full-suite CPU load on this 16 GB box it crossed and
-    // failed 3 of 4 runs at ~10.16 s with "never finished: running" — the foreign task was
-    // still legitimately translating. Same class as #84/#97/#101 and the local-api wave fix:
-    // vitest's CI testTimeout budget does NOT widen a hand-rolled poll bound like this one.
-    if (Date.now() - start > hangBudgetMs(30_000)) throw new Error(`task ${jobId} never finished: ${status.state}`)
-    await new Promise((r) => setTimeout(r, 10))
-  }
+/** Resolve once `jobId` is running and the translator has received a new call (its window is in flight). */
+async function waitRunning(manager: DocTaskManager, jobId: string, translator: ScriptedTranslator): Promise<void> {
+  const before = translator.calls.length
+  await until(
+    () => manager.getDocTask(jobId).state === 'running' && translator.calls.length > before,
+    `task ${jobId} to start a window`
+  )
 }
 
 /** A cipher equivalent to the unlocked vault's (fixed key) — the encrypted-docs pattern. */
@@ -230,8 +189,9 @@ function testCipher(): DocumentCipher {
 
 describe('validation (kind + params, the widened 10-language set)', () => {
   it('refuses missing/invalid/same source+target languages with friendly copy', async () => {
-    const docId = await importDoc(50)
-    const manager = makeManager({ translator: scriptedTranslator() })
+    const docId = await importWords(w, 50)
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, { getTranslator: () => translator })
     // No params at all.
     expect(() => manager.startDocTask({ kind: 'translation', documentIds: [docId] })).toThrow(
       TASK_TRANSLATION_TARGET_MESSAGE
@@ -271,26 +231,23 @@ describe('validation (kind + params, the widened 10-language set)', () => {
   })
 
   it('accepts the widened codes beyond de/en (fr→uk runs to done)', async () => {
-    const docId = await importDoc(30)
+    const docId = await importWords(w, 30)
     const translator = scriptedTranslator()
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'fr', targetLang: 'uk' }
-    })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId, 'fr', 'uk'))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     expect(translator.calls[0]).toMatchObject({ sourceLang: 'fr', targetLang: 'uk' })
     // The materialized title carries the target's native name.
-    const created = getDocument(db, status.resultRef?.documentId as string)
+    const created = getDocument(w.db, status.resultRef?.documentId as string)
     expect(created?.title).toBe('doc (Українська).md')
   })
 
   it('requires exactly one source document', async () => {
-    const a = await importDoc(50, 'a.txt')
-    const b = await importDoc(50, 'b.txt')
-    const manager = makeManager({ translator: scriptedTranslator() })
+    const a = await importWords(w, 50, { name: 'a.txt' })
+    const b = await importWords(w, 50, { name: 'b.txt' })
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, { getTranslator: () => translator })
     expect(() =>
       manager.startDocTask({
         kind: 'translation',
@@ -312,88 +269,59 @@ describe('TG-5: translating a document imported into Temporary (plan §2 D7)', (
   it('materializes a Generated translation and leaves the temporary source in Temporary', async () => {
     // The Translate view's drop/pick path imports the source with `destination: {kind:'temporary'}`
     // (fileDocumentByDestination is exactly what the IPC layer runs), then runs THIS same doc-task.
-    const docId = await importDoc(40, 'dropped.txt')
-    fileDocumentByDestination(db, docId, { kind: 'temporary' })
-    expect(getDocument(db, docId)?.lifecycle).toBe('temporary')
+    const docId = await importWords(w, 40, { name: 'dropped.txt' })
+    fileDocumentByDestination(w.db, docId, { kind: 'temporary' })
+    expect(getDocument(w.db, docId)?.lifecycle).toBe('temporary')
 
     const translator = scriptedTranslator()
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'de', targetLang: 'en' }
-    })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId, 'de', 'en'))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
 
     // The materialized translation is a Generated document (provenance stamped, source recorded).
     const newId = status.resultRef?.documentId as string
-    const origin = getDocumentOrigin(db, newId) as GeneratedProvenance
+    const origin = getDocumentOrigin(w.db, newId) as GeneratedProvenance
     expect(origin.kind).toBe('translation')
     expect(origin.sourceDocumentIds).toEqual([docId])
 
     // The temporary source is untouched by the translation — it stays in Temporary (its own
     // retention lifecycle governs cleanup, TG-5 D7). The Generated output carries NO membership.
-    expect(getDocument(db, docId)?.lifecycle).toBe('temporary')
-    const tempId = getBuiltinCollection(db, 'temporary')!.id
-    expect(documentIdsInCollection(db, tempId)).toContain(docId)
-    expect(documentIdsInCollection(db, tempId)).not.toContain(newId)
+    expect(getDocument(w.db, docId)?.lifecycle).toBe('temporary')
+    const tempId = getBuiltinCollection(w.db, 'temporary')!.id
+    expect(documentIdsInCollection(w.db, tempId)).toContain(docId)
+    expect(documentIdsInCollection(w.db, tempId)).not.toContain(newId)
   })
 })
 
 describe('the D3 guards (TG-3): the translation model, not the chat runtime', () => {
   it('refuses to start without the translation model — even with a chat model running', async () => {
-    const docId = await importDoc(50)
-    const manager = makeManager({ translator: null, runtime: stubChatRuntime() })
-    expect(() =>
-      manager.startDocTask({
-        kind: 'translation',
-        documentIds: [docId],
-        params: { sourceLang: 'en', targetLang: 'de' }
-      })
-    ).toThrow(TASK_TRANSLATION_NO_MODEL_MESSAGE)
+    const docId = await importWords(w, 50)
+    const runtime = stubChatRuntime()
+    const manager = docTaskManager(w, { getRuntime: () => runtime }) // no translator
+    expect(() => manager.startDocTask(translateReq(docId))).toThrow(TASK_TRANSLATION_NO_MODEL_MESSAGE)
   })
 
   it('runs to done with NO chat model, and never calls a chat runtime that IS present', async () => {
-    const docId = await importDoc(50)
+    const docId = await importWords(w, 50)
     // A translator + a booby-trapped chat runtime: chatStream throws if ever touched.
     const translator = scriptedTranslator()
-    const manager = makeManager({ translator, runtime: stubChatRuntime() })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'de', targetLang: 'en' }
-    })
+    const runtime = stubChatRuntime()
+    const manager = docTaskManager(w, { getTranslator: () => translator, getRuntime: () => runtime })
+    const { jobId } = manager.startDocTask(translateReq(docId, 'de', 'en'))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     expect(translator.calls.length).toBeGreaterThan(0)
   })
 
   it('fails friendly when the translator disappears while QUEUED (quit teardown re-check)', async () => {
-    const a = await importDoc(60, 'a.txt')
-    const b = await importDoc(60, 'b.txt')
-    // Slow enough that task B is still queued when the sidecar "stops" (quit teardown).
-    let available: Translator | null = scriptedTranslator({ tokenDelayMs: 5 })
-    const manager = new DocTaskManager({
-      getDb: () => db,
-      getRuntime: () => null,
-      getTranslator: () => available,
-      isChatStreaming: () => false,
-      getContextTokens: () => 4096,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({}),
-      beginDocumentWork: () => () => {}
-    })
-    const first = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [a],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const second = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [b],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const a = await importWords(w, 60, { name: 'a.txt' })
+    const b = await importWords(w, 60, { name: 'b.txt' })
+    // B is queued behind A in the same tick; A captured its translator synchronously at its own dequeue.
+    let available: Translator | null = scriptedTranslator()
+    const manager = docTaskManager(w, { getTranslator: () => available })
+    const first = manager.startDocTask(translateReq(a))
+    const second = manager.startDocTask(translateReq(b))
     available = null // quit stops the sidecar while B waits in the FIFO
     // A captured its translator at ITS dequeue and completes; B re-checks at dequeue
     // time and fails with the friendly install copy — never a raw error.
@@ -409,19 +337,20 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     // 600 unique words: more than one 500-token chunk, so the STORED chunks overlap by
     // ~80 tokens (words 420–499 appear in BOTH chunk rows). The translation must read
     // the parser's segments instead — every word appears exactly once in the output.
-    const docId = await importDoc(600)
+    const docId = await importWords(w, 600)
     // The SIDECAR's context (1024) drives the window budget — deps.getContextTokens (the
     // chat window) is deliberately different (4096) and must be ignored since TG-3.
     const translator = scriptedTranslator({ contextTokens: 1024 })
-    const manager = makeManager({ translator, contextTokens: 4096, audit: true })
-
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
+    const manager = docTaskManager(w, {
+      getTranslator: () => translator,
+      getContextTokens: () => 4096,
+      audit: dbAudit(w.db)
     })
+
+    const { jobId } = manager.startDocTask(translateReq(docId))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
+    expect(status.gaps ?? null).toBeNull() // a page-less .txt: no page accounting, nothing failed
 
     // Multiple windows ran (600 words > the 1024-context budget) + materialize.
     const budget = translationBudgetWords(1024)
@@ -442,7 +371,7 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     const newId = status.resultRef?.documentId as string
     expect(newId).toBeTruthy()
     expect(newId).not.toBe(docId)
-    const created = getDocument(db, newId)
+    const created = getDocument(w.db, newId)
     expect(created?.status).toBe('indexed')
     expect(created?.chunkCount).toBeGreaterThan(0)
     expect(created?.title).toBe('doc (Deutsch).md')
@@ -450,11 +379,11 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     // Windows were sent in document order (window 1 starts at word0).
     const firstWords = translator.calls.map((c) => c.text.split(/\s+/)[0])
     expect(firstWords[0]).toBe('word0')
-    const starts = firstWords.map((w) => Number(w.replace('word', '')))
+    const starts = firstWords.map((fw) => Number(fw.replace('word', '')))
     expect([...starts].sort((x, y) => x - y)).toEqual(starts)
 
     // Stored output: attribution line (the TRANSLATION model's id) + the stitched translation.
-    const { text } = await readStoredDocumentText(db, storeDir, newId)
+    const { text } = await readStoredDocumentText(w.db, w.storeDir, newId)
     expect(text.startsWith(`> ${translationAttributionLine('scripted-translator')}`)).toBe(true)
     const body = text.slice(text.indexOf('\n\n') + 2)
     const tokens = body.split(/\s+/).filter((t) => t.length > 0)
@@ -475,11 +404,11 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
       createdAt: expect.any(String)
     }
     expect(created?.origin).toEqual(expectedOrigin)
-    expect(getDocumentOrigin(db, newId)).toEqual(expectedOrigin)
+    expect(getDocumentOrigin(w.db, newId)).toEqual(expectedOrigin)
 
     // Audit: ids-only document_task_completed (with the SOURCE id) + a
     // document_imported for the materialized document.
-    const events = listAuditEvents(db, { limit: 100 })
+    const events = listAuditEvents(w.db, { limit: 100 })
     const completed = events.find((e) => e.type === 'document_task_completed')
     expect(completed?.metadata).toEqual({ kind: 'translation', documentId: docId })
     const imported = events.find((e) => e.type === 'document_imported')
@@ -490,25 +419,22 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     expect(imported?.message).not.toContain('Deutsch')
 
     // The materialize transient is gone (shredded) — nothing `.parse*` lingers.
-    expect(readdirSync(storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
+    expect(readdirSync(w.storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
   })
 
   it('origin survives a re-index (provenance, not sync) and malformed origin_json reads as null', async () => {
-    const docId = await importDoc(60)
-    const manager = makeManager({ translator: scriptedTranslator() })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'de', targetLang: 'en' }
-    })
+    const docId = await importWords(w, 60)
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId, 'de', 'en'))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     const newId = status.resultRef?.documentId as string
 
     // Re-index the translated document: chunks rebuild, origin stays.
-    const reinfo = await reindexDocument(db, storeDir, newId)
+    const reinfo = await reindexDocument(w.db, w.storeDir, newId)
     expect(reinfo.status).toBe('indexed')
-    expect(getDocumentOrigin(db, newId)).toEqual({
+    expect(getDocumentOrigin(w.db, newId)).toEqual({
       kind: 'translation',
       sourceDocumentIds: [docId],
       modelId: 'scripted-translator',
@@ -516,34 +442,31 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     })
 
     // Malformed origin_json must never break a listing — it reads as null.
-    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run('{not json', newId)
-    expect(getDocumentOrigin(db, newId)).toBeNull()
-    expect(listDocuments(db).find((d) => d.id === newId)?.origin).toBeNull()
+    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run('{not json', newId)
+    expect(getDocumentOrigin(w.db, newId)).toBeNull()
+    expect(listDocuments(w.db).find((d) => d.id === newId)?.origin).toBeNull()
   })
 })
 
 describe('generated provenance + membership (Phase D — §15.1/§15.2, D3/N1)', () => {
   it('writes structured provenance, snapshots the SOURCE collections, and files NO membership', async () => {
-    const docId = await importDoc(80, 'source.txt')
+    const docId = await importWords(w, 80, { name: 'source.txt' })
     // The SOURCE lives in Library + a project; the generated output must NOT inherit them.
-    const lib = getBuiltinCollection(db, 'library')!
-    const project = createCollection(db, 'Tax 2025')
-    addToCollection(db, [docId], lib.id)
-    addToCollection(db, [docId], project.id)
+    const lib = getBuiltinCollection(w.db, 'library')!
+    const project = createCollection(w.db, 'Tax 2025')
+    addToCollection(w.db, [docId], lib.id)
+    addToCollection(w.db, [docId], project.id)
 
-    const manager = makeManager({ translator: scriptedTranslator() })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     const newId = status.resultRef?.documentId as string
 
     // Structured provenance persisted: kind + source id + model + a snapshot of the
     // source's collections at creation time (display/forward-use only).
-    const origin = getDocumentOrigin(db, newId) as GeneratedProvenance
+    const origin = getDocumentOrigin(w.db, newId) as GeneratedProvenance
     expect(origin.kind).toBe('translation')
     expect(origin.sourceDocumentIds).toEqual([docId])
     expect(origin.modelId).toBe('scripted-translator')
@@ -552,36 +475,36 @@ describe('generated provenance + membership (Phase D — §15.1/§15.2, D3/N1)',
 
     // N1/D3: the generated row gets ZERO document_collections rows of its own — it is
     // structurally excluded from every collection-derived (Library/project) scope.
-    const memberships = db
+    const memberships = w.db
       .prepare('SELECT collection_id FROM document_collections WHERE document_id = ?')
       .all(newId) as unknown as Array<{ collection_id: string }>
     expect(memberships).toHaveLength(0)
     // The source keeps its memberships untouched.
-    const sourceMemberships = db
+    const sourceMemberships = w.db
       .prepare('SELECT collection_id FROM document_collections WHERE document_id = ?')
       .all(docId) as unknown as Array<{ collection_id: string }>
     expect(sourceMemberships.map((r) => r.collection_id).sort()).toEqual([lib.id, project.id].sort())
   })
 
   it('round-trips the new shape and STILL parses the old Translation/CompareOrigin shapes', async () => {
-    const docId = await importDoc(40, 'rt.txt')
+    const docId = await importWords(w, 40, { name: 'rt.txt' })
 
     // Old translation shape (pre-discriminator, no `type`) still parses unchanged.
-    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
+    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
       JSON.stringify({ translatedFrom: 'src-1', targetLang: 'en' }),
       docId
     )
-    expect(getDocumentOrigin(db, docId)).toEqual({
+    expect(getDocumentOrigin(w.db, docId)).toEqual({
       type: 'translation',
       translatedFrom: 'src-1',
       targetLang: 'en'
     })
     // Old compare shape still parses.
-    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
+    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
       JSON.stringify({ type: 'compare', comparedFrom: ['a', 'b'] }),
       docId
     )
-    expect(getDocumentOrigin(db, docId)).toEqual({ type: 'compare', comparedFrom: ['a', 'b'] })
+    expect(getDocumentOrigin(w.db, docId)).toEqual({ type: 'compare', comparedFrom: ['a', 'b'] })
 
     // New GeneratedProvenance round-trips exactly.
     const prov: GeneratedProvenance = {
@@ -591,108 +514,84 @@ describe('generated provenance + membership (Phase D — §15.1/§15.2, D3/N1)',
       modelId: 'm',
       createdAt: '2026-06-14T00:00:00.000Z'
     }
-    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(JSON.stringify(prov), docId)
-    expect(getDocumentOrigin(db, docId)).toEqual(prov)
+    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(JSON.stringify(prov), docId)
+    expect(getDocumentOrigin(w.db, docId)).toEqual(prov)
 
     // A `kind` with no source ids is malformed ⇒ null (never throws).
-    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
+    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
       JSON.stringify({ kind: 'translation', sourceDocumentIds: [] }),
       docId
     )
-    expect(getDocumentOrigin(db, docId)).toBeNull()
+    expect(getDocumentOrigin(w.db, docId)).toBeNull()
   })
 })
 
 describe('failed windows (R-T2 retry-then-mark policy)', () => {
-  it('retries a failing window once, then MARKS it visibly with the original text kept', async () => {
-    const docId = await importDoc(600)
-    const budget = translationBudgetWords(1024)
-    const translator = scriptedTranslator({
-      contextTokens: 1024,
-      reply: (call) => {
-        // Window 2 starts exactly where window 1's budget ended.
-        if (call.text.split(/\s+/)[0] === `word${budget}`) throw new Error('boom: model refused')
+  // Window 2 of a 600-word doc on the sidecar's 1024 context starts exactly where window 1's budget ended.
+  const W2 = `word${translationBudgetWords(1024)}`
+  const isWindow2 = (call: TranslateOptions): boolean => call.text.split(/\s+/)[0] === W2
+
+  it.each([
+    // R-T2: a thrown window is the transient class — one retry, then the visible marker.
+    ['a thrown window: one retry, then marked (R-T2)', {
+      reply: (call: TranslateOptions) => {
+        if (isWindow2(call)) throw new Error('boom: model refused')
         return call.text
       }
-    })
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    // The task still completes — one bad window must not lose the document.
-    expect(status.state).toBe('done')
+    }, 2],
+    // An empty reply is transient too — one retry, then the marker (never an empty part).
+    ['an empty reply: one retry, then marked', { reply: (call: TranslateOptions) => (isWindow2(call) ? '   ' : call.text) }, 2],
+    // M6/FA-2 F-2: non-empty text with NO clean stop is a deterministic limit stop (greedy decode reproduces the identical
+    // clip), so it is marked on the FIRST attempt instead of burning a second ~30-min decode.
+    ['a limit stop (no clean stop): marked IMMEDIATELY, no futile retry (M6/FA-2 F-2)', {
+      final: (call: TranslateOptions): CompletionFinal => (isWindow2(call) ? {} : { stoppingWord: TRANSLATION_STOP_TOKEN })
+    }, 1]
+  ] satisfies Array<[string, Pick<ScriptedTranslatorOptions, 'reply' | 'final'>, number]>)(
+    'a failing window is retried per its class, then MARKED with the original text kept: %s',
+    async (_label, opts, attempts) => {
+      const docId = await importWords(w, 600)
+      const translator = scriptedTranslator({ contextTokens: 1024, ...opts })
+      const manager = docTaskManager(w, { getTranslator: () => translator })
+      const status = await waitTerminal(manager, manager.startDocTask(translateReq(docId)).jobId)
+      expect(status.state).toBe('done') // one bad window never loses the document
+      expect(translator.calls.filter(isWindow2)).toHaveLength(attempts)
+      expect(status.gaps).toEqual({ missingPageRanges: [], failedWindows: 1 }) // #58: the count reaches the UI
+      const { text } = await readStoredDocumentText(w.db, w.storeDir, status.resultRef?.documentId as string)
+      expect(text).toContain(failedWindowNotice(2, Math.ceil(600 / translationBudgetWords(1024))))
+      expect(text).toContain(W2) // window 2's ORIGINAL text kept below its notice
+      expect(text).toContain('word0') // the clean windows are intact
+    }
+  )
 
-    const total = Math.ceil(600 / budget)
-    // The failing window was tried exactly twice (one retry).
-    const failingCalls = translator.calls.filter(
-      (c) => c.text.split(/\s+/)[0] === `word${budget}`
-    )
-    expect(failingCalls).toHaveLength(2)
-
-    const newId = status.resultRef?.documentId as string
-    const { text } = await readStoredDocumentText(db, storeDir, newId)
-    expect(text).toContain(failedWindowNotice(2, total))
-    // The window's ORIGINAL text is kept below the notice (window 2 starts where
-    // window 1's budget ended).
-    expect(text).toContain(`word${budget}`)
-  })
-
-  it('#160 (BE-2): a mid-decode TIMEOUT (tokens flowed) is marked WITHOUT a retry', async () => {
-    const docId = await importDoc(40) // one window
+  // Test-gap #4: a per-request timeout aborts the COMBINED signal with a `TimeoutError` while the task's OWN signal stays
+  // unaborted, so `isAbortError(err, taskSignal)` is false — a FAILED window (one window here → the task fails friendly),
+  // never mistaken for a user cancel. #160 (BE-2) then splits it by whether tokens flowed: a live decode that ran out of
+  // time is as deterministic as a limit stop (no retry); a wedged server with no tokens gets the transient retry.
+  it.each([
+    ['#160 (BE-2): tokens flowed (a live, too-slow decode) → marked with NO retry', true, 1],
+    ['#160 (BE-2) control: no tokens (a wedged server) → its one transient retry', false, 2]
+  ])('a per-request TimeoutError is a FAILED window, NOT a task cancel: %s', async (_label, tokensFlowed, attempts) => {
+    const docId = await importWords(w, 40) // one window
     let calls = 0
     const translator: Translator = {
-      modelId: 'timing-out-translator',
+      modelId: 'scripted-translator',
       contextWindow: () => 4096,
+      stop: async () => {},
       async translate(o) {
         calls += 1
-        o.onToken?.('slow ') // the decode was LIVE — tokens flowed until the bound
+        if (tokensFlowed) o.onToken?.('slow ')
         throw new DOMException('The operation timed out.', 'TimeoutError')
-      },
-      async stop() {}
+      }
     }
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    // Single window, marked failed → all windows failed → the task fails friendly.
-    expect(status.state).toBe('failed')
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const status = await waitTerminal(manager, manager.startDocTask(translateReq(docId)).jobId)
+    expect(status.state).toBe('failed') // never 'cancelled'
     expect(status.error).toBe(TASK_GENERIC_FAILURE_MESSAGE)
-    // Deterministic (temperature-0, same hardware): the retry would hold the one-at-a-time
-    // lane another full per-request timeout for the identical outcome — exactly ONE attempt.
-    expect(calls).toBe(1)
-  })
-
-  it('#160 (BE-2) control: a timeout with NO tokens (wedged server) keeps its one transient retry', async () => {
-    const docId = await importDoc(40)
-    let calls = 0
-    const translator: Translator = {
-      modelId: 'wedged-translator',
-      contextWindow: () => 4096,
-      async translate() {
-        calls += 1
-        throw new DOMException('The operation timed out.', 'TimeoutError')
-      },
-      async stop() {}
-    }
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    expect(status.state).toBe('failed')
-    expect(calls).toBe(2) // a fresh request against a wedged server IS a reasonable bet
+    expect(calls).toBe(attempts)
   })
 
   it('#605: a hung sidecar keeps its one retry even after tokens flowed — the runtime stopped it, the retry runs on a fresh one', async () => {
-    const docId = await importDoc(40) // one window
+    const docId = await importWords(w, 40) // one window
     let calls = 0
     const translator: Translator = {
       modelId: 'hung-translator',
@@ -708,12 +607,8 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
       },
       async stop() {}
     }
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     expect(status.gaps).toBeUndefined() // no window marked failed
@@ -724,29 +619,25 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
   // so they localize to the app language at materialization time (via tMain), not the
   // canonical-English DB strings. With German selected, the materialized Markdown is German.
   it('L12: persists the attribution + failed-window notice in the app language (de)', async () => {
-    const docId = await importDoc(600)
+    const docId = await importWords(w, 600)
     const budget = translationBudgetWords(1024)
     const translator = scriptedTranslator({
       contextTokens: 1024,
       reply: (call) => {
-        if (call.text.split(/\s+/)[0] === `word${budget}`) throw new Error('boom: model refused')
+        if (isWindow2(call)) throw new Error('boom: model refused')
         return call.text
       }
     })
-    const manager = makeManager({ translator })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
     applyUiLanguageSetting('de')
     try {
-      const { jobId } = manager.startDocTask({
-        kind: 'translation',
-        documentIds: [docId],
-        params: { sourceLang: 'en', targetLang: 'de' }
-      })
+      const { jobId } = manager.startDocTask(translateReq(docId))
       const status = await waitTerminal(manager, jobId)
       expect(status.state).toBe('done')
 
       const total = Math.ceil(600 / budget)
       const newId = status.resultRef?.documentId as string
-      const { text } = await readStoredDocumentText(db, storeDir, newId)
+      const { text } = await readStoredDocumentText(w.db, w.storeDir, newId)
       // The German catalog strings are present…
       expect(text).toContain(t('de', 'main.translation.attributionLine', { modelId: 'scripted-translator' }))
       expect(text).toContain(t('de', 'main.translation.failedWindowNotice', { part: 2, total }))
@@ -757,216 +648,80 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     }
   })
 
-  it('a window that stops at the output cap (no clean stop) is MARKED IMMEDIATELY — no futile retry (M6/FA-2 F-2)', async () => {
-    const docId = await importDoc(600)
-    const budget = translationBudgetWords(1024)
-    const translator = scriptedTranslator({
-      contextTokens: 1024,
-      // Window 2 returns non-empty text but its final frame carries NO stopping word — a LIMIT
-      // stop (the greedy-decode repetition-loop truncation M6 describes). Greedy decode is
-      // DETERMINISTIC, so a retry would reproduce the identical clip; FA-2 F-2 marks it on the
-      // first attempt instead of burning a second ~30-min decode for the same outcome.
-      final: (call) =>
-        call.text.split(/\s+/)[0] === `word${budget}` ? {} : { stoppingWord: TRANSLATION_STOP_TOKEN }
-    })
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    // The task still completes — one truncated window must not lose the document.
-    expect(status.state).toBe('done')
-
-    const total = Math.ceil(600 / budget)
-    // The truncated window was tried exactly ONCE — a deterministic limit-stop is not retried.
-    const truncatedCalls = translator.calls.filter((c) => c.text.split(/\s+/)[0] === `word${budget}`)
-    expect(truncatedCalls).toHaveLength(1)
-
-    const newId = status.resultRef?.documentId as string
-    const { text } = await readStoredDocumentText(db, storeDir, newId)
-    // Window 2 is marked with its original text kept; the other (clean) windows are intact.
-    expect(text).toContain(failedWindowNotice(2, total))
-    expect(text).toContain(`word${budget}`)
-    expect(text).toContain('word0')
-  })
-
-  it('a per-request TimeoutError is a FAILED window (retry → notice), NOT a task cancel', async () => {
-    // Pins audit test-gap #4: the combined per-request signal times out with a `TimeoutError`
-    // whose name is NOT 'AbortError', while the task's OWN signal stays unaborted — so
-    // `isAbortError(err, taskSignal)` is false and the window is retried-then-failed, never
-    // mistaken for a user cancel. A single window: two timeouts → all windows failed → the task
-    // fails friendly (never `cancelled`).
-    const docId = await importDoc(60)
-    let calls = 0
-    const translator: Translator = {
-      modelId: 'scripted-translator',
-      contextWindow: () => 4096,
-      stop: async () => {},
-      async translate() {
-        calls += 1
-        throw new DOMException('The operation timed out.', 'TimeoutError')
+  // A start fault latches inside the runtime and reaches the handler as a TranslationStartError: it fails the WHOLE task
+  // with friendly, content-free copy — never the generic failure, never N marked windows — after ONE attempt (a retry
+  // re-throws the latch identically). #530: when the OS loader refused the engine, the engine copy, not the memory one.
+  it.each([
+    ['F-7: a start fault (memory pressure) → the restart/free-memory copy',
+      () => new Error('llama-server exited before becoming healthy (code 3221226505)'), 'main.translation.startFailed'],
+    ['#530: the OS loader refused the engine → the engine copy, not the memory one',
+      () => new EngineCannotRunError('llama-server', {
+        family: 'llama_cpp', reason: 'library-missing', os: 'linux', name: 'libgomp.so.1', exit: 'exit code 127'
+      }), 'main.engine.cannotRun']
+  ] as const)('a LATCHED sidecar start failure fails the task with its own friendly copy — one attempt, no per-window retry: %s',
+    async (_label, cause, key) => {
+      const docId = await importWords(w, 60)
+      let calls = 0
+      const translator: Translator = {
+        modelId: 'scripted-translator',
+        contextWindow: () => 4096,
+        stop: async () => {},
+        async translate() {
+          calls += 1
+          throw new TranslationStartError(cause())
+        }
       }
-    }
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
+      const manager = docTaskManager(w, { getTranslator: () => translator })
+      const status = await waitTerminal(manager, manager.startDocTask(translateReq(docId)).jobId)
+      expect(status.state).toBe('failed')
+      expect(status.error).toBe(t('en', key))
+      expect(calls).toBe(1)
     })
-    const status = await waitTerminal(manager, jobId)
-    expect(status.state).toBe('failed')
-    expect(status.error).toBe(TASK_GENERIC_FAILURE_MESSAGE)
-    expect(calls).toBe(2) // retried once, then the window (and the task) failed
-  })
-
-  it('a LATCHED sidecar start failure fails the task with the distinct restart/free-memory copy — no per-window retry (F-7)', async () => {
-    // A start fault (memory pressure on the ~10 GB model co-resident with chat) latches inside the
-    // runtime and reaches the handler as a TranslationStartError. It fails the WHOLE task with the
-    // friendly localized copy the file view shows verbatim — NOT the generic failure and NOT N
-    // marked windows — and the window is attempted only ONCE (a retry re-throws the latch identically).
-    const docId = await importDoc(60)
-    let calls = 0
-    const translator: Translator = {
-      modelId: 'scripted-translator',
-      contextWindow: () => 4096,
-      stop: async () => {},
-      async translate() {
-        calls += 1
-        throw new TranslationStartError(
-          new Error('llama-server exited before becoming healthy (code 3221226505)')
-        )
-      }
-    }
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    expect(status.state).toBe('failed')
-    expect(status.error).toBe(t('en', 'main.translation.startFailed')) // distinct, friendly, content-free
-    expect(calls).toBe(1) // start failure fails the task immediately — no futile per-window retry
-  })
-
-  it('#530: a latched start failure the OS loader caused fails the task with the engine copy, not the memory one', async () => {
-    const docId = await importDoc(60)
-    let calls = 0
-    const translator: Translator = {
-      modelId: 'scripted-translator',
-      contextWindow: () => 4096,
-      stop: async () => {},
-      async translate() {
-        calls += 1
-        throw new TranslationStartError(
-          new EngineCannotRunError('llama-server', {
-            family: 'llama_cpp',
-            reason: 'library-missing',
-            os: 'linux',
-            name: 'libgomp.so.1',
-            exit: 'exit code 127'
-          })
-        )
-      }
-    }
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    expect(status.state).toBe('failed')
-    expect(status.error).toBe(t('en', 'main.engine.cannotRun'))
-    expect(status.error).not.toBe(t('en', 'main.translation.startFailed'))
-    expect(calls).toBe(1)
-  })
-
-  it('an empty reply counts as a failure: one retry, then the marked window', async () => {
-    const docId = await importDoc(60)
-    const translator = scriptedTranslator({ reply: () => '   ' })
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    // The single window failed twice → all windows failed → the task fails friendly.
-    expect(status.state).toBe('failed')
-    expect(translator.calls).toHaveLength(2)
-  })
 
   it('fails the whole task (and persists nothing) when EVERY window fails', async () => {
-    const docId = await importDoc(100)
+    const docId = await importWords(w, 100)
     const translator = scriptedTranslator({
       reply: () => {
         throw new Error('boom')
       }
     })
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('failed')
     expect(status.error).toBe(TASK_GENERIC_FAILURE_MESSAGE)
-    expect(listDocuments(db)).toHaveLength(1) // only the source — no half-born output
+    expect(listDocuments(w.db)).toHaveLength(1) // only the source — no half-born output
   })
 })
 
 describe('cancellation persists nothing', () => {
   it('cancel mid-translation leaves no output document and no transient files', async () => {
-    const docId = await importDoc(600)
+    const docId = await importWords(w, 600)
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId))
     // Wait until it is actually translating, then cancel.
-    const start = Date.now()
-    while (manager.getDocTask(jobId).state !== 'running' || translator.calls.length === 0) {
-      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('task never started')
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await waitRunning(manager, jobId, translator)
     manager.cancelDocTask(jobId)
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('cancelled')
-    expect(listDocuments(db)).toHaveLength(1) // the source only
-    expect(readdirSync(storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
+    expect(listDocuments(w.db)).toHaveLength(1) // the source only
+    expect(readdirSync(w.storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
   })
 })
 
 describe('lifecycle flush (TA-1: lock/quit cancel the running task AND the queue)', () => {
   it('cancelAllDocTasks flushes the running task AND every queued task; a queued task never runs', async () => {
-    const a = await importDoc(600, 'a.txt')
-    const b = await importDoc(60, 'b.txt')
+    const a = await importWords(w, 600, { name: 'a.txt' })
+    const b = await importWords(w, 60, { name: 'b.txt' })
     // Slow token delay so A is still mid-window (running) and B still queued when we flush.
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
-    const manager = makeManager({ translator })
-    const first = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [a],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const second = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [b],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const first = manager.startDocTask(translateReq(a))
+    const second = manager.startDocTask(translateReq(b))
 
     // Wait until A is actually running and B is still queued behind it.
-    const start = Date.now()
-    while (manager.getDocTask(first.jobId).state !== 'running' || translator.calls.length === 0) {
-      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('task A never started')
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await waitRunning(manager, first.jobId, translator)
     expect(manager.getDocTask(second.jobId).state).toBe('queued')
 
     manager.cancelAllDocTasks()
@@ -979,26 +734,19 @@ describe('lifecycle flush (TA-1: lock/quit cancel the running task AND the queue
     expect((await waitTerminal(manager, second.jobId)).state).toBe('cancelled')
 
     // No permanent latch — the manager is fully usable again after the flush (post-unlock parity).
-    const c = await importDoc(40, 'c.txt')
-    const third = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [c],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const c = await importWords(w, 40, { name: 'c.txt' })
+    const third = manager.startDocTask(translateReq(c))
     expect((await waitTerminal(manager, third.jobId)).state).toBe('done')
   })
 
   it('awaitActiveTaskSettled resolves after the running task settles, and immediately when idle', async () => {
-    const manager = makeManager({ translator: scriptedTranslator() })
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, { getTranslator: () => translator })
     // Idle → resolves immediately (nothing running).
     await expect(manager.awaitActiveTaskSettled()).resolves.toBeUndefined()
 
-    const docId = await importDoc(60)
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const docId = await importWords(w, 60)
+    const { jobId } = manager.startDocTask(translateReq(docId))
     // The settle resolves only once the running task has reached a terminal state.
     await manager.awaitActiveTaskSettled()
     expect(['done', 'failed', 'cancelled']).toContain(manager.getDocTask(jobId).state)
@@ -1006,185 +754,64 @@ describe('lifecycle flush (TA-1: lock/quit cancel the running task AND the queue
 })
 
 describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload adoption)', () => {
-  /** Spin until `jobId` is actually running (the scripted translator has started a window). */
-  async function waitRunning(manager: DocTaskManager, jobId: string, translator: ScriptedTranslator): Promise<void> {
-    const start = Date.now()
-    const before = translator.calls.length
-    while (manager.getDocTask(jobId).state !== 'running' || translator.calls.length === before) {
-      if (Date.now() - start > hangBudgetMs(5000)) throw new Error(`task ${jobId} never started running`)
-      await new Promise((r) => setTimeout(r, 5))
-    }
-  }
-
   it('a targeted cancel with a STALE jobId never kills the newer active task (the F-6 race pin)', async () => {
-    const a = await importDoc(600, 'a.txt')
-    const b = await importDoc(40, 'b.txt')
+    const a = await importWords(w, 600, { name: 'a.txt' })
+    const b = await importWords(w, 40, { name: 'b.txt' })
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
-    const manager = makeManager({ translator })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
 
     // Task A runs, then we cancel it — the "our own task went terminal" half of the race.
-    const first = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [a],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const first = manager.startDocTask(translateReq(a))
     await waitRunning(manager, first.jobId, translator)
     manager.cancelDocTask(first.jobId)
     expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
 
     // A NEW task B takes the lane. A stale Stop still carrying A's OLD jobId must NOT kill B —
     // exact-id (#157 DT-2): A is TERMINAL, so the targeted cancel no-ops; B has a different id.
-    const second = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [b],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const second = manager.startDocTask(translateReq(b))
     await waitRunning(manager, second.jobId, translator)
     manager.cancelDocTask(first.jobId) // stale (terminal) id → no-op
     // B is untouched and reaches its OWN terminal state (done), not cancelled by the stale id.
     expect((await waitTerminal(manager, second.jobId)).state).toBe('done')
   })
 
-  it('#157 (DT-2): a targeted cancel dequeues a translation QUEUED behind a foreign running task', async () => {
-    const a = await importDoc(600, 'a.txt')
-    const b = await importDoc(40, 'b.txt')
+  it('#157 (DT-5): listActiveDocTasks surfaces a translation QUEUED behind a foreign running task; getActiveDocTask stays running-only', async () => {
+    const a = await importWords(w, 600, { name: 'a.txt' })
+    const b = await importWords(w, 40, { name: 'b.txt' })
     const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
-    const manager = makeManager({ translator })
-
-    // A foreign task holds the lane (any kind serializes on the one FIFO); OUR translation queues.
-    const foreign = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [a],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    await waitRunning(manager, foreign.jobId, translator)
-    const ours = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [b],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    expect(manager.getDocTask(ours.jobId).state).toBe('queued')
-
-    // Stop on OUR queued task: the old cancelActiveDocTask matched only runningId ?? queue[0]
-    // with runningId winning, so this was a silent no-op and the "cancelled" job later ran to
-    // completion + materialized a document. Exact-id dequeues it NOW.
-    manager.cancelDocTask(ours.jobId)
-    expect(manager.getDocTask(ours.jobId).state).toBe('cancelled')
-
-    // The foreign running task is untouched and finishes.
-    expect((await waitTerminal(manager, foreign.jobId)).state).toBe('done')
-    await manager.awaitActiveTaskSettled()
-    // The cancelled task NEVER runs when the pump drains the queue (pre-fix it ran to
-    // completion here): no sidecar call is made after the foreign task settled.
-    const callsAtForeignDone = translator.calls.length
-    await new Promise((r) => setTimeout(r, 60)) // give a wrongly-pumped task time to start
-    expect(translator.calls.length).toBe(callsAtForeignDone)
-    expect(manager.getDocTask(ours.jobId).state).toBe('cancelled')
-    expect(manager.hasActiveTask()).toBe(false)
-    // 60 s budget (the #101 CI value), applied per-test because THIS test is the heavy one in
-    // the file: it deliberately drives a 600-unit foreign translation to completion so that OUR
-    // task is provably still queued behind it, which costs ~9.4 s of real wall-clock even when
-    // the box is idle. Against the 15 s local default that is only 1.6x headroom, and wave DEP-4
-    // watched it fail 3 of 5 full-suite runs on a loaded 16 GB machine (a run stretching to 312 s
-    // vs the usual ~140 s). Nothing is loosened: the cancel semantics are asserted above by
-    // explicit expect()s, and waitTerminal's own 30 s bound still catches a genuine hang first.
-  }, testBudgetMs(60_000))
-
-  it('a targeted exact-id cancel hits the running task; the no-arg fallback still works (old-caller parity)', async () => {
-    const a = await importDoc(600, 'a.txt')
-    const b = await importDoc(600, 'b.txt')
-    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
-    const manager = makeManager({ translator })
-
-    // A matching-id targeted cancel DOES cancel the active task.
-    const first = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [a],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    await waitRunning(manager, first.jobId, translator)
-    manager.cancelDocTask(first.jobId)
-    expect((await waitTerminal(manager, first.jobId)).state).toBe('cancelled')
-
-    // Absent-id parity: the no-arg cancelDocTask() still cancels whatever is active.
-    const second = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [b],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    await waitRunning(manager, second.jobId, translator)
-    manager.cancelDocTask()
-    expect((await waitTerminal(manager, second.jobId)).state).toBe('cancelled')
-  })
-
-  it('getActiveDocTask returns the running translation task (a copy), null when idle', async () => {
-    const docId = await importDoc(600)
-    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
-    const manager = makeManager({ translator })
-
-    expect(manager.getActiveDocTask()).toBeNull() // idle
-
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    await waitRunning(manager, jobId, translator)
-    const active = manager.getActiveDocTask()
-    expect(active).not.toBeNull()
-    expect(active?.jobId).toBe(jobId)
-    expect(active?.kind).toBe('translation')
-    expect(active?.state).toBe('running')
-
-    manager.cancelDocTask(jobId)
-    await waitTerminal(manager, jobId)
-    expect(manager.getActiveDocTask()).toBeNull() // back to idle once terminal
-  })
-
-  it('#157 (DT-5): listActiveDocTasks surfaces a translation QUEUED behind a foreign running task', async () => {
-    const a = await importDoc(600, 'a.txt')
-    const b = await importDoc(40, 'b.txt')
-    const translator = scriptedTranslator({ contextTokens: 1024, tokenDelayMs: 5 })
-    const manager = makeManager({ translator })
+    const manager = docTaskManager(w, { getTranslator: () => translator })
 
     expect(manager.listActiveDocTasks()).toEqual([]) // idle
+    expect(manager.getActiveDocTask()).toBeNull() // idle — nothing to adopt (FA-3 / F-3)
 
-    const foreign = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [a],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const foreign = manager.startDocTask(translateReq(a))
     await waitRunning(manager, foreign.jobId, translator)
-    const ours = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [b],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const ours = manager.startDocTask(translateReq(b))
 
     // getActiveDocTask keeps its running-only contract (the #38 chain-adopt caller)…
-    expect(manager.getActiveDocTask()?.jobId).toBe(foreign.jobId)
-    // …while the list carries the QUEUED translation too, in lane order — the state the
-    // reload adopt needs (a task becomes `running` in the same tick it becomes runningId,
-    // so `queued` was structurally unreachable through getActiveDocTask).
-    const active = manager.listActiveDocTasks()
-    expect(active.map((t) => t.jobId)).toEqual([foreign.jobId, ours.jobId])
-    expect(active[1].state).toBe('queued')
+    expect(manager.getActiveDocTask()).toMatchObject({ jobId: foreign.jobId, kind: 'translation', state: 'running' })
+    // …while the list carries the QUEUED translation too, in lane order — the state the reload adopt needs (a task becomes
+    // `running` in the same tick it becomes runningId, so `queued` was structurally unreachable through getActiveDocTask).
+    const lane = manager.listActiveDocTasks()
+    expect(lane.map((t) => t.jobId)).toEqual([foreign.jobId, ours.jobId])
+    expect(lane[1].state).toBe('queued')
 
     manager.cancelAllDocTasks()
     await manager.awaitActiveTaskSettled()
     expect(manager.listActiveDocTasks()).toEqual([])
+    expect(manager.getActiveDocTask()).toBeNull() // back to idle once terminal
   })
 })
 
 describe('the Phase-32 lease (held around exactly the materialize step)', () => {
   it('acquires the lease AFTER the last window, releases it after import', async () => {
-    const docId = await importDoc(600)
+    const docId = await importWords(w, 600)
     const translator = scriptedTranslator({ contextTokens: 1024 })
     let acquired = 0
     let released = 0
     let callsAtAcquire = -1
-    const manager = makeManager({
-      translator,
+    const manager = docTaskManager(w, {
+      getTranslator: () => translator,
       beginDocumentWork: () => {
         acquired += 1
         callsAtAcquire = translator.calls.length
@@ -1193,11 +820,7 @@ describe('the Phase-32 lease (held around exactly the materialize step)', () => 
         }
       }
     })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const { jobId } = manager.startDocTask(translateReq(docId))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     expect(acquired).toBe(1)
@@ -1209,30 +832,27 @@ describe('the Phase-32 lease (held around exactly the materialize step)', () => 
   })
 
   it('a password change in progress fails the task friendly (VaultBusyError passes through)', async () => {
-    const docId = await importDoc(60)
+    const docId = await importWords(w, 60)
     const busyMessage = 'The workspace password is being changed right now. Try again in a moment.'
-    const manager = makeManager({
-      translator: scriptedTranslator(),
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, {
+      getTranslator: () => translator,
       beginDocumentWork: () => {
         throw new VaultBusyError(busyMessage)
       }
     })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const { jobId } = manager.startDocTask(translateReq(docId))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('failed')
     expect(status.error).toBe(busyMessage) // the friendly copy, not the generic one
-    expect(listDocuments(db)).toHaveLength(1) // nothing persisted
-    expect(readdirSync(storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
+    expect(listDocuments(w.db)).toHaveLength(1) // nothing persisted
+    expect(readdirSync(w.storeDir).filter((n) => n.includes('.parse'))).toHaveLength(0)
   })
 })
 
 describe('busy-document guard covers the freshly created output document', () => {
   it('isDocumentBusy(outputId) is true while the materialize import runs', async () => {
-    const docId = await importDoc(60)
+    const docId = await importWords(w, 60)
     let releaseEmbed!: () => void
     const embedGate = new Promise<void>((r) => (releaseEmbed = r))
     // The embedder runs INSIDE processDocument during materialize — gating it holds
@@ -1245,24 +865,17 @@ describe('busy-document guard covers the freshly created output document', () =>
         return texts.map(() => new Float32Array(4))
       }
     }
-    const manager = makeManager({
-      translator: scriptedTranslator(),
-      ingestionDeps: () => ({ embedder: gatedEmbedder })
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, {
+      getTranslator: () => translator,
+      getIngestionDeps: () => ({ embedder: gatedEmbedder })
     })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const { jobId } = manager.startDocTask(translateReq(docId))
 
     // Wait until the output row exists (the import is gated on the embedder).
-    const start = Date.now()
-    let outputId: string | null = null
-    while (!outputId) {
-      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('output document never appeared')
-      outputId = listDocuments(db).find((d) => d.id !== docId)?.id ?? null
-      if (!outputId) await new Promise((r) => setTimeout(r, 5))
-    }
+    const outputRow = (): string | undefined => listDocuments(w.db).find((d) => d.id !== docId)?.id
+    await until(() => outputRow() !== undefined, 'the output document row to appear')
+    const outputId = outputRow() as string
     expect(manager.isDocumentBusy(outputId)).toBe(true)
     expect(manager.isDocumentBusy(docId)).toBe(true)
 
@@ -1276,46 +889,43 @@ describe('busy-document guard covers the freshly created output document', () =>
 describe('encrypted workspace', () => {
   it('the materialized translation rests encrypted; export decrypts transiently', async () => {
     const cipher = testCipher()
-    const docId = await importDoc(60, 'memo.txt', { cipher })
-    const manager = makeManager({
-      translator: scriptedTranslator(),
-      ingestionDeps: () => ({ cipher })
+    const docId = await importWords(w, 60, { name: 'memo.txt', deps: { cipher } })
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, {
+      getTranslator: () => translator,
+      getIngestionDeps: () => ({ cipher })
     })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
+    const { jobId } = manager.startDocTask(translateReq(docId))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     const newId = status.resultRef?.documentId as string
-    const created = getDocument(db, newId)
+    const created = getDocument(w.db, newId)
     expect(created?.status).toBe('indexed')
     expect(created?.title).toBe('memo (Deutsch).md')
 
     // On disk: ONLY `.enc` files — no plaintext copy, no `.parse*` transient survived.
-    const names = readdirSync(storeDir)
+    const names = readdirSync(w.storeDir)
     expect(names.length).toBeGreaterThanOrEqual(2)
     expect(names.every((n) => n.endsWith('.enc'))).toBe(true)
 
     // Export path: decrypts to a transient, returns the text, shreds the transient.
-    const { text } = await readStoredDocumentText(db, storeDir, newId, { cipher })
+    const { text } = await readStoredDocumentText(w.db, w.storeDir, newId, { cipher })
     expect(text).toContain(translationAttributionLine('scripted-translator'))
     expect(text).toContain('word0')
-    expect(readdirSync(storeDir).every((n) => n.endsWith('.enc'))).toBe(true)
+    expect(readdirSync(w.storeDir).every((n) => n.endsWith('.enc'))).toBe(true)
 
     // Without the cipher (locked context) the export refuses, never garbles.
-    await expect(readStoredDocumentText(db, storeDir, newId)).rejects.toThrow(/unlock the workspace/)
+    await expect(readStoredDocumentText(w.db, w.storeDir, newId)).rejects.toThrow(/unlock the workspace/)
   })
 })
 
 describe('issue #58 — a source page with no extractable text must never vanish silently', () => {
   /** Write a synthetic PDF buffer and run it through the REAL ingestion pipeline. */
   async function importPdf(buf: Buffer, name: string): Promise<string> {
-    const p = join(tmp, name)
+    const p = join(w.root, name)
     writeFileSync(p, buf)
-    const info = createQueuedDocument(db, p)
-    const done = await processDocument(db, storeDir, info.id, {})
+    const info = createQueuedDocument(w.db, p)
+    const done = await processDocument(w.db, w.storeDir, info.id, {})
     expect(done.status).toBe('indexed')
     return info.id
   }
@@ -1326,44 +936,38 @@ describe('issue #58 — a source page with no extractable text must never vanish
     lines: [`UNIQUEPAGE${n}MARKER this page carries enough real prose to count as text-bearing.`]
   })
 
-  async function translate(docId: string): Promise<{
-    status: Awaited<ReturnType<typeof waitTerminal>>
-    text: string
-  }> {
-    const manager = makeManager({ translator: scriptedTranslator() })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'de', targetLang: 'en' }
-    })
+  async function translate(docId: string): Promise<{ status: DocTaskStatusOf; text: string }> {
+    const translator = scriptedTranslator()
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const { jobId } = manager.startDocTask(translateReq(docId, 'de', 'en'))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     const newId = status.resultRef?.documentId as string
-    const { text } = await readStoredDocumentText(db, storeDir, newId)
+    const { text } = await readStoredDocumentText(w.db, w.storeDir, newId)
     return { status, text }
   }
 
-  it('REPRO: an image-only page 3 of 5 is marked in the output AND reported on the status', async () => {
-    // The issue-#58 shape: a hybrid PDF — pages 1,2,4,5 carry text, page 3 is a scan
-    // (image XObject, empty text layer). Scan detection does NOT fire (4 text pages).
-    const docId = await importPdf(
-      makeMixedPdf([textPage(1), textPage(2), { kind: 'image' }, textPage(4), textPage(5)]),
-      'fivepager.pdf'
-    )
-    const { status, text } = await translate(docId)
-
-    // The gap reaches the UI: the task status carries honest completeness accounting.
-    expect(status.gaps).toEqual({ missingPageRanges: [{ from: 3, to: 3 }], failedWindows: 0 })
-
-    // The generated document marks the gap IN PLACE — between page 2's and page 4's text.
-    const notice = missingPageNotice({ from: 3, to: 3 })
-    expect(text).toContain(notice)
-    expect(text.indexOf('UNIQUEPAGE2MARKER')).toBeGreaterThanOrEqual(0)
-    expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf('UNIQUEPAGE2MARKER'))
-    expect(text.indexOf(notice)).toBeLessThan(text.indexOf('UNIQUEPAGE4MARKER'))
-    // Every text-bearing page made it into the output (nothing else was dropped).
-    for (const n of [1, 2, 4, 5]) expect(text).toContain(`UNIQUEPAGE${n}MARKER`)
-  })
+  it.each([
+    // REPRO (the issue-#58 shape): a hybrid PDF — pages 1,2,4,5 carry text, page 3 is a scan (image XObject, empty
+    // text layer). Scan detection does NOT fire (4 text pages).
+    ['an image-only page 3 of 5 (REPRO)', [1, 2, 'img', 4, 5], { from: 3, to: 3 }, 2, 4],
+    ['the consecutive empty pages 2–3, as ONE range notice', [1, 'img', 'img', 4], { from: 2, to: 3 }, 1, 4]
+  ] satisfies Array<[string, Array<number | 'img'>, PageGap, number, number]>)(
+    'issue #58: %s is marked in place AND reported on the status',
+    async (_label, shape, gap, before, after) => {
+      const pages = shape.map((p) => (p === 'img' ? { kind: 'image' as const } : textPage(p)))
+      const { status, text } = await translate(await importPdf(makeMixedPdf(pages), 'gappy.pdf'))
+      // The gap reaches the UI: honest completeness accounting on the task status…
+      expect(status.gaps).toEqual({ missingPageRanges: [gap], failedWindows: 0 })
+      // …and the document marks it IN PLACE, exactly once (a run of pages is one range, never a notice per page).
+      const notice = missingPageNotice(gap)
+      expect(text.split('⚠')).toHaveLength(2)
+      expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf(`UNIQUEPAGE${before}MARKER`))
+      expect(text.indexOf(notice)).toBeLessThan(text.indexOf(`UNIQUEPAGE${after}MARKER`))
+      // Every text-bearing page made it into the output (nothing else was dropped).
+      for (const p of shape) if (p !== 'img') expect(text).toContain(`UNIQUEPAGE${p}MARKER`)
+    }
+  )
 
   it('detects a TRAILING empty page — page numbering alone could never reveal it', async () => {
     const docId = await importPdf(
@@ -1377,60 +981,11 @@ describe('issue #58 — a source page with no extractable text must never vanish
     expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf('UNIQUEPAGE2MARKER'))
   })
 
-  it('collapses consecutive empty pages into ONE range notice', async () => {
-    const docId = await importPdf(
-      makeMixedPdf([textPage(1), { kind: 'image' }, { kind: 'image' }, textPage(4)]),
-      'range.pdf'
-    )
-    const { status, text } = await translate(docId)
-    expect(status.gaps).toEqual({ missingPageRanges: [{ from: 2, to: 3 }], failedWindows: 0 })
-    const notice = missingPageNotice({ from: 2, to: 3 })
-    expect(text).toContain(notice)
-    // The single-page phrasing is NOT used for a range.
-    expect(text).not.toContain(missingPageNotice({ from: 2, to: 2 }))
-    expect(text.indexOf(notice)).toBeGreaterThan(text.indexOf('UNIQUEPAGE1MARKER'))
-    expect(text.indexOf(notice)).toBeLessThan(text.indexOf('UNIQUEPAGE4MARKER'))
-  })
-
   it('a complete PDF reports NO gaps and carries no notice', async () => {
     const docId = await importPdf(makeMixedPdf([textPage(1), textPage(2)]), 'complete.pdf')
     const { status, text } = await translate(docId)
     expect(status.gaps ?? null).toBeNull()
     expect(text).not.toContain('⚠')
-  })
-
-  it('a page-less source (.txt) is untouched by page accounting', async () => {
-    const docId = await importDoc(40, 'plain.txt')
-    const manager = makeManager({ translator: scriptedTranslator() })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    expect(status.state).toBe('done')
-    expect(status.gaps ?? null).toBeNull()
-  })
-
-  it('failed MODEL windows also reach the status (the other gap class, until now doc-only)', async () => {
-    const docId = await importDoc(600)
-    const budget = translationBudgetWords(1024)
-    const translator = scriptedTranslator({
-      contextTokens: 1024,
-      reply: (call) => {
-        if (call.text.split(/\s+/)[0] === `word${budget}`) throw new Error('boom: model refused')
-        return call.text
-      }
-    })
-    const manager = makeManager({ translator })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    const status = await waitTerminal(manager, jobId)
-    expect(status.state).toBe('done')
-    expect(status.gaps).toEqual({ missingPageRanges: [], failedWindows: 1 })
   })
 
   it('L12: the gap notice persists in the app language (de) at materialization time', async () => {
@@ -1460,10 +1015,10 @@ describe('#156 (DT-1) — image-source documents: re-extraction gets the OCR eng
   async function importPhoto(): Promise<string> {
     // The image parser hands the raw bytes to the injected engine (no in-process decode),
     // so arbitrary bytes under a .jpg name exercise the REAL photo ingest path.
-    const p = join(tmp, 'letter.jpg')
+    const p = join(w.root, 'letter.jpg')
     writeFileSync(p, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]))
-    const info = createQueuedDocument(db, p)
-    const done = await processDocument(db, storeDir, info.id, { ocrEngine: fakeOcrEngine })
+    const info = createQueuedDocument(w.db, p)
+    const done = await processDocument(w.db, w.storeDir, info.id, { ocrEngine: fakeOcrEngine })
     expect(done.status).toBe('indexed')
     return info.id
   }
@@ -1475,19 +1030,18 @@ describe('#156 (DT-1) — image-source documents: re-extraction gets the OCR eng
     // re-extraction must forward it, or parsers/image.ts throws and the task fails
     // "sourceUnreadable" for a file the app just OCR'd and indexed. (The compare handler's
     // extractSegmentTexts rides the same extractTranslationSource, so this covers both.)
-    const manager = makeManager({ translator, ingestionDeps: () => ({ ocrEngine: fakeOcrEngine }) })
-    const { jobId } = manager.startDocTask({
-      kind: 'translation',
-      documentIds: [docId],
-      params: { sourceLang: 'de', targetLang: 'en' }
+    const manager = docTaskManager(w, {
+      getTranslator: () => translator,
+      getIngestionDeps: () => ({ ocrEngine: fakeOcrEngine })
     })
+    const { jobId } = manager.startDocTask(translateReq(docId, 'de', 'en'))
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     // The window text is the re-recognized photo text — the engine reached the re-parse.
     expect(translator.calls.length).toBe(1)
     expect(translator.calls[0].text).toContain('Hallo Welt aus dem Foto.')
     const newId = status.resultRef?.documentId as string
-    const { text } = await readStoredDocumentText(db, storeDir, newId)
+    const { text } = await readStoredDocumentText(w.db, w.storeDir, newId)
     expect(text).toContain('Hallo Welt aus dem Foto.')
   })
 })
