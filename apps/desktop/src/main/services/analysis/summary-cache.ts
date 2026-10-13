@@ -29,25 +29,22 @@ export const SUMMARY_CACHE_MAX_ROWS = 50_000
 /** Session-cumulative count of evicted rows — the log line's content-free `sessionTotal` (DATA-3). */
 let evictedThisSession = 0
 
-/** Resolve the effective cap: an explicit override, else the env tuning knob, else the default. */
-function resolveMaxRows(override?: number): number {
-  if (typeof override === 'number' && Number.isFinite(override) && override > 0) {
-    return Math.floor(override)
-  }
+/** Resolve the effective cap: the env tuning knob, else the default. */
+function resolveMaxRows(): number {
   const env = Number(process.env.HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS)
   if (Number.isFinite(env) && env > 0) return Math.floor(env)
   return SUMMARY_CACHE_MAX_ROWS
 }
 
 /**
- * Prune `summary_cache` down to `maxRows` by deleting the OLDEST rows (`created_at` ascending,
- * `content_hash` as a stable tiebreak). Returns the number of rows evicted (0 when at/under the
- * cap). Cheap: one COUNT, then a single bounded DELETE only when over the cap — so the common
+ * Prune `summary_cache` down to the cap (`resolveMaxRows`) by deleting the OLDEST rows
+ * (`created_at` ascending, `content_hash` as a stable tiebreak). Returns the number of rows evicted
+ * (0 when at/under the cap). Cheap: one COUNT, then a single bounded DELETE only when over the cap — so the common
  * warm-but-under-cap build pays just the COUNT. Never throws on a content error: it touches no
  * summary text, only row counts.
  */
-export function evictSummaryCache(db: Db, maxRows?: number): number {
-  const cap = resolveMaxRows(maxRows)
+export function evictSummaryCache(db: Db): number {
+  const cap = resolveMaxRows()
   const { n } = db.prepare('SELECT COUNT(*) AS n FROM summary_cache').get() as { n: number }
   if (n <= cap) return 0
   const excess = n - cap
