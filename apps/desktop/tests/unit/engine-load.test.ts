@@ -285,15 +285,49 @@ describe('the session verdict store', () => {
     expect(listener).toHaveBeenCalledTimes(1)
     reportEngineProblem(damaged, LLAMA)
     expect(engineProblemFor('llama_cpp')).toEqual({ ...damaged, afterInstall: true })
-    // The cpu/ safety net is another program, which the install left as it was.
-    reportEngineProblem(damaged, LLAMA_CPU)
-    expect(engineProblemFor('llama_cpp')).toEqual(damaged)
     // A refusal no reinstall can fix is reported as it is, fresh copy or not.
     reportEngineProblem(gomp, LLAMA)
     expect(engineProblemFor('llama_cpp')).toEqual(gomp)
     // Only the installed family: the voice engine's copy is not fresh.
     reportEngineProblem({ ...damaged, family: 'whisper_cpp' }, WHISPER)
     expect(engineProblemFor('whisper_cpp')?.afterInstall).toBeUndefined()
+  })
+
+  // #670: on a Kit the ladder walks the fresh main build (rungs 1–2), then the cpu/ net (rung 3), which
+  // the reinstall left as it was. An outdated Visual C++ runtime refuses both as damaged (every DLL is
+  // present). Once the fresh copy was refused, no reinstall helps, whichever program reports next; a
+  // cpu/ refusal on its own says nothing about the fresh copy.
+  const VC_OUTDATED = { family: 'llama_cpp' as const, reason: 'files-damaged' as const, os: 'win' as const, exit: 'exit code 0xC0000139' }
+  const KIT_MAIN = 'E:\\runtime\\llama.cpp\\win\\llama-server.exe'
+  const KIT_CPU = 'E:\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe'
+  it.each<[string, string[], boolean]>([
+    ['rungs 1–2 (the fresh copy), then rung 3 (cpu/)', [KIT_MAIN, KIT_MAIN, KIT_CPU], true],
+    ['cpu/ first, then the fresh copy, then cpu/ again', [KIT_CPU, KIT_MAIN, KIT_CPU], true],
+    ['cpu/ alone (rungs 1–2 failed for another reason)', [KIT_CPU], false]
+  ])('after a reinstall on a Kit: %s (#670)', (_label, reporters, afterInstall) => {
+    engineInstalled('llama_cpp', KIT_MAIN)
+    for (const binPath of reporters) reportEngineProblem(VC_OUTDATED, binPath)
+    expect(engineProblemFor('llama_cpp')).toEqual(afterInstall ? { ...VC_OUTDATED, afterInstall: true } : VC_OUTDATED)
+  })
+
+  it('keeps afterInstall through every ladder walk without a flicker, until the verdict is dropped (#670)', () => {
+    engineInstalled('llama_cpp', KIT_MAIN)
+    const listener = vi.fn()
+    onEngineProblemsChanged(listener)
+    // Two walks: the screens hear of the verdict once, not once per program that reports it.
+    for (const binPath of [KIT_MAIN, KIT_MAIN, KIT_CPU, KIT_MAIN, KIT_MAIN, KIT_CPU]) reportEngineProblem(VC_OUTDATED, binPath)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(engineProblemFor('llama_cpp')?.afterInstall).toBe(true)
+    // A refusal for another reason is shown as it is; the fresh copy's refusal still stands behind it.
+    reportEngineProblem({ ...VC_OUTDATED, reason: 'blocked', exit: 'exit code 0xC0E90002' }, KIT_CPU)
+    expect(engineProblemFor('llama_cpp')?.afterInstall).toBeUndefined()
+    reportEngineProblem(VC_OUTDATED, KIT_CPU)
+    expect(engineProblemFor('llama_cpp')?.afterInstall).toBe(true)
+    // The fresh copy started (the runtime was updated since): the verdict goes, and with it what it
+    // knew. A later cpu/ refusal is the net's own.
+    clearEngineProblemFor('llama_cpp', KIT_MAIN)
+    reportEngineProblem(VC_OUTDATED, KIT_CPU)
+    expect(engineProblemFor('llama_cpp')).toEqual(VC_OUTDATED)
   })
 
   // A clear runs inside LlamaServer.start()'s healthy path (#654): a listener that throws there must not fail it.

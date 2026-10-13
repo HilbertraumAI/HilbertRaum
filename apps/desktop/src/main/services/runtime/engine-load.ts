@@ -278,6 +278,13 @@ interface StoredProblem {
   reporters: Set<string>
   /** The program that reported last (`problem`'s). */
   lastReporter: string
+  /**
+   * #670: the program this session's install put on the drive was refused as damaged since the
+   * verdict was recorded. On a Kit the ladder then walks on to the `cpu/` net, which the install left
+   * as it was and which the same cause refuses too (an outdated Visual C++ runtime): its report, the
+   * latest, must not undo what the fresh copy showed. A reinstall helps neither program.
+   */
+  freshCopyDamaged: boolean
 }
 
 /**
@@ -302,7 +309,8 @@ const dropListeners = new Set<(family: EngineProblemFamily, why: EngineVerdictDr
 /**
  * #532: the program each family's engine install put on the drive THIS session — a fresh copy,
  * checked against its pinned SHA-256 before it was unpacked. A "its own files are damaged" verdict
- * about that same program is marked `afterInstall`: installing it once more would not help.
+ * about that same program is marked `afterInstall`: installing it once more would not help. #670:
+ * so is every later damaged-files report of that verdict, whichever program it is about.
  */
 const freshlyInstalled = new Map<EngineProblemFamily, string>()
 
@@ -329,12 +337,15 @@ function notifyListeners(): void {
 /** Record that the program at `binPath` cannot run (first-hand evidence from a spawn). Never throws. */
 export function reportEngineProblem(problem: EngineProblem, binPath: string): void {
   const previous = problems.get(problem.family)
+  const damaged = problem.reason === 'files-damaged'
   // #532: the classifier never sets `afterInstall`; only the store knows the program is a fresh copy.
-  const afterInstall = problem.reason === 'files-damaged' && freshlyInstalled.get(problem.family) === binPath
-  const stored: EngineProblem = afterInstall ? { ...problem, afterInstall: true } : problem
+  // #670: once that copy was refused as damaged, the verdict keeps saying so until it is dropped.
+  const freshCopyDamaged =
+    previous?.freshCopyDamaged === true || (damaged && freshlyInstalled.get(problem.family) === binPath)
+  const stored: EngineProblem = damaged && freshCopyDamaged ? { ...problem, afterInstall: true } : problem
   const reporters = new Set(previous?.reporters)
   reporters.add(binPath)
-  problems.set(problem.family, { problem: stored, reporters, lastReporter: binPath })
+  problems.set(problem.family, { problem: stored, reporters, lastReporter: binPath, freshCopyDamaged })
   if (!previous || !sameProblem(previous.problem, stored)) notifyListeners()
 }
 
