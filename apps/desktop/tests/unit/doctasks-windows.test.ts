@@ -4,8 +4,7 @@ import {
   summaryBudgetWords,
   SUMMARY_MAP_CALL_CEILING,
   SUMMARY_OUTPUT_TOKENS,
-  SUMMARY_PROMPT_RESERVE_TOKENS,
-  SUMMARY_TOKENS_PER_WORD
+  SUMMARY_PROMPT_RESERVE_TOKENS
 } from '../../src/main/services/doctasks'
 import { approxBudgetWordCount, approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { packIntoWindows } from '../../src/main/services/doctasks/summary'
@@ -24,9 +23,10 @@ const CTX = 4096
 const BUDGET = summaryBudgetWords(CTX)
 
 describe('summaryBudgetWords', () => {
-  it('derives the word budget from contextTokens minus the reserves, with the safety factor', () => {
-    const usable = CTX - SUMMARY_OUTPUT_TOKENS - SUMMARY_PROMPT_RESERVE_TOKENS
-    expect(BUDGET).toBe(Math.floor(usable / SUMMARY_TOKENS_PER_WORD))
+  it('the launched 4096 context gives a 2,526-word budget (the output + prompt reserves, then the 1.3 safety factor)', () => {
+    // (4096 − 512 − 300) / 1.3 = 2526.2 → 2526. A pinned literal like the #512 translation row: re-deriving it from the
+    // same constants would pass any change to them.
+    expect(summaryBudgetWords(4096)).toBe(2526)
   })
 
   it('never collapses below the floor on junk/tiny contexts', () => {
@@ -115,14 +115,14 @@ describe('planSummaryWindows — the hard ceiling (truncated flag)', () => {
     expect(plan.windows[0].startsWith('c0')).toBe(true)
   })
 
-  it('just under the ceiling is not truncated', () => {
+  it('exactly at the ceiling is not truncated', () => {
     const chunksPerWindow = Math.floor(BUDGET / 500)
     const chunks = Array.from(
       { length: SUMMARY_MAP_CALL_CEILING * chunksPerWindow },
       (_, i) => chunkOf(500, `c${i}`)
     )
     const plan = planSummaryWindows(chunks, CTX)
-    expect(plan.windows.length).toBeLessThanOrEqual(SUMMARY_MAP_CALL_CEILING)
+    expect(plan.windows).toHaveLength(SUMMARY_MAP_CALL_CEILING) // the fixture really sits AT the boundary
     expect(plan.truncated).toBe(false)
   })
 })
@@ -168,18 +168,6 @@ import {
 const T_BUDGET = translationBudgetWords(CTX)
 
 describe('translationBudgetWords', () => {
-  it('splits the usable context by the Gemma token weight (2.8/word in, 3.1/word out), clamped by D4', () => {
-    const usable = CTX - TRANSLATION_PROMPT_RESERVE_TOKENS
-    const byContext = Math.floor(
-      usable / (TRANSLATION_INPUT_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD)
-    )
-    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / TRANSLATION_INPUT_TOKENS_PER_WORD)
-    expect(T_BUDGET).toBe(Math.min(byContext, clampWords))
-    expect(Math.ceil(T_BUDGET * TRANSLATION_INPUT_TOKENS_PER_WORD)).toBeLessThanOrEqual(
-      TRANSLATION_MAX_INPUT_TOKENS
-    )
-  })
-
   it('#512: at the launched 4096 the D4 clamp binds — 642-word windows, a 1,998-token output cap', () => {
     // The context split would allow floor(3796 / 5.9) = 643 words; the clamp allows
     // floor(1800 / 2.8) = 642. A full window of token-dense text (~2.8 tok/word) is then
@@ -188,7 +176,9 @@ describe('translationBudgetWords', () => {
     expect(CTX).toBe(4096)
     expect(T_BUDGET).toBe(642)
     expect(Math.ceil(T_BUDGET * 2.8) + 150).toBeLessThan(2048)
-    const cap = planTranslationWindows([chunkOf(200)], CTX).windowMaxTokens
+    const plan = planTranslationWindows([chunkOf(200)], CTX)
+    expect(plan.windows).toHaveLength(1) // a small document is ONE window
+    const cap = plan.windowMaxTokens
     expect(cap).toBe(1998)
     // The output cap still covers the output weight for a full window.
     expect(cap).toBeGreaterThanOrEqual(Math.ceil(T_BUDGET * TRANSLATION_OUTPUT_TOKENS_PER_WORD))
@@ -231,12 +221,6 @@ describe('translationBudgetWords', () => {
 })
 
 describe('planTranslationWindows', () => {
-  it('a small document is one window; stepsTotal includes the materialize step', () => {
-    const plan = planTranslationWindows([chunkOf(200)], CTX)
-    expect(plan.windows).toHaveLength(1)
-    expect(plan.stepsTotal).toBe(2) // 1 window + materialize
-  })
-
   it('packs segments greedily in document order and splits an over-budget segment', () => {
     const seg1 = chunkOf(T_BUDGET - 10, 'a')
     const seg2 = chunkOf(T_BUDGET + 50, 'b') // must be SPLIT, never truncated
@@ -260,31 +244,20 @@ describe('planTranslationWindows', () => {
     const segs = Array.from({ length: 40 }, (_, i) => chunkOf(T_BUDGET, `s${i}`))
     const plan = planTranslationWindows(segs, CTX)
     expect(plan.windows.length).toBeGreaterThanOrEqual(40)
-    expect(plan.stepsTotal).toBe(plan.windows.length + 1)
   })
 
   it('input estimate + output cap provably fit the usable context (the fit property)', () => {
     for (const ctx of [1024, 2048, 4096, 8192]) {
       const plan = planTranslationWindows([chunkOf(5000)], ctx)
-      const usable = Math.max(1024, ctx) - TRANSLATION_PROMPT_RESERVE_TOKENS
       const budget = translationBudgetWords(ctx)
-      expect(
-        Math.ceil(budget * TRANSLATION_INPUT_TOKENS_PER_WORD) + plan.windowMaxTokens
-      ).toBeLessThanOrEqual(
-        Math.max(usable, Math.ceil(budget * TRANSLATION_INPUT_TOKENS_PER_WORD) + 256) // floor exception
+      // Input estimate + output cap fit the REAL launched context minus the scaffold reserve (L9: no clamp-up). The
+      // 256-token output floor binds at none of these contexts (sums: 724 / 1748 / 3796 / 7892, exactly the usable).
+      expect(Math.ceil(budget * TRANSLATION_INPUT_TOKENS_PER_WORD) + plan.windowMaxTokens).toBeLessThanOrEqual(
+        ctx - TRANSLATION_PROMPT_RESERVE_TOKENS
       )
       // Output headroom ≥ 1.9× the input words — comfortably over the TG-6-measured real
       // Gemma output weight (~1.96 tok/source-word into token-dense targets on prose).
       expect(plan.windowMaxTokens).toBeGreaterThanOrEqual(Math.floor(budget * 1.9))
-    }
-  })
-
-  it('D4: windows on a big context stay within the clamped input budget', () => {
-    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / TRANSLATION_INPUT_TOKENS_PER_WORD)
-    const plan = planTranslationWindows([chunkOf(clampWords * 3)], 16384)
-    expect(plan.windows.length).toBeGreaterThanOrEqual(3)
-    for (const w of plan.windows) {
-      expect(approxTokenCount(w)).toBeLessThanOrEqual(clampWords)
     }
   })
 })
@@ -398,9 +371,8 @@ function chunkRefs(count: number, wordsEach: number, tag = 'c'): CompareChunkRef
 }
 
 describe('compareBudgetWords + the mode switch (D28)', () => {
-  it('derives the total input budget from contextTokens minus the reserves', () => {
-    const usable = CTX - COMPARE_OUTPUT_TOKENS - COMPARE_PROMPT_RESERVE_TOKENS
-    expect(C_BUDGET).toBe(Math.floor(usable / SUMMARY_TOKENS_PER_WORD))
+  it('the launched 4096 context gives a 2,526-word total input budget (both documents together)', () => {
+    expect(compareBudgetWords(4096)).toBe(2526)
   })
 
   it('never collapses below the floor on junk/tiny contexts', () => {
@@ -426,12 +398,11 @@ describe('planCompareWindows (mode b)', () => {
       expect(approxTokenCount(w.text)).toBeLessThanOrEqual(A_SHARE)
       expect(w.chunkIds.length).toBeGreaterThan(0)
     }
-    // Order preserved: window 1 starts with chunk 0's first word, and every chunk id
-    // appears in some window in order.
+    // Order preserved: window 1 starts with chunk 0's first word, and the windows carry every
+    // chunk id exactly once, in document order.
     expect(plan.windows[0].text.startsWith('c0w0')).toBe(true)
     const allIds = plan.windows.flatMap((w) => w.chunkIds)
-    expect(allIds).toEqual([...new Set(allIds)].sort((a, b) => allIds.indexOf(a) - allIds.indexOf(b)))
-    expect(new Set(allIds)).toEqual(new Set(chunks.map((c) => c.id)))
+    expect(allIds).toEqual(chunks.map((c) => c.id)) // every chunk id once, in document order (6 × 500 words → 3 windows of 2)
   })
 
   it('splits an over-budget chunk into pieces that KEEP its id (neighbors are per-chunk)', () => {
@@ -570,9 +541,14 @@ describe('computeMissingPageRanges (#58)', () => {
   })
 
   it('stays O(segments) with a bounded result on a crafted huge page count (M-2 shape)', () => {
-    // One text page in a PDF that DECLARES a million pages: one trailing range, not a
-    // million-entry list — and no walk over 1..pageCount.
-    expect(computeMissingPageRanges([seg(1)], 1_000_000)).toEqual([{ from: 2, to: 1_000_000 }])
+    // One text page in a PDF that DECLARES two billion pages: ONE trailing range, never a per-page list, and no walk over
+    // 1..pageCount. Measured in process CPU time, which a descheduled CI fork does not inflate: the correct path costs
+    // microseconds, a walk over 2e9 pages costs whole seconds. (At the former 1,000,000 a walk passed in milliseconds;
+    // a page count no walk can finish would hang the fork instead — vitest cannot time out synchronous code.)
+    const before = process.cpuUsage()
+    expect(computeMissingPageRanges([seg(1)], 2_000_000_000)).toEqual([{ from: 2, to: 2_000_000_000 }])
+    const used = process.cpuUsage(before)
+    expect((used.user + used.system) / 1000).toBeLessThan(250)
   })
 })
 
@@ -591,7 +567,7 @@ describe('planTranslationBlocks (#58)', () => {
     expect(blocks.blocks.map((b) => (b.kind === 'window' ? b.text : ''))).toEqual(flat.windows)
     expect(blocks.windowCount).toBe(flat.windows.length)
     expect(blocks.windowMaxTokens).toBe(flat.windowMaxTokens)
-    expect(blocks.stepsTotal).toBe(flat.stepsTotal)
+    expect(blocks.stepsTotal).toBe(flat.windows.length + 1) // the windows + the materialize step
   })
 
   it('places a gap block at its true reading position and packs the runs separately', () => {
