@@ -572,8 +572,7 @@ model has to FIT THE CARD to run at card speed, and the card is the smaller numb
 consumer machine.
 
 **The rule, as fixed** (`recommendChatModelId` → `recommendModelIdByVram` in `services/models.ts`):
-1. Memory class (`nextStartMemory` in `services/performance.ts`; `memoryClassOf` is its
-   flags-at-default wrapper): `discrete` = a usable **budget device** is available for the NEXT
+1. Memory class (`nextStartMemory` in `services/performance.ts`): `discrete` = a usable **budget device** is available for the NEXT
    start — the largest probed device at or above the runtime's own **5,120 MiB** gate
    (`USABLE_VRAM_MB`; 6,144 until the 2026-09-07 decision on #321 — see the N8 paragraph below)
    and not integrated by name (`selectBudgetDevice` / `looksIntegrated`, never the first device the driver

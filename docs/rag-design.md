@@ -4719,7 +4719,7 @@ this step resolves exactly those three.
   impure seam in `main/index.ts`, never inside this pure module). An unknown or empty probe, no
   useful device, no budget figure, no active chat model or an unresolvable manifest all mean
   `'cpu'`. `gpuUsefulForProfile` keeps every other job (the profile bump, the Models ★, the
-  graphics tile, `memoryClassOf`); only the posture question is re-sourced. See
+  graphics tile); only the posture question is re-sourced. See
   `architecture.md` GPU record §7 for the full derivation and the small-card disclosure.
   **#473 amendment (2026-10-12, ruling 3):** the chat model's side of the subtraction is now
   `chatGraphicsShareMib` (`models.ts`) — this session's measured footprint of the running model

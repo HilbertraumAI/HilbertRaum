@@ -6,18 +6,15 @@ import {
   loadedAtOnceMb,
   machineKey,
   memoryBudgetMb,
-  memoryClassOf,
   nextStartMemory,
   otherMachines,
   placementVerdict,
   recordAnswerSpeed,
   resetPerformanceForTests,
-  selectBudgetDevice,
   upsertHistory
 } from '../../src/main/services/performance'
 import { join } from 'node:path'
 import { discoverManifests, fitsGraphicsMemory, weightsMib } from '../../src/main/services/models'
-import { GPU_BUMP_MIN_VRAM_MB } from '../../src/shared/gpu-rules'
 import type { ModelManifest } from '../../src/shared/manifest'
 import {
   MAX_BENCHMARK_HISTORY,
@@ -144,17 +141,8 @@ describe('answer-speed latch', () => {
 // ---- "Your model" (benchmark.md): memory class, budget, verdict ----
 
 const RTX = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 20_000 }
-const IRIS = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 16_000 }
 
-describe('memoryClassOf / memoryBudgetMb', () => {
-  it('Apple Silicon is unified regardless of the probe; a usable card is discrete; else cpu', () => {
-    expect(memoryClassOf('darwin', 'arm64', [])).toBe('unified')
-    expect(memoryClassOf('linux', 'x64', [RTX])).toBe('discrete')
-    // The iGPU reporting shared memory is NOT a discrete budget (the runtime's own gate).
-    expect(memoryClassOf('win32', 'x64', [IRIS])).toBe('cpu')
-    expect(memoryClassOf('win32', 'x64', [])).toBe('cpu')
-  })
-
+describe('memoryBudgetMb', () => {
   it('budgets: VRAM for discrete, Metal working set (else 75% of RAM) for unified, RAM for cpu', () => {
     expect(memoryBudgetMb('discrete', 16_000, 24_576, null)).toBe(24_576)
     expect(memoryBudgetMb('unified', 49_152, null, null)).toBe(36_864)
@@ -165,55 +153,15 @@ describe('memoryClassOf / memoryBudgetMb', () => {
 })
 
 // ---- The budget device and the next start's class (PR #308 audit, decisions 6 and 9) ----
+// Which device is the budget device (the largest usable card, the 5 GiB gate, integrated names) is
+// `primaryUsefulDevice` / `isUsefulDevice`, owned by gpu-rules.test.ts. This suite owns the class:
+// the GPU flags, and Apple Silicon (the only test of its branch; CI never runs on a Mac).
 
 // A hybrid laptop as the pinned b9849 Vulkan build lists it: the Arrow-Lake iGPU FIRST, with
 // 11.3 GiB of shared RAM as its "total", the RTX 5060 second (the audit's R6 reproduction).
 const ARL: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }
 const RTX5060: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 5060', totalMb: 8151, freeMb: 7573 }
-const SMALL: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, freeMb: 3900 }
 const CARD8: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }
-
-describe('selectBudgetDevice', () => {
-  it('picks the LARGEST usable card, never the first device the driver listed', () => {
-    // Intel first (the real driver order) and NVIDIA first give the same answer.
-    expect(selectBudgetDevice([ARL, RTX5060])).toBe(RTX5060)
-    expect(selectBudgetDevice([RTX5060, ARL])).toBe(RTX5060)
-    // Two discrete cards: the bigger one is the budget, whichever is listed first.
-    expect(selectBudgetDevice([SMALL, CARD8])).toBe(CARD8)
-    expect(selectBudgetDevice([CARD8, SMALL])).toBe(CARD8)
-  })
-
-  it('returns null for an integrated-only machine, an empty probe, or only sub-gate cards', () => {
-    expect(selectBudgetDevice([ARL])).toBeNull()
-    expect(selectBudgetDevice([IRIS])).toBeNull()
-    expect(selectBudgetDevice([])).toBeNull()
-    expect(selectBudgetDevice([SMALL])).toBeNull()
-  })
-
-  it('reuses the runtime\'s VRAM gate at its exact boundary (N8, 5 GiB since #321): 5,119 out, 5,120 in', () => {
-    expect(GPU_BUMP_MIN_VRAM_MB).toBe(5120)
-    const laptop = { ...CARD8, name: 'NVIDIA GeForce RTX 3050 Laptop GPU', totalMb: 5119 }
-    expect(selectBudgetDevice([laptop])).toBeNull()
-    const exactly = { ...laptop, totalMb: 5120 }
-    expect(selectBudgetDevice([exactly])).toBe(exactly)
-    // The three 6 GB laptop cards the project has actually measured — every one of them reports
-    // BELOW the old 6,144 gate on Vulkan, which is why it moved (#321, owner decision 2026-09-07).
-    for (const [name, totalMb] of [
-      ['NVIDIA GeForce GTX 1660 SUPER', 5746],
-      ['NVIDIA GeForce RTX 4050 Laptop GPU', 5921],
-      ['NVIDIA GeForce RTX 3060 Laptop GPU', 5994]
-    ] as const) {
-      const card = { ...CARD8, name, totalMb }
-      expect(selectBudgetDevice([card]), name).toBe(card)
-    }
-    // A 4 GB card is still no budget device — on the reason RESTATED by #321, not the void one:
-    // the E2B (2,271 MiB) does fit such a card, but it is the ONLY ranked model that does at the
-    // ≈ 3,328 MiB budget one actually produces (#413), so admitting it would star the E2B at every
-    // RAM size with nothing measured behind that. SMALL's `freeMb: 3900` is a fixture, not a
-    // reading: no 4 GB card has ever been probed, and every card that has idles ~768 MiB down.
-    expect(selectBudgetDevice([SMALL])).toBeNull()
-  })
-})
 
 describe('nextStartMemory', () => {
   const win = { platform: 'win32', arch: 'x64', gpuMode: 'auto' as const, gpuAutoDisabled: false }
@@ -241,14 +189,6 @@ describe('nextStartMemory', () => {
     expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'x64', devices: [] }).memoryClass).toBe('cpu')
   })
 
-  it('memoryClassOf is the flags-at-default wrapper: same class as nextStartMemory with GPU on', () => {
-    for (const devices of [[ARL, RTX5060], [ARL], [CARD8], [], [IRIS]]) {
-      expect(memoryClassOf('win32', 'x64', devices)).toBe(nextStartMemory({ ...win, devices }).memoryClass)
-    }
-    // …so the hybrid laptop is discrete by the RTX, and an integrated-only one is cpu.
-    expect(memoryClassOf('linux', 'x64', [ARL, RTX5060])).toBe('discrete')
-    expect(memoryClassOf('linux', 'x64', [ARL])).toBe('cpu')
-  })
 })
 
 describe('placementVerdict', () => {

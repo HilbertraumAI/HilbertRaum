@@ -4404,7 +4404,7 @@ estimator (≈ 2.8 GiB, derived from the shipped `bge-reranker-v2-m3` manifest a
 `RERANKER_HEADROOM_FLOOR_MIB`). An unknown or empty probe, no useful device, no budget figure, no
 active chat model, or an unresolvable manifest all mean `'cpu'` — a machine cannot earn the GPU
 posture by failing to report. `gpuUsefulForProfile` keeps every other job it has (the profile
-bump above, the Models ★, the graphics tile, `memoryClassOf`); only the reranker's own posture
+bump above, the Models ★, the graphics tile); only the reranker's own posture
 question is re-sourced. **Disclosed limit:** the project's 12 GiB measurement machine (RTX 3080
 Ti) has ample headroom for both models at once, so on it the new gate behaves identically to
 step 4-4's — the step's acceptance read confirms no regression there, but cannot validate the

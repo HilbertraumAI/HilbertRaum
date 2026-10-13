@@ -142,7 +142,7 @@ export function isUsefulDevice(device: GpuDeviceLike): boolean {
  * The conservative profile-bump gate (GPU record §8): bump only when SOME probed device is
  * useful. An iGPU reporting 16 GB of *shared* RAM must never push a laptop a profile step up;
  * a false negative only costs a too-small model recommendation, never a too-big one. Semantics
- * unchanged by the PR #303 audit (G4) — `memoryClassOf` reads it too.
+ * unchanged by the PR #303 audit (G4).
  */
 export function gpuUsefulForProfile(devices: readonly GpuDeviceLike[]): boolean {
   return devices.some(isUsefulDevice)
