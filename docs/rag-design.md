@@ -5504,6 +5504,40 @@ checked against its tree manifest first; under the shipping rule below no full r
 `known-limitations.md` "Site furniture and code blocks (#627)"; undecoded typographic entities
 (`&rsquo;`, measured on the same archives) are #663.
 
+**Named entities: HTML 4.01's set (#663, 2026-10-13).** `decodeEntities` knew 19 names, and any
+other was copied through, so hand-written pages (zimit archives) delivered `we&rsquo;ll`: 1,680
+sequences on 15 htdp.org pages, 257 on 86 gobyexample pages, `&raquo;` on all 120 PEP pages. That
+is not the word `we’ll` to the matchers, the admission gate or the reranker, and the model and the
+viewer read the noise. Owner call of 2026-10-13: HTML 4.01's 252 names plus `apos`, not HTML5's
+2,231 (the extra ~2,000 are math and rare names no measured page writes; a full table is ~30 KB of
+data under the WHATWG's CC BY 4.0, or a new dependency). As built (`html.ts`): the Latin-1 run as
+one ordered string from U+00A0, the symbol and special sets as `name:code point`; `lang`/`rang` at
+HTML5's U+27E8/U+27E9, what browsers decode. The 19 old mappings are unchanged, their five
+exceptions included (a no-break or typographic space reads as a space, `&shy;` as nothing); every
+new name decodes to its code point, the zero-width joiners and direction marks too, like their
+numeric form and the literal character (the review refused a draft that dropped those four only
+when written as names). Two decoder defects came out on the way: a name could not
+contain a digit (`&sup2;`, `&frac12;`, `&there4;` never matched), and the table was a plain object
+looked up with `in`, so `&toString;` or `&constructor;` decoded to that function's source text
+("function toString() { [native code] }"). It is a `Map` now, and a run longer than the longest
+name (`thetasym`) is never looked up. Still single-pass: `&amp;rsquo;` reads `&rsquo;`, the
+literal a page about HTML means. Not decoded, measured at 0 in the delivered text of all 2,672
+pages: an upper-case hex reference (`&#X2019;`) and a legacy name without its semicolon
+(`&copy 2024`), both of which browsers accept. `tables.ts`, figure captions, formula
+alttext and kiwix search titles (`client.ts`) share the decoder. **Measured (2026-10-13, master
+`76ce5acf` against the fix, #627's 2,672 pages from 15 archives):** the 1,500 German Wikipedia
+pages and nine more archives are byte-identical; every `&name;` left on them is an escaped literal.
+Words change only where an entity was decoded, on 261 pages: htdp.org (rsquo 785, ldquo 420,
+rdquo 419, larr/rarr 27 each, bull 2), gobyexample (rsquo 232, ldquo/rdquo 12 each, lsquo 1),
+PEPs (raquo 240), based.cooking (rsquo 74, ldquo/rdquo 20 each) and devdocs (copy 1). Nothing
+undecoded is left on them. `work` falls on 86 pages, by the characters a kept table no longer
+carries; `slices`, titles and truncation are unchanged. Cost (`scripts/zim-html-perf.mjs`, i7-8700,
+three runs each): the entity-heavy 1 MiB family 22.1–22.8 ms on master, 22.4–23.4 ms after.
+Real app (dev build, scratch root, `getPackArticle`): master left 5 + 1 entities in two
+gobyexample articles and 2 in PEP 0; the fix, none. **Acceptance read:** stage A, on the machine
+that holds the development cache. The Wikipedia sample predicts identical words. Residuals:
+`known-limitations.md` "Named entities (#663)".
+
 ### Shipping rule for knowledge-pack changes
 
 Every change to knowledge-pack retrieval or delivery now ships under one standing

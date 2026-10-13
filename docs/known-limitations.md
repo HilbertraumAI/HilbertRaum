@@ -3611,5 +3611,18 @@ reports and phase plans were working papers; their full text lives in git histor
     characters. A kept table keeps at most 6,000 characters of such
     whitespace in all (`TABLE_MAX_KEPT_WHITESPACE`); past that its code
     collapses as before.
-  - Named entities the converter does not know (`&rsquo;`, `&ldquo;`,
-    `&raquo;`, …) are delivered verbatim on hand-written sites (#663).
+  - Named entities: the next entry (#663).
+- **Named entities (#663).** The converter decodes HTML 4.01's 252 named
+  entities plus `&apos;` (typographic quotes, dashes, arrows, Latin-1 letters,
+  Greek, math symbols, `&euro;`) and numeric references (`&#8217;`,
+  `&#x2019;`). Residuals:
+  - HTML5's further ~2,000 names (`&ZeroWidthSpace;`, `&lbrack;`, `&check;`,
+    the math names) are delivered verbatim, as is any unknown name. So are an
+    upper-case hex reference (`&#X2019;`) and a legacy name written without
+    its semicolon (`&copy 2024`), which browsers accept. None of these was
+    seen in the delivered text of the 2,672 pages from 15 archives measured.
+  - Decoding is single-pass by design: `&amp;rsquo;` reads `&rsquo;`, the
+    literal text a page about HTML means.
+  - `&nbsp;`, `&ensp;`, `&emsp;` and `&thinsp;` read as ordinary spaces and
+    `&shy;` as nothing, as before #663; their numeric forms and the literal
+    characters decode to the characters themselves.
