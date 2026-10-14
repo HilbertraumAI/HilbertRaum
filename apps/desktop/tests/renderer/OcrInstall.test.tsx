@@ -6,11 +6,11 @@
 // KnowledgePacks.test.tsx / GermanSmoke.test.tsx already do.
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
-import { render, screen, cleanup, within, act } from '@testing-library/react'
+import { render, screen, cleanup, within, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../../src/renderer/screens/ModelsScreen'
-import { __resetOcrInstallForTests } from '../../src/renderer/lib/useOcrInstall'
+import { __resetOcrInstallForTests, useOcrInstall } from '../../src/renderer/lib/useOcrInstall'
 import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib/useKnowledgePackToolsInstall'
 import { ToastProvider } from '../../src/renderer/components'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
@@ -372,6 +372,40 @@ describe('OcrInstall — Documents rows (#410)', () => {
     expect(await screen.findByRole('button', { name: en['docs.makeSearchable'] })).toBeInTheDocument()
   })
 
+  // #687: a poll answer about ANOTHER job (a late reply for an earlier one) never replaces the current job — no toast
+  // and no outcome of its own; the current job's outcome is what the row and the toast show.
+  it('9b: a poll reply about another job is ignored; only the current job’s outcome shows (#687)', async () => {
+    const user = userEvent.setup()
+    const getOcrInstallJob = vi
+      .fn()
+      .mockResolvedValueOnce(queuedJob({ jobId: 'j0', status: 'done', outcome: 'activated' }))
+      .mockResolvedValue(queuedJob({ status: 'done', outcome: 'restartRequired' }))
+    stubApi({
+      listDocuments: vi.fn(async () => [scanDoc()]),
+      getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
+      getOcrInstallStatus: vi.fn(async () => ocrStatus()),
+      getPolicy: vi.fn(async () => allowedPolicy()),
+      installOcr: vi.fn(async () => queuedJob()),
+      getOcrInstallJob
+    })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+
+    await user.click(await screen.findByRole('button', { name: en['ocr.install.action'] }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
+
+    expect(
+      await screen.findAllByText(en['ocr.install.outcome.restartRequired'], {}, { timeout: hangBudgetMs(3000) })
+    ).not.toHaveLength(0)
+    // Both answers were delivered — the first (about j0) was read and dropped, polling went on to j1's end.
+    expect(getOcrInstallJob.mock.calls).toEqual([['j1'], ['j1']])
+    expect(screen.queryByText(en['ocr.install.outcome.activated'])).not.toBeInTheDocument()
+  })
+
   it('10: a window focus re-reads app status and the offer appears without a remount', async () => {
     const getAppStatus = vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' }))
     stubApi({
@@ -504,6 +538,80 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(en['models.ocr.row'])).toBeInTheDocument()
   })
+})
+
+// #687: the design record promises `onFinished` fires exactly once per job (architecture.md "In-app OCR install —
+// design record" §3). Both callers re-read their status there and the Documents one toasts, so a second call is a
+// duplicate toast. The race: a poll and the Cancel reply can both report the same job's end before React commits.
+describe('useOcrInstall — onFinished fires once per job (#687)', () => {
+  /** The hook bare (the screens' wiring is covered above): its job, Start and Cancel. */
+  function InstallHarness({ onFinished }: { onFinished: (job: OcrInstallJob) => void }): JSX.Element {
+    const install = useOcrInstall(true, onFinished)
+    return (
+      <div>
+        <output>{install.job ? `${install.job.jobId}:${install.job.status}` : 'none'}</output>
+        <button onClick={() => void install.start()}>start</button>
+        <button onClick={() => void install.cancel()}>cancel</button>
+      </div>
+    )
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>((r) => (resolve = r))
+    return { promise, resolve }
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it.each(['poll', 'cancel'] as const)(
+    'a poll and a Cancel reply that both report the end call onFinished once — the %s reply handled first',
+    async (first) => {
+      // Only the poll's interval is faked, so the test decides when a poll is in flight.
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      const poll = deferred<OcrInstallJob>()
+      const cancelReply = deferred<OcrInstallJob>()
+      const getOcrInstallJob = vi.fn(() => poll.promise)
+      const cancelOcrInstall = vi.fn(() => cancelReply.promise)
+      stubApi({
+        getOcrInstallStatus: vi.fn(async () => ocrStatus()),
+        getPolicy: vi.fn(async () => allowedPolicy()),
+        installOcr: vi.fn(async () => queuedJob()),
+        getOcrInstallJob,
+        cancelOcrInstall
+      })
+      const onFinished = vi.fn()
+      render(<InstallHarness onFinished={onFinished} />)
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'start' }))
+      })
+      expect(screen.getByRole('status')).toHaveTextContent('j1:queued')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+      })
+      expect(getOcrInstallJob).toHaveBeenCalledTimes(1) // a poll is in flight
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
+      })
+      expect(cancelOcrInstall).toHaveBeenCalledWith('j1')
+
+      // Both replies land back to back, before React commits either.
+      const end = queuedJob({ status: 'cancelled' })
+      await act(async () => {
+        const [a, b] = first === 'poll' ? [poll, cancelReply] : [cancelReply, poll]
+        a.resolve(end)
+        b.resolve(end)
+        // The hook's handlers were attached first, so both have run once these settle.
+        await Promise.all([poll.promise, cancelReply.promise])
+      })
+      expect(onFinished).toHaveBeenCalledTimes(1)
+      expect(onFinished).toHaveBeenCalledWith(end)
+      expect(screen.getByRole('status')).toHaveTextContent('j1:cancelled')
+    }
+  )
 })
 
 describe('OcrInstall — German (#410)', () => {
