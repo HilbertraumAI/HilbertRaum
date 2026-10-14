@@ -207,7 +207,7 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerDownloadIpc:
     'pre-unlock by design — model downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()',
   registerEngineIpc:
-    'pre-unlock by design — engine-binary downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()'
+    'pre-unlock by design — engine-binary downloads run at the setup gate; every ctx.db read is guarded (gates()\'s allowNetwork read behind ctx.workspace.isUnlocked(), the #339 pack reconcile behind workspaceAdmitsWork). Its ocr:* channels (#410): ocr:install is refused while locked through that gates() read — ocr-install.test.ts "OCR install via IPC (#410) › refuses while the workspace is locked, before any fetch"; ocr:status / ocr:getJob / ocr:cancel read only the drive and the in-memory job'
 }
 
 describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', () => {
