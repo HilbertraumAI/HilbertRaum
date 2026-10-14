@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -120,7 +120,13 @@ const builtFile = (re: RegExp): string => {
 describe.skipIf(!built)('the renderer build ships the JS decoders the in-page pdf.js worker loads (#551)', () => {
   // The worker code is bundled into the OCR page chunk now (fix/ocr-pdfjs-in-page), so the decoder
   // names are read from it, not from a separate pdf.worker asset — which must no longer be emitted.
-  const ocrChunk = builtFile(/^ocr-.*\.js$/)
+  // Read in a hook, never in this body: vitest runs a skipped describe's body at collection
+  // (@vitest/runner collect()), so a read here failed the whole file on a checkout without out/
+  // instead of skipping it.
+  let ocrChunk = ''
+  beforeAll(() => {
+    ocrChunk = builtFile(/^ocr-.*\.js$/)
+  })
   const JS_DECODERS = ['jbig2_nowasm_fallback.js', 'openjpeg_nowasm_fallback.js']
 
   it('the OCR chunk bundles the worker (sets globalThis.pdfjsWorker) — no separate worker asset is emitted', () => {
