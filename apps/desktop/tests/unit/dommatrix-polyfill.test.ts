@@ -4,10 +4,11 @@ import {
   ensureDomMatrixPolyfill
 } from '../../src/main/services/ingestion/parsers/dommatrix-polyfill'
 
-// Guards the "DOMMatrix is not defined" PDF-import failure from a packaged drive: pdfjs-dist
-// 6.0–6.2 evaluated `new DOMMatrix()` at import time (6.3 does it lazily) and, in Node, only polyfills it from
-// `@napi-rs/canvas`, which we exclude from the bundle. The parser installs this pure-JS
-// matrix first. These tests pin (a) the math pdf.js relies on and (b) the install contract.
+// Guards the "DOMMatrix is not defined" PDF-import failure from a packaged drive. pdfjs-dist 6.0–6.2
+// evaluated `new DOMMatrix()` at import time (6.3+ does it lazily). In Node it only polyfills one from
+// `@napi-rs/canvas`, which we exclude from the bundle. The parser installs this pure-JS matrix first, so
+// pdf.js uses it in the main process, including pdf.js 6.4's Type3 glyph compiler (`scaleSelf` →
+// `translateSelf`). These tests pin (a) the 2D-affine math and (b) the install contract.
 
 const IDENTITY: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0]
 
@@ -37,9 +38,13 @@ describe('DOMMatrixPolyfill', () => {
     expect([p.x, p.y]).toEqual([11, 21])
   })
 
-  it('scale maps points correctly', () => {
+  it('scale maps points correctly, and the in-place scaleSelf → translateSelf chain composes like DOMMatrix', () => {
     const p = new DOMMatrixPolyfill().scale(2, 3).transformPoint({ x: 4, y: 5 })
     expect([p.x, p.y]).toEqual([8, 15])
+    // pdf.js 6.4 runs exactly this chain in the MAIN process (compileType3Glyph in legacy/build/pdf.worker.mjs, reached by
+    // getTextContent/getOperatorList on a Type3 image-mask font; Node runs pdf.js's worker in-process, on this polyfill)
+    // and reads a–f off the result. Post-multiplied, as DOMMatrix does: w = 4, h = 2.
+    expect(toArr(new DOMMatrixPolyfill().scaleSelf(1 / 4, -1 / 2).translateSelf(0, -2))).toEqual([0.25, 0, 0, -0.5, 0, 1])
   })
 
   it('multiply composes transforms (translate then scale applied to a point)', () => {

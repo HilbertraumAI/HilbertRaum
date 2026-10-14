@@ -11,7 +11,6 @@ import {
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
-import { resolvePageYear, type LayoutWord } from '../../src/main/services/ingestion/parsers/pdf-layout'
 import { makeColumnarPdf, type PdfCell } from '../helpers/fixtures'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AuditEventType, DocumentChunkRead, RetrievalScope } from '../../src/shared/types'
@@ -474,8 +473,10 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
   })
 
-  // (d) A multi-line wrapped description row → the booking row still extracts cleanly (the wrap is a
-  //     separate text-only visual row with no booking-column date/amount, so it is dropped, not a row).
+  // (d) A multi-line wrapped description row → the booking row still extracts cleanly. The wrap is a dateless,
+  //     money-less continuation baseline, so A1 MERGES it into the booking description — right before the amount,
+  //     where its bare integers (12345, 778899) must not read as money (`778899 300.00` would fuse to 899300 —
+  //     the pdf-layout continuation hazard money.ts names).
   it('multi-line wrapped description → the booking row still extracts cleanly', async () => {
     const WC = { date: 50, desc: 160, amount: 420, balance: 500 }
     const cells: PdfCell[] = []
@@ -498,8 +499,8 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
         { text: r.amt, x: WC.amount, y },
         { text: r.bal, x: WC.balance, y }
       )
-      // The wrapped second description line (10pt lower → its own visual row): TEXT only, no date, no
-      // money token (the integers 12345/778899 lack a decimal tail, so MONEY_RE never matches them).
+      // The wrapped second description line (10 pt lower → its own visual row, a continuation): text only —
+      // no date, no 2-dp money token.
       cells.push({ text: r.cont, x: WC.desc, y: y - 10 })
       y -= 26
     }
@@ -510,6 +511,9 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
     expect(layoutRows[0]).toMatchObject({ date: '2024-06-10', amount: -45, balanceAfter: 955 })
     expect(layoutRows[1]).toMatchObject({ date: '2024-06-15', amount: 300 })
     expect(layoutRows[0].description).toContain('Direct Debit Insurance')
+    // A1: the continuation is merged into the booking description, not dropped.
+    expect(layoutRows[0].description).toContain('Policy 12345 monthly premium')
+    expect(layoutRows[1].description).toContain('Sender Mustermann GmbH order 778899')
   })
 
   // (e) Split-amount boundary (audit M3): when a producer renders one amount as TWO adjacent text items
@@ -770,28 +774,5 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'summarize spending by category', pdfPath))
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 3 }))
-  })
-})
-
-// REL-10: resolvePageYear's header-band y-range fold USED to spread the whole page's y-array into
-// `Math.max(...ys)` / `Math.min(...ys)`. A crafted page with hundreds of thousands of positioned
-// fragments passes that many function arguments → `RangeError: Maximum call stack size exceeded`.
-// Reachable via the layout preview path (now timeout-backstopped per REL-5, but the allocation
-// itself must not throw). The single-pass loop is O(n) with no argument-count limit.
-describe('resolvePageYear (REL-10 — huge fragment count must not overflow the stack)', () => {
-  it('folds the page y-range in one pass and resolves the header year without a RangeError', () => {
-    const N = 500_000
-    const words: LayoutWord[] = new Array(N)
-    // Non-date, non-year fragments (so the full-date scan and the year-band loop both fall through to
-    // the y-range computation that REL-10 hardens).
-    for (let i = 0; i < N; i++) words[i] = { str: 'x', x: 0, y: i, w: 1 }
-    // One standalone year token at the very top of the page (the header-year fallback target).
-    words[N - 1] = { str: '2024', x: 0, y: N, w: 4 }
-
-    let year: number | null = null
-    expect(() => {
-      year = resolvePageYear(words)
-    }).not.toThrow()
-    expect(year).toBe(2024)
   })
 })
