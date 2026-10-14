@@ -1,7 +1,7 @@
 import { Suspense, lazy, memo } from 'react'
 
 // Lazy boundary for the Streamdown/KaTeX markdown renderer (perf: renderer code-split). The heavy
-// implementation (streamdown + katex + @streamdown/math, ~2 MB) lives in ./AssistantMarkdown and is
+// implementation (streamdown + katex + @streamdown/math, ~1.5 MB since #698) lives in ./AssistantMarkdown and is
 // pulled in a separate async chunk on first render of any assistant markdown — keeping it out of the
 // initial app bundle. The barrel exports THIS wrapper as `AssistantMarkdown`, so every consumer
 // (chat, translate, documents, images) gets the split for free with no call-site change.

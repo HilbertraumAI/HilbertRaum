@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-08 #605 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #698 entry). Its record is unchanged:
+`architecture.md` translation record "#605 amendment". Its open item (no TranslateGemma prefill measured on the slowest laptop) stays recorded there. Citations of the form "BUILD_STATE 2026-10-08 #605 entry" now resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-10-08 — **#605 — a hung translation sidecar ends within minutes and is restarted (`fix/605-translation-liveness`).** The `/completion` reader had no
+watchdog: a hang held its window to the 45-min cap (≈ 50 / 45 / 10 min per window with Electron's own 300 s limit, not the issue's 90), and every later window of a document
+hit the same stuck process. Now `return_progress` + 512-token prefill batches give `readCompletionSSE` the chat reader's clocks (120 s silence, 10 min per batch, 120 s between
+tokens; headers 180 s), a hang stops the child so the one retry runs fresh in the same posture (owner calls), and overlapping requests queue in the app. Real app (9B stand-in):
+master failed a frozen job after 609 s; the fix restarted at 120 s and finished. Record: `architecture.md` translation record "#605 amendment". Open: no TranslateGemma prefill measured on the slowest laptop._
+
 ## 2026-10-14 — the closed 2026-10-07 #637 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #678 entry). Its record is unchanged:

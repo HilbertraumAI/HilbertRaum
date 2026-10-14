@@ -10993,7 +10993,9 @@ crash, permanently outside CI) closed with Phase 1's boundary tests, which use R
 **Watch-items registered in BUILD_STATE §5 item 19 as one "test-suite watch" line (refactor hazards,
 not defects):** source-text scan "wiring pins" (`window-security.test.ts`, `packaging.test.ts`,
 `skills-installer`, `third-party-notices`, `ocr.test.ts`, `rail-labels.test.ts`); the katex
-`package.json` compare across hoist locations in `assistant-markdown.test.tsx`; `as unknown as`
+`package.json` compare across hoist locations in `assistant-markdown.test.tsx` (since #698 a check that the app and
+rehype-katex resolve one install, plus a count of `KaTeX parse error` in the build output, a string pin a KaTeX
+that rewords it turns red); `as unknown as`
 private-field injection (`chat-ipc.test.ts:933`; `docs-ipc.test.ts` moved to `ctxWith` overrides in the
 documents test campaign) — whoever touches those files converts the pin to a
 behavioural assertion where the change is small, else leaves a `// watch-item` comment. Fake timers:
@@ -14431,7 +14433,7 @@ DEP-6 were six hand-rolled batches. What the file does, and why:
   proposed. That covers the Radix primitives (D-UI1, exact, with their transitive set
   license-reviewed), `tesseract.js` (exact) and `katex` (`~0.16`, so one copy serves both
   `rehype-katex` and the CSS; **corrected by DEP-7 §3:** one VERSION serves both, but the tree holds
-  four copies of it and the renderer bundles two, #698). PR C shipped `increase-if-necessary`, and its first run (#541) moved
+  four copies of it and the renderer bundles two, #698; since #698 one copy serves all of them, DEP-7 §6). PR C shipped `increase-if-necessary`, and its first run (#541) moved
   the four Radix pins and took `katex` to `~0.18.9`; after #542 the replacement group PR (#543)
   left both alone. What `lockfile-only` does **not** do, contrary to its documentation ("leaving
   manifests unchanged"): it still raises the caret floor of each package a grouped PR bumps (#540,
@@ -14942,15 +14944,16 @@ sprintf-js; `overrides` to argparse 2. The reasons, as written for GitHub (280 c
 ### §3 KaTeX in this app
 
 - **Where it runs.** Only in the renderer, inside Streamdown's lazily loaded math chunk
-  (`mermaid-*.js`, Streamdown's name for it). The chunk carries **two** copies of 0.16.47: the
-  one under rehype-katex renders every formula, and the app's own (`apps/desktop/node_modules/katex`)
-  checks partial TeX while an answer streams (`completePartialTex`), its output thrown away.
-  `@streamdown/math` declares katex but imports only rehype-katex and remark-math, and
+  (`mermaid-*.js`, Streamdown's name for it). rehype-katex renders every formula, and the app's
+  own import checks partial TeX while an answer streams (`completePartialTex`), its output thrown
+  away. `@streamdown/math` declares katex but imports only rehype-katex and remark-math, and
   micromark-extension-math imports it only in `mathHtml`, which tree-shakes away
-  (`sideEffects: false`). The lockfile has no top-level copy since `ce7e87b1` pinned the app to
-  `~0.16.47`: four nested copies of one version, two of them bundled, about 270 KB minified each.
-  DEP-6 §6's "one copy serves both" is corrected there; #698 is the dedupe. The `katex` directory
-  in `app.asar` (230 entries) is never loaded: the main process imports no KaTeX.
+  (`sideEffects: false`). When this wave ran, the chunk carried **two** copies of 0.16.47: the
+  lockfile had no top-level copy since `ce7e87b1` pinned the app to `~0.16.47`, so it held four
+  nested copies of one version, and the app's and rehype-katex's were both bundled. DEP-6 §6's "one
+  copy serves both" is corrected there. Since #698 (§6) one top-level copy serves all four
+  dependents. The `katex` directory in `app.asar` (230 entries) is never loaded: the main process
+  imports no KaTeX.
 - **`trust` is set nowhere.** rehype-katex receives `{ errorColor }` from `@streamdown/math`,
   plus its own `displayMode` and `throwOnError`; the app's own call passes `{ throwOnError: true }`.
 - **KaTeX's output is not sanitized.** Streamdown appends the math plugin's rehype step after the
@@ -15023,6 +15026,7 @@ sprintf-js; `overrides` to argparse 2. The reasons, as written for GitHub (280 c
 ### §5 Follow-ups
 
 1. **#698:** the renderer bundles KaTeX twice (§3); a lockfile-only dedupe of the same version.
+   **Done 2026-10-14**, §6.
 2. **KaTeX 0.16 is a dead line.** A later KaTeX advisory will be fixed only on 0.18 or newer, so
    it reopens §3's question, as does a rehype-katex or `@streamdown/math` release that accepts
    0.18 (then a lockfile move, no `overrides`).
@@ -15031,6 +15035,46 @@ sprintf-js; `overrides` to argparse 2. The reasons, as written for GitHub (280 c
    alert closes itself. Upstream: alexei/sprintf.js#237.
 4. **Dismissed alerts stay dismissed** when a patch appears; a DEP wave lists
    `state=dismissed` as well as `state=open`.
+
+### §6 #698: one KaTeX (2026-10-14)
+
+Follow-up 1, done on `fix/698-katex-dedupe`.
+- **Mechanism.** The ten lockfile entries (four nested `katex@0.16.47`, each with its
+  `commander@8.3.0`) became two: `node_modules/katex` and `node_modules/katex/node_modules/commander`.
+  The commander stays nested because the top-level commander is electron-builder's 5.1.0. The
+  integrity hashes are the same, and the pinned npm 11.6.2 (`npm install --package-lock-only`) keeps
+  the edited file byte for byte. `npm dedupe` was not used: its dry run also moved semver
+  7.8.3 → 7.8.5, lru-cache, entities and ci-info.
+- **What else is duplicated.** Every other same-version duplicate left in the lockfile is dev
+  tooling, except `entities@6.0.1` and `parse5@7.3.0` (under `hast-util-from-html` and
+  `hast-util-raw`). The renderer bundles each of those once, so KaTeX was the only package it
+  carried twice.
+- **The bundle.** The renderer build is not minified, so one copy of KaTeX is 490,779 bytes (its
+  ESM build, bundled), not the ~270 KB of `katex.min.js` the issue estimated. The math chunk fell from
+  2,006,578 to 1,511,459 bytes (−24.7 %). KaTeX's version string, `KaTeX parse error` and
+  `KaTeX_Main` now each appear once.
+- **What ships.** `app.asar` fell from 71,667,075 to 71,173,790 bytes. Its 3,425 `node_modules`
+  files are byte-identical to a build of the previous dependency set (electron-builder had already
+  packed one `katex` and one `commander`); only built `out/` files changed. `THIRD-PARTY-NOTICES.md`
+  is unchanged: the generator reports 224 packages, byte-identical. The `HILBERTRAUM_PACKED_ASAR`
+  gates pass against a `--win dir` build (37/37).
+- **The test.** "the installed katex package is a single, deduped version"
+  (`assistant-markdown.test.tsx`) compared the two copies' versions, so it passed on two copies.
+  It now walks Node's own lookup paths and requires the app and rehype-katex to resolve one install.
+  A second test needs a build (CI builds first, and on CI the test never skips, AUD-18's lesson). It
+  requires all of `out/renderer` to carry KaTeX once, which also catches an import of another katex
+  entry file. It counts a literal (`KaTeX parse error`), so it sits on the test-suite watch list. Each check goes red under its own
+  regression: a katex copy placed back under rehype-katex for the first, and the previous build for
+  the second ("expected 2 to be 1").
+- **Real app** (the packaged build, a scratch drive root, the 4B on the GTX 1070 Ti):
+  `scripts/lib/packaged-app-probe.mjs --renderer-dir` passes, with the KaTeX stylesheet applied and its
+  fonts loaded. A streamed answer typeset `x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}`.
+- **Found on the way, not caused by this change.** A streamed `$$ …` block shows a KaTeX error box
+  until it parses: about 200 ms in the real app, and in jsdom for `$$ x = \frac{-b \pm \sqrt{…}}`.
+  The streaming completions (`completeTrailingMath`) handle `\[`, `\(` and `$`, not `$$`, and
+  Streamdown closes the `$$` without checking that the TeX parses. Which KaTeX copy runs does not
+  matter: the app's copy only validates candidates through the stateless `renderToString`. Filed as
+  #701.
 
 ## App scheme `hilbertraum://app/` — design record (#560)
 
