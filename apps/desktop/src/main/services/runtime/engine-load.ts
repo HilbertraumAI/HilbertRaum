@@ -296,7 +296,7 @@ export type EngineVerdictDrop = 'started' | 'rechecked' | 'installed' | 'gone'
 
 /**
  * The chat engine's pure-CPU safety net, `runtime/llama.cpp/<os>/cpu/` (`resolveCpuFallbackServerPath`):
- * the ladder's rung 3, spawned only after the main build's rungs 1–2 failed.
+ * the ladder's rung 3, spawned only after the main build's rungs 1–2 failed. Nothing else runs it.
  */
 function isSafetyNet(family: EngineProblemFamily, binPath: string): boolean {
   return family === 'llama_cpp' && /[\\/]cpu[\\/][^\\/]+$/.test(binPath)
@@ -307,12 +307,13 @@ const problems = new Map<EngineProblemFamily, StoredProblem>()
 const listeners = new Set<() => void>()
 const dropListeners = new Set<(family: EngineProblemFamily, why: EngineVerdictDrop) => void>()
 /**
- * #532: the program each family's engine install put on the drive THIS session — a fresh copy,
- * checked against its pinned SHA-256 before it was unpacked. A "its own files are damaged" verdict
- * about that same program is marked `afterInstall`: installing it once more would not help. #670:
- * so is every later damaged-files report of that verdict, whichever program it is about.
+ * #532: the programs each family's engine install put on the drive THIS session — fresh copies,
+ * checked against their pinned SHA-256 before they were unpacked. A "its own files are damaged"
+ * verdict about one of them is marked `afterInstall`: installing it once more would not help. #670:
+ * so is every later damaged-files report of that verdict, whichever program it is about. #678: the
+ * main build and, when the job replaced it too, the `cpu/` net.
  */
-const freshlyInstalled = new Map<EngineProblemFamily, string>()
+const freshlyInstalled = new Map<EngineProblemFamily, ReadonlySet<string>>()
 
 function sameProblem(a: EngineProblem, b: EngineProblem): boolean {
   return (
@@ -341,7 +342,7 @@ export function reportEngineProblem(problem: EngineProblem, binPath: string): vo
   // #532: the classifier never sets `afterInstall`; only the store knows the program is a fresh copy.
   // #670: once that copy was refused as damaged, the verdict keeps saying so until it is dropped.
   const freshCopyDamaged =
-    previous?.freshCopyDamaged === true || (damaged && freshlyInstalled.get(problem.family) === binPath)
+    previous?.freshCopyDamaged === true || (damaged && freshlyInstalled.get(problem.family)?.has(binPath) === true)
   const stored: EngineProblem = damaged && freshCopyDamaged ? { ...problem, afterInstall: true } : problem
   const reporters = new Set(previous?.reporters)
   reporters.add(binPath)
@@ -369,11 +370,12 @@ export function clearEngineProblem(family: EngineProblemFamily, why: EngineVerdi
 /**
  * This family's engine was just installed (#530, #532): the old binary's verdict no longer
  * describes the new one, so it is dropped — a refusal of the new binary re-reports itself on its
- * next spawn. `binPath` is the program the install put on the drive, remembered for the session so
- * that such a re-report says {@link EngineProblem.afterInstall}. Never throws.
+ * next spawn. `binPaths` are the programs the install put on the drive (#678: the `cpu/` net's too),
+ * remembered for the session so that such a re-report says {@link EngineProblem.afterInstall}.
+ * Never throws.
  */
-export function engineInstalled(family: EngineProblemFamily, binPath?: string | null): void {
-  if (binPath) freshlyInstalled.set(family, binPath)
+export function engineInstalled(family: EngineProblemFamily, binPaths: readonly string[] = []): void {
+  if (binPaths.length > 0) freshlyInstalled.set(family, new Set(binPaths))
   else freshlyInstalled.delete(family)
   clearEngineProblem(family, 'installed')
 }
@@ -408,6 +410,31 @@ export function engineProblems(): EngineProblem[] {
 /** This family's current verdict, or null. */
 export function engineProblemFor(family: EngineProblemFamily): EngineProblem | null {
   return problems.get(family)?.problem ?? null
+}
+
+/** #678: which of a family's builds a verdict is about. */
+export interface EngineProblemBuilds {
+  /** The main build reported it (every program but the `cpu/` net: the one each spawn site resolves). */
+  main: boolean
+  /** The chat engine's `cpu/` safety net reported it (the ladder's rung 3). */
+  cpuNet: boolean
+}
+
+/**
+ * #678: the builds that reported this family's verdict, or null without one. On a Kit the ladder
+ * reaches the `cpu/` net only after rungs 1–2 failed, and they can fail for a reason that is not the
+ * loader's (a damaged weight file): the verdict is then the `cpu/` net's alone, and the main build
+ * that runs fine says nothing about it. The #532 reinstall replaces these builds, and "Check again"
+ * checks the `cpu/` net when it is the only one.
+ */
+export function engineProblemBuilds(family: EngineProblemFamily): EngineProblemBuilds | null {
+  const stored = problems.get(family)
+  if (!stored) return null
+  const reporters = [...stored.reporters]
+  return {
+    main: reporters.some((p) => !isSafetyNet(family, p)),
+    cpuNet: reporters.some((p) => isSafetyNet(family, p))
+  }
 }
 
 /** Subscribe to verdict changes (a new or different problem, or a cleared one). Returns the unsubscribe. */

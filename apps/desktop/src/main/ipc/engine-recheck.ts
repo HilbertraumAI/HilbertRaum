@@ -7,9 +7,14 @@ import {
   type LoadCheck,
   type LoadCheckDeps
 } from '../services/engine-health'
-import { clearEngineProblem, engineProblems, onEngineProblemDropped } from '../services/runtime/engine-load'
+import {
+  clearEngineProblem,
+  engineProblemBuilds,
+  engineProblems,
+  onEngineProblemDropped
+} from '../services/runtime/engine-load'
 import { clearModelLoadLatches } from '../services/runtime/factory'
-import { resolveLlamaServerPath } from '../services/runtime/sidecar'
+import { resolveCpuFallbackServerPath, resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { probeAndPersistGpu } from './registerBenchmarkIpc'
@@ -134,8 +139,8 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
       // 'loads': healed here — unless a healthy start dropped the verdict while the check ran, whose
       // own heal (`rearmWhenChatEngineHeals`) already re-armed and restarted; a second pass would
       // re-probe beside that restart's weight upload. 'gone': the program left the drive — its
-      // verdict no longer describes anything (the missing-engine banner speaks now), but nothing was
-      // healed, so nothing is re-armed. 'unchecked': it could not be started at all (integrity
+      // verdict no longer describes anything (the missing-engine banner speaks now; a `cpu/` net that
+      // left is simply no rung 3), but nothing was healed, so nothing is re-armed. 'unchecked': it could not be started at all (integrity
       // check, a spawn error that says nothing about the loader) — the verdict stands.
       if (outcome === 'loads') {
         if (clearEngineProblem(family, 'rechecked')) healed.push(family)
@@ -166,17 +171,22 @@ async function runRecheck(ctx: AppContext, deps: RecheckDeps): Promise<EngineRec
  * check, which would read as "loads") and the same `null` for a refusal as for a crash or a spawn
  * error (#653). `checkProgramLoads` tells them apart: a failed integrity check or a non-refusal
  * spawn error is 'unchecked', a crash is 'loads' (the loader accepted the program), a refusal is
- * 'refused'.
+ * 'refused'. The chat engine's program is the main build, whose start clears any verdict it reported
+ * (#655) — unless only the `cpu/` net reported it (#678): the main build loading says nothing about
+ * that one, and "runs again" would come back with the next walk that reaches rung 3.
  */
 async function recheckFamily(
   ctx: AppContext,
   family: EngineProblemFamily,
   deps: RecheckDeps
 ): Promise<LoadCheck | 'gone'> {
+  const builds = engineProblemBuilds(family)
   const binPath =
-    family === 'llama_cpp'
-      ? resolveLlamaServerPath(ctx.paths.rootPath, process.platform, process.env, { isDev: ctx.isDev })
-      : resolveVoiceEngine(ctx)
+    family !== 'llama_cpp'
+      ? resolveVoiceEngine(ctx)
+      : builds?.cpuNet === true && !builds.main
+        ? resolveCpuFallbackServerPath(ctx.paths.rootPath)
+        : resolveLlamaServerPath(ctx.paths.rootPath, process.platform, process.env, { isDev: ctx.isDev })
   // The program is gone (deleted, or the drive changed).
   if (!binPath) return 'gone'
   return checkProgramLoads(family, binPath, family === 'llama_cpp' ? ['--version'] : ['--help'], deps)

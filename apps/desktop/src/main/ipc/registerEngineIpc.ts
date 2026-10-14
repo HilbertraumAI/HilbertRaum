@@ -17,7 +17,13 @@ import {
 } from '../services/runtime-download'
 import { OcrInstallManager, assertNoOcrInstallPayload } from '../services/ocr-install'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
-import { engineInstalled, engineProblemFor } from '../services/runtime/engine-load'
+import {
+  engineInstalled,
+  engineProblemBuilds,
+  engineProblemFor,
+  type EngineProblemBuilds
+} from '../services/runtime/engine-load'
+import { engineProblemOffersReinstall } from '../../shared/engine-problem'
 import { rearmLlamaConsumers, recheckEngines, restartChatOnRealEngine } from './engine-recheck'
 import { modelBusyLane } from './model-busy'
 import { startModelRuntime } from './registerModelIpc'
@@ -114,11 +120,28 @@ async function resumeChatModel(ctx: AppContext, modelId: string | null): Promise
 
 /**
  * #532: may `family` be installed again? Only while it holds a "files damaged" verdict this session —
- * the one refusal a fresh copy can fix. The renderer offers the action only then; this is the
- * check that holds. Engines the verdict store does not cover (the knowledge-pack tools) never qualify.
+ * the one refusal a fresh copy can fix — and not once a fresh copy was refused too (`afterInstall`,
+ * #678: the renderer's own rule, so the check that holds matches what the screen offers). Engines the
+ * verdict store does not cover (the knowledge-pack tools) never qualify.
  */
 function repairable(family: EngineFamily): boolean {
-  return (family === 'llama_cpp' || family === 'whisper_cpp') && engineProblemFor(family)?.reason === 'files-damaged'
+  if (family !== 'llama_cpp' && family !== 'whisper_cpp') return false
+  const problem = engineProblemFor(family)
+  return problem !== null && engineProblemOffersReinstall(problem)
+}
+
+/**
+ * #678: the builds a reinstall of `families` replaces — the ones the OS refused. On a Kit a verdict
+ * only the `cpu/` net reported is about the `cpu/` net: re-fetching the main build left it damaged
+ * and brought the same offer back. Read after {@link repairable} admitted every family.
+ */
+function refusedBuilds(families: readonly EngineFamily[]): Partial<Record<EngineFamily, EngineProblemBuilds>> {
+  const builds: Partial<Record<EngineFamily, EngineProblemBuilds>> = {}
+  for (const family of families) {
+    const refused = family === 'llama_cpp' || family === 'whisper_cpp' ? engineProblemBuilds(family) : null
+    if (refused) builds[family] = refused
+  }
+  return builds
 }
 
 /**
@@ -172,17 +195,18 @@ export function registerEngineIpc(
   let pendingUpdate: { jobId: string; modelId: string | null; paused: boolean; resumed: boolean } | null =
     null
 
-  engine.onInstalled((families, binaryPaths) => {
+  engine.onInstalled((families, programs) => {
     if (families.includes('llama_cpp')) {
       // #372: a new runtime binary may load what the old one could not (a pin that adds an
       // architecture) — every model the ladder latched as unloadable this session is re-armed.
       // #530: and every other consumer's failed-start latch with it (the embedder's used to need
       // a lock/unlock), and the old binary's load verdict no longer describes the new one — a
       // refusal of the new binary re-reports itself on its first spawn (the probe just below).
-      // #532: one that still says "files damaged" is then marked as about this fresh copy.
+      // #532: one that still says "files damaged" is then marked as about this fresh copy (#678:
+      // either fresh copy, when the job replaced the `cpu/` net too).
       // #654: this call is the install's re-arm, verdict or not — the store's `installed` drop
       // heals nothing on its own (`rearmWhenChatEngineHeals` answers `started` only).
-      engineInstalled('llama_cpp', binaryPaths.llama_cpp)
+      engineInstalled('llama_cpp', programs.llama_cpp)
       rearmLlamaConsumers(ctx)
       // #532: a model the demo runtime stands in for comes back on the real engine, as after a
       // healed "Check again" — after the probe refresh, so the ladder reads this computer's answer.
@@ -199,7 +223,7 @@ export function registerEngineIpc(
     // transcriber selects NOW, so the composer mic appears without a restart (the model-download
     // twin of this hook is `AppContext.onModelInstalled`). Never throws; a null slot only.
     if (families.includes('whisper_cpp')) {
-      engineInstalled('whisper_cpp', binaryPaths.whisper_cpp) // #530/#532: a new binary; a refusal re-reports
+      engineInstalled('whisper_cpp', programs.whisper_cpp) // #530/#532: a new binary; a refusal re-reports
       refreshTranscriberSlot(ctx)
     }
     // #339 P8-2: the knowledge-pack tools just arrived — the packs panel's status re-resolves
@@ -303,6 +327,8 @@ export function registerEngineIpc(
       manifestsDir: ctx.manifestsDir ?? null,
       gates: gates(),
       ...request,
+      // #678: what the reinstall replaces — the builds the OS refused, the `cpu/` net included.
+      ...(request.reinstall ? { reinstallBuilds: refusedBuilds(request.families ?? []) } : {}),
       // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
       // LIVE chat sidecar executes from — the manager refuses a job that would touch it
       // while a model runtime is up OR still starting (friendly copy; stop the model first).
@@ -311,7 +337,7 @@ export function registerEngineIpc(
       // F-32 (full-audit 2026-07-16): widen the guard per family — refuse a llama_cpp install
       // while ANY llama-server sidecar (embedder/reranker/vision/translation) has a live child,
       // and a whisper_cpp install mid-transcription/dictation. Installs touching only the other
-      // family still proceed.
+      // family still proceed, and so does a repair of the `cpu/` net alone (#678: no sidecar runs it).
       llamaSidecarActive: llamaSidecarInUse(),
       whisperActive: whisperSidecarInUse(),
       // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install pre-cleans the dir a live

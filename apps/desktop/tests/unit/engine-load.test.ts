@@ -279,7 +279,7 @@ describe('the session verdict store', () => {
     reportEngineProblem(damaged, LLAMA)
     const listener = vi.fn()
     onEngineProblemsChanged(listener)
-    engineInstalled('llama_cpp', LLAMA)
+    engineInstalled('llama_cpp', [LLAMA])
     // The old copy's verdict no longer describes the new one; screens hear that it went.
     expect(engineProblemFor('llama_cpp')).toBeNull()
     expect(listener).toHaveBeenCalledTimes(1)
@@ -294,24 +294,28 @@ describe('the session verdict store', () => {
   })
 
   // #670: on a Kit the ladder walks the fresh main build (rungs 1–2), then the cpu/ net (rung 3), which
-  // the reinstall left as it was. An outdated Visual C++ runtime refuses both as damaged (every DLL is
-  // present). Once the fresh copy was refused, no reinstall helps, whichever program reports next; a
-  // cpu/ refusal on its own says nothing about the fresh copy.
+  // a reinstall of the main build left as it was. An outdated Visual C++ runtime refuses both as damaged
+  // (every DLL is present). Once a fresh copy was refused, no reinstall helps, whichever program reports
+  // next; a cpu/ refusal on its own says nothing about a fresh main build. #678: a reinstall that
+  // replaced the cpu/ net too put a fresh copy there as well.
   const VC_OUTDATED = { family: 'llama_cpp' as const, reason: 'files-damaged' as const, os: 'win' as const, exit: 'exit code 0xC0000139' }
   const KIT_MAIN = 'E:\\runtime\\llama.cpp\\win\\llama-server.exe'
   const KIT_CPU = 'E:\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe'
-  it.each<[string, string[], boolean]>([
-    ['rungs 1–2 (the fresh copy), then rung 3 (cpu/)', [KIT_MAIN, KIT_MAIN, KIT_CPU], true],
-    ['cpu/ first, then the fresh copy, then cpu/ again', [KIT_CPU, KIT_MAIN, KIT_CPU], true],
-    ['cpu/ alone (rungs 1–2 failed for another reason)', [KIT_CPU], false]
-  ])('after a reinstall on a Kit: %s (#670)', (_label, reporters, afterInstall) => {
-    engineInstalled('llama_cpp', KIT_MAIN)
+  it.each<[string, string[], string[], boolean]>([
+    ['the main build: rungs 1–2 (the fresh copy), then rung 3 (cpu/) (#670)', [KIT_MAIN], [KIT_MAIN, KIT_MAIN, KIT_CPU], true],
+    ['the main build: cpu/ first, then the fresh copy, then cpu/ again (#670)', [KIT_MAIN], [KIT_CPU, KIT_MAIN, KIT_CPU], true],
+    ['the main build: cpu/ alone (rungs 1–2 failed for another reason) (#670)', [KIT_MAIN], [KIT_CPU], false],
+    ['the cpu/ net: cpu/ alone (#678)', [KIT_CPU], [KIT_CPU], true],
+    ['the cpu/ net: the main build, which it left as it was (#678)', [KIT_CPU], [KIT_MAIN], false],
+    ['both builds: cpu/ alone (#678)', [KIT_MAIN, KIT_CPU], [KIT_CPU], true]
+  ])('after a reinstall on a Kit of %s', (_label, installed, reporters, afterInstall) => {
+    engineInstalled('llama_cpp', installed)
     for (const binPath of reporters) reportEngineProblem(VC_OUTDATED, binPath)
     expect(engineProblemFor('llama_cpp')).toEqual(afterInstall ? { ...VC_OUTDATED, afterInstall: true } : VC_OUTDATED)
   })
 
   it('keeps afterInstall through every ladder walk without a flicker, until the verdict is dropped (#670)', () => {
-    engineInstalled('llama_cpp', KIT_MAIN)
+    engineInstalled('llama_cpp', [KIT_MAIN])
     const listener = vi.fn()
     onEngineProblemsChanged(listener)
     // Two walks: the screens hear of the verdict once, not once per program that reports it.
