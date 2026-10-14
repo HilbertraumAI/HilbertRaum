@@ -4,6 +4,21 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }
 }))
+// F17 (#687): the archive-cap row reads the `maxBytes` the manager hands `downloadToFile`. The
+// wrapper records it and delegates to the REAL downloader (driven by the row's fake fetch), so no
+// production injection seam is needed; every other row runs the real function unchanged. The
+// 2 GiB ceiling puts a real body-size bracket around the cap out of reach here.
+const { downloadCaps } = vi.hoisted(() => ({ downloadCaps: [] as Array<number | undefined> }))
+vi.mock('../../src/main/services/assets', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../src/main/services/assets')>()
+  return {
+    ...orig,
+    downloadToFile: (...args: Parameters<typeof orig.downloadToFile>) => {
+      downloadCaps.push(args[2]?.maxBytes)
+      return orig.downloadToFile(...args)
+    }
+  }
+})
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -242,21 +257,14 @@ describe('EngineDownloadManager install flow', () => {
   it('applies the bounded ENGINE_DOWNLOAD_MAX_BYTES cap to the archive download (F17)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     const GiB = 1024 * 1024 * 1024
-    let captured: unknown = 'unset'
-    const mgr = new EngineDownloadManager({
-      extractImpl: fakeExtract,
-      downloadImpl: async (_url, dest, deps) => {
-        captured = deps?.maxBytes
-        writeFileSync(dest, BODY) // matches REAL_SHA so verify passes
-        return { status: 200, received: BODY.length, contentLength: BODY.length }
-      }
-    })
+    downloadCaps.length = 0
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: fakeExtract })
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
     const job = await runToEnd(mgr, started.jobId)
     expect(job.status).toBe('done')
-    expect(captured).toBe(ENGINE_DOWNLOAD_MAX_BYTES)
-    expect(captured as number).toBeGreaterThan(0)
-    expect(captured as number).toBeLessThan(64 * GiB)
+    expect(downloadCaps).toEqual([ENGINE_DOWNLOAD_MAX_BYTES])
+    expect(downloadCaps[0] as number).toBeGreaterThan(0)
+    expect(downloadCaps[0] as number).toBeLessThan(64 * GiB)
   })
 
   it('FAILS CLOSED on a placeholder hash — nothing extracted, no marker (RT-02)', async () => {

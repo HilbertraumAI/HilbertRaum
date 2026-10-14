@@ -444,8 +444,6 @@ export const extractWithTar: ExtractFn = (archivePath, destDir, signal) =>
 
 export interface EngineDownloadDeps {
   fetchImpl?: FetchFn
-  /** Injected downloader (default `downloadToFile`) — tests capture the applied size cap (F17). */
-  downloadImpl?: typeof downloadToFile
   /** Injected verifier (default `verifyDownloadedFile`) — tests gate it to pin the
    *  cancel-during-verify contract deterministically (full-audit 2026-07-11 CODE-13,
    *  mirroring the model downloader's BE-4 seam in downloads.ts). */
@@ -891,8 +889,7 @@ export class EngineDownloadManager {
       // multi-GB weight, and a corrupt partial must never be extracted) — a fresh archive
       // each attempt; a stale one from a cancelled run is overwritten.
       job.status = 'downloading'
-      const download = this.deps.downloadImpl ?? downloadToFile
-      const result = await download(plan.url, plan.zipDest, {
+      const result = await downloadToFile(plan.url, plan.zipDest, {
         fetchImpl: this.deps.fetchImpl,
         signal: controller.signal,
         // F17: engine archives are tens-to-low-hundreds of MB; pass a bounded per-family ceiling so

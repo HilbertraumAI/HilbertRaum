@@ -92,8 +92,6 @@ export type DownloadAuditType =
 export interface DownloadManagerDeps {
   /** Injected fetch — production passes the global `fetch`; tests pass a fake. */
   fetchImpl?: FetchFn
-  /** Injected downloader (default `downloadToFile`) — tests capture the applied size cap (F17). */
-  downloadImpl?: typeof downloadToFile
   /** Injected verifier (default `verifyDownloadedFile`) — tests gate it to pin the
    *  cancel-during-verify contract deterministically (BE-4, full-audit 2026-07-10). */
   verifyImpl?: typeof verifyDownloadedFile
@@ -427,8 +425,7 @@ export class DownloadManager {
         let prefix = resumeFrom
         job.status = 'downloading'
         job.receivedBytes = baseBytes + prefix
-        const download = this.deps.downloadImpl ?? downloadToFile
-        const result = await download(task.url, part, {
+        const result = await downloadToFile(task.url, part, {
           fetchImpl: this.deps.fetchImpl,
           signal: controller.signal,
           // D3 + F17: cap the body so a redirected/hostile endpoint can't stream past it and fill the
