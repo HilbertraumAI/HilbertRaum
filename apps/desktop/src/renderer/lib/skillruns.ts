@@ -39,6 +39,8 @@ export interface SkillRunEntry {
 interface InternalEntry extends SkillRunEntry {
   timer: ReturnType<typeof setInterval> | null
   pollFailures: number
+  /** #688: a `getSkillRun` round-trip for this entry is still resolving (one poll at a time). */
+  inFlight: boolean
 }
 
 const entries = new Map<string, InternalEntry>()
@@ -131,7 +133,15 @@ function sameRun(a: SkillRunState, b: SkillRunState): boolean {
 function adopt(run: SkillRunState, conversationId: string, documentId: string | null): void {
   const prev = entries.get(run.runHandle)
   if (prev) stopTimer(prev)
-  const e: InternalEntry = { run, conversationId, documentId, stateUnknown: false, timer: null, pollFailures: 0 }
+  const e: InternalEntry = {
+    run,
+    conversationId,
+    documentId,
+    stateUnknown: false,
+    timer: null,
+    pollFailures: 0,
+    inFlight: false
+  }
   entries.set(run.runHandle, e)
   if (!isSkillRunTerminal(run)) {
     e.timer = setInterval(() => void pollOnce(run.runHandle), POLL_MS)
@@ -145,6 +155,20 @@ function adopt(run: SkillRunState, conversationId: string, documentId: string | 
 async function pollOnce(handle: string): Promise<void> {
   const before = entries.get(handle)
   if (!before) return // acknowledged / replaced since the tick was scheduled
+  // #688: one round-trip per entry at a time (the #680 latch; fileTranslateSession's TA-3 / H4). A tick that
+  // finds the previous `getSkillRun` still resolving skips: overlapping fast failures could otherwise give up
+  // (SKA-40) under a slow call whose late 'running' answer then revived a row the stopped timer no longer
+  // polled. `adopt()`'s immediate poll and the timer's first tick share the latch too.
+  if (before.inFlight) return
+  before.inFlight = true
+  try {
+    await pollEntry(handle)
+  } finally {
+    before.inFlight = false
+  }
+}
+
+async function pollEntry(handle: string): Promise<void> {
   let next: SkillRunState | null
   try {
     next = await window.api.getSkillRun(handle)
