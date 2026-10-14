@@ -384,20 +384,26 @@ describe('hash-is-state (#410)', () => {
 
   // No content-length, so the body cap is the PINNED size + OCR_SIZE_CAP_HEADROOM plus the downloader's own margin
   // (`effectiveDownloadCap`, owned by assets.test.ts). A body of exactly that size downloads and is then refused by the
-  // hash; one byte more is cut off as a failed download. Either way: no .part and no deu file.
+  // hash; one byte more is cut off as a failed download. Either way: no .part and no file. The cap is per file: the
+  // eng row lets a correct deu download first, so the SECOND planned file is the one served over its own cap.
   const DEU_BODY_CAP = effectiveDownloadCap(null, FAKE_PINS[0].sizeBytes + OCR_SIZE_CAP_HEADROOM)
+  const ENG_BODY_CAP = effectiveDownloadCap(null, FAKE_PINS[1].sizeBytes + OCR_SIZE_CAP_HEADROOM)
   it.each([
-    ['exactly the effective cap', 'main.ocr.checksumMismatch', DEU_BODY_CAP],
-    ['one byte over the effective cap', 'main.ocr.downloadFailed', DEU_BODY_CAP + 1]
+    ['deu', 'exactly the effective cap', 'main.ocr.checksumMismatch', DEU_BODY_CAP],
+    ['deu', 'one byte over the effective cap', 'main.ocr.downloadFailed', DEU_BODY_CAP + 1],
+    ['eng', 'one byte over the effective cap', 'main.ocr.downloadFailed', ENG_BODY_CAP + 1]
   ] as const)(
-    'the body cap is the pinned size + OCR_SIZE_CAP_HEADROOM: a deu body of %s (no content-length) is refused as %s, no .part left',
-    async (_label, key, bytes) => {
+    'the body cap is the pinned size + OCR_SIZE_CAP_HEADROOM: a %s body of %s (no content-length) is refused as %s, no .part left',
+    async (lang, _label, key, bytes) => {
       const root = tempRoot('ocr')
       const manifests = manifestsDirWith(root, ocrYaml())
       mkdirSync(join(root, 'ocr'), { recursive: true })
-      writeFileSync(join(root, 'ocr', 'eng.traineddata.gz'), ENG_BYTES) // present + correct: only deu is fetched
-      const sizedFetch: FetchFn = (async () =>
-        new Response(
+      // deu rows: eng present + correct, so only deu is fetched. eng row: nothing present; deu downloads correctly.
+      if (lang === 'deu') writeFileSync(join(root, 'ocr', 'eng.traineddata.gz'), ENG_BYTES)
+      const sizedFetch: FetchFn = (async (url: unknown) =>
+        lang === 'eng' && String(url).includes('deu')
+          ? correctBytesFetch(url as string)
+          : new Response(
           new ReadableStream({
             start(controller) {
               controller.enqueue(new Uint8Array(bytes))
@@ -410,8 +416,8 @@ describe('hash-is-state (#410)', () => {
       const done = await runToEnd(mgr, (await mgr.start(startOpts(root, manifests))).jobId)
       expect(done.status).toBe('failed')
       expect(done.error).toBe(tMain(key))
-      expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz.part'))).toBe(false)
-      expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz'))).toBe(false)
+      expect(existsSync(join(root, 'ocr', `${lang}.traineddata.gz.part`))).toBe(false)
+      expect(existsSync(join(root, 'ocr', `${lang}.traineddata.gz`))).toBe(false)
     }
   )
 

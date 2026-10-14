@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -187,6 +187,10 @@ describe('walk budget — the async walk is byte-identical to the reference (#27
 })
 
 describe('walk budget — defaults, env overrides and the drop cap', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('resolveWalkBudget: the shipped defaults, positive-integer env overrides, junk ignored', () => {
     expect(resolveWalkBudget({})).toEqual({ maxEntries: 50_000, maxDepth: 64, maxMillis: 10_000 }) // security-model.md walk budget
     expect(
@@ -206,17 +210,15 @@ describe('walk budget — defaults, env overrides and the drop cap', () => {
   it('summarizeImportPaths reports a walk cut at the entry cap; absent when complete (#274)', async () => {
     const dir = root()
     for (let i = 0; i < 40; i++) writeFileSync(join(dir, `f${String(i).padStart(2, '0')}.txt`), 'x')
-    const prior = process.env.HILBERTRAUM_WALK_MAX_ENTRIES
-    process.env.HILBERTRAUM_WALK_MAX_ENTRIES = '10'
-    try {
-      const cut = await summarizeImportPaths([dir])
-      expect(cut.exhausted).toBe('entries')
-      expect(cut.fileCount).toBeLessThanOrEqual(10)
-      expect(cut.fileCount).toBeGreaterThan(0)
-    } finally {
-      if (prior === undefined) delete process.env.HILBERTRAUM_WALK_MAX_ENTRIES
-      else process.env.HILBERTRAUM_WALK_MAX_ENTRIES = prior
-    }
+    // Every walk variable is stubbed, so an override in the developer's shell cannot change either walk.
+    vi.stubEnv('HILBERTRAUM_WALK_MAX_DEPTH', '')
+    vi.stubEnv('HILBERTRAUM_WALK_BUDGET_MS', '')
+    vi.stubEnv('HILBERTRAUM_WALK_MAX_ENTRIES', '10')
+    const cut = await summarizeImportPaths([dir])
+    expect(cut.exhausted).toBe('entries')
+    expect(cut.fileCount).toBeLessThanOrEqual(10)
+    expect(cut.fileCount).toBeGreaterThan(0)
+    vi.stubEnv('HILBERTRAUM_WALK_MAX_ENTRIES', '')
     const full = await summarizeImportPaths([dir])
     expect(full.fileCount).toBe(40)
     expect(full.exhausted).toBeUndefined()

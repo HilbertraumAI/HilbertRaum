@@ -202,8 +202,9 @@ describe('Make searchable (OCR) end to end', () => {
     release()
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('cancelled')
-    // The walk stopped at the cancel (the row below owns the pre-persist check).
-    expect(engine.calls).toBe(1)
+    // The walk stopped at the cancel: page 2 is never read. Page 1, released after the cancel, may be (the row below
+    // owns the pre-persist check).
+    expect(engine.calls).toBeLessThan(2)
     expect(getDocumentOcrPages(w.db, docId)).toBeNull()
     expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
   })

@@ -375,8 +375,9 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
   // REL-2 (TEST-4): a per-page recognition that exceeds the timeout terminates the worker
   // (a tesseract.js WASM job is not cooperatively cancellable) and rejects — so one wedged
   // image can't block the serialized chain for the rest of the scan. The next page gets a
-  // fresh worker and succeeds. Teeth: just short of the shipped 2 min the worker still runs; just
-  // past it, it is terminated.
+  // fresh worker and succeeds. Teeth: just short of DEFAULT_OCR_PAGE_TIMEOUT_MS (the shipped bound) the
+  // worker still runs; just past it, it is terminated. The row pins that this constant is the bound that
+  // fires, not its value (2 min, a design-record decision).
   it('terminates the worker on a per-page timeout and recovers on the next page (REL-2)', async () => {
     vi.stubEnv('HILBERTRAUM_OCR_PAGE_TIMEOUT_MS', '') // the shipped default, not a developer's override
     let created = 0

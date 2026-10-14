@@ -21,7 +21,7 @@ import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 // the cheap `ocr_meta_json` sidecar, NEVER from the multi-MB `ocr_json` blob (which reconstructs
 // every page's text just to read `pages.length`). These tests pin: (a) the list SQL omits
 // `ocr_json` and selects the sidecar; (b) the badge is correct even when the blob says otherwise
-// (the sidecar wins over a different blob on the list and the single-doc reader); (c) an old
+// or is corrupt (the sidecar wins over it on the list and the single-doc reader); (c) an old
 // workspace with `ocr_json` but no sidecar opens, backfills, and reports the correct page count.
 
 let tmp: string
@@ -112,7 +112,7 @@ describe('OCR metadata sidecar (PERF-3)', () => {
     expect(listSql).toMatch(/\bocr_meta_json\b/)
   })
 
-  it('reports the OCR badge from the sidecar even when ocr_json says otherwise (the sidecar wins on every reader)', () => {
+  it('reports the OCR badge from the sidecar even when ocr_json says otherwise or is corrupt (the sidecar wins on every reader)', () => {
     const db = freshDb()
     const id = makeDoc(db)
     setDocumentOcr(db, id, { pages: TWO_PAGES, engineId: 'tesseract.js-7.0.0', languages: ['deu', 'eng'] })
@@ -137,6 +137,11 @@ describe('OCR metadata sidecar (PERF-3)', () => {
     }
     expect(listDocuments(db, null).find((d) => d.id === id)?.ocr).toEqual(sidecar)
     // The single-doc reader selects the whole row (the blob included) and still reads the sidecar.
+    expect(getDocument(db, id)?.ocr).toEqual(sidecar)
+
+    // A corrupt blob breaks neither reader: a path that parsed `ocr_json` would throw here.
+    db.prepare('UPDATE documents SET ocr_json = ? WHERE id = ?').run('{ this is not valid json', id)
+    expect(listDocuments(db, null).find((d) => d.id === id)?.ocr).toEqual(sidecar)
     expect(getDocument(db, id)?.ocr).toEqual(sidecar)
   })
 
