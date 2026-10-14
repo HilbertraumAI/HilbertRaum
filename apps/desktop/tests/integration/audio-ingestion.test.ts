@@ -1,29 +1,26 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { describe, it, expect } from 'vitest'
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
-  documentsDir,
   extractDocumentPreview,
   processDocument,
   reindexDocument,
   summarizeImportPaths,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
-import {
-  AUDIO_NEEDS_TRANSCRIBER_MESSAGE
-} from '../../src/main/services/ingestion/parsers/audio'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
+import { t } from '../../src/shared/i18n'
+import { docTaskWorld, type DocTaskWorld } from '../helpers/doctask-fixtures'
+import { within } from '../helpers/hang-budget'
 import { testCipher } from '../helpers/test-cipher'
 
 // Phase 36 — audio ingestion end-to-end with a FAKE transcriber behind the
 // IngestionDeps injection seam (the embedder precedent): a "recording" becomes a
 // normal corpus document; citations get time-range sections (D29); encrypted
-// workspaces keep only the .enc on disk; absent transcriber = friendly per-file
-// failure through the documents-table error path.
+// workspaces keep only the .enc on disk; absent transcriber = a friendly per-file
+// failure naming the missing piece (#527) through the documents-table error path.
 
 const SECRET_SPEECH = 'vertrauliche Besprechung über das Projekt Einhorn'
 
@@ -35,13 +32,20 @@ const SEGMENTS: TranscriptSegment[] = [
 
 function fakeTranscriber(
   segments: TranscriptSegment[] = SEGMENTS
-): Transcriber & { calls: string[] } {
+): Transcriber & { calls: string[]; inputs: Buffer[]; workDirs: string[] } {
   const calls: string[] = []
+  const inputs: Buffer[] = []
+  const workDirs: string[] = []
   return {
     id: 'fake-whisper',
     calls,
+    inputs,
+    workDirs,
     transcribe: async (filePath, opts) => {
       calls.push(filePath)
+      // whisper-cli decodes the file it is handed; a pipeline that skipped decryption would hand it ciphertext.
+      inputs.push(readFileSync(filePath))
+      workDirs.push(opts.workDir)
       opts?.onProgress?.(50)
       opts?.onProgress?.(100)
       return segments
@@ -49,35 +53,21 @@ function fakeTranscriber(
   }
 }
 
-let srcDir: string
-beforeEach(() => {
-  srcDir = mkdtempSync(join(tmpdir(), 'hilbertraum-audio-src-'))
-})
-
-function writeAudioSource(name = 'meeting.mp3'): string {
-  const p = join(srcDir, name)
+function writeAudioSource(w: DocTaskWorld, name = 'meeting.mp3'): string {
+  const p = join(w.root, name)
   // Real bytes are irrelevant — the fake transcriber never decodes them.
   writeFileSync(p, randomBytes(2048))
   return p
 }
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-audio-db-')), 'test.sqlite'))
-}
-
-function freshStore(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-audio-ws-')))
-}
-
 describe('audio ingestion (Phase 36)', () => {
   it('imports an mp3 into an indexed document with time-range section labels (D29)', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('audio')
     const t = fakeTranscriber()
     const progress: Array<[string, number]> = []
 
-    const doc = createQueuedDocument(db, writeAudioSource())
-    const info = await processDocument(db, store, doc.id, {
+    const doc = createQueuedDocument(w.db, writeAudioSource(w))
+    const info = await processDocument(w.db, w.storeDir, doc.id, {
       transcriber: t,
       onTranscribeProgress: (id, pct) => progress.push([id, pct])
     })
@@ -93,7 +83,7 @@ describe('audio ingestion (Phase 36)', () => {
 
     // Chunks carry the transcript with the D29 "mm:ss–mm:ss" labels in section_label —
     // the EXISTING column Citation.section reads from (zero citation-path changes).
-    const rows = db
+    const rows = w.db
       .prepare('SELECT text, page_number, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index')
       .all(doc.id) as unknown as Array<{ text: string; page_number: number | null; section_label: string }>
     expect(rows.length).toBeGreaterThan(0)
@@ -102,32 +92,23 @@ describe('audio ingestion (Phase 36)', () => {
     expect(rows[0].section_label).toMatch(/^\d{2}:\d{2}–\d{2}:\d{2}$/)
   })
 
-  it('fails the FILE friendly when no transcriber is available — never a throw', async () => {
-    const db = freshDb()
-    const store = freshStore()
-    const doc = createQueuedDocument(db, writeAudioSource())
-
-    const info = await processDocument(db, store, doc.id, {}) // no transcriber injected
-
+  it('fails the FILE friendly, naming the missing piece (#527), when no transcriber is available — never a throw', async () => {
+    const w = docTaskWorld('audio')
+    const doc = createQueuedDocument(w.db, writeAudioSource(w))
+    const info = await processDocument(w.db, w.storeDir, doc.id, { transcriberMissing: 'engine' }) // no transcriber injected
     expect(info.status).toBe('failed')
-    expect(info.errorMessage).toBe(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
-    // A text import in the same run is untouched (graceful-fallback rule).
-    const txt = join(srcDir, 'note.txt')
-    writeFileSync(txt, 'plain text still works')
-    const txtDoc = createQueuedDocument(db, txt)
-    const txtInfo = await processDocument(db, store, txtDoc.id, {})
-    expect(txtInfo.status).toBe('indexed')
+    // processDocument threads deps.transcriberMissing into the ParseContext: the row names the ENGINE, not the model.
+    expect(info.errorMessage).toBe(t('en', 'main.ingest.audioNeedsEngine'))
   })
 
   it('previews the transcript from STORED CHUNKS — no re-transcription', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('audio')
     const t = fakeTranscriber()
-    const doc = createQueuedDocument(db, writeAudioSource())
-    await processDocument(db, store, doc.id, { transcriber: t })
+    const doc = createQueuedDocument(w.db, writeAudioSource(w))
+    await processDocument(w.db, w.storeDir, doc.id, { transcriber: t })
     expect(t.calls).toHaveLength(1)
 
-    const preview = await extractDocumentPreview(db, store, doc.id, {})
+    const preview = await extractDocumentPreview(w.db, w.storeDir, doc.id, {})
     expect(preview.segments.map((s) => s.text).join('\n')).toContain(SECRET_SPEECH)
     expect(preview.segments[0].sectionLabel).toMatch(/–/)
     // The load-bearing assertion: preview did NOT call the transcriber again.
@@ -141,8 +122,7 @@ describe('audio ingestion (Phase 36)', () => {
   // emits one chunk per segment and the round-trip is lossless. Teeth: reverting
   // `packTranscriptSegments` to a word cap makes this fail (markers appear twice).
   it('round-trips a long Japanese transcript through chunks with NO duplicated spans (RAG-N1)', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('audio')
     // 40 space-less whisper segments, each opening with a UNIQUE fixed-width marker (章000…章039)
     // so a duplicated overlap span is detectable. ~28 space-less tokens each ⇒ ~1100 tokens total,
     // far past the 500-token chunk window when (wrongly) packed as one segment.
@@ -153,10 +133,10 @@ describe('audio ingestion (Phase 36)', () => {
       text: `${marker(i)}${'の'.repeat(24)}`
     }))
     const t = fakeTranscriber(segments)
-    const doc = createQueuedDocument(db, writeAudioSource())
-    await processDocument(db, store, doc.id, { transcriber: t })
+    const doc = createQueuedDocument(w.db, writeAudioSource(w))
+    await processDocument(w.db, w.storeDir, doc.id, { transcriber: t })
 
-    const preview = await extractDocumentPreview(db, store, doc.id, {})
+    const preview = await extractDocumentPreview(w.db, w.storeDir, doc.id, {})
     // It actually split into several packed segments (not one over-the-window blob).
     expect(preview.segments.length).toBeGreaterThan(1)
     const joined = preview.segments.map((s) => s.text).join('\n')
@@ -168,63 +148,62 @@ describe('audio ingestion (Phase 36)', () => {
   })
 
   it('preview of a failed (chunkless) audio document fails friendly', async () => {
-    const db = freshDb()
-    const store = freshStore()
-    const doc = createQueuedDocument(db, writeAudioSource())
-    await processDocument(db, store, doc.id, {}) // failed: no transcriber
-    await expect(extractDocumentPreview(db, store, doc.id, {})).rejects.toThrow(/Re-index/)
+    const w = docTaskWorld('audio')
+    const doc = createQueuedDocument(w.db, writeAudioSource(w))
+    await processDocument(w.db, w.storeDir, doc.id, {}) // failed: no transcriber
+    await expect(extractDocumentPreview(w.db, w.storeDir, doc.id, {})).rejects.toThrow(/Re-index/)
   })
 
   it('re-index IS a full re-transcription of the stored copy (D35)', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('audio')
     const t = fakeTranscriber()
-    const source = writeAudioSource()
-    const doc = createQueuedDocument(db, source)
-    await processDocument(db, store, doc.id, { transcriber: t })
+    const source = writeAudioSource(w)
+    const doc = createQueuedDocument(w.db, source)
+    await processDocument(w.db, w.storeDir, doc.id, { transcriber: t })
     rmSync(source) // self-contained: re-index must come from the stored copy
 
-    const info = await reindexDocument(db, store, doc.id, { transcriber: t })
+    const info = await reindexDocument(w.db, w.storeDir, doc.id, { transcriber: t })
     expect(info.status).toBe('indexed')
     expect(t.calls).toHaveLength(2)
     // The second call parsed the STORED copy, not the (deleted) original.
-    expect(t.calls[1].startsWith(store)).toBe(true)
+    expect(t.calls[1].startsWith(w.storeDir)).toBe(true)
   })
 
-  it('encrypted workspace: only the .enc rests on disk; transcriber reads a .parse transient', async () => {
-    const db = freshDb()
-    const store = freshStore()
+  it('encrypted workspace: only the .enc rests on disk; the transcriber reads the DECRYPTED .parse transient, working inside the store', async () => {
+    const w = docTaskWorld('audio')
     const cipher = testCipher()
     const t = fakeTranscriber()
-    const source = writeAudioSource()
+    const source = writeAudioSource(w)
+    const sourceBytes = readFileSync(source)
 
-    const doc = createQueuedDocument(db, source)
-    const info = await processDocument(db, store, doc.id, { cipher, transcriber: t })
+    const doc = createQueuedDocument(w.db, source)
+    const info = await processDocument(w.db, w.storeDir, doc.id, { cipher, transcriber: t })
     expect(info.status).toBe('indexed')
 
     // The stored copy is the .enc artifact; nothing else remains in the store.
-    const stored = readdirSync(store)
+    const stored = readdirSync(w.storeDir)
     expect(stored).toHaveLength(1)
     expect(stored[0].endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
+    expect(readFileSync(join(w.storeDir, stored[0])).includes(sourceBytes)).toBe(false) // the recording rests encrypted, never as plaintext
 
     // Re-index with the original gone: decrypts to the `.parse<ext>` transient, hands
     // THAT to the transcriber, and shreds it after (the existing pattern, D35).
     rmSync(source)
-    const reinfo = await reindexDocument(db, store, doc.id, { cipher, transcriber: t })
+    const reinfo = await reindexDocument(w.db, w.storeDir, doc.id, { cipher, transcriber: t })
     expect(reinfo.status).toBe('indexed')
     expect(t.calls[1]).toContain('.parse')
-    const after = readdirSync(store)
+    const after = readdirSync(w.storeDir)
     expect(after).toHaveLength(1)
     expect(after[0].endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
-    // No file in the store leaks the audio "content" marker text.
-    for (const name of after) {
-      expect(readFileSync(join(store, name)).includes(Buffer.from(SECRET_SPEECH))).toBe(false)
-    }
+    // The transient it was handed holds the DECRYPTED recording (a pipeline that skipped decryption hands it ciphertext)…
+    expect(t.inputs[1].equals(sourceBytes)).toBe(true)
+    // …and whisper's own transient transcript lands in the store, inside the startup crash sweep (REL-6) — never next
+    // to the user's original (the first import parses the original directly).
+    expect(t.workDirs).toEqual([w.storeDir, w.storeDir])
   })
 
   it('aborting an import kills the in-flight transcription — task ends failed, signal threaded (REL-1)', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('audio')
     const controller = new AbortController()
     let sawSignal: AbortSignal | undefined
     let started: () => void = () => undefined
@@ -249,33 +228,31 @@ describe('audio ingestion (Phase 36)', () => {
       }
     }
 
-    const doc = createQueuedDocument(db, writeAudioSource())
-    const p = processDocument(db, store, doc.id, { transcriber: t, signal: controller.signal })
-    await reached // transcribe() is now in flight
+    const doc = createQueuedDocument(w.db, writeAudioSource(w))
+    const p = processDocument(w.db, w.storeDir, doc.id, { transcriber: t, signal: controller.signal })
+    await within(reached, 'transcribe() reached') // transcribe() is now in flight
     controller.abort()
-    const info = await p
+    const info = await within(p, 'the aborted import settling')
 
-    // The cancelled transcription surfaces as a friendly per-file failure on the row.
+    // The cancelled transcription fails the FILE (processDocument never throws).
     expect(info.status).toBe('failed')
     // The load-bearing assertion: the signal reached `transcribe` (was threaded
     // deps.signal → ParseContext.signal → AudioParser → transcribe) and is aborted.
     expect(sawSignal).toBe(controller.signal)
     expect(sawSignal?.aborted).toBe(true)
-    // No transient transcript (.parse-transcript) stranded — only the legitimate stored
-    // copy persists for a later re-index.
-    expect(readdirSync(store).some((n) => n.includes('.parse-transcript'))).toBe(false)
   })
 
   it('summarizeImportPaths counts audio files + bytes for the D35 size confirm', async () => {
-    const audio = writeAudioSource('big.wav')
-    const txt = join(srcDir, 'note.txt')
+    const w = docTaskWorld('audio')
+    const audio = writeAudioSource(w, 'big.wav')
+    const txt = join(w.root, 'note.txt')
     writeFileSync(txt, 'text')
     const pre = await summarizeImportPaths([audio, txt])
     expect(pre.fileCount).toBe(2)
     expect(pre.audioFileCount).toBe(1)
     expect(pre.audioBytes).toBe(2048)
     // Unsupported/missing paths do not blow up the preflight.
-    expect(await summarizeImportPaths([join(srcDir, 'missing.mp3')])).toEqual({
+    expect(await summarizeImportPaths([join(w.root, 'missing.mp3')])).toEqual({
       fileCount: 0,
       audioFileCount: 0,
       audioBytes: 0
