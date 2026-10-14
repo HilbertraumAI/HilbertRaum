@@ -4,8 +4,9 @@ import { math } from '@streamdown/math'
 import { codeBlockExtension } from '@shared/code-block-export'
 import { useCodeBlockActions, type CodeBlockActions } from './CodeBlockActionsContext'
 import { useT } from '../i18n'
-// katex is already in the bundle via @streamdown/math → rehype-katex; imported directly only
-// to VALIDATE partially-streamed TeX before typesetting it (completePartialTex below).
+// rehype-katex renders with its own katex copy; this import resolves the app's copy of the same
+// version (two copies in the bundle, #698) and is used only to VALIDATE partially-streamed TeX
+// before typesetting it (completePartialTex below). The CSS comes from the app's copy.
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
@@ -152,8 +153,8 @@ function promoteSingleDollarMath(prose: string): string {
 // throws, and rehype-katex then falls back to raw error text — worse than showing nothing).
 // Complete it: cut a half-streamed macro name / dangling `^`/`_`, close unbalanced brace
 // groups, and if the result still lacks a pending argument group (e.g. `\frac{X}` awaiting
-// its denominator) try an appended `{}` — then VALIDATE with KaTeX itself (already in the
-// bundle via rehype-katex) and only emit TeX that actually parses. Returns null when the
+// its denominator) try an appended `{}` — then VALIDATE with KaTeX itself (the app's copy, the
+// version rehype-katex renders with) and only emit TeX that actually parses. Returns null when the
 // partial is unsalvageable this flush (e.g. `\left(` before its `\right` arrives) — the
 // caller then hides the math tail instead of flashing raw TeX; it appears once parseable.
 function completePartialTex(tex: string): string | null {
@@ -266,7 +267,9 @@ const mdRemend = {
 //    remote images (`img-src 'self' data:`) and the `a` override below is the link gate; harden only
 //    muddied output with "[blocked]" rewrites and trailing-slash href normalization.
 // `sanitize` stays as defence-in-depth. KaTeX's rehype plugin rides in via `plugins`, independent of
-// this list, so math is unaffected. Module-level for a stable reference (memoization).
+// this list, so math is unaffected. Streamdown appends it AFTER this list, so KaTeX's own output is
+// never sanitized: KaTeX's `trust` option is that path's gate, and nothing may set it (DEP-7; the
+// `trust` pin in assistant-markdown.test.tsx). Module-level for a stable reference (memoization).
 const mdRehypePlugins = [defaultRehypePlugins.sanitize]
 
 // ---------------------------------------------------------------------------------------------
@@ -411,7 +414,8 @@ const mdComponents = {
  * broken output. Streamdown splits the text into blocks and memoizes each, and (when `streaming`)
  * `parseIncompleteMarkdown` closes dangling syntax so the live bubble formats cleanly instead of
  * flashing raw markers. It builds React elements (no innerHTML) and runs rehype-sanitize, so scripts
- * and event handlers are stripped; with the strict CSP the no-injection posture holds. Streamdown's
+ * and event handlers are stripped; with the strict CSP the no-injection posture holds. KaTeX's math
+ * output comes after sanitize, gated by KaTeX's `trust`, which stays off (DEP-7). Streamdown's
  * own link-safety modal is disabled in favour of the existing posture: links are whitelisted to
  * http(s) and open in the OS browser via the main process's window-open handler. Code-block controls
  * are disabled (they ship Tailwind-styled chrome this app doesn't load). User turns stay plain text.

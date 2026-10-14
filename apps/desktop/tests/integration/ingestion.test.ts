@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
-import { basename, join, sep } from 'node:path'
+import { createRequire } from 'node:module'
+import { basename, dirname, join, sep } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
@@ -264,6 +265,23 @@ describe('DocxParser', () => {
       'A clause inside custom XML.',
       'The moved sentence.'
     ])
+  })
+
+  // DEP-7: sprintf-js has an advisory with no patched release (GHSA-hp3w-g68c-fv3c), and the Kit
+  // ships mammoth's copy (through argparse) because mammoth's CLI needs it. The alert was dismissed
+  // as "not used" on the strength of this: the import path never loads either package. A mammoth
+  // update whose library starts loading them fails here, and the alert needs triaging again.
+  it("never loads argparse or sprintf-js, which only mammoth's CLI uses (DEP-7)", async () => {
+    const req = createRequire(import.meta.url)
+    const mammothLib = join(dirname(req.resolve('mammoth/package.json')), 'lib') + sep
+
+    const out = await DocxParser.parse(write('cli-free.docx', makeDocx(['One paragraph.'])))
+    expect(out.segments.map((s) => s.text)).toEqual(['One paragraph.'])
+    const loaded = Object.keys(req.cache)
+    // mammoth itself went through the loader whose cache is read here, so a load would show.
+    expect(loaded.some((file) => file.startsWith(mammothLib))).toBe(true)
+    // Any copy, wherever npm put it: argparse's own, or one hoisted for another dependent.
+    expect(loaded.filter((file) => /[\\/]node_modules[\\/](argparse|sprintf-js)[\\/]/.test(file))).toEqual([])
   })
 })
 

@@ -2103,6 +2103,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   output. Streamdown builds React elements (no `innerHTML`). Its rehype chain is pared to
   `rehype-sanitize` only (we drop `rehype-raw` so model HTML renders as literal text — the no-injection
   posture is unchanged — and drop `rehype-harden` as redundant under the CSP + the link gate below).
+  The math plugin's rehype-katex step runs after that chain, so KaTeX's own output is not sanitized;
+  its gate is KaTeX's `trust` option, which nothing sets (DEP-7 record §3, pinned in
+  `assistant-markdown.test.tsx`).
   The app ships no Tailwind, so Streamdown's one non-semantic element — `**bold**` as a styled
   `<span>` — is mapped back to `<strong>`; every other element is already semantic and styled by the
   existing `.md` CSS. The `components`/plugin objects are **module-level** in `AssistantMarkdown.tsx` so their
@@ -14324,7 +14327,8 @@ DEP-6 were six hand-rolled batches. What the file does, and why:
   deliberate exact or tilde pin a wave's decision: an update that would need the pin changed is not
   proposed. That covers the Radix primitives (D-UI1, exact, with their transitive set
   license-reviewed), `tesseract.js` (exact) and `katex` (`~0.16`, so one copy serves both
-  `rehype-katex` and the CSS). PR C shipped `increase-if-necessary`, and its first run (#541) moved
+  `rehype-katex` and the CSS; **corrected by DEP-7 §3:** one VERSION serves both, but the tree holds
+  four copies of it and the renderer bundles two, #698). PR C shipped `increase-if-necessary`, and its first run (#541) moved
   the four Radix pins and took `katex` to `~0.18.9`; after #542 the replacement group PR (#543)
   left both alone. What `lockfile-only` does **not** do, contrary to its documentation ("leaving
   manifests unchanged"): it still raises the caret floor of each package a grouped PR bumps (#540,
@@ -14794,6 +14798,136 @@ writes, and each old tarball matched the pre-merge lockfile's integrity.
   `pdf-parser-packaged.test.ts`. The differential took minutes: the old tarball from the registry,
   both builds outside `node_modules`, the same calls, a byte comparison. For streamdown: the §9
   render comparison.
+
+## Dependabot triage — design record (wave DEP-7)
+
+_Wave DEP-7 (2026-10-14) triages the four alerts Dependabot opened on 2026-10-12, which DEP-6 §13
+(#685) left untriaged: #125 (high, source-map-js), #127 (medium, sprintf-js) and #124/#126 (low,
+katex: one alert for the direct dependency, one for the transitive copies). On master `8115b6fc`
+`npm audit` listed 16 entries (1 high, 10 moderate, 5 low), all from these three packages. One alert
+is fixed by a lockfile-only patch. For the other three no fix exists inside the declared ranges, and
+the owner dismissed them with the written reasons in §2: the first dismissals of a DEP wave. No
+`overrides`, no manifest edit, no packaging change. Branch `fix/dep7-alerts-124-127`._
+
+### §1 Alert ledger + dispositions
+
+| Alerts | Package (locked → fixed) | Scope | Disposition + verdict |
+|---|---|---|---|
+| alert 125 (high) | source-map-js 1.2.1 → **1.2.2** (postcss, css-tree, magicast, all `^1.2.1`) | development | **Fixed (lockfile only). Unreachable.** GHSA-68fv-2mgg-jv7q: an indexed source map with a huge section `offset.line` makes the consumer write one `;` per skipped line, a long synchronous block or heap exhaustion. The callers are Vite's CSS pipeline (postcss), jsdom's CSS parser (css-tree) and magicast in the test tooling, and every map they read comes from this repo or its dependencies. Nothing ships: `out/` has no source-map-js text and `app.asar` no entry. 1.2.2 bounds the offsets (10 million lines, nested sections included), builds a gap with one `repeat`, stops a `SourceNode` at the end of the code, and lets `quickSort` run without `new Function` under a CSP. No dependency change. |
+| alert 127 (medium) | sprintf-js **1.0.3** (mammoth `~1.0.3` → argparse 1.0.10 → `~1.0.2`; production graph) and **1.1.3** (electron-builder → app-builder-lib → @electron/get 3.1.0 → global-agent → roarr; optional, dev) | runtime (npm graph) | **Dismissed: vulnerable code not used (owner ruling).** GHSA-hp3w-g68c-fv3c: a format string with an oversized precision (`%.999999f`) makes `toFixed`/`toPrecision` throw a `RangeError`. Every release is affected and none is patched. The Kit ships argparse (32 entries) and sprintf-js 1.0.3 (17 entries, flattened to `/node_modules/sprintf-js`), but only mammoth's CLI (`bin/mammoth`) requires argparse; mammoth's `lib/` never does. Measured on the packaged `app.asar` under Electron as Node, `require` reading straight from the archive: loading mammoth and running `extractRawText` on a DOCX loaded 154 modules, none from argparse or sprintf-js; requiring argparse as a control loaded sprintf-js. The dev copy loads only when `ELECTRON_GET_USE_PROXY` is set while electron-builder downloads Electron. On both paths the format strings are the libraries' own. No fix route: mammoth 1.13.0 (its latest) keeps `argparse ~1.0.3` and argparse 1.0.x pins `sprintf-js ~1.0.2`, so not even a future 1.1.x could reach the shipped copy without `overrides`. A `files:` negation would not clear the alert (it reads the lockfile), and DEP-6 §9's rule allows none. Pinned: `ingestion.test.ts` "never loads argparse or sprintf-js, which only mammoth's CLI uses (DEP-7)". |
+| alerts 124 (low, direct), 126 (low, transitive) | katex 0.16.47 (apps/desktop `~0.16.47`; rehype-katex 7.0.1 `^0.16.0`; @streamdown/math 1.0.3 `^0.16.27`; micromark-extension-math 3.1.0 `^0.16.0`) | runtime | **Dismissed: tolerable risk (owner ruling); the `~0.16.47` pin stays.** GHSA-238p-pmpm-9mq7: before 0.18.2 KaTeX reads renderer settings, setting metadata and macro names through the prototype chain, so where `Object.prototype` is already polluted an inherited `trust` turns on `\href`, `\url`, `\includegraphics` and `\html*`. KaTeX does not pollute anything itself. 0.16.47 is the last 0.16 release, and every dependent's range stops before 0.17 (`npm audit`: "No fix available"), so the fix needs `overrides`. Verdict in §3. Pinned: `assistant-markdown.test.tsx` "TeX commands that need KaTeX `trust` stay error text …". |
+
+### §2 Owner rulings and the dismissal reasons
+
+Asked before any change (2026-10-14), each taken as recommended: dismiss #127 as not used; dismiss
+#124/#126 as a tolerable risk and keep the pin, no `overrides`; file the duplicate KaTeX copy (§3)
+as its own issue (#698); the owner posts the dismissals. Not taken: `overrides` to katex ~0.18.11; an
+explicit `trust: false` in the app's math plugin (KaTeX 0.16.47 reads own options first, so it would
+hold under pollution, but not for the inherited macro names; the wave's review raised it again, as
+the way to make the premise structural rather than empirical); a `files:` negation of argparse and
+sprintf-js; `overrides` to argparse 2. The reasons, as written for GitHub (280 characters at most):
+
+- **#127, "vulnerable code is not actually used":** Only mammoth's CLI (bin/mammoth) requires
+  argparse, which loads sprintf-js. The app calls mammoth.extractRawText, which loads neither
+  (traced in the packaged app.asar; pinned in ingestion.test.ts). No patched release exists.
+  Record: docs/architecture.md, wave DEP-7.
+- **#124 and #126, "risk is tolerable to this project":** Needs a prototype pollution already in
+  place; none is known in the renderer. Nothing sets KaTeX trust (pinned in
+  assistant-markdown.test.tsx). Measured worst case: CSS, ids, data: images on a span; no script or
+  network. Fix needs overrides past ^0.16. See architecture.md DEP-7.
+
+### §3 KaTeX in this app
+
+- **Where it runs.** Only in the renderer, inside Streamdown's lazily loaded math chunk
+  (`mermaid-*.js`, Streamdown's name for it). The chunk carries **two** copies of 0.16.47: the
+  one under rehype-katex renders every formula, and the app's own (`apps/desktop/node_modules/katex`)
+  checks partial TeX while an answer streams (`completePartialTex`), its output thrown away.
+  `@streamdown/math` declares katex but imports only rehype-katex and remark-math, and
+  micromark-extension-math imports it only in `mathHtml`, which tree-shakes away
+  (`sideEffects: false`). The lockfile has no top-level copy since `ce7e87b1` pinned the app to
+  `~0.16.47`: four nested copies of one version, two of them bundled, about 270 KB minified each.
+  DEP-6 §6's "one copy serves both" is corrected there; #698 is the dedupe. The `katex` directory
+  in `app.asar` (230 entries) is never loaded: the main process imports no KaTeX.
+- **`trust` is set nowhere.** rehype-katex receives `{ errorColor }` from `@streamdown/math`,
+  plus its own `displayMode` and `throwOnError`; the app's own call passes `{ throwOnError: true }`.
+- **KaTeX's output is not sanitized.** Streamdown appends the math plugin's rehype step after the
+  app's `rehypePlugins` (`[sanitize]`), so `trust` is that path's only gate. The output still goes
+  through the `components` overrides and the CSP. `AssistantMarkdown.tsx`, this file's "Markdown
+  rendering" description and security-model.md now say so.
+- **What the precondition would give, measured.** Rendered through the real `AssistantMarkdown` in
+  jsdom (a throwaway probe), the seven trust-gated commands came out as KaTeX error text with a clean
+  prototype. With `Object.prototype.trust = true`:
+  - `\href` and `\url` with an https URL became links through the app's `a` override, which admits
+    http(s) only and opens the system browser: what a Markdown link already gives. A `javascript:`
+    `\href` stayed a `<span>`.
+  - `\includegraphics` became an `<img>`. A remote one is blocked by `img-src 'self' data:`, as a
+    Markdown image is; a `data:` one displays, which Markdown cannot do (its sanitize strips a
+    `data:` image entirely, measured). It is still a picture: an `<img>` runs no script, SVG
+    included.
+  - `\htmlStyle`, `\htmlId`, `\htmlClass` and `\htmlData` reached the DOM as an inline style, an id, a
+    class and a `data-` attribute on a span. That is the one thing Markdown does not give: CSS that
+    can lay text over the window, security-model's "UI redressing" class, with no script
+    (`script-src 'self'`) and no network (`connect-src`, `img-src`, `font-src 'self'`). The id is
+    bare (the `user-content-` prefix covers Markdown's ids only), so it could shadow a window
+    global. It finds none to shadow: the main window's renderer reads only built-ins and the
+    preload's `api` (`window.ocrRaster` and `globalThis.pdfjsWorker` belong to the OCR page, which
+    renders no Markdown), and in Electron 43.7.7 a `<span id>` for each of them left them intact,
+    with a contextBridge `api`; only an otherwise undefined global resolved to the element. The one
+    `getElementById` (`root`) runs once at start.
+  - KaTeX's MathML copy carries the `javascript:` URL as `href` on an `<mrow>`. Chromium 150
+    (Electron 43.7.7) does not make MathML `href` a link: no `:any-link`, and a click navigates
+    nowhere and runs nothing, measured on a page with no CSP at all.
+- **The precondition.** A prototype-pollution bug in the renderer. None is known: a grep finds no
+  deep merge or `__proto__` handling in `src/renderer` and `src/shared` beyond a guard in
+  `benchmark-schema.ts`, and IPC payloads arrive by structured clone, which cannot pollute. That
+  was a sweep, not an audit.
+- **Why not `overrides`.** It would be the repo's first. It would run rehype-katex outside its
+  declared range until rehype-katex (7.0.1, its latest) and `@streamdown/math` (1.0.3) accept 0.18,
+  and move KaTeX's line: 0.18.0 prefixes KaTeX's internal CSS classes (the app's CSS targets none,
+  and `.katex`, `.katex-display` and `.frac-line` keep their names), and 0.18.11 / 0.19.0 report
+  missing glyph metrics through `strict`.
+
+### §4 Wave facts
+
+- **Mechanism:** `npm update source-map-js --package-lock-only` through the pinned npm 11.6.2.
+  Lockfile diff: one entry, three lines (version, resolved, integrity), the integrity equal to the
+  registry's. No collateral. Published 2026-09-30, outside Dependabot's 7-day cooldown.
+- **THIRD-PARTY-NOTICES.md:** not regenerated, since no shipped package moved. Running the
+  generator anyway reports 224 packages, unchanged.
+- **Gates.** A fresh `npm ci`, after which all 661 lockfile entries are installed at their locked
+  versions with nothing extra; typecheck; `npm run build` (main 261 modules); the full unfiltered
+  suite (Windows, from an upper-case drive letter): 496 files (471 passed / 25 skipped), vitest's
+  total 8,933 = master CI's 8,931 on `8115b6fc` (its ubuntu legs) plus the two pins; 8,842 passed and
+  90 skipped. Passed plus skipped is one short of the total, as on master's CI (8,836 + 94 of
+  8,931), with no failure and no `todo`. The four fewer skips are tests the ubuntu legs skip on
+  platform or binary gates. `npm audit`: 16 → **15** (the katex and sprintf-js chains, which
+  dismissals do not affect).
+- **The packaged artifact.** A `--win dir` package of master and of this branch: both `app.asar`s
+  have 4,125 entries and their 3,516 files hash identically. The packaging, notices and
+  asar-unpack gates pass against the real archive (`HILBERTRAUM_PACKED_ASAR`, 37/37).
+- **The pins.** Each went red under the mutation of its premise, and only it: rehype-katex given
+  `trust: true` fails the KaTeX pin; a `require("argparse")` added to mammoth's `lib/index.js`
+  fails the mammoth pin, and so does a `require("sprintf-js")` there, which resolves the hoisted
+  top-level copy (1.1.3), not argparse's. The mammoth pin matches any `argparse` or `sprintf-js`
+  path in the module cache, wherever npm puts the package (the review found the first draft
+  checked only the copies argparse resolves today). Both check their positive side too: KaTeX
+  typeset every expression and reported each `\html*` command as a strict-mode warning (captured,
+  so the run stays quiet); mammoth's own `lib` loaded through the cache the pin reads. Neither can
+  pass on input that never arrived.
+- **Not run:** the real-data PDF gold set (its corpus is not on this machine, and no PDF code
+  changed), and a real-app math check (KaTeX did not change).
+
+### §5 Follow-ups
+
+1. **#698:** the renderer bundles KaTeX twice (§3); a lockfile-only dedupe of the same version.
+2. **KaTeX 0.16 is a dead line.** A later KaTeX advisory will be fixed only on 0.18 or newer, so
+   it reopens §3's question, as does a rehype-katex or `@streamdown/math` release that accepts
+   0.18 (then a lockfile move, no `overrides`).
+3. **sprintf-js:** triage again if mammoth's library ever loads argparse (the pin fails) or a
+   patched sprintf-js 1.0.x appears. If mammoth drops argparse, sprintf-js leaves the Kit and the
+   alert closes itself. Upstream: alexei/sprintf.js#237.
+4. **Dismissed alerts stay dismissed** when a patch appears; a DEP wave lists
+   `state=dismissed` as well as `state=open`.
 
 ## App scheme `hilbertraum://app/` — design record (#560)
 
