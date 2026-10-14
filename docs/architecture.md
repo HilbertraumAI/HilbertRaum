@@ -5960,7 +5960,9 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   lifecycle; smart views are query-time). `role='generated'` is reserved-unused (N1 — generated docs
   get no membership). The composite PKs make add idempotent (`ON CONFLICT DO NOTHING`).
 - Additive `documents` columns (all nullable): `lifecycle` (NULL ⇒ permanent),
-  `source_relative_path` / `source_folder_label` (folder-import display metadata),
+  `source_relative_path` / `source_folder_label` (folder-import display metadata; no screen shows
+  them since the filing-suggestion removal. A pick that ends in a separator, such as a drive root
+  `D:\`, matches its files on that separator, and a drive root is labelled `D:`, #684),
   `pending_destination_json` (M1), `expires_at` (reserved for Phase-E.2 retention, NULL in v1).
   **`last_used_at` is deferred** (L2 — it would add a hot-path write per cited doc).
 - Additive `conversations` columns: `collection_id` (the legacy single-project creation anchor) +

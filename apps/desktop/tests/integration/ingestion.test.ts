@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
@@ -748,6 +749,85 @@ describe('expandPaths', () => {
     expect(top?.sourceRelativePath).toBe('top.txt')
     expect(top?.sourceFolderLabel).toBe(basename(root))
   })
+
+  // #684: a pick that already ends in a separator matched none of its own files, because the DM-3
+  // boundary appended a second one (`D:\` → `D:\\`), so every file lost its label and relative path.
+  it.each([
+    ['the native separator', sep],
+    ['a forward slash', '/'],
+    ['a doubled separator', sep + sep]
+  ])('expandPathsWithSource: a folder picked ending in %s keeps its label and relative paths (#684)', async (_, end) => {
+    const root = dir()
+    mkdirSync(join(root, 'sub'))
+    writeFileSync(join(root, 'sub', 'nested.txt'), 'x')
+    writeFileSync(join(root, 'top.txt'), 'x')
+
+    const { files, hasDir } = await expandPathsWithSource([root + end])
+    expect(hasDir).toBe(true)
+    const meta = files.map((f) => [basename(f.path), f.sourceRelativePath, f.sourceFolderLabel]).sort()
+    expect(meta).toEqual([
+      ['nested.txt', 'sub/nested.txt', basename(root)],
+      ['top.txt', 'top.txt', basename(root)]
+    ])
+  })
+
+  // DM-3, the boundary the #684 fix keeps: a file under `…\taxes` picked beside the folder `…\tax`
+  // shares its raw prefix, but is a picked file, not part of the `tax` import.
+  it('expandPathsWithSource: a sibling that only shares a picked folder name prefix gets no folder metadata (DM-3)', async () => {
+    const tax = join(dir(), 'tax')
+    const taxes = join(dir(), 'taxes')
+    mkdirSync(tax)
+    mkdirSync(taxes)
+    writeFileSync(join(tax, 'in.txt'), 'x')
+    const sibling = join(taxes, 'out.txt')
+    writeFileSync(sibling, 'x')
+
+    const { files } = await expandPathsWithSource([tax, sibling])
+    expect(files.find((f) => f.path === sibling)).toEqual({ path: sibling, sourceRelativePath: null, sourceFolderLabel: null })
+    expect(files.find((f) => f.path.endsWith('in.txt'))?.sourceFolderLabel).toBe('tax')
+  })
+
+  // The folder picker answers `D:\` for a whole drive (a USB stick); `subst` maps a free letter onto
+  // a temp folder to make one. A drive root has no basename, so it is labelled `D:`, not `D:\`.
+  it.runIf(process.platform === 'win32')(
+    'expandPathsWithSource: a drive root keeps relative paths and is labelled by its letter (#684)',
+    async (ctx) => {
+      const target = dir()
+      mkdirSync(join(target, 'sub'))
+      writeFileSync(join(target, 'sub', 'nested.txt'), 'x')
+      writeFileSync(join(target, 'top.txt'), 'x')
+      // A letter that looks free can still be taken (a disconnected network drive): try the next.
+      const letter = [...'ZYXWVUTSRQPONMLKJIHG']
+        .map((c) => `${c}:`)
+        .filter((l) => !existsSync(`${l}\\`))
+        .find((l) => {
+          try {
+            execFileSync('subst', [l, target], { stdio: 'ignore' })
+            return true
+          } catch {
+            return false
+          }
+        })
+      if (!letter) return ctx.skip('subst mapped no free drive letter')
+      try {
+        for (const pick of [`${letter}\\`, `${letter}/`]) {
+          const { files, hasDir } = await expandPathsWithSource([pick])
+          expect(hasDir).toBe(true)
+          const meta = files.map((f) => [f.path, f.sourceRelativePath, f.sourceFolderLabel]).sort()
+          expect(meta).toEqual([
+            [`${letter}\\sub\\nested.txt`, 'sub/nested.txt', letter],
+            [`${letter}\\top.txt`, 'top.txt', letter]
+          ])
+        }
+      } finally {
+        try {
+          execFileSync('subst', [letter, '/D'], { stdio: 'ignore' })
+        } catch {
+          // Leave the assertion's own error as the reported failure.
+        }
+      }
+    }
+  )
 
   // ING-4 (Wave P5): the walk switched to readdir withFileTypes (one syscall/entry), but a
   // Dirent does not follow symlinks, so symlinks fall back to statSync to keep the old
