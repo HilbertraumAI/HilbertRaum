@@ -13376,7 +13376,7 @@ Translate handoff · P3 `0687a437` docs truth · P4 `f8f3dc29` backend hardening
 3. **macOS/Linux packaged CSP + OCR smoke** (P5 measured Windows).
 4. **BE-7 memory profile** of a real 300+-page scan (manual, real assets) — confirms `page.cleanup()` keeps the hidden renderer flat.
 5. **`renderer/ocr/main.ts` pdfjs-side automated tests** (audit test-gap #4; the P5 harness covers the protocol level).
-6. **PreviewModal `ocrInfo` line renderer test** + **two-queued-OCR-tasks-on-one-doc pin** (P6 review residuals of gaps #1/#3).
+6. ~~**PreviewModal `ocrInfo` line renderer test**~~ (done 2026-10-05, #576) + ~~**two-queued-OCR-tasks-on-one-doc pin**~~ (done 2026-10-14, #687: the test-gaps row #3 above) (P6 review residuals of gaps #1/#3).
 
 Historical note: dated design-record narratives elsewhere in the docs (e.g. the §11.6/S-wave
 records in `design-guidelines.md`) describe the pre-wave overflow-item placement as it was

@@ -246,7 +246,6 @@ function fakeTesseract(): {
 describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
   afterEach(() => {
     vi.useRealTimers()
-    vi.unstubAllEnvs()
   })
 
   it('passes the explicit offline options: local langPath, gzip, no cache, LSTM-only', async () => {
@@ -363,7 +362,6 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
   // worker still runs; just past it, it is terminated. The row pins that this constant is the bound that
   // fires, not its value (2 min, a design-record decision).
   it('terminates the worker on a per-page timeout and recovers on the next page (REL-2)', async () => {
-    vi.stubEnv('HILBERTRAUM_OCR_PAGE_TIMEOUT_MS', '') // the shipped default, not a developer's override
     let created = 0
     let terminated = 0
     let markEntered!: () => void
@@ -630,7 +628,6 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
   // reads as it comes (null), the orientation worker is terminated, and detection stays off for this engine — a page that
   // wedged OSD would wedge it again — while text recognition carries on.
   it('a wedged orientation detection reads null at the page timeout, ends its worker, and switches detection off (#538)', async () => {
-    vi.stubEnv('HILBERTRAUM_OCR_PAGE_TIMEOUT_MS', '') // the shipped default, not a developer's override
     const langDir = tmp()
     writeFileSync(join(langDir, 'osd.traineddata.gz'), 'x')
     const { mod, entered, osd } = wedgingOsdModule()
