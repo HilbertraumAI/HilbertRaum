@@ -66,8 +66,11 @@ const A4: readonly [number, number] = [595, 842]
 /**
  * A geometry fixture's positioned words written as a real PDF (one A4 page each) and read back by the
  * production layout parser — the year/month carry, trimming and empty-page drop included — mapped to
- * chunks exactly as the skills segment reader maps parser segments. Snapshot-keyed on BANK_EXTRACTOR_VERSION
- * for the bank fixtures: its bump policy explicitly covers `pdf-layout.ts` reconstruction changes.
+ * chunks as the skills segment reader maps parser segments. (The parser itself: the stored-copy read and
+ * ingestion limits that wrap it in the app are not part of the corpus.) Snapshot-keyed on
+ * BANK_EXTRACTOR_VERSION for the bank fixtures: its bump policy explicitly covers `pdf-layout.ts`
+ * reconstruction changes — and so a pdf.js change that moves a geometry output demands a bump too, which
+ * is right: a statement already extracted under the old read would re-extract differently.
  */
 async function layoutChunks(pages: GeometryWord[][]): Promise<DocumentChunkRead[]> {
   // pdf.js drops text above the page box, so an off-page corpus word would vanish without a trace.
@@ -489,6 +492,19 @@ describe('extractor output snapshot — any output change forces a version bump 
         committed.invoiceExtractorVersion,
         'INVOICE_EXTRACTOR_VERSION moved but the committed snapshot was not regenerated in the same commit'
       ).toBe(INVOICE_EXTRACTOR_VERSION)
+    })
+
+    // (#687) The per-fixture rows below compare input hashes only once an output moved. Without this check a
+    // fixture edit that left its output alone keeps a STALE committed input hash, and the next output move on
+    // that fixture (an extractor change, in a commit touching no fixture) reads as a corpus edit and escapes
+    // the bump rule — the ACCEPTED exemption above, minus the visible corpus diff.
+    it('self-check (c): every committed inputHash is the current fixture input — an edit that left the output alone still regenerates', () => {
+      for (const [id, cur] of Object.entries(fresh.fixtures)) {
+        expect(
+          committed.fixtures[id]?.inputHash,
+          `snapshot entry "${id}": the fixture input changed since the snapshot was written — regenerate:\n  ${REGENERATE}`
+        ).toBe(cur.inputHash)
+      }
     })
 
     for (const [id, cur] of Object.entries(fresh.fixtures)) {

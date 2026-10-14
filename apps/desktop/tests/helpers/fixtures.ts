@@ -92,7 +92,9 @@ export function makeColumnarPdf(cells: PdfCell[], fontSize = 10): Buffer {
  * one page (#687: the layout parser carries the statement year and month from page to page, which one
  * page cannot show). The pages share one Helvetica font, numbered last, so a one-page call produces the
  * single-page builder's historical bytes. `pageSize` is the MediaBox (US Letter by default): pdf.js drops
- * text whose baseline lies above the page box, so every cell's y must stay under its height.
+ * text whose baseline lies above the page box, so every cell's y must stay under its height. A cell
+ * character WinAnsi cannot carry as its Latin-1 byte (U+2212, a narrow NBSP, …) throws instead of
+ * reaching the PDF as another character.
  */
 export function makeColumnarPdfPages(
   pages: PdfCell[][],
@@ -107,6 +109,7 @@ export function makeColumnarPdfPages(
   pages.forEach((cells, i) => {
     let content = ''
     for (const c of cells) {
+      if (!/^[\x20-\x7E\xA0-\xFF]*$/.test(c.text)) throw new Error(`not WinAnsi-safe: ${JSON.stringify(c.text)}`)
       const esc = c.text.replace(/([()\\])/g, '\\$1')
       content += `BT /F1 ${fontSize} Tf ${c.x} ${c.y} Td (${esc}) Tj ET\n`
     }

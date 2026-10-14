@@ -393,13 +393,12 @@ const invoiceUnreconcilable: InvoiceFixture = {
 // the extract tools). The pages are A4 (595 × 842 pt): pdf.js drops text above the page box (#687).
 // =====================================================================================================
 
-/** A positioned word for a geometry fixture (PDF text space: the run's left x, its baseline y). `w` is
- *  unused (pdf.js measures each run in the written PDF) but stays: the snapshot's input hash covers it. */
+/** A positioned text run for a geometry fixture, in PDF text space: its left x and its baseline y. No width:
+ *  pdf.js measures each run in the written PDF. WinAnsi characters only (the PDF builder refuses others). */
 export interface GeometryWord {
   str: string
   x: number
   y: number
-  w: number
 }
 
 export interface GeometryBankFixture {
@@ -414,7 +413,7 @@ export interface GeometryBankFixture {
   pages: GeometryWord[][]
 }
 
-const gw = (str: string, x: number, y: number): GeometryWord => ({ str, x, y, w: 8 })
+const gw = (str: string, x: number, y: number): GeometryWord => ({ str, x, y })
 
 /**
  * Swiss dot-decimal statement (R7, skills-audit-2026-07-03 SKA-13): small `d.dd` amounts (`5.04`,

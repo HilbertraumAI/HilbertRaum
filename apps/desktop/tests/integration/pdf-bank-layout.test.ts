@@ -75,8 +75,9 @@ function writePdf(...pages: PdfCell[][]): string {
 
 // One parse per (file, mode): a row's own read and the handler's `readDocumentSegments` share it. The mode
 // is part of the key, so a handler that stopped asking for layout would get the TEXT-mode parse (no rows).
+// Every read gets fresh segment objects, as production's re-parse would give it.
 const parsed = new Map<string, Promise<DocumentChunkRead[]>>()
-function parseSegments(pdfPath: string, layout: boolean): Promise<DocumentChunkRead[]> {
+async function parseSegments(pdfPath: string, layout: boolean): Promise<DocumentChunkRead[]> {
   const key = `${layout ? 'layout' : 'text'}:${pdfPath}`
   let segments = parsed.get(key)
   if (!segments) {
@@ -85,7 +86,7 @@ function parseSegments(pdfPath: string, layout: boolean): Promise<DocumentChunkR
     )
     parsed.set(key, segments)
   }
-  return segments
+  return (await segments).map((s) => ({ ...s }))
 }
 
 /**
