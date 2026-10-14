@@ -15,7 +15,8 @@
 // (`HILBERTRAUM_LLAMA_BIN`, `_WHISPER_BIN`, `_KIWIX_BIN`) must reach the tests untouched.
 //
 // A NEW override read in `src/` belongs in `SCRUBBED_ENV` (or, when a test tier must see the
-// developer's value, in `ENV_NOT_SCRUBBED` with the reason).
+// developer's value, in `ENV_NOT_SCRUBBED` with the reason); tests/unit/env-scrub.test.ts fails
+// until it is in one.
 
 /** Behaviour overrides read in `src/` (each one's reader in the comment), deleted for every test file. */
 export const SCRUBBED_ENV: readonly string[] = [
