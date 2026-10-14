@@ -2109,7 +2109,7 @@ are tracked under "Open hardening items" in `BUILD_STATE.md`.)
   (`registerDocsIpc.ts`) was an unauthenticated filesystem probe; it now calls `requireUnlocked()`
   and drops non-string path elements exactly like `importDocuments`, so a compromised renderer
   can neither drive a recursive directory walk of arbitrary paths while the workspace is locked
-  nor crash `expandPaths` with junk elements. It is still a token-less probe, though: after the
+  nor crash the import walk with junk elements. It is still a token-less probe, though: after the
   path cap (PR #275) it `stat`s the raw paths it is given (following symlinks — unlike the drop
   seam, it rejects none), so a UNC or device path reaches the filesystem before any lexical
   check — residual egress channel (ii) below, an accepted residual since owner decision #222

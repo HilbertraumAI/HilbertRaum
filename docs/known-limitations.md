@@ -844,7 +844,7 @@ password recovery — are documented in
   field by field on read and write since the PR #303 audit, not merely shape-checked as plain
   objects — `shared/benchmark-schema.ts`, H1/L8, owner decision G7), and the checksum-cache reader
   degrades a pre-existing corrupted row to a cache miss (BE-1, full-audit 2026-07-10).
-- `expandPaths` follows directory symlinks during import expansion.
+- The import walk (`expandPathsBoundedAsync`) follows directory symlinks during import expansion.
 - Sidecar port selection has a small TOCTOU window between `findFreePort()` and the spawn.
   `LlamaServer.start` retries a bind-class immediate exit ONCE on a fresh port (REL-1), and a
   transient bind race no longer arms the embedder/reranker start-latch (F4/F7) — so a single port

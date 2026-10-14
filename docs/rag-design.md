@@ -37,11 +37,13 @@ valid and lets the real embedder swap in unchanged (Phase 10).
 
 ### Steps
 
-1. **Select / expand.** `expandPaths()` turns a user selection into a flat file list:
+1. **Select / expand.** `expandPathsWithSource()` turns a user selection into a flat file list
+   through the asynchronous, budget-bounded walk `expandPathsBoundedAsync` (#274; the synchronous
+   `expandPaths` stays only as the tests' reference walk, #687):
    folders are walked recursively (supported extensions only); explicitly-picked files are
    always included (an unsupported one surfaces later as `failed`). The walk **follows
    symlinked directories** (intended — ING-4), but guards against a **symlink cycle**
-   (`a/loop -> ..`): it tracks the `realpathSync` of every directory on the *current recursion
+   (`a/loop -> ..`): it tracks the real path of every directory on the *current recursion
    path* in a Set and skips a directory whose real path is already an ancestor (backend audit
    2026-06-27, REL-9). This terminates a self-referential tree (which would otherwise recurse
    until ENAMETOOLONG/ELOOP or a stack overflow, re-adding files via every looped path) while
@@ -281,7 +283,8 @@ retrieval time.
 - Pipeline: txt → `indexed` with a workspace copy + sha256 + chunks; PDF page numbers on
   chunks; **corrupt PDF → `failed` with `error_message` (no crash)**; unsupported type →
   `failed`; re-index replaces chunks without duplication; delete removes everything.
-- `expandPaths` folder walking + explicit-file inclusion.
+- folder walking (`expandPathsBoundedAsync`, checked against the reference `expandPaths`) +
+  explicit-file inclusion.
 
 ---
 

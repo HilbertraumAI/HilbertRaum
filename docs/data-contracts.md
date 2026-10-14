@@ -633,9 +633,10 @@ head's own weights + KV.
   has exactly one `pageNumber`/`sectionLabel`), global cap at `maxChunks`.
 - **`index.ts`** — lifecycle + persistence. `createQueuedDocument`, `processDocument` (never
   throws: failures → `failed` + `error_message`), `reindexDocument`, `listDocuments`,
-  `getDocument`, `deleteDocument`, `expandPaths`, `documentsDir`. Statuses
-  `queued→extracting→chunking→embedding→indexed` (+`failed`/`deleted`); **`embedding` is a
-  pass-through** until Phase 5 (no vectors written yet).
+  `getDocument`, `deleteDocument`, `expandPathsWithSource` (the async walk the import runs, #274;
+  the synchronous `expandPaths` is the tests' reference walk, #687), `documentsDir`. Statuses
+  `queued→extracting→chunking→embedding→indexed` (+`failed`/`deleted`); `embedding` writes the
+  vectors (Phase 5).
 - **DB:** `documents` (status, `original_path`, `stored_path`, `sha256`, `mime_type`,
   `size_bytes`) + `chunks` (`chunk_index`, `text`, `source_label` = document title,
   `page_number`, `section_label`, `token_count`). `chunkCount` is computed per `listDocuments`.

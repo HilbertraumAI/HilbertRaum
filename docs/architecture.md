@@ -9974,7 +9974,7 @@ review-round findings are folded into their rows):
 | **GAP-2** | LOW | E | **fixed** — the four unguarded failure exits in `skills/run.ts` route through `finishRunGuarded` (the P-8 treatment): a doomed terminal UPDATE resolves the friendly envelope, never rejects raw; no more runs stranded 'started' until next-session reconcile. |
 | **GAP-3** | LOW | E | **fixed** — `PdfParser` awaits `loadingTask.promise` INSIDE the try/finally that destroys it: a corrupt/password PDF no longer leaks the pdf.js transport + up-to-`maxBytes` buffer per failed parse. |
 | **GAP-4** | LOW | E | **fixed** — the redact/edit locate catches use the app-wide `isAbortError(e, signal)` instead of the narrow DOMException name-check: a cancel surfacing as a wrapped runtime error records 'cancelled', not 'failed'. (Redaction's observable end state was coincidentally already correct — the degraded locate fell through to the gate's own abort pre-check; the EDIT seam misrecording 'failed' is the discriminating regression test.) |
-| **GAP-5** | LOW | E | **fixed** — delete/re-index IPC (and the reindex-all batch skip) refuse under an in-flight SKILL run via new `ctx.skillRunActive` (assigned by registerSkillsIpc from its module-local controller; `main.docs.skillRunning` EN+DE — the `requireNoActiveTask` mirror): no more mid-run interleaving / friendly-but-confusing persistFailed / orphaned rows under FK-off. Registered nit: the batch-skip branch has no direct test (shares probe + shape with the pinned doctask half) — optional hardening. |
+| **GAP-5** | LOW | E | **fixed** — delete/re-index IPC (and the reindex-all batch skip) refuse under an in-flight SKILL run via new `ctx.skillRunActive` (assigned by registerSkillsIpc from its module-local controller; `main.docs.skillRunning` EN+DE — the `requireNoActiveTask` mirror): no more mid-run interleaving / friendly-but-confusing persistFailed / orphaned rows under FK-off. Registered nit: the batch-skip branch has no direct test (shares probe + shape with the pinned doctask half) — optional hardening (done 2026-10-14, #682: all four skip conditions pinned in docs-ipc). |
 | **GAP-6** | LOW | E | **fixed** — redact + edit refuse `confirmed !== true` UP FRONT (gate copy mirrored) — no more full multi-window LLM locate pass before the gate refusal (no security impact; the gate always blocked the write); edit's DOCX branch gains redaction's explicit `confirmed === true` pre-touch check (branch parity). |
 | **GAP-7** | LOW | E | **fixed (premise half-stale; contract decided + documented)** — the pre-persist abort check already existed at audit HEAD (needed only a citing comment); the REAL gap was as reported: a cancel during the signal-less re-ingest was ignored and reported 'done' under a header claiming "cancel persists NOTHING". Decided contract: a pre-persist cancel actually cancels (nothing persisted); a post-persist cancel deliberately completes **'done'** (the work is real — never "cancelled, nothing happened" about a now-searchable document); header rewritten, both halves pinned (gated-rasterizer + gated-embedder tests). |
 | **DOC-1** | HIGH | A `e7cda05` | **fixed** — README RAM tiers (both spots) → the shipped §6.3 mapping: ≤12 GB → Qwen3-4B · 16–20 GB → Ministral 8B · ≥24 GB → Gemma 4 12B (re-verified against `benchmark.test.ts` before editing). |
@@ -10001,9 +10001,11 @@ here; everything is Low, none flip-blocking):
   (done 2026-10-05 by #532: "Engine load failures" §8) ·
   CODE-7 mounted-guard narrowing · the CODE-18 canned-answer persist site ·
   CODE-35 `key={preview.id}` · CODE-37 `setAutoFire` failure key · `diag.bench.cores` plural pair
-  (CODE-8 net allowlist) · the seven-plus older DE ASCII-quote closers (CODE-25) · a direct GAP-5
-  batch-skip test · exporting `TOKENS_PER_WORD` (the compare-budget tests hard-code `1.3`, the
-  pre-existing SK-2 idiom — a constant change would silently desync the tests' budget currency).
+  (CODE-8 net allowlist) · the seven-plus older DE ASCII-quote closers (CODE-25) · ~~a direct GAP-5
+  batch-skip test~~ · ~~exporting `TOKENS_PER_WORD`~~ (the compare-budget tests hard-coded `1.3`, the
+  pre-existing SK-2 idiom — a constant change would silently desync the tests' budget currency)
+  (both done 2026-10-14 by #682: docs-ipc's "re-index all skips a document held by …" rows; the RAG
+  budget tests read the exported constant).
 - **Owner items:** the CODE-9/TQ-6 manual-smoke inventory (BUILD_STATE §5, TS-3 sub-list) and the
   unchanged §46 carry-overs (TS-3/TS-7/TS-9, `rag*` knobs, SC-1).
 - **Test-infra lessons (recorded for future sessions):** `vi.spyOn` on `node:fs` does NOT
