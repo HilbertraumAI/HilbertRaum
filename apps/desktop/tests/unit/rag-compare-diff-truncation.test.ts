@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import type { Db } from '../../src/main/services/db'
-import { retrieveCompareDiff, buildCompareDiffPrompt, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
+import {
+  retrieveCompareDiff,
+  buildCompareDiffPrompt,
+  wholeDocumentFitBudgetTokens,
+  TOKENS_PER_WORD
+} from '../../src/main/services/rag'
 import { wordDiff, renderChangesForModel, renderRedline, DIFF_RENDER_MAX } from '../../src/main/services/diff'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { openFreshDb } from '../helpers/db-fixtures'
@@ -69,7 +74,7 @@ describe('retrieveCompareDiff — the DIFF_RENDER_MAX render cap sets truncated 
     // for the wrong reason).
     const full = wordDiff(stream(nChanges, 'A'), stream(nChanges, 'B'))!
     expect(full.changes.length).toBe(nChanges)
-    const fullTokens = approxTokenCount(renderChangesForModel(full.changes, { max: nChanges }).text) * 1.3
+    const fullTokens = approxTokenCount(renderChangesForModel(full.changes, { max: nChanges }).text) * TOKENS_PER_WORD
     expect(fullTokens).toBeLessThan(BIG_BUDGET)
 
     const { truncated, prompt } = compareOf(nChanges)
@@ -95,10 +100,10 @@ describe('retrieveCompareDiff — the DIFF_RENDER_MAX render cap sets truncated 
 // load-bearing half: when the pair over-runs, the redline is dropped FIRST (the doctask mode-d
 // sibling keeps the redline out of the prompt entirely — doctasks/handlers/compare.ts:171–178).
 describe('retrieveCompareDiff — the budget covers changes + redline JOINTLY (CODE-5)', () => {
-  /** Total approx-token cost of both model-facing blocks, in the SAME 1.3-scaled currency the
+  /** Total approx-token cost of both model-facing blocks, in the SAME scaled currency the
    *  budget check uses (`approxTokenCount × TOKENS_PER_WORD`). */
   const payloadTokens = (r: { changesText: string; redlineText: string }): number =>
-    (approxTokenCount(r.changesText) + approxTokenCount(r.redlineText)) * 1.3
+    (approxTokenCount(r.changesText) + approxTokenCount(r.redlineText)) * TOKENS_PER_WORD
 
   it('a ~200-one-word-change pair at a 4096-token window keeps the whole payload within budget', () => {
     const nChanges = 200
@@ -126,8 +131,8 @@ describe('retrieveCompareDiff — the budget covers changes + redline JOINTLY (C
     const changesWords = approxTokenCount(changesText)
     const redlineWords = approxTokenCount(renderRedline(full.changes, { max: DIFF_RENDER_MAX }).text)
     // A budget the COMPLETE change list fits alone but the changes+redline pair over-runs.
-    const budget = Math.floor((changesWords + redlineWords / 2) * 1.3)
-    expect(changesWords * 1.3).toBeLessThanOrEqual(budget) // sanity: the list alone fits
+    const budget = Math.floor((changesWords + redlineWords / 2) * TOKENS_PER_WORD)
+    expect(changesWords * TOKENS_PER_WORD).toBeLessThanOrEqual(budget) // sanity: the list alone fits
 
     const db = openFreshDb('cmpdiff')
     seedDoc(db, 'docA', a)
