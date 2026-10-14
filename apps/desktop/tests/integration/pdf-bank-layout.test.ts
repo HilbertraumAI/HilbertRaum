@@ -174,7 +174,7 @@ describe('PDF layout mode — geometry reconstruction recovers the columnar stat
 // lines, were both mis-parsed as transactions too. So 26 real rows became 43 and the gate could not
 // present a total. The fix: only a date in the booking-DATE column qualifies a row, and a `Kontostand
 // per` line is read by the balance gate. This pins the layout so it can't silently regress. SYNTHETIC
-// (`makeColumnarPdf`), never a real statement (D57).
+// (`makeColumnarPdfPages`), never a real statement (D57).
 describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per regression (column model)', () => {
   // Columns: Datum | Valuta | Buchungstext | Betrag | Saldo. The opening/closing `Kontostand per <date>`
   // lines are rendered as pseudo-rows with the date IN the Datum column (the real Raiffeisen geometry),
@@ -298,7 +298,7 @@ describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per
 // handle but those two don't: ENGLISH opening/closing labels on the gate-PASS path, an ENGLISH
 // value-date column on a second baseline (the column-model rejection in English), the honest gate
 // DOWNGRADE for a running-balance-only statement with NO printed opening/closing (in English), and a
-// multi-line wrapped description row (the booking row must still extract cleanly). All `makeColumnarPdf`.
+// multi-line wrapped description row (the booking row must still extract cleanly). All `makeColumnarPdfPages`.
 describe('PDF layout mode — synthetic breadth (English labels, EN value-date, EN downgrade, wrapped desc)', () => {
   // (a) English opening/closing labels that tie out → the gate PRESENTS the total, in English.
   it('English Balance brought/carried forward that ties out → gate presents the total (EN)', async () => {
@@ -521,7 +521,7 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
 // real TextItem distribution can pass `npm test` (M3's "a fixture can be green while a real statement
 // fails"). The local-only gold set is the real-distribution gate, but it runs off-CI; these fixtures
 // drive the SAME messiness through the real pdf.js path so the documented boundaries are pinned IN CI.
-// All are SYNTHETIC `makeColumnarPdf` — never a real statement (D57). None presents a wrong total: each
+// All are SYNTHETIC `makeColumnarPdfPages` — never a real statement (D57). None presents a wrong total: each
 // either reconstructs correctly or degrades to the honest gate downgrade (the cardinal D56 property).
 describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3)', () => {
   // (f) Sub-tolerance baseline JITTER: a real producer rarely emits a row's cells on a pixel-identical
@@ -678,7 +678,7 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
   //     booking fragment (`… EUR …`, payee lost, the Lastschrift shown POSITIVE). Now: the currency code
   //     is kept out of the description (A2), the payee continuation is merged in (A1), and the sign-column
   //     marker is folded into the amount (A3) — so a debit reads negative. No printed opening/closing →
-  //     the honest `unverified` labelled sum (D56-R). SYNTHETIC (`makeColumnarPdf`), never real (D57).
+  //     the honest `unverified` labelled sum (D56-R). SYNTHETIC (`makeColumnarPdfPages`), never real (D57).
   it('recovers payees from continuation baselines, strips EUR, and signs a Lastschrift negative', async () => {
     const UC = { date: 50, type: 140, cur: 300, amount: 470, sign: 512, desc: 140 }
     const cells: PdfCell[] = [{ text: 'Kontoumsaetze 2025 - alle Betraege in EUR', x: 50, y: 760 }]

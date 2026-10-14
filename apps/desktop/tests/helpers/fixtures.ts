@@ -78,20 +78,12 @@ function streamObject(data: Buffer | string, dict = ''): Buffer {
 }
 
 /**
- * Build a minimal valid single-page PDF whose text is POSITIONED cell-by-cell (one `Td`/`Tj` per
- * cell). This is the synthetic COLUMNAR fixture the PDF geometry-extraction tests need: pdf.js returns
+ * Build a minimal valid PDF whose text is POSITIONED cell-by-cell (one `Td`/`Tj` per cell), one page per
+ * entry. This is the synthetic COLUMNAR fixture the PDF geometry-extraction tests need: pdf.js returns
  * each cell with its `transform` x/y, so the layout reconstructor can rebuild the visual rows. Latin-1
  * + `/WinAnsiEncoding` so German umlauts (ü/ö/ä/ß) round-trip; never use a real bank statement (D57).
- */
-export function makeColumnarPdf(cells: PdfCell[], fontSize = 10): Buffer {
-  return makeColumnarPdfPages([cells], fontSize)
-}
-
-/**
- * The MULTI-PAGE columnar fixture: one page per entry, each built as {@link makeColumnarPdf} builds its
- * one page (#687: the layout parser carries the statement year and month from page to page, which one
- * page cannot show). The pages share one Helvetica font, numbered last, so a one-page call produces the
- * single-page builder's historical bytes. `pageSize` is the MediaBox (US Letter by default): pdf.js drops
+ * Several pages show what one cannot: the layout parser carries the statement year and month from page
+ * to page (#687). The pages share one Helvetica font, numbered last. `pageSize` is the MediaBox (US Letter by default): pdf.js drops
  * text whose baseline lies above the page box, so every cell's y must stay under its height. A cell
  * character WinAnsi cannot carry as its Latin-1 byte (U+2212, a narrow NBSP, …) throws instead of
  * reaching the PDF as another character.

@@ -7843,7 +7843,7 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
     can SEE the rows that were read.
 - **D57 — The gold set is LOCAL-ONLY / gitignored.** Real bank statements are user financial data
   (CLAUDE.md "never commit user data"); only aggregate metrics are committed, and every *test* fixture
-  is synthetic (`makeColumnarPdf`), never a real statement or excerpt.
+  is synthetic (`makeColumnarPdfPages`), never a real statement or excerpt.
 - **D58 — Layout mode is bank-statement ONLY.** The invoice skill is label/line-scan based, so
   column-reconstructed text could shift its line composition — adopt layout there (if ever) only behind
   its own measurement. Redaction/preview/translate/compare/ingest never set `layout`.
@@ -8043,7 +8043,7 @@ a broader corpus to trigger it.
 `parseDate` is untouched, `detectDatumColumn` density/leftmost/tie, out-of-column-date rejection,
 value-date drop, balance-line preservation, fallback-year, the REL-10 single-pass header fold over a
 500k-fragment page, a no-date page emitted raw). `tests/integration/pdf-bank-layout.test.ts`
-(SYNTHETIC columnar PDFs via `makeColumnarPdf`: text-mode loses every row while layout-mode recovers
+(SYNTHETIC columnar PDFs via `makeColumnarPdfPages`: text-mode loses every row while layout-mode recovers
 them + the correct total + honest coverage + citations + 0 model calls; a non-tying balance MUST
 downgrade; the Raiffeisen Valuta/second-baseline + `Kontostand per` regression pins the column model;
 and the Phase-31 breadth set — English `Balance brought/carried forward` gate-pass, an English value-
