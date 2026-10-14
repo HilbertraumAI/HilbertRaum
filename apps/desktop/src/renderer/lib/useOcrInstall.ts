@@ -21,7 +21,7 @@ const JOB_LIVE: ReadonlySet<OcrInstallJob['status']> = new Set([
 // during a live install keeps showing its progress instead of losing the job.
 let rememberedJob: OcrInstallJob | null = null
 
-/** Test/preview-only reset. Production code never calls this. */
+/** Test-only reset (no production or preview caller): forgets the module-remembered job. Production never clears it by design — the job lives on in main across a lock. */
 export function __resetOcrInstallForTests(): void {
   rememberedJob = null
 }

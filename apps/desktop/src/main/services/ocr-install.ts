@@ -58,7 +58,7 @@ import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 //   counts and outcomes only — never URLs, paths or error text.
 
 /** The licence of the tesseract language data (approved, docs/model-policy.md). Code-side. */
-export const OCR_LICENSE = 'Apache-2.0'
+const OCR_LICENSE = 'Apache-2.0'
 
 /** One pinned OCR file: what the app installs, anchored in code (#410). */
 export interface OcrPin {
@@ -75,7 +75,8 @@ export interface OcrPin {
 
 /**
  * The pinned bundle (D6: `deu` + `eng`, installed together; #538 added `osd`, the orientation
- * data). Hashes = the committed `runtime-sources.yaml` `ocr:` block (drift-tested); sizes measured
+ * data). Hashes = the committed `runtime-sources.yaml` `ocr:` block; hashes and sizes = docs/model-policy.md
+ * "The OCR asset class" (both drift-tested, tests/unit/ocr-pins.test.ts); sizes measured
  * from the pinned files themselves (`@tesseract.js-data/{deu,eng,osd}@1.0.0`, `4.0.0_best_int` —
  * deu/eng on 2026-09-22, osd on 2026-10-05; 1.27 / 2.82 / 4.12 MB in docs/model-policy.md "The OCR
  * asset class"). A drive that already has deu + eng downloads only `osd` (`planOcrDownloads`).
@@ -127,7 +128,7 @@ function loadOcrBlock(manifestsDir: string): OcrSources | null {
   }
 }
 
-export type OcrSourceResolution =
+type OcrSourceResolution =
   | { kind: 'ok'; urls: ReadonlyMap<string, string> }
   | { kind: 'none' }
   | { kind: 'mismatch' }
@@ -139,7 +140,7 @@ export type OcrSourceResolution =
  * (version skew or tampering) — refused, never "fixed" by falling back. Either way the bytes are
  * the code pins': the yaml only ever chooses the host.
  */
-export function resolveOcrSources(
+function resolveOcrSources(
   manifestsDir: string | null,
   bundledManifestsDir: string | null,
   pins: readonly OcrPin[] = OCR_PINS
@@ -193,7 +194,7 @@ function sourceHosts(urls: ReadonlyMap<string, string>): string | null {
  * into it (#410): created when missing; refused when it is a symlink/junction, not a directory,
  * or resolves (realpath) outside the root. Returns the folder path.
  */
-export async function prepareOcrFolder(rootPath: string): Promise<string> {
+async function prepareOcrFolder(rootPath: string): Promise<string> {
   const dir = ocrAssetsDir(rootPath)
   try {
     await lstat(dir)
@@ -241,8 +242,6 @@ export interface StartOcrInstallOptions extends OcrInstallSourceOptions {
 
 export interface OcrInstallDeps {
   fetchImpl?: FetchFn
-  /** Injected downloader (default `downloadToFile`) — tests capture the size cap. */
-  downloadImpl?: typeof downloadToFile
   /** Injected verifier (default `verifyDownloadedFile`) — tests gate it to pin cancel-in-verify. */
   verifyImpl?: typeof verifyDownloadedFile
   /** The pinned bundle (default `OCR_PINS`); tests pass pins that hash their fake bodies. */
@@ -447,7 +446,6 @@ export class OcrInstallManager {
     controller: AbortController
   ): Promise<void> {
     const signal = controller.signal
-    const download = this.deps.downloadImpl ?? downloadToFile
     const verify = this.deps.verifyImpl ?? verifyDownloadedFile
     // Every abort path ends here: the `.part` (if any) is removed and the job reads 'cancelled'
     // — set explicitly, because a status assignment may have raced the synchronous cancel().
@@ -475,7 +473,7 @@ export class OcrInstallManager {
 
       job.status = 'downloading'
       try {
-        await download(task.url, part, {
+        await downloadToFile(task.url, part, {
           fetchImpl: this.deps.fetchImpl,
           signal,
           maxBytes: pin.sizeBytes + OCR_SIZE_CAP_HEADROOM,
