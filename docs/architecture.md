@@ -5418,9 +5418,9 @@ install never fetches it.
 **As built.**
 - **The store** (`engine-load.ts`): `engineProblemBuilds(family)` answers `{ main, cpuNet }` from the
   verdict's `reporters` (§9), by the same `cpu/` path test the clear rule uses. `freshlyInstalled`
-  holds every program the install put on the drive, so `engineInstalled(family, binPaths)` takes a
-  list, and a fresh `cpu/` copy refused as damaged is marked `afterInstall` like a fresh main build
-  (§8, §10).
+  holds every program this session's installs put on the drive (`engineInstalled(family, binPaths)`
+  takes a list and adds it, so a later `cpu/`-only install leaves the main build fresh), and a fresh
+  `cpu/` copy refused as damaged is marked `afterInstall` like a fresh main build (§8, §10).
 - **The IPC gate** (`registerEngineIpc.ts`): `repairable` applies the renderer's own
   `engineProblemOffersReinstall` (damaged files, not `afterInstall`), and the reinstall passes the
   refused builds to the manager (`reinstallBuilds`).
@@ -5435,7 +5435,8 @@ install never fetches it.
   `cpu/` net is therefore refused for a real chat runtime alone, which can be on rung 3 (the status
   cannot tell, §8), never for a helper.
 - **`onInstalled`** reports every program a job put on the drive per family, main build first. A #516
-  update that replaced the `cpu/` net marks it fresh too.
+  update that replaced the `cpu/` net marks it fresh too. A job that stops part-way reports what it
+  replaced, a `cpu/` net alone included (#516 reported only a replaced main build).
 - **Check again** (`engine-recheck.ts`) checks the `cpu/` build (`resolveCpuFallbackServerPath`) when
   the `cpu/` net is the verdict's only reporter, and the main build otherwise. That matches §9's clear
   rule, under which a main build that reported clears the verdict whatever reported after it.
@@ -5466,6 +5467,11 @@ Computer nicht geladen werden") and was refused on rung 3: `files-damaged`, exit
   `afterInstall: true`, the banner showed the Visual C++ sentence with only "Erneut prüfen", and a
   reinstall request was refused with `main.engine.nothingToRepair`.
 
+**The review found two things, both fixed:** a job that stopped after replacing only the `cpu/` net
+told no one, and a later `cpu/`-only install made the store forget that the main build was fresh. Kept
+by design: when both builds reported, Check again checks the main build, whose healthy start clears
+the verdict anyway (§9).
+
 **Residuals.**
 - While the verdict stands, the banner's demo note ("Bis dahin antworten Modelle im Demo-Modus")
   reads as the engine's doing, although the demo runtime answers because the model failed; the
@@ -5478,7 +5484,8 @@ Computer nicht geladen werden") and was refused on rung 3: `files-damaged`, exit
 Tests: `engine-consent-ipc.test.ts` "#678" (the `cpu/`-only repair through the real handler and
 manager, its fresh copy refused again, both builds, a gone `cpu/` program, no `cpu/` build pinned,
 the per-build in-use guard), `engine-recheck.test.ts` "#678" (Check again on the `cpu/` net),
-`engine-load.test.ts` "after a reinstall on a Kit of …" (the fresh-copy mark per installed build).
+`engine-load.test.ts` "after a reinstall on a Kit of …" (the fresh-copy mark per installed build and
+across installs), `engine-download.test.ts` "#678" (a stopped job reports a `cpu/` net it replaced).
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 

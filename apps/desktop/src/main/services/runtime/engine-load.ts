@@ -371,12 +371,12 @@ export function clearEngineProblem(family: EngineProblemFamily, why: EngineVerdi
  * This family's engine was just installed (#530, #532): the old binary's verdict no longer
  * describes the new one, so it is dropped — a refusal of the new binary re-reports itself on its
  * next spawn. `binPaths` are the programs the install put on the drive (#678: the `cpu/` net's too),
- * remembered for the session so that such a re-report says {@link EngineProblem.afterInstall}.
- * Never throws.
+ * remembered for the session so that such a re-report says {@link EngineProblem.afterInstall}. They
+ * join the ones earlier installs put there: a later install of the `cpu/` net alone leaves the main
+ * build as fresh as it was. Never throws.
  */
 export function engineInstalled(family: EngineProblemFamily, binPaths: readonly string[] = []): void {
-  if (binPaths.length > 0) freshlyInstalled.set(family, new Set(binPaths))
-  else freshlyInstalled.delete(family)
+  freshlyInstalled.set(family, new Set([...(freshlyInstalled.get(family) ?? []), ...binPaths]))
   clearEngineProblem(family, 'installed')
 }
 

@@ -301,15 +301,16 @@ describe('the session verdict store', () => {
   const VC_OUTDATED = { family: 'llama_cpp' as const, reason: 'files-damaged' as const, os: 'win' as const, exit: 'exit code 0xC0000139' }
   const KIT_MAIN = 'E:\\runtime\\llama.cpp\\win\\llama-server.exe'
   const KIT_CPU = 'E:\\runtime\\llama.cpp\\win\\cpu\\llama-server.exe'
-  it.each<[string, string[], string[], boolean]>([
-    ['the main build: rungs 1–2 (the fresh copy), then rung 3 (cpu/) (#670)', [KIT_MAIN], [KIT_MAIN, KIT_MAIN, KIT_CPU], true],
-    ['the main build: cpu/ first, then the fresh copy, then cpu/ again (#670)', [KIT_MAIN], [KIT_CPU, KIT_MAIN, KIT_CPU], true],
-    ['the main build: cpu/ alone (rungs 1–2 failed for another reason) (#670)', [KIT_MAIN], [KIT_CPU], false],
-    ['the cpu/ net: cpu/ alone (#678)', [KIT_CPU], [KIT_CPU], true],
-    ['the cpu/ net: the main build, which it left as it was (#678)', [KIT_CPU], [KIT_MAIN], false],
-    ['both builds: cpu/ alone (#678)', [KIT_MAIN, KIT_CPU], [KIT_CPU], true]
-  ])('after a reinstall on a Kit of %s', (_label, installed, reporters, afterInstall) => {
-    engineInstalled('llama_cpp', installed)
+  it.each<[string, string[][], string[], boolean]>([
+    ['the main build: rungs 1–2 (the fresh copy), then rung 3 (cpu/) (#670)', [[KIT_MAIN]], [KIT_MAIN, KIT_MAIN, KIT_CPU], true],
+    ['the main build: cpu/ first, then the fresh copy, then cpu/ again (#670)', [[KIT_MAIN]], [KIT_CPU, KIT_MAIN, KIT_CPU], true],
+    ['the main build: cpu/ alone (rungs 1–2 failed for another reason) (#670)', [[KIT_MAIN]], [KIT_CPU], false],
+    ['the cpu/ net: cpu/ alone (#678)', [[KIT_CPU]], [KIT_CPU], true],
+    ['the cpu/ net: the main build, which it left as it was (#678)', [[KIT_CPU]], [KIT_MAIN], false],
+    ['both builds: cpu/ alone (#678)', [[KIT_MAIN, KIT_CPU]], [KIT_CPU], true],
+    ['the main build, later the cpu/ net alone: the main build is still a fresh copy (#678)', [[KIT_MAIN], [KIT_CPU]], [KIT_MAIN], true]
+  ])('after a reinstall on a Kit of %s', (_label, installs, reporters, afterInstall) => {
+    for (const installed of installs) engineInstalled('llama_cpp', installed)
     for (const binPath of reporters) reportEngineProblem(VC_OUTDATED, binPath)
     expect(engineProblemFor('llama_cpp')).toEqual(afterInstall ? { ...VC_OUTDATED, afterInstall: true } : VC_OUTDATED)
   })

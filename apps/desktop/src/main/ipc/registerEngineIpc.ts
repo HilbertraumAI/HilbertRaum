@@ -4,6 +4,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
   EngineDownloadJob,
+  EngineProblemFamily,
   EngineRecheckResult,
   EngineStatus,
   OcrInstallJob,
@@ -125,9 +126,13 @@ async function resumeChatModel(ctx: AppContext, modelId: string | null): Promise
  * verdict store does not cover (the knowledge-pack tools) never qualify.
  */
 function repairable(family: EngineFamily): boolean {
-  if (family !== 'llama_cpp' && family !== 'whisper_cpp') return false
-  const problem = engineProblemFor(family)
+  const problem = hasVerdicts(family) ? engineProblemFor(family) : null
   return problem !== null && engineProblemOffersReinstall(problem)
+}
+
+/** The engine families the verdict store covers (#530); the knowledge-pack tools are not one. */
+function hasVerdicts(family: EngineFamily): family is EngineProblemFamily {
+  return family === 'llama_cpp' || family === 'whisper_cpp'
 }
 
 /**
@@ -138,7 +143,7 @@ function repairable(family: EngineFamily): boolean {
 function refusedBuilds(families: readonly EngineFamily[]): Partial<Record<EngineFamily, EngineProblemBuilds>> {
   const builds: Partial<Record<EngineFamily, EngineProblemBuilds>> = {}
   for (const family of families) {
-    const refused = family === 'llama_cpp' || family === 'whisper_cpp' ? engineProblemBuilds(family) : null
+    const refused = hasVerdicts(family) ? engineProblemBuilds(family) : null
     if (refused) builds[family] = refused
   }
   return builds

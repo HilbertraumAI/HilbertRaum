@@ -875,8 +875,9 @@ export class EngineDownloadManager {
     } finally {
       for (const release of releases) release()
       // #516: a job that stopped part-way still replaced what it replaced — the consumers of a new
-      // main build need the same re-arm and probe refresh as after a complete install.
-      if (!complete && replaced.some((s) => s.main)) this.notifyInstalled(replaced)
+      // main build need the same re-arm and probe refresh as after a complete install. #678: so does
+      // a `cpu/` net a reinstall replaced alone: its old verdict goes, and the fresh copy is known.
+      if (!complete && replaced.length > 0) this.notifyInstalled(replaced)
     }
     job.binaryPath = steps.find((s) => s.main)?.plan.binaryPath ?? steps[0]?.plan.binaryPath ?? null
     job.status = 'done'
