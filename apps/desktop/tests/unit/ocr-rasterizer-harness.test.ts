@@ -117,6 +117,8 @@ import {
   rasterizePdfWithHiddenWindow,
   RASTER_STEP_TIMEOUT_MS
 } from '../../src/main/services/ocr/rasterizer'
+import { OCR_MAX_PAGE_PNG_BYTES } from '../../src/main/services/ocr/page-cap'
+import { log } from '../../src/main/services/logging'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../src/main/window-security'
 import { OCR_RASTER } from '../../src/shared/ipc'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -137,6 +139,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllEnvs()
 })
 
 const lastWin = (): FakeWin => {
@@ -163,6 +166,12 @@ const wellBehavedRenderer = (pageCount: number): void => {
 }
 
 const RASTER_CHANNELS = [OCR_RASTER.opened, OCR_RASTER.page, OCR_RASTER.error]
+
+/** The page numbers the window was asked to render, in order. */
+const renderRequests = (win: FakeWin): unknown[] =>
+  win.webContents.send.mock.calls
+    .filter(([channel]) => channel === OCR_RASTER.render)
+    .map(([, payload]) => (payload as { pageNumber: unknown }).pageNumber)
 
 /** Every teardown invariant that must hold after ANY completed run. */
 function expectFullTeardown(win: FakeWin): void {
@@ -253,6 +262,55 @@ describe('rasterizePdfWithHiddenWindow — success path', () => {
       [2, Buffer.from(PNG).toString('hex')],
       [3, Buffer.from(PNG).toString('hex')]
     ])
+    expectFullTeardown(lastWin())
+  })
+
+  // BE-6 (ocr-audit 2026-07-18) / #687: a PDF declaring more pages than the ingestion page cap is walked only up to the
+  // cap, and the CLAMPED count is what progress and the persisted page count see; the truncation is logged.
+  it('a PDF declaring more pages than the page cap is walked to the cap and reports the clamped count (BE-6)', async () => {
+    vi.stubEnv('HILBERTRAUM_PDF_MAX_PAGES', '2')
+    wellBehavedRenderer(5)
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      const counts: number[] = []
+      const pages: number[] = []
+      const result = await rasterizePdfWithHiddenWindow(PDF, {
+        onPageCount: (n) => counts.push(n),
+        onPage: (n) => {
+          pages.push(n)
+        }
+      })
+      expect(result).toEqual({ pageCount: 2 })
+      expect(counts).toEqual([2])
+      expect(pages).toEqual([1, 2])
+      expect(renderRequests(lastWin())).toEqual([1, 2]) // pages past the cap are never even rendered
+      expect(warn).toHaveBeenCalledWith('OCR page walk clamped to the ingestion page cap (M-2 parity)', {
+        declaredPageCount: 5,
+        maxPages: 2
+      })
+    } finally {
+      warn.mockRestore()
+    }
+    expectFullTeardown(lastWin())
+  })
+
+  // #575 / #687: `pages` (a text PDF's scanned pages) reaches the walk — only those are rendered, in ascending order —
+  // while the result still names the document's own page count.
+  it('renders only the requested pages, ascending, and reports how many it will render (#575)', async () => {
+    wellBehavedRenderer(4)
+    const counts: number[] = []
+    const pages: number[] = []
+    const result = await rasterizePdfWithHiddenWindow(PDF, {
+      pages: [3, 1],
+      onPageCount: (n) => counts.push(n),
+      onPage: (n) => {
+        pages.push(n)
+      }
+    })
+    expect(pages).toEqual([1, 3])
+    expect(renderRequests(lastWin())).toEqual([1, 3])
+    expect(counts).toEqual([2])
+    expect(result).toEqual({ pageCount: 4 })
     expectFullTeardown(lastWin())
   })
 
@@ -353,6 +411,55 @@ describe('rasterizePdfWithHiddenWindow — failure paths destroy the window', ()
     await expect(rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} })).rejects.toThrow(
       'The renderer process ended while rendering the PDF'
     )
+    expectFullTeardown(lastWin())
+  })
+
+  // REL-4 (backend-audit 2026-06-27) / #687: an over-cap page PNG fails the run before it reaches recognition — the
+  // pages before it were read, it never is — and the window is torn down.
+  it('an over-cap page PNG fails the run before recognition and tears down (REL-4)', async () => {
+    // Only the byte length is read (page-cap.ts); no 96 MiB allocation.
+    const huge = Object.defineProperty(new Uint8Array(4), 'byteLength', { value: OCR_MAX_PAGE_PNG_BYTES + 1 })
+    fake.state.onSend = (win, channel, payload) => {
+      queueMicrotask(() => {
+        if (channel === OCR_RASTER.open) reply(win, OCR_RASTER.opened, { pageCount: 3 })
+        if (channel === OCR_RASTER.render) {
+          reply(win, OCR_RASTER.page, { pageNumber: payload.pageNumber, png: payload.pageNumber === 2 ? huge : PNG })
+        }
+      })
+    }
+    const pages: number[] = []
+    await expect(
+      rasterizePdfWithHiddenWindow(PDF, {
+        onPage: (n) => {
+          pages.push(n)
+        }
+      })
+    ).rejects.toThrow(/too large/)
+    expect(pages).toEqual([1])
+    expectFullTeardown(lastWin())
+  })
+
+  // #687: an error frame that arrives with no request in flight (it raced a reply that already settled the waiter) is
+  // logged, not silently dropped — and it does not fail the run that is going on.
+  it('an error frame with no request in flight is logged and the run goes on', async () => {
+    fake.state.onSend = (win, channel, payload) => {
+      queueMicrotask(() => {
+        if (channel === OCR_RASTER.open) {
+          reply(win, OCR_RASTER.opened, { pageCount: 1 })
+          reply(win, OCR_RASTER.error, { message: 'late' }) // the waiter was settled by the reply above
+        }
+        if (channel === OCR_RASTER.render) reply(win, OCR_RASTER.page, { pageNumber: payload.pageNumber, png: PNG })
+      })
+    }
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      await expect(rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} })).resolves.toEqual({ pageCount: 1 })
+      expect(warn).toHaveBeenCalledWith('OCR rasterizer error frame arrived with no request in flight', {
+        message: 'late'
+      })
+    } finally {
+      warn.mockRestore()
+    }
     expectFullTeardown(lastWin())
   })
 })
