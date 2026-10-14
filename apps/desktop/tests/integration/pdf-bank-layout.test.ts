@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from '../../src/main/services/db'
-import { PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
+import { PDF_SCAN_DETECTED_MESSAGE, PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
 import { extractStatementBalances, extractTransactionRows } from '../../src/main/services/skills/tools/bank-statement'
 import {
   BANK_STATEMENT_INSTALL_ID,
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
 import type { SkillAnalysisResult } from '../../src/main/services/skills/analysis/types'
-import { makeColumnarPdfPages, type PdfCell } from '../helpers/fixtures'
+import { makeColumnarPdfPages, makeScanOnlyPdf, type PdfCell } from '../helpers/fixtures'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 import { seedLineChunkDoc } from '../helpers/doc-fixtures'
 import { makeAnalysisCtx } from '../helpers/skill-contexts'
@@ -717,5 +717,65 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     const { res } = await analyse(pdfPath, 'summarize spending by category')
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 3 }))
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// The layout page loop in `PdfParser` itself (#687): two pdf.ts contracts no single-page fixture reaches.
+// (1) A multi-page statement prints its period only on page 1, so the parser carries that page's year AND
+// anchor month on to later pages. Asserted on the parser's SEGMENT text, not extracted rows: the
+// extractor completes bare dates from its own document-level anchor, which would mask a missing carry.
+// (2) Scan detection is judged on the RAW text layer, so a text page whose rows all reconstruct to nothing
+// is not mistaken for an image-only scan (docs/architecture.md §21, the D51/D58 wiring note).
+describe('PdfParser layout mode — the page loop (multi-page carry, raw-text scan detection)', () => {
+  it('carries page 1’s year and period month to a later page: a bare December row rolls back a year', async () => {
+    const pdfPath = writePdf(
+      [
+        { text: 'Kontoauszug Zeitraum 05.01.2026 - 31.01.2026', x: 50, y: 750 },
+        { text: '05.01.', x: 50, y: 700 },
+        { text: 'Gehalt', x: 160, y: 700 },
+        { text: '2.500,00', x: 420, y: 700 }
+      ],
+      // Page 2 prints no year at all: only bare DD.MM. dates.
+      [
+        { text: '28.12.', x: 50, y: 700 },
+        { text: 'Miete', x: 160, y: 700 },
+        { text: '-900,00', x: 420, y: 700 },
+        { text: '15.01.', x: 50, y: 680 },
+        { text: 'Strom', x: 160, y: 680 },
+        { text: '-80,00', x: 420, y: 680 }
+      ]
+    )
+    const { segments } = await PdfParser.parse(pdfPath, { layout: true })
+    // The carried year completes both dates; the carried January month rolls the December row into 2025.
+    expect(segments.find((s) => s.pageNumber === 2)?.text).toBe('28.12.2025 Miete -900,00\n15.01.2026 Strom -80,00')
+  })
+
+  it('judges a scan on the RAW text: a page whose rows all reconstruct to nothing is still a text page', async () => {
+    // Two `<date> EUR <balance>` running-balance rows: neither has a description, so each reconstructs to
+    // nothing (pdf-layout.test.ts pins the row rule), yet the raw layer holds ~47 characters, over
+    // PDF_TEXT_PAGE_MIN_CHARS (25). Layout mode emits no segment and raises no scan error.
+    const phantomOnly = writePdf([
+      { text: '07.02.2024', x: 50, y: 700 },
+      { text: 'EUR', x: 300, y: 700 },
+      { text: '1.234,56', x: 420, y: 700 },
+      { text: '08.02.2024', x: 50, y: 680 },
+      { text: 'EUR', x: 300, y: 680 },
+      { text: '2.345,67', x: 420, y: 680 }
+    ])
+    await expect(PdfParser.parse(phantomOnly, { layout: true })).resolves.toMatchObject({ segments: [], pageCount: 1 })
+    // Text mode reads the same page as one segment.
+    expect((await PdfParser.parse(phantomOnly)).segments).toHaveLength(1)
+  })
+
+  it('a scan still fails in layout mode, and so does a page under the raw threshold that reconstructs to text', async () => {
+    const scan = join(tempRoot('pdflayout'), 'scan.pdf')
+    writeFileSync(scan, makeScanOnlyPdf(1))
+    await expect(PdfParser.parse(scan, { layout: true })).rejects.toThrow(PDF_SCAN_DETECTED_MESSAGE)
+    // The other side of the same rule: `Kontoauszug 2024` is 16 raw characters, so the page counts as a
+    // scan although its reconstruction (the raw header line) is not empty. The reconstruction never
+    // overrides the raw threshold in either direction; text mode gives the same verdict.
+    const short = writePdf([{ text: 'Kontoauszug 2024', x: 50, y: 750 }])
+    await expect(PdfParser.parse(short, { layout: true })).rejects.toThrow(PDF_SCAN_DETECTED_MESSAGE)
   })
 })
