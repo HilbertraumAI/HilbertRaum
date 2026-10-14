@@ -8,7 +8,7 @@ import {
   stopActive,
   translate
 } from '../../src/renderer/lib/translateSession'
-import { clearFileTranslate } from '../../src/renderer/lib/fileTranslateSession'
+import { clearFileTranslate, getFileTranslate, translateDroppedFiles } from '../../src/renderer/lib/fileTranslateSession'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { TranslateJob } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
@@ -162,6 +162,23 @@ describe('translateSession — remount recovery + guards', () => {
 
     resolveStart({ jobId: 'j1', state: 'queued', text: '' })
     await first
+  })
+
+  it('refuses while a DOCUMENT translation is in flight — no second job on the lane (L6a, #682)', async () => {
+    // The screen's one `busy` disables Translate while a file translation runs, so this guard is the
+    // only thing between a stray call and a second job on the one-at-a-time lane.
+    const translateStart = vi.fn(async () => ({ jobId: 'j1', state: 'queued', text: '' }) as TranslateJob)
+    stubApi({
+      getDroppedFilePath: vi.fn(() => 'C:\\docs\\a.pdf'),
+      importDocuments: vi.fn(() => new Promise<never>(() => {})), // the import stays in flight
+      translateStart
+    })
+    void translateDroppedFiles([new File(['%PDF'], 'a.pdf')], { sourceLang: 'de', targetLang: 'en' })
+    expect(getFileTranslate().busy).toBe(true) // busy from the start, before the import's first await
+
+    expect(await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })).toBe('busy')
+    expect(translateStart).not.toHaveBeenCalled()
+    expect(getTranslateSession().state).toBe('idle') // the refusal took nothing from the document's panel
   })
 
   it('a malformed translateStart resolve does not wedge the store stuck translating (L6b)', async () => {

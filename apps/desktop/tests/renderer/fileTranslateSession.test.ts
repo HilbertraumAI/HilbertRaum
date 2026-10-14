@@ -196,6 +196,31 @@ describe('fileTranslateSession — reject + guard paths', () => {
     expect(api.importDocuments).not.toHaveBeenCalled()
   })
 
+  // #162 (FE-2), #682: the store's own same-language defense — the screen guards first, so only a call
+  // that slips past it lands here. It runs BEFORE the start guard: with a foreign task on the lane (the
+  // guard would fail docTaskBusy), a same-language pair still reads, imports and raises nothing.
+  const SAME = { sourceLang: 'de', targetLang: 'de' } as const
+  it.each([
+    { entry: 'a drop', run: () => translateDroppedFiles([new File(['%PDF'], 'a.pdf')], SAME) },
+    { entry: 'a pick', run: () => translatePickedFile(SAME) }
+  ])('#162 (FE-2): $entry with the same language on both ends is a noop that imports nothing', async ({ run }) => {
+    const api = {
+      ...happyApi(),
+      startDocTask: vi.fn(async () => ({ jobId: 'foreign' })),
+      getDocTask: vi.fn(async () => docTask({ jobId: 'foreign', kind: 'summary' }))
+    }
+    stubApi(api)
+    await startTask('summary', 'doc9')
+
+    expect(await run()).toBe('noop')
+    const snap = getFileTranslate()
+    expect(snap.state).toBe('idle')
+    expect(snap.error).toBeNull() // not docTaskBusy: the language check came first
+    expect(api.getDroppedFilePath).not.toHaveBeenCalled()
+    expect(api.pickDocuments).not.toHaveBeenCalled()
+    expect(api.importDocuments).not.toHaveBeenCalled()
+  })
+
   it('busy-rejects a second document translation while one runs', async () => {
     const api = happyApi()
     stubApi(api)

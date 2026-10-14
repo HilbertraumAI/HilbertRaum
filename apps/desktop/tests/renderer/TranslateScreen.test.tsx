@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { clearTranslateSession, setLastTranslateChoice } from '../../src/renderer/lib/translateSession'
 import { clearFileTranslate } from '../../src/renderer/lib/fileTranslateSession'
-import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
+import { clearDocTaskSession, getActiveDocTask, isDocTaskTerminal, startTask } from '../../src/renderer/lib/doctasks'
 import { en, t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import type { AppStatus, DocTaskStatus, DocumentInfo, TranslateJob } from '../../src/shared/types'
@@ -300,7 +300,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
     expect(s.translateCancel).toHaveBeenCalledWith('j1')
   })
 
-  it('surfaces a docTaskBusy refusal as a friendly banner', async () => {
+  it("surfaces the backend's docTaskBusy refusal as a friendly banner", async () => {
     const s = streamStubs({ jobId: 'x', state: 'failed', error: 'docTaskBusy' })
     stubApi(s.api)
     const user = userEvent.setup()
@@ -309,6 +309,49 @@ describe('TranslateScreen — translate → stream → copy', () => {
     await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
     await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
     expect(await screen.findByText(t('en', 'translate.err.docTaskBusy'))).toBeInTheDocument()
+  })
+
+  // #162 (FE-3), #682: the screen's busy state covers only its own two paths, so with a Documents-row
+  // task on the lane Translate stays enabled and the click reaches the store's guard. A RUNNING task
+  // refuses with its own banner before any job starts; a FINISHED one, which the store keeps until a
+  // screen acknowledges it, does not block (the file path's guardStart rule).
+  async function startForeignDocTask(
+    s: ReturnType<typeof streamStubs>,
+    state: DocTaskStatus['state']
+  ): Promise<void> {
+    stubApi({
+      ...s.api,
+      startDocTask: vi.fn(async () => ({ jobId: 'foreign' })),
+      getDocTask: vi.fn(async () => docTask({ jobId: 'foreign', kind: 'summary', documentIds: ['doc9'], state }))
+    })
+    await startTask('summary', 'doc9')
+  }
+
+  it('#162 (FE-3): a RUNNING document task started elsewhere refuses with the docTaskBusy banner, no job starts', async () => {
+    const s = streamStubs()
+    await startForeignDocTask(s, 'running')
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+
+    await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
+    expect(await screen.findByText(t('en', 'translate.err.docTaskBusy'))).toBeInTheDocument()
+    expect(s.translateStart).not.toHaveBeenCalled()
+  })
+
+  it('#162 (FE-3): a FINISHED document task still in the store does not block the translation', async () => {
+    const s = streamStubs()
+    await startForeignDocTask(s, 'done')
+    await vi.waitFor(() => expect(isDocTaskTerminal(getActiveDocTask()?.status ?? null)).toBe(true), {
+      timeout: hangBudgetMs(3000)
+    })
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+
+    await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
+    await waitFor(() => expect(s.translateStart).toHaveBeenCalled())
+    expect(screen.queryByText(t('en', 'translate.err.docTaskBusy'))).not.toBeInTheDocument()
   })
 
   it('a dismissed error banner clears the store state (does not stick / reappear on remount)', async () => {
