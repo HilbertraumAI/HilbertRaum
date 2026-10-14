@@ -485,7 +485,14 @@ export function alignNodes(
   }
 }
 
-/** Per-pair output cap so all aligned-section notes provably fit the reduce input budget. */
+/**
+ * Per-pair output cap: the reduce input budget shared out over the aligned-section notes. At ctx ≥ 4096 (every
+ * shipped chat manifest) the notes fit that budget for every pair count the symmetric gate admits
+ * (≤ SYMMETRIC_COMPARE_CALL_CEILING). Below it the floors can overshoot (the 128-token floor from 10 pairs at the
+ * 2,048-token settings minimum; every pair count at 1024), and the reduce belt in `runCompareSymmetricTrees`
+ * then truncates the joined notes and labels the report `compareSymmetricTruncationNotice` (H8, #682). The
+ * uncapped Only-A / Only-B notes go through the same belt (M-1).
+ */
 export function comparePairOutputCap(contextTokens: number, pairCount: number): number {
   const usableInputTokens = compareBudgetWords(contextTokens) * SUMMARY_TOKENS_PER_WORD
   return Math.max(

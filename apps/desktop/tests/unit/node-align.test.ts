@@ -3,6 +3,8 @@ import {
   alignNodes,
   comparePairOutputCap,
   COMPARE_OUTPUT_TOKENS,
+  COMPARE_PROMPT_RESERVE_TOKENS,
+  SYMMETRIC_COMPARE_CALL_CEILING,
   SYMMETRIC_MATCH_MIN_SCORE,
   type AlignNode
 } from '../../src/main/services/doctasks/compare'
@@ -94,5 +96,24 @@ describe('comparePairOutputCap', () => {
     expect(few).toBeLessThanOrEqual(COMPARE_OUTPUT_TOKENS)
     expect(many).toBeGreaterThanOrEqual(128) // never below the floor
     expect(many).toBeLessThanOrEqual(few)
+  })
+
+  it.each([
+    [4096, 1, 512], // one pair: the per-call output ceiling
+    [4096, 24, 136], // the ceiling's worth of pairs: floor(2526 × 1.3 / 24)
+    [1024, 24, 128] // the 128-token floor binds
+  ])('ctx %i with %i pairs caps each note at %i tokens — pinned literals (#682)', (ctx, pairs, cap) => {
+    expect(comparePairOutputCap(ctx, pairs)).toBe(cap)
+  })
+
+  it('every pair count the symmetric gate admits fits the reduce input at ctx ≥ 4096 (the fit property, #682)', () => {
+    // Pairs never exceed the smaller document's level-1 sections, which the gate caps at the ceiling. Below 4096
+    // the floors can overshoot (ctx 2048 from 10 pairs); the reduce belt then truncates and labels the report.
+    for (const ctx of [4096, 8192]) {
+      const usable = ctx - COMPARE_OUTPUT_TOKENS - COMPARE_PROMPT_RESERVE_TOKENS
+      for (let pairs = 1; pairs <= SYMMETRIC_COMPARE_CALL_CEILING; pairs++) {
+        expect(pairs * comparePairOutputCap(ctx, pairs), `ctx ${ctx}, ${pairs} pairs`).toBeLessThanOrEqual(usable)
+      }
+    }
   })
 })

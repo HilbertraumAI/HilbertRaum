@@ -2720,7 +2720,9 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   provably fits the model's real context. Total ≤ budget → one call; else chunks pack
   greedily into budget-sized windows (an over-budget chunk is SPLIT, not truncated) →
   per-window partial summaries → one reduce pass, with each map call's `maxTokens` sized
-  to `usableTokens / windowCount` so all partials provably fit the reduce input. Hard
+  to `usableTokens / windowCount` so all partials fit the reduce input at every shipped
+  window (≥ 4096; at the 2,048-token settings minimum the 128-token floor overshoots from
+  10 windows and the reduce belt cuts the joined partials without setting `truncated`, #682). Hard
   ceiling: **12 map calls** (≈ a ~50-page document at the default context); beyond it the
   summary covers the beginning and is flagged `truncated` (the UI says so honestly).
 - **Persistence (D25):** additive nullable `documents.summary_json`
@@ -2792,7 +2794,9 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   the documents' language; temp 0.3, output cap 512 — both R-T2-validated over two
   smoke rounds on the real b9585 + Qwen3-4B). Map ceiling 12 → an honest truncation
   notice INSIDE the report ("covers the beginning of A"); map output caps are sized so
-  all notes provably fit the reduce input (the D25 fit property). **D37:** mode (a)'s
+  all notes fit the reduce input at every shipped window (the D25 fit property; at the
+  2,048-token settings minimum the 128-token floor overshoots from 10 windows, and the
+  belt cuts the joined notes and adds that truncation notice, #682). **D37:** mode (a)'s
   input AND the mode decision use the re-extracted parser segments (chunk overlap would
   read as phantom "shared" content and inflates a length estimate by ~16% — enough to
   mis-route the switch); mode (b)'s map deliberately uses the stored chunks (vectors
