@@ -491,7 +491,7 @@ password recovery — are documented in
   real user data, special chars as `\u` escapes) consolidating the incident classes (NBSP/narrow-NBSP,
   U+2212/en-dash signs, Summe/Endbetrag/Rechnungssumme labels, SEPA rows, dd.mm.yy + cross-year dates, wrapped
   descriptions), run through the REAL production extractors with the parsed figures asserted; (2) an
-  output-snapshot guard (`extractor-realworld.test.ts` + `extractor-output.snapshot.json`) that hashes each
+  output-snapshot guard (`skills-extractor-corpus.test.ts` + `extractor-output.snapshot.json`) that hashes each
   fixture's full extractor output keyed by extractor version — any output change FAILS the default suite
   unless the affected `*_EXTRACTOR_VERSION` was bumped and the snapshot regenerated
   (`UPDATE_EXTRACTOR_SNAPSHOT=1 …`), the mechanical backstop for the "every behaviour change bumps the

@@ -1,28 +1,23 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
+import { PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
 import {
-  extractTransactionsWithStats,
-  extractStatementBalances,
+  extractTransactionsTool,
   BANK_EXTRACTOR_VERSION,
   type ExtractTransactionsOutput
 } from '../../src/main/services/skills/tools/bank-statement'
 import {
-  extractInvoice,
+  extractInvoiceTool,
   validateInvoiceTotals,
   INVOICE_EXTRACTOR_VERSION,
   type ExtractedInvoice
 } from '../../src/main/services/skills/tools/invoice'
-import {
-  detectDocumentCurrency,
-  inferDateOrderResult,
-  inferDateAnchor,
-  looksLikeGlyphSoup,
-  normalizeExtractionText
-} from '../../src/main/services/skills/tools/money'
-import type { DocumentChunkRead } from '../../src/shared/types'
-import { reconstructPage } from '../../src/main/services/ingestion/parsers/pdf-layout'
+import type { DocumentChunkRead, SkillTool } from '../../src/shared/types'
+import { tempRoot } from '../helpers/db-fixtures'
+import { makeColumnarPdfPages } from '../helpers/fixtures'
+import { makeToolCtx } from '../helpers/skill-contexts'
 import {
   ALL_FIXTURES,
   BANK_FIXTURES,
@@ -33,101 +28,108 @@ import {
   type BankFixture,
   type GeometryBankFixture,
   type GeometryInvoiceFixture,
+  type GeometryWord,
   type InvoiceFixture
 } from '../fixtures/real-layouts/corpus'
 
 // Real-layout extractor tests (skills-remediation T1, audit §7 recs 1 + 2). TWO guards over the ONE
 // committed real-layout corpus (tests/fixtures/real-layouts/corpus.ts):
-//   1. Real-world extraction — the constructed incident-class layouts run through the REAL production
-//      extractors (the same currency/order/anchor inference the tool does) and the parsed FIGURES are
+//   1. Real-world extraction — the constructed incident-class layouts run through the PRODUCTION extract
+//      tools (`extract_transactions` / `extract_invoice`, their own `run`) and the parsed FIGURES are
 //      asserted: signs, grouped amounts, dd.mm.yy/cross-year dates, wrapped payees survive, the
 //      Steuerberatung label theft stays dead, phantom summary lines never become items.
 //   2. Output snapshot — a per-fixture hash of the full extractor output, committed and keyed by extractor
 //      version. Any change to the parsed output FAILS the run unless the affected extractor version was
 //      bumped AND the snapshot regenerated — the mechanical backstop for "every extractor behaviour change
 //      bumps the version" (plan §0), which green synthetic fixtures did not enforce (INVOICE-TOTALS-1).
-// Pure + offline: no DB, no runtime, no network — runs in the default `npm test`.
+// The geometry fixtures are written as real PDFs and read by the production layout parser (#687: this suite
+// used to copy the parser's page loop and the tools' bodies; an eval measures production, not a copy of it).
+// Offline: no DB, no runtime, no network — runs in the default `npm test`.
 
-// ---- Faithful production extraction (mirror of the tool's own call, so the corpus sees what users see) ----
+// ---- Production extraction (the tools' own `run`, so the corpus sees what users see) -------------------
 
 function toChunks(texts: string[]): DocumentChunkRead[] {
   return texts.map((text, index) => ({ text, page: index + 1, index }))
 }
 
-/** Exactly what `extractTransactionsTool.run` assembles (currency vote + order/anchor + balances + stats). */
-function runBank(fx: BankFixture): ExtractTransactionsOutput {
-  return runBankChunks(toChunks(fx.chunks))
+/** Run a production extract tool over one in-scope document serving `chunks`, as the run seam does. */
+async function runTool(tool: SkillTool, chunks: DocumentChunkRead[]): Promise<unknown> {
+  const { ctx } = makeToolCtx(chunks)
+  const result = await tool.run({ documentId: 'd1' }, ctx)
+  if (!result.ok) throw new Error(`${tool.name} failed on the corpus: ${result.error}`)
+  return result.output
 }
 
-/** The GEOMETRY pipeline end-to-end (R7, SKA-13): positioned words → the REAL `reconstructPage` (year +
- *  Datum-column resolution, page year/month carried forward like the PDF parser does) → the same bank
- *  extraction the plain fixtures run. Snapshot-keyed on BANK_EXTRACTOR_VERSION — the bump policy
- *  explicitly covers `pdf-layout.ts` reconstruction changes. */
-function runGeometryBank(fx: GeometryBankFixture): ExtractTransactionsOutput {
-  const texts: string[] = []
-  let fallbackYear: number | null = null
-  let fallbackMonth: number | null = null
-  for (const page of fx.pages) {
-    const { text, year, month } = reconstructPage(page, { fallbackYear, fallbackMonth })
-    texts.push(text)
-    fallbackYear = year
-    fallbackMonth = month
+/** The corpus geometry is laid out on A4 (its headers sit at y=800, above a US Letter page's 792). */
+const A4: readonly [number, number] = [595, 842]
+
+/**
+ * A geometry fixture's positioned words written as a real PDF (one A4 page each) and read back by the
+ * production layout parser — the year/month carry, trimming and empty-page drop included — mapped to
+ * chunks exactly as the skills segment reader maps parser segments. Snapshot-keyed on BANK_EXTRACTOR_VERSION
+ * for the bank fixtures: its bump policy explicitly covers `pdf-layout.ts` reconstruction changes.
+ */
+async function layoutChunks(pages: GeometryWord[][]): Promise<DocumentChunkRead[]> {
+  // pdf.js drops text above the page box, so an off-page corpus word would vanish without a trace.
+  for (const w of pages.flat()) {
+    if (w.x < 0 || w.x >= A4[0] || w.y < 0 || w.y >= A4[1]) throw new Error(`corpus word "${w.str}" lies off the A4 page`)
   }
-  return runBankChunks(toChunks(texts))
+  const path = join(tempRoot('extractor-corpus'), 'fixture.pdf')
+  const cells = pages.map((words) => words.map(({ str, x, y }) => ({ text: str, x, y })))
+  writeFileSync(path, makeColumnarPdfPages(cells, 10, A4))
+  const { segments } = await PdfParser.parse(path, { layout: true })
+  return segments.map((s, index) => ({ text: s.text, page: s.pageNumber ?? null, index }))
 }
 
-function runBankChunks(chunks: DocumentChunkRead[]): ExtractTransactionsOutput {
-  const joined = normalizeExtractionText(chunks.map((c) => c.text).join('\n'))
-  const statementCurrency = detectDocumentCurrency(joined)
-  const { order, inferred } = inferDateOrderResult(joined)
-  const anchor = inferDateAnchor(joined, order)
-  const { rows, droppedRowCount } = extractTransactionsWithStats(chunks, statementCurrency, order, anchor)
-  const balances = extractStatementBalances(chunks, order, anchor)
-  const output: ExtractTransactionsOutput = { transactions: rows, dateOrderInferred: inferred, droppedRowCount }
-  if (statementCurrency) output.currency = statementCurrency
-  if (balances.openingBalance !== undefined) output.openingBalance = balances.openingBalance
-  if (balances.closingBalance !== undefined) output.closingBalance = balances.closingBalance
-  return output
+type CorpusFixture = BankFixture | InvoiceFixture | GeometryBankFixture | GeometryInvoiceFixture
+
+interface CorpusRun {
+  kind: 'bank' | 'invoice'
+  /** The fixture's INPUT, as hashed for the snapshot (its chunks, or its geometry pages). */
+  input: unknown
+  output: unknown
 }
 
-/** Exactly what `extractInvoiceTool.run` assembles (currency vote + order/anchor + dateOrderInferred +
- *  the P3 glyph-soup textQuality stamp). */
-function runInvoice(fx: InvoiceFixture): ExtractedInvoice {
-  return runInvoiceChunks(toChunks(fx.chunks))
-}
-
-/** The geometry INVOICE pipeline end-to-end (invoice-hardening P4): positioned words → the REAL
- *  `reconstructPage` → the same invoice extraction the plain fixtures run — the production shape of the
- *  P3 suspect-retry (`analysis/invoice.ts` re-reads a soup document via the layout segment reader). */
-function runGeometryInvoice(fx: GeometryInvoiceFixture): ExtractedInvoice {
-  const texts: string[] = []
-  let fallbackYear: number | null = null
-  let fallbackMonth: number | null = null
-  for (const page of fx.pages) {
-    const { text, year, month } = reconstructPage(page, { fallbackYear, fallbackMonth })
-    texts.push(text)
-    fallbackYear = year
-    fallbackMonth = month
+/** Every fixture through production ONCE — the figure assertions and the snapshot read the same run. */
+async function runCorpus(): Promise<Map<string, CorpusRun>> {
+  const runs = new Map<string, CorpusRun>()
+  for (const fx of BANK_FIXTURES) {
+    runs.set(fx.id, { kind: 'bank', input: fx.chunks, output: await runTool(extractTransactionsTool, toChunks(fx.chunks)) })
   }
-  return runInvoiceChunks(toChunks(texts))
+  // Geometry fixtures snapshot as 'bank': their output is keyed on BANK_EXTRACTOR_VERSION, whose bump
+  // policy explicitly covers the `pdf-layout.ts` reconstruction (see the constant's docstring).
+  for (const fx of GEOMETRY_BANK_FIXTURES) {
+    runs.set(fx.id, { kind: 'bank', input: fx.pages, output: await runTool(extractTransactionsTool, await layoutChunks(fx.pages)) })
+  }
+  for (const fx of INVOICE_FIXTURES) {
+    runs.set(fx.id, { kind: 'invoice', input: fx.chunks, output: await runTool(extractInvoiceTool, toChunks(fx.chunks)) })
+  }
+  // Geometry invoice fixtures snapshot as 'invoice' (invoice-hardening P4): keyed on the INVOICE
+  // extractor version; `reconstructPage` changes ride the bank version's bump policy (see above). The
+  // layout read is the production shape of the P3 suspect-retry (`analysis/invoice.ts` re-reads a soup
+  // document via the layout segment reader).
+  for (const fx of GEOMETRY_INVOICE_FIXTURES) {
+    runs.set(fx.id, { kind: 'invoice', input: fx.pages, output: await runTool(extractInvoiceTool, await layoutChunks(fx.pages)) })
+  }
+  return runs
 }
 
-function runInvoiceChunks(chunks: DocumentChunkRead[]): ExtractedInvoice {
-  const joined = normalizeExtractionText(chunks.map((c) => c.text).join('\n'))
-  const currency = detectDocumentCurrency(joined)
-  const { order, inferred } = inferDateOrderResult(joined)
-  const anchor = inferDateAnchor(joined, order)
-  const invoice = extractInvoice(chunks, currency, order, anchor)
-  invoice.dateOrderInferred = inferred
-  // P3 mirror of `extractInvoiceTool.run`: the glyph-soup verdict over the RAW text layer.
-  if (looksLikeGlyphSoup(chunks.map((c) => c.text))) invoice.textQuality = 'suspect'
-  return invoice
+const RUNS = await runCorpus()
+
+function outputOf(fx: CorpusFixture): unknown {
+  const run = RUNS.get(fx.id)
+  if (!run) throw new Error(`no production run for fixture "${fx.id}"`)
+  return run.output
 }
+const bankOut = (fx: BankFixture | GeometryBankFixture): ExtractTransactionsOutput =>
+  outputOf(fx) as ExtractTransactionsOutput
+const invoiceOut = (fx: InvoiceFixture | GeometryInvoiceFixture): ExtractedInvoice => outputOf(fx) as ExtractedInvoice
 
 // ---- Snapshot plumbing (stable serialization + hash) ---------------------------------------------------
 
 const SNAPSHOT_PATH = resolve(__dirname, '../fixtures/real-layouts/extractor-output.snapshot.json')
 const UPDATE = process.env.UPDATE_EXTRACTOR_SNAPSHOT === '1'
+const REGENERATE = 'UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/skills-extractor-corpus.test.ts'
 
 /** Deterministic JSON with sorted keys (property order + platform must never move the hash). The replacer
  *  runs on EVERY nested value, so nested objects (rows/line-items inside their arrays) get their keys sorted
@@ -163,31 +165,13 @@ interface SnapshotFile {
 
 function currentSnapshot(): SnapshotFile {
   const fixtures: Record<string, SnapshotEntry> = {}
-  for (const fx of BANK_FIXTURES) {
-    const output = runBank(fx)
-    fixtures[fx.id] = { kind: 'bank', inputHash: sha256(stableStringify(fx.chunks)), hash: sha256(stableStringify(output)), output }
-  }
-  // Geometry fixtures snapshot as 'bank': their output is keyed on BANK_EXTRACTOR_VERSION, whose bump
-  // policy explicitly covers the `pdf-layout.ts` reconstruction (see the constant's docstring).
-  for (const fx of GEOMETRY_BANK_FIXTURES) {
-    const output = runGeometryBank(fx)
-    fixtures[fx.id] = { kind: 'bank', inputHash: sha256(stableStringify(fx.pages)), hash: sha256(stableStringify(output)), output }
-  }
-  for (const fx of INVOICE_FIXTURES) {
-    const output = runInvoice(fx)
-    fixtures[fx.id] = { kind: 'invoice', inputHash: sha256(stableStringify(fx.chunks)), hash: sha256(stableStringify(output)), output }
-  }
-  // Geometry invoice fixtures snapshot as 'invoice' (invoice-hardening P4): keyed on the INVOICE
-  // extractor version; `reconstructPage` changes ride the bank version's bump policy (see above).
-  for (const fx of GEOMETRY_INVOICE_FIXTURES) {
-    const output = runGeometryInvoice(fx)
-    fixtures[fx.id] = { kind: 'invoice', inputHash: sha256(stableStringify(fx.pages)), hash: sha256(stableStringify(output)), output }
+  for (const [id, { kind, input, output }] of RUNS) {
+    fixtures[id] = { kind, inputHash: sha256(stableStringify(input)), hash: sha256(stableStringify(output)), output }
   }
   return {
     $comment:
       'GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by ' +
-      'extractor version. Regenerate in the SAME commit as any extractor version bump: ' +
-      'UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts',
+      `extractor version. Regenerate in the SAME commit as any extractor version bump: ${REGENERATE}`,
     bankExtractorVersion: BANK_EXTRACTOR_VERSION,
     invoiceExtractorVersion: INVOICE_EXTRACTOR_VERSION,
     fixtures
@@ -196,7 +180,7 @@ function currentSnapshot(): SnapshotFile {
 
 // ---- 1. Real-world extraction assertions --------------------------------------------------------------
 
-describe('real-layout corpus — figures parse correctly through the real extractors', () => {
+describe('real-layout corpus — figures parse correctly through the production extract tools', () => {
   it('fixture ids are unique across the plain and geometry corpora (a collision would silently shadow a snapshot entry)', () => {
     const ids = [...ALL_FIXTURES, ...GEOMETRY_BANK_FIXTURES, ...GEOMETRY_INVOICE_FIXTURES].map((f) => f.id)
     expect(new Set(ids).size).toBe(ids.length)
@@ -212,7 +196,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('bank-at-elba: NBSP grouping, U+2212 signs, cross-year + dd.mm.yy dates, wrapped SEPA payee, balances', () => {
-    const out = runBank(BANK_FIXTURES[0])
+    const out = bankOut(BANK_FIXTURES[0])
     expect(out.currency).toBe('EUR')
     expect(out.droppedRowCount).toBe(0)
     const byDesc = new Map(out.transactions.map((t) => [t.description, t]))
@@ -235,7 +219,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('bank-de-sparkasse: en-dash debits, narrow-NBSP grouping, wrapped payee, running balances, order default', () => {
-    const out = runBank(BANK_FIXTURES[1])
+    const out = bankOut(BANK_FIXTURES[1])
     expect(out.currency).toBe('EUR')
     const byDesc = new Map(out.transactions.map((t) => [t.description, t]))
     // en-dash (U+2013) signs the debit negative (R1).
@@ -255,7 +239,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('bank-at-ddmmyy: period lines invent NO transaction; dd.mm.yy trailing dates are not the balances (R7, SKA-1/2)', () => {
-    const out = runBank(BANK_FIXTURES[2])
+    const out = bankOut(BANK_FIXTURES[2])
     expect(out.currency).toBe('EUR')
     // The two period lines (`01.03.2026 bis 31.03.2026`, `15.03.26 bis 31.03.26 Zinsperiode`) used to
     // invent {description: "bis", amount: 30.04 / 3103.26} rows — exactly 3 REAL rows survive, none "bis".
@@ -280,7 +264,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
     // `31.02.2026` Rücklastschrift line is date-SHAPED (LEADING_DATE_SHAPE) and money-bearing
     // (hasMoneyToken) but cannot parse (Feb 31) — it must be counted, never silently vanish.
     // Teeth: revert U1's droppedWithFigure counting (or the R7 SHAPE gate) → dropped reads 0 → red.
-    const out = runBank(BANK_FIXTURES[3])
+    const out = bankOut(BANK_FIXTURES[3])
     expect(out.currency).toBe('EUR')
     expect(out.transactions).toHaveLength(2)
     expect(out.transactions.map((t) => t.description)).toEqual(['Kartenzahlung REWE', 'SEPA-Gutschrift Gehalt'])
@@ -298,7 +282,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
     // rows refute them — the 'contradicted' verdict is the ANALYSIS layer's (assessCompleteness), pinned
     // end-to-end in skills-analysis-bank.test.ts. Here: both rows parse (dropped 0), opening 500,
     // closing 999.99 (the refuted print), Σ(rows) = 80 ≠ 499.99.
-    const out = runBank(BANK_FIXTURES[4])
+    const out = bankOut(BANK_FIXTURES[4])
     expect(out.currency).toBe('EUR')
     expect(out.transactions).toHaveLength(2)
     expect(out.transactions.map((t) => t.amount)).toEqual([-20, 100])
@@ -308,7 +292,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('bank-ch-geometry-dot-decimal: d.dd amounts survive the geometry path; in-band d.dd stays the date (R7, SKA-13)', () => {
-    const out = runGeometryBank(GEOMETRY_BANK_FIXTURES[0])
+    const out = bankOut(GEOMETRY_BANK_FIXTURES[0])
     expect(out.currency).toBe('CHF')
     // Before: `5.04`/`1.12` were eaten as out-of-column DATES → each row's only figure was its running
     // balance (balance-as-amount, the cardinal harm). Now the amounts are the amounts.
@@ -317,8 +301,9 @@ describe('real-layout corpus — figures parse correctly through the real extrac
     expect(out.transactions.map((t) => t.balanceAfter)).toEqual([1209.44, 1210.56, 1230.56, 1234.06, 1244.06])
     // The IN-band yearless `7.02` is still the booking DATE, completed by the page year.
     expect(out.transactions[3].date).toBe('2026-02-07')
-    // Page 2 has no year header: its row completes against the CARRIED document year (the fallback
-    // loop), and its wrapped-payee continuation absorbs (the d.dd annotation `13.02` is dropped).
+    // Page 2 has no year header: its row completes against the CARRIED document year (the parser's
+    // carry — pinned on segment text in pdf-bank-layout, since the extractor's own anchor would complete
+    // the date too), and its wrapped-payee continuation absorbs (the d.dd annotation `13.02` is dropped).
     expect(out.transactions[4].date).toBe('2026-02-12')
     expect(out.transactions[4].description).toBe('Gutschrift Ausgleich Wert:')
     // Opening + Σamounts == closing — the tie proves no row lost its amount to the date classifier.
@@ -328,7 +313,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('invoice-de-ddmmyy-money-headers: money-bearing header lines stay items byte-exact; dd.mm.yy scrubbed (R7, SKA-14/2/1)', () => {
-    const inv = runInvoice(INVOICE_FIXTURES[3])
+    const inv = invoiceOut(INVOICE_FIXTURES[3])
     const descs = inv.lineItems.map((l) => l.description)
     // SKA-14: the vendor/number label lines with figures are LINE ITEMS (nothing vanished behind a
     // header), and their descriptions carry the untouched mid-line dates BYTE-EXACT (the SKA-1
@@ -353,7 +338,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('invoice-at-steuerberatung: label theft dead (Steuerberatung stays an item), Steuer→tax, Summe labels, NBSP', () => {
-    const inv = runInvoice(INVOICE_FIXTURES[0])
+    const inv = invoiceOut(INVOICE_FIXTURES[0])
     const descs = inv.lineItems.map((l) => l.description)
     // The audit §5.2 CRITICAL: `Steuerberatung Jänner` must NOT be stolen into taxTotal by the `steuer` prefix.
     expect(descs).toContain('Steuerberatung Jänner')
@@ -371,7 +356,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('invoice-ch-summe-apostrophe: Swiss U+2019 grouping, wrapped line-item description, Summe gross', () => {
-    const inv = runInvoice(INVOICE_FIXTURES[1])
+    const inv = invoiceOut(INVOICE_FIXTURES[1])
     expect(inv.header.currency).toBe('CHF')
     // Swiss `2’400.00` (U+2019 grouping) reads 2400, not 2 (R1); the wrapped `Onsite-Workshop Zürich`
     // continuation is appended to the first item's description (R6).
@@ -385,7 +370,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('invoice-de-endbetrag-phantom: Zwischensumme/Endbetrag never become phantom items; en-dash credit stays', () => {
-    const inv = runInvoice(INVOICE_FIXTURES[2])
+    const inv = invoiceOut(INVOICE_FIXTURES[2])
     const descs = inv.lineItems.map((l) => l.description)
     // The phantom-item guard (R2): summary lines are NOT line items.
     expect(descs).not.toContain('Zwischensumme')
@@ -399,7 +384,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('invoice-us-glyph-soup: suspect textQuality stamped; every uncorroborated weak total retracted (P2/P3)', () => {
-    const inv = runInvoice(INVOICE_FIXTURES[4])
+    const inv = invoiceOut(INVOICE_FIXTURES[4])
     // P3: the fragmented text layer is flagged — the answer layer keys its refusal/retry on this.
     expect(inv.textQuality).toBe('suspect')
     // P2: the incident's confident garbage (net 4 / tax 0 / gross 914, all bare-integer weak reads that
@@ -410,7 +395,7 @@ describe('real-layout corpus — figures parse correctly through the real extrac
   })
 
   it('invoice-de-unreconcilable-totals: printed 2-dp totals kept VERBATIM; the validator reports the mismatch', () => {
-    const inv = runInvoice(INVOICE_FIXTURES[5])
+    const inv = invoiceOut(INVOICE_FIXTURES[5])
     // Strong decimal-shaped figures are the document's own print — never retracted (the answer layer
     // gates their presentation; P2 touches only weak bare-integer reads).
     expect(inv.totals).toEqual({ netTotal: 300, taxTotal: 60, taxRatePercent: 20, grossTotal: 999 })
@@ -420,8 +405,8 @@ describe('real-layout corpus — figures parse correctly through the real extrac
     expect(validation.checks.find((c) => c.name === 'netPlusTaxIsGross')?.status).toBe('mismatch') // 360 ≠ 999
   })
 
-  it('invoice-de-geometry-columns: a columnar invoice reconstructs and parses CLEANLY through reconstructPage (P3 retry path)', () => {
-    const inv = runGeometryInvoice(GEOMETRY_INVOICE_FIXTURES[0])
+  it('invoice-de-geometry-columns: a columnar invoice PDF reconstructs and parses CLEANLY through the layout parser (P3 retry path)', () => {
+    const inv = invoiceOut(GEOMETRY_INVOICE_FIXTURES[0])
     expect(inv.textQuality).toBeUndefined() // the reconstructed text is NOT soup
     expect(inv.header.invoiceNumber).toBe('G-2026-3')
     expect(inv.header.invoiceDate).toBe('2026-03-15')
@@ -516,24 +501,22 @@ describe('extractor output snapshot — any output change forces a version bump 
         const constName = isBank ? 'BANK_EXTRACTOR_VERSION' : 'INVOICE_EXTRACTOR_VERSION'
         const curVer = isBank ? fresh.bankExtractorVersion : fresh.invoiceExtractorVersion
         const prevVer = isBank ? committed.bankExtractorVersion : committed.invoiceExtractorVersion
-        const regen =
-          'UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts'
         // The fixture INPUT hash tells a corpus edit apart from a real extractor change: only the latter
         // (output moved for UNCHANGED input) must bump the version.
         if (prev.inputHash !== cur.inputHash) {
           throw new Error(
             `Fixture "${id}" was EDITED (its input changed), so its parsed output moved. This is a corpus ` +
-              `change, not an extractor change — no version bump needed. Regenerate the snapshot:\n  ${regen}`
+              `change, not an extractor change — no version bump needed. Regenerate the snapshot:\n  ${REGENERATE}`
           )
         }
         throw new Error(
           curVer > prevVer
             ? `Extractor output changed for "${id}" (unchanged input) and ${constName} was bumped ` +
-              `(${prevVer} → ${curVer}) — GOOD. Regenerate the committed snapshot in this commit:\n  ${regen}`
+              `(${prevVer} → ${curVer}) — GOOD. Regenerate the committed snapshot in this commit:\n  ${REGENERATE}`
             : `Extractor output changed for "${id}" (unchanged fixture input — an extractor change) but ` +
               `${constName} is still ${curVer}. Every extractor behaviour change must bump the version by ` +
               `exactly 1 (plan §0) so stale rows re-extract. Either revert, or bump ${constName} AND ` +
-              `regenerate the snapshot:\n  ${regen}`
+              `regenerate the snapshot:\n  ${REGENERATE}`
         )
       })
     }

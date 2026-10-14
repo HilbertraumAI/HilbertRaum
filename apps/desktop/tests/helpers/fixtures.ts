@@ -91,9 +91,14 @@ export function makeColumnarPdf(cells: PdfCell[], fontSize = 10): Buffer {
  * The MULTI-PAGE columnar fixture: one page per entry, each built as {@link makeColumnarPdf} builds its
  * one page (#687: the layout parser carries the statement year and month from page to page, which one
  * page cannot show). The pages share one Helvetica font, numbered last, so a one-page call produces the
- * single-page builder's historical bytes.
+ * single-page builder's historical bytes. `pageSize` is the MediaBox (US Letter by default): pdf.js drops
+ * text whose baseline lies above the page box, so every cell's y must stay under its height.
  */
-export function makeColumnarPdfPages(pages: PdfCell[][], fontSize = 10): Buffer {
+export function makeColumnarPdfPages(
+  pages: PdfCell[][],
+  fontSize = 10,
+  pageSize: readonly [width: number, height: number] = [612, 792]
+): Buffer {
   const fontNum = 3 + 2 * pages.length
   const objs: Array<string | Buffer> = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -106,7 +111,7 @@ export function makeColumnarPdfPages(pages: PdfCell[][], fontSize = 10): Buffer 
       content += `BT /F1 ${fontSize} Tf ${c.x} ${c.y} Td (${esc}) Tj ET\n`
     }
     objs.push(
-      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageSize[0]} ${pageSize[1]}] ` +
         `/Resources << /Font << /F1 ${fontNum} 0 R >> >> /Contents ${4 + 2 * i} 0 R >>`,
       streamObject(content)
     )

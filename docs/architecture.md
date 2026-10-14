@@ -9332,11 +9332,11 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
 | A1 | §6.1, §6.4 | invoice-run's layer-for-layer copy folded into ONE `DomainRunConfig`-driven engine (`runDomainExtractionInner`); shared `analysis/common.ts` | `run.ts`, `invoice-run.ts`, `analysis/common.ts` |
 | A2 | §6.2 | `shared/skill-tools.ts` self-describing `SkillToolDescriptor` single-sources the wired-tool lists + labels + dialogs; `SkillRunController` scoped per-document | `shared/skill-tools.ts`, `run-controller.ts` |
 | A3 | §6.3, §8.2 | manifest `analysis:` mode + inverted whole-doc gate (`manifestAnalysisHandler`; `isNeedleShaped` / `isSmallTalk` skill-agnostic) | `analysis/whole-doc-skills.ts`, `registerRagIpc.ts` |
-| T1 | §7 | real-layout fixture corpus run through the production extractors + output-**SNAPSHOT** version-bump guard + env-gated real-model smoke (`describe.runIf`, skipped in CI) | `tests/{fixtures/real-layouts,integration/extractor-realworld,e2e-model}` |
+| T1 | §7 | real-layout fixture corpus run through the production extractors + output-**SNAPSHOT** version-bump guard + env-gated real-model smoke (`describe.runIf`, skipped in CI) | `tests/{fixtures/real-layouts,integration/skills-extractor-corpus,e2e-model}` |
 
 Both extractor versions climbed to **8** over the wave (R1→4, R2→5, R5→6, R6→7, U1→8) — every extractor
 behavior change bumps by exactly 1 so stale rows re-extract — and the T1 output-snapshot guard
-(`extractor-realworld.test.ts`) now FAILS the default suite on any corpus-fixture output change unless the
+(`skills-extractor-corpus.test.ts`) now FAILS the default suite on any corpus-fixture output change unless the
 version was bumped AND the snapshot regenerated. The `42a4eb9` U1-review fix was reconciled onto the tip
 in this close-out's **Part A** and owed **no** version bump (no corpus-fixture output moved; the fixtures
 are clean, `droppedRowCount` 0). Suite at close: **3071 passed / 44 skipped** (incl. the 3 collected-but-
