@@ -125,7 +125,8 @@ classifies as a load refusal is cleared (both fields) at every session start. No
 `afterInstall?: boolean` — a `'files-damaged'` verdict about the very program this session's
 engine install put on the drive (session-only, like the verdict; the UI then offers no second
 reinstall). Since #670 (§10 there) the verdict keeps it for every later `'files-damaged'` report
-until it is dropped, whichever program reports (on a Kit, the `cpu/` net); the shape is unchanged.
+until it is dropped, whichever program reports (on a Kit, the `cpu/` net); since #678 (§11) a `cpu/`
+net the reinstall replaced is a fresh copy too. The shape is unchanged.
 The engine-downloader additions are listed under the downloader below. No new channel, no schema
 change.
 #634 (`rag-design.md` §12.4 "#634 amendment"): `documents.error_message` gained three
@@ -1889,6 +1890,9 @@ whole renderer-visible surface.
   are present and current by their marker. It needs an explicit `families` list of REQUIRED
   families and a real boolean (else `main.engine.badRequest`), and main admits it only for
   families holding a `'files-damaged'` verdict this session (else `main.engine.nothingToRepair`).
+  Since #678 (`architecture.md` "Engine load failures" §11) that verdict must not be `afterInstall`,
+  the rule the screen already offered by, and the job replaces the builds the verdict names: the
+  main build, the chat engine's `cpu/` net, or both. The request and job shapes are unchanged.
   `EngineStatus` gains `reinstallableFamilies?: string[]` (required families with a host build
   whose binary IS on the drive). `EngineDownloadJob` gains `families?: string[]` (what the job
   installs; absent on the synthetic unknown-job answer) and `reinstall?: boolean`, so a screen

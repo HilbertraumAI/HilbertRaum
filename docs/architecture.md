@@ -5037,7 +5037,8 @@ user it cannot (GPU record §5.2 "#653 amendment").
 
 **Check again** (`engine:recheck`, `ipc/engine-recheck.ts`) re-starts each family with a verdict.
 - Each engine gets an explicit spawn (`checkProgramLoads`): `llama-server --version` and
-  `whisper-cli --help`.
+  `whisper-cli --help`. The chat engine's program is the main build, unless only its `cpu/` net
+  reported the verdict: then the `cpu/` build is checked (#678, §11).
   - Review fix: the chat engine first re-used the probe, but the probe answers `[]` for a binary
     it could not even run (a failed integrity check, a spawn error). That read as "loads".
   - `unchecked` keeps the verdict.
@@ -5140,7 +5141,8 @@ restart, install. Three things blocked an in-app repair:
    path belongs to the signed update bundles (Phase 22, BUILD_STATE §5 item 3).
 2. **Main build only.** The reinstall re-fetches the default build; the pre-clean keeps `cpu/`
    as it always has. The in-app installer never installs `cpu/`, even on a first install, and the
-   startup check probes the main binary.
+   startup check probes the main binary. *Amended by #678 (§11): the reinstall replaces the builds
+   the OS refused, the `cpu/` net included; a first install still never fetches `cpu/`.*
 3. **The voice engine gets the same action**, on its quiet hint (§11.17 decision 5).
 4. **One click**, like the existing "Install AI engine" button. The drive's copy is replaced only
    after the new archive downloaded and matched its pinned SHA-256; a cancelled or failed download
@@ -5171,7 +5173,8 @@ restart, install. Three things blocked an in-app repair:
 - **A fresh copy that still fails.** A later `files-damaged` report about THAT program is stored
   with `EngineProblem.afterInstall: true`. Other reasons are stored as they are, and so is a report
   about another program of the family (the `cpu/` net) on its own. Since #670 (§10), a `cpu/`
-  refusal that follows the fresh copy's keeps the mark. The banner then says the files are
+  refusal that follows the fresh copy's keeps the mark; since #678 (§11), a `cpu/` copy the
+  reinstall replaced is a fresh copy itself. The banner then says the files are
   probably not the cause, points Windows users to the Visual C++ Redistributable (the
   presence-only check in §7), and offers no second reinstall. Diagnostics says "reported damaged
   right after a fresh install".
@@ -5207,8 +5210,8 @@ the E: stick was only read).**
   registered residual) — closed by #516: every job now downloads and verifies all its archives
   before touching the installed folder, and holds the family's spawns from then until the last
   marker (the spawn gate, "In-app engine updates" §3).
-- A verdict about the `cpu/` binary is repaired by re-fetching the main build, which does not
-  touch `cpu/` (decision 2).
+- ~~A verdict about the `cpu/` binary is repaired by re-fetching the main build, which does not
+  touch `cpu/` (decision 2).~~ Fixed by #678 (§11).
 
 Tests: `engine-consent-ipc.test.ts` "#532" (the repair through the real handler and manager, the
 verdict gate, the demo-runtime install and restart, the payload rows), `engine-download.test.ts`
@@ -5374,15 +5377,108 @@ b11146 main build and its `cpu/` net; D: was not touched.
     installieren" again, with the reinstall sentence.
   - The fix: `afterInstall: true`. The banner showed the Visual C++ sentence and only "Erneut prüfen".
 
-**Residuals (unchanged).**
-- A verdict that only `cpu/` reported still offers a reinstall that does not touch `cpu/` (§8).
+**Residuals.**
+- ~~A verdict that only `cpu/` reported still offers a reinstall that does not touch `cpu/` (§8).~~
+  Fixed by #678 (§11).
 - The mark lasts for the session, like the verdict. After an app restart, the first refusal offers
   the reinstall once more (`freshlyInstalled`, §8).
-- The handler's `repairable` check reads only the reason, so it would admit a reinstall request
-  for a marked verdict. The screen does not offer one.
+- ~~The handler's `repairable` check reads only the reason, so it would admit a reinstall request
+  for a marked verdict. The screen does not offer one.~~ Fixed by #678 (§11).
 
 Tests: `engine-load.test.ts` "#670" covers the walk orders, the push count, a refusal for another
 reason in between, and the drop.
+
+### §11 #678 amendment — the reinstall replaces what the OS refused, the `cpu/` net included (2026-10-14)
+
+**The gap** (a recorded residual since #532, §8 decision 2 and §10). On a Kit the ladder reaches the
+`cpu/` net (rung 3) only after the main build's rungs 1–2 failed, and they can fail for a reason that
+is not the loader's: a damaged weight file dies the same way on both rungs, so #312/#372 blame the
+model. If the `cpu/` net is then refused as `files-damaged`, the verdict is the `cpu/` net's alone,
+and the main build runs fine. Four things went wrong with such a verdict:
+- the banner offered "Install the AI engine again", which re-fetched the main build only. The
+  install hook re-armed the model latches, its restart walked to rung 3 again, and the same verdict
+  and offer came back: the loop #532 and #670 closed for the main build;
+- with an import done, the embedder runs from the healthy main build and stays up, so the reinstall
+  was refused outright: "can't be replaced while a model is running", although only the demo runtime
+  answered;
+- Check again checked the main build. It loads, so the verdict was dropped with the "runs again"
+  toast, and the restart's walk brought it back;
+- the IPC `repairable` gate read only the reason, so it admitted a request for an `afterInstall`
+  verdict (§10).
+
+**Decision (the issue's first option; an owner call taken as the issue recommended it).** "Install
+the AI engine again" repairs what the OS refused: the main build when the main build reported the
+verdict, the `cpu/` net when the `cpu/` net did, both when both did. This reverses §8 decision 2,
+which predates #516's `cpu/` install path, but only for a `cpu/` net the OS refused. The second
+option, offering no reinstall for a verdict only `cpu/` reported, stops the loop but leaves the drive
+damaged, and needs a new `EngineProblem` field. The troubleshooting path it would point to (delete
+the engine folder, install again in the app) would lose the `cpu/` net entirely, because a first
+install never fetches it.
+
+**As built.**
+- **The store** (`engine-load.ts`): `engineProblemBuilds(family)` answers `{ main, cpuNet }` from the
+  verdict's `reporters` (§9), by the same `cpu/` path test the clear rule uses. `freshlyInstalled`
+  holds every program the install put on the drive, so `engineInstalled(family, binPaths)` takes a
+  list, and a fresh `cpu/` copy refused as damaged is marked `afterInstall` like a fresh main build
+  (§8, §10).
+- **The IPC gate** (`registerEngineIpc.ts`): `repairable` applies the renderer's own
+  `engineProblemOffersReinstall` (damaged files, not `afterInstall`), and the reinstall passes the
+  refused builds to the manager (`reinstallBuilds`).
+- **The manager** (`runtime-download.ts`): a reinstall takes each named family's main build and/or its
+  `cpu/` net plan (#516's `EnginePlan.cpuNet`, an `InstallStep` with `main: false`). The `cpu/` net is
+  replaced even if its program has gone since it was refused (a failed earlier attempt). A refused
+  `cpu/` net this host's pin has no build for (a main folder provisioned as the processor build over
+  an older Kit's `cpu/`) is skipped; a job left with nothing is `main.engine.noHostBuild`. Everything
+  else is the ordinary flow: download, SHA-256, spawn gate, pre-clean, extract, marker.
+- **The in-use guard, per build.** The helpers (embedder, reranker, vision, translation) run the main
+  build only, and only the chat ladder's rung 3 runs the `cpu/` net. A job that replaces only the
+  `cpu/` net is therefore refused for a real chat runtime alone, which can be on rung 3 (the status
+  cannot tell, §8), never for a helper.
+- **`onInstalled`** reports every program a job put on the drive per family, main build first. A #516
+  update that replaced the `cpu/` net marks it fresh too.
+- **Check again** (`engine-recheck.ts`) checks the `cpu/` build (`resolveCpuFallbackServerPath`) when
+  the `cpu/` net is the verdict's only reporter, and the main build otherwise. That matches §9's clear
+  rule, under which a main build that reported clears the verdict whatever reported after it.
+- No contract change: the request (`{ families, reinstall: true }`), the job, `EngineProblem` and
+  the renderer are as they were. The banner sentence ("Some of its files on this drive are missing or
+  damaged") fits the `cpu/` net as well.
+
+**Real-app verification (2026-10-14, DesktopDiT, GTX 1070 Ti, dev build, scratch Kit roots; D: and
+E: were not touched).** Each root held the pinned b11146 main build (healthy) and its `cpu/` net
+without `llama.dll`, plus a 4B weight cut to its first 300 MB (a manifest copy with a placeholder
+hash lets a dev build start it). A chat start died of the model on rungs 1–2 ("konnte auf diesem
+Computer nicht geladen werden") and was refused on rung 3: `files-damaged`, exit 0xC0000135, the
+`cpu/` net alone. The banner offered "KI-Engine neu installieren" on both builds.
+- **Check again.** Master answered no verdict and logged "the operating system now starts it"; the
+  restart's walk brought the verdict back about a second later. The fix kept the verdict (the `cpu/`
+  build was checked and still refused) and restarted nothing.
+- **An import, then the reinstall.** The e5 embedder ran from the main build. Master refused the
+  reinstall with "Die KI-Engine kann nicht ersetzt werden, während ein Modell läuft". The fix
+  admitted it while the embedder kept running, fetched `llama_cpp:win/x64/cpu` only (the main
+  marker untouched, the `cpu/` marker rewritten, `llama.dll` back), and the walk after it ran the
+  fresh `cpu/` build, which died of the model (`code 1`). There was no verdict and no banner; the
+  model's own notice stayed.
+- **The reinstall, nothing else running.** Master re-fetched the main build (its marker rewritten,
+  `cpu/` still without `llama.dll`), and the hook's restart brought the verdict and the offer back:
+  the issue's loop. The fix replaced the `cpu/` net, as above.
+- **The fresh `cpu/` copy damaged again** (its `llama.dll` removed, then a second manifest id on the
+  same weight walked to rung 3; the first id was latched by #372). The verdict carried
+  `afterInstall: true`, the banner showed the Visual C++ sentence with only "Erneut prüfen", and a
+  reinstall request was refused with `main.engine.nothingToRepair`.
+
+**Residuals.**
+- While the verdict stands, the banner's demo note ("Bis dahin antworten Modelle im Demo-Modus")
+  reads as the engine's doing, although the demo runtime answers because the model failed; the
+  model's own notice says so above it.
+- A refused `cpu/` net that this host's pin has no build for gets the offer and then
+  `main.engine.noHostBuild` (not observed; the drive layout needs a hand-provisioned main folder).
+- Unchanged from §8: while a real runtime answers, the reinstall is refused even when it replaces
+  only the `cpu/` net, because the status cannot tell rung 3 from the main build's rungs.
+
+Tests: `engine-consent-ipc.test.ts` "#678" (the `cpu/`-only repair through the real handler and
+manager, its fresh copy refused again, both builds, a gone `cpu/` program, no `cpu/` build pinned,
+the per-build in-use guard), `engine-recheck.test.ts` "#678" (Check again on the `cpu/` net),
+`engine-load.test.ts` "after a reinstall on a Kit of …" (the fresh-copy mark per installed build).
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 

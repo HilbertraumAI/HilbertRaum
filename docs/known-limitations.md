@@ -2750,8 +2750,9 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The in-app reinstall needs a download (#532).** "Install the AI engine again" fetches the
   pinned build. On a drive whose policy forbids downloads (an offline Kit) the button stays
   disabled and the troubleshooting entry is the path; an offline repair would come with the
-  signed update bundles (Phase 22). It re-fetches the main build only; the `cpu/` safety net is
-  left as it is, so damage inside `cpu/` itself is not repaired by it.
+  signed update bundles (Phase 22). It re-fetches what the operating system refused: the main
+  build, the `cpu/` safety net, or both (#678). A `cpu/` net the drive's pinned sources have no
+  build for (a main folder replaced by hand with the processor build) cannot be replaced in the app.
 - **No reinstall while the engine's `cpu/` build answers.** When the main engine folder is
   damaged but its `cpu/` build runs the model (a Windows Kit), the reinstall still asks to stop
   the model first: the app cannot tell that runtime from the main build running on the
