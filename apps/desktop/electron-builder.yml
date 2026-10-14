@@ -103,8 +103,11 @@ files:
   - '!out/tools/**'
   - package.json
   # L18 (audit-2026-06-13): `@napi-rs/canvas` is an OPTIONAL transitive dep of pdfjs-dist
-  # — a platform-specific native `.node` (Skia) we never import (the PDF path uses the
-  # hidden-window rasterizer, not node-canvas). `includeSubNodeModules: true` would
+  # — a platform-specific native `.node` (Skia) our code never imports (OCR renders pages in the
+  # hidden-window rasterizer, not with node-canvas). pdf.js itself `require`s it at its first import
+  # in the main process; packaged, that fails, pdf.js warns twice on stderr and carries on, since the
+  # main process needs only a DOMMatrix, which parsers/dommatrix-polyfill.ts supplies (#685,
+  # tests/integration/pdf-parser-packaged.test.ts). `includeSubNodeModules: true` would
   # otherwise follow the hoisted tree and bundle the win32 `.node` into app.asar, breaking
   # the pure-JS / cross-OS portable posture (a Windows .node on a macOS/Linux drive).
   # Exclude every platform variant. tests/integration/packaging.test.ts asserts this stays.

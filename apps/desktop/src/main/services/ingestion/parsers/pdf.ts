@@ -81,10 +81,10 @@ export const PdfParser: DocumentParser = {
   extensions: ['.pdf'],
   mimeType: 'application/pdf',
   async parse(filePath: string, ctx?: ParseContext): Promise<ParsedDocument> {
-    // pdf.js in Node only sources `DOMMatrix` from `@napi-rs/canvas` — which we exclude from
-    // the package — and 6.0–6.2 needed one at import time; 6.4's Type3 glyph compiler uses one
-    // during text extraction. Install a pure-JS DOMMatrix first (idempotent; a no-op where a real
-    // one exists) so the packaged main process never relies on that path. See dommatrix-polyfill.ts.
+    // Install the pure-JS DOMMatrix BEFORE pdf.js loads: pdf.js keeps the one it finds, and in the
+    // packaged main process, where `@napi-rs/canvas` is excluded, there is none otherwise (6.0–6.2
+    // needed one at import time; 6.4's Type3 glyph compiler uses one during text extraction). pdf.js
+    // still tries to load that addon at its import, whatever is installed. See dommatrix-polyfill.ts.
     ensureDomMatrixPolyfill()
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const data = new Uint8Array(await readFile(filePath))

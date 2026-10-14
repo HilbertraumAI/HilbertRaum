@@ -95,6 +95,9 @@ export default defineConfig({
     // that don't share cleanly across worker threads. The FullSuiteGuard above is the hard
     // backstop for any load-induced fork drop.
     pool: 'forks',
+    // Each test file in a fresh fork (vitest's default, pinned for the same reason as the pool):
+    // `pdf-parser-packaged.test.ts` must be the first code in its process to load pdf.js (#685).
+    isolate: true,
     // #458 residual — ONE FORK FEWER on the windows CI legs. vitest's default is
     // `availableParallelism() - 1`: three forks plus the main process on a 4-core runner, i.e.
     // the machine is full before Defender and the runner agent take their share. Everything

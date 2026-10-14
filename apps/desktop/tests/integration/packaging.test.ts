@@ -14,7 +14,8 @@ import {
 } from '../helpers/asar-layout'
 
 // L18 (audit-2026-06-13): @napi-rs/canvas is an OPTIONAL transitive dep of pdfjs-dist —
-// a platform-specific native `.node` (Skia) the app never imports. With
+// a platform-specific native `.node` (Skia) the app's code never imports (pdf.js tries to at its
+// first import and does without it: pdf-parser-packaged.test.ts runs the parser that way, #685). With
 // `includeSubNodeModules: true`, electron-builder would otherwise follow the hoisted
 // dependency tree and bundle the win32 `.node` into app.asar, breaking the pure-JS /
 // cross-OS portable posture (a Windows binary shipped on a macOS/Linux drive). The
