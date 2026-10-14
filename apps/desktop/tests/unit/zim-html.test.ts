@@ -27,6 +27,7 @@ import {
   TABLE_MAX_SOURCE_ROWS,
   TABLE_SEGMENT_MAX_CHARS
 } from '../../src/main/services/zim/tables'
+import { articleSections } from '../../src/main/services/zim/index'
 
 // ZIM article HTML → segments (knowledge packs). The fixture is a hand-trimmed
 // Parsoid/mwoffliner page carrying every structure the converter must handle:
@@ -439,6 +440,22 @@ describe('zimArticleToSegments — site furniture (#627)', () => {
     ],
     ['a navigation box marked only by its extended-box class (#662)', '<p>Body.</p><div class="erweiterte-navigationsleiste">A • B</div>', 'Body.'],
     ['a navigation-box row on its own (#662)', '<p>Body.</p><div class="erw-nav-leiste">A • B</div>', 'Body.'],
+    // #673: German Wikipedia's sister-project links and legal-topics notice, the real markup.
+    [
+      'a sister-project link heading the Weblinks section (#673)',
+      '<h2>Weblinks</h2><div class="sisterproject" style="margin:0.1em 0 0 0;" typeof="mw:Transclusion"><div class="noresize noviewer" aria-hidden="true" role="presentation"><span typeof="mw:File"><span title="Commons"></span></span></div>' +
+        '<b><a rel="mw:ExtLink" href="https://commons.wikimedia.org/wiki/Category:Donald_Norman?uselang=de" class="external text"><span lang="en">Commons</span>: Donald Norman</a></b><span typeof="mw:Entity">&nbsp;</span>– Sammlung von Bildern, Videos und Audiodateien</div>' +
+        '<ul><li>Website von Donald Norman (englisch)</li></ul>',
+      'Weblinks\n\n- Website von Donald Norman (englisch)'
+    ],
+    [
+      'the legal-topics notice (#673)',
+      '<p>Body.</p><div class="hintergrundfarbe1 rahmenfarbe1 navigation-not-searchable  " style="border-top-style: solid; clear: both;" id="Vorlage_Rechtshinweis"><div class="noviewer noresize nomobile " aria-hidden="true" role="presentation"><span class="skin-invert" typeof="mw:File"></span></div>' +
+        '<div style="display: table-cell; vertical-align: middle; width: 100%;">\n<div>\nBitte den Hinweis zu Rechtsthemen beachten!</div>\n</div></div><p>After.</p>',
+      'Body.\n\nAfter.'
+    ],
+    // The rule is the template's id: the box's classes are generic (navigation-not-searchable).
+    ['the legal-topics notice by its id alone (#673)', '<p>Body.</p><div id="Vorlage_Rechtshinweis">Bitte den Hinweis zu Rechtsthemen beachten!</div>', 'Body.'],
     // A stray `</p>` is no holder's end: HTML5 does not let it close the `div` (#662 review).
     ['a footer block through a stray paragraph end tag inside it', '<div class="footer">by A</p>and B</div><p>Body.</p>', 'Body.'],
     [
@@ -477,16 +494,81 @@ describe('zimArticleToSegments — site furniture (#627)', () => {
     expect(textOf(html)).toBe(expected)
   })
 
-  // #662: the generic classes German Wikipedia's navigation boxes also carry mark other boxes too.
+  // #662: the generic classes German Wikipedia's navigation boxes also carry mark other boxes too
+  // (the Normdaten box, which #673 keeps as a segment of its own, below).
   it.each([
     [
-      'the Normdaten box (navigation-not-searchable, but authority data)',
-      '<div id="normdaten" class="catlinks normdaten-typ-p navigation-not-searchable">Normdaten (Person): GND: 118540238</div>',
-      'Normdaten (Person): GND: 118540238'
+      'a box marked only navigation-not-searchable (German Wikipedia’s disambiguation notice, #673)',
+      '<div class="hintergrundfarbe1 rahmenfarbe1 navigation-not-searchable" id="Vorlage_Begriffsklaerung">Dies ist eine Begriffsklärungsseite.</div>',
+      'Dies ist eine Begriffsklärungsseite.'
     ],
     ['a collapsible box that is no navigation box (klappleiste)', '<div class="klappleiste mw-collapsible">Ausführliche Liste</div>', 'Ausführliche Liste']
   ])('keeps %s', (_label, html, expected) => {
     expect(textOf(html)).toBe(expected)
+  })
+})
+
+// Issue #673: German Wikipedia's authority-data box (Normdaten) closes the article, so it was
+// delivered as the last section's text (`Einzelnachweise` on 196 of 227 sampled pages). Owner call
+// of 2026-10-14: keep its identifiers, as a segment of its own where the box stands.
+describe('zimArticleToSegments — the Normdaten box (#673)', () => {
+  const seg = (sectionLabel: string | null, text: string) => ({ text, pageNumber: null, sectionLabel })
+  // The real page tail (wikipedia_de_computer_nopic_2026-07, Donald Norman, through kiwix-serve 3.8.1).
+  const page =
+    '<h1>Donald Norman</h1><p>Lead.</p><section><div class="mw-heading mw-heading2"><h2 id="Einzelnachweise">Einzelnachweise</h2></div><ol><li>Ref.</li></ol>\n\n' +
+    '<div class="hintergrundfarbe1 rahmenfarbe1 navigation-not-searchable  normdaten-typ-p" style="border-style: solid; border-width: 1px;" id="normdaten" typeof="mw:Transclusion">\n' +
+    '<div style="display: table-cell; vertical-align: middle; width: 100%;">\n<div>\nNormdaten<span typeof="mw:Entity">&nbsp;</span>(Person): GND: <span class="-print">' +
+    '<a rel="mw:ExtLink nofollow" href="https://d-nb.info/gnd/136175236" class="external text">136175236</a></span>   <span typeof="mw:Entity">|</span> LCCN: <span class="-print">' +
+    '<a rel="mw:ExtLink nofollow" href="https://id.loc.gov/authorities/n50006033" class="external text">n50006033</a></span> <span typeof="mw:Entity">|</span> VIAF: <span class="-print">' +
+    '<a rel="mw:ExtLink nofollow" href="https://viaf.org/viaf/108123996/" class="external text">108123996</a></span> <span typeof="mw:Entity">|</span> </div>\n</div></div>\n\n' +
+    '<span typeof="mw:Transclusion" id="mwAcw"></span>\n\n</section></div><!--htdig_noindex--><div><div class="zim-footer">Dieser Artikel wurde von Wikipedia herausgegeben.</div></div>'
+
+  it('becomes a segment of its own, labelled Normdaten, after its section’s text', () => {
+    const article = zimArticleToSegments(page)
+    expect(article.segments).toEqual([
+      seg(null, 'Lead.'),
+      seg('Einzelnachweise', 'Einzelnachweise\n\n- Ref.'),
+      seg('Normdaten', 'Normdaten (Person): GND: 136175236 | LCCN: n50006033 | VIAF: 108123996 |')
+    ])
+    expect(article.notice).toBe('Dieser Artikel wurde von Wikipedia herausgegeben.')
+  })
+
+  it('reads whole in the viewer, which drops only a heading’s own line (articleSections)', () => {
+    // The box's line starts with its label's word but is no heading line: cutting the label off
+    // left ` (Person): GND: …`, an indented line under `pre-wrap`.
+    expect(articleSections(zimArticleToSegments(page).segments)).toEqual([
+      { label: null, text: 'Lead.' },
+      { label: 'Einzelnachweise', text: '- Ref.' },
+      { label: 'Normdaten', text: 'Normdaten (Person): GND: 136175236 | LCCN: n50006033 | VIAF: 108123996 |' }
+    ])
+  })
+
+  it('leaves text that follows it in the section under that section’s label', () => {
+    const article = zimArticleToSegments(
+      '<h1>T</h1><section><h2>Einzelnachweise</h2><p>Ref.</p><div id="normdaten">Normdaten (Körperschaft): GND: 1234</div><p>Koordinaten: 22° 39′ N</p></section>'
+    )
+    expect(article.segments).toEqual([
+      seg('Einzelnachweise', 'Einzelnachweise\n\nRef.'),
+      seg('Normdaten', 'Normdaten (Körperschaft): GND: 1234'),
+      seg('Einzelnachweise', 'Koordinaten: 22° 39′ N')
+    ])
+  })
+
+  it('ends at its section’s end when its own end tag is missing, and is still delivered', () => {
+    const article = zimArticleToSegments(
+      '<h1>T</h1><section><h2>Einzelnachweise</h2><p>Ref.</p><div id="normdaten"><div>Normdaten (Sachbegriff): GND: 4011134-9</div></section>' +
+        '<section><h2>Weblinks</h2><p>Link.</p></section>'
+    )
+    expect(article.segments).toEqual([
+      seg('Einzelnachweise', 'Einzelnachweise\n\nRef.'),
+      seg('Normdaten', 'Normdaten (Sachbegriff): GND: 4011134-9'),
+      seg('Weblinks', 'Weblinks\n\nLink.')
+    ])
+  })
+
+  it('is delivered as far as it got when the input ends inside it', () => {
+    const article = zimArticleToSegments('<h1>T</h1><p>Body.</p><div id="normdaten"><div>Normdaten (Werk): GND: 1192150198')
+    expect(article.segments).toEqual([seg(null, 'Body.'), seg('Normdaten', 'Normdaten (Werk): GND: 1192150198')])
   })
 })
 
@@ -940,22 +1022,15 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(() => zimArticleToSegments('<table><tr><th>h<td>x')).not.toThrow()
   })
 
-  it('the table segment renders sensibly through the same section-mapping readArticle (zim/index.ts) uses', () => {
-    // Mirrors readArticle's own transform: the heading is rendered as the section label, so
-    // its duplicate first line is dropped from the segment text. The table now appears in the
-    // viewer/saved article, same as the packer sees it: readable text, no leftover markup.
+  it('the table segment renders sensibly through the section mapping the viewer uses (zim/index.ts)', () => {
+    // The heading is rendered as the section label, so its own first line is dropped from the
+    // segment text. The table now appears in the viewer/saved article, same as the packer sees
+    // it: readable text, no leftover markup.
     const html =
       '<h1>T</h1><section><div class="mw-heading mw-heading2"><h2>Facts</h2></div>' +
       '<p>Intro.</p><table><tr><th>Name</th><th>Value</th></tr>' +
       '<tr><td>Density</td><td>19,32 g/cm<sup>3</sup></td></tr></table></section>'
-    const article = zimArticleToSegments(html)
-    const sections = article.segments.map((s) => {
-      let text = s.text
-      if (s.sectionLabel && text.startsWith(s.sectionLabel)) {
-        text = text.slice(s.sectionLabel.length).replace(/^\n+/, '')
-      }
-      return { label: s.sectionLabel ?? null, text }
-    })
+    const sections = articleSections(zimArticleToSegments(html).segments)
     const tableSection = sections.find((s) => s.text.includes('Density'))
     expect(tableSection).toBeTruthy()
     expect(tableSection?.text).not.toMatch(/<[a-z]/i)

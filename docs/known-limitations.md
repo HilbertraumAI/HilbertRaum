@@ -3620,11 +3620,11 @@ reports and phase plans were working papers; their full text lives in git histor
   closing a saved copy as a `## License` section. German Wikipedia's
   navigation boxes built as `div`s (`navileiste`, `erweiterte-navigationsleiste`,
   `erw-nav-leiste`) are dropped. Residuals:
-  - Three more German Wikipedia boxes are still delivered as text: Normdaten
-    (authority data), Rechtshinweis (a legal-topics notice) and Schwesterprojekte
-    (sister-project links), #673. They share the class
+  - Three more German Wikipedia boxes share the class
     `navigation-not-searchable` with the navigation boxes, which is why that
-    class is not part of the rule.
+    class is not part of the rule. #673 handles them by their own markers:
+    "German Wikipedia's Normdaten, Rechtshinweis and Schwesterprojekte boxes
+    (#673)", below.
   - Measured on German Wikipedia and Alpine Linux's wiki only. Another
     Wikipedia's navigation boxes built as `div`s under other class names are
     still delivered; the ones built as tables were already dropped (`navbox`).
@@ -3641,6 +3641,24 @@ reports and phase plans were working papers; their full text lives in git histor
   - A copy saved before this change keeps the license line inside its last
     section. Saving the article again answers "already saved"; delete the copy
     on the Documents screen and save it again to get the new shape.
+- **German Wikipedia's Normdaten, Rechtshinweis and Schwesterprojekte boxes
+  (#673).** The sister-project links (`div.sisterproject`) and the
+  legal-topics notice (`div#Vorlage_Rechtshinweis`) are dropped. The authority
+  data (`div#normdaten`) is kept, as a section of its own named `Normdaten`.
+  Residuals:
+  - The rules are German Wikipedia's markers: the Rechtshinweis and Normdaten
+    boxes are matched by their template ids. Another Wikipedia's sister-project
+    or authority-control box built as a `div` under other names is still
+    delivered as text (the ones built as tables were already dropped).
+  - In the viewer the `Normdaten` heading is followed by the box's own line,
+    which starts with the same word (`Normdaten (Person): GND: …`). Its numbers
+    are plain text; their links (d-nb.info, viaf.org) are not kept (#416).
+  - Text after the box in the same section (2 of 227 sampled pages, such as
+    Huawei's coordinates line) follows as a second part of that section, so the
+    viewer shows the section's heading twice.
+  - A copy saved before this change keeps the boxes as they were. Delete the
+    copy on the Documents screen and save the article again to get the new
+    shape.
 - **Named entities (#663).** The converter decodes HTML 4.01's 252 named
   entities plus `&apos;` (typographic quotes, dashes, arrows, Latin-1 letters,
   Greek, math symbols, `&euro;`) and numeric references (`&#8217;`,

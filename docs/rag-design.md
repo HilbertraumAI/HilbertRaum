@@ -5560,7 +5560,7 @@ calls of 2026-10-13, all as recommended:
   holding it; the drop does the same for `FURNITURE_HOLDER_TAGS` (sectioning elements, cells, list
   items, `body`; never `p`, whose stray end tag HTML5 ignores), counting the ones opened inside it.
   Identical output on all 2,672 measured pages, which are well-formed.
-- **Normdaten, Rechtshinweis, Schwesterprojekte:** a follow-up with its own read (#673; 1,549, 96 and
+- **Normdaten, Rechtshinweis, Schwesterprojekte:** a follow-up with its own read (#673, below; 1,549, 96 and
   4,187 words in the sample). Undecoded entities (#663) ship separately: on the Wikipedia sample every
   apparent hit is a literal the source escaped, so #663 needs only stage A.
 **Measured (2026-10-13, master `76ce5acf` against the fix, the 2,672 pages of #627's 15 archives):**
@@ -5618,6 +5618,74 @@ Real app (dev build, scratch root, `getPackArticle`): master left 5 + 1 entities
 gobyexample articles and 2 in PEP 0; the fix, none. **Acceptance read:** stage A, on the machine
 that holds the development cache. The Wikipedia sample predicts identical words. Residuals:
 `known-limitations.md` "Named entities (#663)".
+
+**German Wikipedia's Normdaten, Rechtshinweis and Schwesterprojekte boxes (#673, 2026-10-14).**
+Three boxes #662 left alone, because each changes the development set and needed its own call. On
+1,500 sampled German Wikipedia pages each was delivered as article text:
+- the authority-data box (`div#normdaten`, `Normdaten (Person): GND: … | LCCN: … | VIAF: …`) on
+  227 pages, always the article's last text, mostly inside `Einzelnachweise` (196);
+- the legal-topics notice (`div#Vorlage_Rechtshinweis`, "Bitte den Hinweis zu Rechtsthemen
+  beachten!") on 16 pages, 15 at the end and one heading Lego's `Rechtsstreitigkeiten` section;
+- the sister-project links (`div.sisterproject`, "Commons: … – Sammlung von Bildern, Videos und
+  Audiodateien") on 394 pages, 480 boxes, nearly all heading `Weblinks`.
+
+Owner calls of 2026-10-14, all as recommended:
+- **Schwesterprojekte is furniture:** the exact class token `sisterproject` (its only class),
+  added to `FURNITURE_CLASS_TOKENS`.
+- **Rechtshinweis is dropped.** It points to Wikipedia's legal-topics notice, which is not in the
+  archive, and it is an instruction to the reader that a model can repeat. Showing it as a second
+  notice was not taken: it needs a contract field, and a page-level notice loses Lego's section
+  position.
+- **Normdaten stays, as a segment of its own,** labelled `Normdaten`, where the box stands. Its
+  identifiers stay answerable, and the references' last chunk loses them. Dropping it, like
+  furniture, was not taken: GND/LCCN/VIAF questions would become unanswerable.
+
+As built (`html.ts`):
+- **The two boxes have no class of their own, so `FURNITURE_IDS` names them by id**, which their
+  templates set: `Vorlage_Rechtshinweis` → drop, `normdaten` → segment. The match is exact; the
+  Normdaten box's classes vary with its kind (`normdaten-typ-p`, `-s`, …). `navigation-not-searchable`
+  stays out of every rule: it also marks a disambiguation box, pronunciation spans and 20 divs on 9 of
+  150 Alpine Linux pages. `FURNITURE_HINT` learns `sister`, `normdaten`, `rechtshinweis`.
+- **The Normdaten box reuses the license line's gathering** (#662): bounded, entities decoded, one
+  line. At the box the converter flushes the section's text so far; where the box ends it pushes the
+  gathered line as a segment. A box whose own end tag is missing ends at its holder's end tag, like
+  any dropped box, and one the input ends inside is still delivered, as far as it got. Text after
+  the box in the same section continues as a second segment under that section's label.
+- **The viewer drops only a heading's own first line** (`articleSections` in `zim/index.ts`). It
+  used to cut the label from any section text that merely started with it. On the Normdaten segment
+  that left ` (Person): GND: …`, indented under `pre-wrap`. On 14 other sections of the 2,672 pages
+  it cut a real word: `FAT16 ist ein Dateisystem` read ` ist ein Dateisystem`, a table row `FAT16 —
+  Hersteller: Microsoft` read ` — Hersteller: Microsoft`, Alpine's `iwgtk is a …` read ` is a …`.
+  Viewer and saved copies only: retrieval never read the mapping.
+
+**Measured (2026-10-14, master `d7e48f0b` against the fix, #627's 2,672 pages from 15 archives):**
+- 2,182 pages without any of the three boxes are byte-identical, the 14 other archives included.
+- On the 490 with one, the fix reads exactly master's words and labels once the three boxes are cut
+  out of the source (490 of 490, comparing runs of same-label segments). Each Normdaten segment holds
+  exactly its box's words (227 of 227, 1,549 words moved, none lost). 96 Rechtshinweis words and
+  4,187 Schwesterprojekte words leave the text. The license notice is unchanged on 1,500 of 1,500.
+- The admission lead (`segments.slice(0, 1)`) changes on no page. Chunks 14,151 → 14,380: one
+  more per Normdaten page, plus 2 where text followed the box (Huawei's coordinates line, a stray
+  `<pre>`). The segment count changes on 226 pages. On the 227th, Bruce Perens, the box already
+  followed a table as a segment of its own, now relabelled.
+- Under the `capped` scope a Normdaten chunk with no question words is picked as filler only on
+  articles with fewer than four chunks (12 of 227). Under the GPU profile's `all` scope it is one
+  more rerank candidate per such article.
+- Cost (`scripts/zim-html-perf.mjs`, i7-8700, three runs each, interleaved): the 1 MiB worst case
+  53.0–55.2 ms against master's 53.5–54.8, the 60-article batch 65.1–70.2 against 67.2–71.7, the
+  per-slice p95 1.04–1.72 against 1.14–2.28 ms. No measurable change.
+- Real app (dev build, a scratch drive root with the archive, `getPackArticle`, `savePackArticle`,
+  `previewDocument`): master filed the authority data under `Einzelnachweise`, the sister links under
+  `Weblinks` and the legal notice under `Einzelnachweise` and Lego's `Rechtsstreitigkeiten`. The fix
+  showed `Normdaten` as its own section on Donald Norman, Lego and Huawei, and dropped the other two
+  boxes. The saved copy's GND numbers sit under `## Normdaten`, before `## License`.
+
+**Acceptance read:** words change on the development set (stage A cannot pass), so the full read on
+the 200-question development set runs, on the machine that holds the harness. The sample covers
+computer topics; the development set's general topics (people, places) likely carry more Normdaten
+boxes. #662's own read is owed too: run it first, so that a floor miss here is #673's alone.
+Residuals: `known-limitations.md` "German Wikipedia's Normdaten, Rechtshinweis and Schwesterprojekte
+boxes (#673)".
 
 ### Shipping rule for knowledge-pack changes
 
