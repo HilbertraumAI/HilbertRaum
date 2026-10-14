@@ -175,6 +175,7 @@ export async function runSummary(
   const signal = task.controller.signal
 
   let summaryText: string
+  let truncated = plan.truncated
   if (plan.singlePass) {
     summaryText = await ctx.generate(
       runtime,
@@ -200,13 +201,16 @@ export async function runSummary(
       task.status.progress.stepsDone += 1
     }
     if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
-    // Belt for the reduce input: the map output caps already size partials to fit,
-    // but a model that ignores maxTokens semantics must still not overflow.
+    // Belt for the reduce input: the map output caps size the partials to fit from ~2,348 ctx up, but below
+    // that the 128-token map floor can outgrow it, and a model that ignores maxTokens must still not overflow.
+    // A cut drops the tail partials (the END of the document), so the summary says it covers the beginning,
+    // as compare's belt does (H8). #682: it used to be stored as complete.
     const budgetWords = summaryBudgetWords(contextTokens)
     let reduceInput = partials
     const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
     if (totalWords > budgetWords) {
       reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+      truncated = true
     }
     summaryText = await ctx.generate(
       runtime,
@@ -224,7 +228,7 @@ export async function runSummary(
     text: summaryText,
     modelId: runtime.modelId,
     createdAt: new Date().toISOString(),
-    truncated: plan.truncated
+    truncated
   }
   // Re-read via a fresh getter: the document may have been deleted while we worked
   // (the IPC layer refuses re-index/delete on a busy document, but be safe anyway —

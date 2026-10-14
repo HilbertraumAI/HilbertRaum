@@ -97,7 +97,7 @@ export interface ComparePlan {
   windows: CompareWindow[]
   /** True when the map-call ceiling cut doc-A coverage: the report covers its beginning. */
   truncated: boolean
-  /** Output cap per map call, sized so ALL notes fit the reduce call's input budget. */
+  /** Output cap per map call, sized so ALL notes fit the reduce call's input budget (from ~2,348 ctx up, #682). */
   mapMaxTokens: number
   /** Word budget for the retrieved doc-B excerpts of one map call (the B side's share). */
   pairBudgetWords: number
@@ -160,8 +160,10 @@ export function planCompareWindows(chunks: CompareChunkRef[], contextTokens: num
     truncated = true
   }
 
-  // Cap each map call's notes so all of them together provably fit the reduce input
-  // (windows × mapMaxTokens ≤ usable input tokens).
+  // Cap each map call's notes so all of them together fit the reduce input
+  // (windows × mapMaxTokens ≤ usable input tokens). The floor can overshoot below ~2,348 ctx
+  // (from 10 windows at the 2,048-token settings minimum); the reduce belt then cuts the
+  // joined notes and labels the report truncated (#682).
   const mapMaxTokens = Math.max(
     COMPARE_MAP_OUTPUT_FLOOR_TOKENS,
     Math.min(

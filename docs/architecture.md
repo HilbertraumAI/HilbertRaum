@@ -2722,7 +2722,8 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   per-window partial summaries → one reduce pass, with each map call's `maxTokens` sized
   to `usableTokens / windowCount` so all partials fit the reduce input at every shipped
   window (≥ 4096; at the 2,048-token settings minimum the 128-token floor overshoots from
-  10 windows and the reduce belt cuts the joined partials without setting `truncated`, #682). Hard
+  10 windows, and the reduce belt cuts the joined partials' tail and flags the summary
+  `truncated`, #682 — it was stored as complete until then). Hard
   ceiling: **12 map calls** (≈ a ~50-page document at the default context); beyond it the
   summary covers the beginning and is flagged `truncated` (the UI says so honestly).
 - **Persistence (D25):** additive nullable `documents.summary_json`

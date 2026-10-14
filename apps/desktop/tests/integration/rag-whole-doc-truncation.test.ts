@@ -24,6 +24,7 @@ import {
   documentApproxTokenTotal,
   retrieveWholeDocument,
   scanWholeDocumentForPii,
+  TOKENS_PER_WORD,
   wholeDocumentBudgetTokens,
   wholeDocumentFitBudgetTokens
 } from '../../src/main/services/rag'
@@ -102,12 +103,12 @@ describe('whole-document budget honesty at the default 4096 context (W1, audit �
     expect(assembledWords).toBeLessThan(dbTokens)
     // The compare-split sizing (documentApproxTokenTotal) de-overlaps the SAME way (plan §W1 item 3),
     // so a document's half of the split is proportioned on real, not overlap-inflated, size. It reports
-    // TOKENS_PER_WORD-scaled (1.3) tokens, so compare against the naive 1.3-scaled per-chunk sum (what
+    // TOKENS_PER_WORD-scaled tokens, so compare against the naive scaled per-chunk sum (what
     // it would be WITHOUT de-overlap) — de-overlap must make it strictly smaller.
     const perChunk = h.db
       .prepare('SELECT token_count FROM chunks WHERE document_id = ? ORDER BY chunk_index')
       .all(h.docId) as Array<{ token_count: number }>
-    const naiveScaled = perChunk.reduce((a, r) => a + Math.ceil(r.token_count * 1.3), 0)
+    const naiveScaled = perChunk.reduce((a, r) => a + Math.ceil(r.token_count * TOKENS_PER_WORD), 0)
     expect(documentApproxTokenTotal(h.db, h.docId)).toBeLessThan(naiveScaled)
   })
 
