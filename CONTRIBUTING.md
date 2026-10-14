@@ -182,6 +182,10 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `docTaskManager` on harmless default deps, `docTaskRuntime` (scripted, abort-aware, counts
   concurrency) and `waitTerminal`. The ModelSlotArbiter fake clock is `tests/helpers/slot-clock.ts`.
   Ten suites used to carry their own copies.
+- **The whole-document RAG harness lives in `tests/helpers/whole-doc-fixtures.ts`** (`germanDoc`,
+  `wholeDocHarness`, `answerWholeDoc`), and `scripted-runtime`'s `finishScriptedRuntime` is the one fake
+  that scripts finish reasons, caps and a Stop. The whole-doc truncation and map-reduce suites carried
+  verbatim copies of the harness, and rag.test and the map-reduce suite each had their own finish fake.
 - **A registrar's locked-vault proof is its `MODULES` entry in `ipc-lock-coverage.test.ts`**, which
   drives every channel and names each exempt one with its reason. A hand-picked lock test in the
   module's own suite drifts: docs-ipc's checked 5 of the 14 gated `docs:*` channels, and

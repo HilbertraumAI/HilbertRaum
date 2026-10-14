@@ -321,8 +321,6 @@ describe('registerDictationIpc', () => {
   // left it unsettled for a whole 120 s budget).
   it('a wedged child rejects on the wall-clock timeout, not a hang (REL-3)', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    // The shipped ceiling, not a HILBERTRAUM_DICTATION_TIMEOUT_MS left in the shell (an empty value reads as unset).
-    vi.stubEnv('HILBERTRAUM_DICTATION_TIMEOUT_MS', '')
     try {
       const workspacePath = freshWorkspacePath()
       let signal: AbortSignal | undefined
@@ -347,7 +345,6 @@ describe('registerDictationIpc', () => {
       expect(readdirSync(documentsDir(workspacePath))).toEqual([])
     } finally {
       vi.useRealTimers()
-      vi.unstubAllEnvs()
     }
   })
 
