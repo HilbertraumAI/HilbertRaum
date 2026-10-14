@@ -59,9 +59,8 @@ export interface LocatedOriginal {
 }
 
 // The leaf rule lives in stored-copy-leaf.ts (dependency-free) so the vault rekey can share it
-// without an import cycle (#241); `canonicalLeafFor` is re-exported for ingestion/index.ts.
+// without an import cycle (#241).
 import { storedCopyLeaf, canonicalLeafFor } from './stored-copy-leaf'
-export { canonicalLeafFor }
 
 /**
  * Locate a document's workspace copy, or null when there is none on disk.

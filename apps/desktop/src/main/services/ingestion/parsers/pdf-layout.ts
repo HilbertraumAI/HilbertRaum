@@ -316,8 +316,12 @@ function rowTokens(row: readonly LayoutWord[]): PositionedToken[] {
  * section line with no amount) is kept — `parseDate` rejects the bare form, so it never misfires.
  */
 function rowText(row: readonly LayoutWord[], datum: DatumColumn): string {
-  return rowTokens(row)
-    .filter((t) => !(classifyToken(t.str) === 'date' && !inDatumColumn(t.x, datum)))
+  return joinTokens(rowTokens(row).filter((t) => !(classifyToken(t.str) === 'date' && !inDatumColumn(t.x, datum))))
+}
+
+/** Tokens joined left to right — the one place a raw row's text is assembled. */
+function joinTokens(tokens: readonly PositionedToken[]): string {
+  return tokens
     .map((t) => t.str)
     .join(' ')
     .trim()
@@ -648,7 +652,7 @@ export function reconstructPage(
   if (!datum) {
     // No date token anywhere on the page (a cover/terms page, a dateless invoice page): no row can lead a
     // transaction or carry an out-of-column date, so every visual row is its raw left-to-right text.
-    const raw = rows.map((row) => rowTokens(row).map((t) => t.str).join(' ')).filter((line) => line !== '')
+    const raw = rows.map((row) => joinTokens(rowTokens(row))).filter((line) => line !== '')
     return { text: raw.join('\n'), year, month: anchorMonth }
   }
   const lines: string[] = []

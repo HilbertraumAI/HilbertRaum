@@ -60,13 +60,8 @@ import {
 } from './limits'
 import type { PlaintextOpsRegistry } from './plaintext-ops'
 import { failureRowMessage } from './engine-failure'
-import {
-  canonicalLeafFor,
-  locateOriginal,
-  locateStoredCopy,
-  resolveStoredCopy,
-  warnOriginalChanged
-} from './stored-copy'
+import { locateOriginal, locateStoredCopy, resolveStoredCopy, warnOriginalChanged } from './stored-copy'
+import { canonicalLeafFor } from './stored-copy-leaf'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
 //   queued → extracting → chunking → embedding → indexed   (failed on error)

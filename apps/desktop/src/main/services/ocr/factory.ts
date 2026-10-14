@@ -41,7 +41,7 @@ export function listOcrLanguages(assetsDir: string): string[] {
 export interface OcrSelectionDeps {
   /** Drive root — the assets live at `<root>/ocr/`. */
   rootPath: string
-  makeEngine?:(langDir: string, languages: string[]) => OcrEngine
+  makeEngine?: (langDir: string, languages: string[]) => OcrEngine
   onSelect?: (kind: 'tesseract' | 'none', reason: string) => void
   /**
    * Packaged builds start the engine `'probing'`: `ocrAvailable` stays false until the startup
