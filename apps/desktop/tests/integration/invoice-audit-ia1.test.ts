@@ -4,13 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import {
-  createQueuedDocument,
-  documentsDir,
-  extractDocumentPreview,
-  processDocument,
-  reindexDocument
-} from '../../src/main/services/ingestion'
+import { createQueuedDocument, documentsDir, processDocument, reindexDocument } from '../../src/main/services/ingestion'
+import { buildDocumentSegmentReader } from '../../src/main/ipc/documentSegments'
+import type { AppContext } from '../../src/main/services/context'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import {
   INVOICE_INSTALL_ID,
@@ -82,7 +78,7 @@ interface Ingested {
   docId: string
   /** Overwrite the workspace stored copy (what re-index re-parses) to simulate OCR / a changed text layer. */
   rewrite: (text: string) => void
-  /** The production segment-reader adapter (mirrors `buildDocumentSegmentReader`). */
+  /** The production segment reader (`buildDocumentSegmentReader`, shared by both skill entry points). */
   readDocumentSegments: (id: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
 }
 
@@ -94,10 +90,13 @@ async function ingest(text: string, title: string): Promise<Ingested> {
   writeFileSync(docPath, text, 'utf8')
   const doc = createQueuedDocument(db, docPath)
   await processDocument(db, storeDir, doc.id, DEPS)
-  const readDocumentSegments = async (id: string, opts?: { layout?: boolean }): Promise<DocumentChunkRead[]> => {
-    const preview = await extractDocumentPreview(db, storeDir, id, {}, opts?.layout ? { layout: true } : {})
-    return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
-  }
+  // The REAL factory over this plaintext workspace (a hand copy here had drifted from it, #682): only the
+  // fields it reads — no cipher (plaintext ingest), no OCR engine, no plaintext-ops registry.
+  const readDocumentSegments = buildDocumentSegmentReader({
+    db,
+    paths: { workspacePath: join(root, 'workspace') },
+    workspace: { documentCipher: () => null }
+  } as unknown as AppContext)
   const rewrite = (next: string): void => {
     const storedPath = (
       db.prepare('SELECT stored_path AS p FROM documents WHERE id = ?').get(doc.id) as { p: string }
