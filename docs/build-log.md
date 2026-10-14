@@ -27,6 +27,22 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-07 #607 and #582 entries retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #682/#687 entry). Their records are unchanged:
+`rag-design.md` §12.4 "#607 amendment" and `architecture.md` §18 "#582". #582's one open item ("amendments" routes in neither language)
+is recorded there. Citations of the form "BUILD_STATE 2026-10-07 #607 entry" / "… #582 entry" now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-10-07 — **#607 — the embed request's 120 s deadline and the caller's Stop cover the response body (`fix/607-e5-body-timeout`).** Since the 2026-06-30
+overflow retry (`dbfee90f`) both were dropped at the headers: a stalled body ran to undici's own 305 s (`terminated`) while an import held its queue, the doc-work lease and the
+engine-update busy gate, and Stop could not end a document question. The `try/finally` now spans `res.json()` / `res.text()`. Real b9849 e5 behind a stalling proxy:
+120.0 s `TimeoutError`, Stop at once. Record: `rag-design.md` §12.4 "#607 amendment". Open: none._
+_2026-10-07 — **#582 — What-changed routes English and German compare requests alike (`fix/582-what-changed-en-de-parity`).** At a count ≠ 2 German
+"Fasse die Unterschiede zusammen" got "select exactly two"; "summarize the differences" fell to top-k under the compare fence (0.1.59 + 4B: an invented
+"Document B"). Owner: route both; `differences` offers + routes; route-only compare/change words in both languages (German word by word). 23 EN/DE pairs
+pinned, corpus 161 rows; real app before/after on E: data. Record: `architecture.md` §18 "#582". Open: "amendments" routes in neither language._
+
 ## 2026-10-14 — the closed 2026-10-06 #613 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #689 entry). Its record is unchanged:
