@@ -1,14 +1,17 @@
 import type { DocTaskKind, DocTaskStatus } from '@shared/types'
 
-// Renderer-side watcher for the single active document task (the backend allows at
-// most one at a time).
+// Renderer-side watcher for the document task the Documents screen started (the backend
+// runs one task at a time and queues the rest).
 //
 // Lives at MODULE level, not inside a screen component: a summary/translation keeps
 // running in the main process while the user navigates away, so the busy/progress
 // state (and its polling loop) must survive screen unmounts. Screens subscribe via
-// `useSyncExternalStore(subscribeDocTask, getActiveDocTask)`; the chat screen's
-// "task is busy" banner uses `cancelActiveDocTask()`. ONE store covers every task
-// kind — at most one task exists anyway.
+// `useSyncExternalStore(subscribeDocTask, getActiveDocTask)`. ONE store covers every task
+// kind the Documents screen starts. It holds only those: a Translate-screen file translation,
+// a skill's `categorize` or an import's deep-index build share the lane without an entry
+// here, so a Cancel names the task it means (#689) — the Documents row's
+// `cancelActiveDocTask()` sends this entry's id, the chat busy banner's
+// `cancelRunningDocTask()` sends none.
 //
 // Lifecycle: start → poll every POLL_MS → terminal status stays visible (so a screen
 // the user returns to can show the outcome) until a screen acknowledges it with
@@ -180,17 +183,33 @@ export async function startTask(
   }, POLL_MS)
 }
 
-/** Cancel the currently active task (running or queued). */
+/**
+ * Cancel this store's task, running or queued — the Documents row's Cancel. #689: by its id. With
+ * no id, main cancels whatever holds the lane, so a row task queued behind another screen's task
+ * stopped THAT task and then ran itself. An exact id is stale-safe (#157 DT-2): a settled task is a
+ * no-op, and a newer task has a different id.
+ */
 export async function cancelActiveDocTask(): Promise<void> {
   const jobId = active?.jobId
+  if (!jobId) return
   try {
-    await window.api.cancelDocTask()
+    await window.api.cancelDocTask(jobId)
   } catch (e) {
     // #680: a rejected cancel stopped nothing — drop the DOC-5 latch so the row offers Cancel
     // again instead of a disabled "Stopping if possible…"; the caller shows the error (CODE-29).
     if (active?.cancelRequested && active.jobId === jobId) setActive({ ...active, cancelRequested: false })
     throw e
   }
+}
+
+/**
+ * Cancel the task holding the lane (running, else the next queued) — the chat busy banner's
+ * Cancel. #689: deliberately untargeted. Chat is refused while ANY task is active
+ * (`hasActiveTask()`), the copy names the running one, and this store may hold nothing or a task
+ * queued behind it; cancelling that one would leave chat refused.
+ */
+export async function cancelRunningDocTask(): Promise<void> {
+  await window.api.cancelDocTask()
 }
 
 /** DOC-5 (#150): latch a requested cancel onto the active entry (see `cancelRequested`). */

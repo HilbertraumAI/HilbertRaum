@@ -318,6 +318,19 @@ describe('doc-task store — a poll in flight does not undo a change made meanwh
   })
 })
 
+// #689: the Documents row's Cancel sends the store entry's id (DocumentSummary.test.tsx pins the
+// click; the #38 describe below pins it after a chain adoption).
+describe("doc-task store — the row's cancel names its own task (#689)", () => {
+  // With no id, main cancels whatever holds the lane. With no entry the store has no task of its
+  // own to name, so it sends nothing at all.
+  it('a cancel with no entry sends nothing', async () => {
+    const cancelDocTask = vi.fn(async () => {})
+    stubApi({ cancelDocTask })
+    await cancelActiveDocTask()
+    expect(cancelDocTask).not.toHaveBeenCalled()
+  })
+})
+
 describe('doc-task store — deep-index chain adoption (#38)', () => {
   it('adopts the chained extract task after a withExtract tree completes', async () => {
     vi.useFakeTimers()
@@ -347,6 +360,32 @@ describe('doc-task store — deep-index chain adoption (#38)', () => {
       await vi.advanceTimersByTimeAsync(POLL_MS * 2) // tick 2: jx still running; tick 3: jx done — same timer
       expect(getActiveDocTask()?.status?.state).toBe('done')
       expect(getActiveDocTask()?.jobId).toBe('jx')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #689: the row's Cancel names the task the entry holds NOW. After the adoption that is the
+  // extract; the tree's id would reach a finished task.
+  it('a cancel after the adoption targets the adopted extract', async () => {
+    vi.useFakeTimers()
+    try {
+      const cancelDocTask = vi.fn(async () => {})
+      stubApi({
+        startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
+        getDocTask: vi.fn(async (id: string) =>
+          id === 'jt' ? status({ jobId: 'jt', state: 'done' }) : status({ jobId: 'jx', kind: 'extract' })
+        ),
+        getActiveDocTask: vi.fn(async () => status({ jobId: 'jx', kind: 'extract' })),
+        cancelDocTask
+      })
+
+      await startTask('tree', 'd1', { withExtract: true })
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(getActiveDocTask()?.jobId).toBe('jx')
+      await cancelActiveDocTask()
+      expect(cancelDocTask).toHaveBeenCalledTimes(1)
+      expect(cancelDocTask).toHaveBeenCalledWith('jx')
     } finally {
       vi.useRealTimers()
     }

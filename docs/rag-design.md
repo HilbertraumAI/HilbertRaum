@@ -1672,7 +1672,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   until **both** `tree_status` and `extract_status` are `'ready'` (a tree-ready doc with no extract
   re-offers it and starts just the extract), and the "Deeply indexed" badge claims completion only when
   both hold. The renderer doc-task store adopts the chained job at the tree's `done` poll so the busy
-  row/banner stay truthful through both passes. The import-time auto-enqueue (`maybeEnqueueTreeBuild`)
+  row/banner stay truthful through both passes; a row Cancel that still names the finished tree reaches
+  the chained extract (#689). The import-time auto-enqueue (`maybeEnqueueTreeBuild`)
   still starts a **plain** tree — the extract pass never runs without an explicit user action (no
   surprise CPU spend at import).
 - **Aggregate:** `aggregateExtractions` GROUPs BY `normalized_value` through the shared

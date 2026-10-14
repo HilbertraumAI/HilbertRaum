@@ -7,6 +7,7 @@ import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message, type RuntimeSta
 import { stubApi } from '../helpers/renderer'
 import { t } from '../../src/shared/i18n'
 import { RUNTIME_POLL_MS } from '../../src/renderer/lib/polling'
+import { clearDocTaskSession, startTask } from '../../src/renderer/lib/doctasks'
 
 // CR-1 (audit chat-docs-2026-07-07): a send that fails BEFORE the user turn persists (document-task
 // busy, no model, a slot held by another window) used to lose both the composer text and the
@@ -271,33 +272,67 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
   })
 })
 
-// full-audit 2026-07-11 CODE-39 (ChatScreen fold): the busy banner's "Cancel document task" button
-// had an explicit `.catch(() => undefined)` — a REJECTED cancel left the banner up with zero
-// feedback. The failure now lands on the same banner.
-describe('ChatScreen — rejected banner cancel surfaces (CODE-39)', () => {
-  it('shows the cancel failure instead of swallowing it', async () => {
+// The busy banner (D26): a send refused because a document task holds the lane shows the shared
+// copy with a "Cancel document task" button.
+describe('ChatScreen — the document-task busy banner and its cancel (D26)', () => {
+  afterEach(() => clearDocTaskSession())
+
+  /** Send into a busy refusal, then click the banner's cancel. */
+  async function sendRefusedThenCancel(): Promise<void> {
+    renderChat()
+    await flush()
+    fireEvent.click(screen.getByText('Chat 1'))
+    await flush()
+    fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'q' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await flush()
+    expect(screen.getByRole('alert').textContent ?? '').toMatch(/document task/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel document task' }))
+    await flush()
+  }
+
+  const busySend = (): (() => Promise<never>) =>
+    vi.fn(async () => {
+      throw new Error(DOC_TASK_BUSY_MESSAGE)
+    })
+
+  // #689: chat is refused while ANY task holds the lane, so the banner cancels the running one with
+  // no id, whichever screen started it. The Documents store's task may be queued behind it;
+  // cancelling that one by its id would leave chat refused.
+  it('cancels the running task with no id, even while the Documents screen holds a task, and clears', async () => {
     vi.useFakeTimers()
     try {
-      const sendChatMessage = vi.fn(async () => {
-        throw new Error(DOC_TASK_BUSY_MESSAGE)
+      const cancelDocTask = vi.fn(async () => {})
+      baseStub({
+        listMessages: vi.fn(async () => []),
+        sendChatMessage: busySend(),
+        startDocTask: vi.fn(async () => ({ jobId: 'documents-task' })),
+        cancelDocTask
       })
+      await startTask('summary', 'd2')
+
+      await sendRefusedThenCancel()
+
+      expect(cancelDocTask).toHaveBeenCalledTimes(1)
+      expect(cancelDocTask).toHaveBeenCalledWith()
+      expect(screen.queryByText(/A document task is running/)).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // full-audit 2026-07-11 CODE-39 (ChatScreen fold): the button had an explicit
+  // `.catch(() => undefined)` — a REJECTED cancel left the banner up with zero feedback. The failure
+  // now lands on the same banner.
+  it('shows a rejected cancel instead of swallowing it (CODE-39)', async () => {
+    vi.useFakeTimers()
+    try {
       const cancelDocTask = vi.fn(async () => {
         throw new Error("Error invoking remote method 'docs:cancelTask': Error: cancel exploded")
       })
-      baseStub({ listMessages: vi.fn(async () => []), sendChatMessage, cancelDocTask })
+      baseStub({ listMessages: vi.fn(async () => []), sendChatMessage: busySend(), cancelDocTask })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
-
-      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'q' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
-      expect(screen.getByRole('alert').textContent ?? '').toMatch(/document task/i)
-
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel document task' }))
-      await flush()
+      await sendRefusedThenCancel()
 
       // TEETH: with the old no-op catch the banner keeps the busy copy and the failure vanishes.
       expect(cancelDocTask).toHaveBeenCalled()

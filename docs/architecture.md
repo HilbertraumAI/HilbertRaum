@@ -2860,7 +2860,17 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   dropped or a newer task replaced is left alone. One tick runs at a time (a per-timer in-flight
   latch, fileTranslateSession's TA-3 / H4 shape), so a slow round-trip cannot land after an
   overlapping tick gave up (CODE-6) and revive a task nothing polls; a rejected cancel clears the
-  latch.
+  latch. **Cancel targeting (#689):** the store holds only the tasks the Documents screen started,
+  while the lane is shared with a Translate-screen file translation, a skill's `categorize`, and an
+  import's deep-index build. The row's Cancel (`cancelActiveDocTask`) therefore sends the entry's
+  `jobId` (#157 DT-2's exact-id cancel, stale-safe), and sends nothing when there is no entry. With
+  no id, main cancelled whatever held the lane, so a row task queued behind another screen's task
+  stopped that task and then ran itself. A deep-index tree that finished hands its cancel on to the
+  extract pass it chained (#38, `InternalTask.chainedJobId`): the row still holds the tree's id
+  until its next poll adopts the extract. The chat busy banner keeps the no-id cancel
+  (`cancelRunningDocTask`), deliberately. Chat is refused while any task is active
+  (`hasActiveTask()`), the copy names the running task, and the store may hold nothing or a task
+  queued behind it. With a second task queued, the next send is refused again; that is truthful.
 
 ## Translation sidecar — design record (TG wave)
 

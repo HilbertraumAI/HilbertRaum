@@ -145,6 +145,12 @@ export interface InternalTask {
    * row action stays visible until `extract_status='ready'`, so the user can finish it later.
    */
   withExtract?: boolean
+  /**
+   * The extract task this tree chained (#38), once it did. #689: a targeted cancel of the
+   * finished tree reaches it, since the Documents row may still hold the tree's id until its
+   * next poll adopts the extract.
+   */
+  chainedJobId?: string
 }
 
 /**

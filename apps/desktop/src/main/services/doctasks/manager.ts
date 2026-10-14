@@ -444,12 +444,23 @@ export class DocTaskManager {
    * compute + an unwanted document). Exact-id keeps the FA-3 / F-6 stale-Stop property for
    * free: a settled task is TERMINAL (no-op below), and a newer task on the lane has a
    * DIFFERENT id — a stale Stop can never touch it.
+   *
+   * #689: the one exception is a deep-index tree that finished and chained its extract pass
+   * (#38: one user concept). The Documents row cancels by the id it holds, which is still the
+   * tree's until its next poll adopts the extract, so the cancel passes on to that task.
    */
   cancelDocTask(jobId?: string | null): void {
     const id = jobId ?? this.runningId ?? this.queue[0] ?? null
     if (!id) return
     const task = this.tasks.get(id)
-    if (!task || TERMINAL.has(task.status.state)) return
+    if (!task) return
+    if (TERMINAL.has(task.status.state)) {
+      if (task.chainedJobId) {
+        log.info('Document task cancel passed on to its chained task', { jobId: id, chainedJobId: task.chainedJobId })
+        this.cancelDocTask(task.chainedJobId)
+      }
+      return
+    }
     log.info('Document task cancel requested', { jobId: id })
     if (task.status.state === 'queued') {
       this.queue = this.queue.filter((q) => q !== id)
@@ -664,7 +675,7 @@ export class DocTaskManager {
       // `extract_status='ready'`, so the user can finish the missing pass later.
       if (task.withExtract && !this.hasPendingKind(documentId, 'extract')) {
         try {
-          this.startDocTask({ kind: 'extract', documentIds: [documentId] })
+          task.chainedJobId = this.startDocTask({ kind: 'extract', documentIds: [documentId] }).jobId
         } catch (chainErr) {
           log.info('Deep-index extract chain skipped', {
             documentId,

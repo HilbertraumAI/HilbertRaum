@@ -717,6 +717,34 @@ describe('deep-index extract chain (#38)', () => {
     expect(extractStatusOf(id)).toBeNull() // the user said stop — no chained work
   })
 
+  // #689: the Documents row cancels by the id it holds, and until its next poll adopts the
+  // extract that is the finished tree's. "Build deep index" is one concept, so the cancel passes on.
+  it('a cancel aimed at the finished tree stops the extract pass it chained (#689)', async () => {
+    const id = await importWords(w, 4000)
+    let m!: DocTaskManager
+    let treeJobId = ''
+    let releaseExtract!: () => void
+    const extractHeld = new Promise<void>((r) => (releaseExtract = r))
+    // Every model call made after the tree finished is the chained extract's; hold those, so the
+    // cancel lands while that task is live.
+    const runtime = treeRuntime({
+      gate: () => (m.getDocTask(treeJobId).state === 'done' ? extractHeld : Promise.resolve())
+    })
+    m = mgr(runtime, 1024)
+    treeJobId = m.startDocTask({ kind: 'tree', documentIds: [id], params: { withExtract: true } }).jobId
+    expect((await waitTerminal(m, treeJobId)).state).toBe('done')
+    const extract = m.listActiveDocTasks().find((t) => t.kind === 'extract')
+    expect(extract).toBeDefined()
+
+    m.cancelDocTask(treeJobId)
+    releaseExtract()
+
+    expect((await waitTerminal(m, extract!.jobId)).state).toBe('cancelled')
+    expect(extractStatusOf(id)).not.toBe('ready')
+    expect(m.getDocTask(treeJobId).state).toBe('done') // the finished tree stays finished
+    expect(treeStatus(id)).toBe('ready')
+  })
+
   it('withExtract on the auto-enqueue path is never set — maybeEnqueueTreeBuild starts a plain tree', async () => {
     // The import-time auto-enqueue must not inherit the chain: the extract pass is user-
     // triggered only (rag-design §14.5 — no surprise CPU spend at import).

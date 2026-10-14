@@ -52,7 +52,8 @@ the Diagnostics Activity panel, newest-first paging + save-dialog export) +
 fenced code block from a persisted assistant answer as its own file; renderer-supplied bytes,
 verbatim, no BOM; resolves with the path or null on cancel) +
 `startDocTask`/`getDocTask`/`cancelDocTask` (`doctasks:start/get/cancel`, Phases 33–35 —
-document tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task;
+document tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task — since
+#689 only the chat busy banner sends none, the Documents row sends its task's id;
 shapes `StartDocTaskRequest`/`DocTaskStatus`/`DocumentSummary` in `shared/types.ts`, and
 `DocumentInfo` gained an optional `summary` from the additive `documents.summary_json` column;
 Phase 34: `kind: 'translation'` takes BOTH `params.sourceLang: TranslationSourceLang` and
@@ -1984,7 +1985,8 @@ whole renderer-visible surface.
   longer mere engine presence; `documents.error_message` gained one persist-canonical English
   value (`main.ingest.imageOcrUnavailable`, display-map translated) — no schema change. Doc-task
   side (#157): `cancelDocTask(jobId)` with a PRESENT id is an exact-id
-  targeted cancel, running OR queued (stale-safe: a settled id no-ops); NEW
+  targeted cancel, running OR queued (stale-safe: a settled id no-ops, except a finished deep-index
+  tree, whose cancel reaches the extract pass it chained, #689); NEW
   `listActiveDocTasks(): Promise<DocTaskStatus[]>` (`doctasks:listActive`) returns running +
   queued tasks in lane order — the file-translation reload-adoption read (`getActiveDocTask`
   keeps its running-only contract for the #38 chain-adopt).
