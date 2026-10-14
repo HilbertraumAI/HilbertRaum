@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
@@ -16,15 +16,20 @@ import {
   TASK_OCR_NOT_A_SCAN_MESSAGE,
   TASK_OCR_NO_TEXT_MESSAGE,
   TASK_REFUSED_CHAT_STREAMING_MESSAGE,
+  TASK_SOURCE_UNREADABLE_MESSAGE,
   type DocTaskDeps,
   type DocTaskManager
 } from '../../src/main/services/doctasks'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
+import { pagesToWalk, pipelinePages } from '../../src/main/services/ocr/pipeline'
+import { createPlaintextOps, type PlaintextOpsRegistry } from '../../src/main/services/ingestion/plaintext-ops'
 import { createMockEmbedder } from '../../src/main/services/embeddings'
 import { retrieve } from '../../src/main/services/rag'
 import { listAuditEvents } from '../../src/main/services/audit'
-import { shredStalePlaintext, vaultPathsFrom } from '../../src/main/services/workspace-vault'
+import { log } from '../../src/main/services/logging'
+import { shredStalePlaintext, vaultPathsFrom, type DocumentCipher } from '../../src/main/services/workspace-vault'
+import { t } from '../../src/shared/i18n'
 import { matchesSmartView } from '../../src/shared/types'
 import { makeMixedPdf, makePdf, TINY_PNG } from '../helpers/fixtures'
 import { until } from '../helpers/hang-budget'
@@ -37,7 +42,7 @@ import {
   type DocTaskWorld
 } from '../helpers/doctask-fixtures'
 import { fakeOcrEngine, fakeRasterizer, importScan } from '../helpers/ocr-fixtures'
-import { recordingCipher } from '../helpers/test-cipher'
+import { recordingCipher, testCipher } from '../helpers/test-cipher'
 import {
   IMAGE_NEEDS_OCR_MESSAGE,
   IMAGE_OCR_UNAVAILABLE_MESSAGE
@@ -176,6 +181,80 @@ describe('Make searchable (OCR) end to end', () => {
       vaultPathsFrom({ configPath: join(w.root, 'config'), dbPath: join(dirname(w.storeDir), 'hilbertraum.sqlite') })
     )
     expect(existsSync(transient)).toBe(false)
+  })
+
+  // #687: an encrypted stored copy with no cipher in the deps (no unlocked vault behind the task) is refused before
+  // anything is decrypted — no plaintext operation is registered, nothing is rendered or recognized, no transient lands.
+  it('an encrypted stored scan with no cipher fails sourceUnreadable before any decrypt — no plaintext op, no transient (#687)', async () => {
+    const docId = await importScan(w, { deps: { cipher: testCipher() } }) // the stored copy is `<id>.pdf.enc`
+    const ops = createPlaintextOps()
+    const kinds: string[] = []
+    // Every registry member named (the lock-admission-race idiom): one added later is a compile error here.
+    const recording: PlaintextOpsRegistry = {
+      register: (kind, parent) => {
+        kinds.push(kind)
+        return ops.register(kind, parent)
+      },
+      size: () => ops.size(),
+      abortAll: () => ops.abortAll(),
+      awaitSettled: (ms) => ops.awaitSettled(ms),
+      sweepRegistered: () => ops.sweepRegistered()
+    }
+    const pdfs: Buffer[] = []
+    const engine = fakeOcrEngine({ text: 'never read' })
+    const manager = ocrManager(engine, fakeRasterizer({ pdfs }), {
+      getIngestionDeps: () => ({ embedder: createMockEmbedder(), plaintextOps: recording })
+    })
+    const status = await waitTerminal(manager, manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(TASK_SOURCE_UNREADABLE_MESSAGE)
+    expect(kinds).toEqual([])
+    expect(pdfs).toEqual([])
+    expect(engine.calls).toBe(0)
+    expect(readdirSync(w.storeDir)).toEqual([`${docId}.pdf${ENCRYPTED_DOC_SUFFIX}`])
+  })
+
+  // #237 / #687: the decrypted transient is registered with the plaintext-op registry for as long as it exists, so a
+  // lock or quit that outlasts the doc-task settle shreds it under the still-running task; the task then finds its
+  // transient gone and fails calmly, and its registration is released.
+  it('#237: a lock sweep during the decrypt shreds the registered transient; the task fails sourceUnreadable and releases (#687)', async () => {
+    const base = testCipher()
+    const docId = await importScan(w, { deps: { cipher: base } })
+    const ops = createPlaintextOps()
+    let parked = false
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    // The first decrypt (the handler's own) writes its transient, then parks with it on disk.
+    const cipher: DocumentCipher = {
+      ...base,
+      decryptFileAsync: async (src, dest) => {
+        await base.decryptFileAsync(src, dest)
+        if (parked) return
+        parked = true
+        await gate
+      }
+    }
+    const pdfs: Buffer[] = []
+    const engine = fakeOcrEngine({ text: 'never read' })
+    const manager = ocrManager(engine, fakeRasterizer({ pdfs }), {
+      getIngestionDeps: () => ({ embedder: createMockEmbedder(), cipher, plaintextOps: ops })
+    })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    await until(() => parked, 'the decrypt parking with its transient on disk')
+    const transients = readdirSync(w.storeDir).filter((n) => n.includes('.parse'))
+    expect(transients).toHaveLength(1)
+    expect(ops.size()).toBe(1)
+    // The lock/quit sweep (registered paths only) removes the plaintext under the parked task…
+    expect(ops.sweepRegistered()).toBe(1)
+    expect(existsSync(join(w.storeDir, transients[0]))).toBe(false)
+    release()
+    // …which then cannot read it: a calm failure, never a render of stale bytes, and the operation is released.
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(TASK_SOURCE_UNREADABLE_MESSAGE)
+    expect(ops.size()).toBe(0)
+    expect(pdfs).toEqual([])
+    expect(engine.calls).toBe(0)
   })
 
   it('cancel persists nothing — the document stays a detected scan', async () => {
@@ -319,6 +398,68 @@ describe('Make searchable (OCR) end to end', () => {
     expect(getDocumentOcrPages(w.db, docId)).toBeNull()
   })
 
+  // #687: a render or recognition fault fails the task with the friendly copy; the raw reason reaches the LOCAL log
+  // only (§11.4) — never the task status, never the audit trail — and nothing is persisted.
+  it('a scan that cannot be read fails with the ocrFailed copy; the raw reason reaches only the local log (#687)', async () => {
+    const docId = await importScan(w)
+    const engine = fakeOcrEngine({ text: 'never persisted' })
+    const rasterize: RasterizePdf = async () => {
+      throw new Error('bad xref RAW-DETAIL')
+    }
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      const manager = ocrManager(engine, rasterize, { audit: dbAudit(w.db) })
+      const status = await waitTerminal(manager, manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
+      expect(status.state).toBe('failed')
+      expect(status.error).toBe(t('en', 'main.task.ocrFailed'))
+      expect(warn).toHaveBeenCalledWith('OCR task failed while reading the scan', {
+        documentId: docId,
+        error: 'bad xref RAW-DETAIL'
+      })
+    } finally {
+      warn.mockRestore()
+    }
+    const events = listAuditEvents(w.db, { limit: 50 })
+    expect(events.map((e) => e.type)).toContain('document_task_failed')
+    expect(JSON.stringify(events)).not.toContain('RAW-DETAIL')
+    expect(engine.calls).toBe(0)
+    expect(getDocumentOcrPages(w.db, docId)).toBeNull()
+    expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
+  })
+
+  // #687: the recognition is persisted before the re-ingest; a re-ingest that does not reach `indexed` fails the task
+  // with the friendly copy but keeps the pages (Re-index retries from them), and the document-work lease is returned.
+  it('a re-ingest that does not reach indexed fails with the ocrFailed copy, keeps the pages, and releases the lease (#687)', async () => {
+    const docId = await importScan(w)
+    const failingEmbedder = { ...createMockEmbedder(), embed: async () => Promise.reject(new Error('embed down')) }
+    const lease = { taken: 0, held: 0 }
+    const error = vi.spyOn(log, 'error')
+    try {
+      const manager = ocrManager(fakeOcrEngine({ text: (n) => `Seite ${n} erkannt.` }), fakeRasterizer(), {
+        getIngestionDeps: () => ({ embedder: failingEmbedder }),
+        beginDocumentWork: () => {
+          lease.taken += 1
+          lease.held += 1
+          return () => {
+            lease.held -= 1
+          }
+        }
+      })
+      const status = await waitTerminal(manager, manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
+      expect(status.state).toBe('failed')
+      expect(status.error).toBe(t('en', 'main.task.ocrFailed'))
+      expect(error).toHaveBeenCalledWith(
+        'OCR re-ingest did not reach indexed',
+        expect.objectContaining({ documentId: docId, status: 'failed' })
+      )
+    } finally {
+      error.mockRestore()
+    }
+    expect(getDocumentOcrPages(w.db, docId)?.map((p) => p.text)).toEqual(['Seite 1 erkannt.', 'Seite 2 erkannt.'])
+    expect(getDocument(w.db, docId)?.status).toBe('failed')
+    expect(lease).toEqual({ taken: 1, held: 0 })
+  })
+
   it("guards: no engine, not a scan (a text PDF; an OCR'd photo), chat streaming, a recognizer that cannot run (#232)", async () => {
     const docId = await importScan(w)
     // No engine (no OCR files on the drive).
@@ -397,6 +538,58 @@ describe('Make searchable (OCR) end to end', () => {
     expect((await waitTerminal(second, r2.jobId)).state).toBe('done')
     expect(getDocumentOcrPages(w.db, docId)?.[0].text).toBe('Neue Erkennung.')
   })
+
+  // OCR-R test-gap #3 residual (BUILD_STATE §5 item 15(f)) / #687: two OCR tasks queued on ONE document. There is no
+  // same-kind dedupe, so both are admitted; the queue runs them one after the other (the second never starts reading
+  // while the first runs), and the later reading replaces the earlier one — the D33 redo — indexed once.
+  it('two OCR tasks on one document run one after the other; the later reading wins and is indexed once (#687)', async () => {
+    const docId = await importScan(w)
+    let run = 0
+    let active = 0
+    let maxActive = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const engine = fakeOcrEngine({ text: (n) => `Lauf ${run} Seite ${n}.` })
+    const walk = fakeRasterizer()
+    // What task 1 was when task 2 read its first page.
+    const firstStateAtSecondRead: string[] = []
+    let firstJob = ''
+    const rasterize: RasterizePdf = async (pdf, o) => {
+      const mine = ++run
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      try {
+        if (mine === 1) await gate
+        const onPage: typeof o.onPage = (n, png) => {
+          if (mine === 2 && n === 1) firstStateAtSecondRead.push(manager.getDocTask(firstJob).state)
+          return o.onPage(n, png)
+        }
+        return await walk(pdf, { ...o, onPage })
+      } finally {
+        active -= 1
+      }
+    }
+    const manager = ocrManager(engine, rasterize)
+    firstJob = manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId
+    const secondJob = manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId
+    expect(secondJob).not.toBe(firstJob)
+    await until(() => run >= 1, 'task 1 parking in the rasterizer')
+    expect(manager.getDocTask(secondJob).state).toBe('queued')
+    expect(run).toBe(1)
+    release()
+    expect((await waitTerminal(manager, firstJob)).state).toBe('done')
+    expect((await waitTerminal(manager, secondJob)).state).toBe('done')
+    expect(maxActive).toBe(1)
+    expect(firstStateAtSecondRead).toEqual(['done'])
+    expect(engine.calls).toBe(4)
+    expect(getDocumentOcrPages(w.db, docId)?.map((p) => p.text)).toEqual(['Lauf 2 Seite 1.', 'Lauf 2 Seite 2.'])
+    // One chunk set — the second re-ingest replaced the first, it did not add to it.
+    const pages = w.db
+      .prepare('SELECT page_number FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+      .all(docId) as Array<{ page_number: number | null }>
+    expect(pages.map((r) => r.page_number)).toEqual([1, 2])
+    expect(getDocument(w.db, docId)?.status).toBe('indexed')
+  })
 })
 
 // #575 — a typed letter with scanned pages: import keeps its text page searchable AND says which
@@ -461,6 +654,28 @@ describe('a text PDF with scanned pages (#575)', () => {
     const doc = getDocument(w.db, docId)
     expect(doc?.status).toBe('indexed') // its text page still searchable
     expect(doc?.ocr).toMatchObject({ pageCount: 2, textPageCount: 0 })
+  })
+
+  // #687: unlike the row above, a run that read NO page at all — every scanned page lies past the page cap — has read
+  // nothing to keep: it fails with the no-text copy, persists nothing, and the offer stays.
+  it('a run that reads none of the scanned pages (all past the page cap) persists nothing — the offer stays (#687)', async () => {
+    const docId = await importLetter()
+    const engine = fakeOcrEngine({ text: 'never read' })
+    // The real rasterizer's walk under a one-page cap: pages 2 and 3 of 3 are both past it.
+    const rasterize: RasterizePdf = async (_pdf, o) => {
+      o.onPageCount?.(pagesToWalk(3, { maxPages: 1, pages: o.pages }).length)
+      await pipelinePages(3, async (n) => Buffer.from([n]), o.onPage, { maxPages: 1, pages: o.pages, signal: o.signal })
+      return { pageCount: 1 }
+    }
+    const manager = ocrManager(engine, rasterize)
+    const status = await waitTerminal(manager, manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(TASK_OCR_NO_TEXT_MESSAGE)
+    expect(engine.calls).toBe(0)
+    expect(getDocumentOcrPages(w.db, docId)).toBeNull()
+    const doc = getDocument(w.db, docId)
+    expect(doc?.ocr ?? null).toBeNull()
+    expect(doc?.scannedPages).toEqual({ count: 2, pageCount: 3 })
   })
 })
 

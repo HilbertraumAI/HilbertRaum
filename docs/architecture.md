@@ -13351,7 +13351,7 @@ Translate handoff · P3 `0687a437` docs truth · P4 `f8f3dc29` backend hardening
 |---|---|
 | #1 — no renderer test exercised OCR initiation/display | Closed @ P1/P2 (initiation clicks, busy/finishing/stopping states, Translate failure copy). Residual registered: the PreviewModal `ocrInfo` line remains untested |
 | #2 — the real rasterizer wiring had no automated teeth | Closed @ P5: fake-Electron harness (destroy on success/error/timeout/abort, in-use latch, exact 60 s step-timeout pin, sender-spoof rejection on all three reply channels, listener removal, gone-event fast-fail) |
-| #3 — no concurrency test for task-start vs re-index | Closed @ P1 (unit + gated-re-index integration). Residual registered: two-queued-OCR-tasks-on-one-doc remains unpinned (behavior is benign — serialize + overwrite = the D33 redo) |
+| #3 — no concurrency test for task-start vs re-index | Closed @ P1 (unit + gated-re-index integration). Residual registered: two-queued-OCR-tasks-on-one-doc remains unpinned (behavior is benign — serialize + overwrite = the D33 redo). **⟶ PINNED (#687, 2026-10-14):** `ocr-task.test.ts` "two OCR tasks on one document run one after the other…" — both admitted, the second queued until the first is done, the later reading kept, one chunk set |
 | #4 — `renderer/ocr/main.ts` pdfjs side untested | **Deferred** (registered below) |
 | #5 — transient name + engineId unpinned | Closed @ P4: `<id>.parse-ocr.pdf` pinned to the crash-sweep matcher; engineId = `tesseract.js-<installed version>` test |
 
