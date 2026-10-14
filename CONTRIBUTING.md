@@ -195,7 +195,10 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   the last chat" only armed the fake timer, so `resumed === false` held with the guard deleted.
   Advance the clock past the shipped delay, or assert the armed timer (`slotClock().pending()`).
 - **A fake cipher must change the bytes.** With an identity "cipher", an export that read the
-  `.enc` file without decrypting it returned the right bytes, and the test stayed green.
+  `.enc` file without decrypting it returned the right bytes, and the test stayed green. Use
+  `tests/helpers/test-cipher.ts`: `testCipher()` is the vault's real AES-256-GCM under a random key, and
+  `recordingCipher()` also records which decrypt a reader used and where it decrypted to. Seven suites
+  had their own copy, and two docs-ipc rows used identity ciphers.
 - **Reset renderer stores with the production purge, not a test-only reset.** Call
   `clearDocTaskSession()` / `clearFileTranslate()` / `clearTranslateSession()` after RTL
   `cleanup()`. The removed `…ForTests` resets zeroed generation counters, which production never
@@ -207,6 +210,32 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **Count memo re-renders on the test side.** `tests/helpers/render-counter.ts` wraps the
   production `memo(...)` component (keeping its compare function) inside a `vi.mock`, so no
   production module needs a DEV-only counter. Keep a positive control that shows the counter moves.
+- **The OCR fakes live in `tests/helpers/ocr-fixtures.ts`**: `fakeOcrEngine` (text per page, confidence,
+  languages, call count), `fakeRasterizer` (honours the page list a re-run asks for, #575), `importScan`
+  (a scan through the real pipeline, asserting it fails as a detected scan) and `ocrDrive` (a temp drive
+  with language files). The two OCR task suites each carried their own rasterizer, and one copy had
+  stopped honouring the page list.
+- **A skipped `describe` still runs its body at collection.** `describe.skipIf(!built)` skips the tests,
+  not the code between them: `ocr-decoder-assets` read `out/renderer/assets` in the describe body, so a
+  fresh checkout's `npm test` before a build failed the whole file instead of skipping it. Read build
+  output, drives or other optional inputs in `beforeAll` or inside the tests.
+- **A test that cannot run here says so.** A row that `return`s early when the environment lacks
+  something (no symlink privilege, a link that cannot be created) is reported as passed. Use
+  `ctx.skip()` or `it.runIf` / `it.skipIf`, so the run shows the skip.
+- **Search the raw value, not its JSON encoding.** A "never logs the drive path" negative over
+  `JSON.stringify(meta)` passes on Windows even when the path is logged: JSON doubles every backslash,
+  so `C:\…` never appears in the string. Check each logged value, or search the encoded form.
+- **Caps dialled through the environment: stub every variable.** The ingestion caps have no injection
+  parameter; tests set `HILBERTRAUM_MAX_DOC_BYTES` and its siblings with `vi.stubEnv`, which
+  `resolveIngestionLimits()` reads at call time. Stub every cap variable (to `''` where a row pins the
+  default) and `vi.unstubAllEnvs()` after: an override in the developer's shell must not change the
+  result, and `unstubAllEnvs` alone brings that override back.
+- **A doc that names a test as its guard is a claim about that test.** model-policy.md said the OCR
+  drift test checks `OCR_PINS` against its table "and fails until they agree"; the test never read
+  the table, and the pinned sizes were checked nowhere. Make the test check what the doc says, or fix the
+  doc in the same change.
+- **To show a test pins a shipped constant, mutate where it is used, not where it is defined.** A test
+  that imports `DEFAULT_OCR_PAGE_TIMEOUT_MS` moves with any edit to the constant and stays green.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the
