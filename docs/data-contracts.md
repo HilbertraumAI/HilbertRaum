@@ -1937,10 +1937,11 @@ whole renderer-visible surface.
   Promise<OcrInstallJob>` (`ocr:install` — takes NO payload: the preload sends none, and main
   refuses any argument with `main.ocr.badRequest` without echoing it), `getOcrInstallJob(jobId)`
   (`ocr:getJob`), `cancelOcrInstall(jobId)` (`ocr:cancel`). Types (`shared/types.ts`):
-  `OcrInstallLanguage = { lang, sizeBytes, installed }` (installed = on the drive AND matching the
-  pinned hash); `OcrInstallStatus = { available, languages: OcrInstallLanguage[], totalBytes
-  (the not-installed languages' sizes), sourceHost: string | null (computed in main from the
-  pinned URLs), license (code-side 'Apache-2.0') }`; `OcrInstallJob = { jobId, status:
+  `OcrInstallLanguage = { lang, role, sizeBytes, installed }` (role `'language' | 'orientation'`
+  since #538; installed = on the drive AND matching the pinned hash); `OcrInstallStatus = {
+  available, languages: OcrInstallLanguage[], totalBytes (the not-installed languages' sizes),
+  sourceHost: string | null (computed in main from the pinned URLs), license (code-side
+  'Apache-2.0') }`; `OcrInstallJob = { jobId, status:
   queued|downloading|verifying|activating|done|failed|cancelled, receivedBytes, totalBytes,
   outcome: OcrRefreshOutcome | null, error: string | null }` — session-only, never persisted;
   `outcome` is set on `done`, which the job reaches only after the engine slot was refreshed.
