@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_SLICE_WORK,
   IncrementalTidy,
+  articleSections,
   PRE_SPACE,
   PRE_TAB,
   TEXT_PIECE_CHARS,
@@ -27,7 +28,6 @@ import {
   TABLE_MAX_SOURCE_ROWS,
   TABLE_SEGMENT_MAX_CHARS
 } from '../../src/main/services/zim/tables'
-import { articleSections } from '../../src/main/services/zim/index'
 
 // ZIM article HTML → segments (knowledge packs). The fixture is a hand-trimmed
 // Parsoid/mwoffliner page carrying every structure the converter must handle:
@@ -557,13 +557,37 @@ describe('zimArticleToSegments — the Normdaten box (#673)', () => {
   it('ends at its section’s end when its own end tag is missing, and is still delivered', () => {
     const article = zimArticleToSegments(
       '<h1>T</h1><section><h2>Einzelnachweise</h2><p>Ref.</p><div id="normdaten"><div>Normdaten (Sachbegriff): GND: 4011134-9</div></section>' +
-        '<section><h2>Weblinks</h2><p>Link.</p></section>'
+        '<p>After the section.</p>'
     )
     expect(article.segments).toEqual([
       seg('Einzelnachweise', 'Einzelnachweise\n\nRef.'),
       seg('Normdaten', 'Normdaten (Sachbegriff): GND: 4011134-9'),
-      seg('Weblinks', 'Weblinks\n\nLink.')
+      seg('Einzelnachweise', 'After the section.')
     ])
+  })
+
+  it('takes the ordinary text rules: citation brackets dropped, list items kept apart', () => {
+    const article = zimArticleToSegments(
+      '<h1>T</h1><div id="normdaten">GND: 1<sup class="mw-ref">[1]</sup><ul><li>LCCN: n2</li><li>VIAF: 3</li></ul></div>'
+    )
+    expect(article.segments).toEqual([seg('Normdaten', 'GND: 1\n\n- LCCN: n2\n\n- VIAF: 3')])
+  })
+
+  it('ends at a heading inside it, so what follows keeps that heading’s label', () => {
+    const article = zimArticleToSegments(
+      '<h1>T</h1><section><h2>Einzelnachweise</h2><p>Ref.</p><div id="normdaten">GND: 1<h2>Weblinks</h2><p>Link.</p></div><p>More.</p></section>'
+    )
+    expect(article.segments).toEqual([
+      seg('Einzelnachweise', 'Einzelnachweise\n\nRef.'),
+      seg('Normdaten', 'GND: 1'),
+      seg('Weblinks', 'Weblinks\n\nLink.\n\nMore.')
+    ])
+  })
+
+  it('is a box only on a div or section: a paragraph with the id stays its section’s text', () => {
+    // A `p`'s end tag is optional, so a `p` box could not tell where it ends.
+    const article = zimArticleToSegments('<h1>T</h1><h2>E</h2><p id="normdaten">GND: 1<p>Next.</p>')
+    expect(article.segments).toEqual([seg('E', 'E\n\nGND: 1\nNext.')])
   })
 
   it('is delivered as far as it got when the input ends inside it', () => {

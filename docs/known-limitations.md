@@ -3655,7 +3655,14 @@ reports and phase plans were working papers; their full text lives in git histor
     are plain text; their links (d-nb.info, viaf.org) are not kept (#416).
   - Text after the box in the same section (2 of 227 sampled pages, such as
     Huawei's coordinates line) follows as a second part of that section, so the
-    viewer shows the section's heading twice.
+    viewer shows the section's heading twice and a saved copy has two sections of
+    that name, as around a table.
+  - A section whose only content was a sister-project box (58 `Weblinks`
+    sections in the sample) is left with its heading alone, like any section
+    whose content is dropped.
+  - The viewer still tells a heading's segment by its text: a later paragraph
+    of a section that is exactly the section's name, after a table or the
+    Normdaten box, is taken for the heading and not shown.
   - A copy saved before this change keeps the boxes as they were. Delete the
     copy on the Documents screen and save the article again to get the new
     shape.

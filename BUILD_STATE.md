@@ -30,7 +30,7 @@
 > named in §5's branch analysis still carry unmerged work.
 _2026-10-14 — **#673 — German Wikipedia's sister-project links and legal-topics notice leave the article text; its authority data becomes a segment of its own (`fix/673-wikipedia-boxes`).** On 1,500 sampled pages
 `div.sisterproject` (394 pages, 4,187 words), `div#Vorlage_Rechtshinweis` (16, 96) and `div#normdaten` (227, 1,549, always the last text, mostly in `Einzelnachweise`) were delivered as article text. Owner calls as
-recommended: the first is a furniture token, the second dropped by id, the third a `Normdaten` segment where the box stands (`FURNITURE_IDS`; the license line's gathering). The viewer now drops only a heading's own line
+recommended: the first is a furniture token, the second dropped by id, the third a `Normdaten` segment where the box stands, on the ordinary text path (a review pass moved it off the license line's side channel). The viewer now drops only a heading's own line
 (it cut ` (Person): GND`, and a real word on 14 other sections). 2,672 pages: 2,182 byte-identical; the 490 with a box read master's words with the boxes cut (490/490), Normdaten words exact (227/227); lead unchanged;
 chunks +229. Real app: master filed all three under `Einzelnachweise`/`Weblinks`, the fix as designed. Record: `rag-design.md` §17 "#673". **Owed: the full acceptance read** (after #662's). Open: none (residuals there)._
 _2026-10-14 — **#678 — "Install the AI engine again" replaces what the OS refused, the `cpu/` net included; Check again checks the `cpu/` net (`fix/678-cpu-net-reinstall`).** On a Kit, rungs 1–2 dying of

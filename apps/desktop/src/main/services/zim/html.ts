@@ -27,8 +27,7 @@ import {
 // Dropped subtrees: head, script/style/noscript (raw-text aware), figures/images, nav, a
 // `p`/`div`/`section` whose class token names site furniture (`FURNITURE_CLASS_TOKENS`, #627 —
 // German Wikipedia's navigation boxes too, #662, and its sister-project links, #673) or whose id
-// names a German Wikipedia box (`FURNITURE_IDS`, #673: the legal-topics notice; the Normdaten box
-// leaves its section for a segment of its own), mwoffliner's license line (dropped from the
+// is a furniture id (`FURNITURE_IDS`, #673), mwoffliner's license line (dropped from the
 // segments but returned as `ZimArticle.notice`, #662),
 // and `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup> like
 // m<sup>2</sup> keeps its text, now marked — see the sup/sub rule below). A `<pre>` keeps its
@@ -269,8 +268,8 @@ const BLOCK = new Set([
  *   all three are named so a box carrying only one of them is still a box. The generic
  *   MediaWiki class those boxes also carry, `navigation-not-searchable`, is deliberately NOT a
  *   token: it also marks the Normdaten (authority data) and Rechtshinweis (legal notice) boxes
- *   (`FURNITURE_IDS`), inline pronunciation spans in running prose and boxes on other wikis
- *   (20 on 9 of 150 Alpine Linux pages). Nor is `klappleiste`, the collapsible box.
+ *   (`FURNITURE_IDS`, `SEGMENT_BOX_IDS`), inline pronunciation spans in running prose and boxes on
+ *   other wikis (20 on 9 of 150 Alpine Linux pages). Nor is `klappleiste`, the collapsible box.
  * - German Wikipedia's sister-project links (#673; `Vorlage:Schwesterprojekt`, "Commons: … –
  *   Sammlung von Bildern, Videos und Audiodateien"), `div.sisterproject`, the only class it carries
  *   (480 boxes on 394 of 1,500 pages, nearly all heading the `Weblinks` section): navigation to
@@ -300,28 +299,23 @@ const FURNITURE_CLASS_TOKENS = new Set([
 ])
 
 /**
- * German Wikipedia boxes that carry no class of their own, named by their element id, which the
- * template sets (#673). Owner calls of 2026-10-14; 1,500 sampled pages:
- *
- * - `Vorlage_Rechtshinweis` ("Bitte den Hinweis zu Rechtsthemen beachten!", 16 pages): dropped like
- *   furniture. It points to Wikipedia's legal-topics notice, which is not in the archive, and is an
- *   instruction to the reader that a model could repeat.
- * - `normdaten` (authority data, `Normdaten (Person): GND: … | LCCN: … | VIAF: …`, 227 pages, always
- *   the article's last text): kept, but as a segment of its own labelled `NORMDATEN_LABEL`, no longer
- *   as text of the last section (`Einzelnachweise` on 196 of them). Its identifiers stay answerable;
- *   the references' last chunk loses them.
- *
- * An id must match exactly (ids are case-sensitive): the Normdaten box's classes vary with its
- * kind (`normdaten-typ-p`, `-s`, …) and the Rechtshinweis box has only generic ones.
+ * Furniture named by its element id, for a box with no class of its own (#673): German
+ * Wikipedia's legal-topics notice ("Bitte den Hinweis zu Rechtsthemen beachten!", 16 of 1,500
+ * sampled pages), whose template sets the id and only generic classes. It points to Wikipedia's
+ * legal-topics notice, which is not in the archive, and is an instruction to the reader that a
+ * model could repeat (owner call, 2026-10-14). An id must match exactly: ids are case-sensitive.
  */
-const FURNITURE_IDS: ReadonlyMap<string, 'drop' | 'segment'> = new Map([
-  ['Vorlage_Rechtshinweis', 'drop'],
-  ['normdaten', 'segment']
-])
+const FURNITURE_IDS = new Set(['Vorlage_Rechtshinweis'])
 
-/** The label of the Normdaten box's own segment (#673): the template's name, which its text
- *  starts with. */
-const NORMDATEN_LABEL = 'Normdaten'
+/**
+ * Boxes delivered as a segment of their own, by element id → the segment's label (#673): German
+ * Wikipedia's authority data (`Normdaten (Person): GND: … | LCCN: … | VIAF: …`, 227 of 1,500
+ * sampled pages, always the article's last text) used to be text of the last section
+ * (`Einzelnachweise` on 196 of them). Owner call of 2026-10-14: keep its identifiers answerable,
+ * out of the references' last chunk. The box's classes vary with its kind (`normdaten-typ-p`,
+ * `-s`, …), so the template's id names it. Honoured on a `div`/`section`, never a `p`.
+ */
+const SEGMENT_BOX_IDS: ReadonlyMap<string, string> = new Map([['normdaten', 'Normdaten']])
 
 /**
  * The license line mwoffliner appends to every article it writes (#662): `div.zim-footer`,
@@ -335,10 +329,10 @@ const NORMDATEN_LABEL = 'Normdaten'
  */
 const NOTICE_CLASS_TOKENS = new Set(['zim-footer'])
 
-/** Every furniture and notice token, and every furniture id, contains one of these: a cheap test
- *  on the raw attributes, so the class and id are parsed only where one could match (most `div`s
+/** Every furniture and notice token, and every id above, contains one of these: a cheap test on
+ *  the raw attributes, so the class and id are parsed only where one could match (most `div`s
  *  carry other classes). */
-const FURNITURE_HINT = /footer|nav|menu|sidebar|breadcrumb|cookie|sister|normdaten|rechtshinweis/i
+const FURNITURE_HINT = /footer|nav|menu|sidebar|breadcrumb|cookie|sister|rechtshinweis|normdaten/i
 
 /** The elements a furniture class is honoured on (#627). */
 const FURNITURE_ELEMENTS = new Set(['p', 'div', 'section'])
@@ -351,12 +345,10 @@ const FURNITURE_HOLDER_TAGS = new Set([
   'section', 'article', 'main', 'aside', 'blockquote', 'details', 'li', 'dd', 'td', 'th', 'body', 'html'
 ])
 
-/** `'segment'` for the Normdaten box and `'drop'` for the other furniture ids (#673); else
- *  `'notice'` when a class token is a license line's (it wins over a furniture token beside it),
- *  `'drop'` for furniture, null otherwise. */
-function furnitureKind(classAttr: string | null, idAttr: string | null): 'drop' | 'notice' | 'segment' | null {
-  const byId = idAttr === null ? undefined : FURNITURE_IDS.get(idAttr)
-  if (byId !== undefined) return byId
+/** `'notice'` when a token is a license line's (it wins over a furniture token beside it),
+ *  `'drop'` for furniture (a class token or a furniture id), null otherwise. */
+function furnitureKind(classAttr: string | null, idAttr: string | null): 'drop' | 'notice' | null {
+  if (idAttr !== null && FURNITURE_IDS.has(idAttr)) return 'drop'
   if (classAttr === null) return null
   let kind: 'drop' | null = null
   for (const token of classAttr.split(/\s+/)) {
@@ -1067,8 +1059,7 @@ export function* zimArticleSlices(
   // table needs its own branch below), so it gets its own depth counter.
   let tableDropDepth = 0
   // Site furniture (#627): a `p`/`div`/`section` whose class names the page's own footer,
-  // navigation, menu, sidebar, breadcrumb or cookie notice, or whose id is a furniture id (#673),
-  // is dropped with its subtree.
+  // navigation, menu, sidebar, breadcrumb or cookie notice is dropped with its subtree.
   // `furnitureTag` is the element that opened the drop; a `div`/`section` closes on its own
   // matching end tag (same-name depth) or on the end tag of an element holding it (below), a `p`
   // also on anything HTML5 lets close it.
@@ -1079,28 +1070,38 @@ export function* zimArticleSlices(
   // it too, as HTML5 closes an open `div` at its section's end — so a box whose own end tag is
   // missing costs the rest of its section, never the rest of the page (#662 review).
   const furnitureHeld = new Map<string, number>()
-  // The license line (#662) and the Normdaten box (#673) are dropped the same way, but their text
-  // is gathered (bounded by NOTICE_RAW_MAX_CHARS) instead of being discarded: into `notice` for
-  // every license line on the page, into a fresh `box` for each Normdaten box, which becomes a
-  // segment of its own where it ends. `gather` is the open element's buffer, null for furniture.
-  const notice: Gathered = { text: '', clipped: false }
-  let box: Gathered | null = null
-  let gather: Gathered | null = null
+  // The license line (#662) is dropped the same way, but while `furnitureNotice` is set its text
+  // is gathered into `noticeBuf` (bounded by NOTICE_RAW_MAX_CHARS) instead of being discarded;
+  // `noticeClipped` records that the bound cut it.
+  let furnitureNotice = false
+  let noticeBuf = ''
+  let noticeClipped = false
   const endFurniture = (): void => {
-    if (box !== null) {
-      const text = gatheredLine(box)
-      if (text !== null) segments.push({ text, pageNumber: null, sectionLabel: NORMDATEN_LABEL })
-      box = null
-    }
     furnitureDepth = 0
     furnitureTag = null
-    gather = null
+    furnitureNotice = false
     furnitureHeld.clear()
   }
-  /** Appends to the open buffer until the bound has cut it (text runs are sized to it by the
-   *  caller; a separator past it is simply not written). */
-  const gatherText = (text: string): void => {
-    if (gather !== null && !gather.clipped && gather.text.length < NOTICE_RAW_MAX_CHARS) gather.text += text
+  /** Appends to the notice until the bound has cut it (text runs are sized to it by the caller;
+   *  a separator past it is simply not written). */
+  const gatherNotice = (text: string): void => {
+    if (!noticeClipped && noticeBuf.length < NOTICE_RAW_MAX_CHARS) noticeBuf += text
+  }
+  // A box delivered as a segment of its own (#673, `SEGMENT_BOX_IDS`): its text takes every
+  // ordinary text rule under the box's label, while what came before it and what follows it in
+  // its section keep the section's label (`boxOuterLabel`). `boxTag` is the element that opened
+  // it; like a dropped box it closes on its own matching end tag or on the end tag of an element
+  // holding it (`boxHeld`, as `furnitureHeld`), and also at a heading, which starts a section.
+  let boxTag: string | null = null
+  let boxDepth = 0
+  let boxOuterLabel: string | null = null
+  const boxHeld = new Map<string, number>()
+  const endBox = (): void => {
+    flush()
+    currentLabel = boxOuterLabel
+    boxTag = null
+    boxDepth = 0
+    boxHeld.clear()
   }
   // Preformatted text (#627): `preDepth` counts open `<pre>`s, `pre` encodes their whitespace
   // while one is open (prose only — never into a heading), and `preInner` names the block
@@ -1260,18 +1261,18 @@ export function* zimArticleSlices(
         }
         captionBuf += text
       }
-    } else if (gather !== null && !gather.clipped) {
-      // A license line's or a Normdaten box's text (#662, #673). Only what the buffer still has
-      // room for is decoded, so a huge text run inside the element is never one long decode. Where
-      // the bound cuts, the last word goes too — it can be part of an entity or of a surrogate pair.
-      const to = Math.min(upto, textStart + Math.max(0, NOTICE_RAW_MAX_CHARS - gather.text.length))
+    } else if (furnitureNotice && !noticeClipped) {
+      // The license line's text (#662). Only what the notice still has room for is decoded, so
+      // a huge text run inside the element is never one long decode. Where the bound cuts, the
+      // last word goes too — it can be part of an entity or of a surrogate pair.
+      const to = Math.min(upto, textStart + Math.max(0, NOTICE_RAW_MAX_CHARS - noticeBuf.length))
       let text = decodeEntities(input.slice(textStart, to))
       if (to < upto) {
         const lastBreak = text.search(/\s\S*$/)
         text = lastBreak >= 0 ? text.slice(0, lastBreak) : ''
       }
-      gatherText(text)
-      if (to < upto) gather.clipped = true
+      gatherNotice(text)
+      if (to < upto) noticeClipped = true
     }
     textStart = upto
   }
@@ -1502,8 +1503,8 @@ export function* zimArticleSlices(
           else holderEnds = true
         }
         if (!holderEnds) {
-          // Inside a license line or a Normdaten box a block boundary still keeps two words apart.
-          if (gather !== null && (name === 'br' || BLOCK.has(name))) gatherText(' ')
+          // Inside a license line a block boundary still keeps two words apart (#662).
+          if (furnitureNotice && (name === 'br' || BLOCK.has(name))) gatherNotice(' ')
           continue
         }
         // The end tag of an element holding the furniture ends it too, and is then handled as
@@ -1517,7 +1518,7 @@ export function* zimArticleSlices(
         // A `p` has an optional end tag: a block start tag, or the end tag of an element that
         // can hold the `p`, ends it — and is then handled as itself, below.
         if (!(isClose ? P_ENDING_END_TAGS.has(name) : P_ENDING_START_TAGS.has(name))) {
-          if (gather !== null && name === 'br') gatherText(' ')
+          if (furnitureNotice && name === 'br') gatherNotice(' ')
           continue
         }
         endFurniture()
@@ -1611,32 +1612,52 @@ export function* zimArticleSlices(
       if (name === 'sup' && !selfClosing) supSkipDepth += isClose ? -1 : 1
       continue
     }
-    const furniture =
+    const hinted =
       !isClose &&
       !selfClosing &&
       headingLevel === 0 &&
       pre === null && // inside a code block it is code, and its end tag must reach the `<pre>`
       FURNITURE_ELEMENTS.has(name) &&
       FURNITURE_HINT.test(attrs)
-        ? furnitureKind(attrValue(attrs, 'class', { unquoted: true }), attrValue(attrs, 'id', { unquoted: true }))
-        : null
+    const id = hinted ? attrValue(attrs, 'id', { unquoted: true }) : null
+    const boxLabel = id !== null && boxTag === null && name !== 'p' ? SEGMENT_BOX_IDS.get(id) : undefined
+    if (boxLabel !== undefined) {
+      // A box that becomes a segment of its own (#673) where it stands: what came before it ends
+      // here, under its section's label.
+      flush()
+      boxOuterLabel = currentLabel
+      currentLabel = boxLabel
+      boxTag = name
+      boxDepth = 1
+      continue
+    }
+    const furniture = hinted ? furnitureKind(attrValue(attrs, 'class', { unquoted: true }), id) : null
     if (furniture !== null) {
-      if (furniture === 'segment') {
-        // The Normdaten box (#673) becomes a segment of its own where it stands: what came before
-        // it ends here, under its own label.
-        flush()
-        box = { text: '', clipped: false }
-        gather = box
-      } else {
-        // Still a block boundary, so the text before and after the dropped element stays apart.
-        emitBreak()
-        gather = furniture === 'notice' ? notice : null
-        // A second license line on one page is kept too, after the first (#662).
-        if (gather !== null && gather.text.length > 0) gatherText(' ')
-      }
+      // Still a block boundary, so the text before and after the dropped element stays apart.
+      emitBreak()
       furnitureDepth = 1
       furnitureTag = name
+      furnitureNotice = furniture === 'notice'
+      // A second license line on one page is kept too, after the first (#662).
+      if (furnitureNotice && noticeBuf.length > 0) gatherNotice(' ')
       continue
+    }
+    if (boxTag !== null && !selfClosing) {
+      if (name === boxTag) {
+        boxDepth += isClose ? -1 : 1
+        if (boxDepth === 0) {
+          endBox()
+          continue
+        }
+      } else if (FURNITURE_HOLDER_TAGS.has(name)) {
+        const held = boxHeld.get(name) ?? 0
+        if (!isClose) boxHeld.set(name, held + 1)
+        else if (held > 0) boxHeld.set(name, held - 1)
+        // The end tag of an element holding the box ends it too, and is then handled as itself.
+        else endBox()
+      } else if (!isClose && /^h[1-6]$/.test(name)) {
+        endBox() // a heading starts the next section, and is then handled as itself
+      }
     }
 
     if (!isClose && SKIP_SUBTREE.has(name)) {
@@ -1789,8 +1810,6 @@ export function* zimArticleSlices(
   // Trailing character data (a well-formed page ends in tags, but stay total). Any
   // scan-level truncation already parked `textStart` at the end of the input.
   yield* emitTextUpTo(n)
-  // A Normdaten box the input ended inside (cut short) is still delivered, as far as it got.
-  if (furnitureDepth > 0) endFurniture()
   flush()
 
   // An input longer than `maxChars` was sliced mid-markup, so the scan almost always ends in
@@ -1803,25 +1822,37 @@ export function* zimArticleSlices(
     truncated = { reason: 'maxChars', at: scanCut === null ? input.length : scanCut.at }
   }
 
-  return { title, segments, notice: gatheredLine(notice), truncated, work, slices }
+  // One line of text: the source's own line breaks and block boundaries are only layout here. A
+  // notice the bounds cut ends in an ellipsis, so it is never shown as the whole line.
+  const noticeText = tidyWhole(noticeBuf).replace(WHITESPACE_RUN, ' ')
+  const notice =
+    noticeText.length === 0
+      ? null
+      : noticeClipped || noticeText.length > NOTICE_MAX_CHARS
+        ? `${capChars(noticeText, NOTICE_MAX_CHARS - 2).trimEnd()} …`
+        : noticeText
+
+  return { title, segments, notice, truncated, work, slices }
 }
 
-/** A license line's or a Normdaten box's gathered text (#662, #673). */
-interface Gathered {
-  text: string
-  /** The raw bound (NOTICE_RAW_MAX_CHARS) cut it. */
-  clipped: boolean
-}
-
-/** Gathered text as one line, or null when it is empty: the source's own line breaks and block
- *  boundaries are only layout here. Text the bounds cut ends in an ellipsis, so it is never shown
- *  as the whole line. */
-function gatheredLine(gathered: Gathered): string | null {
-  const text = tidyWhole(gathered.text).replace(WHITESPACE_RUN, ' ')
-  if (text.length === 0) return null
-  return gathered.clipped || text.length > NOTICE_MAX_CHARS
-    ? `${capChars(text, NOTICE_MAX_CHARS - 2).trimEnd()} …`
-    : text
+/**
+ * The article viewer's sections (and a saved copy's), one per segment. A heading's segment
+ * starts with the heading's own line, which the viewer renders as the section label, so that line
+ * is dropped from the text. Only a whole first line equal to the label is one (#673): a segment
+ * whose text merely starts with the label's words keeps its text whole. The Normdaten box
+ * (`Normdaten (Person): GND: …`) used to read ` (Person): GND: …`, indented under `pre-wrap`, and
+ * a section's later text that started with its name lost that word (`FAT16 ist ein …`).
+ */
+export function articleSections(
+  segments: readonly ExtractedSegment[]
+): Array<{ label: string | null; text: string }> {
+  return segments.map((s) => {
+    let text = s.text
+    if (s.sectionLabel && (text === s.sectionLabel || text.startsWith(`${s.sectionLabel}\n`))) {
+      text = text.slice(s.sectionLabel.length).replace(/^\n+/, '')
+    }
+    return { label: s.sectionLabel ?? null, text }
+  })
 }
 
 /**

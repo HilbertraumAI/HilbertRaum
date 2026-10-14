@@ -17,7 +17,7 @@ import type { RerankScope } from '../rag/rerank-profile'
 import { EXTERNAL_RETRIEVAL_DEADLINE_MS, collectPackCandidates } from './arm'
 import type { QueryExpander } from './expand'
 import { fetchArticleHtml, probeSearchable } from './client'
-import { zimArticleToSegmentsAsync, type ZimArticle } from './html'
+import { articleSections, zimArticleToSegmentsAsync } from './html'
 import {
   classifyPackSelection,
   listPacks,
@@ -328,23 +328,6 @@ export interface PackArticle {
   /** The archive's own license line (html.ts `ZimArticle.notice`, #662), or null: shown after
    *  the article in the viewer and in a saved copy's closing "License" section, never a section. */
   notice: string | null
-}
-
-/**
- * The viewer's sections (and a saved copy's): one per converted segment. A heading's segment
- * starts with the heading's own line, which the viewer renders as the section label, so that line
- * is dropped from the text. Only a whole first line equal to the label is a heading: a segment
- * whose text merely starts with the label's words (the Normdaten box, `Normdaten (Person): GND: …`,
- * #673) keeps its text whole.
- */
-export function articleSections(segments: ZimArticle['segments']): PackArticle['sections'] {
-  return segments.map((s) => {
-    let text = s.text
-    if (s.sectionLabel && (text === s.sectionLabel || text.startsWith(`${s.sectionLabel}\n`))) {
-      text = text.slice(s.sectionLabel.length).replace(/^\n+/, '')
-    }
-    return { label: s.sectionLabel ?? null, text }
-  })
 }
 
 /** One `ensureServer` call's captured tuple, read BEFORE its first await. */
