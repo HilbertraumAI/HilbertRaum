@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
-  createQueuedDocument,
   getDocumentSummary,
-  processDocument,
   reconcileStuckTrees,
   reindexDocument,
   setDocumentSummary
@@ -39,9 +36,10 @@ import {
 } from '../helpers/doctask-fixtures'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 
-// Whole-document-analysis Phase 1 (docs/rag-design.md §14.1–§14.3 — analysis design record): cap honesty
-// (C1/C2/C4/M13), the ingest-time summary tree (the yielding build + per-node transaction +
-// content cache), and the tree-first summary (M1). Mock runtime, no model, no network.
+// Whole-document-analysis Phase 1 (docs/rag-design.md §14.1–§14.3 — analysis design record): the ingest-time
+// summary tree (the yielding build + per-node transaction + content cache) and the tree-first summary (M1). Cap
+// honesty (C1/C2/C4/M13) lives in ingestion-limits.test.ts with the other ingest caps. Mock runtime, no model, no
+// network.
 
 let w: DocTaskWorld
 let db: Db
@@ -100,54 +98,6 @@ function treeStatus(documentId: string): string | null {
     }
   ).tree_status
 }
-
-// ---- Cap honesty (C1/C2/C4/M13) -----------------------------------------------------
-
-describe('cap honesty', () => {
-  it('rejects an over-cap document at index time with main.ingest.tooManyChunks, never partial', async () => {
-    // ~430k single-token words ⇒ > MAX_CHUNKS_PER_DOCUMENT (1000) windows at the default size.
-    const p = join(w.root, 'huge.txt')
-    writeFileSync(p, 'a '.repeat(430_000), 'utf8')
-    const info = createQueuedDocument(db, p)
-    const done = await processDocument(db, storeDir, info.id)
-
-    expect(done.status).toBe('failed')
-    expect(done.errorMessage).toBe(t('en', 'main.ingest.tooManyChunks'))
-    // Never partial-indexed: no chunks were written.
-    expect(chunkIds(info.id).length).toBe(0)
-  })
-
-  it('sets fully_chunked on every successful index (and the marker proves whole-doc coverage)', async () => {
-    const id = await importWords(w, 300)
-    const row = db.prepare('SELECT fully_chunked FROM documents WHERE id = ?').get(id) as unknown as {
-      fully_chunked: string | null
-    }
-    expect(row.fully_chunked).toBeTruthy()
-  })
-
-  it('M13: re-indexing an over-cap document fails BEFORE deleting its existing chunks', async () => {
-    // A searchable (small) doc that later "grows" over the cap on re-parse must not be left
-    // zero-chunk. Simulate by indexing small, then overwriting the stored copy with an
-    // over-cap body and re-indexing — the gate must throw before the destructive DELETE.
-    const id = await importWords(w, 300)
-    const before = chunkIds(id).length
-    expect(before).toBeGreaterThan(0)
-
-    // Overwrite the stored copy with an over-cap body, then re-index.
-    const stored = (
-      db.prepare('SELECT stored_path FROM documents WHERE id = ?').get(id) as unknown as {
-        stored_path: string
-      }
-    ).stored_path
-    writeFileSync(stored, 'a '.repeat(430_000), 'utf8')
-    const info = await reindexDocument(db, storeDir, id)
-
-    expect(info.status).toBe('failed')
-    expect(info.errorMessage).toBe(t('en', 'main.ingest.tooManyChunks'))
-    // The prior chunks survived the failed re-index (gate failed CLOSED).
-    expect(chunkIds(id).length).toBe(before)
-  })
-})
 
 // ---- Tree build structure + coverage (M11) ------------------------------------------
 

@@ -48,7 +48,7 @@ describe.each(WALKS)('walk budget — %s', (_name, walk) => {
     expect(bounded.files.length).toBe(2)
   })
 
-  it('a deep tree is cut at the depth cap: a prefix of the full walk, one file per admitted level', async () => {
+  it('a deep tree is cut at the depth cap: a subsequence of the full walk, one file per admitted level', async () => {
     const dir = root()
     let cur = dir
     for (let i = 0; i < 40; i++) {
@@ -63,8 +63,7 @@ describe.each(WALKS)('walk budget — %s', (_name, walk) => {
     // The picked root is depth 0; directories deeper than the cap are not entered. A depth cut
     // prunes subtrees and keeps walking siblings, so the result is a SUBSEQUENCE of the full
     // expansion (same relative order), not necessarily a prefix.
-    expect(bounded.files.length).toBeLessThanOrEqual(8)
-    expect(bounded.files.length).toBeLessThan(full.length)
+    expect(bounded.files).toHaveLength(8) // d0…d7 (the picked root is depth 0)
     const positions = bounded.files.map((f) => full.indexOf(f))
     expect(positions.every((p) => p >= 0)).toBe(true)
     expect(positions).toEqual([...positions].sort((a, b) => a - b))
@@ -188,11 +187,8 @@ describe('walk budget — the async walk is byte-identical to the reference (#27
 })
 
 describe('walk budget — defaults, env overrides and the drop cap', () => {
-  it('resolveWalkBudget: defaults, positive-integer env overrides, junk ignored', () => {
-    expect(resolveWalkBudget({})).toEqual(DEFAULT_WALK_BUDGET)
-    expect(DEFAULT_WALK_BUDGET.maxEntries).toBeGreaterThan(0)
-    expect(DEFAULT_WALK_BUDGET.maxDepth).toBeGreaterThan(0)
-    expect(DEFAULT_WALK_BUDGET.maxMillis).toBeGreaterThan(0)
+  it('resolveWalkBudget: the shipped defaults, positive-integer env overrides, junk ignored', () => {
+    expect(resolveWalkBudget({})).toEqual({ maxEntries: 50_000, maxDepth: 64, maxMillis: 10_000 }) // security-model.md walk budget
     expect(
       resolveWalkBudget({
         HILBERTRAUM_WALK_MAX_ENTRIES: '10',

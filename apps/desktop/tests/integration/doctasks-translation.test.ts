@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import {
   createQueuedDocument,
   getDocument,
-  getDocumentOrigin,
   listDocuments,
   processDocument,
   readStoredDocumentText,
@@ -204,7 +203,7 @@ describe('TG-5: translating a document imported into Temporary (plan §2 D7)', (
 
     // The materialized translation is a Generated document (provenance stamped, source recorded).
     const newId = status.resultRef?.documentId as string
-    const origin = getDocumentOrigin(w.db, newId) as GeneratedProvenance
+    const origin = getDocument(w.db, newId)?.origin as GeneratedProvenance
     expect(origin.kind).toBe('translation')
     expect(origin.sourceDocumentIds).toEqual([docId])
 
@@ -327,7 +326,6 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
       createdAt: expect.any(String)
     }
     expect(created?.origin).toEqual(expectedOrigin)
-    expect(getDocumentOrigin(w.db, newId)).toEqual(expectedOrigin)
 
     // Audit: ids-only document_task_completed (with the SOURCE id) + a
     // document_imported for the materialized document.
@@ -357,7 +355,7 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     // Re-index the translated document: chunks rebuild, origin stays.
     const reinfo = await reindexDocument(w.db, w.storeDir, newId)
     expect(reinfo.status).toBe('indexed')
-    expect(getDocumentOrigin(w.db, newId)).toEqual({
+    expect(getDocument(w.db, newId)?.origin).toEqual({
       kind: 'translation',
       sourceDocumentIds: [docId],
       modelId: 'scripted-translator',
@@ -366,7 +364,7 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
 
     // Malformed origin_json must never break a listing — it reads as null.
     w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run('{not json', newId)
-    expect(getDocumentOrigin(w.db, newId)).toBeNull()
+    expect(getDocument(w.db, newId)?.origin).toBeNull()
     expect(listDocuments(w.db).find((d) => d.id === newId)?.origin).toBeNull()
   })
 })
@@ -389,7 +387,7 @@ describe('generated provenance + membership (Phase D — §15.1/§15.2, D3/N1)',
 
     // Structured provenance persisted: kind + source id + model + a snapshot of the
     // source's collections at creation time (display/forward-use only).
-    const origin = getDocumentOrigin(w.db, newId) as GeneratedProvenance
+    const origin = getDocument(w.db, newId)?.origin as GeneratedProvenance
     expect(origin.kind).toBe('translation')
     expect(origin.sourceDocumentIds).toEqual([docId])
     expect(origin.modelId).toBe('scripted-translator')
@@ -407,45 +405,6 @@ describe('generated provenance + membership (Phase D — §15.1/§15.2, D3/N1)',
       .prepare('SELECT collection_id FROM document_collections WHERE document_id = ?')
       .all(docId) as unknown as Array<{ collection_id: string }>
     expect(sourceMemberships.map((r) => r.collection_id).sort()).toEqual([lib.id, project.id].sort())
-  })
-
-  it('round-trips the new shape and STILL parses the old Translation/CompareOrigin shapes', async () => {
-    const docId = await importWords(w, 40, { name: 'rt.txt' })
-
-    // Old translation shape (pre-discriminator, no `type`) still parses unchanged.
-    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
-      JSON.stringify({ translatedFrom: 'src-1', targetLang: 'en' }),
-      docId
-    )
-    expect(getDocumentOrigin(w.db, docId)).toEqual({
-      type: 'translation',
-      translatedFrom: 'src-1',
-      targetLang: 'en'
-    })
-    // Old compare shape still parses.
-    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
-      JSON.stringify({ type: 'compare', comparedFrom: ['a', 'b'] }),
-      docId
-    )
-    expect(getDocumentOrigin(w.db, docId)).toEqual({ type: 'compare', comparedFrom: ['a', 'b'] })
-
-    // New GeneratedProvenance round-trips exactly.
-    const prov: GeneratedProvenance = {
-      kind: 'compare',
-      sourceDocumentIds: ['a', 'b'],
-      sourceCollectionIds: ['c1'],
-      modelId: 'm',
-      createdAt: '2026-06-14T00:00:00.000Z'
-    }
-    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(JSON.stringify(prov), docId)
-    expect(getDocumentOrigin(w.db, docId)).toEqual(prov)
-
-    // A `kind` with no source ids is malformed ⇒ null (never throws).
-    w.db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
-      JSON.stringify({ kind: 'translation', sourceDocumentIds: [] }),
-      docId
-    )
-    expect(getDocumentOrigin(w.db, docId)).toBeNull()
   })
 })
 

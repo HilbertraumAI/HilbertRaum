@@ -48,10 +48,11 @@ async function importScanPdf(): Promise<string> {
 }
 
 describe('Phase 41 — emissions localize, persisted rows stay English', () => {
-  it('a German-cached language localizes an emitted error while the persisted row stays English', async () => {
+  it('a German-cached language localizes an emitted error (the download policy refusal)', () => {
     applyUiLanguageSetting('de')
 
-    // Emission side: the download policy refusal is thrown in German…
+    // Emission side: the download policy refusal is thrown in German. (The persist side — a
+    // scan imported under German still writes English — is the scanDetected row below.)
     let thrown = ''
     try {
       assertDownloadAllowed({ policyAllows: false, settingAllows: false })
@@ -60,13 +61,6 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
     }
     expect(thrown).toBe(t('de', 'main.download.policyDisabled'))
     expect(thrown).not.toBe(t('en', 'main.download.policyDisabled'))
-
-    // …while the persist side keeps writing the canonical ENGLISH constant.
-    const id = await importScanPdf()
-    const doc = getDocument(db, id)
-    expect(doc?.errorMessage).toBe(t('en', 'main.ingest.pdfScanDetected'))
-    expect(doc?.errorMessage).toBe(PDF_SCAN_DETECTED_MESSAGE)
-    expect(doc?.scanDetected).toBe(true)
   })
 
   it('doc-task guard throws localize, and the friendly pass-through recognizes both languages', () => {
@@ -114,6 +108,7 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
 
     // A scan imported WHILE German is cached also persists English ⇒ still detected.
     const id2 = await importScanPdf()
+    expect(getDocument(db, id2)?.errorMessage).toBe(t('en', 'main.ingest.pdfScanDetected')) // persisted English although German is cached
     expect(getDocument(db, id2)?.scanDetected).toBe(true)
 
     applyUiLanguageSetting('en')
