@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-06 #620 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #680 entry). Its record is unchanged:
+Skills §21 "#620 amendment". It named no open items of its own; its follow-up (#622) is closed. Citations of the form
+"BUILD_STATE 2026-10-06 #620 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-06 — **#620 — a model that fails during a redaction's locate pass fails the run, nothing saved (`fix/620-redaction-crash-mid-locate`).** A crash restart runs no
+#600 hook, so after #606 a crash, a freeze, a server error and a context overflow still took the floor and opened the save dialog (real app: 2–4 s after a kill; 1.6 s
+for a 4,660-token window on the 4B's 4,096). Now `failed` + `redactionModelStopped` / `redactionTooLong`; the floor is only for "no model at the start" (D78 amended,
+owner option 1). A `direct` skill run asked for during a model start is refused "is starting". Record: Skills §21 "#620 amendment". Open: none (#622: above)._
+
 ## 2026-10-13 — the closed 2026-10-06 #606 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #671 entry). Its record is unchanged:

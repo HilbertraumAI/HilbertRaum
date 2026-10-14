@@ -2,8 +2,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   acknowledgeDocTask,
+  cancelActiveDocTask,
   clearDocTaskSession,
   getActiveDocTask,
+  markDocTaskCancelRequested,
   startTask,
   subscribeDocTask
 } from '../../src/renderer/lib/doctasks'
@@ -150,6 +152,169 @@ describe('doc-task store — poll-failure tolerance (CODE-6, SKA-40 port)', () =
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// #680: a tick used to write back the entry it captured BEFORE awaiting `getDocTask`, so anything
+// that changed the entry during the round-trip was overwritten. `getDocTask` here resolves only
+// when the test says so, which puts the change inside the round-trip.
+describe('doc-task store — a poll in flight does not undo a change made meanwhile (#680)', () => {
+  /** A `getDocTask` whose first call stays pending until `resolve`; later calls fail at once. */
+  function onDemandPoll() {
+    let resolveFirst: (s: DocTaskStatus) => void = () => {}
+    let calls = 0
+    const getDocTask = vi.fn((): Promise<DocTaskStatus> => {
+      calls += 1
+      if (calls > 1) return Promise.reject(new Error('transient IPC error'))
+      return new Promise((r) => (resolveFirst = r))
+    })
+    return { getDocTask, resolve: (s: DocTaskStatus) => resolveFirst(s) }
+  }
+  const ocr = (over: Partial<DocTaskStatus> = {}) =>
+    status({ kind: 'ocr', progress: { stepsDone: 0, stepsTotal: 5 }, ...over })
+
+  it('a Cancel latched while a poll is in flight survives the tick (DOC-5, #150)', async () => {
+    vi.useFakeTimers()
+    try {
+      const poll = onDemandPoll()
+      stubApi({ startDocTask: vi.fn(async () => ({ jobId: 'jt' })), getDocTask: poll.getDocTask })
+      await startTask('ocr', 'd1')
+      await vi.advanceTimersByTimeAsync(POLL_MS) // the tick fires and awaits getDocTask
+      markDocTaskCancelRequested() // the user clicks Cancel during the round-trip
+      expect(getActiveDocTask()?.cancelRequested).toBe(true)
+      poll.resolve(ocr({ progress: { stepsDone: 1, stepsTotal: 5 } })) // a progress change lands
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getActiveDocTask()?.status?.progress.stepsDone).toBe(1)
+      expect(getActiveDocTask()?.cancelRequested).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a lock purge while a poll is in flight is not undone by the tick (SH-4, #149)', async () => {
+    vi.useFakeTimers()
+    try {
+      const poll = onDemandPoll()
+      stubApi({ startDocTask: vi.fn(async () => ({ jobId: 'jt' })), getDocTask: poll.getDocTask })
+      await startTask('ocr', 'd1')
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      clearDocTaskSession() // purgeSessionStores at the workspace lock
+      expect(getActiveDocTask()).toBeNull()
+      poll.resolve(ocr({ state: 'cancelled' })) // main aborted the task at the lock
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getActiveDocTask()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a lock purge during the deep-index chain read is not undone either (#38)', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveActive: (s: DocTaskStatus) => void = () => {}
+      stubApi({
+        startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
+        getDocTask: vi.fn(async () => status({ state: 'done' })),
+        getActiveDocTask: vi.fn(() => new Promise<DocTaskStatus>((r) => (resolveActive = r)))
+      })
+      await startTask('tree', 'd1', { withExtract: true })
+      await vi.advanceTimersByTimeAsync(POLL_MS) // the tree reports done; the tick asks for the follow-up
+      clearDocTaskSession()
+      resolveActive(status({ jobId: 'jx', kind: 'extract', state: 'running' }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getActiveDocTask()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a newer task started while a poll is in flight keeps its entry and its timer', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveA: (s: DocTaskStatus) => void = () => {}
+      const ids = ['ja', 'jb']
+      const getDocTask = vi.fn(
+        (id: string): Promise<DocTaskStatus> =>
+          id === 'ja'
+            ? new Promise((r) => (resolveA = r))
+            : Promise.resolve(status({ jobId: 'jb', kind: 'summary', documentIds: ['d2'] }))
+      )
+      stubApi({ startDocTask: vi.fn(async () => ({ jobId: ids.shift() ?? 'none' })), getDocTask })
+      await startTask('ocr', 'd1')
+      await vi.advanceTimersByTimeAsync(POLL_MS) // task A's tick awaits getDocTask
+      await startTask('summary', 'd2') // task B replaces A
+      resolveA(ocr({ jobId: 'ja', state: 'done' })) // A's late, terminal answer
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getActiveDocTask()?.jobId).toBe('jb')
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(getDocTask).toHaveBeenLastCalledWith('jb') // A's terminal tick did not stop B's timer
+      expect(getActiveDocTask()?.status?.jobId).toBe('jb')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a replaced task's failed poll does not count against the newer task (CODE-6)", async () => {
+    vi.useFakeTimers()
+    try {
+      let rejectA: (e: Error) => void = () => {}
+      const ids = ['ja', 'jb']
+      stubApi({
+        startDocTask: vi.fn(async () => ({ jobId: ids.shift() ?? 'none' })),
+        getDocTask: vi.fn(
+          (id: string): Promise<DocTaskStatus> =>
+            id === 'ja'
+              ? new Promise((_, reject) => (rejectA = reject))
+              : Promise.reject(new Error('transient IPC error'))
+        )
+      })
+      await startTask('ocr', 'd1')
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      await startTask('summary', 'd2')
+      rejectA(new Error('transient IPC error')) // A's late failure
+      await vi.advanceTimersByTimeAsync(POLL_MS * 2) // B's own two failures: below the give-up
+      expect(getActiveDocTask()?.stateUnknown).toBe(false)
+      await vi.advanceTimersByTimeAsync(POLL_MS) // B's third failure gives up, as it should
+      expect(getActiveDocTask()?.stateUnknown).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a poll slower than the period is not overlapped, so a late success cannot revive a task nobody polls', async () => {
+    vi.useFakeTimers()
+    try {
+      const poll = onDemandPoll()
+      stubApi({ startDocTask: vi.fn(async () => ({ jobId: 'jt' })), getDocTask: poll.getDocTask })
+      await startTask('ocr', 'd1')
+      await vi.advanceTimersByTimeAsync(POLL_MS) // the first poll is slow
+      // Overlapping ticks would each fail fast here and give up (CODE-6) with the timer stopped;
+      // the slow success landing afterwards then wrote back a running task that nothing polls.
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+      expect(poll.getDocTask).toHaveBeenCalledTimes(1)
+      poll.resolve(ocr({ progress: { stepsDone: 2, stepsTotal: 5 } }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getActiveDocTask()?.status?.progress.stepsDone).toBe(2)
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(poll.getDocTask).toHaveBeenCalledTimes(2) // still polled after the slow tick
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a rejected cancel clears the latch, so Cancel is offered again (CODE-29)', async () => {
+    stubApi({
+      startDocTask: vi.fn(async () => ({ jobId: 'jt' })),
+      getDocTask: vi.fn(async () => ocr()),
+      cancelDocTask: vi.fn(async () => {
+        throw new Error('cancel exploded')
+      })
+    })
+    await startTask('ocr', 'd1')
+    markDocTaskCancelRequested() // DocRow latches before it calls onCancelTask
+    await expect(cancelActiveDocTask()).rejects.toThrow('cancel exploded')
+    expect(getActiveDocTask()?.jobId).toBe('jt')
+    expect(getActiveDocTask()?.cancelRequested).toBeFalsy()
   })
 })
 
