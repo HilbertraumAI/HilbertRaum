@@ -7829,12 +7829,12 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
 **Design as built (deterministic, offline, ZERO model calls).**
 - **`ingestion/parsers/pdf-layout.ts`** — pure geometry reconstruction. `clusterRows` groups
   positioned words into visual rows by baseline y (tolerance band for jitter/superscripts), top-to-
-  bottom, each row left-to-right. `resolvePageYear` resolves the page year (first fully-printed
-  `DD.MM.YYYY`, else a header-band 4-digit token, else null → bare rows dropped unless the caller
-  supplies a document-level fallback year). `reconstructLine` emits one clean `<DD.MM.YYYY> <desc>
-  <amount> [<balance>]` per transaction row — the year resolved *during reconstruction* (§3.2: the
-  token reaching the SHARED `parseDate` is already a full date, so `parseDate` — used by invoice +
-  redaction — is **untouched by construction**). A row with no resolvable date / no amount / no
+  bottom, each row left-to-right. `resolvePageAnchor` resolves the page year and, from a fully-printed
+  date, its month (first fully-printed `DD.MM.YYYY`, else a header-band 4-digit token with no month, else
+  null → bare rows dropped unless the caller supplies a document-level fallback year/month).
+  `reconstructLine` emits one clean `<DD.MM.YYYY> <desc> <amount> [<balance>]` per transaction row —
+  the year resolved *during reconstruction* (§3.2: the token reaching the SHARED `parseDate` is already
+  a full date, so `parseDate` — used by invoice + redaction — is **untouched by construction**). A row with no resolvable date / no amount / no
   description is dropped, never invented.
 - **The booking-date COLUMN MODEL (`detectDatumColumn`/`inDatumColumn`, §3.1.3) — the precision fix
   (2026-06-23).** The gold-set measurement found Stage 1 OVER-extracting the Raiffeisen "Mein ELBA"
@@ -8013,7 +8013,8 @@ a broader corpus to trigger it.
 
 **Tests.** `tests/unit/pdf-layout.test.ts` (clustering, `toFullDate` year resolution proving
 `parseDate` is untouched, `detectDatumColumn` density/leftmost/tie, out-of-column-date rejection,
-value-date drop, balance-line preservation, fallback-year). `tests/integration/pdf-bank-layout.test.ts`
+value-date drop, balance-line preservation, fallback-year, the REL-10 single-pass header fold over a
+500k-fragment page, a no-date page emitted raw). `tests/integration/pdf-bank-layout.test.ts`
 (SYNTHETIC columnar PDFs via `makeColumnarPdf`: text-mode loses every row while layout-mode recovers
 them + the correct total + honest coverage + citations + 0 model calls; a non-tying balance MUST
 downgrade; the Raiffeisen Valuta/second-baseline + `Kontostand per` regression pins the column model;
@@ -8316,7 +8317,7 @@ durable index — resolve a code comment's `audit <ID>` citation through it:
 | REL-6 (Low) | 3 | `TranscribeOptions.workDir` now **required** — no OS-tmpdir fallback outside the crash sweep | arch "Audio transcription" |
 | REL-5 (Med), MAINT-4 | 4 | one `parseWithLimits(parser, source, ctx, limits)` decorator across **every** parse entry point; preview gains `maxPages`/`maxInflatedBytes`/wall-clock timeout (ingest byte-for-byte unchanged) | rag-design §2 (cap stack); arch "Document ingestion" |
 | REL-9 (Low) | 4 | `expandPaths` symlink-cycle guard via recursion-path `realpathSync` Set | arch "Document ingestion" |
-| REL-10 (Low) | 4 | `resolvePageYear` single-pass y-range fold (no `Math.max(...spread)`) | arch §21 |
+| REL-10 (Low) | 4 | `resolvePageAnchor` (then `resolvePageYear`) single-pass y-range fold (no `Math.max(...spread)`) | arch §21 |
 | BL-5 (Info) | 4 | ragged-CSV overflow cells kept under `colN:` (no silent truncation) | rag-design §2 |
 | RAG-1 (Med), TEST-3 | 5 | `coverageWhole` gated on `fullyChunked && scannedChunks >= totalChunks` — a multi-doc partial scope falls to "sections scanned" | rag-design §14.5 |
 | EMB-1 (Med), MAINT-2, TEST-5 | 5 | reranker drops naive `truncateWords` for the shared CJK/Thai-aware `truncateToApproxTokens`, per-field caps clamped to the context budget (no silent 500 on space-less input) | rag-design §12.4 |
