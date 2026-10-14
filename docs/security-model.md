@@ -1150,9 +1150,9 @@ sidecar and writes no temp; only the history copy lands on disk).
   `MAGIC | iv | tag | ciphertext` framing, same vault key, fresh IV per file) via the same
   `DocumentCipher`. The Q&A turns live in the `image_turns` table (so they are covered by the
   encrypted DB). `plaintext_dev` workspaces store a raw `<id><ext>` copy (`encrypted=0`), as labelled.
-- **Write path:** the bytes are written to a short-lived plaintext temp (`<id>.tmp`), `encryptFile`-d
-  to the `.enc` sidecar, and the temp **shredded** — the same transient-then-shred posture as document
-  parse.
+- **Write path:** the bytes are written to a short-lived plaintext temp (`<id>.tmp`), encrypted to the
+  `.enc` sidecar with `encryptFileAsync`, and the temp **shredded** with `shredFileAsync` — the same
+  transient-then-shred posture as document parse.
 - **Read path (open an entry):** the `.enc` is decrypted to a **per-call unique** transient temp
   (`<id>.read-<pid>-<uuid>.tmp`), read, then **shredded**. The uuid (added vuln-scan-2026-06-21) keeps two
   concurrent reads of the same session — e.g. a double-click — from colliding on one staging file.

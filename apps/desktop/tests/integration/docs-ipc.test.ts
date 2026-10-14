@@ -1607,8 +1607,6 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
       writeFileSync(dest, Buffer.from(readFileSync(src).map((b) => b ^ 0x5a)))
     const decryptDests: string[] = []
     const cipher: DocumentCipher = {
-      encryptFile: flip,
-      decryptFile: flip,
       encryptFileAsync: async (src, dest) => flip(src, dest),
       decryptFileAsync: async (src, dest) => {
         decryptDests.push(dest)

@@ -3,20 +3,12 @@
 // skips decryption reads garbage and fails (CONTRIBUTING: "A fake cipher must change the bytes"), and a swapped
 // encrypt/decrypt fails the GCM tag. Seven suites used to carry their own copy.
 import { randomBytes } from 'node:crypto'
-import {
-  decryptFile,
-  decryptFileAsync,
-  encryptFile,
-  encryptFileAsync,
-  type DocumentCipher
-} from '../../src/main/services/workspace-vault'
+import { decryptFileAsync, encryptFileAsync, type DocumentCipher } from '../../src/main/services/workspace-vault'
 
 /** A cipher equivalent to the unlocked vault's (`WorkspaceController.documentCipher()`), with a fresh random key. */
 export function testCipher(): DocumentCipher {
   const key = randomBytes(32)
   return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
     encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
     decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
   }
@@ -27,8 +19,6 @@ export interface RecordingCipher {
   cipher: DocumentCipher
   /** The destination path of every `decryptFileAsync` call, in call order. */
   asyncDecrypts: string[]
-  /** How many times the synchronous `decryptFile` ran. */
-  syncDecrypts: number
 }
 
 export interface RecordingCipherOptions {
@@ -37,19 +27,13 @@ export interface RecordingCipherOptions {
   beforeDecryptAsync?: () => Promise<void>
 }
 
-/** A real-AES cipher that records which decrypt each reader used and where it decrypted to. */
+/** A real-AES cipher that records where each reader decrypted to. */
 export function recordingCipher(o: RecordingCipherOptions = {}): RecordingCipher {
   const inner = testCipher()
   const rec: RecordingCipher = {
     asyncDecrypts: [],
-    syncDecrypts: 0,
     cipher: {
-      encryptFile: inner.encryptFile,
       encryptFileAsync: inner.encryptFileAsync,
-      decryptFile: (src, dest) => {
-        rec.syncDecrypts += 1
-        inner.decryptFile(src, dest)
-      },
       decryptFileAsync: async (src, dest) => {
         rec.asyncDecrypts.push(dest)
         if (o.beforeDecryptAsync) await o.beforeDecryptAsync()

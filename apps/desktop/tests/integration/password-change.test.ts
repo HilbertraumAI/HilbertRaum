@@ -16,6 +16,8 @@ import {
   applyPendingRekey,
   discardPendingRekey,
   listVaultKeyCiphertexts,
+  encryptFile,
+  decryptFile,
   shredFile,
   WorkspaceController,
   WrongPasswordError,
@@ -81,22 +83,23 @@ function unlockedController(
   return ctl
 }
 
-/** Write an encrypted document sidecar through the controller's own cipher. */
+/** Write an encrypted document sidecar under the controller's live data key (the key its
+ *  `documentCipher()` uses), via the sync file function so the helper stays synchronous. */
 function addEncryptedDoc(ctl: WorkspaceController, vp: VaultPaths, name: string, text: string): string {
   const docsDir = join(join(vp.dbPath, '..'), 'documents')
   mkdirSync(docsDir, { recursive: true })
   const plain = join(docsDir, `${name}.src`)
   writeFileSync(plain, text, 'utf8')
   const enc = join(docsDir, `${name}.txt.enc`)
-  ctl.documentCipher()!.encryptFile(plain, enc)
+  encryptFile(plain, enc, ctl.encryptionKey()!)
   shredFile(plain)
   return enc
 }
 
-/** Decrypt a sidecar through the controller's cipher and return its text. */
+/** Decrypt a sidecar under the controller's live data key and return its text. */
 function readEncryptedDoc(ctl: WorkspaceController, encPath: string): string {
   const out = `${encPath}.check.tmp`
-  ctl.documentCipher()!.decryptFile(encPath, out)
+  decryptFile(encPath, out, ctl.encryptionKey()!)
   const text = readFileSync(out, 'utf8')
   shredFile(out)
   return text
@@ -574,7 +577,7 @@ async function v1VaultWithEveryClass(): Promise<ClassFixture> {
   const plain = join(legacyDir, 'outside.src')
   writeFileSync(plain, 'OUTSIDE-SURVIVES', 'utf8')
   const outside = join(legacyDir, 'outside.txt.enc')
-  ctl.documentCipher()!.encryptFile(plain, outside)
+  await ctl.documentCipher()!.encryptFileAsync(plain, outside)
   shredFile(plain)
   const now = new Date().toISOString()
   db.prepare(

@@ -106,7 +106,7 @@ function unlockedController(vp: VaultPaths): WorkspaceController {
 }
 
 describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
-  it('a captured cipher THROWS the typed error after lock() instead of encrypting under the zeroed key', () => {
+  it('a captured cipher THROWS the typed error after lock() instead of encrypting under the zeroed key', async () => {
     const vp = freshVault()
     const ctl = unlockedController(vp)
     const cipher = ctl.documentCipher()
@@ -118,17 +118,18 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
 
     // Sanity: the captured cipher works while unlocked (happy path unchanged).
     const encBefore = join(dir, 'before.enc')
-    cipher!.encryptFile(plain, encBefore)
+    await cipher!.encryptFileAsync(plain, encBefore)
     expect(readFileSync(encBefore).includes(Buffer.from(SECRET_TEXT))).toBe(false)
 
     ctl.lock()
 
     // RED on pre-fix code: the closure captured the key Buffer that lock() zeroed in place,
-    // so this WROTE a zero-key-decryptable file instead of throwing.
+    // so this WROTE a zero-key-decryptable file instead of throwing. Awaited, so a regression that
+    // resolves has finished writing before the existsSync check below.
     const encAfter = join(dir, 'after.enc')
     let thrown: unknown = null
     try {
-      cipher!.encryptFile(plain, encAfter)
+      await cipher!.encryptFileAsync(plain, encAfter)
     } catch (err) {
       thrown = err
     }
@@ -137,14 +138,14 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
     expect((thrown as Error).message).not.toContain('note.txt') // content-free
     expect(existsSync(encAfter)).toBe(false) // nothing was written
 
-    // All four closures fail closed the same way (per-invocation key read).
+    // Both closures fail closed the same way (per-invocation key read), and SYNCHRONOUSLY:
+    // requireKey() runs before the async body starts, so no file is even opened.
     expect(() => cipher!.encryptFileAsync(plain, encAfter)).toThrow(/locked/i)
-    expect(() => cipher!.decryptFile(encBefore, join(dir, 'out.txt'))).toThrow(/locked/i)
     expect(() => cipher!.decryptFileAsync(encBefore, join(dir, 'out.txt'))).toThrow(/locked/i)
     expect(existsSync(join(dir, 'out.txt'))).toBe(false)
   }, testBudgetMs(60_000))
 
-  it('a cipher captured across lock → unlock reads the LIVE key again (per-invocation read)', () => {
+  it('a cipher captured across lock → unlock reads the LIVE key again (per-invocation read)', async () => {
     const vp = freshVault()
     const ctl = unlockedController(vp)
     const cipher = ctl.documentCipher()!
@@ -159,9 +160,9 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
     const plain = join(dir, 'note.txt')
     writeFileSync(plain, SECRET_TEXT)
     const enc = join(dir, 'note.enc')
-    cipher.encryptFile(plain, enc)
+    await cipher.encryptFileAsync(plain, enc)
     const back = join(dir, 'back.txt')
-    ctl.documentCipher()!.decryptFile(enc, back) // decrypts under a FRESH capture too
+    await ctl.documentCipher()!.decryptFileAsync(enc, back) // decrypts under a FRESH capture too
     expect(readFileSync(back, 'utf8')).toBe(SECRET_TEXT)
     ctl.lock()
   }, testBudgetMs(60_000))
@@ -223,7 +224,7 @@ describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)
     expect(stored[0].endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
     // Encrypted under the REAL vault key: the vault cipher round-trips it, the zero key can't.
     const back = join(srcDir, 'back.txt')
-    cipher.decryptFile(join(store, stored[0]), back)
+    await cipher.decryptFileAsync(join(store, stored[0]), back)
     expect(readFileSync(back, 'utf8')).toBe(SECRET_TEXT)
     expect(() => decryptFile(join(store, stored[0]), join(srcDir, 'zk.txt'), ZERO_KEY)).toThrow()
     ctl.lock()

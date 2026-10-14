@@ -216,8 +216,8 @@ export async function getImageSession(
     // Per-CALL unique temp (BUG vuln-scan-2026-06-21): two concurrent reads of the SAME session
     // (e.g. a double-click) keyed only by id+pid collided on one staging file — interleaved
     // writes / a premature shred yielded corrupted bytes or an ENOENT. The randomUUID makes each
-    // read (and `decryptFile`'s own `<tmp>.tmp` stage) collision-free; both are still swept by
-    // shredStalePlaintext on crash.
+    // read (and `decryptFileAsync`'s own `<tmp>.tmp` stage, staged the same way) collision-free;
+    // both are still swept by shredStalePlaintext on crash.
     // ASYNC (audit 2026-07-16 F-12): decrypt + read + shred off the main thread (fs/promises + the
     // async cipher/shred twins) so opening a ~20 MiB image from history doesn't freeze the app.
     const tmp = join(dir, `${id}.read-${process.pid}-${randomUUID()}.tmp`)
