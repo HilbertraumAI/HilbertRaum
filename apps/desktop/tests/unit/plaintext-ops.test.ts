@@ -65,6 +65,7 @@ describe('plaintext operation registry (#237)', () => {
   it('awaitSettled resolves false once the bound elapses with an operation still live', async () => {
     const ops = createPlaintextOps()
     ops.register('preview')
+    // The 20 ms real bound IS the semantics: it must elapse with the operation still live.
     expect(await ops.awaitSettled(20)).toBe(false)
     expect(ops.size()).toBe(1) // the bound does not release anything
   })
@@ -73,7 +74,7 @@ describe('plaintext operation registry (#237)', () => {
     const ops = createPlaintextOps()
     const op = ops.register('preview')
     const settled = ops.awaitSettled(5_000)
-    setTimeout(() => op.release(), 5)
+    op.release() // awaitSettled captured the live set at call time; this release is what it must observe
     expect(await settled).toBe(true)
   })
 

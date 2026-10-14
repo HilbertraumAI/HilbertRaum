@@ -1,4 +1,4 @@
-import { canonicalLeafFor, storedCopyLeaf } from '../../src/main/services/ingestion/stored-copy'
+import { canonicalLeafFor, storedCopyLeaf } from '../../src/main/services/ingestion/stored-copy-leaf'
 
 // Issue #190 — the PURE half of the stored-copy diagnostic: given the `documents` rows and a
 // listing of `workspace/documents/`, decide what is stale, what is healable, what is genuinely
@@ -19,10 +19,10 @@ import { canonicalLeafFor, storedCopyLeaf } from '../../src/main/services/ingest
 // CLASS drawn from a closed allowlist + flag letters). `stored-copy-audit.test.ts` asserts that a
 // report rendered from a vault full of distinctive secrets contains none of them.
 //
-// It reuses the shipped `canonicalLeafFor` rather than re-deriving "where would this document's
-// bytes be" — the diagnostic's whole value is that its verdict is the app's verdict, so a
-// divergence between the two would be the one bug that makes the numbers meaningless. That is
-// worth the import graph `stored-copy.ts` drags in; nothing in it runs at import time.
+// It reuses the shipped `canonicalLeafFor` (the dependency-free `stored-copy-leaf.ts` rule the
+// resolver and the vault rekey share) rather than re-deriving "where would this document's bytes
+// be" — the diagnostic's whole value is that its verdict is the app's verdict, so a divergence
+// between the two would be the one bug that makes the numbers meaningless.
 
 /**
  * What a file in `workspace/documents/` is, by NAME alone.

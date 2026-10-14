@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync, renameSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -225,7 +224,7 @@ describe('#188 — legacy rows carrying a foreign absolute path', () => {
     expect(storedPathOf(db, doc.id)).toBe(join(store, realName))
   })
 
-  it('T5: a genuinely absent stored copy still fails loudly, and delete does not throw', async () => {
+  it('T5: a genuinely absent stored copy still fails loudly, and the list reports it missing', async () => {
     const db = freshDb()
     const cipher = testCipher()
     const store = documentsDir(freshWorkspace())
@@ -236,7 +235,9 @@ describe('#188 — legacy rows carrying a foreign absolute path', () => {
     rmSync(file)
     for (const n of readdirSync(store)) rmSync(join(store, n))
 
-    await expect(readStoredDocumentBytes(db, store, doc.id, { cipher })).rejects.toThrow()
+    await expect(readStoredDocumentBytes(db, store, doc.id, { cipher })).rejects.toThrow(
+      /no longer on disk\. Re-import it to export/ // main.docs.exportGone
+    )
     expect(listDocuments(db, null, store).find((d) => d.id === doc.id)?.storedCopy).toBe('missing')
   })
 

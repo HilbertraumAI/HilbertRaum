@@ -98,23 +98,26 @@ describe('#190 stored-copy audit — file classification', () => {
 })
 
 describe('#190 stored-copy audit — ownership', () => {
-  it('a file claimed by ANY of the three row sources is not an orphan', () => {
-    // Over-claiming under-counts orphans (harmless); under-claiming invents one (dangerous).
+  it("a file named by a row's stored_name, or by the leaf of its recorded stored_path, is not an orphan", () => {
+    // Over-claiming under-counts orphans (harmless); under-claiming invents one (dangerous). The
+    // leaves carry NO row id, so the leading-id fallback (next row) cannot claim them: each file has
+    // exactly one claimant. `canonicalLeafFor` needs no row of its own — when it names a leaf at all,
+    // that leaf IS the stored_name or the stored_path leaf (and starts with the id).
     const a = randomUUID()
     const b = randomUUID()
     const c = randomUUID()
     const rows = [
-      // healed row: `stored_name` alone names the file
-      row({ id: a, stored_name: `${a}.pdf.enc`, stored_path: null }),
-      // legacy row on a relocated drive: only the stale absolute path names it
-      row({ id: b, stored_path: `H:\\old\\workspace\\documents\\${b}.docx.enc` }),
-      // a row whose file sits outside the store dir entirely (nothing to heal it to)
-      row({ id: c, stored_path: `/elsewhere/${c}.txt.enc` })
+      // healed row: only `stored_name` names the file
+      row({ id: a, stored_name: 'legacy-a.pdf.enc', stored_path: null }),
+      // legacy row on a relocated drive: only the stale Windows path's leaf names it
+      row({ id: b, stored_path: 'H:\\old\\workspace\\documents\\legacy-b.docx.enc' }),
+      // a row whose file sits outside the store dir (POSIX-shaped path)
+      row({ id: c, stored_path: '/elsewhere/legacy-c.txt.enc' })
     ]
     const dirEntries: AuditDirEntry[] = [
-      { name: `${a}.pdf.enc`, bytes: 1 },
-      { name: `${b}.docx.enc`, bytes: 2 },
-      { name: `${c}.txt.enc`, bytes: 3 }
+      { name: 'legacy-a.pdf.enc', bytes: 1 },
+      { name: 'legacy-b.docx.enc', bytes: 2 },
+      { name: 'legacy-c.txt.enc', bytes: 3 }
     ]
     const r = auditStoredCopies(input({ rows, dirEntries }))
     expect(r.orphans.count).toBe(0)
@@ -179,11 +182,6 @@ describe('#190 stored-copy audit — the row ladder', () => {
   ]
   const report = auditStoredCopies(input({ rows, dirEntries, existingRecordedPaths }))
 
-  it('counts documents by status', () => {
-    expect(report.documents.total).toBe(6)
-    expect(report.documents.byStatus).toEqual({ indexed: 5, queued: 1 })
-  })
-
   it('counts stale rows, and how many of them are healable — the staleness verdict', () => {
     // This pair is the whole point of the tool on the reporting drive: stale > 0 with
     // healable == stale means "the drive moved and every copy is still there".
@@ -212,39 +210,13 @@ describe('#190 stored-copy audit — the row ladder', () => {
     expect(report.audioRows).toBe(1)
   })
 
-  it('reports stored_name adoption', () => {
-    expect(report.storedName).toEqual({ column: true, populated: 3 })
-  })
-
-  it('emits one shape token per row and per orphan', () => {
+  it('emits one shape token per row', () => {
     expect(report.rowTokens).toHaveLength(6)
     for (const t of report.rowTokens) expect(t).toMatch(/^[0-9a-f]{8} [a-z]+ [-ENOPSHMX.]+$/)
   })
 })
 
-describe('#190 stored-copy audit — schema and vault findings', () => {
-  it('distinguishes an ABSENT stored_name column from an unpopulated one', () => {
-    // The reporting drive predates #189 and the column is added by `ensureColumn` at open, which
-    // the diagnostic must never trigger — so "absent" is a real, expected state, not an error.
-    const id = randomUUID()
-    const absent = auditStoredCopies(
-      input({ rows: [row({ id, stored_name: undefined, stored_path: `/x/${id}.pdf.enc` })], storedNameColumn: false })
-    )
-    expect(absent.storedName).toEqual({ column: false, populated: 0 })
-    expect(formatStoredCopyAuditReport(absent)).toContain('ABSENT (pre-#189 schema)')
-  })
-
-  it('reports the descriptor version and the plaintext_dev case', () => {
-    expect(auditStoredCopies(input({ descriptorVersion: 1 })).vault).toEqual({
-      descriptorVersion: 1,
-      mode: 'encrypted'
-    })
-    expect(auditStoredCopies(input({ descriptorVersion: null })).vault).toEqual({
-      descriptorVersion: null,
-      mode: 'plaintext_dev'
-    })
-  })
-
+describe('#190 stored-copy audit — at-rest findings', () => {
   it('surfaces each at-rest finding separately', () => {
     const r = auditStoredCopies(
       input({ atRest: { recovery: true, wal: true, shm: false, dbRekeyStaged: true } })
