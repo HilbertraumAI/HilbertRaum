@@ -27,6 +27,7 @@ import {
   type TesseractModule
 } from '../../src/main/services/ocr/tesseract'
 import { imageOrientation } from '../../src/main/services/ocr/orientation'
+import { log } from '../../src/main/services/logging'
 import { makeMixedPdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
 import { hangBudgetMs, until, within } from '../helpers/hang-budget'
 import { fakeOcrEngine } from '../helpers/ocr-fixtures'
@@ -610,6 +611,82 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     await engine.stop()
   })
 
+  /**
+   * #687: a module whose FIRST orientation worker's `detect` never settles (`entered` settles when it is asked) and whose
+   * later orientation workers answer a 90° turn; the recognizer reads 'ok'. `osd` counts orientation workers started and
+   * terminated.
+   */
+  function wedgingOsdModule(): { mod: TesseractModule; entered: Promise<void>; osd: { starts: number; terminated: number } } {
+    const osd = { starts: 0, terminated: 0 }
+    let markEntered!: () => void
+    const entered = new Promise<void>((r) => (markEntered = r))
+    type Detected = { data: { orientation_degrees: number | null; orientation_confidence: number | null } }
+    const mod: TesseractModule = {
+      createWorker: async (langs) => {
+        if (langs[0] !== 'osd') {
+          return { recognize: async () => ({ data: { text: 'ok', confidence: 90 } }), terminate: async () => undefined }
+        }
+        const mine = ++osd.starts
+        return {
+          recognize: async () => ({ data: { text: '', confidence: 0 } }),
+          detect: (): Promise<Detected> => {
+            if (mine > 1) return Promise.resolve({ data: { orientation_degrees: 90, orientation_confidence: 4 } })
+            markEntered()
+            return new Promise<Detected>(() => undefined) // wedged: OSD is not cooperatively cancellable either
+          },
+          terminate: async () => {
+            osd.terminated += 1
+          }
+        }
+      }
+    }
+    return { mod, entered, osd }
+  }
+
+  // #538 / #687: an orientation detection is bounded by the same per-page timeout as a recognition. Past it the page
+  // reads as it comes (null), the orientation worker is terminated, and detection stays off for this engine — a page that
+  // wedged OSD would wedge it again — while text recognition carries on.
+  it('a wedged orientation detection reads null at the page timeout, ends its worker, and switches detection off (#538)', async () => {
+    vi.stubEnv('HILBERTRAUM_OCR_PAGE_TIMEOUT_MS', '') // the shipped default, not a developer's override
+    const langDir = tmp()
+    writeFileSync(join(langDir, 'osd.traineddata.gz'), 'x')
+    const { mod, entered, osd } = wedgingOsdModule()
+    // setImmediate stays real: the engine's worker start waits one real macrotask (its capture hop).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const engine = new TesseractOcrEngine({ langDir, languages: ['eng'], loadTesseract: async () => mod })
+    const detection = engine.detectOrientation(TINY_PNG)
+    await within(entered, 'the detection reaching the orientation worker')
+    await vi.advanceTimersByTimeAsync(DEFAULT_OCR_PAGE_TIMEOUT_MS - 1)
+    expect(osd.terminated).toBe(0)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await within(detection, 'the wedged detection timing out')).toBeNull()
+    expect(osd.terminated).toBe(1)
+    // Off for good: no second orientation worker (which would answer), and recognition is untouched.
+    expect(await engine.detectOrientation(TINY_PNG)).toBeNull()
+    expect(osd.starts).toBe(1)
+    expect((await engine.recognize(TINY_PNG)).text).toBe('ok')
+    await engine.stop()
+  })
+
+  // #538 / #687: a cancel landing while OSD runs rejects (the task cancels, it does not read on) and ends the wedged
+  // worker — but a cancel says nothing about the page or the build, so the next detection starts a fresh worker.
+  it('an orientation detection aborted in flight rejects, ends its worker, and the next detection starts a fresh one (#538)', async () => {
+    const langDir = tmp()
+    writeFileSync(join(langDir, 'osd.traineddata.gz'), 'x')
+    const { mod, entered, osd } = wedgingOsdModule()
+    const engine = new TesseractOcrEngine({ langDir, languages: ['eng'], loadTesseract: async () => mod })
+    const controller = new AbortController()
+    const call = engine.detectOrientation(TINY_PNG, { signal: controller.signal })
+    // The abort lands while the page is IN the worker — the in-flight listener, not the entry check.
+    await within(entered, 'the detection reaching the orientation worker')
+    controller.abort()
+    await expect(within(call, 'the cancelled detection settling')).rejects.toMatchObject({ name: 'AbortError' })
+    expect(osd.terminated).toBe(1)
+    expect(await engine.detectOrientation(TINY_PNG)).toEqual({ turn: 90, confidence: 4 })
+    expect(osd.starts).toBe(2)
+    await engine.stop()
+  })
+
   it('rewrites app.asar worker paths to app.asar.unpacked (packaged app)', () => {
     expect(
       resolveWorkerScriptPath('C:\\app\\resources\\app.asar\\node_modules\\tesseract.js\\w.js')
@@ -808,6 +885,65 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
       await within(Promise.all(exits), 'every test worker exiting', 10_000)
       expect(captured.map((e) => e.message)).toEqual([])
     })
+  })
+
+  // #538 / #687: the orientation worker dying mid-detection (a WASM abort in the legacy core) must not hang the page or
+  // reach the process: the detection in flight reads as null, the death is logged, detection stays off (no restart per
+  // page), and text recognition — a separate worker — is untouched. A REAL eval-Worker, as above.
+  it('an orientation worker that dies mid-detection reads null, is logged, stays off, and never escapes as an uncaught exception (#538)', async () => {
+    const langDir = tmp()
+    writeFileSync(join(langDir, 'osd.traineddata.gz'), 'x')
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      await withUncaughtCapture(async (captured) => {
+        let osdStarts = 0
+        let markExited: () => void = () => undefined
+        const exited = new Promise<void>((r) => (markExited = r))
+        const mod: TesseractModule = {
+          createWorker: async (langs) => {
+            if (langs[0] !== 'osd') {
+              return { recognize: async () => ({ data: { text: 'ok', confidence: 90 } }), terminate: async () => undefined }
+            }
+            osdStarts += 1
+            const raw = new Worker(
+              "const { parentPort } = require('node:worker_threads');" +
+                "parentPort.on('message', () => { throw new Error('orientation worker crashed mid-detection') });",
+              { eval: true }
+            )
+            // 'exit' only: an 'error' listener here would hide the crash from the capture.
+            raw.once('exit', () => markExited())
+            return {
+              recognize: () => new Promise<never>(() => undefined),
+              detect: () => {
+                raw.postMessage('go')
+                return new Promise<never>(() => undefined) // the job promise never settles either
+              },
+              terminate: async () => {
+                await raw.terminate()
+              }
+            }
+          }
+        }
+        const engine = new TesseractOcrEngine({ langDir, languages: ['eng'], loadTesseract: async () => mod })
+        // Raced against a short clock started once the worker has died (#549), so a hang fails fast and by name.
+        const outcome = await Promise.race([
+          engine.detectOrientation(TINY_PNG),
+          exited.then(() => new Promise<'hung'>((r) => setTimeout(() => r('hung'), hangBudgetMs(2_000))))
+        ])
+        expect(outcome).toBeNull()
+        expect(warn).toHaveBeenCalledWith('OCR orientation worker stopped — pages are read as they come', {
+          error: expect.stringMatching(/crashed mid-detection/)
+        })
+        expect(await engine.detectOrientation(TINY_PNG)).toBeNull()
+        expect(osdStarts).toBe(1)
+        expect((await engine.recognize(TINY_PNG)).text).toBe('ok')
+        await engine.stop()
+        await within(exited, 'the test worker exiting', 10_000)
+        expect(captured.map((e) => e.message)).toEqual([])
+      })
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('probe(): a healthy start proves availability and releases the warm worker; a rejecting or hung start reports unavailable within the bound', async () => {
