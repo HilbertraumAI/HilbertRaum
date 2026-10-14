@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
-import { clearTranslateSession } from '../../src/renderer/lib/translateSession'
+import { clearTranslateSession, setLastTranslateChoice } from '../../src/renderer/lib/translateSession'
 import { clearFileTranslate } from '../../src/renderer/lib/fileTranslateSession'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { en, t } from '../../src/shared/i18n'
@@ -22,14 +22,16 @@ import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 // them; the DOCUMENT path drives the import → doc-task → materialize polling with stubbed IPC.
 // Both active translations live in module-level stores (survive navigation), reset between tests.
 
+// The DOC-7 language-pair memory is module-level and no clear resets it (the lock purge keeps it by
+// design), so without a seed every row would open on whatever pair the previous translating row left —
+// a German-UI row that runs first records en → de, and the literal-pair rows below then fail (#682:
+// `--sequence.shuffle` found such orders). Each row starts from de → en through the production writer.
+// The UI-language defaults themselves are pinned in translateSession.test.ts on a fresh module.
+beforeEach(() => setLastTranslateChoice('de', 'en'))
+
 afterEach(() => {
   cleanup()
-  // The production clears (lib/lockPurge.ts runs the same three). They keep the DOC-7 last-language-pair
-  // memory by design, so a row starts from the pair the previous translating row used, and the order of
-  // the rows matters: the EN rows translate de → en until a German-UI row records en → de.
-  // A row that asserts a literal pair must run before any row that translates another pair ('types text,
-  // translates…' is the EN-UI default pin, 'drops a document…' the document path's); other rows assert
-  // relative to the selects.
+  // The production clears (lib/lockPurge.ts runs the same three).
   clearTranslateSession()
   clearFileTranslate()
   clearDocTaskSession()
@@ -267,8 +269,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
     await user.type(input, 'Hallo Welt.')
     await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
 
-    // The file's first translating row: no earlier row wrote the session's last choice, so the selects
-    // start at the EN-UI default pair — this row pins that default.
+    // The selects start at the pair the beforeEach put in the session's memory.
     expect(s.translateStart).toHaveBeenCalledWith(
       expect.objectContaining({ sourceLang: 'de', targetLang: 'en', text: 'Hallo Welt.' })
     )

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeAll, onTestFinished } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
@@ -256,5 +256,73 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
     await screen.findByText('contract (Deutsch).md')
     expect(screen.getByText(/Translated from/)).toBeInTheDocument()
     expect(screen.getByText('contract.pdf', { selector: 'b' })).toBeInTheDocument()
+  })
+})
+
+// ---- DOC-7: one language-pair memory across the two translate surfaces (#682) ----
+//
+// The modal and the Translate screen both open on `initialTranslateChoice`: the session's last pair,
+// else the UI-language default. That memory is module-level and nothing resets it, so these rows
+// render both screens from a FRESH module graph: one new `translateSession` the two share, empty when
+// the row starts, and gone with it (it never reaches another row's modal).
+
+describe('Documents modal ↔ Translate screen — one language-pair memory (DOC-7, #682)', () => {
+  async function freshScreens() {
+    vi.resetModules()
+    const [{ DocumentsScreen: Docs }, { TranslateScreen: Translate }, doctasks] = await Promise.all([
+      import('../../src/renderer/screens/DocumentsScreen'),
+      import('../../src/renderer/screens/TranslateScreen'),
+      import('../../src/renderer/lib/doctasks')
+    ])
+    // The fresh doc-task store's poll, which the file's afterEach (the static graph's clear) cannot reach.
+    onTestFinished(() => doctasks.clearDocTaskSession())
+    return { Docs, Translate }
+  }
+
+  /** What the two screens read on mount — with no translation of either kind to re-adopt. */
+  const mountApi = () => ({
+    getAppStatus: vi.fn(async () => appStatus()),
+    listDocuments: vi.fn(async () => [doc()]),
+    getActiveTranslateJob: vi.fn(async () => null),
+    listActiveDocTasks: vi.fn(async () => [])
+  })
+
+  it('a pair started from the Documents modal is the pair the Translate screen opens on', async () => {
+    const { Docs, Translate } = await freshScreens()
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
+    stubApi({ ...mountApi(), startDocTask, getDocTask: vi.fn(async () => task()) })
+    render(<Docs />)
+    await screen.findByText('contract.pdf')
+    await openTranslateModal(user)
+    await chooseAndStart(user, 'fr', 'pl')
+    await waitFor(() => expect(startDocTask).toHaveBeenCalled())
+    cleanup() // the user moves on to the Translate screen
+
+    render(<Translate onNavigate={() => {}} />)
+    expect(await screen.findByRole('combobox', { name: 'From' })).toHaveValue('fr')
+    expect(screen.getByRole('combobox', { name: 'To' })).toHaveValue('pl')
+  })
+
+  it('a pair translated on the Translate screen is the pair the Documents modal opens on', async () => {
+    const { Docs, Translate } = await freshScreens()
+    const user = userEvent.setup()
+    const translateStart = vi.fn(() => new Promise<never>(() => {})) // the translation stays in flight
+    stubApi({ ...mountApi(), translateStart })
+    render(<Translate onNavigate={() => {}} />)
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'From' }), 'en')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), 'uk')
+    await user.type(screen.getByLabelText('Text to translate'), 'Hello')
+    await user.click(screen.getByRole('button', { name: 'Translate' }))
+    await waitFor(() =>
+      expect(translateStart).toHaveBeenCalledWith(expect.objectContaining({ sourceLang: 'en', targetLang: 'uk' }))
+    )
+    cleanup() // the user moves on to Documents
+
+    render(<Docs />)
+    await screen.findByText('contract.pdf')
+    await openTranslateModal(user)
+    expect(screen.getByRole('combobox', { name: 'From' })).toHaveValue('en')
+    expect(screen.getByRole('combobox', { name: 'To' })).toHaveValue('uk')
   })
 })

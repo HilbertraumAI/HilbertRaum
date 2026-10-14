@@ -4,6 +4,7 @@ import type {
   TranslationSourceLang,
   TranslationTargetLang
 } from '@shared/types'
+import type { UiLanguage } from '@shared/i18n'
 import { getActiveDocTask, isDocTaskTerminal } from './doctasks'
 import { getFileTranslate } from './fileTranslateSession'
 
@@ -69,15 +70,24 @@ let unsubs: Array<(() => void) | undefined> = []
 let startGen = 0
 const listeners = new Set<() => void>()
 
-/** Session-local last language choice (the DocumentsScreen `lastTranslateChoice` precedent):
- *  module-level so it persists across screen mounts within the session (never persisted to disk). */
-let lastChoice: { sourceLang: TranslationSourceLang; targetLang: TranslationTargetLang } | null = null
+type TranslateChoice = { sourceLang: TranslationSourceLang; targetLang: TranslationTargetLang }
 
-export function getLastTranslateChoice(): {
-  sourceLang: TranslationSourceLang
-  targetLang: TranslationTargetLang
-} | null {
-  return lastChoice
+/** Session-local last language choice, ONE memory for every translate surface (DOC-7): module-level
+ *  so it persists across screen mounts within the session (never persisted to disk). Written when a
+ *  translation starts — text (`translate`), a file (`fileTranslateSession`), a Documents row. */
+let lastChoice: TranslateChoice | null = null
+
+/**
+ * The pair a translate surface opens on — the Translate screen and the Documents translate modal
+ * alike (DOC-7): the session's last choice, else the UI-language default. A German UI translates
+ * INTO German (en → de), an English one out of it (de → en). TranslateGemma needs an explicit
+ * source, so there is no auto-detect to fall back to.
+ */
+export function initialTranslateChoice(lang: UiLanguage): TranslateChoice {
+  return (
+    lastChoice ??
+    (lang === 'de' ? { sourceLang: 'en', targetLang: 'de' } : { sourceLang: 'de', targetLang: 'en' })
+  )
 }
 export function setLastTranslateChoice(sourceLang: TranslationSourceLang, targetLang: TranslationTargetLang): void {
   lastChoice = { sourceLang, targetLang }

@@ -35,7 +35,7 @@ import {
   type ActiveDocTask
 } from '../lib/doctasks'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
-import { getLastTranslateChoice, setLastTranslateChoice } from '../lib/translateSession'
+import { initialTranslateChoice, setLastTranslateChoice } from '../lib/translateSession'
 import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useOcrInstall } from '../lib/useOcrInstall'
@@ -141,9 +141,10 @@ interface Props {
 }
 
 // DOC-7 (#150): the row-translate modal's remembered language pair now lives in the SHARED
-// session store (get/setLastTranslateChoice) — this module kept its own disconnected copy
-// while the Translate screen + file path shared the store, each comment citing the other as
-// precedent. One memory: translating a document here seeds the Translate screen and vice versa.
+// session store (initialTranslateChoice / setLastTranslateChoice) — this module kept its own
+// disconnected copy while the Translate screen + file path shared the store, each comment citing
+// the other as precedent. One memory: translating a document here seeds the Translate screen and
+// vice versa.
 
 /**
  * Whether a document belongs in the current (non-project) section (plan §12.1). Pure (off the
@@ -214,16 +215,7 @@ export function DocumentsScreen({
   // pair starts from the session's last choice (else a UI-language-aware default) — TG-3
   // widened the closed de/en pair to the curated 10-language set.
   const [translateDoc, setTranslateDoc] = useState<DocumentInfo | null>(null)
-  const [translateChoice, setTranslateChoice] = useState<{
-    sourceLang: TranslationSourceLang
-    targetLang: TranslationTargetLang
-  }>(
-    () =>
-      getLastTranslateChoice() ??
-      (lang === 'de'
-        ? { sourceLang: 'en', targetLang: 'de' }
-        : { sourceLang: 'de', targetLang: 'en' })
-  )
+  const [translateChoice, setTranslateChoice] = useState(() => initialTranslateChoice(lang))
   // Translation availability (availability-driven, no settings key): the TranslateGemma
   // sidecar resolves at app startup, so this gates "Translate" the way `ocrAvailable`
   // gates OCR — read once with it below.
