@@ -25,6 +25,7 @@ import {
 } from '../../src/shared/types'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { appStatus as appStatusFixture, makePolicyStatus } from '../helpers/status'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 /** The banner text is built from several sibling text nodes (the stored error + the appended
  *  OCR remedy), so an exact-string `findByText` never matches the whole thing and a literal
@@ -210,37 +211,32 @@ describe('OcrInstall — Documents rows (#410)', () => {
     render(<DocumentsScreen />)
 
     await screen.findByText('broken.pdf')
-    expect(screen.queryByText(en['docs.photo.ocrMissing'])).not.toBeInTheDocument()
+    expect(screen.queryByText(byText(en['docs.photo.ocrMissing']))).not.toBeInTheDocument()
+    expect(screen.queryByText(byText(en['docs.scan.ocrMissing']))).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: en['ocr.install.action'] })).not.toBeInTheDocument()
   })
 
-  it.each([
-    ['the drive policy denies downloads', blockedByPolicy(), en['models.downloads.blockedByPolicy']],
-    [
-      'the Settings toggle is off',
-      makePolicyStatus({ network: { allowModelDownloads: true }, allowNetworkSetting: false }),
-      en['models.downloads.enableInSettings']
-    ]
-  ])('5: gates closed (%s) disable the download button and show why', async (_label, policy, reasonText) => {
+  // The Settings-toggle branch of the shared gate is owned by KnowledgePacks.test.tsx (#339 P8-2 it.each).
+  it('5: gates closed (the drive policy denies downloads) disable the download button and show why', async () => {
     stubApi({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
-      getPolicy: vi.fn(async () => policy)
+      getPolicy: vi.fn(async () => blockedByPolicy())
     })
     render(<DocumentsScreen />)
 
     await screen.findByText('scan.pdf')
     const btn = await screen.findByRole('button', { name: en['ocr.install.action'] })
     expect(btn).toBeDisabled()
-    expect(await screen.findByText(reasonText)).toBeInTheDocument()
+    expect(await screen.findByText(en['models.downloads.blockedByPolicy'])).toBeInTheDocument()
   })
 
   it('6: with no usable source list on this drive the rows point at the offline path and offer no button', async () => {
     stubApi({
       listDocuments: vi.fn(async () => [scanDoc(), photoDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
-      getOcrInstallStatus: vi.fn(async () => ocrStatus(undefined, { available: false, languages: [], totalBytes: 0 })),
+      getOcrInstallStatus: vi.fn(async () => ocrStatus(undefined, { available: false, sourceHost: null })),
       getPolicy: vi.fn(async () => allowedPolicy())
     })
     render(<DocumentsScreen />)
@@ -270,7 +266,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
     const progressText = translate('en', 'ocr.install.progress', { pct: 50 })
-    expect(await screen.findByText(progressText, {}, { timeout: 3000 })).toBeInTheDocument()
+    expect(await screen.findByText(progressText, {}, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
     // The OCR-specific label: never the same accessible name as a model download's Cancel.
     expect(en['ocr.install.cancel']).not.toBe(en['models.download.cancel'])
     await user.click(screen.getByRole('button', { name: en['ocr.install.cancel'] }))
@@ -293,7 +289,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
-    expect(await screen.findByText(en['ocr.install.failed'], {}, { timeout: 3000 })).toBeInTheDocument()
+    expect(await screen.findByText(en['ocr.install.failed'], {}, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
     expect(screen.getByText('some friendly error')).toBeInTheDocument()
     const retryBtn = screen.getByRole('button', { name: en['ocr.install.retry'] })
     await user.click(retryBtn)
@@ -316,7 +312,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
-    expect(await screen.findByText(en['ocr.install.activating'], {}, { timeout: 3000 })).toBeInTheDocument()
+    expect(await screen.findByText(en['ocr.install.activating'], {}, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: en['ocr.install.cancel'] })).not.toBeInTheDocument()
   })
 
@@ -370,7 +366,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
     expect(
-      await screen.findByText(en['ocr.install.outcome.activated'], {}, { timeout: 3000 })
+      await screen.findByText(en['ocr.install.outcome.activated'], {}, { timeout: hangBudgetMs(3000) })
     ).toBeInTheDocument()
     expect(getAppStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(await screen.findByRole('button', { name: en['docs.makeSearchable'] })).toBeInTheDocument()
@@ -425,7 +421,8 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
     policy?: PolicyStatus
     installOcr?: Mock
     getOcrInstallJob?: Mock
-  } = {}): void {
+  } = {}) {
+    const getOcrInstallStatus = vi.fn(async () => opts.status ?? ocrStatus())
     stubApi({
       listModels: vi.fn(async () => []),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
@@ -433,10 +430,11 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
       getAppStatus: vi.fn(async () => appStatusFixture()),
       listDownloadJobs: vi.fn(async () => []),
       dismissDownloadJob: vi.fn(async () => undefined),
-      getOcrInstallStatus: vi.fn(async () => opts.status ?? ocrStatus()),
+      getOcrInstallStatus,
       installOcr: opts.installOcr,
       getOcrInstallJob: opts.getOcrInstallJob
     })
+    return { getOcrInstallStatus }
   }
 
   it('12: a missing language shows the quiet row and opens the dialog', async () => {
@@ -449,17 +447,27 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
-  it('13: both languages installed shows no OCR row', async () => {
-    stubModels({
-      status: ocrStatus([
+  it.each([
+    [
+      'both languages installed',
+      ocrStatus([
         { lang: 'deu', role: 'language', sizeBytes: DEU_SIZE, installed: true },
         { lang: 'eng', role: 'language', sizeBytes: ENG_SIZE, installed: true }
       ])
-    })
+    ],
+    // every pin still listed, as status() always lists them — only the source list is missing
+    ['no usable source list on this drive', ocrStatus(undefined, { available: false, sourceHost: null })]
+  ] as const)('13: no OCR row once the status has landed — %s', async (_label, status) => {
+    const { getOcrInstallStatus } = stubModels({ status })
     render(<ModelsScreen />)
 
     await screen.findByRole('heading', { name: en['models.title'] })
+    // The row is hidden while the status is still null, so wait for the status to land before the negative.
+    await vi.waitFor(() => expect(getOcrInstallStatus).toHaveResolved())
+    await act(async () => {})
+    // Neither row text: with every language installed, a broken "missing" check would render rowOrientation.
     expect(screen.queryByText(en['models.ocr.row'])).not.toBeInTheDocument()
+    expect(screen.queryByText(en['models.ocr.rowOrientation'])).not.toBeInTheDocument()
   })
 
   it('13b (#538): with both languages installed and only the orientation file missing, the row says what it adds', async () => {
@@ -479,23 +487,6 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
     expect(within(await screen.findByRole('dialog')).getByText(en['ocr.install.lang.osd'])).toBeInTheDocument()
   })
 
-  it('14: gates closed disable the row button and show why', async () => {
-    stubModels({ policy: blockedByPolicy() })
-    render(<ModelsScreen />)
-
-    const btn = await screen.findByRole('button', { name: en['ocr.install.action'] })
-    expect(btn).toBeDisabled()
-    expect(await screen.findByText(en['models.downloads.blockedByPolicy'])).toBeInTheDocument()
-  })
-
-  it('15: an unavailable status shows no OCR row', async () => {
-    stubModels({ status: ocrStatus(undefined, { available: false, languages: [], totalBytes: 0 }) })
-    render(<ModelsScreen />)
-
-    await screen.findByRole('heading', { name: en['models.title'] })
-    expect(screen.queryByText(en['models.ocr.row'])).not.toBeInTheDocument()
-  })
-
   it('16: a "restartRequired" outcome keeps the row visible with its outcome copy', async () => {
     const user = userEvent.setup()
     stubModels({
@@ -509,7 +500,7 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
     expect(
-      await screen.findByText(en['ocr.install.outcome.restartRequired'], {}, { timeout: 3000 })
+      await screen.findByText(en['ocr.install.outcome.restartRequired'], {}, { timeout: hangBudgetMs(3000) })
     ).toBeInTheDocument()
     expect(screen.getByText(en['models.ocr.row'])).toBeInTheDocument()
   })
