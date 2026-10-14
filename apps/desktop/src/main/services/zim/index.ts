@@ -17,7 +17,7 @@ import type { RerankScope } from '../rag/rerank-profile'
 import { EXTERNAL_RETRIEVAL_DEADLINE_MS, collectPackCandidates } from './arm'
 import type { QueryExpander } from './expand'
 import { fetchArticleHtml, probeSearchable } from './client'
-import { zimArticleToSegmentsAsync } from './html'
+import { articleSections, zimArticleToSegmentsAsync } from './html'
 import {
   classifyPackSelection,
   listPacks,
@@ -1590,17 +1590,9 @@ export class ZimService {
       // the viewer opens.
       const article = await zimArticleToSegmentsAsync(html, { signal: op.signal })
       op.assert()
-      const sections = article.segments.map((s) => {
-        let text = s.text
-        if (s.sectionLabel && text.startsWith(s.sectionLabel)) {
-          // The heading is rendered as the section label; drop its duplicate first line.
-          text = text.slice(s.sectionLabel.length).replace(/^\n+/, '')
-        }
-        return { label: s.sectionLabel ?? null, text }
-      })
       return {
         title: article.title ?? articlePath,
-        sections,
+        sections: articleSections(article.segments),
         partial: article.truncated !== null,
         notice: article.notice
       }

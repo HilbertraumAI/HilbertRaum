@@ -71,6 +71,12 @@ from its first public `1.0.0` release onward.
   Text like `we&rsquo;ll` or `&raquo;` appeared in answers, in the article viewer and in saved
   copies, and a search for "we'll" did not find it. Typographic quotes, dashes, arrows, accented
   letters and common symbols are now decoded (#663).
+- **German Wikipedia knowledge packs leave out two more boxes and give authority data a section of
+  its own.** The "Commons: … – Sammlung von Bildern, Videos und Audiodateien" links and the line
+  "Bitte den Hinweis zu Rechtsthemen beachten!" were read as part of the article; they are left out
+  now. The authority data (GND, LCCN and VIAF numbers) now has its own *Normdaten* section instead of
+  trailing the references. The article viewer also no longer cuts the first word off a paragraph
+  that starts with its section's name, such as "FAT16 ist ein Dateisystem" (#673).
 - **Installing the AI engine again is no longer offered a second time when it did not help.** On a
   HilbertRaum AI Kit, when even the freshly installed engine would not start, the AI Model screen
   still offered **Install the AI engine again**, because the Kit's CPU fallback build was refused

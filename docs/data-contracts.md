@@ -2161,7 +2161,9 @@ TEXT, never HTML, carrying the converter's superscript/subscript markers (`m^2`,
 rag-design §17), which the retrieval matchers fold back out but the viewer shows as delivered; whitespace
 is collapsed everywhere except inside a `<pre>` code block, whose lines keep their indentation (#627 —
 so a section's text can start with spaces), and a crawled site's own footer/menu is not in it, nor are
-German Wikipedia's navigation boxes (#662); `PackArticle.notice: string | null` (#662) is the archive's own
+German Wikipedia's navigation boxes (#662), sister-project links or legal-topics notice (#673); German
+Wikipedia's authority data is a section of its own labelled `Normdaten` (#673); a section's text omits its
+heading's own first line, and only that line (`articleSections`, #673); `PackArticle.notice: string | null` (#662) is the archive's own
 license line (mwoffliner's `zim-footer`, one line, at most 1,500 characters, a cut one ending in ` …`), never a section — the
 viewer shows it after the article and a saved copy ends with it as a `## License` section;
 the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM

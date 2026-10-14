@@ -27,9 +27,21 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-15 — the closed 2026-10-11 #641 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-15 (preamble budget, making room for the #673 entry). Its record is unchanged:
+`rag-design.md` §14.5 "#641". Its follow-ups (#642–#644) are closed. Citations of the form "BUILD_STATE 2026-10-11 #641 entry" now resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-10-11 — **#641 — explain requests and untyped list asks get a written answer; the deep-index hint shows only when the answer left sections out (`fix/641-explain-not-listing`).**
+With a deep index, "Erkläre … inkl. aller Abkürzungen" got the listing's `generic` dump: any quantifier counted as a list request, and an unmapped {X} defaulted to `generic`, contrary to
+§14.5's own design (15 of 21 probed phrasings). Now an EN/DE explain lexicon and an untyped {X} get labelled relevance ("may miss items", no deep-index advice); aggregation asks keep
+the listing. Both notices are decided after retrieval against the scope's section count; the hint promises "a list that covers every section". Owner calls as recommended. Real app
+(4B, a fictional 2-page letter): master showed the hint at 2/2 sections, then one 16-item dump for 5/5 asks; the fix answers them. Record: `rag-design.md` §14.5 "#641". Open: none (#642–#644: above)._
+
 ## 2026-10-14 — the closed 2026-10-08 #605 entry retired verbatim (preamble budget)
 
-Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #698 entry). Its record is unchanged:
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #698 and #673 entries). Its record is unchanged:
 `architecture.md` translation record "#605 amendment". Its open item (no TranslateGemma prefill measured on the slowest laptop) stays recorded there. Citations of the form "BUILD_STATE 2026-10-08 #605 entry" now resolve
 here. Text below is byte-identical to what was removed.
 
