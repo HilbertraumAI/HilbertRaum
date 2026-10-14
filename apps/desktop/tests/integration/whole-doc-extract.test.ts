@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { Db } from '../../src/main/services/db'
 import { getDocument, reconcileStuckExtracts, reindexDocument } from '../../src/main/services/ingestion'
-import type { DocTaskManager } from '../../src/main/services/doctasks'
+import { TASK_DOCUMENT_NOT_READY_MESSAGE, type DocTaskManager } from '../../src/main/services/doctasks'
 import {
   aggregateExtractions,
   extractDocument,
@@ -84,6 +84,28 @@ describe('extract pass', () => {
         .get(id, SCAN_MARKER_TYPE) as { n: number }
     ).n
     expect(markers).toBe(n)
+  })
+
+  it('C4: refuses a legacy (fully_chunked NULL) doc before any model call; a re-index lets it extract (#682)', async () => {
+    // extractDocument has no marker check of its own, so the manager's C4 gate is all that keeps "every section
+    // scanned" from being claimed over a silently truncated legacy chunk set.
+    const id = await importWords(w, 1500)
+    db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(id)
+    // Every earlier admission check passes (a runtime, one indexed doc with chunks), so the refusal is C4's.
+    expect(getDocument(db, id)?.status).toBe('indexed')
+    expect(chunkCount(id)).toBeGreaterThan(1)
+    const rt = extractRuntime()
+    const m = mgr(rt)
+    expect(() => m.startDocTask({ kind: 'extract', documentIds: [id] })).toThrow(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    expect(rt.calls).toHaveLength(0)
+    expect(extractStatus(id)).toBeNull()
+    expect(recordRows(id)).toBe(0)
+
+    // Re-index re-chunks fully (sets the marker); the same request then runs to the end.
+    await reindexDocument(db, storeDir, id)
+    expect((await waitTerminal(m, m.startDocTask({ kind: 'extract', documentIds: [id] }).jobId)).state).toBe('done')
+    expect(extractStatus(id)).toBe('ready')
+    expect(rt.calls).toHaveLength(chunkCount(id))
   })
 
   it('records an unparsed marker (never drops the chunk) when a reply is unparseable [H7]', async () => {

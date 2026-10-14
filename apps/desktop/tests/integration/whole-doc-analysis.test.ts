@@ -7,7 +7,7 @@ import {
   reindexDocument,
   setDocumentSummary
 } from '../../src/main/services/ingestion'
-import type { DocTaskDeps, DocTaskManager } from '../../src/main/services/doctasks'
+import { TASK_DOCUMENT_NOT_READY_MESSAGE, type DocTaskDeps, type DocTaskManager } from '../../src/main/services/doctasks'
 import { ContextOverflowError } from '../../src/main/services/doctasks/errors'
 import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import { buildTree } from '../../src/main/services/analysis/tree-build'
@@ -367,7 +367,8 @@ describe('C4 deep-index gate', () => {
     const runtime = treeRuntime()
     const m = mgr(runtime, 1024)
 
-    expect(() => m.startDocTask({ kind: 'tree', documentIds: [id] })).toThrow()
+    expect(() => m.startDocTask({ kind: 'tree', documentIds: [id] })).toThrow(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    expect(runtime.calls).toHaveLength(0)
 
     // Re-index re-chunks fully (sets the marker); the build is then allowed.
     await reindexDocument(db, storeDir, id)
