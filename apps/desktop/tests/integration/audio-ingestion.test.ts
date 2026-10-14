@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import {
@@ -10,10 +10,11 @@ import {
   summarizeImportPaths,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
+import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
 import { t } from '../../src/shared/i18n'
 import { docTaskWorld, type DocTaskWorld } from '../helpers/doctask-fixtures'
-import { within } from '../helpers/hang-budget'
+import { until, within } from '../helpers/hang-budget'
 import { testCipher } from '../helpers/test-cipher'
 
 // Phase 36 — audio ingestion end-to-end with a FAKE transcriber behind the
@@ -240,6 +241,63 @@ describe('audio ingestion (Phase 36)', () => {
     // deps.signal → ParseContext.signal → AudioParser → transcribe) and is aborted.
     expect(sawSignal).toBe(controller.signal)
     expect(sawSignal?.aborted).toBe(true)
+  })
+
+  // #237 / #687: a re-index registers with `plaintextOps`, so "Lock now" / quit reach the plaintext it puts on the
+  // drive: the registry's abort is the whisper child's signal, and its sweep shreds the file the child is reading. An
+  // encrypted copy decrypts to `<id>.parse<ext>`, tracked BEFORE the write. A LEGACY plaintext copy is encrypted in
+  // place and parsed one last time as `<id><ext>`: no `.parse` in that name, so the startup crash sweep never catches
+  // it and only the registry can. Abort and sweep run in one tick, before prepare's own `finally` can shred — the
+  // state a transcription that outlives the settle bound leaves.
+  it.each([
+    { copy: 'an encrypted stored copy', legacy: false, transient: '.parse.mp3' }, // its decrypted transient
+    { copy: 'a legacy plaintext stored copy', legacy: true, transient: '.mp3' } // the plaintext copy itself
+  ])('a lock reaches a re-index of $copy: the registry aborts the transcription and sweeps the plaintext it reads (#687)', async ({ legacy, transient }) => {
+    const w = docTaskWorld('audio')
+    const cipher = testCipher()
+    const source = writeAudioSource(w)
+    const sourceBytes = readFileSync(source)
+    const doc = createQueuedDocument(w.db, source)
+    const first = await processDocument(w.db, w.storeDir, doc.id, {
+      cipher: legacy ? null : cipher,
+      transcriber: fakeTranscriber()
+    })
+    expect(first.status).toBe('indexed')
+    rmSync(source)
+
+    const ops = createPlaintextOps()
+    let handed: string | null = null
+    let signal: AbortSignal | undefined
+    const parked: Transcriber = {
+      id: 'parked',
+      transcribe: (filePath, opts) =>
+        new Promise<never>((_resolve, reject) => {
+          handed = filePath
+          signal = opts.signal
+          const cancelled = (): void => reject(new Error('Transcription was cancelled.'))
+          if (opts.signal?.aborted) cancelled()
+          else opts.signal?.addEventListener('abort', cancelled, { once: true })
+        })
+    }
+    const run = reindexDocument(w.db, w.storeDir, doc.id, { cipher, transcriber: parked, plaintextOps: ops })
+    await until(() => handed !== null, 'the re-index reaching transcribe')
+    expect(handed).toBe(join(w.storeDir, `${doc.id}${transient}`))
+    expect(readFileSync(handed!).equals(sourceBytes)).toBe(true) // the recording, in plaintext, on the drive
+
+    ops.abortAll()
+    expect(signal!.aborted).toBe(true) // the lock reached the whisper child's signal
+    expect(ops.sweepRegistered()).toBe(1) // the file was tracked, so the lock sweep shreds it
+    expect(existsSync(handed!)).toBe(false)
+
+    const info = await within(run, 'the aborted re-index settling')
+    expect(info.status).toBe('failed')
+    expect(ops.size()).toBe(0) // released in prepare's finally
+    // Never half-written: the row names the one copy left in the store, and that copy is the encrypted one.
+    const { stored_name } = w.db.prepare('SELECT stored_name FROM documents WHERE id = ?').get(doc.id) as {
+      stored_name: string
+    }
+    expect(stored_name).toBe(`${doc.id}.mp3${ENCRYPTED_DOC_SUFFIX}`)
+    expect(readdirSync(w.storeDir)).toEqual([stored_name])
   })
 
   it('summarizeImportPaths counts audio files + bytes for the D35 size confirm', async () => {

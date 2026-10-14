@@ -40,56 +40,79 @@ export interface PdfCell {
 }
 
 /**
- * Build a minimal valid single-page PDF whose text is POSITIONED cell-by-cell (one `Td`/`Tj` per
- * cell). This is the synthetic COLUMNAR fixture the PDF geometry-extraction tests need: pdf.js returns
- * each cell with its `transform` x/y, so the layout reconstructor can rebuild the visual rows. Latin-1
- * + `/WinAnsiEncoding` so German umlauts (ü/ö/ä/ß) round-trip; never use a real bank statement (D57).
+ * Serialize numbered PDF objects (object `i + 1` is `objs[i]`; object 1 is the catalog) behind the binary
+ * header comment, with a byte-exact xref. Binary-safe: a Buffer object (an image stream) rides untouched.
+ * `eofNewline` keeps each builder's historical last byte, so every builder's output stays byte-identical.
  */
-export function makeColumnarPdf(cells: PdfCell[], fontSize = 10): Buffer {
-  let content = ''
-  for (const c of cells) {
-    const esc = c.text.replace(/([()\\])/g, '\\$1')
-    content += `BT /F1 ${fontSize} Tf ${c.x} ${c.y} Td (${esc}) Tj ET\n`
+function serializePdf(objs: Array<string | Buffer>, eofNewline: boolean): Buffer {
+  const chunks: Buffer[] = []
+  let offset = 0
+  const push = (b: Buffer | string): void => {
+    const buf = Buffer.isBuffer(b) ? b : Buffer.from(b, 'latin1')
+    chunks.push(buf)
+    offset += buf.length
   }
-  const stream = Buffer.from(content, 'latin1')
-  const objs: Buffer[] = []
-  objs[1] = Buffer.from('<< /Type /Catalog /Pages 2 0 R >>', 'latin1')
-  objs[2] = Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>', 'latin1')
-  objs[3] = Buffer.from(
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
-      '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
-    'latin1'
-  )
-  objs[4] = Buffer.concat([
-    Buffer.from(`<< /Length ${stream.length} >>\nstream\n`, 'latin1'),
-    stream,
+  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')
+  const xref: number[] = [0]
+  for (let i = 0; i < objs.length; i++) {
+    xref.push(offset)
+    push(`${i + 1} 0 obj\n`)
+    push(objs[i])
+    push('\nendobj\n')
+  }
+  const xrefStart = offset
+  push(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`)
+  for (let i = 1; i <= objs.length; i++) push(`${String(xref[i]).padStart(10, '0')} 00000 n \n`)
+  push(`trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF${eofNewline ? '\n' : ''}`)
+  return Buffer.concat(chunks)
+}
+
+/** A stream object: `dict` entries (without `/Length`, which is counted here in bytes) and its data. */
+function streamObject(data: Buffer | string, dict = ''): Buffer {
+  const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, 'latin1')
+  return Buffer.concat([
+    Buffer.from(`<< ${dict ? `${dict} ` : ''}/Length ${bytes.length} >>\nstream\n`, 'latin1'),
+    bytes,
     Buffer.from('\nendstream', 'latin1')
   ])
-  objs[5] = Buffer.from(
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
-    'latin1'
-  )
+}
 
-  const parts: Buffer[] = []
-  let pos = 0
-  const push = (b: Buffer): void => {
-    parts.push(b)
-    pos += b.length
-  }
-  push(Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'latin1'))
-  const offsets: number[] = []
-  for (let i = 1; i <= 5; i++) {
-    offsets[i] = pos
-    push(Buffer.from(`${i} 0 obj\n`, 'latin1'))
-    push(objs[i])
-    push(Buffer.from('\nendobj\n', 'latin1'))
-  }
-  const xrefPos = pos
-  let xref = 'xref\n0 6\n0000000000 65535 f \n'
-  for (let i = 1; i <= 5; i++) xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n'
-  push(Buffer.from(xref, 'latin1'))
-  push(Buffer.from(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`, 'latin1'))
-  return Buffer.concat(parts)
+/**
+ * Build a minimal valid PDF whose text is POSITIONED cell-by-cell (one `Td`/`Tj` per cell), one page per
+ * entry. This is the synthetic COLUMNAR fixture the PDF geometry-extraction tests need: pdf.js returns
+ * each cell with its `transform` x/y, so the layout reconstructor can rebuild the visual rows. Latin-1
+ * + `/WinAnsiEncoding` so German umlauts (ü/ö/ä/ß) round-trip; never use a real bank statement (D57).
+ * Several pages show what one cannot: the layout parser carries the statement year and month from page
+ * to page (#687). The pages share one Helvetica font, numbered last. `pageSize` is the MediaBox (US Letter by default): pdf.js drops
+ * text whose baseline lies above the page box, so every cell's y must stay under its height. A cell
+ * character WinAnsi cannot carry as its Latin-1 byte (U+2212, a narrow NBSP, …) throws instead of
+ * reaching the PDF as another character.
+ */
+export function makeColumnarPdfPages(
+  pages: PdfCell[][],
+  fontSize = 10,
+  pageSize: readonly [width: number, height: number] = [612, 792]
+): Buffer {
+  const fontNum = 3 + 2 * pages.length
+  const objs: Array<string | Buffer> = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Kids [${pages.map((_, i) => `${3 + 2 * i} 0 R`).join(' ')}] /Count ${pages.length} >>`
+  ]
+  pages.forEach((cells, i) => {
+    let content = ''
+    for (const c of cells) {
+      if (!/^[\x20-\x7E\xA0-\xFF]*$/.test(c.text)) throw new Error(`not WinAnsi-safe: ${JSON.stringify(c.text)}`)
+      const esc = c.text.replace(/([()\\])/g, '\\$1')
+      content += `BT /F1 ${fontSize} Tf ${c.x} ${c.y} Td (${esc}) Tj ET\n`
+    }
+    objs.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageSize[0]} ${pageSize[1]}] ` +
+        `/Resources << /Font << /F1 ${fontNum} 0 R >> >> /Contents ${4 + 2 * i} 0 R >>`,
+      streamObject(content)
+    )
+  })
+  objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>')
+  return serializePdf(objs, false)
 }
 
 // ---- Scanned-PDF detection fixtures (Phase 38 step 0) ------------------------------
@@ -125,8 +148,8 @@ type FixturePage =
  * image-only ("true scan"), hybrid (text + image), and all-text (via makePdf above).
  */
 export function makeMixedPdf(pages: FixturePage[]): Buffer {
-  const objs: Array<string | { head: string; bin: Buffer; tail: string }> = []
-  const add = (body: (typeof objs)[number]): number => {
+  const objs: Array<string | Buffer> = []
+  const add = (body: string | Buffer): number => {
     objs.push(body)
     return objs.length
   }
@@ -137,7 +160,7 @@ export function makeMixedPdf(pages: FixturePage[]): Buffer {
 
   for (const p of pages) {
     if (p.kind === 'blank') {
-      const contentNum = add('<< /Length 0 >>\nstream\n\nendstream')
+      const contentNum = add(streamObject(''))
       const pageNum = add(
         `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contentNum} 0 R >>`
       )
@@ -147,9 +170,7 @@ export function makeMixedPdf(pages: FixturePage[]): Buffer {
         'BT /F1 12 Tf 72 720 Td 16 TL\n' +
         p.lines.map((l) => `(${l.replace(/([()\\])/g, '\\$1')}) Tj T*`).join('\n') +
         '\nET'
-      const contentNum = add(
-        `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`
-      )
+      const contentNum = add(streamObject(content))
       const pageNum = add(
         '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
           `/Resources << /Font << /F1 ${fontNum} 0 R >> >> /Contents ${contentNum} 0 R >>`
@@ -157,15 +178,8 @@ export function makeMixedPdf(pages: FixturePage[]): Buffer {
       kidRefs.push(`${pageNum} 0 R`)
     } else {
       const image = p.image ?? JPEG_IMAGE
-      const imgNum = add({
-        head: `<< /Type /XObject /Subtype /Image ${image.dict} /Length ${image.bin.length} >>\nstream\n`,
-        bin: image.bin,
-        tail: '\nendstream'
-      })
-      const content = 'q 612 0 0 792 0 0 cm /Im0 Do Q'
-      const contentNum = add(
-        `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`
-      )
+      const imgNum = add(streamObject(image.bin, `/Type /XObject /Subtype /Image ${image.dict}`))
+      const contentNum = add(streamObject('q 612 0 0 792 0 0 cm /Im0 Do Q'))
       const pageNum = add(
         '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
           `/Resources << /XObject << /Im0 ${imgNum} 0 R >> >> /Contents ${contentNum} 0 R >>`
@@ -174,33 +188,7 @@ export function makeMixedPdf(pages: FixturePage[]): Buffer {
     }
   }
   objs[1] = `<< /Type /Pages /Kids [${kidRefs.join(' ')}] /Count ${kidRefs.length} >>`
-
-  const chunks: Buffer[] = []
-  let offset = 0
-  const push = (b: Buffer | string): void => {
-    const buf = Buffer.isBuffer(b) ? b : Buffer.from(b, 'latin1')
-    chunks.push(buf)
-    offset += buf.length
-  }
-  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')
-  const xref: number[] = [0]
-  for (let i = 0; i < objs.length; i++) {
-    xref.push(offset)
-    push(`${i + 1} 0 obj\n`)
-    const o = objs[i]
-    if (typeof o === 'string') push(o)
-    else {
-      push(o.head)
-      push(o.bin)
-      push(o.tail)
-    }
-    push('\nendobj\n')
-  }
-  const xrefStart = offset
-  push(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`)
-  for (let i = 1; i <= objs.length; i++) push(`${String(xref[i]).padStart(10, '0')} 00000 n \n`)
-  push(`trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`)
-  return Buffer.concat(chunks)
+  return serializePdf(objs, true)
 }
 
 /** A "true scan": every page is an image, zero extractable text. */
@@ -253,6 +241,38 @@ export function makeCcittScanPdf(): Buffer {
       }
     }
   ])
+}
+
+// ---- Type3 image-mask glyph (#687) ----------------------------------------------------
+//
+// pdf.js compiles a Type3 glyph that paints an IMAGE MASK into a path (`compileType3Glyph`, its only
+// DOMMatrix use in the main process) when the font loads, which text extraction does. The mask is 8×8
+// (a 1×1 mask takes a shortcut that skips the compiler): a square outline, 1 = unpainted.
+const TYPE3_GLYPH_MASK: Buffer = Buffer.from([0xff, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xff])
+
+/** A one-page PDF: `line` in Helvetica, then `AAAA` in a Type3 font whose one glyph paints an 8×8 image mask. */
+export function makeType3MaskGlyphPdf(line: string): Buffer {
+  const esc = line.replace(/([()\\])/g, '\\$1')
+  return serializePdf(
+    [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
+        '/Resources << /Font << /F1 5 0 R /T3 6 0 R >> >> /Contents 4 0 R >>',
+      streamObject(`BT /F1 12 Tf 72 720 Td (${esc}) Tj ET\nBT /T3 12 Tf 72 690 Td (AAAA) Tj ET`),
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 8 8] /FontMatrix [0.125 0 0 0.125 0 0] ' +
+        '/CharProcs << /A 7 0 R >> /Encoding << /Type /Encoding /Differences [65 /A] >> ' +
+        '/FirstChar 65 /LastChar 65 /Widths [8] /Resources << /XObject << /M 8 0 R >> >> >>',
+      // The glyph procedure: width + bbox (`d1`), then the mask scaled onto the 8×8 glyph box.
+      streamObject('8 0 0 0 8 8 d1 q 8 0 0 8 0 0 cm /M Do Q'),
+      streamObject(
+        TYPE3_GLYPH_MASK,
+        '/Type /XObject /Subtype /Image /Width 8 /Height 8 /ImageMask true /BitsPerComponent 1'
+      )
+    ],
+    true
+  )
 }
 
 /** A tiny but valid 1x1 PNG (photo-import tests; the fake engine never decodes it). */

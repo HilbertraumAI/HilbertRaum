@@ -1,5 +1,5 @@
 {
-  "$comment": "GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by extractor version. Regenerate in the SAME commit as any extractor version bump: UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts",
+  "$comment": "GENERATED — do not hand-edit. Committed output-snapshot for the real-layout corpus, keyed by extractor version. Regenerate in the SAME commit as any extractor version bump: UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/skills-extractor-corpus.test.ts",
   "bankExtractorVersion": 11,
   "invoiceExtractorVersion": 13,
   "fixtures": {
@@ -180,7 +180,7 @@
     },
     "bank-ch-geometry-dot-decimal": {
       "kind": "bank",
-      "inputHash": "4f16197c722d12eab97e90d4ef7fcdef3226b72ba379ea5e2b002ffcd71315d1",
+      "inputHash": "5d11df9635f2023d76fc7d5630cce73919dcc4f1179b34c5143085573a7feb18",
       "hash": "8d5db0800ab3bb0d015dc1365c9043758ddf013ca283e7ca3512e0eee55c2ca9",
       "output": {
         "transactions": [
@@ -428,7 +428,7 @@
     },
     "invoice-de-geometry-columns": {
       "kind": "invoice",
-      "inputHash": "ea8985ff197036bf70937d0fc9f4ab5d3864a20500630491f60936d30c1822c5",
+      "inputHash": "311b3c38edbd6b8e1168513b19100173e7809970ceb2cb6866a14cfe84560fa6",
       "hash": "22aff383172d5e19b033646b3c3e30985d4d5ca76d318a7bde4ae7213da98c13",
       "output": {
         "header": {

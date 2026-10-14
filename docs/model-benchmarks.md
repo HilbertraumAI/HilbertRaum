@@ -2306,7 +2306,7 @@ characters written as `\u` escapes so a git/editor normalization can't silently 
 carrying the layouts that actually broke: NBSP / narrow-NBSP thousands grouping, U+2212 / en-dash minus
 signs, the German `Summe` / `Summe netto` / `Endbetrag` / `Rechnungssumme` totals labels, SEPA rows,
 `dd.mm.yy` + cross-year dates, and wrapped descriptions.
-[`tests/integration/extractor-realworld.test.ts`](../apps/desktop/tests/integration/extractor-realworld.test.ts)
+[`tests/integration/skills-extractor-corpus.test.ts`](../apps/desktop/tests/integration/skills-extractor-corpus.test.ts)
 runs the corpus through the REAL production extractors (the same currency-vote / date-order / anchor
 inference the tool does) and asserts the parsed figures, AND pins a per-fixture hash of the full extractor
 output in `extractor-output.snapshot.json`, keyed by `BANK_EXTRACTOR_VERSION` / `INVOICE_EXTRACTOR_VERSION`.
@@ -2317,7 +2317,7 @@ the snapshot is regenerated — and regeneration itself REFUSES to write when th
 input without a version bump, so the rule cannot be silenced by regenerating alone:
 
 ```powershell
-UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/extractor-realworld.test.ts
+UPDATE_EXTRACTOR_SNAPSHOT=1 npx vitest run tests/integration/skills-extractor-corpus.test.ts
 ```
 
 This is the mechanical backstop for the repo rule "every extractor behaviour change bumps the version by

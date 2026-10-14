@@ -277,12 +277,10 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
         {
           db: ctx.db,
           storeDir: documentsDir(ctx.paths.workspacePath),
+          // A saved article is always Markdown (`articleDocumentTitle`), so no transcriber or OCR engine applies (#687).
           ingestion: {
             embedder: ctx.embedder,
             cipher: ctx.workspace.documentCipher(),
-            transcriber: ctx.transcriber,
-            transcriberMissing: ctx.transcriberMissing,
-            ocrEngine: ctx.ocrEngine,
             plaintextOps: ctx.plaintextOps
           },
           beginDocumentWork: () => ctx.workspace.beginDocumentWork(),

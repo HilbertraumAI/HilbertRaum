@@ -44,7 +44,7 @@ import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
 import { DocTaskManager } from './services/doctasks'
 import { documentsDir } from './services/ingestion'
 import { createPlaintextOps } from './services/ingestion/plaintext-ops'
-import { inFlightStreams } from './ipc/inflight'
+import { isChatStreaming } from './ipc/inflight'
 import { registerDictationIpc } from './ipc/registerDictationIpc'
 import { registerImagesIpc } from './ipc/registerImagesIpc'
 import {
@@ -582,7 +582,7 @@ function initBackend(): void {
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
   // The helper (content-free log: outcome, duration, engine id) is shared with the #410
   // post-install refresh, which awaits it instead.
-  if (ocrEngine?.probe) void probeOcrEngine(ocrEngine)
+  if (ocrEngine) void probeOcrEngine(ocrEngine)
 
   // Document task engine: one-at-a-time summary/translation/compare jobs. The
   // chat-streaming guard reads the shared in-flight registry — tasks never put
@@ -608,7 +608,8 @@ function initBackend(): void {
     // here was exactly the staleness that forced a restart. `ctx` is assigned below, before any
     // task can run.
     getTranslator: () => ctx?.translator ?? null,
-    isChatStreaming: () => inFlightStreams.size > 0,
+    // D26: the shared predicate over the chat stream registry (#682), never a local copy of it.
+    isChatStreaming,
     // Doc-task window budgets follow the REAL launched context window (§L0 — the same source
     // chat/RAG assembly budgets against), not bare `settings.contextTokens`: the runtime is
     // launched with the user's override ?? the manifest's recommended size, which can diverge

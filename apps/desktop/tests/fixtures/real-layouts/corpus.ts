@@ -5,8 +5,9 @@
 // German/Austrian/Swiss statements and invoices — never real user documents — so the real extractors are
 // exercised against the shapes that actually broke in the field.
 //
-// The corpus is fed to the REAL `extractTransactionsWithStats`/`extractStatementBalances` (bank) and
-// `extractInvoice` (invoice) exactly as the production tool calls them (see extractor-realworld.test.ts).
+// The corpus is fed to the production extract tools, `extract_transactions` (bank) and `extract_invoice`
+// (invoice), through their own `run`; the geometry pages are written as real PDFs and read by the production
+// layout parser first (see skills-extractor-corpus.test.ts).
 // It is the input to BOTH T1 tests: the real-world assertion suite (figures parse correctly) and the
 // output-snapshot / version-bump guard (any output change without an extractor version bump fails).
 //
@@ -388,16 +389,16 @@ const invoiceUnreconcilable: InvoiceFixture = {
 }
 
 // =====================================================================================================
-// GEOMETRY STATEMENTS (positioned words — run through the REAL `reconstructPage`, then the extractors)
+// GEOMETRY STATEMENTS (positioned words — written as a real PDF, read by the production layout parser, then
+// the extract tools). The pages are A4 (595 × 842 pt): pdf.js drops text above the page box (#687).
 // =====================================================================================================
 
-/** A positioned word for a geometry fixture — mirrors `LayoutWord` (pdf-layout.ts) structurally so this
- *  fixtures module needs no import from `src` (`w` is unused by clustering today). */
+/** A positioned text run for a geometry fixture, in PDF text space: its left x and its baseline y. No width:
+ *  pdf.js measures each run in the written PDF. WinAnsi characters only (the PDF builder refuses others). */
 export interface GeometryWord {
   str: string
   x: number
   y: number
-  w: number
 }
 
 export interface GeometryBankFixture {
@@ -406,12 +407,13 @@ export interface GeometryBankFixture {
   title: string
   incidentClasses: Array<IncidentClass | string>
   note: string
-  /** Positioned words, one entry per PAGE — the test feeds them through the REAL `reconstructPage`
-   *  (year/column resolution included) and then the bank extractors, the full geometry pipeline. */
+  /** Positioned words, one entry per PAGE — the test writes them as a real PDF and reads it with the
+   *  production layout parser (year/column resolution and the page-to-page carry included), then runs the
+   *  bank extract tool: the full geometry pipeline. */
   pages: GeometryWord[][]
 }
 
-const gw = (str: string, x: number, y: number): GeometryWord => ({ str, x, y, w: 8 })
+const gw = (str: string, x: number, y: number): GeometryWord => ({ str, x, y })
 
 /**
  * Swiss dot-decimal statement (R7, skills-audit-2026-07-03 SKA-13): small `d.dd` amounts (`5.04`,
@@ -484,17 +486,19 @@ export interface GeometryInvoiceFixture {
   title: string
   incidentClasses: Array<IncidentClass | string>
   note: string
-  /** Positioned words, one entry per PAGE — fed through the REAL `reconstructPage`, then `extractInvoice`
-   *  (the P3 glyph-soup RETRY path: `analysis/invoice.ts` re-reads a suspect document via layout). */
+  /** Positioned words, one entry per PAGE — written as a real PDF, read by the production layout parser,
+   *  then the invoice extract tool (the P3 glyph-soup RETRY path: `analysis/invoice.ts` re-reads a suspect
+   *  document via layout). */
   pages: GeometryWord[][]
 }
 
 /**
  * Columnar invoice through the geometry pipeline (invoice-hardening-2026-07-04 P4 — the first geometry
  * INVOICE coverage; T1 recorded the gap). An invoice printed in description/qty/unit/total columns:
- * `reconstructPage` clusters each visual row and emits its raw left-to-right text (no booking-date
- * column, so every row is a non-transaction "raw" row), which the plain invoice extractor then parses —
- * exactly what the P3 suspect-retry does in production. The read must be CLEAN: 2 items, reconciling
+ * `reconstructPage` clusters each visual row and emits its raw left-to-right text (the `15.03.2026`
+ * invoice date at x=145 resolves a one-token booking-date column, but no row both leads with an in-column
+ * date and carries an amount, so every row is a non-transaction "raw" row), which the plain invoice
+ * extractor then parses — exactly what the P3 suspect-retry does in production. The read must be CLEAN: 2 items, reconciling
  * totals, header fields intact.
  */
 const geometryInvoiceColumns: GeometryInvoiceFixture = {

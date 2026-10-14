@@ -8,7 +8,7 @@ import {
   stopActive,
   translate
 } from '../../src/renderer/lib/translateSession'
-import { clearFileTranslate } from '../../src/renderer/lib/fileTranslateSession'
+import { clearFileTranslate, getFileTranslate, translateDroppedFiles } from '../../src/renderer/lib/fileTranslateSession'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { TranslateJob } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
@@ -162,6 +162,23 @@ describe('translateSession — remount recovery + guards', () => {
 
     resolveStart({ jobId: 'j1', state: 'queued', text: '' })
     await first
+  })
+
+  it('refuses while a DOCUMENT translation is in flight — no second job on the lane (L6a, #682)', async () => {
+    // The screen's one `busy` disables Translate while a file translation runs, so this guard is the
+    // only thing between a stray call and a second job on the one-at-a-time lane.
+    const translateStart = vi.fn(async () => ({ jobId: 'j1', state: 'queued', text: '' }) as TranslateJob)
+    stubApi({
+      getDroppedFilePath: vi.fn(() => 'C:\\docs\\a.pdf'),
+      importDocuments: vi.fn(() => new Promise<never>(() => {})), // the import stays in flight
+      translateStart
+    })
+    void translateDroppedFiles([new File(['%PDF'], 'a.pdf')], { sourceLang: 'de', targetLang: 'en' })
+    expect(getFileTranslate().busy).toBe(true) // busy from the start, before the import's first await
+
+    expect(await translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })).toBe('busy')
+    expect(translateStart).not.toHaveBeenCalled()
+    expect(getTranslateSession().state).toBe('idle') // the refusal took nothing from the document's panel
   })
 
   it('a malformed translateStart resolve does not wedge the store stuck translating (L6b)', async () => {
@@ -568,5 +585,58 @@ describe('translateSession — #163 (T-6) edges', () => {
     // B's own stream still works.
     callbacks.get('jB')?.token?.('echt')
     expect(getTranslateSession().output).toBe('echt')
+  })
+})
+
+// ---- DOC-7: the pair a translate surface opens on (#682) ----
+//
+// `initialTranslateChoice` is the one rule the Translate screen and the Documents translate modal both
+// open on: the session's last pair, else the UI-language default. The memory is module-level and
+// nothing resets it (the lock purge keeps it by design), so each row runs on a FRESH module graph:
+// its memory starts empty, and nothing it writes reaches another row.
+
+describe('translateSession — the pair a translate surface opens on (DOC-7, #682)', () => {
+  type Fresh = {
+    session: typeof import('../../src/renderer/lib/translateSession')
+    file: typeof import('../../src/renderer/lib/fileTranslateSession')
+  }
+  async function freshStores(): Promise<Fresh> {
+    vi.resetModules()
+    const session = await import('../../src/renderer/lib/translateSession')
+    const file = await import('../../src/renderer/lib/fileTranslateSession')
+    return { session, file }
+  }
+
+  it.each([
+    { lang: 'en', pair: { sourceLang: 'de', targetLang: 'en' } },
+    { lang: 'de', pair: { sourceLang: 'en', targetLang: 'de' } }
+  ] as const)('before any translation this session, a $lang UI opens on its default pair', async ({ lang, pair }) => {
+    const { session } = await freshStores()
+    expect(session.initialTranslateChoice(lang)).toEqual(pair)
+  })
+
+  // The pair is remembered as the translation STARTS, before its first round-trip — both round-trips
+  // stay in flight here, so nothing runs past the write.
+  it.each([
+    {
+      label: 'a text translation',
+      start: ({ session }: Fresh) => session.translate({ sourceLang: 'fr', targetLang: 'pl', text: 'Bonjour' })
+    },
+    {
+      label: 'a document translation',
+      start: ({ file }: Fresh) =>
+        file.translateDroppedFiles([new File(['%PDF'], 'a.pdf')], { sourceLang: 'fr', targetLang: 'pl' })
+    }
+  ])('once $label starts, every surface opens on its pair whatever the UI language', async ({ start }) => {
+    stubApi({
+      translateStart: vi.fn(() => new Promise<never>(() => {})),
+      getDroppedFilePath: vi.fn(() => 'C:\\docs\\a.pdf'),
+      importDocuments: vi.fn(() => new Promise<never>(() => {}))
+    })
+    const fresh = await freshStores()
+    void start(fresh)
+    for (const lang of ['en', 'de'] as const) {
+      expect(fresh.session.initialTranslateChoice(lang)).toEqual({ sourceLang: 'fr', targetLang: 'pl' })
+    }
   })
 })

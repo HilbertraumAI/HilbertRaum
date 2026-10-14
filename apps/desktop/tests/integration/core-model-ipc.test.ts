@@ -165,10 +165,6 @@ describe('registerCoreIpc', () => {
     const available = await statusWith(engine('available'))
     expect(available.ocrAvailable).toBe(true)
     expect(available.ocrState).toBe('available')
-    // An engine without the optional method (the test fakes) is available by construction.
-    const minimal = await statusWith({ id: 'fake', languages: ['eng'], recognize: async () => ({ text: '', confidence: null }) })
-    expect(minimal.ocrAvailable).toBe(true)
-    expect(minimal.ocrState).toBe('available')
   })
 
   // #527: the composer hint names the missing piece. The reason is stored on ctx with the slot

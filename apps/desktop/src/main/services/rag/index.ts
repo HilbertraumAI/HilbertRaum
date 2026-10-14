@@ -102,7 +102,7 @@ export {
 // budget is a MODEL-token limit, so words must be scaled up before comparing — otherwise
 // the assembled excerpt block overflows the context window and the runtime silently
 // truncates excerpts. Same factor doctasks uses (SUMMARY_TOKENS_PER_WORD).
-const TOKENS_PER_WORD = 1.3
+export const TOKENS_PER_WORD = 1.3
 
 /** True when the document is fully chunked (the whole document was indexed, no silent
  *  truncation). NULL `fully_chunked` (legacy/truncated) → false. Mirrors `computeCoverage`

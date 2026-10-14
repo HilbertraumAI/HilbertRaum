@@ -8,6 +8,7 @@ import {
   toFullDate,
   DEFAULT_ROW_TOLERANCE,
   DEFAULT_COLUMN_GAP,
+  MAX_CONTINUATION_ROWS,
   type LayoutWord
 } from '../../src/main/services/ingestion/parsers/pdf-layout'
 import { parseDate } from '../../src/main/services/skills/tools/money'
@@ -541,6 +542,13 @@ describe('HVB multi-baseline recovery (A1 association + A2 currency + A3 sign)',
       { min: 50, max: 50 }
     )
     expect(credit).toBe('29.01.2025 GUTSCHRIFT 34,39')
+    // A "+" in the sign column is a credit marker too: folded in (not left as text) and positive (#687).
+    const plus = reconstructLine(
+      [word('29.01.', 50, 680), word('GUTSCHRIFT', 140, 680), word('34,39', 490, 680), word('+', 512, 680)],
+      2025,
+      { min: 50, max: 50 }
+    )
+    expect(plus).toBe('29.01.2025 GUTSCHRIFT 34,39')
   })
 
   it('does NOT treat a dash far from the money column as a sign (a description dash stays positive)', () => {
@@ -595,6 +603,31 @@ describe('HVB multi-baseline recovery (A1 association + A2 currency + A3 sign)',
     expect(lines).toContain('14.01.2025 LASTSCHRIFT Telekom Deutschland GmbH Mandatsref 9988 -3,99 EUR')
     // The phantom balance row (no payee continuation) is dropped — never a transaction line.
     expect(lines.some((l) => l.includes('1.234,56'))).toBe(false)
+  })
+
+  it('absorbs at most MAX_CONTINUATION_ROWS (4) continuation baselines; the fifth is emitted raw (#687)', () => {
+    // The bound keeps a mis-fired column model (or a footer note under the last row) from letting one
+    // transaction swallow an unbounded run of text. Five dateless, money-less text rows follow one booking row.
+    expect(MAX_CONTINUATION_ROWS).toBe(4)
+    const words: LayoutWord[] = [
+      word('Kontoumsaetze', 50, 800),
+      word('2025', 300, 800),
+      word('14.01.', 50, 700),
+      word('LASTSCHRIFT', 140, 700),
+      word('EUR', 300, 700),
+      word('3,99', 490, 700),
+      word('-', 512, 700),
+      word('Telekom Deutschland GmbH', 140, 688),
+      word('Mandatsref 9988', 140, 676),
+      word('Kundennummer ABC', 140, 664),
+      word('Vertrag Mobilfunk', 140, 652),
+      word('Fusszeile Seite eins', 140, 640)
+    ]
+    expect(reconstructPage(words).text.split('\n')).toEqual([
+      'Kontoumsaetze 2025',
+      '14.01.2025 LASTSCHRIFT Telekom Deutschland GmbH Mandatsref 9988 Kundennummer ABC Vertrag Mobilfunk -3,99 EUR',
+      'Fusszeile Seite eins'
+    ])
   })
 })
 

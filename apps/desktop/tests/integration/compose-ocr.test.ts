@@ -44,7 +44,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
     expect(ctx.ocrEngine).toBe(made[0])
     expect(ctx.ocrEngine?.languages).toEqual(['deu', 'eng'])
     expect(made[0].probe).toHaveBeenCalledTimes(1)
-    expect(ctx.ocrEngine?.availability?.()).toBe('available')
+    expect(ctx.ocrEngine?.availability()).toBe('available')
   })
 
   it('an engine that cannot start in this build fills the slot and reports startFailed (status stays honest)', async () => {
@@ -56,7 +56,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
     expect(outcome).toBe('startFailed')
     // Held on the slot, so `ocrState` reads 'unavailable' (files present, recognizer cannot run)
     // instead of 'missing' — the #232 distinction.
-    expect(ctx.ocrEngine?.availability?.()).toBe('unavailable')
+    expect(ctx.ocrEngine?.availability()).toBe('unavailable')
   })
 
   it('a folder that still holds no language files leaves the slot null: unchanged', async () => {
@@ -129,6 +129,29 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
     expect(live.probe).not.toHaveBeenCalled()
   })
 
+  // #687 (owner call): a folder that cannot be listed right now (a transient read failure on the drive) is not a
+  // language change — an empty listing on a live engine means "can't tell". It used to read as a shrunken set and
+  // answered "restart required". Here `ocr` is a FILE: it exists, but listing it fails (ENOTDIR).
+  it("an 'available' engine whose folder cannot be listed: unchanged, never restartRequired (#687)", async () => {
+    const root = ocrDrive()
+    writeFileSync(join(root, 'ocr'), 'x')
+    const live = fakeEngine(['deu', 'eng'], { state: 'available' })
+    const ctx = slot(root, live)
+    expect(await refreshOcrSlot(ctx)).toBe('unchanged')
+    expect(ctx.ocrEngine).toBe(live)
+    expect(live.probe).not.toHaveBeenCalled()
+  })
+
+  // #687 (code review): only an UNLISTABLE folder is "can't tell". One that lists but holds no language file any
+  // more (deleted by hand; only the orientation file left) is still a change — not "activated" because osd is there.
+  it("'available' with every language file gone but osd present: restartRequired, never activated (#687)", async () => {
+    const root = ocrDrive(['osd'])
+    const live = fakeEngine(['deu', 'eng'], { state: 'available' })
+    const ctx = slot(root, live)
+    expect(await refreshOcrSlot(ctx)).toBe('restartRequired')
+    expect(live.probe).not.toHaveBeenCalled()
+  })
+
   it("'available' and the orientation file just installed: activated — no restart, same engine (#538)", async () => {
     const root = ocrDrive(['deu', 'eng', 'osd'])
     const live = fakeEngine(['deu', 'eng'], { state: 'available' })
@@ -170,8 +193,8 @@ describe('composeOcrEngine + probeOcrEngine (#410, shared with startup)', () => 
     const packaged = composeOcrEngine({ rootPath: root, isDev: false })
     expect(dev).toBeInstanceOf(TesseractOcrEngine)
     expect(dev?.languages).toEqual(['deu', 'eng'])
-    expect(dev?.availability?.()).toBe('available')
-    expect(packaged?.availability?.()).toBe('probing')
+    expect(dev?.availability()).toBe('available')
+    expect(packaged?.availability()).toBe('probing')
     // Construction spawns nothing — the worker starts lazily on the first recognition / probe.
   })
 
@@ -181,23 +204,12 @@ describe('composeOcrEngine + probeOcrEngine (#410, shared with startup)', () => 
 
   it('probeOcrEngine never rejects: a throwing probe reads as false', async () => {
     const engine: OcrEngine = {
-      id: 'x',
-      languages: ['deu'],
-      recognize: async () => ({ text: '', confidence: null }),
+      ...fakeOcrEngine({ languages: ['deu'] }),
       probe: async () => {
         throw new Error('worker exploded')
       }
     }
     await expect(probeOcrEngine(engine)).resolves.toBe(false)
-  })
-
-  it('probeOcrEngine on an engine without a probe reports its availability', async () => {
-    const engine: OcrEngine = {
-      id: 'x',
-      languages: ['deu'],
-      recognize: async () => ({ text: '', confidence: null })
-    }
-    await expect(probeOcrEngine(engine)).resolves.toBe(true)
   })
 })
 

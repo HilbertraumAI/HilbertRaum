@@ -10,6 +10,7 @@ import {
   generateGroundedAnswer,
   ragSettingsFrom,
   retrieve,
+  TOKENS_PER_WORD,
   type ExternalRetrievalOutput,
   type RagRetrievalSettings,
   type RetrievedChunk
@@ -80,8 +81,8 @@ function testArm(...candidates: ExternalCandidate[]): ExternalRetrievalOutput {
   return { candidates, outcomes: [] }
 }
 
-/** Same unit as retrieve()'s budget loop: persisted/recomputed word estimate × TOKENS_PER_WORD (1.3). */
-const budgetTokens = (text: string): number => Math.ceil(approxTokenCount(text) * 1.3)
+/** Same unit as retrieve()'s budget loop: persisted/recomputed word estimate × TOKENS_PER_WORD. */
+const budgetTokens = (text: string): number => Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
 
 describe('T01 — #293 excerpt framing over mixed document + archive excerpts', () => {
   const documentChunk: RetrievedChunk = {

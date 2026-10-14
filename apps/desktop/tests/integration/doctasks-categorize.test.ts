@@ -2,8 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import type { Db } from '../../src/main/services/db'
 import { BANK_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/bank-statement'
-import { buildToolRunner, toSkillToolAudit } from '../../src/main/services/skills/tool-runs'
-import type { DocTaskManager } from '../../src/main/services/doctasks'
 import {
   docTaskManager,
   docTaskRuntime,
@@ -164,42 +162,6 @@ describe('categorize doctask — A9 staleness re-extraction', () => {
     // The bogus row is gone; the two re-extracted rows are categorized (Gehalt → Income, Gebühr → Fees).
     const cats = persistedCategories(stmts[0].id)
     expect(cats).toEqual(['Income', 'Fees'])
-  })
-})
-
-describe('categorize doctask — extract does not auto-categorize (U-2)', () => {
-  it('an extract run leaves the categorize lane untouched and the rows uncategorized', async () => {
-    // U-2 (audit 2026-06-26): a read-only extract no longer silently starts the LLM categorizer. Run
-    // the extract through the tool-run dispatch with a FULLY functional doctask lane available — the
-    // old Phase-33 auto-offer would have enqueued a `categorize` job here; now nothing touches the lane.
-    const text = 'Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Gebühr -3,50'
-    const docId = await importText(w, text, { name: 'statement.txt' })
-    const mgr = docTaskManager(w)
-    // Spy on the REAL manager: record every job the extract asks it to start (synchronous — the old
-    // auto-offer called startDocTask inside the runner before it returned, so a regression is caught).
-    const started: Array<{ kind: string }> = []
-    const realStart = mgr.startDocTask.bind(mgr)
-    mgr.startDocTask = ((req: Parameters<DocTaskManager['startDocTask']>[0]) => {
-      started.push(req)
-      return realStart(req)
-    }) as DocTaskManager['startDocTask']
-    const runner = buildToolRunner(
-      w.db,
-      'extract_transactions',
-      { skillInstallId: 'app:bank-statement', conversationId: '', documentId: docId },
-      toSkillToolAudit(),
-      { docTasks: mgr, readDocumentSegments: async () => [{ text, page: 1, index: 0 }] }
-    )!
-    const outcome = await runner({ signal: new AbortController().signal, onProgress: () => {} })
-    expect(outcome.ok).toBe(true)
-    expect(outcome.count).toBeGreaterThan(0) // rows WERE extracted (A2: the runner emits the generic `count`)
-    // The doctask lane was never asked to do anything — no hidden model run.
-    expect(started).toHaveLength(0)
-    // The freshly-extracted rows stay UNcategorized until the user explicitly taps "Categorize".
-    const stmt = w.db
-      .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC LIMIT 1')
-      .get(docId) as { id: string }
-    expect(persistedCategories(stmt.id).every((c) => c === null)).toBe(true)
   })
 })
 

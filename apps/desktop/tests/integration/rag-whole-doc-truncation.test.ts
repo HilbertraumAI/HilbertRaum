@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -9,29 +9,28 @@ import { join } from 'node:path'
 // This suite pins, on a realistic ~10-page German fixture at contextTokens=4096:
 //   1. the 1.5 German-subword safety divisor on the whole-doc budget,
 //   2. de-overlap: consecutive same-segment chunks no longer repeat their ~80-token boundary,
-//   3. Phase 1 (wholedoc-truncation-fix-plan §3): an over-budget doc with NO tree now covers the WHOLE
-//      document via the on-the-fly chunk map-reduce (`capped`, untruncated) — the old beginning-only
-//      "PARTIAL DOCUMENT" notice was the reported defect. The rich map-reduce assertions (call count,
-//      whole-doc marker reach, Stop contract) live in rag-whole-doc-mapreduce.test.ts.
+//   3. the single read flags its truncation at the fit budget, and a document that fits answers
+//      notice-free,
+//   4. the share-safe PII pre-scan (U2): whole-document counts and the verdict gate on a fitting read.
+// The over-budget whole-doc TURN with no tree (Phase 1: the chunk map-reduce covers the WHOLE document,
+// untruncated, share-safe scan in its reduce turn) is owned by rag-whole-doc-mapreduce.test.ts.
 
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
-import { MockEmbedder } from '../../src/main/services/embeddings'
-import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
-import { appendMessage, createConversation, CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
+import { createQueuedDocument } from '../../src/main/services/ingestion'
+import { CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
 import {
   buildShareSafeScanBlock,
   documentApproxTokenTotal,
-  generateGroundedAnswer,
-  ragSettingsFrom,
   retrieveWholeDocument,
   scanWholeDocumentForPii,
+  TOKENS_PER_WORD,
   wholeDocumentBudgetTokens,
   wholeDocumentFitBudgetTokens
 } from '../../src/main/services/rag'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
-import { DEFAULT_SETTINGS, type Message } from '../../src/shared/types'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
+import { answerWholeDoc, germanDoc, WHOLE_DOC_QUESTION, wholeDocHarness } from '../helpers/whole-doc-fixtures'
 
 /** Insert a chunk row directly, for precise control over segment labels (page/section) the ingestion
  *  path would coalesce away — used to exercise the cross-segment de-overlap gate. */
@@ -60,46 +59,6 @@ function insertChunk(
 }
 
 const CTX = 4096
-const QUESTION = 'Fasse das gesamte Dokument zusammen: welche Entscheidungen wurden getroffen?'
-
-/** A realistic ~10-page German document: each sentence carries a unique `M####` marker so a chunk
- *  overlap (a duplicated boundary) is directly detectable, and the subword-dense German prose is what
- *  the 1.5 safety divisor exists for. One coalesced segment ⇒ the chunker produces OVERLAPPING windows. */
-function germanDoc(sentences: number): string {
-  const lines: string[] = []
-  for (let i = 0; i < sentences; i++) {
-    const marker = `M${String(i).padStart(4, '0')}`
-    lines.push(
-      `${marker} Abschnitt: Der Kontostand des Geschäftskontos wurde im Berichtszeitraum sorgfältig ` +
-        `geprüft, sämtliche Buchungen ordnungsgemäß erfasst und den jeweiligen Kategorien zugeordnet.`
-    )
-  }
-  return lines.join('\n')
-}
-
-interface Harness {
-  db: Db
-  docId: string
-  conversationId: string
-}
-
-async function makeHarness(): Promise<Harness> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-wholedoctrunc-'))
-  const workspacePath = join(root, 'workspace')
-  mkdirSync(workspacePath, { recursive: true })
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const storeDir = documentsDir(workspacePath)
-  const docPath = join(root, 'statement.txt')
-  writeFileSync(docPath, germanDoc(280), 'utf8') // ~280 sentences ≈ 11 pages, well over the 4096 budget
-  const doc = createQueuedDocument(db, docPath)
-  await processDocument(db, storeDir, doc.id, { embedder: new MockEmbedder() })
-  const conv = createConversation(db, {
-    mode: 'documents',
-    scope: { collectionIds: [], documentIds: [doc.id] }
-  })
-  return { db, docId: doc.id, conversationId: conv.id }
-}
 
 /** A runtime that reports a 4096 window (§L0) and captures the assembled grounded turn. */
 function capturingRuntime(): RecordingRuntime {
@@ -113,8 +72,8 @@ function markersOf(texts: string[]): string[] {
 
 describe('whole-document budget honesty at the default 4096 context (W1, audit §2.2)', () => {
   it('applies the 1.5 German-subword safety divisor to the whole-doc budget', () => {
-    const raw = wholeDocumentBudgetTokens(CTX, QUESTION, null)
-    const fit = wholeDocumentFitBudgetTokens(CTX, QUESTION, null)
+    const raw = wholeDocumentBudgetTokens(CTX, WHOLE_DOC_QUESTION, null)
+    const fit = wholeDocumentFitBudgetTokens(CTX, WHOLE_DOC_QUESTION, null)
     // Exactly the divisor the relevance path uses (RETRIEVAL_FIT_SAFETY = 1.5), floored to the 512 floor.
     expect(fit).toBe(Math.max(512, Math.floor(raw / 1.5)))
     // The divisor actually shrinks the budget (it was applied, not a no-op).
@@ -124,7 +83,7 @@ describe('whole-document budget honesty at the default 4096 context (W1, audit �
   })
 
   it('de-overlaps consecutive same-segment chunks: no duplicated ~80-token boundary', async () => {
-    const h = await makeHarness()
+    const h = await wholeDocHarness(germanDoc(280)) // ~11 pages, well over the 4096 whole-doc budget
     const dbTokens = (
       h.db
         .prepare('SELECT COALESCE(SUM(token_count), 0) AS s FROM chunks WHERE document_id = ?')
@@ -144,12 +103,12 @@ describe('whole-document budget honesty at the default 4096 context (W1, audit �
     expect(assembledWords).toBeLessThan(dbTokens)
     // The compare-split sizing (documentApproxTokenTotal) de-overlaps the SAME way (plan §W1 item 3),
     // so a document's half of the split is proportioned on real, not overlap-inflated, size. It reports
-    // TOKENS_PER_WORD-scaled (1.3) tokens, so compare against the naive 1.3-scaled per-chunk sum (what
+    // TOKENS_PER_WORD-scaled tokens, so compare against the naive scaled per-chunk sum (what
     // it would be WITHOUT de-overlap) — de-overlap must make it strictly smaller.
     const perChunk = h.db
       .prepare('SELECT token_count FROM chunks WHERE document_id = ? ORDER BY chunk_index')
       .all(h.docId) as Array<{ token_count: number }>
-    const naiveScaled = perChunk.reduce((a, r) => a + Math.ceil(r.token_count * 1.3), 0)
+    const naiveScaled = perChunk.reduce((a, r) => a + Math.ceil(r.token_count * TOKENS_PER_WORD), 0)
     expect(documentApproxTokenTotal(h.db, h.docId)).toBeLessThan(naiveScaled)
   })
 
@@ -203,81 +162,24 @@ describe('whole-document budget honesty at the default 4096 context (W1, audit �
   })
 
   it('truncates the read at the fit budget and flags it (posture: honest beginning, not silent prefix)', async () => {
-    const h = await makeHarness()
-    const fit = wholeDocumentFitBudgetTokens(CTX, QUESTION, null)
+    const h = await wholeDocHarness(germanDoc(280)) // ~11 pages, well over the 4096 whole-doc budget
+    const fit = wholeDocumentFitBudgetTokens(CTX, WHOLE_DOC_QUESTION, null)
     const partial = retrieveWholeDocument(h.db, h.docId, fit)
     expect(partial.truncated).toBe(true)
     expect(partial.chunksCovered).toBeLessThan(partial.chunksTotal)
     expect(partial.chunksCovered).toBeGreaterThan(0)
   })
 
-  it('over-budget doc with NO tree covers the WHOLE document via chunk map-reduce (Phase 1, gap band closed)', async () => {
-    // BEFORE Phase 1 this ~11-page doc (no tree) was read from the BEGINNING only and stamped
-    // `truncated:true` + a "PARTIAL DOCUMENT" notice — the reported defect. Now the on-the-fly chunk
-    // map-reduce analyses the WHOLE document and stamps honest whole-doc coverage (`capped`, untruncated).
-    const h = await makeHarness()
-    const runtime = capturingRuntime()
-    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
-    const msg = (await generateGroundedAnswer(
-      h.db,
-      runtime,
-      new MockEmbedder(),
-      h.conversationId,
-      QUESTION,
-      ragSettingsFrom(DEFAULT_SETTINGS),
-      { wholeDocument: { documentId: h.docId } }
-    )) as Message
-
-    // Honest whole-document coverage: capped mode (via map-reduce), NOT truncated, whole doc reached.
-    expect(msg.coverage?.mode).toBe('capped')
-    expect(msg.coverage?.truncated).toBe(false)
-    const covered = msg.coverage?.chunksCovered ?? 0
-    const total = msg.coverage?.chunksTotal ?? 0
-    expect(covered).toBeGreaterThan(0)
-    expect(covered).toBe(total) // the whole document IS the source
-
-    // The final REDUCE turn is framed for the WHOLE document — never the old beginning-only notice.
-    const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
-    expect(userTurn).toContain('cover the WHOLE document')
-    expect(userTurn).toContain('Notes (whole document)')
-    expect(userTurn).not.toContain('PARTIAL DOCUMENT')
-    expect(userTurn).not.toContain('covers only the beginning')
-
-    // No untrusted-text leakage into the system prompt.
-    const systemTurn = runtime.lastMessages.find((m) => m.role === 'system')?.content ?? ''
-    expect(systemTurn).not.toContain('PARTIAL DOCUMENT')
-  })
-
   it('a small (non-truncating) document keeps the whole-doc read honest and notice-free', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-wholedocsmall-'))
-    const workspacePath = join(root, 'workspace')
-    mkdirSync(workspacePath, { recursive: true })
-    const db = openDatabase(join(root, 'test.sqlite'))
-    seedSettings(db)
-    const storeDir = documentsDir(workspacePath)
-    const docPath = join(root, 'short.txt')
-    writeFileSync(docPath, germanDoc(3), 'utf8') // three sentences — fits any sane budget
-    const doc = createQueuedDocument(db, docPath)
-    await processDocument(db, storeDir, doc.id, { embedder: new MockEmbedder() })
-    const conv = createConversation(db, {
-      mode: 'documents',
-      scope: { collectionIds: [], documentIds: [doc.id] }
-    })
+    const h = await wholeDocHarness(germanDoc(3)) // three sentences — fits any sane budget
     const runtime = capturingRuntime()
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: QUESTION })
-    const msg = (await generateGroundedAnswer(
-      db,
-      runtime,
-      new MockEmbedder(),
-      conv.id,
-      QUESTION,
-      ragSettingsFrom(DEFAULT_SETTINGS),
-      { wholeDocument: { documentId: doc.id } }
-    )) as Message
+    const msg = await answerWholeDoc(h, runtime)
 
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)
     const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
+    // The floor read's notice is composed at runtime ("IMPORTANT — PARTIAL " + "DOCUMENT", rag/index.ts
+    // `truncationNotice`), so no source grep finds it — but a fitting read must never carry it.
     expect(userTurn).not.toContain('PARTIAL DOCUMENT')
   })
 })
@@ -344,60 +246,12 @@ describe('share-safe PII pre-scan injection (U2, audit §3.5)', () => {
     expect(counts.email).toBe(0)
   })
 
-  it('over-budget doc: the scan block rides in the chunk map-reduce reduce turn, whole-doc coverage lifts the gate', async () => {
-    // BEFORE Phase 1 this over-budget doc read the beginning only ⇒ `truncated:true` and the low-risk
-    // verdict was FORBIDDEN. Now the chunk map-reduce covers the WHOLE document, so the pre-scan block
-    // rides in the reduce USER turn WITHOUT the gate — a low-risk verdict now rests on real whole-doc review.
-    const h = await makeHarness() // ~11-page doc, over budget, no tree ⇒ chunk map-reduce
-    const runtime = capturingRuntime()
-    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: QUESTION })
-    const msg = (await generateGroundedAnswer(
-      h.db,
-      runtime,
-      new MockEmbedder(),
-      h.conversationId,
-      QUESTION,
-      ragSettingsFrom(DEFAULT_SETTINGS),
-      { wholeDocument: { documentId: h.docId }, wholeDocumentPiiScan: true }
-    )) as Message
-
-    expect(msg.coverage?.truncated).toBe(false) // whole document analysed
-    const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
-    // The deterministic pre-scan summary rides in the reduce user turn (never the system prompt)…
-    expect(userTurn).toContain('AUTOMATED PRE-SCAN')
-    expect(userTurn).toContain('payment-card numbers:')
-    // …and whole-document coverage means NO verdict gate (the low-risk verdict is legitimately allowed).
-    expect(userTurn).not.toContain('MUST NOT')
-    const systemTurn = runtime.lastMessages.find((m) => m.role === 'system')?.content ?? ''
-    expect(systemTurn).not.toContain('AUTOMATED PRE-SCAN')
-  })
-
+  // The over-budget share-safe turn (the scan block in the chunk map-reduce's reduce turn, no gate) is
+  // owned by rag-whole-doc-mapreduce.test.ts ('share-safe: …').
   it('a small (fitting) document injects the scan block WITH counts and NO verdict gate', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-sharesafe-small-'))
-    const workspacePath = join(root, 'workspace')
-    mkdirSync(workspacePath, { recursive: true })
-    const db = openDatabase(join(root, 'test.sqlite'))
-    seedSettings(db)
-    const storeDir = documentsDir(workspacePath)
-    const docPath = join(root, 'letter.txt')
-    writeFileSync(docPath, 'Please review before sharing. Reach me at jane@example.com.', 'utf8')
-    const doc = createQueuedDocument(db, docPath)
-    await processDocument(db, storeDir, doc.id, { embedder: new MockEmbedder() })
-    const conv = createConversation(db, {
-      mode: 'documents',
-      scope: { collectionIds: [], documentIds: [doc.id] }
-    })
+    const h = await wholeDocHarness('Please review before sharing. Reach me at jane@example.com.')
     const runtime = capturingRuntime()
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Is this safe to share?' })
-    const msg = (await generateGroundedAnswer(
-      db,
-      runtime,
-      new MockEmbedder(),
-      conv.id,
-      'Is this safe to share?',
-      ragSettingsFrom(DEFAULT_SETTINGS),
-      { wholeDocument: { documentId: doc.id }, wholeDocumentPiiScan: true }
-    )) as Message
+    const msg = await answerWholeDoc(h, runtime, { wholeDocumentPiiScan: true }, 'Is this safe to share?')
 
     expect(msg.coverage?.truncated).toBe(false)
     const userTurn = runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''

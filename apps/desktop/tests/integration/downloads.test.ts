@@ -20,6 +20,22 @@ import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
+// F17 (#687): the per-role cap row reads the `maxBytes` the manager hands `downloadToFile`. The
+// wrapper records it and delegates to the REAL downloader (driven by the row's fake fetch), so no
+// production injection seam is needed; every other row runs the real function unchanged. The role
+// defaults are ≥ 4 GiB, so a real body-size bracket around the cap is out of reach here.
+const { downloadCaps } = vi.hoisted(() => ({ downloadCaps: [] as Array<number | undefined> }))
+vi.mock('../../src/main/services/assets', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../src/main/services/assets')>()
+  return {
+    ...orig,
+    downloadToFile: (...args: Parameters<typeof orig.downloadToFile>) => {
+      downloadCaps.push(args[2]?.maxBytes)
+      return orig.downloadToFile(...args)
+    }
+  }
+})
+
 // Phase 18 — the in-app model downloader (architecture.md "In-app model downloader"). Everything
 // runs through the INJECTED fake fetch: the suite makes zero real network calls, and the
 // gate tests prove a closed gate never even reaches the fetch seam.
@@ -695,8 +711,8 @@ describe('DownloadManager jobs', () => {
   })
 
   // F17 (audit-postmerge-2026-06-29): the model downloader must ALWAYS pass a bounded `maxBytes` to
-  // downloadToFile — the manifest's exact size when known, else a per-role default — so a redirected
-  // / Content-Length-less endpoint can't fall through to the multi-GiB backstop and fill the drive.
+  // downloadToFile — the manifest's size plus drift headroom when known, else a per-role default — so a
+  // redirected / Content-Length-less endpoint can't fall through to the multi-GiB backstop and fill the drive.
   describe('size cap (F17)', () => {
     const GiB = 1024 * 1024 * 1024
 
@@ -707,38 +723,16 @@ describe('DownloadManager jobs', () => {
         // download block WITHOUT size_bytes → planOneFile sets sizeBytes:null.
         download: { url: 'https://example.test/x.gguf', sha256: sha256(body), license_url: 'https://example.test/l' }
       })
-      let captured: unknown = 'unset'
-      const mgr = new DownloadManager({
-        downloadImpl: async (_url, dest, deps) => {
-          captured = deps?.maxBytes
-          writeFileSync(dest, body)
-          return { status: 200, received: body.length, contentLength: null }
-        }
-      })
+      downloadCaps.length = 0
+      const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
       const job = await mgr.start({ rootPath: tempRoot(), manifest: m, gates: OPEN })
-      await waitForTerminal(mgr, job.jobId)
-      expect(typeof captured).toBe('number')
-      expect(captured as number).toBeGreaterThan(0)
-      expect(captured as number).toBeLessThan(64 * GiB)
-    })
-
-    it('passes a DRIFT-TOLERANT size-based cap when size_bytes is known (not the razor-thin exact size)', async () => {
-      // BUG dl-size-cap-2026-07-03: the cap must be size_bytes + headroom so a file a little larger than
-      // the DECLARED size still fits — the old exact cap truncated a legitimate download near ~95%.
-      const body = 'exactly-sized-weights'
-      const m = verifiedManifest(body) // size_bytes = body.length
-      let captured: unknown = 'unset'
-      const mgr = new DownloadManager({
-        downloadImpl: async (_url, dest, deps) => {
-          captured = deps?.maxBytes
-          writeFileSync(dest, body)
-          return { status: 200, received: body.length, contentLength: body.length }
-        }
-      })
-      const job = await mgr.start({ rootPath: tempRoot(), manifest: m, gates: OPEN })
-      await waitForTerminal(mgr, job.jobId)
-      expect(typeof captured).toBe('number')
-      expect(captured as number).toBeGreaterThan(body.length) // headroom over the declared size
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('done')
+      expect(downloadCaps).toHaveLength(1)
+      const [cap] = downloadCaps
+      expect(typeof cap).toBe('number')
+      expect(cap as number).toBeGreaterThan(0)
+      expect(cap as number).toBeLessThan(64 * GiB)
     })
 
     it('COMPLETES a fresh download whose real body is larger than the declared size_bytes (regression)', async () => {

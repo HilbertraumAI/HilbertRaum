@@ -4,6 +4,7 @@ import {
   tokenizeForDiff,
   renderRedline,
   renderChangesForModel,
+  isPreciseDiffUseful,
   DEFAULT_MAX_EDITS
 } from '../../src/main/services/diff'
 
@@ -121,6 +122,29 @@ describe('wordDiff — the core cases', () => {
     const g = wordDiff('a x c d', 'a b c d', { context: 1 })!
     expect(f.changes[0].removed).toEqual(g.changes[0].added)
     expect(f.changes[0].added).toEqual(g.changes[0].removed)
+  })
+
+  it('returns null past 20,000 words on EITHER side, and still diffs exactly 20,000 (#682)', () => {
+    // The per-side cap is the contract (the caller falls back to the modes built for large docs), so it is pinned as
+    // a literal. Identical and one-word-apart streams cost Myers almost nothing, so only the bail can return null.
+    const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
+    const atCap = words(20_000)
+    const overCap = words(20_001)
+    expect(wordDiff(atCap, atCap)).not.toBeNull()
+    expect(wordDiff(overCap, overCap)).toBeNull()
+    expect(wordDiff(overCap, atCap)).toBeNull() // the old side alone over the cap
+    expect(wordDiff(atCap, overCap)).toBeNull() // the new side alone over the cap
+  })
+})
+
+describe('isPreciseDiffUseful — the routing bar (#682)', () => {
+  it.each([
+    ['w0 w1 x y', true, { added: 2, removed: 0, equal: 2 }], // 2 changed of 4 = 0.5: AT the bar, the diff drives
+    ['w0 w1 x y z', false, { added: 3, removed: 0, equal: 2 }] // 3 of 5 = 0.6: over it, the thematic modes
+  ])('"w0 w1" → %j: useful = %s', (newText, useful, stats) => {
+    const r = wordDiff('w0 w1', newText)!
+    expect(r.stats).toEqual(stats) // the fixture really sits where the comment says
+    expect(isPreciseDiffUseful(r)).toBe(useful)
   })
 })
 

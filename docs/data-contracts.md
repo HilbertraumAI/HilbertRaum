@@ -633,9 +633,10 @@ head's own weights + KV.
   has exactly one `pageNumber`/`sectionLabel`), global cap at `maxChunks`.
 - **`index.ts`** — lifecycle + persistence. `createQueuedDocument`, `processDocument` (never
   throws: failures → `failed` + `error_message`), `reindexDocument`, `listDocuments`,
-  `getDocument`, `deleteDocument`, `expandPaths`, `documentsDir`. Statuses
-  `queued→extracting→chunking→embedding→indexed` (+`failed`/`deleted`); **`embedding` is a
-  pass-through** until Phase 5 (no vectors written yet).
+  `getDocument`, `deleteDocument`, `expandPathsWithSource` (the async walk the import runs, #274;
+  the synchronous `expandPaths` is the tests' reference walk, #687), `documentsDir`. Statuses
+  `queued→extracting→chunking→embedding→indexed` (+`failed`/`deleted`); `embedding` writes the
+  vectors (Phase 5).
 - **DB:** `documents` (status, `original_path`, `stored_path`, `sha256`, `mime_type`,
   `size_bytes`) + `chunks` (`chunk_index`, `text`, `source_label` = document title,
   `page_number`, `section_label`, `token_count`). `chunkCount` is computed per `listDocuments`.
@@ -1936,10 +1937,11 @@ whole renderer-visible surface.
   Promise<OcrInstallJob>` (`ocr:install` — takes NO payload: the preload sends none, and main
   refuses any argument with `main.ocr.badRequest` without echoing it), `getOcrInstallJob(jobId)`
   (`ocr:getJob`), `cancelOcrInstall(jobId)` (`ocr:cancel`). Types (`shared/types.ts`):
-  `OcrInstallLanguage = { lang, sizeBytes, installed }` (installed = on the drive AND matching the
-  pinned hash); `OcrInstallStatus = { available, languages: OcrInstallLanguage[], totalBytes
-  (the not-installed languages' sizes), sourceHost: string | null (computed in main from the
-  pinned URLs), license (code-side 'Apache-2.0') }`; `OcrInstallJob = { jobId, status:
+  `OcrInstallLanguage = { lang, role, sizeBytes, installed }` (role `'language' | 'orientation'`
+  since #538; installed = on the drive AND matching the pinned hash); `OcrInstallStatus = {
+  available, languages: OcrInstallLanguage[], totalBytes (the not-installed languages' sizes),
+  sourceHost: string | null (computed in main from the pinned URLs), license (code-side
+  'Apache-2.0') }`; `OcrInstallJob = { jobId, status:
   queued|downloading|verifying|activating|done|failed|cancelled, receivedBytes, totalBytes,
   outcome: OcrRefreshOutcome | null, error: string | null }` — session-only, never persisted;
   `outcome` is set on `done`, which the job reaches only after the engine slot was refreshed.

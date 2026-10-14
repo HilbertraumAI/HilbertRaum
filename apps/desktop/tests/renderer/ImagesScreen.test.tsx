@@ -5,7 +5,6 @@ import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { resetVisionSessionForTests } from '../../src/renderer/lib/visionSession'
-import { __turnRowRenderCounts } from '../../src/renderer/images'
 import type { DecodedImage, DecodeImage } from '../../src/renderer/images'
 import type {
   ImageJob,
@@ -17,6 +16,14 @@ import type {
 import type { PreloadApi } from '../../src/preload'
 import { stubApi } from '../helpers/renderer'
 import { t } from '../../src/shared/i18n'
+
+// PF-7c: count TurnRow renders test-side — production's memo object, inner component wrapped (no src seam).
+const turnRenders = vi.hoisted(() => new Map<string, number>())
+vi.mock('../../src/renderer/images/TurnRow', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../src/renderer/images/TurnRow')>()
+  const { countMemoRenders } = await import('../helpers/render-counter')
+  return { ...m, TurnRow: countMemoRenders(m.TurnRow, (p) => p.turn.id, turnRenders) }
+})
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
 // (no `as never` erasure). The status/history builders return the real shared types, and
@@ -415,12 +422,12 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
     await waitFor(() => expect(s.token.fn).toBeDefined())
     await act(async () => s.token.fn?.('One'))
     await screen.findByText(/One/)
-    const before = new Map(__turnRowRenderCounts)
+    const before = new Map(turnRenders)
 
     await act(async () => s.token.fn?.(' two'))
     await screen.findByText(/One two/)
     const delta = (id: string): number =>
-      (__turnRowRenderCounts.get(id) ?? 0) - (before.get(id) ?? 0)
+      (turnRenders.get(id) ?? 0) - (before.get(id) ?? 0)
     expect(delta('img-turn-1')).toBe(0) // the settled row's memo held through the flush
     expect(delta('img-turn-2')).toBeGreaterThan(0) // the streaming row is the only one updating
   })

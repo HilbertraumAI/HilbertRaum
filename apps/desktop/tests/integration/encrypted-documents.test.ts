@@ -192,7 +192,7 @@ describe('concurrent reads of one encrypted copy (DB-2 / DB-7)', () => {
     expect(plaintextLeaks(store)).toEqual([])
   })
 
-  it('DB-7: concurrent text exports decrypt asynchronously (never the sync decryptFile) into distinct transients and return the plaintext', async () => {
+  it('DB-7: concurrent text exports decrypt into distinct transients and return the plaintext', async () => {
     const db = freshDb()
     const store = freshStore()
     const rec = recordingCipher({ beforeDecryptAsync: hop })
@@ -205,7 +205,6 @@ describe('concurrent reads of one encrypted copy (DB-2 / DB-7)', () => {
     ])
     expect(a.text).toBe(SECRET_TEXT)
     expect(b.text).toBe(SECRET_TEXT)
-    expect(rec.syncDecrypts).toBe(0) // TEETH (PERF-1): the sync decryptFile blocks the main process
     const dests = rec.asyncDecrypts.slice(before)
     expect(dests).toHaveLength(2)
     expect(new Set(dests).size).toBe(2)
@@ -225,7 +224,7 @@ describe('WorkspaceController.documentCipher()', () => {
     return { vp: vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') }) }
   }
 
-  it('is null while locked; round-trips files when unlocked', () => {
+  it('is null while locked; round-trips files when unlocked', async () => {
     const { vp } = freshVaultRoot()
     createEncryptedVaultOnDisk(vp, 'password', FAST_KDF)
     const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
@@ -240,9 +239,9 @@ describe('WorkspaceController.documentCipher()', () => {
     writeFileSync(plain, SECRET_TEXT)
     const enc = join(srcDir, 'note.txt.enc')
     const back = join(srcDir, 'note-back.txt')
-    cipher!.encryptFile(plain, enc)
+    await cipher!.encryptFileAsync(plain, enc)
     expect(readFileSync(enc).includes(Buffer.from(SECRET_TEXT))).toBe(false)
-    cipher!.decryptFile(enc, back)
+    await cipher!.decryptFileAsync(enc, back)
     expect(readFileSync(back, 'utf8')).toBe(SECRET_TEXT)
     ctl.lock()
   })

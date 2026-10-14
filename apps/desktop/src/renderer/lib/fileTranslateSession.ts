@@ -1,7 +1,7 @@
-import type { DocTaskGaps, TranslationSourceLang, TranslationTargetLang } from '@shared/types'
+import type { DocTaskGaps } from '@shared/types'
 import { getActiveDocTask, isDocTaskTerminal } from './doctasks'
 import { friendlyIpcError } from './errors'
-import { clearTranslateSession, getTranslateSession, setLastTranslateChoice } from './translateSession'
+import { clearTranslateSession, getTranslateSession, setLastTranslateChoice, type TranslateChoice } from './translateSession'
 
 // Renderer-side store for the SINGLE active DOCUMENT translation in the Translate view (TG-5,
 // plan §2 D7). A dropped or picked document rides the EXISTING translation doc-task — it is NOT
@@ -206,7 +206,6 @@ export function getFileTranslate(): FileTranslateSnapshot {
   return snapshot
 }
 
-type Choice = { sourceLang: TranslationSourceLang; targetLang: TranslationTargetLang }
 
 /** Shared start guard: refuse while this store is busy, a live TEXT translation streams, or a
  *  foreign doc task holds the lane (D9). The screen's `busy` prop already disables the triggers;
@@ -229,7 +228,7 @@ function guardStart(): FileTranslateOutcome | null {
  * Translate a DROPPED document. Rejects a multi-drop and resolves the single file's on-disk path
  * via the preload `getDroppedFilePath` bridge (a browser-origin drag with no path resolves to '').
  */
-export async function translateDroppedFiles(files: File[], choice: Choice): Promise<FileTranslateOutcome> {
+export async function translateDroppedFiles(files: File[], choice: TranslateChoice): Promise<FileTranslateOutcome> {
   // #162 (FE-2): store-level same-language defense (the screen guards + disables first — this
   // keeps the invariant if a drop slips through): never burn a full import on a pair the
   // backend is guaranteed to reject after it.
@@ -253,7 +252,7 @@ export async function translateDroppedFiles(files: File[], choice: Choice): Prom
  * Translate a PICKED document (the WCAG 2.5.7 non-drag path). `pickDocuments` returns a one-time
  * capability token main resolves to the exact picked paths (D1) — passed back as `pickerToken`.
  */
-export async function translatePickedFile(choice: Choice): Promise<FileTranslateOutcome> {
+export async function translatePickedFile(choice: TranslateChoice): Promise<FileTranslateOutcome> {
   // #162 (FE-2) — see translateDroppedFiles.
   if (choice.sourceLang === choice.targetLang) return 'noop'
   const blocked = guardStart()
@@ -285,7 +284,7 @@ export async function translatePickedFile(choice: Choice): Promise<FileTranslate
  * Import the source as a TEMPORARY document, then (on ingestion) start the translation doc-task.
  * A drop has no picker token (main hardens the raw paths); a pick passes its token.
  */
-async function runImport(paths: string[], token: string | undefined, choice: Choice): Promise<FileTranslateOutcome> {
+async function runImport(paths: string[], token: string | undefined, choice: TranslateChoice): Promise<FileTranslateOutcome> {
   const myGen = ++gen
   stopPolling()
   setLastTranslateChoice(choice.sourceLang, choice.targetLang) // shared last-choice memory (text + file)
@@ -392,7 +391,7 @@ async function resolveImportFailure(docId: string, myGen: number): Promise<void>
 }
 
 /** Start the translation doc-task over the ingested temporary document, then poll it to completion. */
-async function startTranslationTask(docId: string, choice: Choice, myGen: number): Promise<void> {
+async function startTranslationTask(docId: string, choice: TranslateChoice, myGen: number): Promise<void> {
   if (myGen !== gen) return
   let started
   try {

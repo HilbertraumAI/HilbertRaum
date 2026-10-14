@@ -167,7 +167,8 @@ function treeLevelsOf(meta: string | null): number | undefined {
 /**
  * Compute the honest coverage of a document's CURRENT summary (whole-document-analysis plan
  * §4.5). The summary (when present) decides tree-vs-capped: a deep-index summary is served
- * by `runSummary` with `truncated:false` + a `tier`, so:
+ * by `runSummary` with `truncated:false` + a `tier` (a Tier 3 whose final reduce cut its batches is
+ * `truncated:true` instead, #682, and reads as the capped "covers the beginning" below), so:
  *   - tree `ready` + an untruncated summary ⇒ mode `tree`, whole-document coverage at `tier`;
  *   - a tree mid-build/stale/pending ⇒ mode `tree`, the PARTIAL reachable fraction (never
  *     100% — C1), so a meter rendered against it can't claim completeness;

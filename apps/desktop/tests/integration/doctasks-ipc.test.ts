@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Phase 33 IPC-layer tests: the doctasks:start/get/cancel glue (the cancel routing), the D26 guard
@@ -30,10 +31,11 @@ import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
 import { registerDocTasksIpc } from '../../src/main/ipc/registerDocTasksIpc'
-import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { inFlightStreams, isChatStreaming } from '../../src/main/ipc/inflight'
+import { TASK_REFUSED_CHAT_STREAMING_MESSAGE } from '../../src/main/services/doctasks'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, until } from '../helpers/hang-budget'
 import {
   docTaskManager,
   docTaskRuntime,
@@ -82,7 +84,8 @@ async function makeHarness(): Promise<Harness> {
     manifestsDir: null,
     isDev: true
   } as unknown as AppContext
-  ctx.docTasks = docTaskManager(w, { getRuntime: () => runtime, getIngestionDeps: () => ({ embedder }) })
+  // `isChatStreaming` is the production predicate `main/index.ts` passes (#682), never a harness copy.
+  ctx.docTasks = docTaskManager(w, { getRuntime: () => runtime, getIngestionDeps: () => ({ embedder }), isChatStreaming })
 
   registerChatIpc(ctx)
   registerRagIpc(ctx)
@@ -154,6 +157,25 @@ describe('strict one-at-a-time vs chat (D26)', () => {
       await pollTerminal(jobId)
     }
   )
+
+  // The inverse guard over the real wiring (#682): a chat answer streaming through `chat:send` registers in the
+  // stream registry the shared predicate reads, so a task is refused until the answer ends, then admitted.
+  it('a task refuses to start while a chat answer streams and starts once it has ended', async () => {
+    const h = await makeHarness()
+    const conv = (await invoke(handlers, IPC.createConversation, { mode: 'chat' })).result as Conversation
+    const answer = invoke(handlers, IPC.sendChatMessage, conv.id, 'hello') // parked on the runtime gate
+    // Wait on the chat lane's own registry, so a broken predicate fails the refusal below, not this wait.
+    await until(() => inFlightStreams.size > 0, 'the chat answer registering its stream')
+    await expect(invoke(handlers, IPC.startDocTask, { kind: 'summary', documentIds: [h.docId] })).rejects.toThrow(
+      TASK_REFUSED_CHAT_STREAMING_MESSAGE
+    )
+    h.releaseGate()
+    await answer
+    expect(inFlightStreams.size).toBe(0)
+    const { jobId } = (await invoke(handlers, IPC.startDocTask, { kind: 'summary', documentIds: [h.docId] }))
+      .result as { jobId: string }
+    expect((await pollTerminal(jobId)).state).toBe('done')
+  })
 })
 
 describe('busy-document guard (re-index / delete during a task)', () => {
@@ -161,7 +183,7 @@ describe('busy-document guard (re-index / delete during a task)', () => {
     { kind: 'summary' as const, sources: (h: Harness) => [h.docId], newDocument: false },
     { kind: 'compare' as const, sources: (h: Harness) => [h.docId, h.docIdB], newDocument: true }
   ])(
-    'a running $kind task blocks re-index and delete of every source, never preview, and ends done over the polling contract',
+    'a running $kind task blocks re-index, delete and original export of every source, never preview, and ends done over the polling contract',
     async ({ kind, sources, newDocument }) => {
       const h = await makeHarness()
       const ids = sources(h)
@@ -171,6 +193,8 @@ describe('busy-document guard (re-index / delete during a task)', () => {
       for (const id of ids) {
         await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/task is running for this document/i)
         await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/task is running for this document/i)
+        // #682: the original export takes the same task gate (it reads the stored copy a re-index rewrites).
+        await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(/task is running for this document/i)
         // Negative control (was docs-ipc T-3): preview only reads the stored copy, so it consults the processing
         // gate, never the task gate — it still resolves with content while the task runs.
         const preview = (await invoke(handlers, IPC.previewDocument, id)).result as DocumentPreview
@@ -188,7 +212,26 @@ describe('busy-document guard (re-index / delete during a task)', () => {
         expect(status.resultRef).toEqual({ documentId: h.docId })
       }
       // After the task finished the operations work again.
-      for (const id of ids) await expect(invoke(handlers, IPC.reindexDocument, id)).resolves.toBeTruthy()
+      for (const id of ids) {
+        await expect(invoke(handlers, IPC.reindexDocument, id)).resolves.toBeTruthy()
+        // The save dialog is cancelled in this file's electron mock: an admitted export resolves null.
+        expect((await invoke(handlers, IPC.exportDocumentOriginal, id)).result).toBeNull()
+      }
     }
   )
+})
+
+// #682: `main/index.ts` is composition with no unit harness, so its one-word pass of the shared predicate is pinned by
+// source text (precedent: the #410 pin in compose-ocr.test.ts); the inverse-guard row above runs on that same predicate.
+describe('#682 wiring pin: main/index.ts hands the doc-task manager the shared chat predicate', () => {
+  it('the DocTaskManager deps pass isChatStreaming from ipc/inflight, not a local copy', () => {
+    const src = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
+    const start = src.indexOf('new DocTaskManager({')
+    expect(start).toBeGreaterThanOrEqual(0)
+    const end = src.indexOf('\n  })\n', start)
+    expect(end).toBeGreaterThan(start) // the constructor's closer, so the block cannot run on into the rest of the file
+    const block = src.slice(start, end)
+    expect(src).toMatch(/import \{[^}]*\bisChatStreaming\b[^}]*\} from '\.\/ipc\/inflight'/)
+    expect(block).toMatch(/^\s*isChatStreaming,$/m)
+  })
 })

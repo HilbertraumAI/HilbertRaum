@@ -1,19 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
+import type { Db } from '../../src/main/services/db'
+import { PDF_SCAN_DETECTED_MESSAGE, PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
 import { extractStatementBalances, extractTransactionRows } from '../../src/main/services/skills/tools/bank-statement'
 import {
   BANK_STATEMENT_INSTALL_ID,
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
-import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
-import { makeColumnarPdf, type PdfCell } from '../helpers/fixtures'
+import type { SkillAnalysisResult } from '../../src/main/services/skills/analysis/types'
+import { makeColumnarPdfPages, makeScanOnlyPdf, type PdfCell } from '../helpers/fixtures'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { seedLineChunkDoc } from '../helpers/doc-fixtures'
+import { makeAnalysisCtx } from '../helpers/skill-contexts'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import type { AuditEventType, DocumentChunkRead, RetrievalScope } from '../../src/shared/types'
+import type { DocumentChunkRead } from '../../src/shared/types'
 
 // PDF geometry-extraction plan §3.1/§6, Stage 1 — the WHOLE deterministic path end-to-end on a real
 // synthetic PDF: a COLUMNAR German statement (the HVB failure shape) whose per-row dates are BARE
@@ -65,63 +66,47 @@ function statementCells(closing: string): PdfCell[] {
   return cells
 }
 
-function writePdf(cells: PdfCell[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-pdflayout-'))
-  const path = join(dir, 'statement.pdf')
-  writeFileSync(path, makeColumnarPdf(cells))
+/** Write a columnar statement PDF, one page per argument. */
+function writePdf(...pages: PdfCell[][]): string {
+  const path = join(tempRoot('pdflayout'), 'statement.pdf')
+  writeFileSync(path, makeColumnarPdfPages(pages))
   return path
 }
 
+// One parse per (file, mode): a row's own read and the handler's `readDocumentSegments` share it. The mode
+// is part of the key, so a handler that stopped asking for layout would get the TEXT-mode parse (no rows).
+// Every read gets fresh segment objects, as production's re-parse would give it.
+const parsed = new Map<string, Promise<DocumentChunkRead[]>>()
 async function parseSegments(pdfPath: string, layout: boolean): Promise<DocumentChunkRead[]> {
-  const parsed = await PdfParser.parse(pdfPath, { layout, maxPages: 5000 })
-  return parsed.segments.map((s, index) => ({ text: s.text, page: s.pageNumber ?? null, index }))
-}
-
-function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-pdflayout-db-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
-
-/** Seed the document + one chunk per segment line (citations/coverage read the chunks table). */
-function seedDoc(db: Db, segments: DocumentChunkRead[]): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
-     VALUES (?, 'statement.pdf', 'indexed', 'application/pdf', ?, ?, ?)`
-  ).run(docId, now, now, now)
-  let idx = 0
-  for (const seg of segments) {
-    for (const line of seg.text.split('\n')) {
-      db.prepare(
-        `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-         VALUES (?, ?, ?, ?, 'statement.pdf', 1, ?)`
-      ).run(randomUUID(), docId, idx++, line, now)
-    }
+  const key = `${layout ? 'layout' : 'text'}:${pdfPath}`
+  let segments = parsed.get(key)
+  if (!segments) {
+    segments = PdfParser.parse(pdfPath, { layout, maxPages: 5000 }).then((p) =>
+      p.segments.map((s, index) => ({ text: s.text, page: s.pageNumber ?? null, index }))
+    )
+    parsed.set(key, segments)
   }
-  return docId
+  return (await segments).map((s) => ({ ...s }))
 }
 
-function ctxFor(
-  db: Db,
-  docId: string,
-  question: string,
-  pdfPath: string
-): SkillAnalysisContext & { events: Array<{ type: AuditEventType; meta?: Record<string, unknown> }> } {
-  const events: Array<{ type: AuditEventType; meta?: Record<string, unknown> }> = []
-  const scope: RetrievalScope = { documentIds: [docId] }
-  return {
-    db,
-    scope,
-    question,
-    skillInstallId: BANK_STATEMENT_INSTALL_ID,
-    conversationId: null,
-    audit: (type, meta) => events.push({ type, meta }),
-    tr,
-    // The bank handler sets `layout: true`, which arrives here as opts.layout (proves the wiring).
-    readDocumentSegments: (_id, opts) => parseSegments(pdfPath, opts?.layout === true),
-    events
-  }
+/**
+ * The bank analysis handler over `pdfPath`, seeded as an indexed document with one chunk per layout line
+ * (citations and coverage read the chunks table). The handler re-reads the PDF through
+ * `readDocumentSegments`, asking for `layout: true` (which proves the wiring), and runs no model.
+ */
+async function analyse(
+  pdfPath: string,
+  question: string
+): Promise<{ res: SkillAnalysisResult; db: Db; docId: string; toolNames: unknown[] }> {
+  const lines = (await parseSegments(pdfPath, true)).flatMap((s) => s.text.split('\n'))
+  const db = openFreshDb('pdflayout')
+  const docId = seedLineChunkDoc(db, lines, { title: 'statement.pdf', fullyChunked: true })
+  const ctx = makeAnalysisCtx(db, { documentIds: [docId] }, question, { skillInstallId: BANK_STATEMENT_INSTALL_ID })
+  const res = await bankStatementAnalysisHandler.run!({
+    ...ctx,
+    readDocumentSegments: (_id, opts) => parseSegments(pdfPath, opts?.layout === true)
+  })
+  return { res, db, docId, toolNames: ctx.events.map((e) => e.meta?.toolName) }
 }
 
 describe('PDF layout mode — geometry reconstruction recovers the columnar statement', () => {
@@ -146,13 +131,8 @@ describe('PDF layout mode — geometry reconstruction recovers the columnar stat
   })
 
   it('full analysis: non-empty rows, the correct total, honest coverage, citations, 0 model calls', async () => {
-    const pdfPath = writePdf(statementCells('2.000,00')) // opening 1000 + Σ 1000 == closing 2000 (ties)
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const ctx = ctxFor(db, docId, 'summarize the cashflow', pdfPath)
-
-    const res = await bankStatementAnalysisHandler.run!(ctx)
+    // opening 1000 + Σ 1000 == closing 2000 (ties)
+    const { res, toolNames } = await analyse(writePdf(statementCells('2.000,00')), 'summarize the cashflow')
 
     // 3 transactions, a presented total (the gate proved completeness), correct figures.
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
@@ -166,7 +146,6 @@ describe('PDF layout mode — geometry reconstruction recovers the columnar stat
     expect(res.citations.length).toBeGreaterThan(0)
 
     // ZERO model calls: only the deterministic read-only tools ran (no runtime exists in this test).
-    const toolNames = ctx.events.map((e) => e.meta?.toolName)
     expect(toolNames).toContain('extract_transactions')
     expect(toolNames).toContain('summarize_cashflow')
     expect(toolNames).not.toContain('export_transactions_csv')
@@ -174,11 +153,7 @@ describe('PDF layout mode — geometry reconstruction recovers the columnar stat
 
   it('partial/mis-read fixture: a non-tying closing balance MUST downgrade (no total — D56)', async () => {
     // Same rows, but the printed Endsaldo is wrong (9.999,99) → completeness cannot be proven.
-    const pdfPath = writePdf(statementCells('9.999,99'))
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    const { res } = await analyse(writePdf(statementCells('9.999,99')), 'what is the total?')
 
     // U1 (audit §2.3): a CONTRADICTED statement no longer claims "across the whole statement" over a body
     // that refuses a total — the count line is gated to the honest contradicted headline.
@@ -199,7 +174,7 @@ describe('PDF layout mode — geometry reconstruction recovers the columnar stat
 // lines, were both mis-parsed as transactions too. So 26 real rows became 43 and the gate could not
 // present a total. The fix: only a date in the booking-DATE column qualifies a row, and a `Kontostand
 // per` line is read by the balance gate. This pins the layout so it can't silently regress. SYNTHETIC
-// (`makeColumnarPdf`), never a real statement (D57).
+// (`makeColumnarPdfPages`), never a real statement (D57).
 describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per regression (column model)', () => {
   // Columns: Datum | Valuta | Buchungstext | Betrag | Saldo. The opening/closing `Kontostand per <date>`
   // lines are rendered as pseudo-rows with the date IN the Datum column (the real Raiffeisen geometry),
@@ -259,7 +234,8 @@ describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per
   }
 
   it('extracts ONLY the real booking rows — no spurious Valuta/FX or Kontostand-per rows', async () => {
-    const layoutRows = extractTransactionRows(await parseSegments(writePdf(raiffeisenCells('30.647,07')), true), 'EUR')
+    const segments = await parseSegments(writePdf(raiffeisenCells('30.647,07')), true)
+    const layoutRows = extractTransactionRows(segments, 'EUR')
 
     // Exactly the three real transactions — the ~spurious second-baseline rows are gone.
     expect(layoutRows).toHaveLength(3)
@@ -270,25 +246,16 @@ describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per
       expect(layoutRows.map((r) => r.amount)).not.toContain(fx)
     }
     // The balances were read from the `Kontostand per` lines, not turned into transactions.
-    const balances = extractStatementBalances(
-      (await parseSegments(writePdf(raiffeisenCells('30.647,07')), true)).map((s) => ({
-        text: s.text,
-        page: s.page,
-        index: 0
-      }))
-    )
+    const balances = extractStatementBalances(segments)
     expect(balances.openingBalance).toBeCloseTo(35037.04, 2)
     expect(balances.closingBalance).toBeCloseTo(30647.07, 2)
   })
 
   it('full analysis: the gate PASSES and presents the correct total (figures tie out)', async () => {
-    const pdfPath = writePdf(raiffeisenCells('30.647,07'))
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const ctx = ctxFor(db, docId, 'summarize the cashflow and the total', pdfPath)
-
-    const res = await bankStatementAnalysisHandler.run!(ctx)
+    const { res, db, docId, toolNames } = await analyse(
+      writePdf(raiffeisenCells('30.647,07')),
+      'summarize the cashflow and the total'
+    )
 
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain('Net change')
@@ -309,17 +276,12 @@ describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per
     expect(stmt.closing).toBeCloseTo(30647.07, 2)
 
     // Still zero model calls — the deterministic read-only tools only.
-    const toolNames = ctx.events.map((e) => e.meta?.toolName)
     expect(toolNames).toContain('extract_transactions')
     expect(toolNames).not.toContain('export_transactions_csv')
   })
 
   it('a non-tying Kontostand-per closing still downgrades (no total — D56 holds with the new label)', async () => {
-    const pdfPath = writePdf(raiffeisenCells('9.999,99'))
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    const { res } = await analyse(writePdf(raiffeisenCells('9.999,99')), 'what is the total?')
 
     // U1 (audit §2.3): a CONTRADICTED statement no longer claims "across the whole statement" over a body
     // that refuses a total — the count line is gated to the honest contradicted headline.
@@ -336,7 +298,7 @@ describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per
 // handle but those two don't: ENGLISH opening/closing labels on the gate-PASS path, an ENGLISH
 // value-date column on a second baseline (the column-model rejection in English), the honest gate
 // DOWNGRADE for a running-balance-only statement with NO printed opening/closing (in English), and a
-// multi-line wrapped description row (the booking row must still extract cleanly). All `makeColumnarPdf`.
+// multi-line wrapped description row (the booking row must still extract cleanly). All `makeColumnarPdfPages`.
 describe('PDF layout mode — synthetic breadth (English labels, EN value-date, EN downgrade, wrapped desc)', () => {
   // (a) English opening/closing labels that tie out → the gate PRESENTS the total, in English.
   it('English Balance brought/carried forward that ties out → gate presents the total (EN)', async () => {
@@ -371,11 +333,7 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
     // Closing label ties out: opening 1000 + Σ(2000−800−200=1000) == 2000.
     cells.push({ text: 'Balance carried forward', x: EC.desc, y }, { text: '2,000.00', x: EC.amount, y })
 
-    const pdfPath = writePdf(cells)
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    const { res } = await analyse(writePdf(cells), 'what is the total?')
 
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain('Net change') // the English totals line is presented
@@ -458,11 +416,7 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
       y -= 20
     }
 
-    const pdfPath = writePdf(cells)
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total spending?', pdfPath))
+    const { res } = await analyse(writePdf(cells), 'what is the total spending?')
 
     // The rows are read; with no opening/closing balance to tie against, completeness is unverifiable —
     // but nothing CONTRADICTS the read, so the figures are presented under the honest unverified caveat.
@@ -545,15 +499,12 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
     expect(wholeRows[0]).toMatchObject({ date: '2024-01-05', amount: 2000 })
 
     // Failure: the SPLIT amount yields NO transaction row (the fragments aren’t money) …
-    const splitRows = extractTransactionRows(await parseSegments(writePdf(splitAmountCells(true)), true), 'EUR')
+    const splitPdf = writePdf(splitAmountCells(true))
+    const splitRows = extractTransactionRows(await parseSegments(splitPdf, true), 'EUR')
     expect(splitRows).toHaveLength(0)
 
     // … and end-to-end the handler degrades safely: an empty extraction, never a confident total.
-    const pdfPath = writePdf(splitAmountCells(true))
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    const { res } = await analyse(splitPdf, 'what is the total?')
     expect(res.answer).not.toContain('Net change')
     const safe =
       res.answer.includes(tr('skills.bankAnalysis.empty')) ||
@@ -570,7 +521,7 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
 // real TextItem distribution can pass `npm test` (M3's "a fixture can be green while a real statement
 // fails"). The local-only gold set is the real-distribution gate, but it runs off-CI; these fixtures
 // drive the SAME messiness through the real pdf.js path so the documented boundaries are pinned IN CI.
-// All are SYNTHETIC `makeColumnarPdf` — never a real statement (D57). None presents a wrong total: each
+// All are SYNTHETIC `makeColumnarPdfPages` — never a real statement (D57). None presents a wrong total: each
 // either reconstructs correctly or degrades to the honest gate downgrade (the cardinal D56 property).
 describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3)', () => {
   // (f) Sub-tolerance baseline JITTER: a real producer rarely emits a row's cells on a pixel-identical
@@ -610,14 +561,11 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     cells.push({ text: 'Endsaldo', x: JC.date, y: 675 }, { text: '3.000,00', x: JC.amount, y: 675 })
 
     // The booking row lost its amount → no transaction extracted.
-    const rows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    const pdfPath = writePdf(cells)
+    const rows = extractTransactionRows(await parseSegments(pdfPath, true), 'EUR')
     expect(rows).toHaveLength(0)
     // End-to-end the handler degrades safely (empty/incomplete), never a confident total.
-    const pdfPath = writePdf(cells)
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    const { res } = await analyse(pdfPath, 'what is the total?')
     expect(res.answer).not.toContain('Net change')
     const safe =
       res.answer.includes(tr('skills.bankAnalysis.empty')) ||
@@ -627,45 +575,47 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
 
   // (h) TIGHT column gap: when the Datum and Valuta columns sit < DEFAULT_COLUMN_GAP (12 pt) apart,
   //     detectDatumColumn merges them into ONE band, so a Valuta-only second-baseline row (its date now
-  //     INSIDE the merged band) + an FX reference amount qualifies as a spurious transaction. This is the
-  //     unit-pinned boundary driven END-TO-END through real pdf.js: over-extraction occurs, but the gate
-  //     (no printed opening/closing here) downgrades — never a wrong total.
-  it('tight Datum/Valuta gap merges columns → over-extraction, but the gate downgrades (no total)', async () => {
-    const TC = { date: 50, valuta: 58, desc: 170, amount: 440 } // gap 8 < 12 → columns merge
-    const cells: PdfCell[] = [{ text: 'Kontoauszug 2024 in EUR', x: 50, y: 760 }]
-    const rows = [
-      { d: '05.04.', desc: 'Gehalt ACME', amt: '1.000,00', v: '07.04.', cont: 'FX-Referenz 39,00 USD' },
-      { d: '12.04.', desc: 'Miete', amt: '-500,00', v: '14.04.', cont: 'Referenz 12,50 CHF' }
-    ]
-    let y = 720
-    for (const r of rows) {
-      cells.push(
-        { text: r.d, x: TC.date, y },
-        { text: r.desc, x: TC.desc, y },
-        { text: r.amt, x: TC.amount, y }
-      )
-      // Second baseline: Valuta date (x=58, now INSIDE the merged band) + an FX reference amount.
-      cells.push({ text: r.v, x: TC.valuta, y: y - 14 }, { text: r.cont, x: TC.desc, y: y - 14 })
-      y -= 34
+  //     INSIDE the merged band) + a reference amount qualifies as a spurious transaction. This is the
+  //     unit-pinned boundary driven END-TO-END through real pdf.js, and the completeness gate keeps it safe:
+  //     the printed opening/closing tie over the REAL rows only, so the phantom rows contradict them and the
+  //     total is refused. The reference amounts carry no currency code (#687): a foreign code would make
+  //     the statement mixed-currency, and that guard (pinned in skills-analysis-bank) refuses first, so the
+  //     gate this row is about would never run.
+  it('tight Datum/Valuta gap merges columns → over-extraction, and the completeness gate refuses the total', async () => {
+    function tightGapCells(valutaX: number): PdfCell[] {
+      const TC = { date: 50, desc: 170, amount: 440 }
+      const cells: PdfCell[] = [{ text: 'Kontoauszug 2024 in EUR', x: 50, y: 760 }]
+      // Printed opening/closing that tie over the two REAL rows only: 1000 + (1000 − 500) == 1500.
+      cells.push({ text: 'Anfangssaldo', x: TC.date, y: 740 }, { text: '1.000,00', x: TC.amount, y: 740 })
+      const rows = [
+        { d: '05.04.', desc: 'Gehalt ACME', amt: '1.000,00', v: '07.04.', cont: 'FX-Referenz 39,00' },
+        { d: '12.04.', desc: 'Miete', amt: '-500,00', v: '14.04.', cont: 'Referenz 12,50' }
+      ]
+      let y = 720
+      for (const r of rows) {
+        cells.push({ text: r.d, x: TC.date, y }, { text: r.desc, x: TC.desc, y }, { text: r.amt, x: TC.amount, y })
+        // Second baseline: the Valuta date + a reference amount in the statement's own currency.
+        cells.push({ text: r.v, x: valutaX, y: y - 14 }, { text: r.cont, x: TC.desc, y: y - 14 })
+        y -= 34
+      }
+      cells.push({ text: 'Endsaldo', x: TC.date, y }, { text: '1.500,00', x: TC.amount, y })
+      return cells
     }
 
-    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
-    // The merged band lets each Valuta row through as a spurious FX transaction (2 real + 2 phantom).
-    expect(layoutRows.length).toBeGreaterThan(2)
-    // SAFETY: no printed opening/closing → the gate cannot prove completeness → honest downgrade.
-    const pdfPath = writePdf(cells)
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    // Valuta at x=58, 8 pt from the Datum column (< 12): the merged band lets both Valuta rows through.
+    const tight = writePdf(tightGapCells(58))
+    const layoutRows = extractTransactionRows(await parseSegments(tight, true), 'EUR')
+    expect(layoutRows.map((r) => r.amount)).toEqual([1000, 39, -500, 12.5])
+    // 1000 + 551,50 ≠ 1500: the rows contradict the printed balances → the honest refusal, no total.
+    const { res } = await analyse(tight, 'what is the total?')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.countContradicted', { count: 4 }))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
     expect(res.answer).not.toContain('Net change')
-    // The FX continuation amounts carry foreign currencies, so this downgrades via the mixed-currency
-    // path rather than the completeness gate — still a SAFE downgrade (no single total presented).
-    const safe =
-      res.answer.includes(tr('skills.bankAnalysis.incompleteNoTotal')) ||
-      res.answer.includes(tr('skills.bankAnalysis.noCurrency')) ||
-      res.answer.includes(tr('skills.bankAnalysis.empty'))
-    expect(safe).toBe(true)
+
+    // Control: the same statement with the Valuta column at x=110 (no merge) reads the 2 real rows, which tie.
+    const { res: wide } = await analyse(writePdf(tightGapCells(110)), 'what is the total?')
+    expect(wide.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    expect(wide.answer).toContain('Net change')
   })
 
   // (i) SHARED-COLUMN running-balance rows — the gold-set HVB "Umsätze" shape, the original motivating
@@ -708,18 +658,15 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     }
     cells.push({ text: 'Endsaldo', x: HC.date, y }, { text: '2.000,00', x: HC.amount, y })
 
-    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    const pdfPath = writePdf(cells)
+    const layoutRows = extractTransactionRows(await parseSegments(pdfPath, true), 'EUR')
     // No over-extraction: exactly the 3 genuine rows; the bare-currency balance rows are dropped.
     expect(layoutRows).toHaveLength(3)
     expect(layoutRows.some((r) => r.description === 'EUR')).toBe(false)
     expect(layoutRows.map((r) => r.amount)).toEqual([2000, -800, -200])
 
     // The surviving genuine rows tie out against the printed opening/closing → the gate presents the total.
-    const pdfPath = writePdf(cells)
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    const { res } = await analyse(pdfPath, 'what is the total?')
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain('Net change')
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
@@ -731,7 +678,7 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
   //     booking fragment (`… EUR …`, payee lost, the Lastschrift shown POSITIVE). Now: the currency code
   //     is kept out of the description (A2), the payee continuation is merged in (A1), and the sign-column
   //     marker is folded into the amount (A3) — so a debit reads negative. No printed opening/closing →
-  //     the honest `unverified` labelled sum (D56-R). SYNTHETIC (`makeColumnarPdf`), never real (D57).
+  //     the honest `unverified` labelled sum (D56-R). SYNTHETIC (`makeColumnarPdfPages`), never real (D57).
   it('recovers payees from continuation baselines, strips EUR, and signs a Lastschrift negative', async () => {
     const UC = { date: 50, type: 140, cur: 300, amount: 470, sign: 512, desc: 140 }
     const cells: PdfCell[] = [{ text: 'Kontoumsaetze 2025 - alle Betraege in EUR', x: 50, y: 760 }]
@@ -755,7 +702,8 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
       y -= 30
     }
 
-    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    const pdfPath = writePdf(cells)
+    const layoutRows = extractTransactionRows(await parseSegments(pdfPath, true), 'EUR')
     expect(layoutRows).toHaveLength(3)
     // Payees recovered, "EUR" gone from the description, the two Lastschriften negative, the credit positive.
     expect(layoutRows[0]).toMatchObject({ date: '2025-01-14', amount: -3.99, currency: 'EUR' })
@@ -767,12 +715,68 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     expect(layoutRows[2].description).toContain('Arbeitgeber')
 
     // No printed opening/closing → the honest unverified labelled sum (not a refusal, not a verified total).
-    const pdfPath = writePdf(cells)
-    const segments = await parseSegments(pdfPath, true)
-    const db = freshDb()
-    const docId = seedDoc(db, segments)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'summarize spending by category', pdfPath))
+    const { res } = await analyse(pdfPath, 'summarize spending by category')
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
     expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 3 }))
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// The layout page loop in `PdfParser` itself (#687): two pdf.ts contracts no single-page fixture reaches.
+// (1) A multi-page statement prints its period only on page 1, so the parser carries that page's year AND
+// anchor month on to later pages. Asserted on the parser's SEGMENT text, not extracted rows: the
+// extractor completes bare dates from its own document-level anchor, which would mask a missing carry.
+// (2) Scan detection is judged on the RAW text layer, so a text page whose rows all reconstruct to nothing
+// is not mistaken for an image-only scan (docs/architecture.md §21, the D51/D58 wiring note).
+describe('PdfParser layout mode — the page loop (multi-page carry, raw-text scan detection)', () => {
+  it('carries page 1’s year and period month to a later page: a bare December row rolls back a year', async () => {
+    const pdfPath = writePdf(
+      [
+        { text: 'Kontoauszug Zeitraum 05.01.2026 - 31.01.2026', x: 50, y: 750 },
+        { text: '05.01.', x: 50, y: 700 },
+        { text: 'Gehalt', x: 160, y: 700 },
+        { text: '2.500,00', x: 420, y: 700 }
+      ],
+      // Page 2 prints no year at all: only bare DD.MM. dates.
+      [
+        { text: '28.12.', x: 50, y: 700 },
+        { text: 'Miete', x: 160, y: 700 },
+        { text: '-900,00', x: 420, y: 700 },
+        { text: '15.01.', x: 50, y: 680 },
+        { text: 'Strom', x: 160, y: 680 },
+        { text: '-80,00', x: 420, y: 680 }
+      ]
+    )
+    const { segments } = await PdfParser.parse(pdfPath, { layout: true })
+    // The carried year completes both dates; the carried January month rolls the December row into 2025.
+    expect(segments.find((s) => s.pageNumber === 2)?.text).toBe('28.12.2025 Miete -900,00\n15.01.2026 Strom -80,00')
+  })
+
+  it('judges a scan on the RAW text: a page whose rows all reconstruct to nothing is still a text page', async () => {
+    // Two `<date> EUR <balance>` running-balance rows: neither has a description, so each reconstructs to
+    // nothing (pdf-layout.test.ts pins the row rule), yet the raw layer holds ~47 characters, over
+    // PDF_TEXT_PAGE_MIN_CHARS (25). Layout mode emits no segment and raises no scan error.
+    const phantomOnly = writePdf([
+      { text: '07.02.2024', x: 50, y: 700 },
+      { text: 'EUR', x: 300, y: 700 },
+      { text: '1.234,56', x: 420, y: 700 },
+      { text: '08.02.2024', x: 50, y: 680 },
+      { text: 'EUR', x: 300, y: 680 },
+      { text: '2.345,67', x: 420, y: 680 }
+    ])
+    await expect(PdfParser.parse(phantomOnly, { layout: true })).resolves.toMatchObject({ segments: [], pageCount: 1 })
+    // Text mode reads the same page as one segment.
+    expect((await PdfParser.parse(phantomOnly)).segments).toHaveLength(1)
+  })
+
+  it('a scan still fails in layout mode, and so does a page under the raw threshold that reconstructs to text', async () => {
+    const scan = join(tempRoot('pdflayout'), 'scan.pdf')
+    writeFileSync(scan, makeScanOnlyPdf(1))
+    await expect(PdfParser.parse(scan, { layout: true })).rejects.toThrow(PDF_SCAN_DETECTED_MESSAGE)
+    // The other side of the same rule: `Kontoauszug 2024` is 16 raw characters, so the page counts as a
+    // scan although its reconstruction (the raw header line) is not empty. The reconstruction never
+    // overrides the raw threshold in either direction; text mode gives the same verdict.
+    const short = writePdf([{ text: 'Kontoauszug 2024', x: 50, y: 750 }])
+    await expect(PdfParser.parse(short, { layout: true })).rejects.toThrow(PDF_SCAN_DETECTED_MESSAGE)
   })
 })

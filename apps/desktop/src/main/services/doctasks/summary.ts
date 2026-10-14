@@ -123,9 +123,11 @@ export function planSummaryWindows(chunkTexts: string[], contextTokens: number):
   }
 
   const singlePass = kept.length <= 1
-  // Cap each partial so the reduce input (all partials together) provably fits the
-  // input budget: windows × mapMaxTokens ≤ usable input tokens. The floor keeps tiny
-  // contexts from degenerating; the reduce step additionally hard-truncates its input.
+  // Cap each partial so the reduce input (all partials together) fits the input budget:
+  // windows × mapMaxTokens ≤ usable input tokens. The floor keeps tiny contexts from
+  // degenerating, so below ~2,348 ctx it can overshoot (from 10 windows at the 2,048-token
+  // settings minimum); the reduce step then hard-truncates its input and flags the summary
+  // truncated (#682).
   const mapMaxTokens = singlePass
     ? SUMMARY_OUTPUT_TOKENS
     : Math.max(

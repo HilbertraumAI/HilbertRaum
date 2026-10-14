@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSelectedEmbedder } from './embeddings/factory'
 import { createSelectedReranker } from './reranker'
@@ -290,11 +290,9 @@ export function composeOcrEngine(deps: ComposeOcrEngineDeps): OcrEngine | null {
  * The packaged-mode OCR execution probe (#232): one bounded worker start (the engine's own start
  * timeout), released on success. Shared by startup (fire-and-forget) and `refreshOcrSlot`
  * (awaited, so the install job can report a definite outcome — #410). Never rejects. Content-free
- * log: outcome, duration, engine id. An engine without `probe` (a test fake) reports its
- * availability as-is.
+ * log: outcome, duration, engine id.
  */
 export async function probeOcrEngine(engine: OcrEngine): Promise<boolean> {
-  if (!engine.probe) return (engine.availability?.() ?? 'available') === 'available'
   const t0 = performance.now()
   try {
     const ok = await engine.probe()
@@ -323,6 +321,17 @@ function sameLanguageSet(a: readonly string[], b: readonly string[]): boolean {
   return sortedA.every((lang, i) => lang === sortedB[i])
 }
 
+/** `dir` exists but cannot be listed (#687): what `listOcrLanguages` reads as an empty folder. */
+function unlistable(dir: string): boolean {
+  if (!existsSync(dir)) return false
+  try {
+    readdirSync(dir)
+    return false
+  } catch {
+    return true
+  }
+}
+
 /**
  * Re-read the drive's `ocr/` folder after an in-app install and bring the OCR slot up to date
  * without a restart (#410). Every consumer reads `ctx.ocrEngine` per call (the ingestion deps,
@@ -335,7 +344,9 @@ function sameLanguageSet(a: readonly string[], b: readonly string[]): boolean {
  *   - an engine whose language set DIFFERS from the folder's (in practice: it grew) →
  *     `'restartRequired'`. Its languages are fixed at construction, and it is never replaced
  *     mid-session: `stop()` latches permanently, tesseract.js leaves pending jobs hanging on
- *     terminate, and an un-stopped old worker would survive the lock teardown;
+ *     terminate, and an un-stopped old worker would survive the lock teardown. A folder that lists
+ *     no language at all is not a difference — it may just be unreadable right now (#687) — and
+ *     falls through to the rules below;
  *   - an available engine with the orientation file on the drive → `'activated'`: the engine looks
  *     for that file at each detection, so a just-installed one is in use without a restart (#538);
  *   - otherwise `'unchanged'`.
@@ -355,9 +366,16 @@ export async function refreshOcrSlot(
       ctx.ocrEngine = next
       return (await probeOcrEngine(next)) ? 'activated' : 'startFailed'
     }
-    const onDisk = listOcrLanguages(ocrAssetsDir(rootPath))
-    if (!sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
-    const availability = current.availability?.() ?? 'available'
+    const dir = ocrAssetsDir(rootPath)
+    const onDisk = listOcrLanguages(dir)
+    // #687 (owner call): a folder that exists but cannot be LISTED right now (an antivirus lock, EACCES) says
+    // nothing about the language set — `listOcrLanguages` reads it as no files — so a live engine is not told to
+    // restart. A folder that lists is compared as before, so language files deleted by hand still read as a change
+    // (and an `osd` file left alone never reads as "activated" for an engine with no languages on disk).
+    if (!(onDisk.length === 0 && unlistable(dir)) && !sameLanguageSet(current.languages, onDisk)) {
+      return 'restartRequired'
+    }
+    const availability = current.availability()
     if (availability === 'unavailable') {
       return (await probeOcrEngine(current)) ? 'activated' : 'startFailed'
     }

@@ -25,7 +25,8 @@ import type { DocTaskCtx, InternalTask } from '../context'
 /**
  * Serve a whole-document summary from a READY deep index at the chosen coverage tier
  * (whole-document-analysis plan §4.5). All tiers cover the whole document (`truncated:false`)
- * — they differ in DEPTH, not breadth. Returns the summary, or null to fall through to the
+ * — they differ in DEPTH, not breadth — except a Tier 3 whose final reduce belt had to cut the
+ * batch summaries (#682): that one says it covers the beginning. Returns the summary, or null to fall through to the
  * capped path. One model job at a time (we run inside the serialized summary task).
  * - Tier 1: the stored ROOT verbatim — 0 model calls (Q6).
  * - Tier 2: the root's children (the layer below the root, which fit ONE budget window by
@@ -77,6 +78,7 @@ async function summarizeFromTree(
   task.status.progress.stepsTotal = windows.length <= 1 ? 1 : windows.length + 1
 
   let text: string
+  let cut = false
   if (windows.length <= 1) {
     // One reduce over the node summaries (Tier 2 always; Tier 3 when they fit one window).
     text = await ctx.generate(
@@ -105,10 +107,14 @@ async function summarizeFromTree(
       task.status.progress.stepsDone += 1
     }
     if (partials.length === 0) return null
+    // The batch summaries are capped at SUMMARY_OUTPUT_TOKENS each, never sized per batch, so enough
+    // batches outgrow the reduce input (at 4096 from 7). The belt then cuts the LAST batches — the end
+    // of the document — so the summary says it covers the beginning (#682, as the capped path's belt).
     let reduceInput = partials
     const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
     if (totalWords > budgetWords) {
       reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+      cut = true
     }
     text = await ctx.generate(
       runtime,
@@ -121,7 +127,7 @@ async function summarizeFromTree(
     task.status.progress.stepsDone += 1
   }
   if (text.length === 0) return null
-  return { text, modelId: runtime.modelId, createdAt: now(), truncated: false, tier }
+  return { text, modelId: runtime.modelId, createdAt: now(), truncated: cut, tier }
 }
 
 /** The summary task: stored chunks in, `summary_json` out. */
@@ -175,6 +181,7 @@ export async function runSummary(
   const signal = task.controller.signal
 
   let summaryText: string
+  let truncated = plan.truncated
   if (plan.singlePass) {
     summaryText = await ctx.generate(
       runtime,
@@ -200,13 +207,16 @@ export async function runSummary(
       task.status.progress.stepsDone += 1
     }
     if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
-    // Belt for the reduce input: the map output caps already size partials to fit,
-    // but a model that ignores maxTokens semantics must still not overflow.
+    // Belt for the reduce input: the map output caps size the partials to fit from ~2,348 ctx up, but below
+    // that the 128-token map floor can outgrow it, and a model that ignores maxTokens must still not overflow.
+    // A cut drops the tail partials (the END of the document), so the summary says it covers the beginning,
+    // as compare's belt does (H8). #682: it used to be stored as complete.
     const budgetWords = summaryBudgetWords(contextTokens)
     let reduceInput = partials
     const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
     if (totalWords > budgetWords) {
       reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+      truncated = true
     }
     summaryText = await ctx.generate(
       runtime,
@@ -224,7 +234,7 @@ export async function runSummary(
     text: summaryText,
     modelId: runtime.modelId,
     createdAt: new Date().toISOString(),
-    truncated: plan.truncated
+    truncated
   }
   // Re-read via a fresh getter: the document may have been deleted while we worked
   // (the IPC layer refuses re-index/delete on a busy document, but be safe anyway —

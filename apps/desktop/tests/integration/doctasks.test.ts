@@ -27,6 +27,7 @@ import {
   docTaskRuntime,
   docTaskWorld,
   importWords,
+  userPromptOf,
   waitTerminal,
   type DocRuntime,
   type DocTaskWorld
@@ -129,6 +130,34 @@ describe('map-reduce path + the hard ceiling', () => {
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     expect(runtime.calls).toHaveLength(SUMMARY_MAP_CALL_CEILING + 1)
+    expect(getDocumentSummary(w.db, docId)?.truncated).toBe(true)
+  })
+
+  // #682: at a small window the 128-token map floor lets the partials outgrow the reduce input, so the reduce belt
+  // cuts their joined text, and the cut always drops the END of the document (the partials run in document order).
+  // The summary must say it covers the beginning, as compare's belt does (H8); it used to be stored as complete.
+  it('flags the summary truncated when the reduce belt cuts the partials', async () => {
+    // ctx 1024 → word budget 200 and a 128-token map floor: four ~98-word partials overflow the reduce input.
+    const docId = await importWords(w, 700)
+    let maps = 0
+    const runtime = docTaskRuntime({
+      tokens: 'whole',
+      reply: (call) => {
+        if (userPromptOf(call).includes('partial summaries')) return 'The final summary.'
+        maps += 1
+        // A model writing up to its cap: maxTokens ÷ 1.3 words, each tagged with its partial and position.
+        const words = Math.floor((call.options?.maxTokens ?? 0) / 1.3)
+        return Array.from({ length: words }, (_, i) => `P${maps}w${i}`).join(' ')
+      }
+    })
+    const manager = docTaskManager(w, { getRuntime: () => runtime, getContextTokens: () => 1024 })
+
+    const status = await waitTerminal(manager, manager.startDocTask({ kind: 'summary', documentIds: [docId] }).jobId)
+    expect(status.state).toBe('done')
+    expect(maps).toBeGreaterThanOrEqual(3) // under the map ceiling: only the belt can cut
+    const reduce = userPromptOf(runtime.calls[runtime.calls.length - 1])
+    expect(reduce).toContain('P1w0') // the beginning reached the reduce…
+    expect(reduce).not.toContain(`P${maps}w0`) // …the last partial did not
     expect(getDocumentSummary(w.db, docId)?.truncated).toBe(true)
   })
 })

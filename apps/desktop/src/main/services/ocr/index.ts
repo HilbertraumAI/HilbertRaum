@@ -68,23 +68,23 @@ export interface OcrEngine {
    */
   detectOrientation?(image: Buffer, opts?: { signal?: AbortSignal }): Promise<OcrOrientation | null>
   /**
-   * Execution state (#232). Optional so test fakes stay minimal — absent means `'available'`.
-   * `ocrAvailable` in the app status and the image parser read this, never mere presence.
+   * Execution state (#232). `ocrAvailable` in the app status, the image parser and the OCR task
+   * read this, never mere presence.
    */
-  availability?(): OcrAvailability
+  availability(): OcrAvailability
   /**
    * Packaged-mode execution probe (#232): start the worker once, bounded, and settle the
    * availability. Resolves `true` when the engine proved it can run. The startup wiring calls it.
    */
-  probe?(): Promise<boolean>
+  probe(): Promise<boolean>
   /** Release the backend permanently (terminates the worker). On `will-quit`. */
-  stop?(): Promise<void>
+  stop(): Promise<void>
   /**
    * Non-latching teardown for the workspace lock (BE-5): terminate the warm worker so no decoded
    * page bytes linger across the vault re-encrypt, but let the next recognition lazily respawn
    * (unlike `stop()`, which latches permanently). On `lock`.
    */
-  suspend?(): Promise<void>
+  suspend(): Promise<void>
 }
 
 /** A page of persisted recognition output (the `documents.ocr_json` content shape). */

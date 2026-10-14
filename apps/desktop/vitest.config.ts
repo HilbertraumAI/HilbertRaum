@@ -79,7 +79,9 @@ export default defineConfig({
     // sweeps, after the forks exit, whatever still could not be removed. See
     // tests/helpers/temp-roots.ts and tests/helpers/sqlite-handles.ts. Before #335 a full run leaked
     // ~2,500 roots; before #460 ~1,500 of them per windows run reached the sweep.
-    setupFiles: ['./tests/setup.ts', './tests/setup-temp-roots.ts'],
+    // #687: `setup-env-scrub.ts` runs FIRST so a developer shell's behaviour overrides
+    // (`HILBERTRAUM_PDF_MAX_PAGES`, `HR_FORCE_REINDEX`, …) are gone before anything imports src.
+    setupFiles: ['./tests/setup-env-scrub.ts', './tests/setup.ts', './tests/setup-temp-roots.ts'],
     globalSetup: ['./tests/global-temp-roots.ts'],
     globals: true,
     reporters: ['default', new FullSuiteGuard(expectedFiles)],

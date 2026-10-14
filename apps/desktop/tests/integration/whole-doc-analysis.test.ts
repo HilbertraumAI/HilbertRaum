@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
@@ -7,7 +7,7 @@ import {
   reindexDocument,
   setDocumentSummary
 } from '../../src/main/services/ingestion'
-import type { DocTaskDeps, DocTaskManager } from '../../src/main/services/doctasks'
+import { TASK_DOCUMENT_NOT_READY_MESSAGE, type DocTaskDeps, type DocTaskManager } from '../../src/main/services/doctasks'
 import { ContextOverflowError } from '../../src/main/services/doctasks/errors'
 import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import { buildTree } from '../../src/main/services/analysis/tree-build'
@@ -335,6 +335,77 @@ describe('content cache, resume, and re-index invalidation', () => {
     expect(reachableLeafChunks(id).size).toBe(newChunks.size)
   })
 
+  const cacheRows = (): number =>
+    (db.prepare('SELECT COUNT(*) AS n FROM summary_cache').get() as unknown as { n: number }).n
+  const buildDeps = (jobId: string, generate: () => Promise<string>): Parameters<typeof buildTree>[1] => ({
+    db,
+    modelId: 'm',
+    contextTokens: 1024,
+    signal: new AbortController().signal,
+    arbiter: new ModelSlotArbiter(),
+    jobId,
+    generate
+  })
+
+  it('a finished build prunes summary_cache to the HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS cap (DATA-3 wiring, #682)', async () => {
+    // buildTree is the cache's only pruner: nothing else deletes its rows (no document_id, no FK).
+    const id = await importWords(w, 4000)
+    let calls = 0
+    vi.stubEnv('HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS', '1')
+    try {
+      await buildTree(
+        id,
+        buildDeps('job-evict', async () => {
+          calls += 1
+          return `summary #${calls}`
+        })
+      )
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(treeStatus(id)).toBe('ready')
+    expect(calls).toBeGreaterThan(1) // the build wrote more rows than the cap (one per distinct summarized group)…
+    expect(cacheRows()).toBe(1) // …and evicted back down to it
+  })
+
+  it('an empty generation is never cached — the node keeps a source excerpt and the next build retries (#682)', async () => {
+    // A one-chunk document: its single level-1 group is the root, so one call per build.
+    const id = await importWords(w, 120)
+    const chunkText = (
+      db.prepare('SELECT text FROM chunks WHERE document_id = ?').get(id) as unknown as { text: string }
+    ).text
+    const rootSummary = (): string =>
+      (
+        db.prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1').get(id) as unknown as {
+          summary_text: string
+        }
+      ).summary_text
+
+    let calls = 0
+    await buildTree(
+      id,
+      buildDeps('job-empty', async () => {
+        calls += 1
+        return ''
+      })
+    )
+    expect(calls).toBe(1)
+    expect(rootSummary()).toBe(chunkText) // the leading excerpt of the source (the whole of so short a chunk)
+    expect(cacheRows()).toBe(0) // the cache stays cold
+
+    // A rebuild asks the model again and stores its real reply.
+    await buildTree(
+      id,
+      buildDeps('job-retry', async () => {
+        calls += 1
+        return 'A real summary of the section.'
+      })
+    )
+    expect(calls).toBe(2)
+    expect(rootSummary()).toBe('A real summary of the section.')
+    expect(cacheRows()).toBe(1)
+  })
+
   it('C3: a boilerplate doc yields DISTINCT nodes that share ONE cache entry (no collapse)', async () => {
     // Identical repeated sections (same text) — distinct structural positions must stay
     // distinct nodes; the cache holds one entry for that text under the model.
@@ -367,7 +438,8 @@ describe('C4 deep-index gate', () => {
     const runtime = treeRuntime()
     const m = mgr(runtime, 1024)
 
-    expect(() => m.startDocTask({ kind: 'tree', documentIds: [id] })).toThrow()
+    expect(() => m.startDocTask({ kind: 'tree', documentIds: [id] })).toThrow(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    expect(runtime.calls).toHaveLength(0)
 
     // Re-index re-chunks fully (sets the marker); the build is then allowed.
     await reindexDocument(db, storeDir, id)
@@ -667,6 +739,36 @@ describe('coverage tiers', () => {
     const s = getDocumentSummary(db, id)
     expect(s?.truncated).toBe(false)
     expect(s?.tier).toBe(3)
+  })
+
+  // #682 (code review): Tier 3 caps each batch summary at SUMMARY_OUTPUT_TOKENS, never per batch, so enough batches
+  // outgrow the final reduce input (at the shipped 4096 from 7 batches) and its belt cuts the LAST ones, the end of
+  // the document. The summary must say it covers the beginning, as the capped path's belt does; it was stored as
+  // whole-document.
+  it('Tier 3 flags the summary truncated when the final reduce belt cuts the batch summaries', async () => {
+    const id = await importWords(w, 8000)
+    // ~60-word node summaries, so the level-1 layer spans several 200-word batches at ctx 1024.
+    const tree = docTaskRuntime({ reply: (call) => Array.from({ length: 60 }, (_, i) => `${hashReply(call)}x${i}`).join(' ') })
+    const tm = mgr(tree, 1024)
+    await waitTerminal(tm, tm.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
+    let batches = 0
+    const runtime = docTaskRuntime({
+      tokens: 'whole',
+      reply: (call) => {
+        if (userPromptOf(call).includes('B1w0')) return 'The final summary.' // the final reduce over the batch summaries
+        batches += 1
+        // A model writing up to its cap: maxTokens ÷ 1.3 words, each tagged with its batch and position.
+        const words = Math.floor((call.options?.maxTokens ?? 0) / 1.3)
+        return Array.from({ length: words }, (_, i) => `B${batches}w${i}`).join(' ')
+      }
+    })
+    const m = mgr(runtime, 1024)
+    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 3 } }).jobId)
+    expect(batches).toBeGreaterThanOrEqual(2)
+    const reduce = userPromptOf(runtime.calls[runtime.calls.length - 1])
+    expect(reduce).toContain('B1w0') // the first batch reached the final reduce…
+    expect(reduce).not.toContain(`B${batches}w0`) // …the last did not
+    expect(getDocumentSummary(db, id)).toMatchObject({ truncated: true, tier: 3 })
   })
 })
 

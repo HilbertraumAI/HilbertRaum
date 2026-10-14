@@ -2720,7 +2720,10 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   provably fits the model's real context. Total ≤ budget → one call; else chunks pack
   greedily into budget-sized windows (an over-budget chunk is SPLIT, not truncated) →
   per-window partial summaries → one reduce pass, with each map call's `maxTokens` sized
-  to `usableTokens / windowCount` so all partials provably fit the reduce input. Hard
+  to `usableTokens / windowCount` so all partials fit the reduce input at every shipped
+  window (≥ 4096; at the 2,048-token settings minimum the 128-token floor overshoots from
+  10 windows, and the reduce belt cuts the joined partials' tail and flags the summary
+  `truncated`, #682 — it was stored as complete until then). Hard
   ceiling: **12 map calls** (≈ a ~50-page document at the default context); beyond it the
   summary covers the beginning and is flagged `truncated` (the UI says so honestly).
 - **Persistence (D25):** additive nullable `documents.summary_json`
@@ -2792,7 +2795,9 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   the documents' language; temp 0.3, output cap 512 — both R-T2-validated over two
   smoke rounds on the real b9585 + Qwen3-4B). Map ceiling 12 → an honest truncation
   notice INSIDE the report ("covers the beginning of A"); map output caps are sized so
-  all notes provably fit the reduce input (the D25 fit property). **D37:** mode (a)'s
+  all notes fit the reduce input at every shipped window (the D25 fit property; at the
+  2,048-token settings minimum the 128-token floor overshoots from 10 windows, and the
+  belt cuts the joined notes and adds that truncation notice, #682). **D37:** mode (a)'s
   input AND the mode decision use the re-extracted parser segments (chunk overlap would
   read as phantom "shared" content and inflates a length estimate by ~16% — enough to
   mis-route the switch); mode (b)'s map deliberately uses the stored chunks (vectors
@@ -7840,7 +7845,7 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
     can SEE the rows that were read.
 - **D57 — The gold set is LOCAL-ONLY / gitignored.** Real bank statements are user financial data
   (CLAUDE.md "never commit user data"); only aggregate metrics are committed, and every *test* fixture
-  is synthetic (`makeColumnarPdf`), never a real statement or excerpt.
+  is synthetic (`makeColumnarPdfPages`), never a real statement or excerpt.
 - **D58 — Layout mode is bank-statement ONLY.** The invoice skill is label/line-scan based, so
   column-reconstructed text could shift its line composition — adopt layout there (if ever) only behind
   its own measurement. Redaction/preview/translate/compare/ingest never set `layout`.
@@ -8040,7 +8045,7 @@ a broader corpus to trigger it.
 `parseDate` is untouched, `detectDatumColumn` density/leftmost/tie, out-of-column-date rejection,
 value-date drop, balance-line preservation, fallback-year, the REL-10 single-pass header fold over a
 500k-fragment page, a no-date page emitted raw). `tests/integration/pdf-bank-layout.test.ts`
-(SYNTHETIC columnar PDFs via `makeColumnarPdf`: text-mode loses every row while layout-mode recovers
+(SYNTHETIC columnar PDFs via `makeColumnarPdfPages`: text-mode loses every row while layout-mode recovers
 them + the correct total + honest coverage + citations + 0 model calls; a non-tying balance MUST
 downgrade; the Raiffeisen Valuta/second-baseline + `Kontostand per` regression pins the column model;
 and the Phase-31 breadth set — English `Balance brought/carried forward` gate-pass, an English value-
@@ -8228,10 +8233,9 @@ rows is ONE call, 21 is two, a 1-row batch is one); `skills-bank-statement-tool.
 opening/closing and a lone line is closing-only → `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`);
 `skills-run.test.ts` (**Phase 3:** a v1 statement is detected stale at v2, a freshly-stamped one is
 not); `doctasks-categorize.test.ts` (model path persists, deterministic fallback persists,
-auto-extract-then-categorize, A9 stale-statement re-extract + replace; **Phase 6:** an extract run
-leaves the doctask lane untouched and the rows uncategorized — no hidden model run);
-`skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO `categorize` doctask —
-U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions" offer renders only
+auto-extract-then-categorize, A9 stale-statement re-extract + replace);
+`skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO `categorize` doctask and
+leaves the rows uncategorized — no hidden model run, U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions" offer renders only
 after a successful rows>0 extract and fires the categorize path with the remembered id; absent for a
 0-row / non-extract / non-done run); `skills-analysis-bank.test.ts` (persisted model categories surface +
 the model-assisted label; **Phase 2:** the rule-based note when `modelAssisted` is false, absent when
@@ -9330,11 +9334,11 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
 | A1 | §6.1, §6.4 | invoice-run's layer-for-layer copy folded into ONE `DomainRunConfig`-driven engine (`runDomainExtractionInner`); shared `analysis/common.ts` | `run.ts`, `invoice-run.ts`, `analysis/common.ts` |
 | A2 | §6.2 | `shared/skill-tools.ts` self-describing `SkillToolDescriptor` single-sources the wired-tool lists + labels + dialogs; `SkillRunController` scoped per-document | `shared/skill-tools.ts`, `run-controller.ts` |
 | A3 | §6.3, §8.2 | manifest `analysis:` mode + inverted whole-doc gate (`manifestAnalysisHandler`; `isNeedleShaped` / `isSmallTalk` skill-agnostic) | `analysis/whole-doc-skills.ts`, `registerRagIpc.ts` |
-| T1 | §7 | real-layout fixture corpus run through the production extractors + output-**SNAPSHOT** version-bump guard + env-gated real-model smoke (`describe.runIf`, skipped in CI) | `tests/{fixtures/real-layouts,integration/extractor-realworld,e2e-model}` |
+| T1 | §7 | real-layout fixture corpus run through the production extractors + output-**SNAPSHOT** version-bump guard + env-gated real-model smoke (`describe.runIf`, skipped in CI) | `tests/{fixtures/real-layouts,integration/skills-extractor-corpus,e2e-model}` |
 
 Both extractor versions climbed to **8** over the wave (R1→4, R2→5, R5→6, R6→7, U1→8) — every extractor
 behavior change bumps by exactly 1 so stale rows re-extract — and the T1 output-snapshot guard
-(`extractor-realworld.test.ts`) now FAILS the default suite on any corpus-fixture output change unless the
+(`skills-extractor-corpus.test.ts`) now FAILS the default suite on any corpus-fixture output change unless the
 version was bumped AND the snapshot regenerated. The `42a4eb9` U1-review fix was reconciled onto the tip
 in this close-out's **Part A** and owed **no** version bump (no corpus-fixture output moved; the fixtures
 are clean, `droppedRowCount` 0). Suite at close: **3071 passed / 44 skipped** (incl. the 3 collected-but-
@@ -9972,7 +9976,7 @@ review-round findings are folded into their rows):
 | **GAP-2** | LOW | E | **fixed** — the four unguarded failure exits in `skills/run.ts` route through `finishRunGuarded` (the P-8 treatment): a doomed terminal UPDATE resolves the friendly envelope, never rejects raw; no more runs stranded 'started' until next-session reconcile. |
 | **GAP-3** | LOW | E | **fixed** — `PdfParser` awaits `loadingTask.promise` INSIDE the try/finally that destroys it: a corrupt/password PDF no longer leaks the pdf.js transport + up-to-`maxBytes` buffer per failed parse. |
 | **GAP-4** | LOW | E | **fixed** — the redact/edit locate catches use the app-wide `isAbortError(e, signal)` instead of the narrow DOMException name-check: a cancel surfacing as a wrapped runtime error records 'cancelled', not 'failed'. (Redaction's observable end state was coincidentally already correct — the degraded locate fell through to the gate's own abort pre-check; the EDIT seam misrecording 'failed' is the discriminating regression test.) |
-| **GAP-5** | LOW | E | **fixed** — delete/re-index IPC (and the reindex-all batch skip) refuse under an in-flight SKILL run via new `ctx.skillRunActive` (assigned by registerSkillsIpc from its module-local controller; `main.docs.skillRunning` EN+DE — the `requireNoActiveTask` mirror): no more mid-run interleaving / friendly-but-confusing persistFailed / orphaned rows under FK-off. Registered nit: the batch-skip branch has no direct test (shares probe + shape with the pinned doctask half) — optional hardening. |
+| **GAP-5** | LOW | E | **fixed** — delete/re-index IPC (and the reindex-all batch skip) refuse under an in-flight SKILL run via new `ctx.skillRunActive` (assigned by registerSkillsIpc from its module-local controller; `main.docs.skillRunning` EN+DE — the `requireNoActiveTask` mirror): no more mid-run interleaving / friendly-but-confusing persistFailed / orphaned rows under FK-off. Registered nit: the batch-skip branch has no direct test (shares probe + shape with the pinned doctask half) — optional hardening (done 2026-10-14, #682: all four skip conditions pinned in docs-ipc). |
 | **GAP-6** | LOW | E | **fixed** — redact + edit refuse `confirmed !== true` UP FRONT (gate copy mirrored) — no more full multi-window LLM locate pass before the gate refusal (no security impact; the gate always blocked the write); edit's DOCX branch gains redaction's explicit `confirmed === true` pre-touch check (branch parity). |
 | **GAP-7** | LOW | E | **fixed (premise half-stale; contract decided + documented)** — the pre-persist abort check already existed at audit HEAD (needed only a citing comment); the REAL gap was as reported: a cancel during the signal-less re-ingest was ignored and reported 'done' under a header claiming "cancel persists NOTHING". Decided contract: a pre-persist cancel actually cancels (nothing persisted); a post-persist cancel deliberately completes **'done'** (the work is real — never "cancelled, nothing happened" about a now-searchable document); header rewritten, both halves pinned (gated-rasterizer + gated-embedder tests). |
 | **DOC-1** | HIGH | A `e7cda05` | **fixed** — README RAM tiers (both spots) → the shipped §6.3 mapping: ≤12 GB → Qwen3-4B · 16–20 GB → Ministral 8B · ≥24 GB → Gemma 4 12B (re-verified against `benchmark.test.ts` before editing). |
@@ -9999,9 +10003,11 @@ here; everything is Low, none flip-blocking):
   (done 2026-10-05 by #532: "Engine load failures" §8) ·
   CODE-7 mounted-guard narrowing · the CODE-18 canned-answer persist site ·
   CODE-35 `key={preview.id}` · CODE-37 `setAutoFire` failure key · `diag.bench.cores` plural pair
-  (CODE-8 net allowlist) · the seven-plus older DE ASCII-quote closers (CODE-25) · a direct GAP-5
-  batch-skip test · exporting `TOKENS_PER_WORD` (the compare-budget tests hard-code `1.3`, the
-  pre-existing SK-2 idiom — a constant change would silently desync the tests' budget currency).
+  (CODE-8 net allowlist) · the seven-plus older DE ASCII-quote closers (CODE-25) · ~~a direct GAP-5
+  batch-skip test~~ · ~~exporting `TOKENS_PER_WORD`~~ (the compare-budget tests hard-coded `1.3`, the
+  pre-existing SK-2 idiom — a constant change would silently desync the tests' budget currency)
+  (both done 2026-10-14 by #682: docs-ipc's "re-index all skips a document held by …" rows; the RAG
+  budget tests read the exported constant).
 - **Owner items:** the CODE-9/TQ-6 manual-smoke inventory (BUILD_STATE §5, TS-3 sub-list) and the
   unchanged §46 carry-overs (TS-3/TS-7/TS-9, `rag*` knobs, SC-1).
 - **Test-infra lessons (recorded for future sessions):** `vi.spyOn` on `node:fs` does NOT
@@ -13347,7 +13353,7 @@ Translate handoff · P3 `0687a437` docs truth · P4 `f8f3dc29` backend hardening
 |---|---|
 | #1 — no renderer test exercised OCR initiation/display | Closed @ P1/P2 (initiation clicks, busy/finishing/stopping states, Translate failure copy). Residual registered: the PreviewModal `ocrInfo` line remains untested |
 | #2 — the real rasterizer wiring had no automated teeth | Closed @ P5: fake-Electron harness (destroy on success/error/timeout/abort, in-use latch, exact 60 s step-timeout pin, sender-spoof rejection on all three reply channels, listener removal, gone-event fast-fail) |
-| #3 — no concurrency test for task-start vs re-index | Closed @ P1 (unit + gated-re-index integration). Residual registered: two-queued-OCR-tasks-on-one-doc remains unpinned (behavior is benign — serialize + overwrite = the D33 redo) |
+| #3 — no concurrency test for task-start vs re-index | Closed @ P1 (unit + gated-re-index integration). Residual registered: two-queued-OCR-tasks-on-one-doc remains unpinned (behavior is benign — serialize + overwrite = the D33 redo). **⟶ PINNED (#687, 2026-10-14):** `ocr-task.test.ts` "two OCR tasks on one document run one after the other…" — both admitted, the second queued until the first is done, the later reading kept, one chunk set |
 | #4 — `renderer/ocr/main.ts` pdfjs side untested | **Deferred** (registered below) |
 | #5 — transient name + engineId unpinned | Closed @ P4: `<id>.parse-ocr.pdf` pinned to the crash-sweep matcher; engineId = `tesseract.js-<installed version>` test |
 
@@ -13372,7 +13378,7 @@ Translate handoff · P3 `0687a437` docs truth · P4 `f8f3dc29` backend hardening
 3. **macOS/Linux packaged CSP + OCR smoke** (P5 measured Windows).
 4. **BE-7 memory profile** of a real 300+-page scan (manual, real assets) — confirms `page.cleanup()` keeps the hidden renderer flat.
 5. **`renderer/ocr/main.ts` pdfjs-side automated tests** (audit test-gap #4; the P5 harness covers the protocol level).
-6. **PreviewModal `ocrInfo` line renderer test** + **two-queued-OCR-tasks-on-one-doc pin** (P6 review residuals of gaps #1/#3).
+6. ~~**PreviewModal `ocrInfo` line renderer test**~~ (done 2026-10-05, #576) + ~~**two-queued-OCR-tasks-on-one-doc pin**~~ (done 2026-10-14, #687: the test-gaps row #3 above) (P6 review residuals of gaps #1/#3).
 
 Historical note: dated design-record narratives elsewhere in the docs (e.g. the §11.6/S-wave
 records in `design-guidelines.md`) describe the pre-wave overflow-item placement as it was
@@ -13489,9 +13495,12 @@ they rest on._
 fallback, hash-is-state skip, mismatch keeps the old file, size cap, third-language survival,
 symlinked `ocr/`, cancel in every state, single-flight, content-free logs, IPC end to end),
 `ocr-pins.test.ts` (the drift test: `OCR_PINS` against the committed yaml and model-policy.md's
-asset table), `preload-ocr-install.test.ts`, `compose-ocr.test.ts` (the D2 rules + the capture pin), `ocr-slot-live-consumers.test.ts` (the split-brain regression),
+asset table), `preload-ocr-install.test.ts`, `compose-ocr.test.ts` (the D2 rules — since #687 a
+folder that cannot be listed reads as no change, not `'restartRequired'` — + the capture pin), `ocr-slot-live-consumers.test.ts` (the split-brain regression),
 `download-fail-close.test.ts` (the seam fix above) and `OcrInstall.test.tsx` (rows, dialog, job
-states, focus/job re-read, AI Model row, German).
+states, focus/job re-read, AI Model row, German; since #687 a poll reply about another job is
+ignored, and `onFinished` fires once when a poll and the Cancel reply both report the end, in
+either order).
 
 **§5 Residuals and follow-ups.**
 - Files copied onto the drive by hand while the app runs, and an in-app download that grows a
@@ -15548,9 +15557,11 @@ asserts none of them survive.
 **D10 — ownership is deliberately over-generous, and the id is the final word.** The error
 directions are not symmetric: under-counting orphans is merely uninformative, while over-counting
 invents an orphan out of live user data and would hand a future cleanup a file to destroy. So a
-file is claimed by a row if ANY of four sources says so — the healed `stored_name`, the leaf of the
-recorded `stored_path`, `canonicalLeafFor`, and finally the file's own **leading id**. The fourth
-was added after the first end-to-end operator smoke, which showed the hole the other three leave: a
+file is claimed by a row if ANY of three sources says so — the healed `stored_name`, the leaf of the
+recorded `stored_path`, and finally the file's own **leading id** (the audit also asks
+`canonicalLeafFor`, but that only filters: a leaf it returns is the `stored_name` or the
+`stored_path` leaf unchanged, so it is never a file's only claimant, #687). The third was added
+after the first end-to-end operator smoke, which showed the hole the other two leave: a
 row whose recorded strings are corrupt (the safety guard refuses the leaf) names *nothing*, so its
 perfectly healthy `<id><ext>.enc` was reported as an orphan. The store's naming is
 `<documentId><ext>[.enc]` and the id is a never-reused UUID primary key, so a file whose leading id

@@ -509,6 +509,27 @@ describe('the queue phase — createQueuedDocument(s) (DM-2, DB-4)', () => {
     expect(rows.map((r) => r.status)).toEqual(['queued', 'queued', 'queued', 'queued'])
     expect(rows.map((r) => r.size_bytes)).toEqual([10, 20, null, 30])
   })
+
+  // DB-4 (#687): a mid-batch insert failure leaves NO rows, so the caller's lease-release catch has
+  // nothing half-queued to clean up. Nothing in the schema can fail one of these inserts, so a TEMP
+  // trigger refuses b.txt's (as a full disk would). RAISE(ABORT) undoes only that statement and
+  // leaves the transaction open: the explicit ROLLBACK is the one thing that removes a.txt's row.
+  it('DB-4: a failed createQueuedDocuments batch rolls back every row and leaves the connection usable', () => {
+    const db = freshDb()
+    const files = ['a.txt', 'b.txt', 'c.txt'].map((n) => ({ filePath: write(n, 'x') }))
+    db.exec(`CREATE TEMP TRIGGER poison BEFORE INSERT ON main.documents WHEN NEW.title = 'b.txt'
+             BEGIN SELECT RAISE(ABORT, 'disk I/O error (simulated)'); END`)
+    const count = (): number => (db.prepare('SELECT COUNT(*) AS n FROM documents').get() as { n: number }).n
+
+    expect(() => createQueuedDocuments(db, files)).toThrow(/disk I\/O error \(simulated\)/)
+    expect(count()).toBe(0) // a.txt, inserted before the failure, is gone too
+
+    // Not left inside a transaction: the next batch opens its own (a dangling one would make its
+    // BEGIN throw "cannot start a transaction within a transaction") and commits all three rows.
+    db.exec('DROP TRIGGER temp.poison')
+    expect(createQueuedDocuments(db, files)).toHaveLength(3)
+    expect(count()).toBe(3)
+  })
 })
 
 describe('reconcileStuckDocuments', () => {

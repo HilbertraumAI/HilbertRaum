@@ -255,10 +255,7 @@ describe('TranslationRuntime — launch + translate', () => {
 // The idle-teardown interlock (vision RUNTIME-4 pattern) + the reranker stop()/suspend() split.
 // Injected clock → deterministic (fire teardown on demand), no wall-clock idle sleeps.
 describe('TranslationRuntime — idle teardown + stop/suspend', () => {
-  afterEach(() => vi.unstubAllEnvs())
-
   it('arms an unref\'d idle timer on settle and tears the idle sidecar down when it fires', async () => {
-    vi.stubEnv('HILBERTRAUM_TRANSLATION_IDLE_MS', '') // the shipped default, whatever the shell sets
     const { spawn, children } = fakeSpawn()
     const { fetchImpl } = translationFetch()
     const { clock, state } = fakeIdleClock()

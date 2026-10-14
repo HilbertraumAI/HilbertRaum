@@ -8,6 +8,7 @@ import {
 import { readUpright, OCR_ACCEPT_CONFIDENCE } from '../../src/main/services/ocr/upright'
 import type { OcrEngine, OcrOrientation } from '../../src/main/services/ocr'
 import { TINY_JPEG, TINY_PNG } from '../helpers/fixtures'
+import { fakeOcrEngine } from '../helpers/ocr-fixtures'
 
 // #538 — turning a page upright. tesseract.js applies an image's EXIF orientation with an exact
 // right-angle turn, but it finds the orientation only as a BIG-endian byte run in the first 500
@@ -109,8 +110,7 @@ describe('readUpright — the reading policy (#538)', () => {
   ): OcrEngine & { calls: string[] } {
     const calls: string[] = []
     const engine: OcrEngine & { calls: string[] } = {
-      id: 'fake',
-      languages: ['deu'],
+      ...fakeOcrEngine({ id: 'fake', languages: ['deu'] }),
       calls,
       recognize: async (_image, opts) => {
         const turn = opts?.turn ?? 0

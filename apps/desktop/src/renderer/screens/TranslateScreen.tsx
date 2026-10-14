@@ -4,8 +4,8 @@ import { AssistantMarkdown, StreamAnnouncer } from '../chat'
 import {
   acknowledgeError,
   adoptActiveJob,
-  getLastTranslateChoice,
   getTranslateSession,
+  initialTranslateChoice,
   stopActive,
   subscribeTranslateSession,
   translate as runTranslate
@@ -104,18 +104,9 @@ export function TranslateScreen({
   // start this session. Drives the muted #36-style device hint below the language bar.
   const [device, setDevice] = useState<TranslationDeviceStatus | null>(null)
   const [input, setInput] = useState('')
-  // Source+target start from the session's last choice (else a UI-language-aware default), the
-  // DocumentsScreen translate-modal precedent. TranslateGemma needs an explicit source — no auto-detect.
-  const [choice, setChoice] = useState<{
-    sourceLang: TranslationSourceLang
-    targetLang: TranslationTargetLang
-  }>(
-    () =>
-      getLastTranslateChoice() ??
-      (lang === 'de'
-        ? { sourceLang: 'en', targetLang: 'de' }
-        : { sourceLang: 'de', targetLang: 'en' })
-  )
+  // Source+target start from the session's last choice, else the UI-language default — the one rule
+  // the Documents translate modal opens on too (DOC-7).
+  const [choice, setChoice] = useState(() => initialTranslateChoice(lang))
   const [screenError, setScreenError] = useState<ClientTranslateError | null>(null)
 
   // The active TEXT translation (streamed output) lives in the module store so it survives

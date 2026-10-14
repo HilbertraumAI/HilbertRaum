@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
-import { clearTranslateSession } from '../../src/renderer/lib/translateSession'
+import { clearTranslateSession, setLastTranslateChoice } from '../../src/renderer/lib/translateSession'
 import { clearFileTranslate } from '../../src/renderer/lib/fileTranslateSession'
-import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
+import { clearDocTaskSession, getActiveDocTask, isDocTaskTerminal, startTask } from '../../src/renderer/lib/doctasks'
 import { en, t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import type { AppStatus, DocTaskStatus, DocumentInfo, TranslateJob } from '../../src/shared/types'
@@ -22,14 +22,16 @@ import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 // them; the DOCUMENT path drives the import → doc-task → materialize polling with stubbed IPC.
 // Both active translations live in module-level stores (survive navigation), reset between tests.
 
+// The DOC-7 language-pair memory is module-level and no clear resets it (the lock purge keeps it by
+// design), so without a seed every row would open on whatever pair the previous translating row left —
+// a German-UI row that runs first records en → de, and the literal-pair rows below then fail (#682:
+// `--sequence.shuffle` found such orders). Each row starts from de → en through the production writer.
+// The UI-language defaults themselves are pinned in translateSession.test.ts on a fresh module.
+beforeEach(() => setLastTranslateChoice('de', 'en'))
+
 afterEach(() => {
   cleanup()
-  // The production clears (lib/lockPurge.ts runs the same three). They keep the DOC-7 last-language-pair
-  // memory by design, so a row starts from the pair the previous translating row used, and the order of
-  // the rows matters: the EN rows translate de → en until a German-UI row records en → de.
-  // A row that asserts a literal pair must run before any row that translates another pair ('types text,
-  // translates…' is the EN-UI default pin, 'drops a document…' the document path's); other rows assert
-  // relative to the selects.
+  // The production clears (lib/lockPurge.ts runs the same three).
   clearTranslateSession()
   clearFileTranslate()
   clearDocTaskSession()
@@ -267,8 +269,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
     await user.type(input, 'Hallo Welt.')
     await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
 
-    // The file's first translating row: no earlier row wrote the session's last choice, so the selects
-    // start at the EN-UI default pair — this row pins that default.
+    // The selects start at the pair the beforeEach put in the session's memory.
     expect(s.translateStart).toHaveBeenCalledWith(
       expect.objectContaining({ sourceLang: 'de', targetLang: 'en', text: 'Hallo Welt.' })
     )
@@ -299,7 +300,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
     expect(s.translateCancel).toHaveBeenCalledWith('j1')
   })
 
-  it('surfaces a docTaskBusy refusal as a friendly banner', async () => {
+  it("surfaces the backend's docTaskBusy refusal as a friendly banner", async () => {
     const s = streamStubs({ jobId: 'x', state: 'failed', error: 'docTaskBusy' })
     stubApi(s.api)
     const user = userEvent.setup()
@@ -308,6 +309,49 @@ describe('TranslateScreen — translate → stream → copy', () => {
     await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
     await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
     expect(await screen.findByText(t('en', 'translate.err.docTaskBusy'))).toBeInTheDocument()
+  })
+
+  // #162 (FE-3), #682: the screen's busy state covers only its own two paths, so with a Documents-row
+  // task on the lane Translate stays enabled and the click reaches the store's guard. A RUNNING task
+  // refuses with its own banner before any job starts; a FINISHED one, which the store keeps until a
+  // screen acknowledges it, does not block (the file path's guardStart rule).
+  async function startForeignDocTask(
+    s: ReturnType<typeof streamStubs>,
+    state: DocTaskStatus['state']
+  ): Promise<void> {
+    stubApi({
+      ...s.api,
+      startDocTask: vi.fn(async () => ({ jobId: 'foreign' })),
+      getDocTask: vi.fn(async () => docTask({ jobId: 'foreign', kind: 'summary', documentIds: ['doc9'], state }))
+    })
+    await startTask('summary', 'doc9')
+  }
+
+  it('#162 (FE-3): a RUNNING document task started elsewhere refuses with the docTaskBusy banner, no job starts', async () => {
+    const s = streamStubs()
+    await startForeignDocTask(s, 'running')
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+
+    await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
+    expect(await screen.findByText(t('en', 'translate.err.docTaskBusy'))).toBeInTheDocument()
+    expect(s.translateStart).not.toHaveBeenCalled()
+  })
+
+  it('#162 (FE-3): a FINISHED document task still in the store does not block the translation', async () => {
+    const s = streamStubs()
+    await startForeignDocTask(s, 'done')
+    await vi.waitFor(() => expect(isDocTaskTerminal(getActiveDocTask()?.status ?? null)).toBe(true), {
+      timeout: hangBudgetMs(3000)
+    })
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+
+    await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
+    await waitFor(() => expect(s.translateStart).toHaveBeenCalled())
+    expect(screen.queryByText(t('en', 'translate.err.docTaskBusy'))).not.toBeInTheDocument()
   })
 
   it('a dismissed error banner clears the store state (does not stick / reappear on remount)', async () => {

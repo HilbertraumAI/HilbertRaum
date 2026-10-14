@@ -273,27 +273,29 @@ export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor)
 //   • `encryptFile`/`decryptFile` (SYNC) — the original `readSync`/`writeSync` loop. Used by the
 //     DB-`.enc` lifecycle (create/unlock/lock/checkpoint/rekey) and the crash-only lock, which
 //     must run to completion BEFORE `process.exit` in the `uncaughtException` handler (an async
-//     lock can't finish before exit → committed in-session data would be lost), and by the bounded
-//     text-export path reached through a SYNCHRONOUS caller (the export reader). NOT the per-import freeze.
+//     lock can't finish before exit → committed in-session data would be lost). They take a raw
+//     key; the vault's `DocumentCipher` no longer exposes them (#687). NOT the per-import freeze.
 //   • `encryptFileAsync`/`decryptFileAsync` (ASYNC) — the same loop on `fs.promises` FileHandles,
 //     awaiting each chunk so it YIELDS to the event loop between chunks (AES-GCM `update` on an
 //     8 MiB chunk is sub-ms). Used by the document-CACHE import/re-index/preview/OCR path — the
 //     "freeze on every import" PERF-1 targets (a large scanned PDF over USB, paid twice in an
 //     encrypted workspace) — AND, since audit 2026-07-16 F-12, the image-history store/open path
-//     (see below). DIVERGENCE from the audit's "convert the vault loop" wording: rather than make the
-//     shared functions async-in-place (which cascades into the DB lock/unlock/rekey lifecycle + the
-//     synchronous crash-lock — the highest-stakes, most-tested code, with a real vault-corruption blast
-//     radius the audit itself flagged), we ADDED async siblings used by the actual per-import harm and
-//     left the session-boundary DB lifecycle + the sync export path on the sync functions. See
-//     architecture.md §35.
+//     (see below), AND, since DB-7, the text/original export readers. They are the only pair the
+//     vault's `DocumentCipher` exposes (#687). DIVERGENCE from the audit's "convert the vault loop"
+//     wording: rather than make the shared functions async-in-place (which cascades into the DB
+//     lock/unlock/rekey lifecycle + the synchronous crash-lock — the highest-stakes, most-tested code,
+//     with a real vault-corruption blast radius the audit itself flagged), we ADDED async siblings used
+//     by the actual per-import harm and left the session-boundary DB lifecycle on the sync functions.
+//     See architecture.md §35.
 //
 //   SUPERSEDE (audit 2026-07-16 F-12, 2026-07-17): the "image-history via the vision emitter stays on
 //   the SYNC path" carve-out above is RETIRED. On an encrypted workspace, storing/opening/deleting a
 //   ~20 MiB image ran ~60 MiB of sync fs+crypto+shred on the main thread AT the answer-complete moment
 //   (freezing all IPC on the USB medium the product targets). The vision history now uses the async
 //   cipher twins + `fs.promises` + `shredFileAsync` (below), and the analyze handler awaits the
-//   persistence before firing `done` (so sessionId still rides the event). The sync `shredFile` and the
-//   sync cipher stay for the crash-lock / export / vault-lifecycle callers. See architecture.md §35.
+//   persistence before firing `done` (so sessionId still rides the event). The sync `shredFile` stays
+//   for the export readers' transients (and the other temp-file cleanups); the sync cipher stays for
+//   the crash-lock / vault-lifecycle / rekey callers. See architecture.md §35.
 
 /** Chunk size for streaming crypto + shredding. Bounds memory regardless of file size. */
 export const FILE_CHUNK_BYTES = 8 * 1024 * 1024
@@ -1140,15 +1142,14 @@ export function rewrapVaultKey(
  * bytes of every imported file would otherwise stay readable on a lost drive).
  */
 export interface DocumentCipher {
-  /** Encrypt the plaintext file at `srcPath` → framed ciphertext at `destPath`. SYNCHRONOUS —
-   *  for the bounded, sync-reached paths (image-history via the vision emitter; text export). */
-  encryptFile(srcPath: string, destPath: string): void
-  /** Decrypt the framed ciphertext at `srcPath` → plaintext at `destPath`. SYNCHRONOUS. */
-  decryptFile(srcPath: string, destPath: string): void
-  /** Async encrypt (PERF-1): yields to the event loop between chunks. Use on the document-cache
-   *  import/re-index path so a large import never freezes the main process. */
+  // ASYNC only (#687): every consumer (document-cache import/re-index/preview/OCR, the text and
+  // original export readers, the image history) awaits these, so a large file never freezes the
+  // main process. The sync module functions stay for the raw-key DB lifecycle, crash-lock and rekey.
+  /** Async encrypt (PERF-1): plaintext at `srcPath` → framed ciphertext at `destPath`, yielding to
+   *  the event loop between chunks. */
   encryptFileAsync(srcPath: string, destPath: string): Promise<void>
-  /** Async decrypt (PERF-1): yields between chunks. Use on the import/preview/OCR read path. */
+  /** Async decrypt (PERF-1): framed ciphertext at `srcPath` → plaintext at `destPath`, yielding
+   *  between chunks. */
   decryptFileAsync(srcPath: string, destPath: string): Promise<void>
 }
 
@@ -1877,8 +1878,6 @@ export class WorkspaceController {
       return this.key
     }
     return {
-      encryptFile: (src, dest) => encryptFile(src, dest, requireKey()),
-      decryptFile: (src, dest) => decryptFile(src, dest, requireKey()),
       encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, requireKey()),
       decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, requireKey())
     }

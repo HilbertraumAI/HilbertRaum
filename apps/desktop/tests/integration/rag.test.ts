@@ -36,7 +36,7 @@ import {
   getConversationContextUsage,
   listMessages
 } from '../../src/main/services/chat'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../../src/main/services/runtime'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
 import { MAX_REDUCE_CONTINUATIONS, streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
@@ -49,7 +49,7 @@ import {
   processDocument
 } from '../../src/main/services/ingestion'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
-import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { finishScriptedRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
 
 function freshDb(): Db {
   return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-')), 'test.sqlite'))
@@ -804,33 +804,10 @@ describe('generateGroundedAnswer', () => {
 
   // Continue-generation on the single-turn grounded path (follow-up #1): a grounded answer cut off at the
   // context ceiling ('length', no explicit cap) is FINISHED across bounded re-prompts via the shared engine
-  // instead of persisting a mid-word partial — the same engine the map-reduce reduce uses. A scripted runtime
-  // fires a finish reason + reply per chatStream call so a test can drive the loop and assert the outcome.
-  function groundedScriptRuntime(
-    // #498: `timings` is optional per step — the cause attribution reads `predicted_n` to tell a
-    // pass that really reached its cap from one the window stopped short of it. `caps` records the
-    // `max_tokens` each pass was actually sent, so a test can see the room guard shrink it.
-    script: Array<{ reply: string; finish?: string; timings?: RuntimeTimings }>,
-    contextWindow = 2048
-  ): ModelRuntime & { calls: number; caps: Array<number | undefined> } {
-    const rt = {
-      modelId: 'script',
-      calls: 0,
-      caps: [] as Array<number | undefined>,
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      contextWindow: () => contextWindow,
-      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
-        const step = script[Math.min(rt.calls, script.length - 1)]
-        rt.calls++
-        rt.caps.push(options?.maxTokens)
-        yield step.reply
-        options?.onFinish?.(step.finish ?? 'stop', step.timings)
-      }
-    } as unknown as ModelRuntime & { calls: number; caps: Array<number | undefined> }
-    return rt
-  }
+  // instead of persisting a mid-word partial — the same engine the map-reduce reduce uses. `finishScriptedRuntime`
+  // fires a finish reason + reply per chatStream call so a test can drive the loop and assert the outcome; #498:
+  // a step's `timings.predicted_n` tells a pass that really reached its cap from one the window stopped short
+  // of, and `caps` records the `max_tokens` each pass was actually sent (the room guard shrinking it).
 
   async function askGrounded(runtime: ModelRuntime, opts: GroundedAnswerOptions = {}) {
     const db = freshDb()
@@ -845,7 +822,7 @@ describe('generateGroundedAnswer', () => {
   }
 
   it('continue-generation FINISHES a grounded answer cut off at the ceiling (follow-up #1)', async () => {
-    const runtime = groundedScriptRuntime([
+    const runtime = finishScriptedRuntime([
       { reply: 'The first half of the answer', finish: 'length' },
       { reply: ' and the second half completes it.', finish: 'stop' }
     ])
@@ -858,7 +835,7 @@ describe('generateGroundedAnswer', () => {
 
   it('continue-generation is bounded and seam-deduped: an always-cut answer stamps truncated after the cap (follow-up #1)', async () => {
     // Distinct replies whose openings repeat the prior tail (the seam) — the dedup must emit each once.
-    const runtime = groundedScriptRuntime([
+    const runtime = finishScriptedRuntime([
       { reply: 'alpha beta', finish: 'length' },
       { reply: 'beta gamma', finish: 'length' },
       { reply: 'gamma delta', finish: 'length' }
@@ -874,7 +851,7 @@ describe('generateGroundedAnswer', () => {
   // never continued past (mirrors chat.ts's own Fast-mode rule) — the product's own pinned default
   // does not suppress continuation, per the two tests above.
   it('never continues generation past a caller-supplied maxTokens', async () => {
-    const runtime = groundedScriptRuntime([
+    const runtime = finishScriptedRuntime([
       { reply: 'The caller wanted it short', finish: 'length' },
       { reply: ' and this only exists if a continuation ran.', finish: 'stop' }
     ])
@@ -889,7 +866,7 @@ describe('generateGroundedAnswer', () => {
   // tooltip offers. 'context' ⇒ "raise the context size" (the window really was the reason);
   // 'cap' ⇒ "ask it to continue" (the app's own 1024-token-per-pass ceiling ended it).
   it('#498: a grounded answer still cut after the continuations is attributed to the app’s own cap', async () => {
-    const runtime = groundedScriptRuntime([
+    const runtime = finishScriptedRuntime([
       { reply: 'alpha beta', finish: 'length' },
       { reply: 'beta gamma', finish: 'length' },
       { reply: 'gamma delta', finish: 'length' }
@@ -907,7 +884,7 @@ describe('generateGroundedAnswer', () => {
     // A tiny launched window: the grounded prompt plus the resume anchor leaves less than
     // CONTINUATION_MIN_OUTPUT_TOKENS of room, so the engine's no-overflow guard stops the loop
     // before a single continuation pass can run. Nothing but the window explains that.
-    const runtime = groundedScriptRuntime(
+    const runtime = finishScriptedRuntime(
       [{ reply: 'cut at the wall', finish: 'length', timings: { predicted_n: 300 } }],
       2048 / 4
     )
@@ -919,7 +896,7 @@ describe('generateGroundedAnswer', () => {
   })
 
   it('#498: a grounded answer that finishes cleanly carries neither the flag nor a cause', async () => {
-    const msg = await askGrounded(groundedScriptRuntime([{ reply: 'A complete answer.', finish: 'stop' }]))
+    const msg = await askGrounded(finishScriptedRuntime([{ reply: 'A complete answer.', finish: 'stop' }]))
     expect(msg.truncated).toBeUndefined()
     expect(msg.truncatedCause).toBeUndefined()
   })
