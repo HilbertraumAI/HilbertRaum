@@ -15073,7 +15073,8 @@ Follow-up 1, done on `fix/698-katex-dedupe`.
   until it parses: about 200 ms in the real app, and in jsdom for `$$ x = \frac{-b \pm \sqrt{…}}`.
   The streaming completions (`completeTrailingMath`) handle `\[`, `\(` and `$`, not `$$`, and
   Streamdown closes the `$$` without checking that the TeX parses. Which KaTeX copy runs does not
-  matter: the app's copy only validates candidates through the stateless `renderToString`.
+  matter: the app's copy only validates candidates through the stateless `renderToString`. Filed as
+  #701.
 
 ## App scheme `hilbertraum://app/` — design record (#560)
 
