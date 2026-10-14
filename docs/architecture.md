@@ -2530,7 +2530,7 @@ sentinel-tested), zero native deps.
   ENABLED through the finishing step (a legitimately cancellable pre-persist instant
   shares that renderer-visible state); after a cancel click the button renders disabled as
   "Stopping if possible…" (`docs.task.stopping`) — honest about the two-part cancel
-  contract above. The ~ms ambiguity (the pre-persist instant already reads "Finishing") is
+  contract above (a cancel the IPC rejects offers Cancel again, #680). The ~ms ambiguity (the pre-persist instant already reads "Finishing") is
   accepted.
 - **Availability-driven (D14/D9):** `createSelectedOcrEngine` returns the engine iff
   `<root>/ocr/*.traineddata.gz` exist, else **null** (no mock — invented text would
@@ -2852,7 +2852,13 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   translation reveals the new document in the refreshed list with a quiet "Translated
   from <original>" provenance line (row + preview); a done comparison opens the new
   report's preview with its "Comparison of <A> and <B>" line. Both materialized kinds
-  offer Export.
+  offer Export. **Poll write-back (#680):** a 400 ms tick reads the entry again after its
+  round-trips (`getDocTask`, and the #38 chain read) and spreads THAT entry, never the one it read
+  before them, so a Cancel latch (DOC-5) set meanwhile survives and an entry a lock purge (SH-4)
+  dropped or a newer task replaced is left alone. One tick runs at a time (a per-timer in-flight
+  latch, fileTranslateSession's TA-3 / H4 shape), so a slow round-trip cannot land after an
+  overlapping tick gave up (CODE-6) and revive a task nothing polls; a rejected cancel clears the
+  latch.
 
 ## Translation sidecar — design record (TG wave)
 
