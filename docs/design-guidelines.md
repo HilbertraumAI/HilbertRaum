@@ -1360,7 +1360,7 @@ eligibility, the empty state's copy action, the picker's "Add packs…"), `HomeK
 (the three row states + the absent row), `GermanSmoke.test.tsx`, `InformationArchitecture.test.tsx`
 (`documents:packs`), `i18n-unused-keys.test.ts`, `zim-ui-layout-rules.test.ts`.
 
-### 11.17 "The AI engine can't run on this computer" — design record (IMPLEMENTED 2026-10-01, #530; reinstall 2026-10-05, #532)
+### 11.17 "The AI engine can't run on this computer" — design record (IMPLEMENTED 2026-10-01, #530; reinstall 2026-10-05, #532; the `cpu/` net 2026-10-14, #678)
 
 _How the app tells the user that an engine on the drive cannot run here: the OS refused the
 program before it started (Linux without `libgomp1`, a system too old, Windows without the Visual
@@ -1468,7 +1468,10 @@ Engineering record: `architecture.md` "Engine load failures" §8.
    Redistributable, elsewhere it points to the troubleshooting guide. No second reinstall is
    offered; Check again remains. Diagnostics says "engine files reported damaged right after a
    fresh install". On a Kit the `cpu/` net is refused right after the fresh copy; since #670 its
-   report keeps this sentence instead of bringing the reinstall back.
+   report keeps this sentence instead of bringing the reinstall back. Since #678 the reinstall
+   replaces the `cpu/` net too when the OS refused it (alone, when the main build ran fine), so the
+   same sentence follows a fresh `cpu/` copy that is refused again. Check again checks the `cpu/` net
+   when it is the only program refused, instead of saying the engine runs again.
 5. **Copy:** `models.engineProblem.{filesDamagedReinstall, filesDamagedAfterInstall,
    filesDamagedAfterInstallWin, reinstall, voiceReinstall, reinstalled, voiceReinstalled}`,
    `diag.engine.reason.filesDamagedAfterInstall`, `main.engine.nothingToRepair` (en + de).

@@ -48,7 +48,10 @@ const REFUSED_WHISPER = '/drive/runtime/whisper.cpp/linux/whisper-cli'
 const dirs: string[] = []
 const dbs: Db[] = []
 
-function driveRoot(opts: { llama?: boolean; whisper?: boolean } = {}): string {
+const cpuNetBin = (root: string): string => join(root, 'runtime', 'llama.cpp', llamaOsDir(), 'cpu', llamaServerBinaryName())
+
+/** `cpuNet` (#678): the chat engine's `cpu/` safety net too, as on a prepared Kit. */
+function driveRoot(opts: { llama?: boolean; whisper?: boolean; cpuNet?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-recheck-'))
   dirs.push(root)
   const put = (family: string, bin: string): void => {
@@ -57,6 +60,10 @@ function driveRoot(opts: { llama?: boolean; whisper?: boolean } = {}): string {
     writeFileSync(join(dir, bin), '')
   }
   if (opts.llama !== false) put('llama.cpp', llamaServerBinaryName())
+  if (opts.cpuNet) {
+    mkdirSync(join(root, 'runtime', 'llama.cpp', llamaOsDir(), 'cpu'), { recursive: true })
+    writeFileSync(cpuNetBin(root), '')
+  }
   if (opts.whisper) put('whisper.cpp', whisperCliBinaryName())
   return root
 }
@@ -252,6 +259,28 @@ describe('recheckEngines — the chat engine (#530)', () => {
     expect(result).toEqual({ problems: [] })
     expect(f.probe).not.toHaveBeenCalled()
     expect(f.restartChat).not.toHaveBeenCalled()
+  })
+
+  // #678: on a Kit, rungs 1–2 can fail for a reason that is not the loader's (a damaged weight file)
+  // and rung 3 then reports the cpu/ net alone. The main build loads fine; checking it said "runs
+  // again" and the next walk to rung 3 brought the verdict back. The cpu/ net is what is checked.
+  it.each<[string, boolean]>([
+    ['still refused keeps the verdict', false],
+    ['now starting heals it', true]
+  ])('a verdict only the cpu/ net reported is checked on the cpu/ net: %s (#678)', async (_label, cpuLoads) => {
+    const root = driveRoot({ cpuNet: true })
+    const CPU_DAMAGED: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: 'linux', name: 'libllama.so', exit: 'exit code 127' }
+    reportEngineProblem(CPU_DAMAGED, cpuNetBin(root))
+    const f = makeCtx(root, () => undefined)
+    // The main build always loads; the cpu/ net is refused for a missing library of its own.
+    const refusal = `${cpuNetBin(root)}: error while loading shared libraries: libllama.so: cannot open shared object file: No such file or directory\n`
+    const spawn = vi.fn<SpawnFn>((bin, args, o) =>
+      (bin === cpuNetBin(root) && !cpuLoads ? closingSpawn(127, refusal) : closingSpawn(0))(bin, args, o)
+    )
+    const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn, verify: verified, platform: 'linux' })
+    expect(spawn.mock.calls.map(([bin]) => bin)).toEqual([cpuNetBin(root)])
+    expect(result.problems).toEqual(cpuLoads ? [] : [CPU_DAMAGED])
+    expect(f.restartChat).toHaveBeenCalledTimes(cpuLoads ? 1 : 0)
   })
 })
 

@@ -120,9 +120,11 @@ function demoRuntime(): { status: () => RuntimeStatus; activeModelId: () => stri
  *  with a policy that allows downloads and the network setting on; the engine IPC registered
  *  over a real DB. `ctx.zim` is a stub whose `reconcile` the completed-install hook must call.
  *  `withWhisper` (#497) also pins the whisper_cpp family and provisions the speech model's
- *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case. */
+ *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case.
+ *  `kit` (#678) pins the chat engine as a prepared Kit has it: a vulkan main build, plus the
+ *  `cpu/` safety net in its own folder (each its own archive URL). */
 function makeDrive(
-  opts: { withWhisper?: boolean; runtime?: unknown; llamaVersion?: string; extract?: ExtractFn } = {}
+  opts: { withWhisper?: boolean; runtime?: unknown; llamaVersion?: string; extract?: ExtractFn; kit?: boolean } = {}
 ): Drive {
   const root = freshRoot()
   const manifests = join(root, 'model-manifests')
@@ -147,7 +149,12 @@ function makeDrive(
     stringify({
       llama_cpp: {
         version: opts.llamaVersion ?? 'btest',
-        builds: [{ os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/llama.zip', sha256: SHA, extract_to: `runtime/llama.cpp/${HOST_OS}` }]
+        builds: opts.kit
+          ? [
+              { os: HOST_OS, arch: HOST_ARCH, backend: 'vulkan', url: 'https://example.test/llama-vulkan.zip', sha256: SHA, extract_to: `runtime/llama.cpp/${HOST_OS}` },
+              { os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/llama-cpu.zip', sha256: SHA, extract_to: `runtime/llama.cpp/${HOST_OS}/cpu` }
+            ]
+          : [{ os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/llama.zip', sha256: SHA, extract_to: `runtime/llama.cpp/${HOST_OS}` }]
       },
       ...(opts.withWhisper
         ? {
@@ -410,11 +417,16 @@ describe('engine load verdicts over IPC (#530)', () => {
 describe('downloadEngine({ families, reinstall }) — the damaged-files repair (#532)', () => {
   const DAMAGED: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: HOST_OS, exit: 'exit code 0xC0000135' }
 
-  /** Install the chat engine once, so it is on the drive and current by its marker. */
+  /**
+   * The chat engine as the drive was prepared: on it and current by its marker. Not a copy this
+   * session's install put there — one of those refused as damaged is `afterInstall`, which is offered
+   * no reinstall (#678 closed the handler's side of that rule).
+   */
   async function installChatEngine(d: Drive): Promise<void> {
-    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'] })
-    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
-    d.fetchSpy.mockClear()
+    const dir = join(d.root, 'runtime', 'llama.cpp', HOST_OS)
+    await mkdir(dir, { recursive: true })
+    writeFileSync(join(dir, BIN_NAME), 'the prepared copy')
+    writeRuntimeMarker(dir, { version: 'btest', backend: 'cpu', os: HOST_OS, arch: HOST_ARCH })
   }
 
   it('re-fetches a present, current engine whose files are damaged: the old copy goes, cpu/ stays, the fresh copy is remembered', async () => {
@@ -467,6 +479,105 @@ describe('downloadEngine({ families, reinstall }) — the damaged-files repair (
     await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
     expect(runtime.stop).toHaveBeenCalledTimes(1)
     expect(runtime.stop.mock.invocationCallOrder[0]).toBeLessThan(runtime.start.mock.invocationCallOrder[0] ?? 0)
+  })
+})
+
+// #678: on a Kit the ladder reaches the cpu/ net (rung 3) only after the main build's rungs 1–2 failed,
+// and they can fail for a reason that is not the loader's (a damaged weight file). A cpu/ refusal is
+// then the verdict's only report. The reinstall used to re-fetch the main build alone, leave cpu/
+// damaged, and bring the same offer back with the next walk; with an import done, the embedder running
+// from the healthy main build refused it outright ("stop the model first").
+describe('downloadEngine({ families, reinstall }) on a Kit — the builds the OS refused (#678)', () => {
+  const DAMAGED: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: HOST_OS, exit: 'exit code 0xC0000135' }
+  const mainDir = (d: Drive): string => join(d.root, 'runtime', 'llama.cpp', HOST_OS)
+  const cpuBin = (d: Drive): string => join(mainDir(d), 'cpu', BIN_NAME)
+  const fetched = (d: Drive): string[] => d.fetchSpy.mock.calls.map(([url]) => String(url))
+
+  /** A prepared Kit: the main build and the cpu/ net on the drive, each current by its marker. */
+  function kitDrive(runtime?: unknown): Drive {
+    const d = makeDrive({ kit: true, runtime })
+    for (const [dir, backend] of [[mainDir(d), 'vulkan'], [join(mainDir(d), 'cpu'), 'cpu']] as const) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, BIN_NAME), `old ${backend}`)
+      writeRuntimeMarker(dir, { version: 'btest', backend, os: HOST_OS, arch: HOST_ARCH })
+    }
+    return d
+  }
+
+  it('a verdict only the cpu/ net reported re-fetches the cpu/ net alone; its fresh copy refused again offers nothing more', async () => {
+    const d = kitDrive()
+    reportEngineProblem(DAMAGED, cpuBin(d))
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+    expect(result).toMatchObject({ families: ['llama_cpp'], reinstall: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(fetched(d)).toEqual(['https://example.test/llama-cpu.zip'])
+    expect(readFileSync(cpuBin(d), 'utf8')).toBe(`bytes of ${BIN_NAME}`)
+    expect(readFileSync(llamaBin(d.root), 'utf8')).toBe('old vulkan') // the main build ran fine: left as it was
+    expect(engineProblemFor('llama_cpp')).toBeNull()
+    // The fresh cpu/ copy refused as damaged too: its files are not the cause — no second reinstall,
+    // on the screen (afterInstall) or through the handler.
+    reportEngineProblem(DAMAGED, cpuBin(d))
+    expect(engineProblemFor('llama_cpp')?.afterInstall).toBe(true)
+    await expect(
+      invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+    ).rejects.toThrow(/nothing to repair/i)
+  })
+
+  it('a verdict both builds reported re-fetches both, the main build first', async () => {
+    const d = kitDrive()
+    reportEngineProblem(DAMAGED, llamaBin(d.root)) // rungs 1–2
+    reportEngineProblem(DAMAGED, cpuBin(d)) // rung 3
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(fetched(d)).toEqual(['https://example.test/llama-vulkan.zip', 'https://example.test/llama-cpu.zip'])
+    for (const bin of [llamaBin(d.root), cpuBin(d)]) expect(readFileSync(bin, 'utf8')).toBe(`bytes of ${BIN_NAME}`)
+  })
+
+  it('a cpu/ net whose program is gone since it was refused (a failed attempt) is re-fetched all the same', async () => {
+    const d = kitDrive()
+    reportEngineProblem(DAMAGED, cpuBin(d))
+    rmSync(cpuBin(d))
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(fetched(d)).toEqual(['https://example.test/llama-cpu.zip'])
+    expect(existsSync(cpuBin(d))).toBe(true)
+  })
+
+  it('a refused cpu/ net this drive pins no cpu/ build for is refused — nothing is fetched, the main build is not replaced instead', async () => {
+    const d = makeDrive() // the main build IS the processor build: no cpu/ net in the pin
+    await mkdir(join(mainDir(d), 'cpu'), { recursive: true })
+    writeFileSync(llamaBin(d.root), 'old cpu')
+    writeFileSync(cpuBin(d), 'an older Kit’s cpu/ net')
+    reportEngineProblem(DAMAGED, cpuBin(d))
+    await expect(
+      invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+    ).rejects.toThrow(/no ai-engine build/i)
+    expect(d.fetchSpy).not.toHaveBeenCalled()
+  })
+
+  // The helpers (embedder, reranker, vision, translation) run the main build only; the chat ladder's
+  // rung 3 runs the cpu/ net, and the status cannot tell that rung from the main build's.
+  it.each<[string, 'main' | 'cpu', 'helper' | 'chat', boolean]>([
+    ['the cpu/ net is admitted while the embedder runs from the main build', 'cpu', 'helper', true],
+    ['the main build is refused while the embedder runs from it', 'main', 'helper', false],
+    ['the cpu/ net is refused while a model runs on the engine', 'cpu', 'chat', false]
+  ])('the in-use guard, per build: %s', async (_label, refused, user, admitted) => {
+    const chat = { activeModelId: () => 'chat-test', status: () => ({ running: true, modelId: 'chat-test', backend: 'cpu', startingModelId: null, port: 1, healthy: true, message: 'Running' }) }
+    const d = kitDrive(user === 'chat' ? chat : undefined)
+    reportEngineProblem(DAMAGED, refused === 'cpu' ? cpuBin(d) : llamaBin(d.root))
+    const embedderPid = 970_678
+    if (user === 'helper') registerSidecarChild(embedderPid, 'llama_cpp')
+    try {
+      const request = invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+      if (admitted) {
+        expect((await settle(d, (await request).result as EngineDownloadJob)).status).toBe('done')
+      } else {
+        await expect(request).rejects.toThrow(/while a model is running/i)
+        expect(d.fetchSpy).not.toHaveBeenCalled()
+      }
+    } finally {
+      unregisterSidecarChild(embedderPid)
+    }
   })
 })
 

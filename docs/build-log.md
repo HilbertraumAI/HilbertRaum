@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-07 #637 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #678 entry). Its record is unchanged:
+`architecture.md` image-understanding §6 "#637 amendment". Citations of the form "BUILD_STATE 2026-10-07 #637 entry" now resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-10-07 — **#637 — a cancel ends a vision or translation job's wait for a cold start, not the start (`fix/637-vision-translation-start-stop`).** A
+cancel during a hung start waited up to the 180 s health budget: a new image analysis read "busy", a cancelled document translation kept chat refused.
+Both `ensureStarted`s now race the shared start (#635's `waitUnlessAborted`; translation's idle-teardown wait too); the start's own settle arms the idle clock, so
+a start every job left is unloaded one idle window after it lands; `VisionService` drops a runtime whose start failed after its job left; translation walks no CPU rung
+for nobody. Real app, frozen start:
+a new analysis 28.8 s → 30 ms after the cancel, a cancelled translation 23.9 s → 5 ms. Record: `architecture.md` image-understanding §6 "#637 amendment". Open: none._
+
 ## 2026-10-14 — the closed 2026-10-07 #635 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the DEP-7 entry). Its record is unchanged:

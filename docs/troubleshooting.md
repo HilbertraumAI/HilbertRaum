@@ -137,7 +137,8 @@ the app cannot override them.
 to its program could not be loaded, which usually means an interrupted copy. Choose **Install the
 AI engine again** in the banner (for the voice engine: **Install the voice engine again**, under
 the speech model). It downloads a fresh copy, checks it against its pinned checksum, replaces the
-engine folder and starts your model again. If the download fails or you cancel it, the copy on the
+engine folder and starts your model again. On a Kit it replaces the part that could not start: the
+main engine, its `cpu/` safety net, or both. If the download fails or you cancel it, the copy on the
 drive stays as it was. Like every download, it needs **Allow internet access…** in Settings; if
 the button is greyed out, the line under it says why.
 

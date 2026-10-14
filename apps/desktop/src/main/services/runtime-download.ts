@@ -35,6 +35,7 @@ import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
 import { assertDownloadAllowed, type DownloadGates } from './downloads'
 import { holdEngineSpawns } from './runtime/spawn-gate'
+import type { EngineProblemBuilds } from './runtime/engine-load'
 
 // In-app engine (prebuilt sidecar binary) downloader. The model downloader fetches model
 // WEIGHTS; the ENGINE binaries (the llama.cpp chat server, the whisper.cpp transcriber)
@@ -129,7 +130,8 @@ interface EnginePlan {
   /**
    * #516: the family's pure-CPU safety net for this host — the yaml's `cpu` build when the default
    * build is another backend and lands in its own folder (`<os>/cpu/`, win + linux). Only an update
-   * installs it, and only when the drive carries it and it is older; nothing else here does.
+   * (when the drive carries it and it is older) and a reinstall (#678, when the OS refused it as
+   * damaged) install it; the plain install never does.
    */
   cpuNet?: RuntimeDownloadPlan
 }
@@ -466,6 +468,14 @@ export interface StartEngineDownloadOptions {
    */
   reinstall?: boolean
   /**
+   * #678: with `reinstall`, which of each family's builds to replace — the ones the OS refused
+   * (`engineProblemBuilds`). A family not listed gets its main build only (#532). A `cpu/` net is
+   * replaced when this host's pin has one, even if its program has gone since it was refused (a
+   * failed earlier attempt); a refused `cpu/` net with no build here is skipped, and a job left with
+   * nothing to install is `main.engine.noHostBuild`.
+   */
+  reinstallBuilds?: Partial<Record<EngineFamily, EngineProblemBuilds>>
+  /**
    * #516: update `families` to this app's pin. Only an install whose relation is `older` is
    * replaced (never a newer or unrecorded one), plus the family's `cpu/` safety net when the drive
    * carries it and it is older too. Requires `families`; no family qualifying is
@@ -489,6 +499,8 @@ export interface StartEngineDownloadOptions {
    * friendly copy while a model runs. Installs that only touch other families (e.g. a
    * missing whisper_cpp) are unaffected. The IPC layer passes `chatEngineInUse(ctx.runtime)`:
    * a model running or starting on the real engine, never the built-in demo runtime (#532).
+   * #678: a job that replaces only the `cpu/` net is refused too — the chat ladder's rung 3 runs
+   * from there, and the status cannot tell that rung from the main build's.
    */
   chatRuntimeActive?: boolean
   /**
@@ -496,7 +508,8 @@ export interface StartEngineDownloadOptions {
    * or translation — has a live child. They all execute the SAME `runtime/llama.cpp/<os>/`
    * binary a llama_cpp (re-)install pre-cleans, so the guard must refuse the install while any
    * of them runs, not just the chat runtime. The IPC layer passes
-   * `registeredSidecarPids('llama_cpp').length > 0`.
+   * `registeredSidecarPids('llama_cpp').length > 0`. #678: none of them runs the `cpu/` net, so a
+   * job that replaces only that is not refused for them.
    */
   llamaSidecarActive?: boolean
   /**
@@ -519,13 +532,17 @@ export interface StartEngineDownloadOptions {
 
 const MAX_TERMINAL_JOBS = 10
 
-/** A completed-install subscriber (#323): the families installed, and each one's primary program (#532). */
+/**
+ * A completed-install subscriber (#323): the families installed, and each one's programs the job
+ * put on the drive (#532) — the main build's primary program, then the `cpu/` net's when the job
+ * replaced it too (#678).
+ */
 export type InstalledListener = (
   families: EngineFamily[],
-  binaryPaths: Partial<Record<EngineFamily, string>>
+  programs: Partial<Record<EngineFamily, string[]>>
 ) => void
 
-/** One archive a job installs: a family's main build, or (#516, updates only) its `cpu/` net. */
+/** One archive a job installs: a family's main build, or (#516 updates, #678 reinstalls) its `cpu/` net. */
 interface InstallStep {
   family: EngineFamily
   plan: RuntimeDownloadPlan
@@ -577,8 +594,9 @@ export class EngineDownloadManager {
    * fails the finished job (the same rule as the model downloader's `onModelInstalled`, #40).
    * Returns the unsubscribe. The IPC layer wires this to the GPU-probe refresh: a benchmark
    * run before the chat engine existed persisted an empty probe, and installing the engine is
-   * the moment that answer can change. `binaryPaths` (#532) names each installed family's
-   * primary program, the path every spawn site resolves for it.
+   * the moment that answer can change. `programs` (#532) names each installed family's primary
+   * program, the path every spawn site resolves for it, and (#678) its `cpu/` net's when the job
+   * replaced that too.
    */
   onInstalled(cb: InstalledListener): () => void {
     this.installedListeners.add(cb)
@@ -592,7 +610,7 @@ export class EngineDownloadManager {
    * in the background. Throws a friendly, cause-specific error when a gate is closed,
    * another download is running, there are no engine sources / host build, or everything is
    * already installed + current. A reinstall (#532, `reinstall: true`) installs the families it
-   * names whether or not they are current.
+   * names whether or not they are current — the builds `reinstallBuilds` names (#678).
    */
   async start(opts: StartEngineDownloadOptions): Promise<EngineDownloadJob> {
     this.pruneTerminalJobs()
@@ -619,6 +637,7 @@ export class EngineDownloadManager {
     // An explicit `families` list (the consent step) installs the named families not yet current.
     // #532: a reinstall keeps the requested families even when current — and only those, so it
     // needs the explicit list; a family it names that has no build here cannot be repaired here.
+    // #678: it replaces the builds the OS refused — the main build, the `cpu/` net, or both.
     const wanted = opts.families
     const reinstall = opts.reinstall === true
     const update = opts.update === true
@@ -640,15 +659,22 @@ export class EngineDownloadManager {
         }
       }
       if (steps.length === 0) throw new Error(tMain('main.engine.nothingToUpdate'))
+    } else if (reinstall) {
+      const named = engines.filter((e) => wanted?.includes(e.family))
+      if (named.length < (wanted?.length ?? 0)) throw new Error(tMain('main.engine.noHostBuild'))
+      steps = []
+      for (const e of named) {
+        const builds = opts.reinstallBuilds?.[e.family] ?? { main: true, cpuNet: false }
+        if (builds.main) steps.push({ family: e.family, plan: e.plan, main: true })
+        if (builds.cpuNet && e.cpuNet) steps.push({ family: e.family, plan: e.cpuNet, main: false })
+      }
+      // Only a refused `cpu/` net that this host's pin has no build for is left (a main folder
+      // provisioned as the processor build over an older Kit's `cpu/`): nothing here can replace it.
+      if (steps.length === 0) throw new Error(tMain('main.engine.noHostBuild'))
     } else {
       const selected = engines.filter((e) =>
-        wanted
-          ? wanted.includes(e.family) && (reinstall || !runtimeInstallCurrent(e.plan))
-          : !e.optional && !runtimeBinaryPresent(e.plan)
+        wanted ? wanted.includes(e.family) && !runtimeInstallCurrent(e.plan) : !e.optional && !runtimeBinaryPresent(e.plan)
       )
-      if (reinstall && selected.length < (wanted?.length ?? 0)) {
-        throw new Error(tMain('main.engine.noHostBuild'))
-      }
       if (selected.length === 0) {
         throw new Error(tMain('main.engine.alreadyInstalled'))
       }
@@ -659,9 +685,12 @@ export class EngineDownloadManager {
     // A llama_cpp install is refused while the chat runtime OR any other llama-server-backed
     // sidecar (embedder/reranker/vision/translation) is up; a whisper_cpp install while a
     // transcription/dictation runs. Installs touching only the OTHER family stay allowed.
+    // #678: per build — the helpers run only the main build, so a job that replaces only the
+    // `cpu/` net is refused for the chat runtime alone (rung 3 runs from there).
     // #516: an update that brings its own `beforeReplace` makes that check there, after its pause.
     if (!opts.beforeReplace) {
-      if (families.includes('llama_cpp') && (opts.chatRuntimeActive || opts.llamaSidecarActive)) {
+      const llamaMain = steps.some((s) => s.family === 'llama_cpp' && s.main)
+      if (families.includes('llama_cpp') && (opts.chatRuntimeActive || (llamaMain && opts.llamaSidecarActive))) {
         throw new Error(tMain('main.engine.runtimeRunning'))
       }
       if (families.includes('whisper_cpp') && opts.whisperActive) {
@@ -846,8 +875,9 @@ export class EngineDownloadManager {
     } finally {
       for (const release of releases) release()
       // #516: a job that stopped part-way still replaced what it replaced — the consumers of a new
-      // main build need the same re-arm and probe refresh as after a complete install.
-      if (!complete && replaced.some((s) => s.main)) this.notifyInstalled(replaced)
+      // main build need the same re-arm and probe refresh as after a complete install. #678: so does
+      // a `cpu/` net a reinstall replaced alone: its old verdict goes, and the fresh copy is known.
+      if (!complete && replaced.length > 0) this.notifyInstalled(replaced)
     }
     job.binaryPath = steps.find((s) => s.main)?.plan.binaryPath ?? steps[0]?.plan.binaryPath ?? null
     job.status = 'done'
@@ -860,11 +890,11 @@ export class EngineDownloadManager {
    */
   private notifyInstalled(steps: readonly InstallStep[]): void {
     const families = [...new Set(steps.map((s) => s.family))]
-    const binaryPaths: Partial<Record<EngineFamily, string>> = {}
-    for (const s of steps) if (s.main) binaryPaths[s.family] = s.plan.binaryPath
+    const programs: Partial<Record<EngineFamily, string[]>> = {}
+    for (const s of steps) (programs[s.family] ??= []).push(s.plan.binaryPath)
     for (const listener of this.installedListeners) {
       try {
-        listener(families, binaryPaths)
+        listener(families, programs)
       } catch (err) {
         this.deps.log?.('Engine install listener failed (install itself succeeded)', String(err))
       }

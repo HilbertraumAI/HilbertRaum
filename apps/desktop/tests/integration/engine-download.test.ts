@@ -1204,6 +1204,33 @@ describe('engine updates (#516)', () => {
     expect(engineSpawnsHeld('llama_cpp')).toBe(false)
   })
 
+  // #678: a reinstall can replace a family's cpu/ net alone. A job that stops after that swap (here the
+  // voice engine's extraction fails) still reports it: the net's old verdict goes, its fresh copy is known.
+  it('a job that stops part-way still reports a cpu/ net it replaced alone (#678)', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async (archive, destDir, signal) => {
+        if (destDir === whisperDir(rootPath)) throw new Error('tar exited with code 1')
+        await familyExtract(archive, destDir, signal)
+      }
+    })
+    const installed: Array<[string[], Partial<Record<string, string[]>>]> = []
+    mgr.onInstalled((families, programs) => installed.push([families, programs]))
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp', 'whisper_cpp'],
+      reinstall: true,
+      reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
+    })
+    await runToEnd(mgr, started.jobId)
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    expect(mgr.get(started.jobId).status).toBe('failed')
+    expect(installed).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
+  })
+
   it('onSettled reports every outcome once — a done job and a failed one', async () => {
     const { rootPath, manifestsDir } = makeUpdateDrive()
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
