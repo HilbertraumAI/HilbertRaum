@@ -184,6 +184,19 @@ describe('translationBudgetWords', () => {
     expect(cap).toBeGreaterThanOrEqual(Math.ceil(T_BUDGET * TRANSLATION_OUTPUT_TOKENS_PER_WORD))
   })
 
+  it.each([
+    [1024, 122, 382],
+    [2048, 296, 919]
+  ])('#512: below ~4,088 ctx the 2.8 + 3.1 split binds — ctx %i gives %i-word windows and a %i-token output cap (#682)', (ctx, words, cap) => {
+    // floor((ctx − 300) / (2.8 + 3.1)) words; the cap is the usable context minus ceil(words × 2.8). Only below the
+    // D4 clamp does the 3.1 output weight shape a window, and the fit property below re-derives from the same
+    // constants, so these are pinned literals (the 4096 row's note). At the former 2.0: 150 / 304 and 364 / 728.
+    expect(translationBudgetWords(ctx)).toBe(words)
+    // Both planners: the doc-task handler plans blocks, the pasted-text path (translation/jobs.ts) plain windows.
+    expect(planTranslationBlocks([{ text: chunkOf(200), pageNumber: null }], null, ctx).windowMaxTokens).toBe(cap)
+    expect(planTranslationWindows([chunkOf(200)], ctx).windowMaxTokens).toBe(cap)
+  })
+
   it('D4: clamps the input to the model card 2K spec on larger contexts', () => {
     // A 16K context would allow far more words by the split formula — the fine-tune is
     // trained at ≤2K input tokens, so the clamp must win regardless of the context.
@@ -373,6 +386,15 @@ function chunkRefs(count: number, wordsEach: number, tag = 'c'): CompareChunkRef
 describe('compareBudgetWords + the mode switch (D28)', () => {
   it('the launched 4096 context gives a 2,526-word total input budget (both documents together)', () => {
     expect(compareBudgetWords(4096)).toBe(2526)
+  })
+
+  it.each([
+    [1024, 200], // (1024 − 512 − 300) / 1.3 = 163 → the 200-word floor binds
+    [1100, 221], // 288 / 1.3 = 221.5 — just above the floor
+    [2048, 950], // the settings minimum for the context override
+    [8192, 5676] // the window most shipped chat manifests launch
+  ])('ctx %i gives a %i-word compare budget — pinned literals (#682)', (ctx, words) => {
+    expect(compareBudgetWords(ctx)).toBe(words)
   })
 
   it('never collapses below the floor on junk/tiny contexts', () => {
