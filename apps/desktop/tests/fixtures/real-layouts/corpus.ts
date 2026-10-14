@@ -492,9 +492,10 @@ export interface GeometryInvoiceFixture {
 /**
  * Columnar invoice through the geometry pipeline (invoice-hardening-2026-07-04 P4 — the first geometry
  * INVOICE coverage; T1 recorded the gap). An invoice printed in description/qty/unit/total columns:
- * `reconstructPage` clusters each visual row and emits its raw left-to-right text (no booking-date
- * column, so every row is a non-transaction "raw" row), which the plain invoice extractor then parses —
- * exactly what the P3 suspect-retry does in production. The read must be CLEAN: 2 items, reconciling
+ * `reconstructPage` clusters each visual row and emits its raw left-to-right text (the `15.03.2026`
+ * invoice date at x=145 resolves a one-token booking-date column, but no row both leads with an in-column
+ * date and carries an amount, so every row is a non-transaction "raw" row), which the plain invoice
+ * extractor then parses — exactly what the P3 suspect-retry does in production. The read must be CLEAN: 2 items, reconciling
  * totals, header fields intact.
  */
 const geometryInvoiceColumns: GeometryInvoiceFixture = {
