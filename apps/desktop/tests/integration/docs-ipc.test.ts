@@ -78,7 +78,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 // ipc-lock-coverage.test.ts's MODULES row; the task-busy guard is doctasks-ipc.test.ts's (a real DocTaskManager).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
-const dialogState = vi.hoisted(() => ({ result: { canceled: true, filePaths: [] as string[] } }))
+// `onOpen` runs while the open dialog is "on screen" (#681: a lock landing then).
+const dialogState = vi.hoisted(() => ({
+  result: { canceled: true, filePaths: [] as string[] },
+  onOpen: null as (() => void) | null
+}))
 // #90: the save-dialog seam for the original-bytes export; `lastOptions` captures the dialog
 // options so the suggested name / title / encryption-boundary `message` can be asserted.
 const saveDialogState = vi.hoisted(() => ({
@@ -92,7 +96,10 @@ vi.mock('electron', () => ({
   },
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: {
-    showOpenDialog: async () => dialogState.result,
+    showOpenDialog: async () => {
+      dialogState.onOpen?.()
+      return dialogState.result
+    },
     showSaveDialog: async (options: Record<string, unknown>) => {
       saveDialogState.lastOptions = options
       return saveDialogState.result
@@ -287,6 +294,7 @@ function perFileGatedEmbedder(): {
 beforeEach(() => {
   ipcState.handlers.clear()
   dialogState.result = { canceled: true, filePaths: [] }
+  dialogState.onOpen = null
 })
 
 describe('registerDocsIpc', () => {
@@ -1064,6 +1072,25 @@ describe('registerDocsIpc — import path binding (D1)', () => {
     expect(titles).toEqual(['picked.txt'])
   })
 
+  // #681: the lock gate runs first, but a lock can also land while the dialog is open. The picked
+  // paths then belong to a workspace that no longer admits work: no token is minted for them.
+  it('a lock landing while the dialog is open mints no token (#681)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let unlocked = true
+    registerDocsIpc(ctxWith(db, workspacePath, { workspace: { isUnlocked: () => unlocked } }))
+    const dir = mkdtempSync(join(tmpdir(), 'hr-pick-lock-'))
+    const file = join(dir, 'picked.txt')
+    writeFileSync(file, 'a note picked just before the workspace locked')
+    dialogState.onOpen = () => {
+      unlocked = false // "Lock now" while the dialog is on screen
+    }
+    await expect(pick([file])).rejects.toThrow(/Workspace is locked\./)
+    // The control: the same pick with no lock in between does get a token.
+    unlocked = true
+    dialogState.onOpen = null
+    expect((await pick([file])).token).not.toBe('')
+  })
+
   it('imports nothing for a forged/unknown token — even when raw paths name a real file', async () => {
     const { db, workspacePath } = freshWorkspace()
     registerDocsIpc(ctxWith(db, workspacePath))
@@ -1657,4 +1684,36 @@ describe('a scan attached in a chat, then made searchable in Documents (#570, #5
     expect(pendingOf(db, id)).toBeNull()
     expect(resolveScope(db, convId).documentIds).toEqual([id]) // once, now as a linked attachment
   }, testBudgetMs(60_000))
+})
+
+// #681: `docs:preview-page` takes `offset` and `limit` from the renderer. FE-6's "bounded pages" held only
+// for a well-behaved one: `limit` was clamped below and not above, so any renderer could ask for the whole
+// document as one page, and a non-numeric value gave an empty page instead of the default.
+describe('registerDocsIpc — docs:preview-page bounds the renderer-supplied page (#681)', () => {
+  it('caps a page at 50 segments and falls back to the defaults for a non-finite offset or limit', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath))
+    const source = join(workspacePath, 'sections.md')
+    writeFileSync(source, Array.from({ length: 120 }, (_, i) => `# Section ${i}\n\nBody ${i}.`).join('\n\n'))
+    const [id] = (await runImport([source])).documentIds
+    const page = async (offset: unknown, limit: unknown) => {
+      const p = (await invoke(handlers, IPC.previewDocumentPage, id, offset, limit)).result as {
+        segments: Array<{ sectionLabel: string | null }>
+        totalSegments: number
+        nextOffset: number | null
+      }
+      return { n: p.segments.length, first: p.segments[0]?.sectionLabel ?? null, total: p.totalSegments, next: p.nextOffset }
+    }
+
+    expect(await page(0, 10)).toEqual({ n: 10, first: 'Section 0', total: 120, next: 10 }) // a smaller page is honoured
+    expect(await page(0, 0)).toEqual({ n: 1, first: 'Section 0', total: 120, next: 1 }) // the lower bound
+    expect(await page(-10, 10)).toEqual({ n: 10, first: 'Section 0', total: 120, next: 10 })
+    expect(await page(0, undefined)).toEqual({ n: 50, first: 'Section 0', total: 120, next: 50 }) // limit left out
+    expect(await page(0, 10_000)).toEqual({ n: 50, first: 'Section 0', total: 120, next: 50 })
+    expect(await page(0, Infinity)).toEqual({ n: 50, first: 'Section 0', total: 120, next: 50 })
+    expect(await page(0, NaN)).toEqual({ n: 50, first: 'Section 0', total: 120, next: 50 })
+    expect(await page(0, 'all')).toEqual({ n: 50, first: 'Section 0', total: 120, next: 50 })
+    expect(await page(NaN, 10)).toEqual({ n: 10, first: 'Section 0', total: 120, next: 10 })
+    expect(await page(100, 10_000)).toEqual({ n: 20, first: 'Section 100', total: 120, next: null })
+  })
 })

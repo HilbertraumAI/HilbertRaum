@@ -2012,7 +2012,8 @@ whole renderer-visible surface.
 - **Bulk re-index** — `startReindexAll(documentIds)`, `getReindexAllJob(): Promise<ReindexJobStatus | null>`
   (parameterless mount recovery), `cancelReindexAll()`. Type: `ReindexJobStatus`.
 - **Smaller members** (owned here so the index is complete): `exportMessageTable(messageId)`
-  (result-table CSV via save dialog), `previewDocument`/`previewDocumentPage` (bounded pages),
+  (result-table CSV via save dialog), `previewDocument`/`previewDocumentPage` (bounded pages: main
+  clamps `limit` to 1–50 and a non-finite `offset`/`limit` to 0/50, #681),
   `exportSummary(documentId)`, `exportDocumentOriginal(documentId)` (#90 — stored original
   bytes via save dialog), `saveCodeBlock(messageId, content, language)` (#286 — one fenced
   code block from a persisted assistant answer, renderer-supplied bytes, via save dialog),

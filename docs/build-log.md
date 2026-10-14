@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-06 #581 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #681 entry). Its record is unchanged:
+`architecture.md` F-29 row "#581", data-contracts "DB schema". It named no open items. Citations of the form
+"BUILD_STATE 2026-10-06 #581 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-06 — **#581 — the skill suggestion follows every change to the documents in scope (`fix/581-scope-signal-cache`).** The F-29 memo's `(COUNT, MAX(rowid))` key
+repeated after a delete of the newest document + an import (both tables reuse the freed rowid) and never moved on an archive or a status swap below the highest
+row, so a Library or project chat kept a deleted title. Key now: scope fingerprint + `corpusGeneration(db)`, bumped by connection-local TEMP triggers on `documents` /
+`document_collections` (nothing in the workspace file). Auto-fire always read live. Record: `architecture.md` F-29 row "#581", data-contracts "DB schema". Open: none._
+
 ## 2026-10-14 — the closed 2026-10-06 #622 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #684 entry). Its record is unchanged:

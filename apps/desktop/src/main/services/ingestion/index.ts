@@ -1339,8 +1339,12 @@ export async function extractDocumentPreviewPage(
   // REL-5: forward the cap stack so EACH "Show more" page re-parse is bounded (the whole-document
   // re-extract this paging wrapper does per call now enforces maxPages/maxInflatedBytes + timeout).
   const full = await extractDocumentPreview(db, storeDir, documentId, deps, opts)
-  const safeOffset = Math.max(0, Math.floor(offset))
-  const safeLimit = Math.max(1, Math.floor(limit))
+  // #681: both come from the renderer. A page holds 1..DEFAULT_PREVIEW_PAGE_SIZE segments (the app
+  // asks for exactly that many), and a non-finite value takes the default instead of an empty page.
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0
+  const safeLimit = Number.isFinite(limit)
+    ? Math.min(DEFAULT_PREVIEW_PAGE_SIZE, Math.max(1, Math.floor(limit)))
+    : DEFAULT_PREVIEW_PAGE_SIZE
   const end = safeOffset + safeLimit
   return {
     id: full.id,

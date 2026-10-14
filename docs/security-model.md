@@ -2195,7 +2195,8 @@ read any supported-type file anywhere on disk (the text is then reachable via
 `previewDocument`/`exportDocument`/RAG). The OS picker is owned by **main**, so:
 - `pickDocuments` mints a **one-time token** per dialog (`randomUUID`, a bounded map, single-use)
   bound to the exact paths it returned, and returns `{ token, paths }` (paths are renderer
-  **display/preflight only**).
+  **display/preflight only**). It is `requireUnlocked()`-gated like every other picker (#681): while
+  locked no dialog opens, and a lock that lands while the dialog is open mints no token.
 - A PICKER import passes `options.pickerToken`; main **resolves+consumes** it to those exact paths
   and **ignores** the renderer-supplied `paths`. A forged/replayed/unknown token imports nothing.
 - **Drag-drop residual (documented, accepted):** a native OS drop is delivered to the *renderer*,

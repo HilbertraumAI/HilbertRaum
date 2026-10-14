@@ -313,6 +313,11 @@ export function registerDocsIpc(ctx: AppContext): void {
   ipcHandle(
     IPC.pickDocuments,
     async (_e, mode?: 'files' | 'folder'): Promise<PickDocumentsResult> => {
+      // #681 (architecture.md follow-up-audit row "SEC-3 (Info)"): gated like every other picker
+      // (images #119, skills #240). Nothing legitimate calls it locked (its screens, Documents,
+      // Chat and Translate, are unmounted then); ungated it opened the OS dialog and minted a D1
+      // token while locked.
+      requireUnlocked()
       const exts = supportedExtensions().map((e) => e.replace(/^\./, ''))
       const options =
         mode === 'folder'
@@ -333,6 +338,9 @@ export function registerDocsIpc(ctx: AppContext): void {
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options)
       const paths = result.canceled ? [] : result.filePaths
+      // #681: a lock can land while the dialog is open; mint nothing for a workspace that no
+      // longer admits work (the knowledge-pack picker's post-dialog check).
+      requireUnlocked()
       // D1: bind these exact main-vetted paths to a one-time token. The renderer gets `paths`
       // for display/preflight, but `importDocuments` only trusts the token (not the paths).
       return { token: paths.length > 0 ? mintPickerToken(paths) : '', paths }
@@ -738,14 +746,15 @@ export function registerDocsIpc(ctx: AppContext): void {
   })
 
   // FE-6: a subsequent bounded page of a preview (the modal's "Show more"). Same guards as the
-  // first page; returns the slice at [offset, offset+limit) plus the next cursor.
+  // first page; returns the slice at [offset, offset+limit) plus the next cursor. The service clamps
+  // both renderer-supplied numbers (#681), a missing or non-finite one taking its default.
   ipcHandle(
     IPC.previewDocumentPage,
     async (_e, documentId: string, offset: number, limit: number): Promise<DocumentPreview> => {
       requireUnlocked()
       requireNotProcessing(documentId)
       return previewUnlessLocked(() =>
-        extractDocumentPreviewPage(ctx.db, storeDir, documentId, offset ?? 0, limit ?? DEFAULT_PREVIEW_PAGE_SIZE, {
+        extractDocumentPreviewPage(ctx.db, storeDir, documentId, offset, limit, {
           cipher: ctx.workspace.documentCipher(),
           ocrEngine: ctx.ocrEngine,
           plaintextOps: ctx.plaintextOps
