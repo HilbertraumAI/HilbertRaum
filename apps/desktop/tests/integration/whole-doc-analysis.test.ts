@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
@@ -333,6 +333,77 @@ describe('content cache, resume, and re-index invalidation', () => {
 
     // Provenance walk after the rebuild has no dangling edges and full coverage.
     expect(reachableLeafChunks(id).size).toBe(newChunks.size)
+  })
+
+  const cacheRows = (): number =>
+    (db.prepare('SELECT COUNT(*) AS n FROM summary_cache').get() as unknown as { n: number }).n
+  const buildDeps = (jobId: string, generate: () => Promise<string>): Parameters<typeof buildTree>[1] => ({
+    db,
+    modelId: 'm',
+    contextTokens: 1024,
+    signal: new AbortController().signal,
+    arbiter: new ModelSlotArbiter(),
+    jobId,
+    generate
+  })
+
+  it('a finished build prunes summary_cache to the HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS cap (DATA-3 wiring, #682)', async () => {
+    // buildTree is the cache's only pruner: nothing else deletes its rows (no document_id, no FK).
+    const id = await importWords(w, 4000)
+    let calls = 0
+    vi.stubEnv('HILBERTRAUM_SUMMARY_CACHE_MAX_ROWS', '1')
+    try {
+      await buildTree(
+        id,
+        buildDeps('job-evict', async () => {
+          calls += 1
+          return `summary #${calls}`
+        })
+      )
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(treeStatus(id)).toBe('ready')
+    expect(calls).toBeGreaterThan(1) // the build wrote more rows than the cap (one per distinct summarized group)…
+    expect(cacheRows()).toBe(1) // …and evicted back down to it
+  })
+
+  it('an empty generation is never cached — the node keeps a source excerpt and the next build retries (#682)', async () => {
+    // A one-chunk document: its single level-1 group is the root, so one call per build.
+    const id = await importWords(w, 120)
+    const chunkText = (
+      db.prepare('SELECT text FROM chunks WHERE document_id = ?').get(id) as unknown as { text: string }
+    ).text
+    const rootSummary = (): string =>
+      (
+        db.prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1').get(id) as unknown as {
+          summary_text: string
+        }
+      ).summary_text
+
+    let calls = 0
+    await buildTree(
+      id,
+      buildDeps('job-empty', async () => {
+        calls += 1
+        return ''
+      })
+    )
+    expect(calls).toBe(1)
+    expect(rootSummary()).toBe(chunkText) // the leading excerpt of the source (the whole of so short a chunk)
+    expect(cacheRows()).toBe(0) // the cache stays cold
+
+    // A rebuild asks the model again and stores its real reply.
+    await buildTree(
+      id,
+      buildDeps('job-retry', async () => {
+        calls += 1
+        return 'A real summary of the section.'
+      })
+    )
+    expect(calls).toBe(2)
+    expect(rootSummary()).toBe('A real summary of the section.')
+    expect(cacheRows()).toBe(1)
   })
 
   it('C3: a boilerplate doc yields DISTINCT nodes that share ONE cache entry (no collapse)', async () => {
