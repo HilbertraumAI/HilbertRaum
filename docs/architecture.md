@@ -2107,7 +2107,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `<span>` — is mapped back to `<strong>`; every other element is already semantic and styled by the
   existing `.md` CSS. The `components`/plugin objects are **module-level** in `AssistantMarkdown.tsx` so their
   references stay stable across the ~40 ms flush — an inline object would defeat Streamdown's block
-  memoization (see FE-1, measured). Links are whitelisted to http(s) and get `target="_blank"` so the
+  memoization (see FE-1, measured); `linkSafety` stayed an inline object until #685 (DEP-6 §13). Links are whitelisted to http(s) and get `target="_blank"` so the
   main process's window-open handler routes them to the OS browser and denies everything else
   (superseded in part by #236, PR #287: the handler now routes them through a native confirmation
   naming the site — `main/external-open.ts`; the in-app denial is unchanged). **User
@@ -14373,7 +14373,9 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   `ARGON2_MAX_M_KIB`). The default KDF derives the same key on 2.2.0 and 2.4.0 (three known-answer
   vectors); `crypto.test.ts` pins one, `crypto-argon2-maxmem.test.ts` pins the option.
 - **pdf.js 6.3 no longer needs `DOMMatrix` at import** (upstream #21721, the cause of the old
-  packaged-drive failure). The polyfill stays; its comments now say why.
+  packaged-drive failure). The polyfill stays; its comments now say why. **Corrected by §13
+  (#685):** they gave the wrong why. pdf.js loads `@napi-rs/canvas` at import whatever is
+  installed; the polyfill only decides which DOMMatrix it gets.
 - **The other packages:** `mammoth` brings fixes against crafted DOCX (prototype pollution, regex
   backtracking); `yaml` limits recursive merge aliases (skill manifests are user-supplied);
   `papaparse`'s delimiter-detection change is moot (the app pins the delimiter); `jszip` is a type
@@ -14552,7 +14554,9 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   dropped decoder import, a dropped `wasmUrl` and hashed names, each fail exactly the guard for
   their link. Suite: 480 files, 7,920 passed / 87 skipped / 8,008, which is master's 479 / 8,001 plus
   the new file's 7. Not covered end to end: JBIG2 and JPEG 2000 scans (no encoder on this machine).
-  They use the same loader, and JBIG2 shares `jbig2.*` with CCITT.
+  They use the same loader, and JBIG2 shares `jbig2.*` with CCITT. (Narrowed by §13: four real
+  JPEG 2000 images decode, and a JBIG2 page in the MMR form OCRs word for word in a packaged build;
+  arithmetic-coded JBIG2 is still not run.)
 - **Superseded by §11 (`fix/ocr-pdfjs-in-page`).** Two statements above are no longer true: pdf.js
   no longer runs in a worker (the rasterizer's `pdf.worker-*.mjs` ran outside the CSP on `file://`,
   the gap §11 closes), and the build no longer ships the `.wasm` decoders — only the
@@ -14658,6 +14662,138 @@ replacement PR on top of Dependabot's commit.
     through `importDocuments`; the preview showed exactly its three segments, and the log had no
     errors;
   - on quit only `hilbertraum.sqlite.enc` remained.
+
+### §13 Dependabot's production group #666: pdf.js 6.4 and streamdown 2.7, reviewed after the merge (#685)
+
+Dependabot's #666 (merged 2026-10-13, `76ce5acf`) carried three shipped packages: `pdfjs-dist`
+6.3.289 → 6.4.299, `streamdown` 2.6.0 → 2.7.0 (with `marked` 17.0.6 → 18.1.1 and `remend` 1.3.1 →
+1.4.0) and `@streamdown/math` 1.0.2 → 1.0.3, plus the dev-only `@napi-rs/canvas` 1.0.0 → 1.0.11
+under pdf.js. It merged with the notices regenerated (`bf746262`) and none of the checks §7 ran,
+which had found breakage CI could not see. This section is that review, done afterwards (#685) on
+master `3c1f24ea` on DesktopDiT. The lockfile is byte-identical to what the pinned npm 11.6.2
+writes, and each old tarball matched the pre-merge lockfile's integrity.
+
+- **The pdf.js changelog (147 entries) and the code diff.** What reaches the app:
+  - the JBIG2 decoder moved to a newer pdfium (upstream #21980) and OpenJPEG was updated
+    (#22049): the decoders the OCR page loads (§10, §11);
+  - the worker-loading handshake changed (#21988), but only for a real `Worker`. Both of the app's
+    paths use pdf.js's in-process fake worker (Node in the main process, `globalThis.pdfjsWorker`
+    in the OCR page);
+  - font internals moved to Maps (CMaps, CFF, `charCodeToGlyphId`), and one text change keeps the
+    ToUnicode mapping of unencoded glyphs in non-embedded Type1 fonts (#21872);
+  - parser hardening on paths an imported PDF reaches: a CPU DoS in auto-sized text fields
+    (#21889; #575's operator lists include annotations), cumulative CMap ranges (#21989), CFF
+    INDEX and FDArray bounds (#22037), xref stream field widths (#21987), tiling-pattern folding
+    (#22012), shading-function dimensions (#22041), NaN in sampled functions (#21891), a stricter
+    `Ref.fromString` (#21898).
+
+  The two api-minor changes (`operationsFilter`, `saveDocument(printToPDF)`) are unused.
+- **`getDocument` and the scripting posture.** `getDocument`'s body is identical except
+  `apiVersion`; the `DocumentInitParameters` typings changed only `Object` to `object`. The app's
+  three calls (main-process text `{ data, verbosity: 0 }`; #575's `maxImageSize: 1` +
+  `stopAtErrors`; the OCR page's `useWasm: false` + `wasmUrl`) mean what they meant. Nothing sets
+  `enableScripting` or loads `pdf.sandbox`, and the wasm surfaces (the decoders' `WasmImage`, the
+  PostScript-function compiler) are 6.3's. The package has the same 554 files; `standard_fonts/`
+  and `cmaps/` are byte-identical, so §7's exclusion and notice stand. The decoder file names are
+  unchanged; their code is not.
+- **The polyfill comments were wrong, and had been since §7.** pdf.js's Node block
+  (`src/display/node_utils.js`) is byte-identical in 6.3.289 and 6.4.299. At its first import it
+  always `require`s `@napi-rs/canvas`, then fills `DOMMatrix` and `Path2D` from it only where the
+  global is missing. Installing the polyfill first does not keep pdf.js off the addon (`npm run
+  dev` and the suite load the Skia `.node` regardless); it decides which DOMMatrix pdf.js gets, and
+  the packaged main process has none without it. Measured in a packaged build: at the first PDF
+  import pdf.js prints `Cannot load "@napi-rs/canvas"` (with the `app.asar` path) and
+  ``Cannot polyfill `Path2D` `` to stderr, once per process. Neither reaches the app log, and
+  `DOMMatrix` stays the polyfill. Path2D has no consumer there: every use is in the display layer's
+  canvas code, and the worker's one DOMMatrix use is `compileType3Glyph`. The comments in
+  `dommatrix-polyfill.ts`, `pdf.ts`, `electron-builder.yml` (L18) and `packaging.test.ts` now say so.
+- **A new test, because CI never ran pdf.js the way the packaged app does.** npm installs the
+  optional addon on every CI leg, so every PDF test had Skia's DOMMatrix and Path2D to fall back on:
+  dropping `ensureDomMatrixPolyfill()` from `PdfParser` failed none of the 140 tests in the seven
+  PDF suites. `pdf-parser-packaged.test.ts` makes the addon unresolvable before pdf.js loads, runs
+  `PdfParser` on text, a scan and #575's scanned pages, and pins the two warnings. Three mutations
+  fail it: the install dropped, the install after the import (a third warning,
+  ``Cannot polyfill `DOMMatrix` ``), and the addon left resolvable (Skia's Path2D appears).
+  Blocking the addon for the whole suite was considered and not taken: one file owns the posture.
+- **Does 6.4 read the same? A differential.** `PdfParser`'s own calls ran on both builds, each
+  copied out of `node_modules` so the addon could not load, over 52 PDFs: 47 public documents
+  that ship with software installed on this machine (Adobe Acrobat's templates, samples and
+  stamps, two pdfTeX papers, a German product manual, an Intel guide, Firefox's PDFs; embedded
+  TrueType, CFF and CID fonts, AcroForms, nine with document JavaScript) and five of the suite's
+  fixtures. On all 52 the output is byte-identical: every text item (`str`, `hasEOL`, `transform`,
+  `width`) of 549 pages and 698,083 characters, the lenient and strict operator counts and #575's
+  verdicts, and the warnings. The time is the same (5.94 s against 5.93 s). Through the JS
+  decoders the OCR page uses, all 468 image paints decode pixel-identical, four JPEG 2000 images
+  (OpenJPEG) among them. The corpus has no JBIG2 image, so the G4 page below was also wrapped as an
+  embedded JBIG2 stream (an MMR generic region): both builds decode it to the CCITT page's pixels,
+  the TIFF's 149,346 black pixels.
+- **The manual gates.**
+  - *Evidence-pack PDF smoke* (real Electron): 11/11.
+  - *Real-data PDF gold set* (`HILBERTRAUM_PDF_GOLDSET=1`): **not run.** Its corpus (real bank
+    statements) is not on this machine. Layout mode reads only the text items, which were
+    byte-identical above, so the same figures are expected; the run is owed where the corpus is.
+  - *Packaged OCR on a black-and-white office scan*: a `--win dir` package of master `3c1f24ea`
+    (Smart App Control is off on DesktopDiT). An encrypted workspace; the in-app OCR install (deu,
+    eng and osd, 8.6 MB, active without a restart, the network switched off again after). The scan:
+    an A4 300-DPI page of German text, 1 bit, encoded CCITT G4 by the Windows TIFF encoder. It was
+    detected as a scan at import, then recognised word for word in 3.1 s (23/23 probe words:
+    umlauts, ß, amounts); the same page as JBIG2 took 4.1 s, 23/23. Three text PDFs (the German
+    manual, a pdfTeX paper, the Type3 fixture) indexed with exactly the differential's text. No
+    ERROR line in the log tail, and quitting leaves only `.enc` files. The `app.asar` (4,125
+    entries) has no `@napi-rs/canvas` and no `standard_fonts/`, and exactly the two JS decoders.
+- **`@napi-rs/canvas` 1.0.11** is dev and test only, plus `scripts/generate-icons.mjs`, which was
+  not re-run (the icons are committed files).
+- **streamdown 2.7, `remend` 1.4.0, `marked` 18.1.1 and `@streamdown/math` 1.0.3.**
+  `@streamdown/math`'s code is byte-identical (only its typings and `package.json` moved). The
+  rest got the §9 comparison:
+  - **The method.** The app's own `AssistantMarkdown` rendered 38 samples of reply Markdown (30
+    English, 7 German, 1 CJK) in four ways: static, static inside the code-block toolbar's context,
+    every streamed prefix, and the final frame. That is 4,422 renders on each stack, and each run
+    proved which versions it loaded.
+  - **1,492 renders differ, in four classes:**
+    - The code-block wrapper gains Tailwind's `relative`, which has no rule here.
+    - An image still streaming renders an empty placeholder, 0 × 0 without Tailwind. For it, the
+      sanitize schema now admits `streamdown:` in `src`.
+    - remend 1.4.0 fixes four live-bubble defects 2.6 had:
+      - a `<` inside math (`$$ \sum_{j<k} $$`) hid the rest of the answer behind a KaTeX error
+        until a later `>`;
+      - `snake__case` left a stray `__` at the end until the stream finished, and backticks in code
+        spans did the same;
+      - a `~~~` fence got `**`, `~~` or `$$` appended inside it;
+      - `echo $$` inside a fence added a `$$` and an empty KaTeX span.
+    - A list item's only `<p>` is unwrapped. That changes nothing in chat, image answers or the
+      Documents preview, where `li > p` has no margin. The Review item and both Translate
+      outputs had none of those rules, though. Rendered in real Chromium with the app's stylesheet,
+      one list there was spaced 16 / 16 / 16 px on 2.6 and 0 / 16 / 16 on 2.7. **Fixed:**
+      `AssistantMarkdown` gives Streamdown's root the class `assistant-md`, and one rule,
+      `.assistant-md li > p { margin: 0 }`, covers every surface it renders on, as chat's rules already
+      did (now 0 / 0 / 0). `assistant-markdown.test.tsx` pins the class and the rule.
+  - **What stayed the same:**
+    - The custom remend handler (`trailing-math`, priority 10) still runs before links (20) and
+      after `htmlTags` (also 10; on a tie the built-ins go first), and the links early return is
+      unchanged.
+    - #501's streaming math completion renders identically on every prefix.
+    - Copy payloads are identical, caps of 0 still mean no cap, `controls={false}` leaves only the
+      app's own toolbar buttons, and a mermaid fence stays a code block.
+    - 2.7's new props (`portal`, `fallbackComponent`, `disableAutolinkProtocols`) change nothing
+      when unset, and none of them is a cap like 2.6's.
+- **A cost older than 2.7, found on the way.** `linkSafety={{ enabled: false }}` was the one inline
+  object among Streamdown's props. Streamdown keeps it in the context its code blocks, tables and
+  images read, so every flush re-rendered those inside each block already closed. It is now
+  module-level like the others. `bench-markdown-flush.mjs`, which copies those props, streams 80
+  blocks in 743–758 ms instead of 1,162 (three runs against one). `TranscriptMemo.test.tsx` now fails
+  when any object prop of the live bubble changes between flushes. Streaming stays O(n) on both
+  versions, and 2.7 alone is about 30 % faster than 2.6 at 80 blocks (2.6: 1,618–1,754 ms;
+  2.7: 1,155–1,162 ms). Since 2.7 the benchmark's `reparse` mode logs React's "Maximum update depth
+  exceeded" three times a run. That mode remounts on every flush by design; the app never does.
+- **Not checked for streamdown:** the corpus in a real Electron render (it ran in jsdom; only the
+  list spacing was measured in Chromium), real token timing, and React's production build.
+- **On the next bump.** `.github/dependabot.yml` now says that a production-group PR moving
+  `pdfjs-dist` or `streamdown` waits for this review. For pdf.js: the changelog and the code diff
+  (the decoders, the Node block, `getDocument`), the three gates, and the warning list in
+  `pdf-parser-packaged.test.ts`. The differential took minutes: the old tarball from the registry,
+  both builds outside `node_modules`, the same calls, a byte comparison. For streamdown: the §9
+  render comparison.
 
 ## App scheme `hilbertraum://app/` — design record (#560)
 

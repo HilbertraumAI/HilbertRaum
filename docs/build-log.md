@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-07 #634 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #685 entry). Its record is unchanged:
+`rag-design.md` §12.4 "#634 amendment" and design-guidelines §11.23. Citations of the form "BUILD_STATE 2026-10-07 #634 entry"
+now resolve here. Its closing "(#635: above)" means the 2026-10-07 #635 entry, still in `BUILD_STATE.md` when this one moved.
+Text below is byte-identical to what was removed.
+
+_2026-10-07 — **#634 — a search-model failure reaches the user as words, chosen by kind (`fix/634-embedder-error-copy`).** A timeout read "The
+operation timed out." in any language, and a damaged e5 file stored llama-server's stderr (the weight file's absolute path) on every row of the
+session and in the question banner. Now `EmbedderError` (`timeout`/`start`/`failed`/`interrupted`) → canonical row copy + chat copy naming the
+search model; old rows rewritten at unlock; lock mid-import → "interrupted"; a crashed sidecar restarts; a re-download or clean model check re-arms. Owner calls as
+recommended. Real app (German, encrypted vault) before/after. Record: `rag-design.md` §12.4 "#634 amendment", design-guidelines §11.23. Open: none (#635: above)._
+
 ## 2026-10-14 — the closed 2026-10-07 #607 and #582 entries retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #682/#687 entry). Their records are unchanged:

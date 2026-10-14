@@ -45,6 +45,8 @@ const { math } = await import('@streamdown/math')
 const h = React.createElement
 const mdPlugins = { math }
 const mdRehypePlugins = [defaultRehypePlugins.sanitize]
+// As in AssistantMarkdown: one object for every render, or the context its code blocks read changes each flush.
+const mdLinkSafety = { enabled: false }
 
 // One realistic markdown "block" of streamed reply. Mixes prose, a bold span, an inline-code span,
 // a list, a fenced code block and a KaTeX display block — the shapes a tax/finance answer emits.
@@ -76,7 +78,7 @@ function streamdownEl(text, { streaming, parseIncomplete, key }) {
       plugins: mdPlugins,
       rehypePlugins: mdRehypePlugins,
       controls: false,
-      linkSafety: { enabled: false }
+      linkSafety: mdLinkSafety
     },
     text
   )

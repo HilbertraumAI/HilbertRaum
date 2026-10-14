@@ -38,6 +38,10 @@ updates:
         # re-measure of BUILD_STATE §5 item 18(g).
         exclude-patterns: [electron]
       production:
+        # A PR from this group that moves pdfjs-dist or streamdown is merged only after the review
+        # CI cannot do: #666 took both to master with none (#685). What to run, and what each one
+        # caught before, is in docs/architecture.md "Dependabot triage — design record (wave
+        # DEP-6)" §13 ("On the next bump").
         dependency-type: production
         update-types: [minor, patch]
     ignore:

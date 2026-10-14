@@ -1,17 +1,20 @@
 // Minimal `DOMMatrix` polyfill for the Electron MAIN process: exactly the members pdf.js reaches there.
 //
-// WHY THIS EXISTS. pdfjs-dist 6.0–6.2's legacy build evaluated a module-level
-// `const SCALE_MATRIX = new DOMMatrix()` at import time, and in Node it only sets
-// `globalThis.DOMMatrix` by `require("@napi-rs/canvas")`. We DELIBERATELY exclude
-// `@napi-rs/canvas` from the packaged app (electron-builder.yml `files` negation — a
-// platform-specific Skia `.node` we never import; keeps the portable bundle pure-JS /
-// cross-OS, asserted by tests/integration/packaging.test.ts). So in the PACKAGED app the
-// require fails, `globalThis.DOMMatrix` stays undefined, and `import`ing pdfjs throws
-// "DOMMatrix is not defined" → PDF import breaks. In `npm run dev` the dep is present, so
-// pdf.js polyfills itself and the bug is invisible — which is why it only surfaced from a
-// built drive. pdfjs-dist 6.3 creates that matrix lazily (upstream pdf.js #21721), so its
-// import no longer throws without one. The polyfill stays (wave DEP-6): it keeps pdf.js off
-// the `@napi-rs/canvas` DOMMatrix and guards against a later release reintroducing the import-time use.
+// WHY THIS EXISTS. Node has no DOMMatrix, and pdf.js brings none of its own. At its first import
+// pdf.js ALWAYS `require`s `@napi-rs/canvas` (legacy/build/pdf.mjs, `src/display/node_utils.js`; the
+// same block in 6.3.289 and 6.4.299) and copies that native addon's DOMMatrix and Path2D onto
+// `globalThis` only where the global is missing. So this polyfill does NOT keep pdf.js off the addon
+// (`npm run dev` and the test suite load the Skia `.node` whatever is installed); it decides which
+// DOMMatrix pdf.js gets. Packaged, the addon is excluded (electron-builder.yml `files` negation: a
+// platform-specific `.node`, kept out so the portable bundle stays pure-JS / cross-OS; asserted by
+// tests/integration/packaging.test.ts). There the require fails and, without this polyfill, the
+// main process has no DOMMatrix at all; pdf.js prints two warnings to stderr at that first import
+// (`Cannot load "@napi-rs/canvas"`, ``Cannot polyfill `Path2D` ``), before any `verbosity: 0` applies.
+// Nothing here reads Path2D (canvas rendering only) and the app log does not capture them (#685,
+// measured in a packaged build). pdfjs-dist 6.0–6.2 also built a matrix at import time, so the
+// packaged import threw "DOMMatrix is not defined" while dev, with the addon's, worked; 6.3 builds it
+// lazily (upstream pdf.js #21721). tests/integration/pdf-parser-packaged.test.ts runs the parser with
+// the addon unloadable.
 //
 // WHAT pdf.js REACHES HERE (pdfjs-dist 6.4.299; #687). pdf.js installs `@napi-rs/canvas`'s DOMMatrix
 // only `if (!globalThis.DOMMatrix)`, so installing this BEFORE the pdfjs import makes pdf.js use it,
@@ -72,8 +75,9 @@ class DOMMatrixPolyfill {
 
 /**
  * Install the pure-JS `DOMMatrix` on `globalThis` **if none exists** — idempotent, and a
- * no-op where a real one is present (renderer/dev with `@napi-rs/canvas`). Call this before
- * importing pdfjs-dist in the main process.
+ * no-op where one is present (a browser context, or a process that imported pdf.js first, which
+ * then holds `@napi-rs/canvas`'s wherever that addon loads). Call this before importing pdfjs-dist
+ * in the main process.
  */
 export function ensureDomMatrixPolyfill(): void {
   const g = globalThis as { DOMMatrix?: unknown }

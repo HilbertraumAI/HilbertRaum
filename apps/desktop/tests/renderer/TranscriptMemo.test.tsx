@@ -90,4 +90,30 @@ describe('Transcript — streaming memoization (FE-1)', () => {
     rerender(<Transcript {...props} streamText="one two three four five" />)
     expect(persistedParses('**Hello** world')).toBe(1)
   })
+
+  it('hands Streamdown the same objects on every flush; only the text changes (#685)', () => {
+    // Streamdown memoizes its blocks on these props and puts some of them (linkSafety among them)
+    // into the context its code blocks, tables and images read: one fresh object per flush
+    // re-renders those inside every block already closed. `linkSafety` was such an inline object.
+    const props = {
+      messages: [],
+      streamingHere: true,
+      streamThinking: '',
+      thinkingOpen: false,
+      onThinkingOpenChange: noop,
+      emptyState: null,
+      onCopy,
+      onSave: noop,
+      actionsDisabled: false
+    }
+    const { rerender } = render(<Transcript {...props} streamText="Erster Teil" />)
+    rerender(<Transcript {...props} streamText="Erster Teil, zweiter Teil" />)
+    const [first, last] = [sdMock.mock.calls[0]![0], sdMock.mock.calls.at(-1)![0]] as Record<string, unknown>[]
+    expect(last!.children).not.toBe(first!.children)
+    const objectProps = Object.keys(first!).filter(
+      (k) => k !== 'children' && first![k] !== null && ['object', 'function'].includes(typeof first![k])
+    )
+    expect(objectProps).toEqual(expect.arrayContaining(['linkSafety', 'components', 'plugins', 'remend']))
+    expect(objectProps.filter((k) => last![k] !== first![k])).toEqual([])
+  })
 })

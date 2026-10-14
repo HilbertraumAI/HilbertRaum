@@ -374,6 +374,12 @@ function CodeBlockPre({ children }: { children?: ReactNode }): JSX.Element {
   )
 }
 
+// Streamdown's link-safety modal is off (see the `a` override). Module-level for the same reason as
+// `mdComponents`: Streamdown puts this object in the context its code blocks, tables and images
+// read, so a fresh `{ enabled: false }` per render re-rendered those inside blocks already closed on
+// every flush (#685; scripts/bench-markdown-flush.mjs streams 80 blocks in ~750 ms, not 1,160).
+const mdLinkSafety = { enabled: false }
+
 // Module-level so the reference is stable across every render — defining this inline in JSX would
 // hand Streamdown a fresh `components` object on each ~40 ms flush, busting the block memoization
 // that makes the live bubble O(n) instead of O(n²) (the whole point of FE-1 revisited).
@@ -420,13 +426,16 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
 }): JSX.Element {
   return (
     <Streamdown
+      // Its own class on Streamdown's root, so styles.css can style every surface that renders
+      // this component, whatever wrapper the call site uses (#685, list item paragraphs).
+      className="assistant-md"
       mode={streaming ? 'streaming' : 'static'}
       parseIncompleteMarkdown={streaming}
       remend={mdRemend}
       plugins={mdPlugins}
       rehypePlugins={mdRehypePlugins}
       controls={false}
-      linkSafety={{ enabled: false }}
+      linkSafety={mdLinkSafety}
       // streamdown 2.6 caps code blocks at 400 px and tables at 300 px, and relies on Tailwind's
       // overflow utilities (not loaded here) to scroll the rest: a tall table drew over everything
       // below it. 0 turns the caps off, so both grow with their content as before (#550).

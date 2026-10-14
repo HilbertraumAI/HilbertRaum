@@ -1098,6 +1098,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 .image-turn-text.md ul, .image-turn-text.md ol { margin: 0 0 10px; padding-left: 22px; }
 .msg-content.md li, .image-turn-text.md li { margin: 3px 0; }
 .msg-content.md li > p, .image-turn-text.md li > p { margin: 0; }
+/* Every surface that renders AssistantMarkdown (its Streamdown root is `.assistant-md`), the Review
+   item and the Translate outputs included, which have none of the rules above: there a list item's
+   <p> kept the browser's 1em margins, and since Streamdown 2.7 unwraps an item's only <p>, one list
+   came out uneven (measured: 0 / 16 / 16 px between its items; #685). */
+.assistant-md li > p { margin: 0; }
 .msg-content.md code, .image-turn-text.md code {
   background: var(--code-bg);
   border: 1px solid var(--border);

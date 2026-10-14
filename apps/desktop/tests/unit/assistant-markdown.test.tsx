@@ -132,6 +132,17 @@ describe('AssistantMarkdown layout without Tailwind (#550)', () => {
     const lines = container.querySelectorAll('[data-streamdown="code-block-body"] code > span')
     expect([...lines].map((l) => l.textContent)).toEqual(['const a = 1', '\n', 'const b = 2'])
   })
+
+  it('styles.css zeroes a list item’s paragraph margins wherever the component renders (#685)', () => {
+    // Streamdown 2.7 unwraps an item's only <p> and keeps the <p>s of an item with several, so where a
+    // <p> inside a list item keeps a margin, one list is spaced unevenly. The Review item and the
+    // Translate outputs have no Markdown rules of their own, so the rule keys on the component's root.
+    const { container } = render(<AssistantMarkdown text={'1. Heizung\n\n2. Strom\n\n   inkl. Zähler\n\n3. Müll'} />)
+    expect([...container.querySelectorAll('li')].map((li) => li.querySelectorAll(':scope > p').length)).toEqual([0, 2, 0])
+    expect(container.querySelector('ol')!.closest('.assistant-md')).toBe(container.firstElementChild)
+    const stylesCss = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8')
+    expect(stylesCss).toMatch(/(^|\n)\.assistant-md li > p\s*\{\s*margin:\s*0;\s*\}/)
+  })
 })
 
 describe('AssistantMarkdown math (KaTeX)', () => {
