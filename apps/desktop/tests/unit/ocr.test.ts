@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -11,7 +11,6 @@ import {
   IMAGE_OCR_FAILED_MESSAGE,
   IMAGE_OCR_UNAVAILABLE_MESSAGE
 } from '../../src/main/services/ingestion/parsers/image'
-import { isImagePath, isPdfPath, selectParser, supportedExtensions } from '../../src/main/services/ingestion/parsers'
 import {
   createSelectedOcrEngine,
   listOcrLanguages,
@@ -20,31 +19,28 @@ import {
   type OcrAvailability,
   type OcrEngine
 } from '../../src/main/services/ocr'
-import { resolveWorkerScriptPath, type TesseractModule } from '../../src/main/services/ocr/tesseract'
+import {
+  DEFAULT_OCR_PAGE_TIMEOUT_MS,
+  DEFAULT_OCR_REPROBE_DELAY_MS,
+  DEFAULT_OCR_WORKER_START_TIMEOUT_MS,
+  resolveWorkerScriptPath,
+  type TesseractModule
+} from '../../src/main/services/ocr/tesseract'
 import { imageOrientation } from '../../src/main/services/ocr/orientation'
-import { validateRuntimeSources } from '../../src/shared/runtime-sources'
-import { planOcrDownloads, sha256Of } from '../../src/main/services/assets'
-import { makeMixedPdf, makePdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
-import { hangBudgetMs } from '../helpers/hang-budget'
-import { sha256File } from '../../src/main/services/models'
+import { makeMixedPdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
+import { hangBudgetMs, until, within } from '../helpers/hang-budget'
+import { fakeOcrEngine } from '../helpers/ocr-fixtures'
 
 // Phase 38 — scanned-PDF detection (step 0), the OCR engine seam + offline wiring
-// (R-O2), the factory's availability rule (D14/D9: null, never a mock), the ocr:
-// asset class on runtime-sources.yaml (D32), and the no-CDN sentinel. CI posture:
-// zero network, zero models — the real tesseract.js module is never loaded here.
+// (R-O2), the factory's availability rule (D14/D9: null, never a mock), and the no-CDN
+// sentinel. CI posture: zero network, zero models — the real tesseract.js module is never
+// loaded here.
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-ocr-'))
 }
 
 describe('image-only PDF detection (step 0)', () => {
-  it('fails a true scan with the friendly notice', async () => {
-    const dir = tmp()
-    const p = join(dir, 'scan.pdf')
-    writeFileSync(p, makeScanOnlyPdf(2))
-    await expect(PdfParser.parse(p)).rejects.toThrow(PDF_SCAN_DETECTED_MESSAGE)
-  })
-
   it('does NOT detect a hybrid text+scan PDF — its text pages index normally', async () => {
     const dir = tmp()
     const p = join(dir, 'hybrid.pdf')
@@ -89,29 +85,6 @@ describe('image-only PDF detection (step 0)', () => {
     ])
   })
 
-  it('parses a normal text PDF unchanged', async () => {
-    const dir = tmp()
-    const p = join(dir, 'normal.pdf')
-    writeFileSync(p, makePdf('An ordinary text page with plenty of readable words on it.'))
-    const parsed = await PdfParser.parse(p)
-    expect(parsed.segments.length).toBe(1)
-    expect(parsed.segments[0].text).toContain('ordinary text page')
-  })
-
-  it('uses stored OCR pages for a scan instead of failing (re-index/preview hook)', async () => {
-    const dir = tmp()
-    const p = join(dir, 'scan.pdf')
-    writeFileSync(p, makeScanOnlyPdf(2))
-    const parsed = await PdfParser.parse(p, {
-      ocrPages: [
-        { pageNumber: 1, text: 'Recognized page one text.' },
-        { pageNumber: 2, text: 'Recognized page two text.' }
-      ]
-    })
-    expect(parsed.segments.map((s) => s.pageNumber)).toEqual([1, 2])
-    expect(parsed.segments[1].text).toBe('Recognized page two text.')
-  })
-
   it('still fails friendly when the stored OCR pages are all empty', async () => {
     const dir = tmp()
     const p = join(dir, 'scan.pdf')
@@ -123,36 +96,14 @@ describe('image-only PDF detection (step 0)', () => {
 })
 
 describe('photo parser (.png/.jpg OCR on import)', () => {
-  const fakeEngine = (text: string): OcrEngine => ({
-    id: 'fake-ocr',
-    languages: ['deu', 'eng'],
-    recognize: async () => ({ text, confidence: 92 })
-  })
-
-  it('registers png/jpg/jpeg and the path helpers agree', () => {
-    const exts = supportedExtensions()
-    for (const e of ['.png', '.jpg', '.jpeg']) expect(exts).toContain(e)
-    expect(selectParser('photo.PNG')?.name).toBe('image')
-    expect(isImagePath('a/b/photo.jpeg')).toBe(true)
-    expect(isImagePath('a/b/doc.pdf')).toBe(false)
-    expect(isPdfPath('a/b/doc.PDF')).toBe(true)
-  })
-
   it('recognizes a photo into one page-less segment', async () => {
     const dir = tmp()
     const p = join(dir, 'page.png')
     writeFileSync(p, TINY_PNG)
-    const parsed = await ImageParser.parse(p, { ocrEngine: fakeEngine('Hello recognized world') })
+    const parsed = await ImageParser.parse(p, { ocrEngine: fakeOcrEngine({ text: 'Hello recognized world' }) })
     expect(parsed.segments).toEqual([
       { text: 'Hello recognized world', pageNumber: null, sectionLabel: null }
     ])
-  })
-
-  it('fails friendly without an engine (no OCR files on the drive)', async () => {
-    const dir = tmp()
-    const p = join(dir, 'page.png')
-    writeFileSync(p, TINY_PNG)
-    await expect(ImageParser.parse(p, {})).rejects.toThrow(IMAGE_NEEDS_OCR_MESSAGE)
   })
 
   // BE-8 (ocr-audit 2026-07-18): the parse context's abort signal must reach the engine so a
@@ -181,7 +132,7 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     const dir = tmp()
     const p = join(dir, 'page.jpg')
     writeFileSync(p, TINY_PNG)
-    await expect(ImageParser.parse(p, { ocrEngine: fakeEngine('   ') })).rejects.toThrow(
+    await expect(ImageParser.parse(p, { ocrEngine: fakeOcrEngine({ text: '   ' }) })).rejects.toThrow(
       IMAGE_NO_TEXT_MESSAGE
     )
     const failing: OcrEngine = {
@@ -254,19 +205,9 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
 })
 
 describe('OCR factory (availability-driven, D9: null — never a mock)', () => {
-  it('returns null when the ocr/ dir is absent or empty', () => {
-    const root = tmp()
-    const reasons: string[] = []
-    expect(
-      createSelectedOcrEngine({ rootPath: root, onSelect: (_k, r) => reasons.push(r) })
-    ).toBeNull()
-    expect(reasons[0]).toContain('no OCR language files')
-  })
-
   it('selects an engine over the languages actually present (sorted)', () => {
     const root = tmp()
     const dir = ocrAssetsDir(root)
-    const { mkdirSync } = require('node:fs') as typeof import('node:fs')
     mkdirSync(dir, { recursive: true })
     // #538: the orientation data is not a language — read with, it would fail the LSTM-only start.
     writeFileSync(join(dir, 'osd.traineddata.gz'), 'x')
@@ -288,69 +229,74 @@ describe('OCR factory (availability-driven, D9: null — never a mock)', () => {
   })
 })
 
-describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
-  function fakeModule(): {
-    mod: { createWorker: (...a: unknown[]) => Promise<unknown> }
-    calls: Array<{ langs: string[]; oem: number; options: Record<string, unknown> }>
-    recognized: Buffer[]
-    terminated: { value: boolean }
-  } {
-    const calls: Array<{ langs: string[]; oem: number; options: Record<string, unknown> }> = []
-    const recognized: Buffer[] = []
-    const terminated = { value: false }
-    const mod = {
-      createWorker: async (langs: unknown, oem: unknown, options: unknown) => {
-        calls.push({
-          langs: langs as string[],
-          oem: oem as number,
-          options: options as Record<string, unknown>
-        })
-        return {
-          recognize: async (img: Buffer) => {
-            recognized.push(img)
-            return { data: { text: `text-${recognized.length}`, confidence: 90 } }
-          },
-          terminate: async () => {
-            terminated.value = true
-          }
+/**
+ * A tesseract.js-shaped module whose workers start at once and read the n-th image as `text-<n>`.
+ * `starts` records every `createWorker` call; `terminated.count` every worker terminated.
+ */
+function fakeTesseract(): {
+  mod: TesseractModule
+  starts: Array<{ langs: string[]; oem: number; options: Record<string, unknown> }>
+  recognized: Buffer[]
+  terminated: { count: number }
+} {
+  const starts: Array<{ langs: string[]; oem: number; options: Record<string, unknown> }> = []
+  const recognized: Buffer[] = []
+  const terminated = { count: 0 }
+  const mod: TesseractModule = {
+    createWorker: async (langs, oem, options) => {
+      starts.push({ langs, oem, options })
+      return {
+        recognize: async (img: Buffer) => {
+          recognized.push(img)
+          return { data: { text: `text-${recognized.length}`, confidence: 90 } }
+        },
+        terminate: async () => {
+          terminated.count += 1
         }
       }
     }
-    return { mod, calls, recognized, terminated }
   }
+  return { mod, starts, recognized, terminated }
+}
+
+describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllEnvs()
+  })
 
   it('passes the explicit offline options: local langPath, gzip, no cache, LSTM-only', async () => {
-    const { mod, calls } = fakeModule()
+    const { mod, starts } = fakeTesseract()
     const engine = new TesseractOcrEngine({
       langDir: 'X:/drive/ocr',
       languages: ['deu', 'eng'],
-      loadTesseract: async () => mod as never
+      loadTesseract: async () => mod
     })
     await engine.recognize(Buffer.from('img'))
-    expect(calls.length).toBe(1)
-    expect(calls[0].langs).toEqual(['deu', 'eng'])
-    expect(calls[0].oem).toBe(1) // LSTM_ONLY — the vendored data is LSTM-only (R-O3)
-    expect(calls[0].options.langPath).toBe('X:/drive/ocr')
-    expect(calls[0].options.gzip).toBe(true)
-    expect(calls[0].options.cacheMethod).toBe('none')
+    expect(starts.length).toBe(1)
+    expect(starts[0].langs).toEqual(['deu', 'eng'])
+    expect(starts[0].oem).toBe(1) // LSTM_ONLY — the vendored data is LSTM-only (R-O3)
+    expect(starts[0].options.langPath).toBe('X:/drive/ocr')
+    expect(starts[0].options.gzip).toBe(true)
+    expect(starts[0].options.cacheMethod).toBe('none')
   })
 
   it('reuses one worker across recognitions and terminates on stop()', async () => {
-    const { mod, calls, recognized, terminated } = fakeModule()
+    const { mod, starts, recognized, terminated } = fakeTesseract()
     const engine = new TesseractOcrEngine({
       langDir: '/ocr',
       languages: ['eng'],
-      loadTesseract: async () => mod as never
+      loadTesseract: async () => mod
     })
     const [a, b] = await Promise.all([
       engine.recognize(Buffer.from('1')),
       engine.recognize(Buffer.from('2'))
     ])
-    expect(calls.length).toBe(1) // one warm worker
+    expect(starts.length).toBe(1) // one warm worker
     expect(recognized.length).toBe(2)
     expect([a.text, b.text].sort()).toEqual(['text-1', 'text-2'])
     await engine.stop()
-    expect(terminated.value).toBe(true)
+    expect(terminated.count).toBe(1)
     await expect(engine.recognize(Buffer.from('3'))).rejects.toThrow('stopped')
   })
 
@@ -365,14 +311,17 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     const firstGate = new Promise<{ data: { text: string; confidence: number } }>((resolve) => {
       releaseFirst = () => resolve({ data: { text: 'first', confidence: 90 } })
     })
+    let markParked!: () => void
+    const firstParked = new Promise<void>((r) => (markParked = r))
     let firstStarted = false
-    const mod = {
+    const mod: TesseractModule = {
       createWorker: async () => {
         created++
         return {
           recognize: (_img: Buffer) => {
             if (!firstStarted) {
               firstStarted = true
+              markParked()
               return firstGate // the first recognition PARKS, holding the chain
             }
             return Promise.resolve({ data: { text: 'later', confidence: 90 } })
@@ -388,7 +337,7 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     })
     // A first recognition starts and parks in the worker, holding the serialized chain.
     const first = engine.recognize(Buffer.from('1')).then(() => 'ok', () => 'failed')
-    while (!firstStarted) await new Promise((r) => setImmediate(r))
+    await within(firstParked, 'the first recognition parking in the worker')
     // A SECOND recognition queued while `stopped` is still false — it passes the top-level check
     // and parks in the chain, so its ensureWorker() runs AFTER stop() latches below.
     const second = engine.recognize(Buffer.from('2')).then(() => 'ok', (e) => (e as Error).message)
@@ -404,55 +353,72 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
   // page bytes linger across the vault re-encrypt) but does NOT latch — the next recognition
   // lazily respawns a fresh worker and succeeds (unlike after `stop()`).
   it('suspend() terminates the warm worker without latching; next recognize respawns (BE-5)', async () => {
-    const { mod, calls, terminated } = fakeModule()
+    const { mod, starts, terminated } = fakeTesseract()
     const engine = new TesseractOcrEngine({
       langDir: '/ocr',
       languages: ['eng'],
-      loadTesseract: async () => mod as TesseractModule
+      loadTesseract: async () => mod
     })
     const first = await engine.recognize(Buffer.from('1'))
     expect(first.text).toBe('text-1')
-    expect(calls.length).toBe(1)
+    expect(starts.length).toBe(1)
 
     await engine.suspend()
-    expect(terminated.value).toBe(true) // the warm worker was terminated
+    expect(terminated.count).toBe(1) // the warm worker was terminated
 
     // Non-latching: a fresh worker respawns and the recognition succeeds.
     const second = await engine.recognize(Buffer.from('2'))
     expect(second.text).toBe('text-2')
-    expect(calls.length).toBe(2) // a SECOND worker was spawned (unlike after stop())
+    expect(starts.length).toBe(2) // a SECOND worker was spawned (unlike after stop())
   })
 
   // REL-2 (TEST-4): a per-page recognition that exceeds the timeout terminates the worker
   // (a tesseract.js WASM job is not cooperatively cancellable) and rejects — so one wedged
   // image can't block the serialized chain for the rest of the scan. The next page gets a
-  // fresh worker and succeeds. Teeth: a huge recognizeTimeoutMs makes page 1 hang forever.
+  // fresh worker and succeeds. Teeth: just short of DEFAULT_OCR_PAGE_TIMEOUT_MS (the shipped bound) the
+  // worker still runs; just past it, it is terminated. The row pins that this constant is the bound that
+  // fires, not its value (2 min, a design-record decision).
   it('terminates the worker on a per-page timeout and recovers on the next page (REL-2)', async () => {
+    vi.stubEnv('HILBERTRAUM_OCR_PAGE_TIMEOUT_MS', '') // the shipped default, not a developer's override
     let created = 0
     let terminated = 0
+    let markEntered!: () => void
+    const page1Entered = new Promise<void>((r) => (markEntered = r))
     type FakeResult = { data: { text: string; confidence: number } }
-    const mod = {
+    const mod: TesseractModule = {
       createWorker: async () => {
         const myIndex = ++created
         return {
-          recognize: (_img: Buffer): Promise<FakeResult> =>
-            myIndex === 1
-              ? new Promise<FakeResult>(() => undefined) // first worker: wedge forever
-              : Promise.resolve({ data: { text: 'recovered', confidence: 88 } }),
+          recognize: (_img: Buffer): Promise<FakeResult> => {
+            if (myIndex !== 1) return Promise.resolve({ data: { text: 'recovered', confidence: 88 } })
+            markEntered()
+            return new Promise<FakeResult>(() => undefined) // first worker: wedge forever
+          },
           terminate: async () => {
             terminated += 1
           }
         }
       }
     }
+    // setImmediate stays real: the engine's worker start waits one real macrotask (its capture hop).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const engine = new TesseractOcrEngine({
       langDir: '/ocr',
       languages: ['eng'],
-      loadTesseract: async () => mod as never,
-      recognizeTimeoutMs: 20
+      loadTesseract: async () => mod
     })
     // Page 1 wedges → times out → worker #1 terminated → rejects.
-    await expect(engine.recognize(Buffer.from('p1'))).rejects.toThrow(/timed out/i)
+    const p1 = engine.recognize(Buffer.from('p1')).then(
+      () => null,
+      (e: unknown) => e
+    )
+    await within(page1Entered, 'page 1 reaching the worker')
+    await vi.advanceTimersByTimeAsync(DEFAULT_OCR_PAGE_TIMEOUT_MS - 1)
+    expect(terminated).toBe(0)
+    await vi.advanceTimersByTimeAsync(1)
+    const err = await within(p1, 'page 1 timing out')
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/timed out/i)
     expect(terminated).toBe(1)
     // The serialized chain recovered: page 2 lazily creates a fresh worker and succeeds.
     const r = await engine.recognize(Buffer.from('p2'))
@@ -464,10 +430,15 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
   // OCR task's Cancel takes effect WITHIN a page, not only between pages.
   it('terminates the worker when a recognition is aborted in flight (REL-2)', async () => {
     let terminated = 0
+    let markEntered!: () => void
+    const entered = new Promise<void>((r) => (markEntered = r))
     type FakeResult = { data: { text: string; confidence: number } }
-    const mod = {
+    const mod: TesseractModule = {
       createWorker: async () => ({
-        recognize: (_img: Buffer): Promise<FakeResult> => new Promise<FakeResult>(() => undefined),
+        recognize: (_img: Buffer): Promise<FakeResult> => {
+          markEntered()
+          return new Promise<FakeResult>(() => undefined) // the page never finishes by itself
+        },
         terminate: async () => {
           terminated += 1
         }
@@ -476,14 +447,14 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     const engine = new TesseractOcrEngine({
       langDir: '/ocr',
       languages: ['eng'],
-      loadTesseract: async () => mod as never,
-      recognizeTimeoutMs: 60_000 // long — the abort, not the timeout, is what fires
+      loadTesseract: async () => mod
     })
     const controller = new AbortController()
     const call = engine.recognize(Buffer.from('p'), { signal: controller.signal })
-    await new Promise((r) => setImmediate(r))
+    // The abort lands while the page is IN the worker — the in-flight listener, not the entry check.
+    await within(entered, 'the page reaching the worker')
     controller.abort()
-    await expect(call).rejects.toThrow(/abort/i)
+    await expect(within(call, 'the cancelled page settling')).rejects.toMatchObject({ name: 'AbortError' })
     expect(terminated).toBe(1)
   })
 
@@ -499,11 +470,16 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     const terminated: boolean[] = []
     let releaseInit!: () => void
     const initGate = new Promise<void>((r) => (releaseInit = r))
-    const mod = {
+    let markInitEntered!: () => void
+    const initEntered = new Promise<void>((r) => (markInitEntered = r))
+    const mod: TesseractModule = {
       createWorker: async () => {
         const myIndex = created++
         // Gate the FIRST init so it is still in flight when stop() fires.
-        if (myIndex === 0) await initGate
+        if (myIndex === 0) {
+          markInitEntered()
+          await initGate
+        }
         terminated[myIndex] = false
         return {
           recognize: async (): Promise<{ data: { text: string; confidence: number } }> => ({
@@ -518,7 +494,7 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     const engine = new TesseractOcrEngine({
       langDir: '/ocr',
       languages: ['eng'],
-      loadTesseract: async () => mod as never
+      loadTesseract: async () => mod
     })
 
     // A recognize() drives ensureWorker() → createWorker enters and parks (init #0 in flight).
@@ -526,15 +502,12 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
       () => 'ok',
       () => 'failed'
     )
-    while (created === 0) await new Promise((r) => setTimeout(r, 1))
+    await within(initEntered, 'worker init #0 entering')
     expect(created).toBe(1)
 
     // stop() fires while init #0 is parked. terminateWorker must await it, then terminate worker #0.
+    // stop() captures the in-flight init (`this.starting`) synchronously, so no hop is needed here.
     const stopP = engine.stop()
-    // Let terminateWorker register its await on this.starting: one macrotask hop over a pure
-    // microtask chain — deterministic; a lost race only weakens the interleave, never the
-    // assertions (releaseInit()/await stopP below are the real gates) (TS-1: justified fixed sleep).
-    await new Promise((r) => setTimeout(r, 2))
 
     releaseInit() // init #0 resolves → worker #0 is born
     await stopP
@@ -546,17 +519,10 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
 
   // BE-9 (ocr-audit 2026-07-18): the engine id must be DERIVED from the installed tesseract.js
   // version, not a hardcoded literal — a future bump would otherwise stamp a wrong
-  // `ocr_json.engineId` provenance. TEETH: an injected version proves the id is derived (pre-fix
+  // `ocr_json.engineId` provenance. A version bump that meets a hardcoded id reds here (pre-fix
   // `this.id` was the frozen string 'tesseract.js-7.0.0' regardless).
   it('derives the engine id from the tesseract.js version (BE-9)', async () => {
-    const injected = new TesseractOcrEngine({
-      langDir: '/ocr',
-      languages: ['eng'],
-      resolveVersion: () => '9.9.9-test'
-    })
-    expect(injected.id).toBe('tesseract.js-9.9.9-test')
-
-    // By default the real installed package version flows through (byte-identical today).
+    // The real installed package version flows through.
     const { createRequire } = await import('node:module')
     const { version } = createRequire(import.meta.url)('tesseract.js/package.json') as {
       version: string
@@ -661,14 +627,20 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
 // Worker and never settles `createWorker()` on a load failure, so a worker that died while
 // loading surfaced as `uncaughtException` and killed the app. The fakes below reproduce that
 // with a REAL eval-Worker (no mock of `node:worker_threads`): the engine must catch it, reject
-// the pending recognition per document, and report `isAvailable() === false`.
+// the pending recognition per document, and report `availability() === 'unavailable'`.
 describe('TesseractOcrEngine — worker boundary (#232)', () => {
   const base = { langDir: '/ocr', languages: ['eng'] }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   /**
    * Run `fn` with vitest's own `uncaughtException` handlers parked, capturing what would have
    * reached them. Before the fix the worker's load failure lands here (the pinned crash); after
-   * it nothing must — the engine's own `'error'` listener consumes the event.
+   * it nothing must — the engine's own `'error'` listener consumes the event. `fn` returns only
+   * after every worker it started has exited (its own observable), so nothing can land after the
+   * capture ends.
    */
   async function withUncaughtCapture<T>(fn: (captured: Error[]) => Promise<T>): Promise<T> {
     const captured: Error[] = []
@@ -681,8 +653,6 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
     try {
       return await fn(captured)
     } finally {
-      // Let a straggling 'error' event land before the real handlers come back.
-      await new Promise((r) => setTimeout(r, 50))
       process.removeListener('uncaughtException', capture)
       for (const l of previous) process.on('uncaughtException', l as NodeJS.UncaughtExceptionListener)
     }
@@ -714,9 +684,13 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
     return { mod, exited }
   }
 
-  /** A module whose worker starts fine and then dies on its first recognition message. */
-  function crashOnRecognizeModule(): { mod: TesseractModule; spawned: Worker[] } {
+  /**
+   * A module whose worker starts fine and then dies on its first recognition message. `exits`
+   * holds one promise per spawned worker, settled when that worker has exited.
+   */
+  function crashOnRecognizeModule(): { mod: TesseractModule; spawned: Worker[]; exits: Promise<void>[] } {
     const spawned: Worker[] = []
+    const exits: Promise<void>[] = []
     const mod: TesseractModule = {
       createWorker: async () => {
         const raw = new Worker(
@@ -725,6 +699,8 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
           { eval: true }
         )
         spawned.push(raw)
+        // 'exit' only: an 'error' listener here would hide the pinned crash from the capture.
+        exits.push(new Promise<void>((r) => raw.once('exit', () => r())))
         return {
           recognize: () => {
             raw.postMessage('go')
@@ -736,28 +712,7 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
         }
       }
     }
-    return { mod, spawned }
-  }
-
-  function healthyModule(): {
-    mod: TesseractModule
-    calls: Array<Record<string, unknown>>
-    terminated: { count: number }
-  } {
-    const calls: Array<Record<string, unknown>> = []
-    const terminated = { count: 0 }
-    const mod: TesseractModule = {
-      createWorker: async (_langs, _oem, options) => {
-        calls.push(options)
-        return {
-          recognize: async () => ({ data: { text: 'ok', confidence: 90 } }),
-          terminate: async () => {
-            terminated.count += 1
-          }
-        }
-      }
-    }
-    return { mod, calls, terminated }
+    return { mod, spawned, exits }
   }
 
   it('a worker that fails at LOAD rejects recognize() per document, reports unavailable, and never escapes as an uncaught exception', async () => {
@@ -765,8 +720,7 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
       const { mod, exited } = loadFailingModule()
       const engine = new TesseractOcrEngine({
         ...base,
-        loadTesseract: async () => mod,
-        workerStartTimeoutMs: 5_000
+        loadTesseract: async () => mod
       })
       // Pre-fix the recognition HANGS (createWorker never settles) while the load failure
       // reaches the process as uncaughtException — race it against a short clock so the pin
@@ -782,57 +736,50 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
       ])
       expect(outcome).toBeInstanceOf(Error)
       expect((outcome as Error).message).toMatch(/hoisted dependency/)
-      expect(engine.isAvailable()).toBe(false)
       expect(engine.availability()).toBe('unavailable')
+      await within(exited, 'the load-failing worker exiting')
       expect(captured.map((e) => e.message)).toEqual([])
       await engine.stop()
     })
   })
 
-  /** Poll a real deadline for an engine state (real timers — the re-probe is a real setTimeout). */
-  async function waitForState(
-    engine: TesseractOcrEngine,
-    want: OcrAvailability,
-    timeoutMs = 3_000
-  ): Promise<void> {
-    const t0 = Date.now()
-    while (engine.availability() !== want) {
-      if (Date.now() - t0 > timeoutMs) throw new Error(`state stayed ${engine.availability()}`)
-      await new Promise((r) => setTimeout(r, 10))
-    }
-  }
-
-  it('a worker failure AT RECOGNIZE TIME after a successful probe flips isAvailable() to false, rejects the in-flight page, and re-arms with one re-probe', async () => {
+  it('a worker failure AT RECOGNIZE TIME after a successful probe takes OCR out of service, rejects the in-flight page, and re-arms with one re-probe at the shipped delay', async () => {
+    // setImmediate stays real: the engine's worker start waits one real macrotask (its capture hop).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     await withUncaughtCapture(async (captured) => {
-      const { mod, spawned } = crashOnRecognizeModule()
+      const { mod, spawned, exits } = crashOnRecognizeModule()
       const engine = new TesseractOcrEngine({
         ...base,
         loadTesseract: async () => mod,
-        probeRequired: true,
-        reprobeDelayMs: 20
+        probeRequired: true
       })
       // Packaged posture: unproven until the execution probe passes.
       expect(engine.availability()).toBe('probing')
-      expect(engine.isAvailable()).toBe(false)
       expect(await engine.probe()).toBe(true)
-      expect(engine.isAvailable()).toBe(true)
+      expect(engine.availability()).toBe('available')
       // A startup-only probe would leave `ocrAvailable` lying from here on (PR #268 review).
       await expect(engine.recognize(Buffer.from('img'))).rejects.toThrow(/crashed mid-recognition/)
-      expect(engine.isAvailable()).toBe(false)
       // "Proved, then died" re-arms rather than latching: one page's WASM abort must not disable
       // OCR for the session (PR #268 review). The re-probe's fresh worker is healthy
       // until its first message, so availability comes back.
       expect(engine.availability()).toBe('probing')
-      await waitForState(engine, 'available')
-      expect(spawned.length).toBe(3) // probe worker, the one that died, the re-probe worker
-      expect(captured.map((e) => e.message)).toEqual([])
+      await vi.advanceTimersByTimeAsync(DEFAULT_OCR_REPROBE_DELAY_MS - 1)
+      expect(spawned).toHaveLength(2) // no re-probe yet
+      expect(engine.availability()).toBe('probing')
+      await vi.advanceTimersByTimeAsync(1)
+      await until(() => engine.availability() === 'available', 'the re-probe proving the engine again', 10_000)
+      expect(spawned).toHaveLength(3) // probe worker, the one that died, the re-probe worker
       await engine.stop()
+      await within(Promise.all(exits), 'every test worker exiting', 10_000)
+      expect(captured.map((e) => e.message)).toEqual([])
     })
   })
 
   it('a re-probe whose start FAILS latches unavailable (a transient death is retried once, a broken build is not)', async () => {
+    // setImmediate stays real: the engine's worker start waits one real macrotask (its capture hop).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     await withUncaughtCapture(async (captured) => {
-      const { mod } = crashOnRecognizeModule()
+      const { mod, exits } = crashOnRecognizeModule()
       let starts = 0
       const brokenAfterDeath: TesseractModule = {
         createWorker: async (langs, oem, options) => {
@@ -844,24 +791,27 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
       const engine = new TesseractOcrEngine({
         ...base,
         loadTesseract: async () => brokenAfterDeath,
-        probeRequired: true,
-        reprobeDelayMs: 20
+        probeRequired: true
       })
       expect(await engine.probe()).toBe(true) // start 1
       await expect(engine.recognize(Buffer.from('img'))).rejects.toThrow(/crashed/) // start 2, dies
       expect(engine.availability()).toBe('probing')
-      await waitForState(engine, 'unavailable') // start 3 rejects → latched
+      await vi.advanceTimersByTimeAsync(DEFAULT_OCR_REPROBE_DELAY_MS)
+      await until(() => engine.availability() === 'unavailable', 'the failed re-probe latching unavailable') // start 3 rejects
       expect(starts).toBe(3)
-      // Latched: the parser skips (`availability() === 'unavailable'`), nothing respawns by itself.
-      await new Promise((r) => setTimeout(r, 60))
+      // Latched: the parser skips (`availability() === 'unavailable'`), nothing respawns by itself —
+      // the engine arms no further re-probe.
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(DEFAULT_OCR_REPROBE_DELAY_MS * 2)
       expect(starts).toBe(3)
-      expect(captured.map((e) => e.message)).toEqual([])
       await engine.stop()
+      await within(Promise.all(exits), 'every test worker exiting', 10_000)
+      expect(captured.map((e) => e.message)).toEqual([])
     })
   })
 
   it('probe(): a healthy start proves availability and releases the warm worker; a rejecting or hung start reports unavailable within the bound', async () => {
-    const healthy = healthyModule()
+    const healthy = fakeTesseract()
     const proven = new TesseractOcrEngine({
       ...base,
       loadTesseract: async () => healthy.mod,
@@ -873,13 +823,12 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
     // The probe holds no warm worker for a feature most sessions never use — released after
     // the proof, lazily respawned by the first real recognition.
     expect(healthy.terminated.count).toBe(1)
-    expect(healthy.calls.length).toBe(1)
+    expect(healthy.starts.length).toBe(1)
     await proven.recognize(Buffer.from('img'))
-    expect(healthy.calls.length).toBe(2)
-    expect(proven.isAvailable()).toBe(true)
+    expect(healthy.starts.length).toBe(2)
     // A second probe on a proven engine is a cheap no-op (no third worker).
     expect(await proven.probe()).toBe(true)
-    expect(healthy.calls.length).toBe(2)
+    expect(healthy.starts.length).toBe(2)
     await proven.stop()
 
     // tesseract's own `status: 'reject'` load path → createWorker rejects (a corrupt traineddata).
@@ -897,142 +846,40 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
     expect(failed.availability()).toBe('unavailable')
     await expect(failed.recognize(Buffer.from('img'))).rejects.toThrow(/traineddata unreadable/)
 
-    // A start that never settles (and spawns nothing) is bounded by the start timeout.
+    // A start that never settles (and spawns nothing) is bounded by the shipped start timeout.
+    // setImmediate stays real: the engine's worker start waits one real macrotask (its capture hop).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const hung: TesseractModule = { createWorker: () => new Promise<never>(() => undefined) }
     const timedOut = new TesseractOcrEngine({
       ...base,
       loadTesseract: async () => hung,
-      probeRequired: true,
-      workerStartTimeoutMs: 200
+      probeRequired: true
     })
-    const t0 = Date.now()
-    expect(await timedOut.probe()).toBe(false)
-    expect(Date.now() - t0).toBeLessThan(5_000)
+    let settled = false
+    const probed = timedOut.probe().finally(() => {
+      settled = true
+    })
+    // Armed after the start's real capture hop — `createWorker` being entered is not enough.
+    await until(() => vi.getTimerCount() > 0, 'the worker start timer arming')
+    await vi.advanceTimersByTimeAsync(DEFAULT_OCR_WORKER_START_TIMEOUT_MS - 1)
+    expect(settled).toBe(false)
+    expect(timedOut.availability()).toBe('probing')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await within(probed, 'the hung start timing out')).toBe(false)
     expect(timedOut.availability()).toBe('unavailable')
   })
 
   it('passes tesseract.js’s errorHandler option (a status:reject must never throw from its message handler) and a dev engine needs no probe', async () => {
-    const healthy = healthyModule()
+    const healthy = fakeTesseract()
     const dev = new TesseractOcrEngine({ ...base, loadTesseract: async () => healthy.mod })
     // No probe required (dev build): available before any worker starts — today's behaviour.
     expect(dev.availability()).toBe('available')
-    expect(dev.isAvailable()).toBe(true)
     await dev.recognize(Buffer.from('img'))
-    expect(typeof healthy.calls[0].errorHandler).toBe('function')
+    const { errorHandler } = healthy.starts[0].options
+    expect(typeof errorHandler).toBe('function')
     // The handler itself never throws (tesseract calls it with the rejection payload).
-    expect(() => (healthy.calls[0].errorHandler as (d: unknown) => void)('bad image')).not.toThrow()
+    expect(() => (errorHandler as (d: unknown) => void)('bad image')).not.toThrow()
     await dev.stop()
-  })
-})
-
-describe('runtime-sources.yaml ocr: block (D32)', () => {
-  const base = {
-    llama_cpp: {
-      version: 'b1',
-      builds: [
-        { os: 'win', arch: 'x64', backend: 'cpu', url: 'https://x/f.gz', sha256: 'h', extract_to: 'runtime/llama.cpp/win' }
-      ]
-    }
-  }
-
-  it('absent block stays valid (forward compatibility)', () => {
-    const r = validateRuntimeSources(base)
-    expect(r.ok).toBe(true)
-    expect(r.ocr).toBeUndefined()
-  })
-
-  it('parses a valid ocr block', () => {
-    const r = validateRuntimeSources({
-      ...base,
-      ocr: {
-        version: '4.0.0_best_int',
-        files: [
-          { lang: 'deu', url: 'https://x/deu.gz', sha256: 'A'.repeat(64), dest: 'ocr/deu.traineddata.gz' },
-          { lang: 'eng', url: 'https://x/eng.gz', sha256: 'b'.repeat(64), dest: 'ocr/eng.traineddata.gz' }
-        ]
-      }
-    })
-    expect(r.ok).toBe(true)
-    expect(r.ocr?.files.map((f) => f.lang)).toEqual(['deu', 'eng'])
-    expect(r.ocr?.files[0].sha256).toBe('a'.repeat(64)) // normalized lower-case
-  })
-
-  it('rejects malformed blocks: missing fields, dup langs, escaping dest', () => {
-    expect(
-      validateRuntimeSources({ ...base, ocr: { version: 'v', files: [{ lang: 'deu' }] } }).ok
-    ).toBe(false)
-    expect(
-      validateRuntimeSources({
-        ...base,
-        ocr: {
-          version: 'v',
-          files: [
-            { lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: 'ocr/a.gz' },
-            { lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: 'ocr/b.gz' }
-          ]
-        }
-      }).ok
-    ).toBe(false)
-    expect(
-      validateRuntimeSources({
-        ...base,
-        ocr: { version: 'v', files: [{ lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: '../escape.gz' }] }
-      }).ok
-    ).toBe(false)
-  })
-
-  it('the committed runtime-sources.yaml carries a fully-pinned ocr block', async () => {
-    const yaml = await import('yaml')
-    const raw = yaml.parse(
-      readFileSync(join(__dirname, '../../../../model-manifests/runtime-sources.yaml'), 'utf8')
-    )
-    const r = validateRuntimeSources(raw)
-    expect(r.ok).toBe(true)
-    expect(r.ocr).toBeDefined()
-    expect(r.ocr?.files.map((f) => f.lang).sort()).toEqual(['deu', 'eng', 'osd'])
-    for (const f of r.ocr?.files ?? []) {
-      expect(f.sha256).toMatch(/^[a-f0-9]{64}$/) // real pins, no placeholders
-      expect(f.dest.startsWith('ocr/')).toBe(true)
-    }
-  })
-})
-
-describe('planOcrDownloads (assets.ts)', () => {
-  const sources = (sha: string) => ({
-    version: 'v',
-    files: [{ lang: 'deu', url: 'https://x/deu.gz', sha256: sha, dest: 'ocr/deu.traineddata.gz' }]
-  })
-
-  it('absent file → download; matching file → present-verified; mismatch → download', async () => {
-    const root = tmp()
-    const data = Buffer.from('traineddata-bytes')
-    const sha = sha256Of(data)
-
-    let plan = await planOcrDownloads(root, sources(sha))
-    expect(plan[0].status).toBe('download')
-
-    const { mkdirSync } = require('node:fs') as typeof import('node:fs')
-    mkdirSync(join(root, 'ocr'), { recursive: true })
-    writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), data)
-    plan = await planOcrDownloads(root, sources(sha))
-    expect(plan[0].status).toBe('present-verified')
-
-    writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'tampered')
-    plan = await planOcrDownloads(root, sources(sha))
-    expect(plan[0].status).toBe('download')
-
-    plan = await planOcrDownloads(root, sources('REPLACE_WITH_REAL_HASH'))
-    expect(plan[0].status).toBe('present-unverified')
-  })
-
-  it('rejects a dest escaping the drive root', async () => {
-    const root = tmp()
-    await expect(
-      planOcrDownloads(root, {
-        version: 'v',
-        files: [{ lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: '../outside.gz' }]
-      })
-    ).rejects.toThrow(/escapes the drive root/)
   })
 })
 

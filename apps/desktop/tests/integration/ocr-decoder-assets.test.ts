@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -19,7 +19,8 @@ import {
 // fix/ocr-pdfjs-in-page: pdf.js now runs IN the OCR page, not a worker, under the page's CSP —
 // which has no `'wasm-unsafe-eval'`, so the rasterizer forces the JS decoders (`useWasm: false`)
 // and the build ships ONLY the `*_nowasm_fallback.js` modules (no `.wasm`). The links kept here,
-// one block each: the installed pdf.js decodes such a scan through either build given `wasmUrl`;
+// one block each: the installed pdf.js decodes such a scan through the JS build given `wasmUrl`
+// (the page never loads the wasm build);
 // the renderer build ships exactly the JS decoders the in-page worker names, byte for byte, with
 // no `.wasm` and no separate `pdf.worker-*.mjs` asset; and the page passes `wasmUrl` +
 // `useWasm: false` and sets no `workerSrc`.
@@ -84,14 +85,6 @@ describe('pdf.js decodes a CCITT G4 scan only through its decoder modules (#551)
     expect(warnings.join('\n')).toContain('`wasmUrl`')
   })
 
-  it('with wasmUrl it decodes pixel for pixel through the wasm build', async () => {
-    // A filesystem path: pdf.js reads binary data with fs in Node.
-    const { image, warnings } = await decodeScan({ wasmUrl: `${PDFJS_WASM_DIR}/` })
-    expect(warnings).toEqual([])
-    expect(image).not.toBeNull()
-    expect(await patternMismatches(image!)).toBe(0)
-  })
-
   it('it decodes the same through the plain-JS build pdf.js falls back to', async () => {
     // pdf.js imports the JS build, so it needs a URL here.
     const { image, warnings } = await decodeScan({
@@ -120,7 +113,13 @@ const builtFile = (re: RegExp): string => {
 describe.skipIf(!built)('the renderer build ships the JS decoders the in-page pdf.js worker loads (#551)', () => {
   // The worker code is bundled into the OCR page chunk now (fix/ocr-pdfjs-in-page), so the decoder
   // names are read from it, not from a separate pdf.worker asset — which must no longer be emitted.
-  const ocrChunk = builtFile(/^ocr-.*\.js$/)
+  // Read in a hook, never in this body: vitest runs a skipped describe's body at collection
+  // (@vitest/runner collect()), so a read here failed the whole file on a checkout without out/
+  // instead of skipping it.
+  let ocrChunk = ''
+  beforeAll(() => {
+    ocrChunk = builtFile(/^ocr-.*\.js$/)
+  })
   const JS_DECODERS = ['jbig2_nowasm_fallback.js', 'openjpeg_nowasm_fallback.js']
 
   it('the OCR chunk bundles the worker (sets globalThis.pdfjsWorker) — no separate worker asset is emitted', () => {

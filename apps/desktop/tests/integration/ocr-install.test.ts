@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 
@@ -29,12 +28,13 @@ import {
   type OcrPin,
   type StartOcrInstallOptions
 } from '../../src/main/services/ocr-install'
-import { downloadToFile, verifyDownloadedFile, type FetchFn } from '../../src/main/services/assets'
+import { effectiveDownloadCap, verifyDownloadedFile, type FetchFn } from '../../src/main/services/assets'
 import { tMain } from '../../src/main/services/i18n'
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, until } from '../helpers/hang-budget'
+import { tempRoot } from '../helpers/db-fixtures'
 import type { OcrInstallJob, OcrInstallStatus, OcrRefreshOutcome } from '../../src/shared/types'
 
 const handlers = ipcState.handlers as IpcHandlers
@@ -55,10 +55,6 @@ const FAKE_PINS: readonly OcrPin[] = [
 
 const ALLOW = { policyAllows: true, settingAllows: true }
 
-function tempRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'hr-ocr-root-'))
-}
-
 interface OcrYamlOverrides {
   host?: string
   deuUrl?: string
@@ -68,12 +64,31 @@ interface OcrYamlOverrides {
   deuDest?: string
   engDest?: string
   extraLangs?: Array<{ lang: string; url: string; sha256: string; dest: string }>
+  /** Leave these languages out of the `ocr:` block. */
+  omitLangs?: string[]
+  /** A llama_cpp-only yaml: no `ocr:` block at all. */
+  noOcrBlock?: boolean
 }
 
 /** A `runtime-sources.yaml` carrying a valid `llama_cpp:` block (required by the
  *  validator) plus an `ocr:` block matching FAKE_PINS by default. */
 function ocrYaml(o: OcrYamlOverrides = {}): string {
   const host = o.host ?? 'https://example.test'
+  const files = [
+    {
+      lang: 'deu',
+      url: o.deuUrl ?? `${host}/deu.traineddata.gz`,
+      sha256: o.deuSha ?? FAKE_PINS[0].sha256,
+      dest: o.deuDest ?? 'ocr/deu.traineddata.gz'
+    },
+    {
+      lang: 'eng',
+      url: o.engUrl ?? `${host}/eng.traineddata.gz`,
+      sha256: o.engSha ?? FAKE_PINS[1].sha256,
+      dest: o.engDest ?? 'ocr/eng.traineddata.gz'
+    },
+    ...(o.extraLangs ?? [])
+  ].filter((f) => !o.omitLangs?.includes(f.lang))
   return stringify({
     llama_cpp: {
       version: 'btest',
@@ -88,24 +103,7 @@ function ocrYaml(o: OcrYamlOverrides = {}): string {
         }
       ]
     },
-    ocr: {
-      version: '4.0.0_best_int',
-      files: [
-        {
-          lang: 'deu',
-          url: o.deuUrl ?? `${host}/deu.traineddata.gz`,
-          sha256: o.deuSha ?? FAKE_PINS[0].sha256,
-          dest: o.deuDest ?? 'ocr/deu.traineddata.gz'
-        },
-        {
-          lang: 'eng',
-          url: o.engUrl ?? `${host}/eng.traineddata.gz`,
-          sha256: o.engSha ?? FAKE_PINS[1].sha256,
-          dest: o.engDest ?? 'ocr/eng.traineddata.gz'
-        },
-        ...(o.extraLangs ?? [])
-      ]
-    }
+    ...(o.noOcrBlock ? {} : { ocr: { version: '4.0.0_best_int', files } })
   })
 }
 
@@ -158,6 +156,26 @@ function hangingFetch(firstChunk: string): FetchFn {
   }) as unknown as FetchFn
 }
 
+/** One chunk, then a body error carrying a drive error code. `isDiskError` reads only `.code`, and a real ENOSPC
+ *  arrives from the write stream through the same `fail(err)` in `downloadToFile`. The chunk means the `.part`
+ *  exists, so the cleanup the test asserts is real. */
+function diskFullFetch(): FetchFn {
+  return (async () => {
+    let sent = false
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          controller.error(Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }))
+          return
+        }
+        sent = true
+        controller.enqueue(new TextEncoder().encode('d'))
+      }
+    })
+    return new Response(stream, { status: 200 })
+  }) as unknown as FetchFn
+}
+
 /**
  * Poll a job to a terminal status AND wait for its `run()` to fully SETTLE (the F-33 busy-latch
  * precedent, engine-download.test.ts): `cancel()` flips `status` to 'cancelled' SYNCHRONOUSLY,
@@ -165,15 +183,11 @@ function hangingFetch(firstChunk: string): FetchFn {
  * — `activeJob()` stays non-null until that background work finishes. Without this, a test that
  * cancels and immediately asserts the `.part` is gone races the manager's own cleanup.
  */
+const TERMINAL: ReadonlySet<OcrInstallJob['status']> = new Set(['done', 'failed', 'cancelled'])
+
 async function runToEnd(mgr: OcrInstallManager, jobId: string): Promise<OcrInstallJob> {
-  const start = Date.now()
-  for (;;) {
-    const job = mgr.get(jobId)
-    const terminal = job.status === 'done' || job.status === 'failed' || job.status === 'cancelled'
-    if (terminal && mgr.activeJob() !== jobId) return job
-    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('OCR install job never finished')
-    await new Promise((r) => setTimeout(r, 5))
-  }
+  await until(() => TERMINAL.has(mgr.get(jobId).status) && mgr.activeJob() !== jobId, 'the OCR install job settling')
+  return mgr.get(jobId)
 }
 
 async function waitForStatus(
@@ -181,36 +195,21 @@ async function waitForStatus(
   jobId: string,
   status: OcrInstallJob['status']
 ): Promise<void> {
-  const start = Date.now()
-  while (mgr.get(jobId).status !== status) {
-    if (Date.now() - start > hangBudgetMs(5000)) throw new Error(`OCR install job never reached ${status}`)
-    await new Promise((r) => setTimeout(r, 2))
-  }
+  await until(() => mgr.get(jobId).status === status, `the OCR install job reaching ${status}`)
 }
 
 // ---- Gates — a closed gate never fetches ----------------------------------------------
 
 describe('gates (offline guarantee — a closed gate never fetches, #410)', () => {
-  it('refuses when the policy ceiling denies downloads — no fetch, no ocr/ folder', async () => {
-    const root = tempRoot()
+  it.each([
+    ['the policy ceiling denies downloads', { policyAllows: false, settingAllows: true }, 'main.download.policyDisabled'],
+    ['the allowNetwork setting is off', { policyAllows: true, settingAllows: false }, 'main.download.networkOff']
+  ] as const)('refuses when %s — no fetch, no ocr/ folder', async (_label, gates, key) => {
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     const fetchSpy = vi.fn(correctBytesFetch)
     const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
-    await expect(
-      mgr.start({ ...startOpts(root, manifests), gates: { policyAllows: false, settingAllows: true } })
-    ).rejects.toThrow(tMain('main.download.policyDisabled'))
-    expect(fetchSpy).not.toHaveBeenCalled()
-    expect(existsSync(join(root, 'ocr'))).toBe(false)
-  })
-
-  it('refuses when the allowNetwork setting is off — no fetch, no ocr/ folder', async () => {
-    const root = tempRoot()
-    const manifests = manifestsDirWith(root, ocrYaml())
-    const fetchSpy = vi.fn(correctBytesFetch)
-    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
-    await expect(
-      mgr.start({ ...startOpts(root, manifests), gates: { policyAllows: true, settingAllows: false } })
-    ).rejects.toThrow(tMain('main.download.networkOff'))
+    await expect(mgr.start({ ...startOpts(root, manifests), gates })).rejects.toThrow(tMain(key))
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(existsSync(join(root, 'ocr'))).toBe(false)
   })
@@ -220,7 +219,7 @@ describe('gates (offline guarantee — a closed gate never fetches, #410)', () =
 
 describe('sources / destinations (#410)', () => {
   it('the yaml dest is ignored: files always land at the fixed ocr/<lang>.traineddata.gz path', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(
       root,
       ocrYaml({
@@ -239,7 +238,7 @@ describe('sources / destinations (#410)', () => {
   })
 
   it('a yaml sha256 that does not match the pin is a mismatch — refused, no fetch, unavailable', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml({ deuSha: sha256('not-the-pinned-bytes') }))
     const fetchSpy = vi.fn(correctBytesFetch)
     const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
@@ -250,29 +249,8 @@ describe('sources / destinations (#410)', () => {
   })
 
   it('a yaml missing one pinned language is a mismatch too', async () => {
-    const root = tempRoot()
-    const yaml = stringify({
-      llama_cpp: {
-        version: 'btest',
-        builds: [
-          {
-            os: 'win',
-            arch: 'x64',
-            backend: 'cpu',
-            url: 'https://example.test/llama.zip',
-            sha256: sha256('llama-body'),
-            extract_to: 'runtime/llama.cpp/win'
-          }
-        ]
-      },
-      ocr: {
-        version: '4.0.0_best_int',
-        files: [
-          { lang: 'deu', url: 'https://example.test/deu.traineddata.gz', sha256: FAKE_PINS[0].sha256, dest: 'ocr/deu.traineddata.gz' }
-        ]
-      }
-    })
-    const manifests = manifestsDirWith(root, yaml)
+    const root = tempRoot('ocr')
+    const manifests = manifestsDirWith(root, ocrYaml({ omitLangs: ['eng'] }))
     const fetchSpy = vi.fn(correctBytesFetch)
     const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
     await expect(mgr.start(startOpts(root, manifests))).rejects.toThrow(tMain('main.ocr.sourcesMismatch'))
@@ -280,29 +258,9 @@ describe('sources / destinations (#410)', () => {
   })
 
   it('falls back to the app-bundled source list when the drive yaml carries no ocr: block', async () => {
-    const root = tempRoot()
-    const driveManifests = join(root, 'model-manifests')
-    mkdirSync(driveManifests, { recursive: true })
-    writeFileSync(
-      join(driveManifests, 'runtime-sources.yaml'),
-      stringify({
-        llama_cpp: {
-          version: 'btest',
-          builds: [
-            {
-              os: 'win',
-              arch: 'x64',
-              backend: 'cpu',
-              url: 'https://example.test/llama.zip',
-              sha256: sha256('llama-body'),
-              extract_to: 'runtime/llama.cpp/win'
-            }
-          ]
-        }
-        // no ocr: block on the drive
-      })
-    )
-    const bundled = mkdtempSync(join(tmpdir(), 'hr-ocr-bundled-'))
+    const root = tempRoot('ocr')
+    const driveManifests = manifestsDirWith(root, ocrYaml({ noOcrBlock: true }))
+    const bundled = tempRoot('ocr-bundled')
     writeFileSync(join(bundled, 'runtime-sources.yaml'), ocrYaml({ host: 'https://bundled.example.test' }))
     const fetchSpy = vi.fn(correctBytesFetch)
     const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
@@ -316,27 +274,8 @@ describe('sources / destinations (#410)', () => {
   })
 
   it('neither the drive nor the bundled dir carries an ocr source: unavailable, no host, refused', async () => {
-    const root = tempRoot()
-    const driveManifests = join(root, 'model-manifests')
-    mkdirSync(driveManifests, { recursive: true })
-    writeFileSync(
-      join(driveManifests, 'runtime-sources.yaml'),
-      stringify({
-        llama_cpp: {
-          version: 'btest',
-          builds: [
-            {
-              os: 'win',
-              arch: 'x64',
-              backend: 'cpu',
-              url: 'https://example.test/llama.zip',
-              sha256: sha256('llama-body'),
-              extract_to: 'runtime/llama.cpp/win'
-            }
-          ]
-        }
-      })
-    )
+    const root = tempRoot('ocr')
+    const driveManifests = manifestsDirWith(root, ocrYaml({ noOcrBlock: true }))
     const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
     const status = await mgr.status(sourceOpts(root, driveManifests))
     expect(status.available).toBe(false)
@@ -345,7 +284,7 @@ describe('sources / destinations (#410)', () => {
   })
 
   it('extra languages in the yaml are ignored — never fetched, never written', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(
       root,
       ocrYaml({
@@ -368,7 +307,7 @@ describe('sources / destinations (#410)', () => {
 
 describe('hash-is-state (#410)', () => {
   it('a present + verified file is skipped without a fetch — only the missing one is fetched', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     mkdirSync(join(root, 'ocr'), { recursive: true })
     writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), DEU_BYTES)
@@ -383,7 +322,7 @@ describe('hash-is-state (#410)', () => {
   })
 
   it('both already present + verified: start() refuses alreadyInstalled, no fetch; status reflects it', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     mkdirSync(join(root, 'ocr'), { recursive: true })
     writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), DEU_BYTES)
@@ -401,7 +340,7 @@ describe('hash-is-state (#410)', () => {
   })
 
   it('#538: a drive with deu + eng reports the orientation file as the one missing piece, by role', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const OSD_BYTES = 'osd-bytes'
     const osdPin: OcrPin = { lang: 'osd', sha256: sha256(OSD_BYTES), sizeBytes: OSD_BYTES.length }
     const manifests = manifestsDirWith(
@@ -425,8 +364,8 @@ describe('hash-is-state (#410)', () => {
     expect(status.totalBytes).toBe(OSD_BYTES.length)
   })
 
-  it('a present but CORRUPT file, served corrupt again: checksum mismatch, no .part, the existing file is untouched', async () => {
-    const root = tempRoot()
+  it('a present but CORRUPT file, served corrupt again: checksum mismatch, no .part, the existing file and the skipped one untouched', async () => {
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     mkdirSync(join(root, 'ocr'), { recursive: true })
     writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'corrupt-deu-on-disk')
@@ -440,70 +379,50 @@ describe('hash-is-state (#410)', () => {
     expect(done.error).toBe(tMain('main.ocr.checksumMismatch'))
     expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz.part'))).toBe(false)
     expect(readFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'utf8')).toBe('corrupt-deu-on-disk')
+    expect(readFileSync(join(root, 'ocr', 'eng.traineddata.gz'), 'utf8')).toBe(ENG_BYTES)
   })
 
-  it('deu already good (skipped), eng fetch serves wrong bytes: deu untouched, no eng file, no .part', async () => {
-    const root = tempRoot()
-    const manifests = manifestsDirWith(root, ocrYaml())
-    mkdirSync(join(root, 'ocr'), { recursive: true })
-    writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), DEU_BYTES)
-    const badFetch: FetchFn = (async () =>
-      new Response('wrong-eng-bytes', { status: 200 })) as unknown as FetchFn
-    const mgr = new OcrInstallManager({ fetchImpl: badFetch, pins: FAKE_PINS })
-    const job = await mgr.start(startOpts(root, manifests))
-    const done = await runToEnd(mgr, job.jobId)
-    expect(done.status).toBe('failed')
-    expect(done.error).toBe(tMain('main.ocr.checksumMismatch'))
-    expect(existsSync(join(root, 'ocr', 'eng.traineddata.gz.part'))).toBe(false)
-    expect(existsSync(join(root, 'ocr', 'eng.traineddata.gz'))).toBe(false)
-    expect(readFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'utf8')).toBe(DEU_BYTES)
-  })
-
-  it('the downloader receives maxBytes = pin.sizeBytes + the 1 MiB headroom, for every fetched file', async () => {
-    const root = tempRoot()
-    const manifests = manifestsDirWith(root, ocrYaml())
-    const captured: Array<number | undefined> = []
-    const downloadImpl: typeof downloadToFile = async (url, dest, deps) => {
-      captured.push(deps?.maxBytes)
-      return downloadToFile(url, dest, deps)
+  // No content-length, so the body cap is the PINNED size + OCR_SIZE_CAP_HEADROOM plus the downloader's own margin
+  // (`effectiveDownloadCap`, owned by assets.test.ts). A body of exactly that size downloads and is then refused by the
+  // hash; one byte more is cut off as a failed download. Either way: no .part and no file. The cap is per file: the
+  // eng row lets a correct deu download first, so the SECOND planned file is the one served over its own cap.
+  const DEU_BODY_CAP = effectiveDownloadCap(null, FAKE_PINS[0].sizeBytes + OCR_SIZE_CAP_HEADROOM)
+  const ENG_BODY_CAP = effectiveDownloadCap(null, FAKE_PINS[1].sizeBytes + OCR_SIZE_CAP_HEADROOM)
+  it.each([
+    ['deu', 'exactly the effective cap', 'main.ocr.checksumMismatch', DEU_BODY_CAP],
+    ['deu', 'one byte over the effective cap', 'main.ocr.downloadFailed', DEU_BODY_CAP + 1],
+    ['eng', 'one byte over the effective cap', 'main.ocr.downloadFailed', ENG_BODY_CAP + 1]
+  ] as const)(
+    'the body cap is the pinned size + OCR_SIZE_CAP_HEADROOM: a %s body of %s (no content-length) is refused as %s, no .part left',
+    async (lang, _label, key, bytes) => {
+      const root = tempRoot('ocr')
+      const manifests = manifestsDirWith(root, ocrYaml())
+      mkdirSync(join(root, 'ocr'), { recursive: true })
+      // deu rows: eng present + correct, so only deu is fetched. eng row: nothing present; deu downloads correctly.
+      if (lang === 'deu') writeFileSync(join(root, 'ocr', 'eng.traineddata.gz'), ENG_BYTES)
+      const sizedFetch: FetchFn = (async (url: unknown) =>
+        lang === 'eng' && String(url).includes('deu')
+          ? correctBytesFetch(url as string)
+          : new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(bytes))
+              controller.close()
+            }
+          }),
+          { status: 200 } // deliberately no content-length header
+        )) as unknown as FetchFn
+      const mgr = new OcrInstallManager({ fetchImpl: sizedFetch, pins: FAKE_PINS })
+      const done = await runToEnd(mgr, (await mgr.start(startOpts(root, manifests))).jobId)
+      expect(done.status).toBe('failed')
+      expect(done.error).toBe(tMain(key))
+      expect(existsSync(join(root, 'ocr', `${lang}.traineddata.gz.part`))).toBe(false)
+      expect(existsSync(join(root, 'ocr', `${lang}.traineddata.gz`))).toBe(false)
     }
-    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, downloadImpl, pins: FAKE_PINS })
-    const job = await mgr.start(startOpts(root, manifests))
-    const done = await runToEnd(mgr, job.jobId)
-    expect(done.status).toBe('done')
-    expect(captured).toEqual([
-      FAKE_PINS[0].sizeBytes + OCR_SIZE_CAP_HEADROOM,
-      FAKE_PINS[1].sizeBytes + OCR_SIZE_CAP_HEADROOM
-    ])
-  })
-
-  it('a real over-cap body (no content-length) fails the job and leaves no .part', async () => {
-    const root = tempRoot()
-    const manifests = manifestsDirWith(root, ocrYaml())
-    mkdirSync(join(root, 'ocr'), { recursive: true })
-    writeFileSync(join(root, 'ocr', 'eng.traineddata.gz'), ENG_BYTES) // present + correct: skip eng
-    const oversizedFetch: FetchFn = (async () => {
-      const size = FAKE_PINS[0].sizeBytes + 3 * 1024 * 1024 // > sizeBytes + 2 MiB (maxBytes + margin)
-      const bytes = new Uint8Array(size)
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(bytes)
-          controller.close()
-        }
-      })
-      return new Response(stream, { status: 200 }) // deliberately no content-length header
-    }) as unknown as FetchFn
-    const mgr = new OcrInstallManager({ fetchImpl: oversizedFetch, pins: FAKE_PINS })
-    const job = await mgr.start(startOpts(root, manifests))
-    const done = await runToEnd(mgr, job.jobId)
-    expect(done.status).toBe('failed')
-    expect(done.error).toBe(tMain('main.ocr.downloadFailed'))
-    expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz.part'))).toBe(false)
-    expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz'))).toBe(false)
-  })
+  )
 
   it('a user-added third language file and an unrelated file survive a full install byte-identical', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     mkdirSync(join(root, 'ocr'), { recursive: true })
     writeFileSync(join(root, 'ocr', 'fra.traineddata.gz'), 'fra-bytes-not-pinned')
@@ -520,16 +439,17 @@ describe('hash-is-state (#410)', () => {
 // ---- Folder safety ------------------------------------------------------------------------
 
 describe('ocr/ folder safety (#410)', () => {
-  it('refuses a symlink/junction ocr/ — nothing written into the target, folder unsafe', async () => {
-    const root = tempRoot()
+  it('refuses a symlink/junction ocr/ — nothing written into the target, folder unsafe', async (ctx) => {
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
-    const target = mkdtempSync(join(tmpdir(), 'hr-ocr-target-'))
+    const target = tempRoot('ocr-target')
     const ocrPath = join(root, 'ocr')
     try {
       symlinkSync(target, ocrPath, process.platform === 'win32' ? 'junction' : 'dir')
     } catch {
-      // Creating a symlink/junction is not permitted in this environment (e.g. no privilege) —
-      // skip gracefully rather than fail on an environmental limitation.
+      // Neither link kind is creatable here: report SKIPPED, never passed (a junction needs no
+      // privilege on Windows, so this runs there and on Linux CI).
+      ctx.skip()
       return
     }
     const fetchSpy = vi.fn(correctBytesFetch)
@@ -541,22 +461,13 @@ describe('ocr/ folder safety (#410)', () => {
   })
 
   it('refuses ocr/ as a regular file', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     writeFileSync(join(root, 'ocr'), 'not a directory')
     const fetchSpy = vi.fn(correctBytesFetch)
     const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
     await expect(mgr.start(startOpts(root, manifests))).rejects.toThrow(tMain('main.ocr.unsafeFolder'))
     expect(fetchSpy).not.toHaveBeenCalled()
-  })
-
-  it('ocr/ missing is created by the install', async () => {
-    const root = tempRoot()
-    const manifests = manifestsDirWith(root, ocrYaml())
-    expect(existsSync(join(root, 'ocr'))).toBe(false)
-    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
-    await mgr.start(startOpts(root, manifests))
-    expect(existsSync(join(root, 'ocr'))).toBe(true)
   })
 })
 
@@ -565,7 +476,7 @@ describe('ocr/ folder safety (#410)', () => {
 describe('job lifecycle (#410)', () => {
   for (const outcome of ['activated', 'restartRequired'] as const) {
     it(`reaches 'done' only after activate resolves, outcome ${outcome}, only after BOTH files are renamed`, async () => {
-      const root = tempRoot()
+      const root = tempRoot('ocr')
       const manifests = manifestsDirWith(root, ocrYaml())
       const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
       let activateCalls = 0
@@ -602,7 +513,7 @@ describe('job lifecycle (#410)', () => {
   }
 
   it('a rejecting activate still reaches done, with outcome startFailed', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
     const job = await mgr.start(
@@ -615,21 +526,23 @@ describe('job lifecycle (#410)', () => {
     expect(done.outcome).toBe('startFailed')
   })
 
-  it('cancel called immediately after start() resolves removes the .part and ends cancelled', async () => {
-    const root = tempRoot()
+  it('cancel right after start() resolves (still queued) ends cancelled before any fetch', async () => {
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
-    const mgr = new OcrInstallManager({ fetchImpl: hangingFetch('x'), pins: FAKE_PINS })
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
     const job = await mgr.start(startOpts(root, manifests))
+    // run() is still awaiting its first folder check (real fs I/O), so this cancel lands on a queued job.
+    expect(mgr.get(job.jobId).status).toBe('queued')
     mgr.cancel(job.jobId)
     const done = await runToEnd(mgr, job.jobId)
     expect(done.status).toBe('cancelled')
-    expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz.part'))).toBe(false)
-    expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz'))).toBe(false)
-    expect(existsSync(join(root, 'ocr', 'eng.traineddata.gz'))).toBe(false)
+    expect(done.receivedBytes).toBe(0)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it("cancel during 'downloading' removes the .part and ends cancelled", async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     const mgr = new OcrInstallManager({ fetchImpl: hangingFetch('partial-bytes'), pins: FAKE_PINS })
     const job = await mgr.start(startOpts(root, manifests))
@@ -642,7 +555,7 @@ describe('job lifecycle (#410)', () => {
   })
 
   it("cancel during 'verifying' removes the .part and ends cancelled", async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     let releaseVerify: () => void = () => undefined
     const verifyGate = new Promise<void>((r) => {
@@ -667,7 +580,7 @@ describe('job lifecycle (#410)', () => {
   })
 
   it("cancel during 'activating' reads cancelled at once, and STAYS cancelled with outcome null once activate settles", async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
     let releaseActivate: () => void = () => undefined
@@ -702,7 +615,7 @@ describe('job lifecycle (#410)', () => {
 
 describe('single-flight (#410)', () => {
   it('two start() calls fired back-to-back: exactly one succeeds, the other is refused', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     const mgr = new OcrInstallManager({ fetchImpl: hangingFetch('x'), pins: FAKE_PINS })
     const p1 = mgr.start(startOpts(root, manifests))
@@ -716,10 +629,11 @@ describe('single-flight (#410)', () => {
     expect(rejected).toHaveLength(1)
     expect(String((rejected[0].reason as Error).message)).toBe(tMain('main.ocr.alreadyRunning'))
     mgr.cancel(fulfilled[0].value.jobId) // unwind the hanging fetch
+    await runToEnd(mgr, fulfilled[0].value.jobId)
   })
 
   it('a start while a cancelled-but-unsettled activate is still running is refused; a new start is allowed once it settles', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
     let releaseActivate: () => void = () => undefined
@@ -741,16 +655,13 @@ describe('single-flight (#410)', () => {
   })
 })
 
-// ---- Logs are content-free -----------------------------------------------------------------
+// ---- Drive-side failures -------------------------------------------------------------------
 
 describe('drive-side failures read as drive problems, never raw paths (#410)', () => {
   it('a download that fails on the DRIVE (ENOSPC) says "could not be saved", not "check the internet"', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
-    const diskFull: typeof downloadToFile = async () => {
-      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
-    }
-    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, downloadImpl: diskFull, pins: FAKE_PINS })
+    const mgr = new OcrInstallManager({ fetchImpl: diskFullFetch(), pins: FAKE_PINS })
     const job = await mgr.start(startOpts(root, manifests))
     const done = await runToEnd(mgr, job.jobId)
     expect(done.status).toBe('failed')
@@ -759,19 +670,20 @@ describe('drive-side failures read as drive problems, never raw paths (#410)', (
   })
 
   it('a network failure still says "check the internet connection"', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
-    const offline: typeof downloadToFile = async () => {
+    // What undici throws when there is no network.
+    const offlineFetch: FetchFn = (async () => {
       throw new TypeError('fetch failed')
-    }
-    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, downloadImpl: offline, pins: FAKE_PINS })
+    }) as unknown as FetchFn
+    const mgr = new OcrInstallManager({ fetchImpl: offlineFetch, pins: FAKE_PINS })
     const job = await mgr.start(startOpts(root, manifests))
     const done = await runToEnd(mgr, job.jobId)
     expect(done.error).toBe(tMain('main.ocr.downloadFailed'))
   })
 
   it('a present file that cannot be read at start is refused with friendly copy — no raw error, no drive path', async () => {
-    const root = tempRoot()
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     // A DIRECTORY where the language file belongs: hashing it fails (EISDIR) the way an AV lock
     // or an ACL would, deterministically on every OS.
@@ -785,16 +697,19 @@ describe('drive-side failures read as drive problems, never raw paths (#410)', (
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('a planted .part link is unlinked, never followed — its target is untouched', async () => {
-    const root = tempRoot()
+  it('a planted .part link is unlinked, never followed — its target is untouched', async (ctx) => {
+    const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml())
     mkdirSync(join(root, 'ocr'), { recursive: true })
-    const target = mkdtempSync(join(tmpdir(), 'hr-ocr-part-target-'))
+    const target = tempRoot('ocr-part-target')
     writeFileSync(join(target, 'keep.txt'), 'precious')
     try {
       symlinkSync(target, join(root, 'ocr', 'deu.traineddata.gz.part'), process.platform === 'win32' ? 'junction' : 'dir')
     } catch {
-      return // this environment cannot create links — nothing to prove here
+      // Neither link kind is creatable here: report SKIPPED, never passed (a junction needs no
+      // privilege on Windows, so this runs there and on Linux CI).
+      ctx.skip()
+      return
     }
     const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
     const job = await mgr.start(startOpts(root, manifests))
@@ -807,6 +722,8 @@ describe('drive-side failures read as drive problems, never raw paths (#410)', (
   })
 })
 
+// ---- Logs are content-free -----------------------------------------------------------------
+
 describe('logs are content-free (#410)', () => {
   it('never carry a URL, a drive root path, or a .traineddata path fragment — but do carry the language codes', async () => {
     const logs: Array<[string, Record<string, unknown> | undefined]> = []
@@ -815,14 +732,14 @@ describe('logs are content-free (#410)', () => {
     }
 
     // A full, successful install.
-    const root1 = tempRoot()
+    const root1 = tempRoot('ocr')
     const manifests1 = manifestsDirWith(root1, ocrYaml())
     const mgr1 = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS, log })
     const done1 = await runToEnd(mgr1, (await mgr1.start(startOpts(root1, manifests1))).jobId)
     expect(done1.status).toBe('done')
 
     // A failed install (checksum mismatch).
-    const root2 = tempRoot()
+    const root2 = tempRoot('ocr')
     const manifests2 = manifestsDirWith(root2, ocrYaml())
     const badFetch: FetchFn = (async () => new Response('wrong-bytes', { status: 200 })) as unknown as FetchFn
     const mgr2 = new OcrInstallManager({ fetchImpl: badFetch, pins: FAKE_PINS, log })
@@ -833,8 +750,10 @@ describe('logs are content-free (#410)', () => {
     const dump = JSON.stringify(logs)
     expect(dump).not.toContain('https')
     expect(dump).not.toContain('example.test')
-    expect(dump).not.toContain(root1)
-    expect(dump).not.toContain(root2)
+    // JSON.stringify escapes every backslash, so a Windows drive root appears in `dump` only in its escaped form.
+    const asInDump = (s: string): string => JSON.stringify(s).slice(1, -1)
+    expect(dump).not.toContain(asInDump(root1))
+    expect(dump).not.toContain(asInDump(root2))
     expect(dump).not.toContain('.traineddata')
     expect(dump).toContain('deu')
     expect(dump).toContain('eng')

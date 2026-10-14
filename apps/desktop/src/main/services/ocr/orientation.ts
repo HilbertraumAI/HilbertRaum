@@ -18,8 +18,6 @@ import { crc32 } from 'node:zlib'
 /** A clockwise turn, in degrees, applied to an image before it is read. */
 export type OcrTurn = 0 | 90 | 180 | 270
 
-export const OCR_TURNS: readonly OcrTurn[] = [0, 90, 180, 270]
-
 /**
  * The orientation data on the drive: `ocr/osd.traineddata.gz` (Tesseract OSD, legacy engine).
  * It sits beside the language files but is NOT a recognition language — the factory leaves it out
@@ -113,7 +111,7 @@ export function imageOrientation(image: Buffer): number {
 }
 
 /** The EXIF orientation that shows an image of orientation `own` turned a further `turn` clockwise. */
-export function composeOrientation(own: number, turn: OcrTurn): number {
+function composeOrientation(own: number, turn: OcrTurn): number {
   const base = ORIENTATIONS[own] ?? ORIENTATIONS[1]
   const total = ((base.turn + turn) % 360) as OcrTurn
   for (const [value, o] of Object.entries(ORIENTATIONS)) {

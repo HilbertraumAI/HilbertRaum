@@ -69,10 +69,15 @@ describe('packTranscriptSegments', () => {
   })
 
   it('keeps every packed segment at or below MAX approx-tokens (the one-chunk invariant)', () => {
-    const input = Array.from({ length: 100 }, (_, i) => seg(i * 5, i * 5 + 5, 37))
-    for (const p of packTranscriptSegments(input)) {
-      expect(approxTokenCount(p.text)).toBeLessThanOrEqual(AUDIO_SEGMENT_MAX_TOKENS)
-    }
+    // A pending pack still under TARGET, then a segment that fits MAX on its own but not on top of it: the pack
+    // must flush FIRST. (Uniform short segments flush on TARGET long before MAX, so they never reach this branch.)
+    // seg() words are one approx-token each.
+    const below = AUDIO_SEGMENT_TARGET_TOKENS - 30 // 150: no TARGET flush yet
+    const big = AUDIO_SEGMENT_MAX_TOKENS - 100 // 300: fits MAX alone (not the oversize split)
+    expect(below + big).toBeGreaterThan(AUDIO_SEGMENT_MAX_TOKENS) // the fixture reaches the flush-before-overflow branch
+    const packed = packTranscriptSegments([seg(0, 60, below), seg(60, 180, big)])
+    expect(packed.map((p) => approxTokenCount(p.text))).toEqual([below, big]) // each ≤ MAX, never one 450-token pack
+    expect(packed.map((p) => p.sectionLabel)).toEqual([audioRangeLabel(0, 60_000), audioRangeLabel(60_000, 180_000)])
   })
 
   it('splits an oversized single whisper segment instead of overflowing', () => {
@@ -202,13 +207,6 @@ describe('AudioParser', () => {
     expect(parsed.segments[0].pageNumber).toBeNull()
   })
 
-  it('fails with the friendly download-the-model copy when no transcriber is injected', async () => {
-    await expect(AudioParser.parse('meeting.mp3', {})).rejects.toThrow(
-      AUDIO_NEEDS_TRANSCRIBER_MESSAGE
-    )
-    await expect(AudioParser.parse('meeting.mp3')).rejects.toThrow(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
-  })
-
   // #527: the stored failure names the piece that is really missing. Before, every case stored the
   // model copy — a Linux drive (v1.8.6 engine: Windows-only) told the user to download the model
   // they had just downloaded. The model copy itself is unchanged: old rows still map by its text.
@@ -225,12 +223,14 @@ describe('AudioParser', () => {
     }
     expect(audioUnavailableMessage(null)).toBe(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
     expect(audioUnavailableMessage(undefined)).toBe(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
+    // No reason recorded, and no context at all: the parse still fails with the model copy.
+    await expect(AudioParser.parse('meeting.mp3', {})).rejects.toThrow(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
+    await expect(AudioParser.parse('meeting.mp3')).rejects.toThrow(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
     // The pre-#527 stored text, verbatim: persisted rows keep translating through the display map.
     expect(AUDIO_NEEDS_TRANSCRIBER_MESSAGE).toBe(
       'Audio import needs the transcription model — download it on the AI Model screen.'
     )
   })
-
 
   it('maps a decode failure to the convert-to-WAV/MP3 copy (R-W2 silent-failure mode)', async () => {
     const failing: Transcriber = {

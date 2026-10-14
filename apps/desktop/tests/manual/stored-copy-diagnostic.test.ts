@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { runStoredCopyAudit, isUnder } from '../helpers/stored-copy-audit-run'
 import { fingerprintTree, treeUnchanged } from '../helpers/read-only-witness'
 import { PASSWORD_ENV_VAR, promptHiddenPassword } from '../helpers/console-password'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // MANUAL stored-copy diagnostic (issue #190 checkbox 1) — NOT CI.
 //
@@ -71,7 +72,7 @@ const enabled = ROOT.length > 0 && existsSync(ROOT)
 describe.skipIf(!enabled)('HILBERTRAUM_STORED_COPY_AUDIT — read-only stored-copy diagnostic (#190)', () => {
   it(
     'audits the drive without writing to it and prints a report safe to paste in public',
-    { timeout: 600_000 },
+    { timeout: testBudgetMs(600_000) },
     async () => {
       const scratchRoot = join(tmpdir(), 'hilbertraum-stored-copy-audit')
       mkdirSync(scratchRoot, { recursive: true })

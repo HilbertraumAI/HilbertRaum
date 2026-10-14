@@ -1,22 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { t } from '../../src/shared/i18n'
 import { applyUiLanguageSetting, initMainI18n } from '../../src/main/services/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import {
-  createQueuedDocument,
-  documentsDir,
-  getDocument,
-  processDocument
-} from '../../src/main/services/ingestion'
+import { documentsDir, getDocument } from '../../src/main/services/ingestion'
 import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
 import { assertDownloadAllowed } from '../../src/main/services/downloads'
 import { isFriendlyTaskError } from '../../src/main/services/doctasks'
 import { buildWarnings } from '../../src/main/services/benchmark'
 import { docTaskManager } from '../helpers/doctask-fixtures'
-import { makeScanOnlyPdf } from '../helpers/fixtures'
+import { importScan } from '../helpers/ocr-fixtures'
 
 // Phase 41 — the §3.3 two-rule boundary under a GERMAN-cached main-process language:
 // emissions (IPC throws, job errors) localize via tMain, while everything persisted
@@ -39,19 +34,15 @@ afterEach(() => {
   initMainI18n('en-US')
 })
 
-async function importScanPdf(): Promise<string> {
-  const p = join(tmp, 'scan.pdf')
-  writeFileSync(p, makeScanOnlyPdf(2))
-  const info = createQueuedDocument(db, p)
-  await processDocument(db, storeDir, info.id)
-  return info.id
-}
+/** A two-page scan through the real pipeline (`importScan` asserts it failed as a detected scan). */
+const importScanPdf = (): Promise<string> => importScan({ root: tmp, db, storeDir })
 
 describe('Phase 41 — emissions localize, persisted rows stay English', () => {
-  it('a German-cached language localizes an emitted error while the persisted row stays English', async () => {
+  it('a German-cached language localizes an emitted error (the download policy refusal)', () => {
     applyUiLanguageSetting('de')
 
-    // Emission side: the download policy refusal is thrown in German…
+    // Emission side: the download policy refusal is thrown in German. (The persist side — a
+    // scan imported under German still writes English — is the scanDetected row below.)
     let thrown = ''
     try {
       assertDownloadAllowed({ policyAllows: false, settingAllows: false })
@@ -60,13 +51,6 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
     }
     expect(thrown).toBe(t('de', 'main.download.policyDisabled'))
     expect(thrown).not.toBe(t('en', 'main.download.policyDisabled'))
-
-    // …while the persist side keeps writing the canonical ENGLISH constant.
-    const id = await importScanPdf()
-    const doc = getDocument(db, id)
-    expect(doc?.errorMessage).toBe(t('en', 'main.ingest.pdfScanDetected'))
-    expect(doc?.errorMessage).toBe(PDF_SCAN_DETECTED_MESSAGE)
-    expect(doc?.scanDetected).toBe(true)
   })
 
   it('doc-task guard throws localize, and the friendly pass-through recognizes both languages', () => {
@@ -114,6 +98,7 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
 
     // A scan imported WHILE German is cached also persists English ⇒ still detected.
     const id2 = await importScanPdf()
+    expect(getDocument(db, id2)?.errorMessage).toBe(t('en', 'main.ingest.pdfScanDetected')) // persisted English although German is cached
     expect(getDocument(db, id2)?.scanDetected).toBe(true)
 
     applyUiLanguageSetting('en')

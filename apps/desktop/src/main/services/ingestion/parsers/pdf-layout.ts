@@ -205,9 +205,8 @@ export interface DatumColumn {
 /** Membership slack (points) so float jitter at a band edge never drops a real booking date. */
 const DATUM_X_EPS = 1
 
-/** True when a date token at `x` sits in the booking-date column (or no column was resolved). */
-function inDatumColumn(x: number, datum: DatumColumn | null | undefined): boolean {
-  if (!datum) return true // no column model → fall back to "any lead date qualifies" (legacy behaviour)
+/** True when a date token at `x` sits in the booking-date column. */
+function inDatumColumn(x: number, datum: DatumColumn): boolean {
   return x >= datum.min - DATUM_X_EPS && x <= datum.max + DATUM_X_EPS
 }
 
@@ -316,9 +315,13 @@ function rowTokens(row: readonly LayoutWord[]): PositionedToken[] {
  * leaves the label + the money the gate reads fully intact. An in-column date (e.g. a bare `07.02.`
  * section line with no amount) is kept — `parseDate` rejects the bare form, so it never misfires.
  */
-function rowText(row: readonly LayoutWord[], datum?: DatumColumn | null): string {
-  return rowTokens(row)
-    .filter((t) => !(classifyToken(t.str) === 'date' && !inDatumColumn(t.x, datum)))
+function rowText(row: readonly LayoutWord[], datum: DatumColumn): string {
+  return joinTokens(rowTokens(row).filter((t) => !(classifyToken(t.str) === 'date' && !inDatumColumn(t.x, datum))))
+}
+
+/** Tokens joined left to right — the one place a raw row's text is assembled. */
+function joinTokens(tokens: readonly PositionedToken[]): string {
+  return tokens
     .map((t) => t.str)
     .join(' ')
     .trim()
@@ -331,16 +334,13 @@ export const DEFAULT_COLUMN_GAP = 12
 
 /**
  * Resolve the booking-DATE column from all date tokens on the page (§3.1.3). Cluster the date-token x
- * values into contiguous bands (a gap > `columnGap` starts a new band), then pick the band with the
- * MOST date tokens — the booking column prints one date per transaction row, so it is the densest —
+ * values into contiguous bands (a gap > `DEFAULT_COLUMN_GAP` starts a new band), then pick the band with
+ * the MOST date tokens — the booking column prints one date per transaction row, so it is the densest —
  * breaking ties by the leftmost band (the Datum column is left of Valuta). Returns null when the page
  * has no date tokens. Density-first (not pure leftmost) so a single stray header/period date further
  * left than the booking column cannot define a phantom column and suppress every real row.
  */
-export function detectDatumColumn(
-  rows: readonly (readonly LayoutWord[])[],
-  columnGap: number = DEFAULT_COLUMN_GAP
-): DatumColumn | null {
+export function detectDatumColumn(rows: readonly (readonly LayoutWord[])[]): DatumColumn | null {
   const xs: number[] = []
   for (const row of rows) {
     for (const tok of rowTokens(row)) {
@@ -352,7 +352,7 @@ export function detectDatumColumn(
   const bands: Array<{ min: number; max: number; count: number }> = []
   let cur = { min: xs[0], max: xs[0], count: 1 }
   for (let i = 1; i < xs.length; i++) {
-    if (xs[i] - cur.max <= columnGap) {
+    if (xs[i] - cur.max <= DEFAULT_COLUMN_GAP) {
       cur.max = xs[i]
       cur.count++
     } else {
@@ -382,13 +382,13 @@ export function detectDatumColumn(
  *     the last as the running balance — exactly as today.
  * Description text is the remaining free-text tokens. A row whose description would be empty is dropped
  * (a bare date+amount with no label is almost always a summary/header line, and `parseLine` drops it
- * anyway). `datum` null/omitted keeps the legacy "any lead date qualifies" behaviour (e.g. direct unit
- * calls); `reconstructPage` always resolves and passes the page's column.
+ * anyway). `datum` is the page's booking-date column (`detectDatumColumn`); a page with no date token
+ * has none, and `reconstructPage` emits its rows raw without calling this.
  */
 export function reconstructLine(
   row: readonly LayoutWord[],
   year: number | null,
-  datum?: DatumColumn | null,
+  datum: DatumColumn,
   anchorMonth?: number | null
 ): string | null {
   const parsed = parseTransactionRow(row, year, datum, anchorMonth)
@@ -429,7 +429,7 @@ function formatTransaction(date: string, description: string[], money: string[],
 function parseTransactionRow(
   row: readonly LayoutWord[],
   year: number | null,
-  datum?: DatumColumn | null,
+  datum: DatumColumn,
   anchorMonth?: number | null
 ): TransactionParse | null {
   const tokens = rowTokens(row)
@@ -528,7 +528,7 @@ function parseTransactionRow(
  * transaction). Out-of-column dates (a Valuta date), the currency code, and a sign marker are dropped;
  * the remaining free text is the payee/purpose the booking row's own baseline did not carry (§3.1).
  */
-function continuationText(row: readonly LayoutWord[], datum?: DatumColumn | null): string[] | null {
+function continuationText(row: readonly LayoutWord[], datum: DatumColumn): string[] | null {
   const tokens = rowTokens(row)
   if (tokens.length === 0) return null
   const text: string[] = []
@@ -556,11 +556,11 @@ export interface PageAnchor {
 }
 
 /**
- * Resolve a page's year ANCHOR from its words (R5 generalisation of `resolvePageYear`): prefer the FIRST
- * fully-printed `DD.MM.YYYY` date anywhere on the page (the statement period or a fully-dated row) — its year
- * AND month — else a standalone 4-digit year token in the page's TOP band (the header, year only, month
- * null), else null. A null result means bare per-row dates on this page cannot be completed and their rows
- * are dropped (honesty) unless a document-level fallback is supplied by the caller.
+ * Resolve a page's year ANCHOR from its words: prefer the FIRST fully-printed `DD.MM.YYYY` date anywhere
+ * on the page (the statement period or a fully-dated row) — its year AND month — else a standalone 4-digit
+ * year token in the page's TOP band (the header, year only, month null), else null. A null result means
+ * bare per-row dates on this page cannot be completed and their rows are dropped (honesty) unless a
+ * document-level fallback is supplied by the caller.
  */
 export function resolvePageAnchor(words: readonly LayoutWord[]): PageAnchor | null {
   for (const w of words) {
@@ -598,15 +598,6 @@ export function resolvePageAnchor(words: readonly LayoutWord[]): PageAnchor | nu
   return null
 }
 
-/**
- * Resolve the calendar year for a page — the year of {@link resolvePageAnchor}, or null. Kept as the narrow
- * exported entry point that predates R5's month-aware anchor (unit tests + the "carry the year forward"
- * caller depend on it).
- */
-export function resolvePageYear(words: readonly LayoutWord[]): number | null {
-  return resolvePageAnchor(words)?.year ?? null
-}
-
 /** Default baseline tolerance (PDF points) for grouping words into one visual row. */
 export const DEFAULT_ROW_TOLERANCE = 3
 
@@ -616,8 +607,6 @@ export const DEFAULT_ROW_TOLERANCE = 3
 export const MAX_CONTINUATION_ROWS = 4
 
 export interface ReconstructOptions {
-  /** Baseline y tolerance (points) for row clustering. Defaults to {@link DEFAULT_ROW_TOLERANCE}. */
-  yTolerance?: number
   /**
    * A document-level fallback year for pages whose own header carries none (a multi-page statement
    * usually prints the year only on page 1). When the page resolves its own year that wins.
@@ -629,8 +618,6 @@ export interface ReconstructOptions {
    * its own dated anchor, that month wins. Undefined/null ⇒ no rollover on that page (the year stands).
    */
   fallbackMonth?: number | null
-  /** x gap (points) separating columns when resolving the booking-date column. Defaults to {@link DEFAULT_COLUMN_GAP}. */
-  columnGap?: number
 }
 
 export interface ReconstructResult {
@@ -652,17 +639,22 @@ export function reconstructPage(
   words: readonly LayoutWord[],
   opts: ReconstructOptions = {}
 ): ReconstructResult {
-  const tol = opts.yTolerance ?? DEFAULT_ROW_TOLERANCE
   const ownAnchor = resolvePageAnchor(words)
   const year = ownAnchor?.year ?? opts.fallbackYear ?? null
   // The rollover month follows the page's OWN dated anchor when it has one; a page that resolved only a bare
   // header YEAR (month null) falls back to the carried period month (page 1's period month applies to a
   // page-3 December row), else null → no rollover.
   const anchorMonth = ownAnchor?.month ?? opts.fallbackMonth ?? null
-  const rows = clusterRows(words, tol)
-  // Resolve the booking-date column from the page's date geometry first, so `reconstructLine` can
+  const rows = clusterRows(words, DEFAULT_ROW_TOLERANCE)
+  // Resolve the booking-date column from the page's date geometry first, so `parseTransactionRow` can
   // reject a row whose only date is a Valuta column or a mid-line label date (§3.1.3).
-  const datum = detectDatumColumn(rows, opts.columnGap ?? DEFAULT_COLUMN_GAP)
+  const datum = detectDatumColumn(rows)
+  if (!datum) {
+    // No date token anywhere on the page (a cover/terms page, a dateless invoice page): no row can lead a
+    // transaction or carry an out-of-column date, so every visual row is its raw left-to-right text.
+    const raw = rows.map((row) => joinTokens(rowTokens(row))).filter((line) => line !== '')
+    return { text: raw.join('\n'), year, month: anchorMonth }
+  }
   const lines: string[] = []
 
   // Multi-baseline row association (§3.1): a booking row OPENS a transaction; the payee/purpose that

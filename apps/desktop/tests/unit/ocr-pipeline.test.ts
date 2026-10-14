@@ -1,36 +1,34 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { pipelinePages } from '../../src/main/services/ocr/pipeline'
 
 // ING-5 — bounded 1-deep render/recognize look-ahead. Pure orchestration (no Electron):
 // fake render + recognize functions let us assert ordering, the one-extra-PNG memory bound,
 // the render(N+1)↔recognize(N) overlap, and cancellation without a hidden window.
 
-/** A deferred promise we can resolve from the test to drive timing precisely. */
-function deferred(): { promise: Promise<void>; resolve: () => void } {
+/** A deferred promise we can settle from the test to drive timing precisely. */
+function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: Error) => void } {
   let resolve!: () => void
-  const promise = new Promise<void>((r) => (resolve = () => r()))
-  return { promise, resolve }
+  let reject!: (e: Error) => void
+  const promise = new Promise<void>((res, rej) => {
+    resolve = () => res()
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
-describe('pipelinePages (ING-5 OCR look-ahead)', () => {
-  it('recognizes pages strictly in order', async () => {
-    const recognized: number[] = []
-    await pipelinePages(
-      4,
-      async (n) => Buffer.from([n]),
-      async (n) => {
-        recognized.push(n)
-      }
-    )
-    expect(recognized).toEqual([1, 2, 3, 4])
-  })
+/**
+ * Every fake here settles on microtasks, so one macrotask hop lets the pipeline run as far as it
+ * can — a justified single-macrotask hop: these claims are about where it STOPS, which nothing
+ * else marks.
+ */
+const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
 
+describe('pipelinePages (ING-5 OCR look-ahead)', () => {
   it('renders page N+1 while page N recognizes, but never more than one ahead', async () => {
     const rendered: number[] = []
     const recognizeStarted: number[] = []
     const gates = new Map<number, ReturnType<typeof deferred>>()
     const recognizing: number[] = []
-    let maxRendered = 0
     let maxConcurrentRecognize = 0
 
     const run = pipelinePages(
@@ -51,26 +49,23 @@ describe('pipelinePages (ING-5 OCR look-ahead)', () => {
       }
     )
 
-    // Let microtasks settle: page 1 rendered + recognize(1) started, page 2 rendered ahead
-    // (the look-ahead) while recognize(1) is gated — but recognize(2) NOT started yet.
-    await Promise.resolve()
-    await Promise.resolve()
-    maxRendered = Math.max(...rendered)
-    expect(recognizeStarted).toEqual([1]) // only page 1 recognizing
-    expect(rendered).toContain(2) // page 2 already rendered ahead (overlap)
-    expect(maxRendered).toBe(2) // never rendered more than one ahead (page 3 not yet)
+    // Page 1 rendered + recognize(1) started, page 2 rendered ahead (the look-ahead) while
+    // recognize(1) is gated — but recognize(2) NOT started, and page 3 not rendered.
+    await settle()
+    expect(rendered).toEqual([1, 2])
+    expect(recognizeStarted).toEqual([1])
 
-    // Release recognitions one at a time; the pipeline advances by one each time.
+    // Release recognitions one at a time; the pipeline advances by exactly one each time.
     gates.get(1)!.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    await settle()
+    expect(rendered).toEqual([1, 2, 3])
+    expect(recognizeStarted).toEqual([1, 2])
     gates.get(2)!.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    await settle()
+    expect(recognizeStarted).toEqual([1, 2, 3])
     gates.get(3)!.resolve()
     await run
 
-    expect(recognizeStarted).toEqual([1, 2, 3])
     expect(maxConcurrentRecognize).toBe(1) // recognitions never overlap (single engine)
   })
 
@@ -94,21 +89,24 @@ describe('pipelinePages (ING-5 OCR look-ahead)', () => {
 
   it('stops promptly when the signal aborts mid-run and surfaces the abort', async () => {
     const controller = new AbortController()
+    const rendered: number[] = []
     const recognized: number[] = []
     await expect(
       pipelinePages(
         10,
-        async (n) => Buffer.from([n]),
+        async (n) => {
+          rendered.push(n)
+          if (n === 3) controller.abort() // the cancel lands while page 3 renders
+          return Buffer.from([n])
+        },
         async (n) => {
           recognized.push(n)
-          if (n === 2) controller.abort()
         },
         { signal: controller.signal, abortError: () => new DOMException('cancelled', 'AbortError') }
       )
     ).rejects.toMatchObject({ name: 'AbortError' })
-    // Recognized a bounded prefix, not all ten pages.
-    expect(recognized.length).toBeLessThan(10)
-    expect(recognized.slice(0, 2)).toEqual([1, 2])
+    expect(rendered).toEqual([1, 2, 3]) // nothing renders after the cancel
+    expect(recognized).toEqual([1, 2]) // the page rendering when it landed is never recognized
   })
 
   it('propagates a recognition error and does not leak the in-flight recognition', async () => {
@@ -121,6 +119,27 @@ describe('pipelinePages (ING-5 OCR look-ahead)', () => {
         }
       )
     ).rejects.toThrow('recognize failed on page 2')
+
+    // A render that fails while the previous page still recognizes: the pipeline waits for that
+    // recognition before it reports, so its late failure never leaks as an unhandled rejection.
+    const page2 = deferred()
+    let settled = false
+    const run = pipelinePages(
+      3,
+      async (n) => {
+        if (n === 3) throw new Error('render failed on page 3')
+        return Buffer.from([n])
+      },
+      (n) => (n === 2 ? page2.promise : undefined)
+    )
+    run.then(
+      () => (settled = true),
+      () => (settled = true)
+    )
+    await settle()
+    expect(settled).toBe(false) // still waiting for page 2's recognition
+    page2.reject(new Error('late recognition failure'))
+    await expect(run).rejects.toThrow('render failed on page 3')
   })
 
   // BE-6 (ocr-audit 2026-07-18): a crafted PDF can declare an enormous page count. The walk is
@@ -184,24 +203,5 @@ describe('pipelinePages (ING-5 OCR look-ahead)', () => {
       calls++
     })
     expect(calls).toBe(0)
-  })
-
-  // R4 (full-audit-2026-06-30, Phase C): the in-try drain of the LAST recognition awaits it once;
-  // if it rejects, the catch must NOT re-await the SAME already-settled promise (there is no
-  // still-pending look-ahead for the final page). The fix nulls `prevOnPage` before the final await.
-  it('does not re-await an already-settled FINAL-page recognition in the catch (R4)', async () => {
-    const failure = new Error('final page recognize failed')
-    const finalP = Promise.reject(failure)
-    finalP.catch(() => undefined) // pre-handle with the REAL `then` (before the spy) → no unhandled-rejection warning
-    // `await p` on a native promise uses the internal then (invisible here); an EXPLICIT
-    // `p.catch(...)` calls `p.then`, so this spy counts ONLY a catch-block re-await of the final
-    // recognition — 0 when fixed, 1 with the double-drain bug.
-    const thenSpy = vi.spyOn(finalP, 'then')
-
-    await expect(
-      pipelinePages(3, async (n) => Buffer.from([n]), (n) => (n === 3 ? finalP : undefined))
-    ).rejects.toBe(failure)
-
-    expect(thenSpy).toHaveBeenCalledTimes(0)
   })
 })

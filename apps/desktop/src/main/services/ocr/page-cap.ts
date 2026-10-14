@@ -29,9 +29,6 @@ function readPageByteCap(): number {
  * task's try/catch downgrades to a friendly failure instead of feeding an oversized buffer to
  * recognition (and holding it resident behind the look-ahead). Pure — no I/O.
  */
-export function assertPageWithinByteCap(
-  png: Uint8Array,
-  maxBytes: number = OCR_MAX_PAGE_PNG_BYTES
-): void {
-  if (png.byteLength > maxBytes) throw new Error('The rendered page was too large')
+export function assertPageWithinByteCap(png: Uint8Array): void {
+  if (png.byteLength > OCR_MAX_PAGE_PNG_BYTES) throw new Error('The rendered page was too large')
 }

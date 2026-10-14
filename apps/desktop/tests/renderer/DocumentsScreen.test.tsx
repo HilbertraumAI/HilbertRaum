@@ -10,6 +10,7 @@ import { startTask, clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { AppStatus, Collection, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { appStatus as appStatusFixture } from '../helpers/status'
 
 // PERF-5: count DocRow renders test-side — production's memo object, inner component wrapped (no src seam).
 const rowRenders = vi.hoisted(() => new Map<string, number>())
@@ -1511,8 +1512,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
       chunkCount: 0,
       ...over
     })
-  const appStatus = (over: Record<string, unknown> = {}): AppStatus =>
-    ({ ocrAvailable: true, translationAvailable: false, ...over }) as unknown as AppStatus
+  const appStatus = (over: Partial<AppStatus> = {}): AppStatus => appStatusFixture({ ocrAvailable: true, ...over })
   const ocrStatus = (over: Partial<DocTaskStatus> = {}): DocTaskStatus => ({
     jobId: 'j1',
     kind: 'ocr',
@@ -1523,6 +1523,12 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     resultRef: null,
     ...over
   })
+  // FE-4/FE-5 rows: drain the mount refresh and the doc-task poll under fake timers.
+  const flush = async (): Promise<void> => {
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+    })
+  }
 
   it('FE-1: a scan-detected row offers an inline "Make searchable (OCR)" button that starts the task', async () => {
     const user = userEvent.setup()
@@ -1724,7 +1730,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     expect(
       within(dialog).getByText(translate('en', 'docs.previewModal.ocrInfoPartial', { count: 2, total: 3 }))
     ).toBeInTheDocument()
-    expect(within(dialog).getByText(new RegExp(unsure.replace(/[.]/g, '\.')))).toBeInTheDocument()
+    expect(within(dialog).getByText(new RegExp(unsure.replace(/[.]/g, '\\.')))).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Read again (OCR)' }))
     await waitFor(() =>
       expect(startDocTask).toHaveBeenCalledWith({ kind: 'ocr', documentIds: ['d1'], params: undefined })
@@ -1860,11 +1866,6 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
         // stepsDone = pages (3) of stepsTotal = pages + 1 — the signal-less re-ingest step.
         getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 3, stepsTotal: 4 } }))
       })
-      const flush = async (): Promise<void> => {
-        await act(async () => {
-          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
-        })
-      }
       render(<DocumentsScreen />)
       await flush() // mount refresh + ocr status
       await act(async () => {
@@ -1895,11 +1896,6 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
         getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 3, stepsTotal: 4 } })),
         cancelDocTask
       })
-      const flush = async (): Promise<void> => {
-        await act(async () => {
-          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
-        })
-      }
       render(<DocumentsScreen />)
       await flush()
       await act(async () => {
@@ -1930,11 +1926,6 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
         startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
         getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 1, stepsTotal: 4 } }))
       })
-      const flush = async (): Promise<void> => {
-        await act(async () => {
-          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
-        })
-      }
       render(<DocumentsScreen />)
       await flush()
       await act(async () => {

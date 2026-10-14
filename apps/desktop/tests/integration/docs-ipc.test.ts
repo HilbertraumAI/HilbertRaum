@@ -105,11 +105,7 @@ import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
-  createQueuedDocuments,
-  listDocuments,
   processDocument,
-  extractDocumentPreview,
-  readStoredDocumentText,
   documentsDir,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
@@ -128,7 +124,6 @@ import type { Embedder } from '../../src/main/services/embeddings'
 import type {
   DocumentInfo,
   DocumentLifecycle,
-  DocumentOrigin,
   ImportDestination,
   ImportJob,
   ImportJobStatus,
@@ -146,7 +141,6 @@ import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
-import { countPrepares } from '../helpers/db-spy'
 import { docTaskManager, docTaskRuntime, waitTerminal } from '../helpers/doctask-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -797,41 +791,6 @@ describe('registerDocsIpc', () => {
     expect(row.pending_destination_json).toBeNull()
   })
 
-  // ---- DM-2: generated provenance is stamped at queue time, never backfilled --------
-
-  it('a generated doc carries origin_json from queue time, so a crash never backfills it into Library (DM-2)', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-dm2-'))
-    const dbPath = join(root, 'hilbertraum.sqlite')
-    let db = openDatabase(dbPath)
-    const file = join(root, 'translation.md')
-    writeFileSync(file, '# Translated output\n\nsome generated body text to index here')
-
-    // Materialize-style create: provenance is stamped AT QUEUE TIME (the DM-2 fix), before
-    // the row can ever flip to `indexed` — closing the window the old stamp-after-`indexed`
-    // ordering left open.
-    const origin: DocumentOrigin = {
-      kind: 'translation',
-      sourceDocumentIds: ['src'],
-      modelId: 'm',
-      createdAt: '2026-01-01T00:00:00.000Z'
-    }
-    const doc = createQueuedDocument(db, file, { displayTitle: 'translation.md', origin })
-    const stamped = db
-      .prepare('SELECT origin_json, status FROM documents WHERE id = ?')
-      .get(doc.id) as { origin_json: string | null; status: string }
-    expect(stamped.origin_json).not.toBeNull() // stamped while still `queued`
-    expect(stamped.status).toBe('queued')
-
-    // Simulate a kill in the exact old crash window: the row reached `indexed` with NO
-    // membership (generated, D3). origin_json is already set, so the backfill guard holds.
-    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run(doc.id)
-    db.close()
-
-    // Next app open re-runs the Library backfill — the work-product must NOT be swept in.
-    db = openDatabase(dbPath)
-    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).not.toContain(doc.id)
-  })
-
   // ---- Phase E: docs:list smart-view predicates (plan §7.6/§12.1) ------------------
 
   it('filters docs:list by a smart view and orders "recent" by createdAt desc', async () => {
@@ -965,9 +924,10 @@ describe('registerDocsIpc', () => {
   })
 })
 
-// Session 1 (DB-1/DB-2/DB-3) — Documents backend data integrity. Each test is teeth-checked:
-// reverting its fix reddens the marked assertion.
-describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => {
+// Session 1 (DB-1/DB-3) — Documents backend data integrity. Each test is teeth-checked:
+// reverting its fix reddens the marked assertion. (DB-2's concurrent-preview row lives in
+// encrypted-documents.test.ts beside the other encrypted readers.)
+describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-3)', () => {
   // DB-1 #1: filing to a collection id that never existed must degrade to Library rather than
   // FK-throw. Pre-fix the raw `addToCollection` throws inside the import loop's try → the doc is
   // counted `failed`, the `document_imported` audit is skipped, `pending_destination_json` is
@@ -1043,47 +1003,6 @@ describe('registerDocsIpc — Session 1 data integrity (DB-1/DB-2/DB-3)', () => 
       .prepare('SELECT pending_destination_json FROM documents WHERE id = ?')
       .get(doc.id) as { pending_destination_json: string | null }
     expect(row.pending_destination_json).toBeNull()
-  })
-
-  // DB-2: two concurrent same-doc reads must not decrypt into and shred a SHARED transient path.
-  // The fake cipher forces an interleave (`setTimeout(0)` before the copy) and records the
-  // destination path of every decrypt.
-  it('DB-2: concurrent same-doc previews use unique transients and never shred each other', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    const embedder = createMockEmbedder()
-    const storeDir = documentsDir(workspacePath)
-    const decryptDests: string[] = []
-    const copy = (src: string, dest: string): void => writeFileSync(dest, readFileSync(src))
-    const cipher: DocumentCipher = {
-      encryptFile: copy,
-      decryptFile: copy,
-      encryptFileAsync: async (src, dest) => {
-        copy(src, dest)
-      },
-      decryptFileAsync: async (src, dest) => {
-        decryptDests.push(dest)
-        await new Promise((r) => setTimeout(r, 0)) // force the two reads to interleave
-        copy(src, dest)
-      }
-    }
-    const file = join(workspacePath, 'secret.txt')
-    writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi')
-    const doc = createQueuedDocument(db, file)
-    // Encrypt into the workspace (`stored_path` becomes the `.enc` copy) via the fake cipher.
-    await processDocument(db, storeDir, doc.id, { embedder, cipher })
-
-    const [a, b] = await Promise.all([
-      extractDocumentPreview(db, storeDir, doc.id, { cipher }),
-      extractDocumentPreview(db, storeDir, doc.id, { cipher })
-    ])
-    // Both reads succeed with equal, non-empty content — no cross-shred corruption / ENOENT.
-    const textOf = (p: { segments: Array<{ text: string }> }): string =>
-      p.segments.map((s) => s.text).join('')
-    expect(textOf(a).length).toBeGreaterThan(0)
-    expect(textOf(b)).toEqual(textOf(a))
-    // TEETH: the two concurrent reads decrypted into DISTINCT transient paths. Revert the
-    // `randomUUID()` infix → both reconstruct `${id}.parse-preview.txt` → the Set collapses to 1.
-    expect(new Set(decryptDests).size).toBe(2)
   })
 
   // DB-3: a live doc-task ingestion (translation-materialize / OCR re-ingest) drives `documents`
@@ -1193,39 +1112,9 @@ describe('registerDocsIpc — import path binding (D1)', () => {
   })
 })
 
-// Session 6 — Documents backend performance (DB-4, DB-5, DB-6, DB-7). Backend/perf only; sits on
-// top of Session 1's guards (shared files). Each test reddens if its fix is reverted.
-describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () => {
-  // DB-4 (unit): the batch inserts one row per file, in order, sizes where statable. A nonexistent
-  // path still queues a row (mirrors createQueuedDocument's insert-regardless) with a null size, so
-  // no row is silently dropped and the id list aligns 1:1 with the input files.
-  it('DB-4: createQueuedDocuments batch-inserts ids in order, sizes where statable', () => {
-    const { db } = freshWorkspace()
-    const dir = mkdtempSync(join(tmpdir(), 'hr-cqd-'))
-    const real = ['a.txt', 'b.txt', 'c.txt'].map((n) => join(dir, n))
-    real.forEach((f, i) => writeFileSync(f, 'x'.repeat((i + 1) * 10)))
-    const missing = join(dir, 'gone.txt')
-
-    const ids = createQueuedDocuments(db, [
-      { filePath: real[0] },
-      { filePath: real[1] },
-      { filePath: missing },
-      { filePath: real[2] }
-    ])
-
-    expect(ids).toHaveLength(4)
-    const rows = ids.map(
-      (id) =>
-        db
-          .prepare('SELECT id, title, size_bytes, status FROM documents WHERE id = ?')
-          .get(id) as { id: string; title: string; size_bytes: number | null; status: string }
-    )
-    // Order preserved (ING-3 in-order push), the missing file included with a null size.
-    expect(rows.map((r) => r.title)).toEqual(['a.txt', 'b.txt', 'gone.txt', 'c.txt'])
-    expect(rows.map((r) => r.status)).toEqual(['queued', 'queued', 'queued', 'queued'])
-    expect(rows.map((r) => r.size_bytes)).toEqual([10, 20, null, 30])
-  })
-
+// Session 6 — Documents backend performance (DB-4, DB-6) at the handler. The service halves live
+// with their owners: DB-4's batch + DB-5 in ingestion.test.ts, DB-7 in encrypted-documents.test.ts.
+describe('registerDocsIpc — Session 6 backend performance (DB-4, DB-6)', () => {
   // DB-4 (integration): a folder import queues EVERY row before the invoke RESOLVES — the batch
   // commits all N inserts in one BEGIN…COMMIT after the (asynchronous since #274) walk is awaited.
   // Reverting to a lazy queue phase would make the count < N at resolution. The invoke names the
@@ -1253,44 +1142,6 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     await importDone(job.jobId)
     const docs = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
     expect(docs.filter((d) => job.documentIds.includes(d.id)).every((d) => d.status === 'indexed')).toBe(true)
-  })
-
-  // DB-5: on a mid-import poll (no `indexed` row) the embeddings⋈chunks join is pure waste — no
-  // indexed row can be flagged stale. The early-out skips it; the chunk count is still correct and
-  // staleEmbeddings stays undefined. Teeth: a `db.prepare` counter proves the join SQL is never prepared,
-  // and the positive control (an `indexed` row whose vectors predate an embedder switch) shows the join
-  // DOES run then, and staleEmbeddings is built (the M7 path is unaffected by the early-out).
-  it('DB-5: a mid-import list skips the embeddings join yet reports the chunk count (an indexed row still joins and is flagged stale)', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    const embedder = createMockEmbedder()
-    const storeDir = documentsDir(workspacePath)
-    const file = join(workspacePath, 'src.txt')
-    writeFileSync(file, 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu')
-    const doc = createQueuedDocument(db, file)
-    // Fully index it (chunks + embeddings under `embedder.id`), then force it BACK to a mid-import
-    // status so the list has chunks-with-embeddings present but no `indexed` row.
-    await processDocument(db, storeDir, doc.id, { embedder })
-    db.prepare("UPDATE documents SET status = 'embedding' WHERE id = ?").run(doc.id)
-
-    const JOIN = /FROM embeddings e JOIN chunks c/
-    let docs: DocumentInfo[] = []
-    const midImport = await countPrepares(db, JOIN, async () => {
-      docs = listDocuments(db, embedder.id)
-    })
-    expect(docs.find((d) => d.id === doc.id)!.chunkCount).toBeGreaterThan(0) // chunkCounts is always built — badge stays correct
-    expect(docs.find((d) => d.id === doc.id)!.staleEmbeddings).toBeUndefined() // no indexed row → never flagged stale
-    // TEETH: revert the `!force && rows.some(indexed)` guard → the full-corpus join runs on the poll.
-    expect(midImport).toBe(0)
-
-    // Positive control on the SAME connection: the join is prepareCached (compiled once per connection), so seeing it
-    // compiled now also proves nothing earlier had compiled it — the negative above had teeth.
-    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run(doc.id)
-    // The ACTIVE embedder reports a DIFFERENT id → the indexed doc's vectors no longer match.
-    const indexed = await countPrepares(db, JOIN, async () => {
-      docs = listDocuments(db, 'a-different-model')
-    })
-    expect(indexed).toBeGreaterThan(0) // an indexed row is present → the join is NOT skipped
-    expect(docs.find((d) => d.id === doc.id)!.staleEmbeddings).toBe(true)
   })
 
   // DB-6: the jobs map is capped at IMPORT_JOB_CAP (16). After > 16 completed imports the oldest is
@@ -1336,47 +1187,6 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
 
     release() // let the gated embed resolve, then drain so the loop/lease unwind cleanly
     await importDone(gated.jobId)
-  })
-
-  // DB-7: the export text reader decrypts via decryptFileAsync (PERF-1), NOT the sync decryptFile;
-  // two concurrent same-doc reads both succeed (the DB-2 unique-transient sibling).
-  it('DB-7: readStoredDocumentText decrypts via decryptFileAsync, concurrent reads both succeed', async () => {
-    const { db, workspacePath } = freshWorkspace()
-    const embedder = createMockEmbedder()
-    const storeDir = documentsDir(workspacePath)
-    let syncCalled = false
-    let asyncCalls = 0
-    const copy = (src: string, dest: string): void => writeFileSync(dest, readFileSync(src))
-    const cipher: DocumentCipher = {
-      encryptFile: copy,
-      decryptFile: (src, dest) => {
-        syncCalled = true
-        copy(src, dest)
-      },
-      encryptFileAsync: async (src, dest) => {
-        copy(src, dest)
-      },
-      decryptFileAsync: async (src, dest) => {
-        asyncCalls++
-        await new Promise((r) => setTimeout(r, 0)) // force the two reads to interleave
-        copy(src, dest)
-      }
-    }
-    const file = join(workspacePath, 'note.txt')
-    writeFileSync(file, 'the quick brown fox jumps over the lazy dog again and again indeed')
-    const doc = createQueuedDocument(db, file)
-    // Encrypt into the workspace (stored_path becomes the `.enc` copy) via the fake cipher.
-    await processDocument(db, storeDir, doc.id, { embedder, cipher })
-
-    const [a, b] = await Promise.all([
-      readStoredDocumentText(db, storeDir, doc.id, { cipher }),
-      readStoredDocumentText(db, storeDir, doc.id, { cipher })
-    ])
-    expect(a.text).toContain('quick brown fox')
-    expect(b.text).toEqual(a.text)
-    // TEETH: revert to the sync `cipher.decryptFile` → syncCalled true, asyncCalls 0.
-    expect(syncCalled).toBe(false)
-    expect(asyncCalls).toBe(2)
   })
 })
 

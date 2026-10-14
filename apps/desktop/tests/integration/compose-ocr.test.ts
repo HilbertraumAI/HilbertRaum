@@ -1,6 +1,5 @@
-import { describe, it, expect, vi, type Mock } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi } from 'vitest'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   composeOcrEngine,
@@ -9,6 +8,7 @@ import {
   type OcrSlot
 } from '../../src/main/services/compose-services'
 import { TesseractOcrEngine, type OcrAvailability, type OcrEngine } from '../../src/main/services/ocr'
+import { fakeOcrEngine, ocrDrive, type FakeOcrEngine } from '../helpers/ocr-fixtures'
 
 // Issue #410 — the OCR slot refresh after an in-app install (the transcriber twin is
 // compose-transcriber.test.ts). `refreshOcrSlot` re-reads the drive's REAL `ocr/` folder (a temp
@@ -17,42 +17,11 @@ import { TesseractOcrEngine, type OcrAvailability, type OcrEngine } from '../../
 // set grew is left alone with a "restart required" verdict. The engine itself is a fake (no
 // tesseract worker is ever spawned); its probe settles the availability the way the real one does.
 
-function tempDrive(langs: string[] = []): string {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-ocr-'))
-  if (langs.length > 0) addLanguages(root, langs)
-  return root
-}
-
-function addLanguages(root: string, langs: string[]): void {
-  mkdirSync(join(root, 'ocr'), { recursive: true })
-  for (const lang of langs) writeFileSync(join(root, 'ocr', `${lang}.traineddata.gz`), `${lang}-bytes`)
-}
-
-interface FakeEngine extends OcrEngine {
-  probe: Mock
-  stop: Mock
-  suspend: Mock
-}
-
-/** A fake engine whose probe settles `availability()` like the real one (#232). */
-function fakeEngine(
+/** A fake engine whose probe settles `availability()` like the real one (#232); the packaged posture starts 'probing'. */
+const fakeEngine = (
   languages: readonly string[],
-  opts: { state?: OcrAvailability; probeOk?: boolean } = {}
-): FakeEngine {
-  let state: OcrAvailability = opts.state ?? 'probing'
-  return {
-    id: 'fake-ocr',
-    languages,
-    recognize: async () => ({ text: '', confidence: null }),
-    availability: () => state,
-    probe: vi.fn(async () => {
-      state = opts.probeOk === false ? 'unavailable' : 'available'
-      return opts.probeOk !== false
-    }),
-    stop: vi.fn(async () => undefined),
-    suspend: vi.fn(async () => undefined)
-  }
-}
+  o: { state?: OcrAvailability; probeOk?: boolean } = {}
+): FakeOcrEngine => fakeOcrEngine({ languages, state: o.state ?? 'probing', probeOk: o.probeOk })
 
 function slot(root: string, engine: OcrEngine | null, isDev = false): OcrSlot {
   return { ocrEngine: engine, paths: { rootPath: root }, isDev }
@@ -60,8 +29,8 @@ function slot(root: string, engine: OcrEngine | null, isDev = false): OcrSlot {
 
 describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
   it('composes an engine over the folder and probes it: activated, no restart', async () => {
-    const root = tempDrive(['deu', 'eng'])
-    const made: FakeEngine[] = []
+    const root = ocrDrive(['deu', 'eng'])
+    const made: FakeOcrEngine[] = []
     const ctx = slot(root, null)
     const outcome = await refreshOcrSlot(ctx, {
       makeEngine: (_dir, languages) => {
@@ -79,7 +48,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
   })
 
   it('an engine that cannot start in this build fills the slot and reports startFailed (status stays honest)', async () => {
-    const root = tempDrive(['deu', 'eng'])
+    const root = ocrDrive(['deu', 'eng'])
     const ctx = slot(root, null)
     const outcome = await refreshOcrSlot(ctx, {
       makeEngine: (_dir, languages) => fakeEngine(languages, { probeOk: false })
@@ -91,7 +60,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
   })
 
   it('a folder that still holds no language files leaves the slot null: unchanged', async () => {
-    const root = tempDrive()
+    const root = ocrDrive()
     const makeEngine = vi.fn()
     const ctx = slot(root, null)
     expect(await refreshOcrSlot(ctx, { makeEngine })).toBe('unchanged')
@@ -100,7 +69,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
   })
 
   it('a .part left in the folder is not a language (the suffix filter)', async () => {
-    const root = tempDrive()
+    const root = ocrDrive()
     mkdirSync(join(root, 'ocr'), { recursive: true })
     writeFileSync(join(root, 'ocr', 'deu.traineddata.gz.part'), 'partial')
     const ctx = slot(root, null)
@@ -111,7 +80,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
 
 describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () => {
   it("'unavailable' with the same language set on disk: the SAME instance is probed again", async () => {
-    const root = tempDrive(['deu', 'eng'])
+    const root = ocrDrive(['deu', 'eng'])
     const existing = fakeEngine(['deu', 'eng'], { state: 'unavailable' })
     const makeEngine = vi.fn()
     const ctx = slot(root, existing)
@@ -122,7 +91,7 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
   })
 
   it("'unavailable', same set, and the probe fails again: startFailed, still the same instance", async () => {
-    const root = tempDrive(['deu', 'eng'])
+    const root = ocrDrive(['deu', 'eng'])
     const existing = fakeEngine(['deu', 'eng'], { state: 'unavailable', probeOk: false })
     const ctx = slot(root, existing)
     expect(await refreshOcrSlot(ctx)).toBe('startFailed')
@@ -130,7 +99,7 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
   })
 
   it('a LIVE engine whose language set grew: restartRequired — never replaced, never stopped', async () => {
-    const root = tempDrive(['deu', 'eng'])
+    const root = ocrDrive(['deu', 'eng'])
     const live = fakeEngine(['deu'], { state: 'available' })
     const makeEngine = vi.fn()
     const ctx = slot(root, live)
@@ -143,7 +112,7 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
   })
 
   it('an engine that could not start with a DIFFERENT set is not replaced either (restartRequired)', async () => {
-    const root = tempDrive(['deu', 'eng'])
+    const root = ocrDrive(['deu', 'eng'])
     const dead = fakeEngine(['deu'], { state: 'unavailable' })
     const ctx = slot(root, dead)
     expect(await refreshOcrSlot(ctx)).toBe('restartRequired')
@@ -152,7 +121,7 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
   })
 
   it("'available' with the same set: unchanged, no probe", async () => {
-    const root = tempDrive(['eng', 'deu'])
+    const root = ocrDrive(['eng', 'deu'])
     const live = fakeEngine(['deu', 'eng'], { state: 'available' })
     const ctx = slot(root, live)
     expect(await refreshOcrSlot(ctx)).toBe('unchanged')
@@ -161,7 +130,7 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
   })
 
   it("'available' and the orientation file just installed: activated — no restart, same engine (#538)", async () => {
-    const root = tempDrive(['deu', 'eng', 'osd'])
+    const root = ocrDrive(['deu', 'eng', 'osd'])
     const live = fakeEngine(['deu', 'eng'], { state: 'available' })
     const ctx = slot(root, live)
     // osd is not a language, so the set is unchanged; the engine looks for the file at each
@@ -172,7 +141,7 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
   })
 
   it("'probing' (the startup proof still running) with the same set: unchanged, no second probe", async () => {
-    const root = tempDrive(['deu', 'eng'])
+    const root = ocrDrive(['deu', 'eng'])
     const pending = fakeEngine(['deu', 'eng'], { state: 'probing' })
     const ctx = slot(root, pending)
     expect(await refreshOcrSlot(ctx)).toBe('unchanged')
@@ -182,7 +151,7 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
 
 describe('refreshOcrSlot never throws (#410)', () => {
   it('a throwing engine factory reads as startFailed', async () => {
-    const root = tempDrive(['deu'])
+    const root = ocrDrive(['deu'])
     const ctx = slot(root, null)
     const outcome = await refreshOcrSlot(ctx, {
       makeEngine: () => {
@@ -192,22 +161,11 @@ describe('refreshOcrSlot never throws (#410)', () => {
     expect(outcome).toBe('startFailed')
     expect(ctx.ocrEngine).toBeNull()
   })
-
-  it('a throwing folder listing reads as startFailed', async () => {
-    const root = tempDrive(['deu'])
-    const ctx = slot(root, fakeEngine(['deu'], { state: 'available' }))
-    const outcome = await refreshOcrSlot(ctx, {
-      listLanguages: () => {
-        throw new Error('EIO')
-      }
-    })
-    expect(outcome).toBe('startFailed')
-  })
 })
 
 describe('composeOcrEngine + probeOcrEngine (#410, shared with startup)', () => {
   it('builds the real engine over the folder: dev starts available, packaged starts probing (#232)', () => {
-    const root = tempDrive(['deu', 'eng'])
+    const root = ocrDrive(['deu', 'eng'])
     const dev = composeOcrEngine({ rootPath: root, isDev: true })
     const packaged = composeOcrEngine({ rootPath: root, isDev: false })
     expect(dev).toBeInstanceOf(TesseractOcrEngine)
@@ -218,7 +176,7 @@ describe('composeOcrEngine + probeOcrEngine (#410, shared with startup)', () => 
   })
 
   it('returns null without language files (no mock engine)', () => {
-    expect(composeOcrEngine({ rootPath: tempDrive(), isDev: true })).toBeNull()
+    expect(composeOcrEngine({ rootPath: ocrDrive(), isDev: true })).toBeNull()
   })
 
   it('probeOcrEngine never rejects: a throwing probe reads as false', async () => {

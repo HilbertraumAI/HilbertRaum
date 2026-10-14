@@ -2,11 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  canonicalLeafFor,
-  locateStoredCopy,
-  storedCopyLeaf
-} from '../../src/main/services/ingestion/stored-copy'
+import { canonicalLeafFor, storedCopyLeaf } from '../../src/main/services/ingestion/stored-copy-leaf'
+import { locateStoredCopy } from '../../src/main/services/ingestion/stored-copy'
 
 // Issue #188 — the resolver's SAFETY guard. `deleteDocument` shreds whatever this returns, so
 // "which file is this document's?" is a data-destruction question, not a lookup convenience.

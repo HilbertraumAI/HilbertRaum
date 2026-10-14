@@ -499,10 +499,12 @@ describe('WorkspaceController', () => {
   it('shredStalePlaintext removes the working file + WAL/SHM', () => {
     const vp = freshVault()
     writeFileSync(vp.dbPath, 'x')
+    writeFileSync(`${vp.dbPath}.tmp`, 'x') // decryptFile's whole-DB temp before its atomic rename
     writeFileSync(`${vp.dbPath}-wal`, 'x')
     writeFileSync(`${vp.dbPath}-shm`, 'x')
     shredStalePlaintext(vp)
     expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}.tmp`)).toBe(false)
     expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
     expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
   })
@@ -517,6 +519,8 @@ describe('WorkspaceController', () => {
 
     // Transient plaintext copies a killed run can leave behind.
     writeFileSync(join(docsDir, 'doc1.parsepdf'), 'x') // re-index parse temp
+    writeFileSync(join(docsDir, 'doc1.parse.pdf'), 'x') // re-index transient <id>.parse<ext>
+    writeFileSync(join(docsDir, 'doc1.pdf.enc.tmp'), 'x') // encryptFile's atomic-write temp under documents/
     writeFileSync(join(imagesDir, 'img1.tmp'), 'x') // image-history write temp
     writeFileSync(join(imagesDir, 'img2.read-1234.tmp'), 'x') // image-history read temp
     // Stored encrypted copies must SURVIVE the sweep (they match neither pattern).
@@ -526,6 +530,8 @@ describe('WorkspaceController', () => {
     shredStalePlaintext(vp)
 
     expect(existsSync(join(docsDir, 'doc1.parsepdf'))).toBe(false)
+    expect(existsSync(join(docsDir, 'doc1.parse.pdf'))).toBe(false)
+    expect(existsSync(join(docsDir, 'doc1.pdf.enc.tmp'))).toBe(false)
     expect(existsSync(join(imagesDir, 'img1.tmp'))).toBe(false)
     expect(existsSync(join(imagesDir, 'img2.read-1234.tmp'))).toBe(false)
     expect(existsSync(join(docsDir, 'doc1.pdf.enc'))).toBe(true)

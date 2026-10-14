@@ -7,6 +7,7 @@ import { parse } from 'yaml'
 import {
   archiveNameFromUrl,
   planModelDownloads,
+  planOcrDownloads,
   selectRuntimeBuild,
   selectRuntimeBuilds,
   planRuntimeDownload,
@@ -854,6 +855,44 @@ describe('planRuntimeDownload', () => {
     expect(runtimeBinaryName('win')).toBe('llama-server.exe')
     expect(runtimeBinaryName('mac')).toBe('llama-server')
     expect(runtimeBinaryName('linux')).toBe('llama-server')
+  })
+})
+
+describe('planOcrDownloads (the ocr: asset class, D32)', () => {
+  const sources = (sha: string) => ({
+    version: 'v',
+    files: [{ lang: 'deu', url: 'https://x/deu.gz', sha256: sha, dest: 'ocr/deu.traineddata.gz' }]
+  })
+
+  it('absent file → download; matching file → present-verified; mismatch → download; a placeholder pin → present-unverified', async () => {
+    const root = tempDir('hilbertraum-ocr-assets-')
+    const data = 'traineddata-bytes'
+    const sha = sha256(data)
+
+    let plan = await planOcrDownloads(root, sources(sha))
+    expect(plan[0].status).toBe('download')
+
+    mkdirSync(join(root, 'ocr'), { recursive: true })
+    writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), data)
+    plan = await planOcrDownloads(root, sources(sha))
+    expect(plan[0].status).toBe('present-verified')
+
+    writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'tampered')
+    plan = await planOcrDownloads(root, sources(sha))
+    expect(plan[0].status).toBe('download')
+
+    plan = await planOcrDownloads(root, sources('REPLACE_WITH_REAL_HASH'))
+    expect(plan[0].status).toBe('present-unverified')
+  })
+
+  it('rejects a dest escaping the drive root', async () => {
+    const root = tempDir('hilbertraum-ocr-assets-')
+    await expect(
+      planOcrDownloads(root, {
+        version: 'v',
+        files: [{ lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: '../outside.gz' }]
+      })
+    ).rejects.toThrow(/escapes the drive root/)
   })
 })
 

@@ -5,7 +5,6 @@ import {
   reconstructLine,
   reconstructPage,
   resolvePageAnchor,
-  resolvePageYear,
   toFullDate,
   DEFAULT_ROW_TOLERANCE,
   DEFAULT_COLUMN_GAP,
@@ -40,11 +39,6 @@ describe('clusterRows', () => {
       ['Date'],
       ['date', 'desc', 'amount'] // left-to-right by x within the 700-band
     ])
-  })
-
-  it('splits rows that differ by more than the tolerance', () => {
-    const rows = clusterRows([word('a', 0, 700), word('b', 0, 690)], 3)
-    expect(rows).toHaveLength(2)
   })
 
   it('skips words with non-finite coordinates', () => {
@@ -103,25 +97,18 @@ describe('resolvePageAnchor (R5 — year + rollover month)', () => {
   it('returns null when no year is anywhere on the page', () => {
     expect(resolvePageAnchor([word('28.12.', 50, 700)])).toBeNull()
   })
-})
 
-describe('resolvePageYear', () => {
-  it('prefers the year of the first fully-printed date on the page', () => {
-    const words = [word('Statement period 01.01.2022 - 31.12.2022', 50, 800), word('31.05.', 50, 700)]
-    expect(resolvePageYear(words)).toBe(2022)
-  })
-
-  it('falls back to a standalone year token in the top header band', () => {
-    const words = [
-      word('Kontoauszug 2024', 50, 800), // header band
-      word('31.12.', 50, 700), // bare row date, lower on the page
-      word('1.234,56', 400, 700)
-    ]
-    expect(resolvePageYear(words)).toBe(2024)
-  })
-
-  it('returns null when no year is anywhere on the page', () => {
-    expect(resolvePageYear([word('31.12.', 50, 700)])).toBeNull()
+  // REL-10: the header-band y-range fold USED to spread every fragment's y into `Math.max(...ys)` /
+  // `Math.min(...ys)`; a crafted page with hundreds of thousands of positioned fragments overflowed the call
+  // stack (`RangeError`) on the layout preview path. The single-pass loop has no argument-count limit.
+  it('REL-10: folds a 500k-fragment page y-range in one pass and still resolves the header year', () => {
+    const N = 500_000
+    const words: LayoutWord[] = new Array(N)
+    // Non-date, non-year fragments, so the full-date scan falls through to the y-range fold REL-10 hardens.
+    for (let i = 0; i < N; i++) words[i] = { str: 'x', x: 0, y: i, w: 1 }
+    // One standalone year token at the very top of the page (the header-band fallback target).
+    words[N - 1] = { str: '2024', x: 0, y: N, w: 4 }
+    expect(resolvePageAnchor(words)).toEqual({ year: 2024, month: null })
   })
 })
 
@@ -175,22 +162,22 @@ describe('reconstructLine', () => {
       word('-1.234,56', 420, 700),
       word('9.999,99', 500, 700)
     ]
-    const line = reconstructLine(row, 2024)
+    const line = reconstructLine(row, 2024, { min: 50, max: 50 })
     expect(line).toBe('31.12.2024 SEPA-Überweisung Müller -1.234,56 9.999,99')
     // The dropped value date is gone — only ONE date token leads the line.
     expect(line!.match(/\d{1,2}\.\d{1,2}\./g)).toHaveLength(1)
   })
 
   it('returns null when the row has no resolvable date', () => {
-    expect(reconstructLine([word('Zwischensumme', 50, 700), word('1.000,00', 400, 700)], 2024)).toBeNull()
+    expect(reconstructLine([word('Zwischensumme', 50, 700), word('1.000,00', 400, 700)], 2024, { min: 50, max: 50 })).toBeNull()
   })
 
   it('returns null when the row has a date but no amount (a header/section line)', () => {
-    expect(reconstructLine([word('31.12.', 50, 700), word('Kontostand', 140, 700)], 2024)).toBeNull()
+    expect(reconstructLine([word('31.12.', 50, 700), word('Kontostand', 140, 700)], 2024, { min: 50, max: 50 })).toBeNull()
   })
 
   it('returns null when the description would be empty', () => {
-    expect(reconstructLine([word('31.12.', 50, 700), word('1.234,56', 400, 700)], 2024)).toBeNull()
+    expect(reconstructLine([word('31.12.', 50, 700), word('1.234,56', 400, 700)], 2024, { min: 50, max: 50 })).toBeNull()
   })
 })
 
@@ -301,18 +288,6 @@ describe('SKA-13 — a yearless d.dd token is a date only INSIDE the Datum band 
     const { text } = reconstructPage(words)
     expect(text.split('\n')).toContain('12.02.2026 Lastschrift Wert: -49,00')
   })
-
-  it('with NO column model the legacy date-first classification stands (the documented fallback)', () => {
-    // detectDatumColumn returns null only for a page with no date tokens (no transactions anyway);
-    // direct null-datum calls keep the pre-SKA-13 semantics byte-identically.
-    const row: LayoutWord[] = [
-      word('01.02.', 40, 700),
-      word('Coffee', 100, 700),
-      word('5.04', 300, 700),
-      word('1,234.06', 380, 700)
-    ]
-    expect(reconstructLine(row, 2026, null)).toBe('01.02.2026 Coffee 1,234.06')
-  })
 })
 
 describe('reconstructPage (end-to-end on word boxes)', () => {
@@ -413,12 +388,6 @@ describe('reconstructPage (end-to-end on word boxes)', () => {
     expect(lines.some((l) => /^\d{1,2}\.\d{1,2}\./.test(l) && l.includes('39,00'))).toBe(false)
   })
 
-  it('uses the document-level fallback year for a page whose header carries none', () => {
-    const words: LayoutWord[] = [word('07.02.', 50, 700), word('Kaffee', 140, 700), word('-3,50', 420, 700)]
-    const { text } = reconstructPage(words, { fallbackYear: 2023 })
-    expect(text).toBe('07.02.2023 Kaffee -3,50')
-  })
-
   it('emits a bare-date row RAW when no year is resolvable — extraction still drops it (honesty)', () => {
     const words: LayoutWord[] = [word('07.02.', 50, 700), word('Kaffee', 140, 700), word('-3,50', 420, 700)]
     const { text } = reconstructPage(words)
@@ -426,6 +395,19 @@ describe('reconstructPage (end-to-end on word boxes)', () => {
     expect(text).toBe('07.02. Kaffee -3,50')
     // …and its bare lead date is one parseDate REJECTS, so the bank extractor drops it, never guesses.
     expect(parseDate(text.split(' ')[0])).toBeNull()
+  })
+
+  it('a page with NO date token has no booking-date column: every row is emitted raw, left-to-right', () => {
+    // A terms/cover page or a dateless invoice page in layout mode: no row can lead a transaction, so each
+    // visual row survives as its raw text (labels, figures, currency), and the carried year/month pass through.
+    const words: LayoutWord[] = [
+      word('Rechnung', 40, 780), word('Nr.', 100, 780), word('G-7', 125, 780),
+      word('Beratung', 40, 700), word('2', 200, 700), word('100,00', 260, 700), word('EUR', 410, 700),
+      word('Endsaldo', 40, 680), word('4.000,00', 420, 680)
+    ]
+    const text = 'Rechnung Nr. G-7\nBeratung 2 100,00 EUR\nEndsaldo 4.000,00'
+    expect(reconstructPage(words)).toEqual({ text, year: null, month: null })
+    expect(reconstructPage(words, { fallbackYear: 2026, fallbackMonth: 3 })).toEqual({ text, year: 2026, month: 3 })
   })
 })
 
@@ -504,15 +486,11 @@ describe('Stage-1 geometry edge boundaries (audit M3)', () => {
     // The gold-set HVB "Umsätze" over-extraction (former boundary 1): each transaction prints a booking
     // row (`<date> <desc> <amount>`) AND a per-row running-balance row (`<date> EUR <balance>`), and the
     // amount and balance share ONE right-aligned numeric column so a "money-column model" can't separate
-    // them (these MEASURED gold-set x's all fall inside one DEFAULT_COLUMN_GAP band). The fix is NOT a
-    // money-column model: the per-row CURRENCY token is now its own class, so the balance row's ONLY
+    // them (the measured gold-set x's 493–510 all fall inside one 12-pt DEFAULT_COLUMN_GAP band). The fix
+    // is NOT a money-column model: the per-row CURRENCY token is now its own class, so the balance row's ONLY
     // non-date/non-money token (the bare `EUR`) no longer becomes a description → the row has an EMPTY
     // description → reconstructLine drops it. A genuine row whose payee wrapped to another baseline is
     // RESCUED by multi-baseline association (next test), so the two are now distinguishable.
-    const moneyXs = [493, 495, 499, 505, 508, 510]
-    const sorted = [...moneyXs].sort((a, b) => a - b)
-    const maxConsecutiveGap = Math.max(...sorted.slice(1).map((x, i) => x - sorted[i]))
-    expect(maxConsecutiveGap).toBeLessThanOrEqual(DEFAULT_COLUMN_GAP) // amount & balance share one band
     const phantom = reconstructLine(
       [word('07.02.', 50, 700), word('EUR', 470, 700), word('1.234,56', 493, 700)],
       2024,
@@ -549,7 +527,14 @@ describe('HVB multi-baseline recovery (A1 association + A2 currency + A3 sign)',
       { min: 50, max: 50 }
     )
     expect(debit).toBe('14.01.2025 LASTSCHRIFT -3,99')
-    // A German Soll/Haben "H" in the sign column marks a credit (stays positive); "S" marks a debit.
+    // A German Soll/Haben "S" in the sign column marks a debit (reads negative) …
+    const soll = reconstructLine(
+      [word('15.01.', 50, 660), word('LASTSCHRIFT', 140, 660), word('12,00', 490, 660), word('S', 512, 660)],
+      2025,
+      { min: 50, max: 50 }
+    )
+    expect(soll).toBe('15.01.2025 LASTSCHRIFT -12,00')
+    // … and "H" marks a credit (stays positive).
     const credit = reconstructLine(
       [word('29.01.', 50, 680), word('GUTSCHRIFT', 140, 680), word('34,39', 490, 680), word('H', 512, 680)],
       2025,
@@ -638,16 +623,6 @@ describe('FIN-3: bare-thousands / apostrophe amounts are no longer mis-read as d
     expect(rows[0]).toMatchObject({ amount: 2500, balanceAfter: 1000 })
   })
 
-  it('an apostrophe-grouped `1\'234.56` likewise survives when a cents figure anchors the row', () => {
-    const line = reconstructLine(
-      [word('05.01.', 50, 700), word('Zahlung', 160, 700), word("1'234.56", 420, 700), word('9.999,99', 500, 700)],
-      2024,
-      { min: 50, max: 50 }
-    )
-    expect(line).toBe("05.01.2024 Zahlung 1'234.56 9.999,99")
-    expect(extractTransactionRows([seg(line!)], 'EUR')[0]).toMatchObject({ amount: 1234.56, balanceAfter: 9999.99 })
-  })
-
   it('boundary: a SOLE no-cents `10.000` stays a gate-safe DROP (MONEY_TOKEN_RE deliberately not widened)', () => {
     // The classifier keeps the 2-dp requirement, so a row whose ONLY figure is a no-cents bare-thousands
     // carries no money TOKEN and is dropped — a recall loss, never a wrong figure. Widening to accept it
@@ -668,7 +643,7 @@ describe('R1: geometry token normalization (audit §5.3)', () => {
   const RSQUO = '\u2019' // RIGHT SINGLE QUOTATION MARK
   const seg = (text: string): { text: string; page: number; index: number } => ({ text, page: 1, index: 0 })
 
-  it('a U+2212 amount classifies as money, keeps its sign, and reads negative through the parser', () => {
+  it('a U+2212 amount classifies as money, keeps its sign, and reads negative through the parser — with or without a balance column', () => {
     const row: LayoutWord[] = [
       word('05.04.', 50, 700),
       word('Gehalt', 170, 700),
@@ -679,13 +654,14 @@ describe('R1: geometry token normalization (audit §5.3)', () => {
     // BEFORE: null — the `−1.234,56` token was TEXT, the row had no amount and was dropped.
     expect(line).toBe('05.04.2025 Gehalt -1.234,56 9.999,99')
     expect(extractTransactionRows([seg(line!)], 'EUR')[0]).toMatchObject({ amount: -1234.56, balanceAfter: 9999.99 })
-  })
-
-  it('a lone U+2212 amount (no balance column) still signs the movement negative', () => {
-    const row: LayoutWord[] = [word('05.04.', 50, 700), word('Miete', 170, 700), word(`${MINUS}45,90`, 440, 700)]
-    const line = reconstructLine(row, 2025, { min: 50, max: 50 })
-    expect(line).toBe('05.04.2025 Miete -45,90')
-    expect(extractTransactionRows([seg(line!)], 'EUR')[0]).toMatchObject({ amount: -45.9 })
+    // A lone `−45,90` (no balance column) still signs the movement negative.
+    const lone = reconstructLine(
+      [word('05.04.', 50, 700), word('Miete', 170, 700), word(`${MINUS}45,90`, 440, 700)],
+      2025,
+      { min: 50, max: 50 }
+    )
+    expect(lone).toBe('05.04.2025 Miete -45,90')
+    expect(extractTransactionRows([seg(lone!)], 'EUR')[0]).toMatchObject({ amount: -45.9 })
   })
 
   it('a Swiss U+2019 apostrophe amount survives as apostrophe-grouped money', () => {

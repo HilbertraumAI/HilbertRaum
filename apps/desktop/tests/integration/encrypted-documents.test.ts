@@ -1,37 +1,32 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import type { Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
   processDocument,
   reindexDocument,
-  deleteDocument,
   documentsDir,
   extractDocumentPreview,
   readStoredDocumentBytes,
+  readStoredDocumentText,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
 import {
-  encryptFile,
-  decryptFile,
-  encryptFileAsync,
-  decryptFileAsync,
-  shredStalePlaintext,
   vaultPathsFrom,
   createEncryptedVaultOnDisk,
-  WorkspaceController,
-  type DocumentCipher
+  WorkspaceController
 } from '../../src/main/services/workspace-vault'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { KdfParams } from '../../src/main/services/security/crypto'
+import { recordingCipher, testCipher } from '../helpers/test-cipher'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 
 // H1 (audit round 4): spec §3.5 requires encrypting the workspace database AND the
 // document cache. The vault used to cover only the DB — every imported file's raw bytes
 // rested in plaintext under workspace/documents/. With a DocumentCipher supplied, the
 // stored copy is `<id><ext>.enc` and any transient decrypted working copy is shredded.
+// DB-2/DB-7: concurrent reads of one copy each decrypt into their own `.parse` transient.
 
 const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
 const SECRET_TEXT = 'wholly confidential contract clause 7: severance of unicorns'
@@ -44,26 +39,15 @@ function writeSource(name: string, data: string): string {
 }
 
 beforeEach(() => {
-  srcDir = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-src-'))
+  srcDir = tempRoot('encdoc-src')
 })
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-db-')), 'test.sqlite'))
+  return openFreshDb('encdoc-db')
 }
 
 function freshStore(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-ws-')))
-}
-
-/** A cipher equivalent to the unlocked vault's (same encryptFile/decryptFile, fixed key). */
-function testCipher(): DocumentCipher {
-  const key = randomBytes(32)
-  return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
-    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
-  }
+  return documentsDir(tempRoot('encdoc-ws'))
 }
 
 /** Every plaintext occurrence of SECRET_TEXT under `dir` (the store) is a leak. */
@@ -99,7 +83,7 @@ describe('encrypted document cache (H1)', () => {
     expect(row.text).toContain('severance of unicorns')
   })
 
-  it('re-indexes from the encrypted copy and shreds the transient decrypted file', async () => {
+  it("re-indexes from the encrypted copy (not the user's original) and shreds the transient decrypted file", async () => {
     const db = freshDb()
     const store = freshStore()
     const cipher = testCipher()
@@ -108,11 +92,17 @@ describe('encrypted document cache (H1)', () => {
     const doc = createQueuedDocument(db, file)
     await processDocument(db, store, doc.id, { cipher })
 
-    // Re-index must work even when the ORIGINAL is gone (self-contained drive): it
-    // decrypts the stored .enc to a transient working file and parses that.
+    // The user's original changed after the import. Re-index must read the stored .enc (D5: the
+    // workspace copy first), never the file that happens to sit at original_path.
+    writeFileSync(file, 'an unrelated edit made after the import')
     const reinfo = await reindexDocument(db, store, doc.id, { cipher })
     expect(reinfo.status).toBe('indexed')
     expect(reinfo.chunkCount).toBeGreaterThan(0)
+    const texts = (db.prepare('SELECT text FROM chunks WHERE document_id = ?').all(doc.id) as Array<{ text: string }>)
+      .map((r) => r.text)
+      .join('\n')
+    expect(texts).toContain('severance of unicorns')
+    expect(texts).not.toContain('unrelated edit')
 
     // After the run: only the .enc remains — the `.parse` transient was shredded.
     const stored = readdirSync(store)
@@ -167,24 +157,67 @@ describe('encrypted document cache (H1)', () => {
       .get(doc.id) as unknown as { stored_path: string }
     expect(row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
   })
+})
 
-  it('deleteDocument removes the encrypted stored copy', async () => {
+// DB-2 / DB-7: concurrent reads of ONE encrypted copy each decrypt into their own `.parse`
+// transient (the crash sweep matches `.parse`), asynchronously (PERF-1), and read the plaintext.
+describe('concurrent reads of one encrypted copy (DB-2 / DB-7)', () => {
+  // A single-macrotask hop with no observable to gate on: it parks each decrypt so the second
+  // read starts before the first finishes — the interleave both rows are about.
+  const hop = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+  const inStoreParse = (store: string, dests: string[]): void => {
+    for (const d of dests) {
+      expect(dirname(d)).toBe(store)
+      expect(basename(d)).toContain('.parse')
+    }
+  }
+
+  it('DB-2: concurrent same-doc previews decrypt into distinct .parse transients, each reads the plaintext, and only the .enc remains', async () => {
     const db = freshDb()
     const store = freshStore()
-    const file = writeSource('contract.txt', SECRET_TEXT)
+    const rec = recordingCipher({ beforeDecryptAsync: hop })
+    const doc = createQueuedDocument(db, writeSource('contract.txt', SECRET_TEXT))
+    await processDocument(db, store, doc.id, { cipher: rec.cipher })
+    const before = rec.asyncDecrypts.length
+    const [a, b] = await Promise.all([
+      extractDocumentPreview(db, store, doc.id, { cipher: rec.cipher }),
+      extractDocumentPreview(db, store, doc.id, { cipher: rec.cipher })
+    ])
+    for (const p of [a, b]) expect(p.segments.map((s) => s.text).join('\n')).toContain('severance of unicorns')
+    const dests = rec.asyncDecrypts.slice(before)
+    expect(dests).toHaveLength(2)
+    expect(new Set(dests).size).toBe(2) // TEETH: a shared `${id}.parse-preview.txt` collapses this to 1
+    inStoreParse(store, dests)
+    expect(readdirSync(store)).toEqual([`${doc.id}.txt${ENCRYPTED_DOC_SUFFIX}`])
+    expect(plaintextLeaks(store)).toEqual([])
+  })
 
-    const doc = createQueuedDocument(db, file)
-    await processDocument(db, store, doc.id, { cipher: testCipher() })
-    expect(readdirSync(store)).toHaveLength(1)
-
-    deleteDocument(db, store, doc.id)
-    expect(readdirSync(store)).toHaveLength(0)
+  it('DB-7: concurrent text exports decrypt asynchronously (never the sync decryptFile) into distinct transients and return the plaintext', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const rec = recordingCipher({ beforeDecryptAsync: hop })
+    const doc = createQueuedDocument(db, writeSource('contract.txt', SECRET_TEXT))
+    await processDocument(db, store, doc.id, { cipher: rec.cipher })
+    const before = rec.asyncDecrypts.length
+    const [a, b] = await Promise.all([
+      readStoredDocumentText(db, store, doc.id, { cipher: rec.cipher }),
+      readStoredDocumentText(db, store, doc.id, { cipher: rec.cipher })
+    ])
+    expect(a.text).toBe(SECRET_TEXT)
+    expect(b.text).toBe(SECRET_TEXT)
+    expect(rec.syncDecrypts).toBe(0) // TEETH (PERF-1): the sync decryptFile blocks the main process
+    const dests = rec.asyncDecrypts.slice(before)
+    expect(dests).toHaveLength(2)
+    expect(new Set(dests).size).toBe(2)
+    inStoreParse(store, dests)
+    expect(readdirSync(store)).toEqual([`${doc.id}.txt${ENCRYPTED_DOC_SUFFIX}`])
+    expect(plaintextLeaks(store)).toEqual([])
   })
 })
 
 describe('WorkspaceController.documentCipher()', () => {
   function freshVaultRoot(): { vp: ReturnType<typeof vaultPathsFrom> } {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-vault-'))
+    const root = tempRoot('encdoc-vault')
     const configPath = join(root, 'config')
     const workspacePath = join(root, 'workspace')
     mkdirSync(configPath, { recursive: true })
@@ -192,7 +225,7 @@ describe('WorkspaceController.documentCipher()', () => {
     return { vp: vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') }) }
   }
 
-  it('is null while locked and in plaintext mode; round-trips files when unlocked', () => {
+  it('is null while locked; round-trips files when unlocked', () => {
     const { vp } = freshVaultRoot()
     createEncryptedVaultOnDisk(vp, 'password', FAST_KDF)
     const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
@@ -220,56 +253,6 @@ describe('WorkspaceController.documentCipher()', () => {
     ctl.init() // dev + default policy → plaintext opens
     expect(ctl.isUnlocked()).toBe(true)
     expect(ctl.documentCipher()).toBeNull()
-  })
-})
-
-describe('shredStalePlaintext — transient sweep (H1/M9)', () => {
-  it('shreds the DB .tmp and stray .parse document transients, sparing stored copies', () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-shred-'))
-    const configPath = join(root, 'config')
-    const workspacePath = join(root, 'workspace')
-    mkdirSync(configPath, { recursive: true })
-    mkdirSync(workspacePath, { recursive: true })
-    const vp = vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
-    const docs = join(workspacePath, 'documents')
-    mkdirSync(docs, { recursive: true })
-
-    // Crash leftovers: decrypt temp of the DB + a transient decrypted document copy.
-    writeFileSync(`${vp.dbPath}.tmp`, 'decrypted database bytes')
-    writeFileSync(join(docs, 'abc.parse.pdf'), SECRET_TEXT)
-    writeFileSync(join(docs, 'abc.pdf.enc.tmp'), 'partial encrypt')
-    // A real stored copy that must survive the sweep.
-    writeFileSync(join(docs, 'abc.pdf.enc'), 'ciphertext')
-
-    shredStalePlaintext(vp)
-
-    expect(existsSync(`${vp.dbPath}.tmp`)).toBe(false)
-    expect(existsSync(join(docs, 'abc.parse.pdf'))).toBe(false)
-    expect(existsSync(join(docs, 'abc.pdf.enc.tmp'))).toBe(false)
-    expect(existsSync(join(docs, 'abc.pdf.enc'))).toBe(true)
-  })
-
-  // Audit test-gap #5 ride-along (OCR-R P4): the OCR handler decrypts an encrypted scan to a
-  // `${documentId}.parse-ocr.pdf` transient (handlers/ocr.ts) and relies on the startup crash
-  // sweep to shred it if a crash lands before its `finally`. Pin that exact name to the sweep so a
-  // rename that drops the `.parse` infix can't silently orphan an encrypted-page transient on disk.
-  it('sweeps the OCR `.parse-ocr.pdf` decrypt transient (audit test-gap #5)', () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-ocrsweep-'))
-    const configPath = join(root, 'config')
-    const workspacePath = join(root, 'workspace')
-    mkdirSync(configPath, { recursive: true })
-    mkdirSync(workspacePath, { recursive: true })
-    const vp = vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
-    const docs = join(workspacePath, 'documents')
-    mkdirSync(docs, { recursive: true })
-
-    const documentId = 'doc-1234'
-    const ocrTransient = join(docs, `${documentId}.parse-ocr.pdf`) // handlers/ocr.ts naming
-    writeFileSync(ocrTransient, SECRET_TEXT)
-
-    shredStalePlaintext(vp)
-
-    expect(existsSync(ocrTransient)).toBe(false)
   })
 })
 

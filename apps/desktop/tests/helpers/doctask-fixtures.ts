@@ -1,7 +1,8 @@
 // The DocTaskManager world for the doc-task suites (doctasks*, whole-doc-*): a temp root + fresh DB + document
 // store, documents imported through the REAL ingestion pipeline (the handlers re-extract the stored copy, so the
 // row-only seeders in `doc-fixtures.ts` do not fit), a manager on harmless default deps, a scripted chat runtime,
-// and the terminal-state poll. Pure: no electron import. Every temp root comes from `tempRoot` (the swept prefix).
+// a scripted translation sidecar, and the terminal-state poll. Pure: no electron import. Every temp root comes
+// from `tempRoot` (the swept prefix).
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect } from 'vitest'
@@ -15,6 +16,12 @@ import {
 import { DocTaskManager, type DocTaskDeps } from '../../src/main/services/doctasks'
 import { recordEvent } from '../../src/main/services/audit'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import {
+  TRANSLATION_STOP_TOKEN,
+  type CompletionFinal,
+  type TranslateOptions,
+  type Translator
+} from '../../src/main/services/translation'
 import type { AuditEventType } from '../../src/shared/types'
 import { tempRoot } from './db-fixtures'
 import { until } from './hang-budget'
@@ -137,22 +144,25 @@ export function userPromptOf(call: DocRuntimeCall): string {
   return call.messages.find((m) => m.role === 'user')?.content ?? ''
 }
 
+/** A token delay cut short by an abort. One task signal spans every token of every call, so each delay removes
+ *  its abort listener again. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const onAbort = (): void => {
+      clearTimeout(t)
+      resolve()
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 /** A scripted chat runtime that records every call, counts concurrency and stops at an abort. */
 export function docTaskRuntime(o: DocRuntimeOptions = {}): DocRuntime {
-  // One task signal spans every token of every call, so each delay removes its abort listener again.
-  const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
-    new Promise((resolve) => {
-      if (signal?.aborted) return resolve()
-      const onAbort = (): void => {
-        clearTimeout(t)
-        resolve()
-      }
-      const t = setTimeout(() => {
-        signal?.removeEventListener('abort', onAbort)
-        resolve()
-      }, ms)
-      signal?.addEventListener('abort', onAbort, { once: true })
-    })
   const rt: DocRuntime = {
     modelId: o.modelId ?? 'scripted-model',
     calls: [],
@@ -183,4 +193,56 @@ export function docTaskRuntime(o: DocRuntimeOptions = {}): DocRuntime {
     }
   }
   return rt
+}
+
+export interface ScriptedTranslatorOptions {
+  /** Reply per call; throwing fails that call. Default: a perfect echo translator. */
+  reply?: (call: TranslateOptions, index: number) => string
+  /** The sidecar's launched context window (`contextWindow()`). Default 4096 (the manifest). */
+  contextTokens?: number
+  /** Delay (ms) before each streamed token — lets cancel land mid-window. */
+  tokenDelayMs?: number
+  /**
+   * The final frame each (non-throwing) call reports via `onFinal` (TA-5 M6 — now load-bearing).
+   * Default: a CLEAN stop (`stopping_word: <end_of_turn>`). Return `{}` to model a LIMIT stop
+   * (truncation) — a non-empty window that the handler must treat as a failed attempt.
+   */
+  final?: (call: TranslateOptions, index: number) => CompletionFinal
+}
+
+export interface ScriptedTranslator extends Translator {
+  calls: TranslateOptions[]
+}
+
+/**
+ * A scripted Translator (the TG-3 sidecar seam). The default reply is a "perfect
+ * translator": it returns the window text verbatim, so the stitched output is
+ * byte-comparable to the source — exactly what the D36 regression needs.
+ */
+export function scriptedTranslator(opts: ScriptedTranslatorOptions = {}): ScriptedTranslator {
+  const translator: ScriptedTranslator = {
+    modelId: 'scripted-translator',
+    calls: [],
+    contextWindow: () => opts.contextTokens ?? 4096,
+    stop: async () => {},
+    async translate(call: TranslateOptions): Promise<string> {
+      const index = translator.calls.length
+      translator.calls.push(call)
+      const text = opts.reply ? opts.reply(call, index) : call.text
+      if (opts.tokenDelayMs) {
+        for (const token of text.match(/\S+\s*/g) ?? [text]) {
+          // The real runtime rejects on abort; a clean return exercises the handler's
+          // aborted-normalization the same way the old mock chat runtime did.
+          if (call.signal?.aborted) return ''
+          await delay(opts.tokenDelayMs, call.signal)
+          call.onToken?.(token)
+        }
+      }
+      // A normal resolve ALWAYS carries a terminal frame (the runtime throws IncompleteStreamError
+      // otherwise) — model it so `isCleanStop(final)` can tell a clean stop from a limit stop (M6).
+      call.onFinal?.(opts.final ? opts.final(call, index) : { stoppingWord: TRANSLATION_STOP_TOKEN })
+      return text
+    }
+  }
+  return translator
 }

@@ -71,8 +71,13 @@ describe('preload — OCR install surface (#410)', () => {
 
   it('the hostile-PDF rasterizer window preload never mentions the install surface (main-window only)', () => {
     const src = readFileSync(join(__dirname, '../../src/preload/ocr.ts'), 'utf8')
-    expect(src).not.toContain('installOcr')
-    expect(src).not.toContain('getOcrInstallStatus')
-    expect(src).not.toContain('ocr:install')
+    // The rasterizer bridge only listens (`on`) and reports (`send`) on its ocr-raster: literals. Every install channel is
+    // an `invoke` on an `ocr:` literal, and a sandboxed preload cannot import IPC, so no `invoke`, no `'ocr:` literal and
+    // no install method name together cover all four channels, renamed or not.
+    expect(src).not.toMatch(/\.invoke\s*\(/)
+    expect(src).not.toMatch(/['"`]ocr:/)
+    for (const name of ['installOcr', 'getOcrInstallStatus', 'getOcrInstallJob', 'cancelOcrInstall']) {
+      expect(src, name).not.toContain(name)
+    }
   })
 })

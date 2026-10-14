@@ -60,13 +60,8 @@ import {
 } from './limits'
 import type { PlaintextOpsRegistry } from './plaintext-ops'
 import { failureRowMessage } from './engine-failure'
-import {
-  canonicalLeafFor,
-  locateOriginal,
-  locateStoredCopy,
-  resolveStoredCopy,
-  warnOriginalChanged
-} from './stored-copy'
+import { locateOriginal, locateStoredCopy, resolveStoredCopy, warnOriginalChanged } from './stored-copy'
+import { canonicalLeafFor } from './stored-copy-leaf'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
 //   queued → extracting → chunking → embedding → indexed   (failed on error)
@@ -112,13 +107,6 @@ export interface IngestionDeps {
    * unaffected.
    */
   ocrEngine?: OcrEngine | null
-  /**
-   * Resource caps applied before a parser runs (security audit M-1/M-2/M-3): a
-   * pre-parse byte ceiling, a parse wall-clock timeout, a PDF page cap, and a DOCX
-   * inflated-size ceiling. Omit to use `resolveIngestionLimits()` (env-overridable
-   * defaults). Injected mainly so tests can dial the caps down.
-   */
-  limits?: IngestionLimits
   /**
    * Cancellation for the parse phase (REL-1). Threaded to `ParseContext.signal` so an
    * aborted import KILLS an in-flight audio transcription mid-flight (the import loop
@@ -766,7 +754,7 @@ export async function prepareDocument(
   // document content lingers on the drive.
   const transients: string[] = []
 
-  const limits = deps.limits ?? resolveIngestionLimits()
+  const limits = resolveIngestionLimits()
 
   // #237: registered for the lock/quit teardowns (aborted, settled within a bound, swept); the
   // op's signal also follows the caller's `deps.signal` (an import job's abort). Registered
@@ -1209,12 +1197,6 @@ export interface ExtractPreviewOptions {
   layout?: boolean
   /** Page cap for the layout path (plan §3.1) — threaded only when `layout` is set. */
   maxPages?: number
-  /**
-   * Resource caps for the preview re-parse (REL-5). The preview now enforces the SAME cap stack
-   * as ingest, via `parseWithLimits`. Omit → `resolveIngestionLimits()` (env-overridable
-   * defaults). Injected mainly so tests can dial the caps down to prove the preview is bounded.
-   */
-  limits?: IngestionLimits
 }
 
 export async function extractDocumentPreview(
@@ -1308,7 +1290,7 @@ export async function extractDocumentPreview(
       parser,
       parseSource,
       previewCtx,
-      opts.limits ?? resolveIngestionLimits(),
+      resolveIngestionLimits(),
       tMain('main.ingest.parseTimeout')
     )
     return {
@@ -1471,7 +1453,7 @@ export function getDocumentSummary(db: Db, documentId: string): DocumentSummary 
 }
 
 /**
- * Persist (or clear, with null) a document's OCR recognition. The pages
+ * Persist a document's OCR recognition. The pages
  * are CONTENT: they live only in this (possibly encrypted) DB column — callers must
  * never put them into logs or the audit trail. Survives re-index deliberately (like
  * `origin_json`: it states where the text CAME from; re-running the OCR task is the
@@ -1480,22 +1462,15 @@ export function getDocumentSummary(db: Db, documentId: string): DocumentSummary 
 export function setDocumentOcr(
   db: Db,
   documentId: string,
-  ocr: { pages: OcrPage[]; engineId: string; languages: string[] } | null
+  ocr: { pages: OcrPage[]; engineId: string; languages: string[] }
 ): void {
   const createdAt = nowIso()
-  const json = ocr
-    ? JSON.stringify({
-        pages: ocr.pages,
-        engineId: ocr.engineId,
-        languages: ocr.languages,
-        createdAt
-      })
-    : null
+  const json = JSON.stringify({ pages: ocr.pages, engineId: ocr.engineId, languages: ocr.languages, createdAt })
   // PERF-3: write the cheap metadata sidecar alongside the full blob so `listDocuments` reads the
-  // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json`:
-  // clearing OCR (ocr === null) nulls both. `ocrMetaOf` is the same derivation `ocrMetaFromJson`
-  // (the backfill) applies to the just-written blob (engine pages are always well-formed).
-  const meta = ocr ? ocrMetaOf(ocr.pages, { ...ocr, createdAt }) : null
+  // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json` (one
+  // statement writes both). `ocrMetaOf` is the same derivation `ocrMetaFromJson` (the backfill)
+  // applies to the just-written blob (engine pages are always well-formed).
+  const meta = ocrMetaOf(ocr.pages, { ...ocr, createdAt })
   const metaJson = meta ? JSON.stringify(meta) : null
   db.prepare('UPDATE documents SET ocr_json = ?, ocr_meta_json = ?, updated_at = ? WHERE id = ?').run(
     json,
@@ -1580,16 +1555,6 @@ export function setDocumentOrigin(db: Db, documentId: string, origin: DocumentOr
   db.prepare(
     'UPDATE documents SET origin_json = ?, original_path = NULL, updated_at = ? WHERE id = ?'
   ).run(JSON.stringify(origin), nowIso(), documentId)
-}
-
-/** Read a document's provenance, or null (missing document / malformed JSON included). */
-export function getDocumentOrigin(db: Db, documentId: string): DocumentOrigin | null {
-  // DB-8: project ONLY `origin_json` — `getDocumentOrigin` is on per-compare/per-doc paths and
-  // never needs the wide row (the old `SELECT *` pulled `ocr_json` for nothing).
-  const row = db
-    .prepare('SELECT origin_json FROM documents WHERE id = ?')
-    .get(documentId) as unknown as { origin_json: string | null } | undefined
-  return row ? parseOrigin(row.origin_json) : null
 }
 
 /** Plain-text formats `readStoredDocumentText` can export as-is (no layout re-render). */

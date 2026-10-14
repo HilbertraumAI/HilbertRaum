@@ -41,7 +41,6 @@ export function listOcrLanguages(assetsDir: string): string[] {
 export interface OcrSelectionDeps {
   /** Drive root — the assets live at `<root>/ocr/`. */
   rootPath: string
-  listLanguages?: (assetsDir: string) => string[]
   makeEngine?: (langDir: string, languages: string[]) => OcrEngine
   onSelect?: (kind: 'tesseract' | 'none', reason: string) => void
   /**
@@ -59,13 +58,12 @@ export interface OcrSelectionDeps {
  */
 export function createSelectedOcrEngine(deps: OcrSelectionDeps): OcrEngine | null {
   const dir = ocrAssetsDir(deps.rootPath)
-  const listLanguages = deps.listLanguages ?? listOcrLanguages
   const makeEngine =
     deps.makeEngine ??
     ((langDir: string, languages: string[]) =>
       createTesseractOcrEngine({ langDir, languages, probeRequired: deps.probeRequired === true }))
 
-  const languages = listLanguages(dir)
+  const languages = listOcrLanguages(dir)
   if (languages.length === 0) {
     deps.onSelect?.('none', 'no OCR language files on the drive')
     return null

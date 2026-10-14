@@ -174,8 +174,8 @@ batching — no behavior change.
   - **DATA-2 (invariant, no code change).** `tree_edges.child_id` is a polymorphic FK (chunks.id OR
     tree_nodes.id) with no FK to chunks; the no-dangling-edge invariant holds only because every
     chunk-delete path also tears down the document's `tree_nodes` (cascading the edges via `parent_id`).
-    Pinned by an integrity test (after a `deleteDocument`, zero `child_is_chunk=1` edges reference a gone
-    chunk; the forbidden chunks-only delete dangles them).
+    Pinned on the delete path by `data-layer-hardening.test.ts` (a `deleteDocument` leaves no tree edge)
+    and on the re-index path by `whole-doc-analysis.test.ts` 're-index tears the tree down (stale)…'.
   - **DATA-3 (idempotency confirmed, no code change).** `extract.ts` re-extract is idempotent per chunk:
     the main loop skips a chunk whose `__scan__` marker matches the current content hash, and `commitChunk`
     deletes the chunk's prior rows before inserting, so a forced re-commit replaces rather than doubles the
@@ -846,8 +846,9 @@ Condensed from `docs/performance-audit-2026-06-18.md` §4 after Wave P5 shipped 
   `maxPages` + `maxInflatedBytes` from the resolved `IngestionLimits` and applies the wall-clock parse
   timeout (audio exempt — its `signal` + the transcriber watchdog bound it instead); the byte ceiling
   stays the ingest path's pre-selection stat (the preview reads the already-import-capped stored copy).
-  The ingest path is byte-for-byte unchanged (the decorator injects the same caps it set inline before);
-  `ExtractPreviewOptions.limits` is a test seam to dial the caps down.
+  The ingest path is byte-for-byte unchanged (the decorator injects the same caps it set inline before).
+  The caps resolve through `resolveIngestionLimits()` on every call (env-overridable); tests dial them
+  down through the same `HILBERTRAUM_*` variables.
 
 Deferred with explicit, unmet triggers (recorded, not built): P4b worker/`SharedArrayBuffer` scan
 (trigger: cached main-thread scan >100 ms routinely; measured ≤70 ms @10k chunks), P4c ANN/sqlite-vec
@@ -863,10 +864,12 @@ sections above, the full original stays in git history). The deferred-with-trigg
 FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
 **Shipped (✅):**
-- **DB-8 — project columns on the targeted document getters** (`ingestion/index.ts`). `getDocumentOrigin`,
-  `getDocumentSummary`, `getDocumentOcrPages` now `SELECT` only the one TEXT column each needs instead of
-  the shared `getRow` `SELECT *`, so a provenance/summary read no longer also deserializes the potentially
-  large `ocr_json`. Output identical (same `parseOrigin`/`parseSummary`/`parseOcr`).
+- **DB-8 — project columns on the targeted document getters** (`ingestion/index.ts`). `getDocumentSummary`
+  and `getDocumentOcrPages` now `SELECT` only the one TEXT column each needs instead of the shared `getRow`
+  `SELECT *`, so a summary/OCR read no longer also deserializes the potentially large `ocr_json`. Output
+  identical (same `parseSummary`/`parseOcr`). (A third getter, `getDocumentOrigin`, had no production
+  caller and was removed in the 2026-10 documents test campaign; provenance is read through
+  `getDocument`/`listDocuments`' `origin`.)
 - **RAG-5 — per-embedder query-vector LRU** (`embeddings/index.ts`). `searchText` serves the query
   embedding from a small LRU (`QUERY_VECTOR_CACHE_MAX = 32`) in a `WeakMap` keyed by embedder INSTANCE, so
   re-asking / "try again" / the re-index honesty re-check skip the embed round-trip that DOMINATES the scan
@@ -2478,7 +2481,7 @@ sentinel-tested), zero native deps.
   job is **not cooperatively cancellable** and recognitions are serialized through one
   worker chain, so one crafted/huge image could wedge OCR for the whole session and Cancel
   only landed between pages. `recognize()` now races `worker.recognize` against a per-page
-  timeout (`recognizeTimeoutMs`, default 2 min, `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`) **and**
+  timeout (`DEFAULT_OCR_PAGE_TIMEOUT_MS`, 2 min, overridable with `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`) **and**
   the abort signal; on timeout OR mid-page abort the only real recovery is to `terminate()`
   the worker (cleared → recreated lazily) and reject — which frees the serialized chain so
   the next page proceeds with a fresh worker. A plain recognition error still leaves the
@@ -7829,12 +7832,12 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
 **Design as built (deterministic, offline, ZERO model calls).**
 - **`ingestion/parsers/pdf-layout.ts`** — pure geometry reconstruction. `clusterRows` groups
   positioned words into visual rows by baseline y (tolerance band for jitter/superscripts), top-to-
-  bottom, each row left-to-right. `resolvePageYear` resolves the page year (first fully-printed
-  `DD.MM.YYYY`, else a header-band 4-digit token, else null → bare rows dropped unless the caller
-  supplies a document-level fallback year). `reconstructLine` emits one clean `<DD.MM.YYYY> <desc>
-  <amount> [<balance>]` per transaction row — the year resolved *during reconstruction* (§3.2: the
-  token reaching the SHARED `parseDate` is already a full date, so `parseDate` — used by invoice +
-  redaction — is **untouched by construction**). A row with no resolvable date / no amount / no
+  bottom, each row left-to-right. `resolvePageAnchor` resolves the page year and, from a fully-printed
+  date, its month (first fully-printed `DD.MM.YYYY`, else a header-band 4-digit token with no month, else
+  null → bare rows dropped unless the caller supplies a document-level fallback year/month).
+  `reconstructLine` emits one clean `<DD.MM.YYYY> <desc> <amount> [<balance>]` per transaction row —
+  the year resolved *during reconstruction* (§3.2: the token reaching the SHARED `parseDate` is already
+  a full date, so `parseDate` — used by invoice + redaction — is **untouched by construction**). A row with no resolvable date / no amount / no
   description is dropped, never invented.
 - **The booking-date COLUMN MODEL (`detectDatumColumn`/`inDatumColumn`, §3.1.3) — the precision fix
   (2026-06-23).** The gold-set measurement found Stage 1 OVER-extracting the Raiffeisen "Mein ELBA"
@@ -8013,7 +8016,8 @@ a broader corpus to trigger it.
 
 **Tests.** `tests/unit/pdf-layout.test.ts` (clustering, `toFullDate` year resolution proving
 `parseDate` is untouched, `detectDatumColumn` density/leftmost/tie, out-of-column-date rejection,
-value-date drop, balance-line preservation, fallback-year). `tests/integration/pdf-bank-layout.test.ts`
+value-date drop, balance-line preservation, fallback-year, the REL-10 single-pass header fold over a
+500k-fragment page, a no-date page emitted raw). `tests/integration/pdf-bank-layout.test.ts`
 (SYNTHETIC columnar PDFs via `makeColumnarPdf`: text-mode loses every row while layout-mode recovers
 them + the correct total + honest coverage + citations + 0 model calls; a non-tying balance MUST
 downgrade; the Raiffeisen Valuta/second-baseline + `Kontostand per` regression pins the column model;
@@ -8316,7 +8320,7 @@ durable index — resolve a code comment's `audit <ID>` citation through it:
 | REL-6 (Low) | 3 | `TranscribeOptions.workDir` now **required** — no OS-tmpdir fallback outside the crash sweep | arch "Audio transcription" |
 | REL-5 (Med), MAINT-4 | 4 | one `parseWithLimits(parser, source, ctx, limits)` decorator across **every** parse entry point; preview gains `maxPages`/`maxInflatedBytes`/wall-clock timeout (ingest byte-for-byte unchanged) | rag-design §2 (cap stack); arch "Document ingestion" |
 | REL-9 (Low) | 4 | `expandPaths` symlink-cycle guard via recursion-path `realpathSync` Set | arch "Document ingestion" |
-| REL-10 (Low) | 4 | `resolvePageYear` single-pass y-range fold (no `Math.max(...spread)`) | arch §21 |
+| REL-10 (Low) | 4 | `resolvePageAnchor` (then `resolvePageYear`) single-pass y-range fold (no `Math.max(...spread)`) | arch §21 |
 | BL-5 (Info) | 4 | ragged-CSV overflow cells kept under `colN:` (no silent truncation) | rag-design §2 |
 | RAG-1 (Med), TEST-3 | 5 | `coverageWhole` gated on `fullyChunked && scannedChunks >= totalChunks` — a multi-doc partial scope falls to "sections scanned" | rag-design §14.5 |
 | EMB-1 (Med), MAINT-2, TEST-5 | 5 | reranker drops naive `truncateWords` for the shared CJK/Thai-aware `truncateToApproxTokens`, per-field caps clamped to the context budget (no silent 500 on space-less input) | rag-design §12.4 |
@@ -8986,7 +8990,7 @@ bundles offline — no runtime fetch).
   *every* documents-screen mount / import-completion / collection change. FIX: a cheap, additive, nullable
   **`documents.ocr_meta_json`** sidecar holding ONLY the badge metadata (a serialized `DocumentOcrInfo` —
   counts/ids/languages, **never page text**). Written alongside `ocr_json` at OCR-write time
-  (`setDocumentOcr`, lock-step; clearing nulls both), and **backfilled once** at `openDatabase` for rows
+  (`setDocumentOcr`, lock-step: one statement writes both), and **backfilled once** at `openDatabase` for rows
   imported before the column existed (reads each blob ONCE, extracts meta, writes the sidecar; FK/lifecycle-
   safe; `updated_at` untouched; subsequent opens select zero rows). `listDocuments` now SELECTs an explicit
   **narrow column set that omits `ocr_json`** and reads the badge via `ocrInfoForRow` from the sidecar (with
@@ -10694,7 +10698,7 @@ phase moved):
 
 | ID (aliases · folded) | Sev | Phase | PR | Disposition |
 |---|---|---|---|---|
-| **REL-6** (H-05) | HIGH | 1 | #268 + #269 | **fixed** — tesseract.js sets the browser idiom `worker.onerror` on its Node `worker_threads.Worker` and never settles `createWorker()` on a load failure, so the packaged `asarUnpack` gap (the worker's hoisted deps stayed inside `app.asar`) surfaced as an `uncaughtException` that killed the whole app while `ocrAvailable` — inferred from asset presence — said true, and every PNG/JPG import auto-OCRs. 1-a: `ocr/tesseract.ts` `startWorker` (`:227`) subscribes `process.on('worker')` (`:254`) so the raw worker's `error` is caught before it reaches the process, bounds the start (`DEFAULT_OCR_WORKER_START_TIMEOUT_MS = 30_000`, `:48` — also the only settle for a corrupt traineddata `status:'reject'`), passes tesseract's `errorHandler`, rejects the page in flight and re-probes once after a live death; the engine latches `'unavailable'` and STAYS on `ctx` (nulling would collapse "language files missing" and "recognizer cannot run here" into one state); packaged builds run one startup execution probe (`probeRequired: !isDev`) and `registerCoreIpc.ts:69` reports `ocrState` beside the now-honest `ocrAvailable`; decision 2 default: a photo imports without text and its row carries `IMAGE_OCR_UNAVAILABLE_MESSAGE` (`parsers/image.ts:38`; row `failed`, stored copy kept, re-index later recognises it; EN+DE copy shipped on the default, owner review pending — STATE Q22). 1-b: `asar-unpack-closure.test.ts` walks the worker entry's literal `require` graph and asserts every module is covered at BOTH candidate asar destinations (electron-builder 26 flattens a source-nested package to top level — the first draft gave a false green), so `electron-builder.yml` `asarUnpack` went from 2 to 10 globs (`:168-183`); the packaged Windows startup probe answered `ok` in 277 ms. Tests: `ocr.test.ts:547` "worker boundary (#232)" with REAL eval-Workers (pre-fix pinned as a hung `recognize()` + an escaped uncaughtException), `ocr-task.test.ts` (real pipeline: row `failed` + note, engine never called). Records: `packaging.md` asar bullet, `known-limitations.md`, the DEP-1 record's follow-up 2 (this file). Residual (measurement, not containment): the interactive packaged recognition smoke per platform — BUILD_STATE §5 18(c). #232 closed. |
+| **REL-6** (H-05) | HIGH | 1 | #268 + #269 | **fixed** — tesseract.js sets the browser idiom `worker.onerror` on its Node `worker_threads.Worker` and never settles `createWorker()` on a load failure, so the packaged `asarUnpack` gap (the worker's hoisted deps stayed inside `app.asar`) surfaced as an `uncaughtException` that killed the whole app while `ocrAvailable` — inferred from asset presence — said true, and every PNG/JPG import auto-OCRs. 1-a: `ocr/tesseract.ts` `startWorker` (`:227`) subscribes `process.on('worker')` (`:254`) so the raw worker's `error` is caught before it reaches the process, bounds the start (`DEFAULT_OCR_WORKER_START_TIMEOUT_MS = 30_000`, `:48` — also the only settle for a corrupt traineddata `status:'reject'`), passes tesseract's `errorHandler`, rejects the page in flight and re-probes once after a live death; the engine latches `'unavailable'` and STAYS on `ctx` (nulling would collapse "language files missing" and "recognizer cannot run here" into one state); packaged builds run one startup execution probe (`probeRequired: !isDev`) and `registerCoreIpc.ts:69` reports `ocrState` beside the now-honest `ocrAvailable`; decision 2 default: a photo imports without text and its row carries `IMAGE_OCR_UNAVAILABLE_MESSAGE` (`parsers/image.ts:38`; row `failed`, stored copy kept, re-index later recognises it; EN+DE copy shipped on the default, owner review pending — STATE Q22). 1-b: `asar-unpack-closure.test.ts` walks the worker entry's literal `require` graph and asserts every module is covered at BOTH candidate asar destinations (electron-builder 26 flattens a source-nested package to top level — the first draft gave a false green), so `electron-builder.yml` `asarUnpack` went from 2 to 10 globs (`:168-183`); the packaged Windows startup probe answered `ok` in 277 ms. Tests: `ocr.test.ts` "TesseractOcrEngine — worker boundary (#232)" with REAL eval-Workers (pre-fix pinned as a hung `recognize()` + an escaped uncaughtException), `ocr-task.test.ts` (real pipeline: row `failed` + note, engine never called). Records: `packaging.md` asar bullet, `known-limitations.md`, the DEP-1 record's follow-up 2 (this file). Residual (measurement, not containment): the interactive packaged recognition smoke per platform — BUILD_STATE §5 18(c). #232 closed. |
 | **GAP-4** (H-06 · DOC-7) | HIGH | 2 | #271 | **fixed** — the canonical gate returned ten checks, none about the app artifact, launcher, version, arch or platform; both builder scripts warned and printed SELLABLE anyway. `assertCommercialDrive(root, manifests, runtime, whisper, ocr, opts: { platforms, appVersion })` (`commercial-drive.ts:457`, options type `:276`) gained `platformMatrixDeclared` (no/empty/unknown/duplicate platforms or an empty version → not sellable), `appArtifactsPresent` (exactly ONE artifact of the built version per declared platform per `KIT_PLATFORM_SPECS` `:257` — win `HilbertRaum-<v>-portable.exe`, mac `HilbertRaum-<v>-mac-arm64.app.zip` or an extracted `.app` whose `Info.plist` version matches, linux `HilbertRaum-<v>.AppImage`; an unrecognised name, an undeclared platform, 0 or >1, zero bytes or another version fail), `launchersPresent`, `runtimeHashed`. A Node entry `src/main/tools/assert-commercial-drive.ts` → `out/tools/assert-commercial-drive.mjs` (own `vite.tools.config.ts`, built by `npm run build`) is what `build-commercial-drive.{ps1,sh}` run for the verdict: SELLABLE only from its exit code; `-DryRun` reaches the verdict; `-VerifyOnly`/`--verify-only` runs only the gate; a prior `HilbertRaum-*` file or `*.app` at the root refuses the run before step 1 (never deleted — Q19). Decision 12 default: a declared platform matrix (`-Platforms`/`--platforms`, default all three); user-guide §1 says a kit's label names its platforms (DOC-7). B5 inverted: `commercial-drive.test.ts:762,776` (no app / zero-byte app; also wrong arch, missing launcher, hashless marker, tampered binary); `script-execution.test.ts` (`LEGS` `:83`) executes both scripts against scratch targets on both OS legs. The boot on each sold platform stays a manual release-acceptance step (BUILD_STATE §5 item 1's demo), not a gate input. #233 closed. |
 | **SEC-11** (H-07 · NEW-4, DOC-1) | HIGH | 2 | #271 | **fixed** — the scripts reimplemented only a version/backend subset of the gate and `fetch-runtime.*` installed a placeholder-hash archive and then minted a marker whose hash came from the EXTRACTED binary (an unverified install looked authoritative). Now the scripts call the gate (row above), whose `runtimeHashed` refuses a hashless marker or a hash ≠ bytes; `fetch-runtime -Commercial`/`--commercial` (`fetch-runtime.ps1:347,375`, `.sh:338,364`) refuses a placeholder `sha256` before any download (also under `-DryRun`, also for the OCR family), does NOT skip a hashless marker, and writes the marker's `binaries` hash only after a verified archive (NEW-4); `packaging.md`'s "the scripts add a native cross-check of the same invariants" became "the scripts call the gate; their native checks are a pre-flight" (DOC-1). In-app: `isCommercialPolicy` (`policy.ts:184`) + `setBinaryVerificationPosture` (`binary-verifier.ts:80`) right after `loadPolicy`; **the spawn-time refusal of hashless markers on commercial drives is wired and tested but OFF** — `REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false` (`:55`): refusing already-sold kits is the owner's call (STATE Q23), flipping the constant is the whole enablement; DIY drives keep the documented tolerance. Kits provisioned before #271 are NOT SELLABLE until re-run through the builders. Adjacent and unchanged: the build-time member-traversal half of BUILD_STATE §8 L-7. #234 closed. |
 | **REL-7** (H-08 · DOC-2, DOC-13) | HIGH | 3 | #272 | **fixed** — the documented update copied a new versioned artifact beside the old one and all three launchers took the FIRST match (name-sorted on Windows/Linux → the older one); with 0.1.58 running and 0.1.59 launched, 0.1.59's startup sweep and 0.1.58's unguarded lock-on-quit replay #208 and corrupt `.enc` permanently (sequence A); the reverse silently loses the session delta (B). Now every launcher counts matches and REFUSES to start while more than one app artifact sits at the root, naming what to delete and never deleting (`Start HilbertRaum.cmd:47`; `start-hilbertraum.sh:46`, glob narrowed to `HilbertRaum-*.AppImage`; `Start HilbertRaum.command:66` counts extracted `.app` bundles AND `*-mac-arm64.app.zip`s and refuses before its `$HOME/Library/Caches` write, with a `${HOME:-}` guard); `/check` / `--check` resolves the app without starting it (the `.cmd` report enables delayed expansion for its own lines only — a `& ( ) ! ^ %` path prints verbatim). Decision 3 default (interim): no signed current-release manifest (#220). Docs: `drive-layout.md` "Updating a drive" step 3 = delete the prior artifact and any extracted `.app` FIRST, copy, verify the version under Settings → Diagnostics (DOC-2); `troubleshooting.md` "Two app versions on the drive" + the version floor (only ≥ 0.1.59 refuses a second instance — DOC-13); `security-model.md` single-instance bullet; `packaging.md` launcher table; the builders already refuse a prior artifact (Phase 2). B9 → `launcher-execution.test.ts` (16 cases, seven `refuses …` at `:78-239`; `.cmd` on Windows, bash legs under Git Bash / ubuntu CI). The Windows adjacent-version walk RAN on a scratch root with the real 0.1.57/0.1.59 artifacts (refusal, `/check`, the single-artifact launch); the GUI version-check leg and the macOS/Linux walks are release acceptance before those kits ship. Residual: starting an artifact directly (double-click) bypasses the launcher (`known-limitations.md`). #235 closed. |
@@ -12168,15 +12172,16 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   `reranker.test.ts` ("forwards the caller abort signal…") and its E5 twin (since retired: the #607 user-Stop row on
   a real loopback socket covers it) (`sleep(1)` "let the request reach fetch" → `while
   (!seenSignal) await …` so the abort lands only after the signal was genuinely handed to fetch), and
-  `ocr-task.test.ts:210` (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the gate, polled, so the
-  cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,
+  `ocr-task.test.ts` "cancel persists nothing" (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the
+  gate, polled through hang-budget's `until`, so the cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,
   per "keep the timeout headroom"):** `chat.test.ts:171` + `image-history.test.ts:111` are timestamp-monotonicity
   gaps (a small real-clock gap so `updated_at` strictly increases — converting needs a timestamp-injection seam
   into `createConversation`/`appendMessage`/`addImageTurn`, out of test-only scope; low flake risk given ISO-ms
   resolution + real elapsed insert work); `core-model-ipc.test.ts:448` is an ABSENCE-settle for a wrongly-fired
   fire-and-forget `void startModelRuntime(…)` (in the correct case NO racing call exists to await, so the 50 ms is
-  a low-risk upper bound on a would-be async start); `ingestion-limits.test.ts:80/254` are deliberate slow-operation
-  SIMULATIONS (the duration MODELS a slow parse to exercise the wall-clock timeout — correct as-is, not a gate).
+  a low-risk upper bound on a would-be async start); `ingestion-limits.test.ts`'s audio-exemption row is a deliberate
+  slow-operation SIMULATION (the duration MODELS a long transcription outlasting the wall-clock budget — correct
+  as-is, not a gate).
   **The full-suite 3× (15 s) timeout headroom (vitest.config.ts) is RETAINED** — it absorbs the orthogonal,
   pre-existing CPU-starvation renderer flake ("1-2 per run, a different test each time, all pass in isolation"),
   which Phase F neither introduced nor is in scope to eliminate (it is a load-timeout, not a fixed-sleep premise
@@ -12271,7 +12276,9 @@ message only. Suite **2669 passed / 41 skipped** (Phase-B baseline 2653/41 → *
   the last page (harmless, but the "drain the in-flight look-ahead" guarantee is wrong for the last page — there
   is none). **Fix:** `const last = prevOnPage; prevOnPage = null; if (last) await last`, so the catch only
   drains a genuinely still-pending look-ahead (a render/abort throw mid-loop while recognize(N-1) runs). Teeth:
-  the final-page recognition is awaited exactly once (no catch re-await). (`ocr/pipeline.ts`; `ocr-pipeline.test.ts` ×1.)
+  the final-page recognition is awaited exactly once (no catch re-await). (`ocr/pipeline.ts`. The call-count pin
+  was retired in the 2026-10 test campaign: the double drain it counted was harmless; the in-flight drain stays
+  pinned by `ocr-pipeline.test.ts` "propagates a recognition error and does not leak the in-flight recognition".)
 - **R5 (Low, latent) — GPU probe re-spawn stacked children on "Try GPU again" mashing.** The probe timeout
   `SIGKILL`s but doesn't await the (unref'd) reap, and `invalidate()` did `cache.clear()` unconditionally — so
   rapid invalidate()+re-probe WHILE a probe was still in flight dropped the in-flight entry and spawned a SECOND
@@ -12286,7 +12293,7 @@ message only. Suite **2669 passed / 41 skipped** (Phase-B baseline 2653/41 → *
   waiter closure is extracted to a pure, exported `RasterReplySlot` (behavior-identical: `expect`/`awaits`/
   `deliver`/`fail` map 1:1 to the old `waiter`/`expectChannel` logic) whose `expect()` REJECTS a still-pending
   prior waiter (`'superseded'`) before re-arming. Teeth: two `expect()`s without an intervening settle → the
-  first rejects rather than hangs. (`ocr/rasterizer.ts`; new `ocr-rasterizer-slot.test.ts` ×3.)
+  first rejects rather than hangs. (`ocr/rasterizer.ts`; `ocr-rasterizer-slot.test.ts` ×2.)
 - **R7 (Low, latent) — vision `analyze()` finally `armIdleTimer()` vs a concurrent `stop()`.** The audit flagged
   a timer armed in `stop()`'s await window surviving its `cancelIdleTimer()`. **Verified ALREADY closed** — and
   TWICE: `armIdleTimer` returns early on BOTH `this.stopped` AND `!this.server`, and `stop()` sets `stopped` and
@@ -12304,7 +12311,7 @@ message only. Suite **2669 passed / 41 skipped** (Phase-B baseline 2653/41 → *
 | **R1** | Med (live) | **fixed** — `streamSettled` registry + `awaitInFlightStreamsSettled()` make lock/quit await each aborted partial's persist BEFORE closing the DB (supersedes the §37 REL-4 race); `appendMessage` locked-DB guard swallows cleanly. Teeth: drop a settle-await → ordering reds; drop the guard → locked persist rejects | this §39; `ipc/inflight.ts`, `ipc/chat-stream.ts`, `registerWorkspaceIpc.ts`, `main/shutdown.ts`, `services/chat.ts` |
 | **R2** | Med | **fixed** — fast-path holder installs the same release-on-abort listener as the slow path (shared `released` latch). Teeth: neuter → parked-build resume reds; idempotency pins single-release | this §39; `analysis/model-slot-arbiter.ts` |
 | **R3** | Med | **fixed** — reconcile STAGES decodes then commits `byChunk`+`modelByChunk` atomically (`decodeRow`/`applyStaged`); a throw leaves the prior maps intact. Preserves Phase-B P2 + F12 O(K). Teeth: 2nd-lookup throw → live map pristine at throw, next query = from-scratch | this §39; `embeddings/resident-cache.ts` |
-| **R4** | Low | **fixed** — null `prevOnPage` before the in-try final await so the catch drains only a still-pending look-ahead. Teeth: final-page recognition awaited exactly once | this §39; `ocr/pipeline.ts` |
+| **R4** | Low | **fixed** — null `prevOnPage` before the in-try final await so the catch drains only a still-pending look-ahead. Teeth: final-page recognition awaited exactly once (pin retired 2026-10, see §39 R4) | this §39; `ocr/pipeline.ts` |
 | **R5** | Low | **fixed** — `invalidate()` drops only SETTLED probes; an in-flight re-probe coalesces (one child per binary). Teeth: mashing spawns 1, not 1+N | this §39; `runtime/gpu.ts`; GPU §5.4 "Try GPU again" |
 | **R6** | Low | **fixed** — `RasterReplySlot.expect()` rejects a superseded prior waiter; extracted from the closure for testability. Teeth: two expect()s → first rejects | this §39; `ocr/rasterizer.ts` |
 | **R7** | Low | **already-mitigated; defense-in-depth added** — `stop()` re-cancels the idle timer after its awaits (the race is already closed by armIdleTimer's `stopped`+`!server` guards — triple-guarded; property test, not RED→GREEN-able) | this §39; `vision/runtime.ts`; GPU §5.5c |
@@ -13458,8 +13465,8 @@ they rest on._
 **§4 Tests.** `ocr-install.test.ts` (gates, payload, hostile `dest`, pin mismatch, bundled
 fallback, hash-is-state skip, mismatch keeps the old file, size cap, third-language survival,
 symlinked `ocr/`, cancel in every state, single-flight, content-free logs, IPC end to end),
-`ocr-pins.test.ts` (the drift test), `preload-ocr-install.test.ts`, `compose-ocr.test.ts` (the D2
-rules + the capture pin), `ocr-slot-live-consumers.test.ts` (the split-brain regression),
+`ocr-pins.test.ts` (the drift test: `OCR_PINS` against the committed yaml and model-policy.md's
+asset table), `preload-ocr-install.test.ts`, `compose-ocr.test.ts` (the D2 rules + the capture pin), `ocr-slot-live-consumers.test.ts` (the split-brain regression),
 `download-fail-close.test.ts` (the seam fix above) and `OcrInstall.test.tsx` (rows, dialog, job
 states, focus/job re-read, AI Model row, German).
 
@@ -14520,7 +14527,8 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   `*_nowasm_fallback.js` builds, loaded under `useWasm: false`. The decoder loader and the
   `wasmUrl`/`pdfjs-wasm/` mechanism are otherwise unchanged; `ocr-decoder-assets.test.ts` now reads
   the decoder names from the OCR page chunk (the worker is bundled into it) and asserts no `.wasm`
-  and no separate worker asset ship.
+  and no separate worker asset ship. Its wasm-build decode row is retired: the page never loads the
+  wasm build.
 
 ### §11 The OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`)
 

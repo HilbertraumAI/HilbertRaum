@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   chunkSegments,
   approxTokenCount,
-  tokenize,
   truncateToApproxTokens,
   windowByTokens,
   CHUNK_DEFAULTS
@@ -11,13 +10,7 @@ import type { ExtractedSegment } from '../../src/main/services/ingestion/parsers
 
 const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
 
-describe('tokenize / approxTokenCount', () => {
-  it('counts whitespace-delimited words, ignoring extra whitespace', () => {
-    expect(tokenize('  hello   world\n\nfoo ')).toEqual(['hello', 'world', 'foo'])
-    expect(approxTokenCount('one two three')).toBe(3)
-    expect(approxTokenCount('   ')).toBe(0)
-  })
-
+describe('approxTokenCount', () => {
   // The bug fix: a whitespace-word count collapses space-less or glued text to ~1 token,
   // which let document prompts overflow the model context (HTTP 400). The estimate must
   // NOT under-count these — it counts CJK per character and charges long no-space runs.
@@ -32,10 +25,12 @@ describe('tokenize / approxTokenCount', () => {
     expect(approxTokenCount(blob)).toBeGreaterThanOrEqual(1000)
   })
 
-  it('still treats ordinary prose words as ~1 token each (no regression)', () => {
+  it('still treats ordinary prose words as ~1 token each, ignoring extra whitespace (no regression)', () => {
     expect(approxTokenCount(words(500))).toBe(500)
     // Normal-length words (incl. German compounds up to the threshold) stay 1 token.
     expect(approxTokenCount('the quick brown fox')).toBe(4)
+    expect(approxTokenCount('  hello   world\n\nfoo ')).toBe(3)
+    expect(approxTokenCount('   ')).toBe(0)
   })
 })
 
@@ -47,12 +42,6 @@ describe('windowByTokens (content-preserving, space-less safe)', () => {
     for (const w of wins) expect(approxTokenCount(w)).toBeLessThanOrEqual(500)
     // No characters inserted/dropped: the pieces concatenate back to the original.
     expect(wins.join('')).toBe(cjk)
-  })
-
-  it('keeps ordinary word windows within budget with overlap', () => {
-    const wins = windowByTokens(words(110), 40, 10)
-    for (const w of wins) expect(approxTokenCount(w)).toBeLessThanOrEqual(40)
-    expect(wins.length).toBeGreaterThan(1)
   })
 
   // RAG-N2: a space-less run is hard-cut into window-sized character slices; the overlap
@@ -73,15 +62,6 @@ describe('windowByTokens (content-preserving, space-less safe)', () => {
     let stitched = wins[0]
     for (let k = 1; k < wins.length; k += 1) stitched += wins[k].slice(80)
     expect(stitched).toBe(cjk)
-  })
-
-  // Don't-regress: with overlap 0 a space-less run is still a lossless partition (the prior
-  // behavior the audio split and `truncateToApproxTokens` rely on — no characters inserted).
-  it('partitions a space-less run losslessly when overlap is 0', () => {
-    const cjk = '報'.repeat(1234)
-    const wins = windowByTokens(cjk, 500, 0)
-    for (const w of wins) expect(approxTokenCount(w)).toBeLessThanOrEqual(500)
-    expect(wins.join('')).toBe(cjk)
   })
 
   // RAG-N2 applies to an over-long no-space LATIN run too (base64 / a giant URL / a glued

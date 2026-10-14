@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
 
 // Image-analysis history storage (image-understanding history). Mirrors the documents
 // encrypted-copy contract: the image rests ENCRYPTED on disk when a cipher is supplied (no
@@ -19,13 +18,7 @@ import {
   imagesDir,
   listImageSessions
 } from '../../src/main/services/vision/history'
-import {
-  encryptFile,
-  decryptFile,
-  encryptFileAsync,
-  decryptFileAsync,
-  type DocumentCipher
-} from '../../src/main/services/workspace-vault'
+import { testCipher } from '../helpers/test-cipher'
 
 // A recognizable image-byte pattern no real PNG header would contain — lets us assert the
 // ENCRYPTED copy never leaks the plaintext bytes to disk.
@@ -34,16 +27,6 @@ const SENTINEL = new Uint8Array([0xab, 0xcd, 0xef, 0x10, 0x20, 0x30, 0x40, 0x50]
 function freshWorkspace(): { db: Db; workspacePath: string } {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-imghist-'))
   return { db: openDatabase(join(root, 'hilbertraum.sqlite')), workspacePath: root }
-}
-
-function testCipher(): DocumentCipher {
-  const key = randomBytes(32)
-  return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
-    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
-  }
 }
 
 function leaks(dir: string, needle: Uint8Array): string[] {

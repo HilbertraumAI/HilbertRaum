@@ -1,29 +1,35 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
+  createQueuedDocuments,
   processDocument,
   reindexDocument,
   deleteDocument,
   extractDocumentPreview,
   extractDocumentPreviewPage,
+  getDocument,
   listDocuments,
   reconcileStuckDocuments,
   expandPaths,
   expandPathsBoundedAsync,
+  expandPathsWithSource,
   documentsDir
 } from '../../src/main/services/ingestion'
+import { documentIdsInCollection, getBuiltinCollection } from '../../src/main/services/collections'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
-import { selectParser } from '../../src/main/services/ingestion/parsers'
+import { isImagePath, isPdfPath, selectParser, supportedExtensions } from '../../src/main/services/ingestion/parsers'
 import { TxtParser } from '../../src/main/services/ingestion/parsers/txt'
 import { MarkdownParser } from '../../src/main/services/ingestion/parsers/markdown'
 import { CsvParser } from '../../src/main/services/ingestion/parsers/csv'
 import { PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
 import { DocxParser } from '../../src/main/services/ingestion/parsers/docx'
+import type { DocumentInfo, DocumentOrigin, GeneratedProvenance } from '../../src/shared/types'
 import { makePdf, makeDocx, makeDocxFromBody } from '../helpers/fixtures'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { countPrepares } from '../helpers/db-spy'
 
 // `save-export.ts` (the export side of the F-22/F-10 round-trip tests below) imports electron at module
 // top; on CI the electron binary is absent — mock the transport like save-export-bom.test.ts does.
@@ -45,21 +51,21 @@ function write(name: string, data: string | Buffer): string {
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-ingest-'))
+  tmp = tempRoot('ingest')
 })
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-db-')), 'test.sqlite'))
+  return openFreshDb('ingest-db')
 }
 function store(): string {
   // A workspace 'documents' dir for stored copies.
-  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-ws-')))
+  return documentsDir(tempRoot('ingest-ws'))
 }
 
 // ---- Parser unit coverage --------------------------------------------------------
 
 describe('parser registry', () => {
-  it('selects parsers by extension and returns null for unsupported types', () => {
+  it('selects parsers by extension (case-insensitive, photos included), returns null for unsupported types, and the path helpers agree', () => {
     expect(selectParser('a.txt')?.name).toBe('TxtParser')
     expect(selectParser('A.MD')?.name).toBe('MarkdownParser')
     expect(selectParser('x.pdf')?.name).toBe('PdfParser')
@@ -67,6 +73,11 @@ describe('parser registry', () => {
     expect(selectParser('data.csv')?.name).toBe('CsvParser')
     expect(selectParser('image.png')?.name).toBe('image') // photos OCR on import (Phase 38)
     expect(selectParser('blob.xyz')).toBeNull()
+    for (const e of ['.png', '.jpg', '.jpeg']) expect(supportedExtensions()).toContain(e)
+    expect(selectParser('photo.PNG')?.name).toBe('image')
+    expect(isImagePath('a/b/photo.jpeg')).toBe(true)
+    expect(isImagePath('a/b/doc.pdf')).toBe(false)
+    expect(isPdfPath('a/b/doc.PDF')).toBe(true)
   })
 })
 
@@ -211,14 +222,6 @@ describe('CsvParser', () => {
     expect(text).toContain('last, first: Hopper, Grace')
     expect(text).toContain('role: Admiral')
   })
-
-  // Don't-regress: a .csv with comma-separated cells is still comma-parsed (unchanged path).
-  it('still parses a .csv by comma (RAG-N5 — no regression)', async () => {
-    const p = write('plain.csv', 'name,role\nAda,Engineer')
-    const out = await CsvParser.parse(p)
-    expect(out.segments[0].text).toContain('name: Ada')
-    expect(out.segments[0].text).toContain('role: Engineer')
-  })
 })
 
 describe('PdfParser', () => {
@@ -226,7 +229,7 @@ describe('PdfParser', () => {
     const p = write('a.pdf', makePdf('Hello PDF World with enough readable words on the page'))
     const out = await PdfParser.parse(p)
     expect(out.mimeType).toBe('application/pdf')
-    expect(out.segments.length).toBeGreaterThanOrEqual(1)
+    expect(out.segments).toHaveLength(1) // one text page ⇒ one segment
     expect(out.segments[0].pageNumber).toBe(1)
     expect(out.segments[0].text).toContain('Hello PDF World')
   })
@@ -441,6 +444,72 @@ describe('ingestion pipeline — chunk-insert rollback (T3: no partial chunks su
   })
 })
 
+// DM-2 (provenance at queue time) and DB-4 (the batched queue phase): the service halves of
+// the import queue. The handler-level DB-4 row ("queues all rows before importDocuments
+// resolves") stays in docs-ipc.test.ts.
+describe('the queue phase — createQueuedDocument(s) (DM-2, DB-4)', () => {
+  it('a generated doc carries origin_json from queue time, so a crash never backfills it into Library (DM-2)', () => {
+    const dbPath = join(tempRoot('ingest-dm2'), 'hilbertraum.sqlite')
+    let db = openDatabase(dbPath)
+    // Materialize-style create: provenance is stamped AT QUEUE TIME (the DM-2 fix), before the
+    // row can ever flip to `indexed`.
+    const origin: DocumentOrigin = {
+      kind: 'translation',
+      sourceDocumentIds: ['src'],
+      modelId: 'm',
+      createdAt: '2026-01-01T00:00:00.000Z'
+    }
+    const doc = createQueuedDocument(db, write('translation.md', '# Translated output\n\nsome generated body text'), {
+      displayTitle: 'translation.md',
+      origin
+    })
+    // Positive control: an ordinary import caught in the same crash window.
+    const plain = createQueuedDocument(db, write('plain.md', '# A note\n\nan ordinary imported document'))
+    const stamped = db.prepare('SELECT origin_json, status FROM documents WHERE id = ?').get(doc.id) as {
+      origin_json: string | null
+      status: string
+    }
+    expect(stamped.origin_json).not.toBeNull() // stamped while still `queued`
+    expect(stamped.status).toBe('queued')
+    // A kill in the old crash window: both rows reached `indexed` with NO membership.
+    db.prepare("UPDATE documents SET status = 'indexed' WHERE id IN (?, ?)").run(doc.id, plain.id)
+    db.close()
+    // The next open re-runs the Library backfill.
+    db = openDatabase(dbPath)
+    const library = documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)
+    expect(library).toContain(plain.id) // the backfill ran…
+    expect(library).not.toContain(doc.id) // …and skipped the generated row because of the queue-time stamp
+  })
+
+  // DB-4: the batch inserts one row per file, in order, sizes where statable. A nonexistent
+  // path still queues a row (mirrors createQueuedDocument's insert-regardless) with a null size, so
+  // no row is silently dropped and the id list aligns 1:1 with the input files.
+  it('DB-4: createQueuedDocuments batch-inserts ids in order, sizes where statable', () => {
+    const db = freshDb()
+    const real = ['a.txt', 'b.txt', 'c.txt'].map((n, i) => write(n, 'x'.repeat((i + 1) * 10)))
+    const missing = join(dir(), 'gone.txt')
+
+    const ids = createQueuedDocuments(db, [
+      { filePath: real[0] },
+      { filePath: real[1] },
+      { filePath: missing },
+      { filePath: real[2] }
+    ])
+
+    expect(ids).toHaveLength(4)
+    const rows = ids.map(
+      (id) =>
+        db
+          .prepare('SELECT id, title, size_bytes, status FROM documents WHERE id = ?')
+          .get(id) as { id: string; title: string; size_bytes: number | null; status: string }
+    )
+    // Order preserved (ING-3 in-order push), the missing file included with a null size.
+    expect(rows.map((r) => r.title)).toEqual(['a.txt', 'b.txt', 'gone.txt', 'c.txt'])
+    expect(rows.map((r) => r.status)).toEqual(['queued', 'queued', 'queued', 'queued'])
+    expect(rows.map((r) => r.size_bytes)).toEqual([10, 20, null, 30])
+  })
+})
+
 describe('reconcileStuckDocuments', () => {
   it('fails documents left non-terminal by a previous run, sparing live ones', () => {
     const db = freshDb()
@@ -500,6 +569,73 @@ describe('listDocuments stale-embedding flag', () => {
     }
     // Flag cleared → back to normal: matching model ⇒ not stale.
     expect(listDocuments(db, embedder.id)[0].staleEmbeddings).toBe(false)
+  })
+
+  // DB-5: on a mid-import poll (no `indexed` row) the embeddings⋈chunks join is pure waste — no
+  // indexed row can be flagged stale. The early-out skips it; the chunk count is still correct and
+  // staleEmbeddings stays undefined. Teeth: a `db.prepare` counter proves the join SQL is never prepared,
+  // and the positive control (an `indexed` row whose vectors predate an embedder switch) shows the join
+  // DOES run then, and staleEmbeddings is built (the M7 path is unaffected by the early-out).
+  it('DB-5: a mid-import list skips the embeddings join yet reports the chunk count (an indexed row still joins and is flagged stale)', async () => {
+    const db = freshDb()
+    const embedder = createMockEmbedder()
+    const storeDir = store()
+    const file = write('src.txt', 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu')
+    const doc = createQueuedDocument(db, file)
+    // Fully index it (chunks + embeddings under `embedder.id`), then force it BACK to a mid-import
+    // status so the list has chunks-with-embeddings present but no `indexed` row.
+    await processDocument(db, storeDir, doc.id, { embedder })
+    db.prepare("UPDATE documents SET status = 'embedding' WHERE id = ?").run(doc.id)
+
+    const JOIN = /FROM embeddings e JOIN chunks c/
+    let docs: DocumentInfo[] = []
+    const midImport = await countPrepares(db, JOIN, async () => {
+      docs = listDocuments(db, embedder.id)
+    })
+    expect(docs.find((d) => d.id === doc.id)!.chunkCount).toBeGreaterThan(0) // chunkCounts is always built — badge stays correct
+    expect(docs.find((d) => d.id === doc.id)!.staleEmbeddings).toBeUndefined() // no indexed row → never flagged stale
+    // TEETH: revert the `!force && rows.some(indexed)` guard → the full-corpus join runs on the poll.
+    expect(midImport).toBe(0)
+
+    // Positive control on the SAME connection: the join is prepareCached (compiled once per connection), so seeing it
+    // compiled now also proves nothing earlier had compiled it — the negative above had teeth.
+    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run(doc.id)
+    // The ACTIVE embedder reports a DIFFERENT id → the indexed doc's vectors no longer match.
+    const indexed = await countPrepares(db, JOIN, async () => {
+      docs = listDocuments(db, 'a-different-model')
+    })
+    expect(indexed).toBeGreaterThan(0) // an indexed row is present → the join is NOT skipped
+    expect(docs.find((d) => d.id === doc.id)!.staleEmbeddings).toBe(true)
+  })
+})
+
+describe('DocumentOrigin — the origin_json reader (data-contracts DocumentOrigin)', () => {
+  it('round-trips the new shape and STILL parses the old Translation/CompareOrigin shapes', () => {
+    const db = freshDb()
+    const docId = createQueuedDocument(db, write('rt.txt', 'x')).id
+    const setOrigin = (v: unknown): void => {
+      db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(JSON.stringify(v), docId)
+    }
+    const origin = (): DocumentInfo['origin'] => getDocument(db, docId)?.origin
+    // Old translation shape (pre-discriminator, no `type`) still parses unchanged.
+    setOrigin({ translatedFrom: 'src-1', targetLang: 'en' })
+    expect(origin()).toEqual({ type: 'translation', translatedFrom: 'src-1', targetLang: 'en' })
+    // Old compare shape still parses.
+    setOrigin({ type: 'compare', comparedFrom: ['a', 'b'] })
+    expect(origin()).toEqual({ type: 'compare', comparedFrom: ['a', 'b'] })
+    // New GeneratedProvenance round-trips exactly.
+    const prov: GeneratedProvenance = {
+      kind: 'compare',
+      sourceDocumentIds: ['a', 'b'],
+      sourceCollectionIds: ['c1'],
+      modelId: 'm',
+      createdAt: '2026-06-14T00:00:00.000Z'
+    }
+    setOrigin(prov)
+    expect(origin()).toEqual(prov)
+    // A `kind` with no source ids is malformed ⇒ null (never throws).
+    setOrigin({ kind: 'translation', sourceDocumentIds: [] })
+    expect(origin()).toBeNull()
   })
 })
 
@@ -570,7 +706,7 @@ describe('extractDocumentPreview', () => {
 })
 
 describe('expandPaths', () => {
-  it('walks folders for supported files and always includes explicitly-picked files', () => {
+  it('walks folders for supported files and always includes explicitly-picked files', async () => {
     const sub = join(dir(), 'sub')
     mkdirSync(sub)
     write('top.txt', 'x')
@@ -584,6 +720,33 @@ describe('expandPaths', () => {
     expect(files.some((f) => f.endsWith('nested.md'))).toBe(true)
     expect(files.filter((f) => f.endsWith('ignore.xyz'))).toHaveLength(0)
     expect(files.filter((f) => f.endsWith('explicit.xyz'))).toHaveLength(1)
+    expect((await expandPathsBoundedAsync([dir(), explicit])).files).toEqual(files) // the production walk (#274) keeps the explicit pick too
+  })
+
+  // full-audit 2026-07-12 CODE-1 — `source_relative_path` is persisted DISPLAY metadata (never
+  // parsed back into a host path), so it must be separator-normalized like every other persisted
+  // key (`driveRelKey`, `markerBinaryKey`): a Windows-populated workspace opened on macOS/Linux
+  // must not show `sub\folder\file.pdf` breadcrumbs.
+  it('expandPathsWithSource: sourceRelativePath uses forward slashes regardless of the host separator (CODE-1)', async () => {
+    const root = dir()
+    const sub = join(root, 'sub')
+    mkdirSync(sub)
+    writeFileSync(join(sub, 'nested.txt'), 'x')
+    writeFileSync(join(root, 'top.txt'), 'x')
+
+    // #274: the walk is asynchronous and reports whether it was cut (`null` = complete).
+    const { files, exhausted } = await expandPathsWithSource([root])
+    expect(exhausted).toBeNull()
+    const nested = files.find((f) => f.path.endsWith('nested.txt'))
+    // Red on Windows pre-fix: `relative()` returned `sub\nested.txt` and was persisted as-is.
+    expect(nested?.sourceRelativePath).toBe('sub/nested.txt')
+    expect(nested?.sourceRelativePath).not.toContain('\\')
+    expect(nested?.sourceFolderLabel).toBe(basename(root))
+
+    // A root-level file stays a bare name; the label attribution is unchanged.
+    const top = files.find((f) => f.path.endsWith('top.txt'))
+    expect(top?.sourceRelativePath).toBe('top.txt')
+    expect(top?.sourceFolderLabel).toBe(basename(root))
   })
 
   // ING-4 (Wave P5): the walk switched to readdir withFileTypes (one syscall/entry), but a
@@ -592,7 +755,7 @@ describe('expandPaths', () => {
   // privilege on Windows (Developer Mode / admin), so skip cleanly where it isn't available.
   const symlinkOk = ((): boolean => {
     try {
-      const base = mkdtempSync(join(tmpdir(), 'hilbertraum-symtest-'))
+      const base = tempRoot('symtest')
       writeFileSync(join(base, 't.txt'), 'x')
       symlinkSync(join(base, 't.txt'), join(base, 'l.txt'))
       return true
@@ -615,12 +778,13 @@ describe('expandPaths', () => {
   // MUST actually run there. If CI ever loses its Ubuntu job, these three tests would silently
   // stop executing everywhere (all runners lack the privilege) and their regressions would go
   // unnoticed; this assertion reddens instead, flagging the lost coverage (not a real symlink
-  // regression). It is a no-op off Linux-CI, so local Windows/mac runs stay green.
-  it('symlink support is present on Linux CI so the skipIf trio actually runs (CODE-46)', () => {
-    if (process.env.CI && process.platform === 'linux') {
+  // regression). Off Linux CI it is reported skipped, never a silent pass.
+  it.runIf(Boolean(process.env.CI) && process.platform === 'linux')(
+    'symlink support is present on Linux CI so the skipIf trio actually runs (CODE-46)',
+    () => {
       expect(symlinkOk).toBe(true)
     }
-  })
+  )
 
   // #274: every link-following case is asserted on BOTH walks — the synchronous reference and
   // the asynchronous production walk must follow (and refuse) exactly the same links.

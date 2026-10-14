@@ -119,6 +119,7 @@ import {
 } from '../../src/main/services/ocr/rasterizer'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../src/main/window-security'
 import { OCR_RASTER } from '../../src/shared/ipc'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const PDF = Buffer.from('%PDF-1.4 fake')
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
@@ -260,7 +261,7 @@ describe('rasterizePdfWithHiddenWindow — success path', () => {
     fake.state.onSend = () => {}
     const controller = new AbortController()
     const first = rasterizePdfWithHiddenWindow(PDF, { onPage: () => {}, signal: controller.signal })
-    await vi.waitFor(() => expect(lastWin().webContents.send).toHaveBeenCalled())
+    await vi.waitFor(() => expect(lastWin().webContents.send).toHaveBeenCalled(), { timeout: hangBudgetMs(1_000) })
     // …so the overlapping second call must be refused without touching the first.
     await expect(rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} })).rejects.toThrow(
       'PDF rasterizer is busy'
@@ -318,7 +319,7 @@ describe('rasterizePdfWithHiddenWindow — failure paths destroy the window', ()
     fake.state.onSend = () => {} // park on `opened` so the abort races nothing
     const controller = new AbortController()
     const run = rasterizePdfWithHiddenWindow(PDF, { onPage: () => {}, signal: controller.signal })
-    await vi.waitFor(() => expect(lastWin().webContents.send).toHaveBeenCalled())
+    await vi.waitFor(() => expect(lastWin().webContents.send).toHaveBeenCalled(), { timeout: hangBudgetMs(1_000) })
     controller.abort()
     await expect(run).rejects.toMatchObject({ name: 'AbortError' })
     expectFullTeardown(lastWin())

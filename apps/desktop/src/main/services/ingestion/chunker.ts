@@ -61,13 +61,6 @@ export interface DocumentChunk {
   tokenCount: number
 }
 
-/** Split text into whitespace-delimited words. NB: this is a plain word split, NOT a
- * token estimate — for budgeting use `approxTokenCount`, which also handles space-less
- * scripts. Kept for callers that genuinely want words (e.g. keyword search). */
-export function tokenize(text: string): string[] {
-  return text.split(/\s+/).filter((t) => t.length > 0)
-}
-
 // Scripts whose real tokenizers split roughly per-character AND that carry no whitespace
 // word boundaries: Hiragana/Katakana, CJK ext-A, CJK unified, compatibility ideographs,
 // Hangul syllables, half/fullwidth forms, Thai. Counted ~1 token/char (a safe over-count).

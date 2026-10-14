@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 //   PERF-3 — getLatestCheckpoint (every chat turn) is served by idx_messages_conv_kind, not a partial scan.
 //   DATA-2 — tree_edges.child_id is a polymorphic FK (chunks.id OR tree_nodes.id) with no FK to chunks;
 //            the no-dangling-edge invariant is upheld only because every chunk-delete path also tears
-//            down the document's tree_nodes (cascading the edges). This pins that invariant + its teeth.
+//            down the document's tree_nodes (cascading the edges). This pins that invariant on the delete path.
 // (REL-5 lives in image-history.test.ts, DATA-1 in conversation-search.test.ts, DATA-3 in
 //  whole-doc-extract.test.ts, PERF-4 in summary-cache-eviction.test.ts — each next to its own infra.)
 
@@ -192,16 +192,6 @@ describe('tree_edges no-dangling-chunk-edge invariant (DATA-2)', () => {
     return { docId }
   }
 
-  /** Edges that claim a chunk child but reference a chunk row that no longer exists. */
-  const danglingChunkEdges = (db: Db): number =>
-    (
-      db
-        .prepare(
-          `SELECT COUNT(*) AS n FROM tree_edges
-           WHERE child_is_chunk = 1 AND child_id NOT IN (SELECT id FROM chunks)`
-        )
-        .get() as { n: number }
-    ).n
   const edgeCount = (db: Db): number =>
     (db.prepare('SELECT COUNT(*) AS n FROM tree_edges').get() as { n: number }).n
 
@@ -209,20 +199,12 @@ describe('tree_edges no-dangling-chunk-edge invariant (DATA-2)', () => {
     const db = freshDb()
     const { docId } = seedDocWithTree(db)
     expect(edgeCount(db)).toBe(3)
-    expect(danglingChunkEdges(db)).toBe(0) // edges reference live chunks
 
-    // The authoritative chunk-delete path also deletes tree_nodes (purgeDocumentDerivatives), so the
-    // edges cascade via their parent_id FK — the invariant the polymorphic child_id relies on.
+    // deleteDocument removes the whole tree with the chunks (purgeDocumentDerivatives' explicit
+    // `tree_nodes` delete — on fresh schemas the documents→tree_nodes cascade covers it too), and the
+    // edges cascade via their parent_id FK. The re-index path, which keeps the documents row, is
+    // whole-doc-analysis's 're-index tears the tree down' row.
     deleteDocument(db, mkdtempSync(join(tmpdir(), 'hilbertraum-dlh-store-')), docId)
     expect(edgeCount(db)).toBe(0) // whole tree gone
-    expect(danglingChunkEdges(db)).toBe(0) // invariant holds
-  })
-
-  it('TEETH: deleting chunks WITHOUT the tree teardown dangles the chunk edges (the forbidden path)', () => {
-    const db = freshDb()
-    const { docId } = seedDocWithTree(db)
-    // A future chunk-mutating path that skips the tree teardown — exactly what DATA-2 warns against.
-    db.prepare('DELETE FROM chunks WHERE document_id = ?').run(docId)
-    expect(danglingChunkEdges(db)).toBe(2) // both level-1 edges now point at gone chunks
   })
 })

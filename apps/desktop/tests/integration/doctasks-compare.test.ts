@@ -5,7 +5,6 @@ import type { Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
   getDocument,
-  getDocumentOrigin,
   listDocuments,
   readStoredDocumentText,
   type IngestionDeps
@@ -152,7 +151,6 @@ describe('mode (a) — small-docs full compare (D37: re-extracted segments)', ()
       createdAt: expect.any(String)
     }
     expect(created?.origin).toEqual(expectedOrigin)
-    expect(getDocumentOrigin(db, newId)).toEqual(expectedOrigin)
     const { text } = await readStoredDocumentText(db, storeDir, newId)
     expect(text.startsWith(`> ${compareAttributionLine('scripted-model')}`)).toBe(true)
     expect(text).toContain(REPORT)

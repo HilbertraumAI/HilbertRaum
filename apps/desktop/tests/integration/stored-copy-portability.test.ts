@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync, renameSync } from 'node:fs'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -16,13 +15,7 @@ import {
   listDocuments,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
-import {
-  encryptFile,
-  decryptFile,
-  encryptFileAsync,
-  decryptFileAsync,
-  type DocumentCipher
-} from '../../src/main/services/workspace-vault'
+import { testCipher } from '../helpers/test-cipher'
 
 // Issue #188 — `documents.stored_path` was persisted ABSOLUTE, so a portable drive that came
 // back under a different mount point (H: → E:, or a Windows letter ↔ /Volumes/…) had EVERY
@@ -55,16 +48,6 @@ function freshDb(): Db {
 /** A workspace root; `documentsDir` makes the `documents/` child under it. */
 function freshWorkspace(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-portability-ws-'))
-}
-
-function testCipher(): DocumentCipher {
-  const key = randomBytes(32)
-  return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
-    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
-  }
 }
 
 /**
@@ -241,7 +224,7 @@ describe('#188 — legacy rows carrying a foreign absolute path', () => {
     expect(storedPathOf(db, doc.id)).toBe(join(store, realName))
   })
 
-  it('T5: a genuinely absent stored copy still fails loudly, and delete does not throw', async () => {
+  it('T5: a genuinely absent stored copy still fails loudly, and the list reports it missing', async () => {
     const db = freshDb()
     const cipher = testCipher()
     const store = documentsDir(freshWorkspace())
@@ -252,7 +235,9 @@ describe('#188 — legacy rows carrying a foreign absolute path', () => {
     rmSync(file)
     for (const n of readdirSync(store)) rmSync(join(store, n))
 
-    await expect(readStoredDocumentBytes(db, store, doc.id, { cipher })).rejects.toThrow()
+    await expect(readStoredDocumentBytes(db, store, doc.id, { cipher })).rejects.toThrow(
+      /no longer on disk\. Re-import it to export/ // main.docs.exportGone
+    )
     expect(listDocuments(db, null, store).find((d) => d.id === doc.id)?.storedCopy).toBe('missing')
   })
 
