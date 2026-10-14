@@ -142,9 +142,8 @@ import type {
 import { MAX_DROP_PATHS } from '../../src/main/services/ingestion/limits'
 import type { AppContext } from '../../src/main/services/context'
 import { TASK_DOCUMENT_BUSY_INGESTING_MESSAGE } from '../../src/main/services/doctasks'
-import type { OcrEngine } from '../../src/main/services/ocr'
-import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
+import { fakeOcrEngine, fakeRasterizer } from '../helpers/ocr-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
@@ -1378,16 +1377,7 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     const g = perFileGatedEmbedder()
     const ctx = ctxWith(db, workspacePath, { embedder: g.embedder })
     registerDocsIpc(ctx)
-    const engine: OcrEngine = {
-      id: 'fake-tesseract',
-      languages: ['deu', 'eng'],
-      recognize: async (image: Buffer) => ({ text: `Seite ${image[0]} erkannt.`, confidence: 90 })
-    }
-    const rasterize: RasterizePdf = async (_pdf, o) => {
-      o.onPageCount?.(2)
-      for (let n = 1; n <= 2; n++) await o.onPage(n, Buffer.from([n]))
-      return { pageCount: 2 }
-    }
+    const engine = fakeOcrEngine({ text: (page) => `Seite ${page} erkannt.` })
     // The live wiring shape: the predicate reads ctx late-bound (registerDocsIpc assigned
     // `ctx.docIngestionActive` above), exactly like main/index.ts.
     const manager = docTaskManager(
@@ -1395,7 +1385,7 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
       {
         getIngestionDeps: () => ({ embedder: g.embedder }),
         getOcrEngine: () => engine,
-        rasterizePdf: rasterize,
+        rasterizePdf: fakeRasterizer(),
         isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false
       }
     )
@@ -1654,22 +1644,13 @@ describe('a scan attached in a chat, then made searchable in Documents (#570, #5
 
   it('OCR from Documents links it to that chat by itself — Temporary, not Library, intent cleared', async () => {
     const { db, workspacePath, storeDir, convId, id } = await scanAttachedToChat()
-    const engine: OcrEngine = {
-      id: 'fake-tesseract',
-      languages: ['deu', 'eng'],
-      recognize: async (image: Buffer) => ({ text: `Seite ${image[0]}: Der Vertrag endet am 1. März.`, confidence: 90 })
-    }
-    const rasterize: RasterizePdf = async (_pdf, o) => {
-      o.onPageCount?.(2)
-      for (let n = 1; n <= 2; n++) await o.onPage(n, Buffer.from([n]))
-      return { pageCount: 2 }
-    }
+    const engine = fakeOcrEngine({ text: (page) => `Seite ${page}: Der Vertrag endet am 1. März.` })
     const manager = docTaskManager(
       { root: workspacePath, db, storeDir },
       {
         getIngestionDeps: () => ({ embedder: createMockEmbedder() }),
         getOcrEngine: () => engine,
-        rasterizePdf: rasterize
+        rasterizePdf: fakeRasterizer()
       }
     )
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [id] })
