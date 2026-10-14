@@ -266,8 +266,7 @@ export interface ComposeOcrEngineDeps {
   rootPath: string
   /** Developer build: the engine starts `'available'` instead of `'probing'` (#232). */
   isDev?: boolean
-  /** Test seams (default: the real folder listing and the tesseract.js engine). */
-  listLanguages?: OcrSelectionDeps['listLanguages']
+  /** Test seam (default: the tesseract.js engine). */
   makeEngine?: OcrSelectionDeps['makeEngine']
 }
 
@@ -282,7 +281,6 @@ export function composeOcrEngine(deps: ComposeOcrEngineDeps): OcrEngine | null {
   return createSelectedOcrEngine({
     rootPath: deps.rootPath,
     probeRequired: !(deps.isDev ?? false),
-    ...(deps.listLanguages ? { listLanguages: deps.listLanguages } : {}),
     ...(deps.makeEngine ? { makeEngine: deps.makeEngine } : {}),
     onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
   })
@@ -346,7 +344,7 @@ function sameLanguageSet(a: readonly string[], b: readonly string[]): boolean {
  */
 export async function refreshOcrSlot(
   ctx: OcrSlot,
-  deps: Pick<ComposeOcrEngineDeps, 'listLanguages' | 'makeEngine'> = {}
+  deps: Pick<ComposeOcrEngineDeps, 'makeEngine'> = {}
 ): Promise<OcrRefreshOutcome> {
   try {
     const rootPath = ctx.paths.rootPath
@@ -357,7 +355,7 @@ export async function refreshOcrSlot(
       ctx.ocrEngine = next
       return (await probeOcrEngine(next)) ? 'activated' : 'startFailed'
     }
-    const onDisk = (deps.listLanguages ?? listOcrLanguages)(ocrAssetsDir(rootPath))
+    const onDisk = listOcrLanguages(ocrAssetsDir(rootPath))
     if (!sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
     const availability = current.availability?.() ?? 'available'
     if (availability === 'unavailable') {

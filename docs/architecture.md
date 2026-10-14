@@ -2481,7 +2481,7 @@ sentinel-tested), zero native deps.
   job is **not cooperatively cancellable** and recognitions are serialized through one
   worker chain, so one crafted/huge image could wedge OCR for the whole session and Cancel
   only landed between pages. `recognize()` now races `worker.recognize` against a per-page
-  timeout (`recognizeTimeoutMs`, default 2 min, `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`) **and**
+  timeout (`DEFAULT_OCR_PAGE_TIMEOUT_MS`, 2 min, overridable with `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`) **and**
   the abort signal; on timeout OR mid-page abort the only real recovery is to `terminate()`
   the worker (cleared → recreated lazily) and reject — which frees the serialized chain so
   the next page proceeds with a fresh worker. A plain recognition error still leaves the
@@ -8990,7 +8990,7 @@ bundles offline — no runtime fetch).
   *every* documents-screen mount / import-completion / collection change. FIX: a cheap, additive, nullable
   **`documents.ocr_meta_json`** sidecar holding ONLY the badge metadata (a serialized `DocumentOcrInfo` —
   counts/ids/languages, **never page text**). Written alongside `ocr_json` at OCR-write time
-  (`setDocumentOcr`, lock-step; clearing nulls both), and **backfilled once** at `openDatabase` for rows
+  (`setDocumentOcr`, lock-step: one statement writes both), and **backfilled once** at `openDatabase` for rows
   imported before the column existed (reads each blob ONCE, extracts meta, writes the sidecar; FK/lifecycle-
   safe; `updated_at` untouched; subsequent opens select zero rows). `listDocuments` now SELECTs an explicit
   **narrow column set that omits `ocr_json`** and reads the badge via `ocrInfoForRow` from the sidecar (with

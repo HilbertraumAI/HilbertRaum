@@ -54,7 +54,7 @@ const OEM_TESSERACT_ONLY = 0
  * worker chain, one wedged page would block every later page. So a page that exceeds this
  * ceiling terminates the worker (recreated lazily) and rejects, freeing the chain. 2 min is
  * generous for a single ≤4096px page even on slow hardware. Override with
- * `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS` or per instance via `recognizeTimeoutMs` (tests).
+ * `HILBERTRAUM_OCR_PAGE_TIMEOUT_MS`.
  */
 export const DEFAULT_OCR_PAGE_TIMEOUT_MS = 2 * 60 * 1000
 
@@ -62,7 +62,7 @@ export const DEFAULT_OCR_PAGE_TIMEOUT_MS = 2 * 60 * 1000
  * Bound on one worker start (module load + WASM core + language init). tesseract.js never
  * settles `createWorker()` when its worker dies while loading, so without a bound a hung start
  * would block every later recognition. 30 s covers a cold USB read; a real load failure rejects
- * in well under a second via the worker hook below. Injectable in tests. (#232)
+ * in well under a second via the worker hook below. (#232)
  */
 export const DEFAULT_OCR_WORKER_START_TIMEOUT_MS = 30_000
 
@@ -73,8 +73,7 @@ export const DEFAULT_OCR_WORKER_START_TIMEOUT_MS = 30_000
  */
 export const DEFAULT_OCR_REPROBE_DELAY_MS = 1_000
 
-function resolveOcrPageTimeoutMs(explicit?: number): number {
-  if (typeof explicit === 'number' && explicit > 0) return explicit
+function resolveOcrPageTimeoutMs(): number {
   const env = Number(process.env.HILBERTRAUM_OCR_PAGE_TIMEOUT_MS)
   return Number.isFinite(env) && env > 0 ? env : DEFAULT_OCR_PAGE_TIMEOUT_MS
 }
@@ -102,25 +101,11 @@ export interface TesseractOcrEngineOptions {
    */
   loadTesseract?: () => Promise<TesseractModule>
   /**
-   * Per-page recognition timeout in ms (REL-2). Default `DEFAULT_OCR_PAGE_TIMEOUT_MS`
-   * (env-overridable). Injected small in tests to exercise the terminate-on-timeout path.
-   */
-  recognizeTimeoutMs?: number
-  /**
-   * Injection seam for tests (BE-9): returns the tesseract.js version stamped into the engine id.
-   * Default derives it from the installed `tesseract.js/package.json`.
-   */
-  resolveVersion?: () => string
-  /**
    * Start in the `'probing'` state: the engine reports unavailable until `probe()` (or a first
    * recognition) proves the worker runs in this build. Set for packaged builds; dev builds start
    * `'available'`. (#232)
    */
   probeRequired?: boolean
-  /** Bound on one worker start. Default `DEFAULT_OCR_WORKER_START_TIMEOUT_MS`. */
-  workerStartTimeoutMs?: number
-  /** Delay before the re-probe after a live worker death. Default `DEFAULT_OCR_REPROBE_DELAY_MS`. */
-  reprobeDelayMs?: number
 }
 
 /**
@@ -182,7 +167,6 @@ export class TesseractOcrEngine implements OcrEngine {
 
   private readonly opts: TesseractOcrEngineOptions
   private readonly recognizeTimeoutMs: number
-  private readonly workerStartTimeoutMs: number
   private worker: TesseractWorker | null = null
   private starting: Promise<TesseractWorker> | null = null
   /** Serializes recognitions — a tesseract worker handles one job at a time. */
@@ -200,7 +184,6 @@ export class TesseractOcrEngine implements OcrEngine {
   private readonly liveRaw = new Set<Worker>()
   /** Rejecters of the recognitions in flight on the live worker — a worker death rejects them. */
   private readonly inflight = new Set<(err: Error) => void>()
-  private readonly reprobeDelayMs: number
   private reprobeTimer: ReturnType<typeof setTimeout> | null = null
   /** The OSD worker (#538) — same lifecycle shape as `worker`/`starting`/`liveRaw`/`inflight`. */
   private osdWorker: TesseractWorker | null = null
@@ -217,19 +200,11 @@ export class TesseractOcrEngine implements OcrEngine {
 
   constructor(opts: TesseractOcrEngineOptions) {
     this.opts = opts
-    this.recognizeTimeoutMs = resolveOcrPageTimeoutMs(opts.recognizeTimeoutMs)
-    this.workerStartTimeoutMs =
-      typeof opts.workerStartTimeoutMs === 'number' && opts.workerStartTimeoutMs > 0
-        ? opts.workerStartTimeoutMs
-        : DEFAULT_OCR_WORKER_START_TIMEOUT_MS
-    this.reprobeDelayMs =
-      typeof opts.reprobeDelayMs === 'number' && opts.reprobeDelayMs >= 0
-        ? opts.reprobeDelayMs
-        : DEFAULT_OCR_REPROBE_DELAY_MS
+    this.recognizeTimeoutMs = resolveOcrPageTimeoutMs()
     this.state = opts.probeRequired ? 'probing' : 'available'
     this.languages = [...opts.languages]
     // BE-9: derived from the installed package version, never a hardcoded literal.
-    this.id = `tesseract.js-${(opts.resolveVersion ?? resolveTesseractVersion)()}`
+    this.id = `tesseract.js-${resolveTesseractVersion()}`
   }
 
   private async ensureWorker(): Promise<TesseractWorker> {
@@ -357,9 +332,9 @@ export class TesseractOcrEngine implements OcrEngine {
           timer = setTimeout(
             () =>
               reject(
-                new Error(`OCR worker did not start within ${this.workerStartTimeoutMs} ms`)
+                new Error(`OCR worker did not start within ${DEFAULT_OCR_WORKER_START_TIMEOUT_MS} ms`)
               ),
-            this.workerStartTimeoutMs
+            DEFAULT_OCR_WORKER_START_TIMEOUT_MS
           )
           ;(timer as { unref?: () => void }).unref?.()
         })
@@ -409,7 +384,7 @@ export class TesseractOcrEngine implements OcrEngine {
       this.reprobeTimer = setTimeout(() => {
         this.reprobeTimer = null
         void this.probe()
-      }, this.reprobeDelayMs)
+      }, DEFAULT_OCR_REPROBE_DELAY_MS)
       ;(this.reprobeTimer as { unref?: () => void }).unref?.()
     }
   }
@@ -696,11 +671,6 @@ export class TesseractOcrEngine implements OcrEngine {
   /** Execution state (see `OcrAvailability`); a stopped engine is unavailable. */
   availability(): OcrAvailability {
     return this.stopped ? 'unavailable' : this.state
-  }
-
-  /** `availability() === 'available'` — the predicate `ocrAvailable` in the app status uses. */
-  isAvailable(): boolean {
-    return this.availability() === 'available'
   }
 
   /**

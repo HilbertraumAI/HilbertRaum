@@ -1458,7 +1458,7 @@ export function getDocumentSummary(db: Db, documentId: string): DocumentSummary 
 }
 
 /**
- * Persist (or clear, with null) a document's OCR recognition. The pages
+ * Persist a document's OCR recognition. The pages
  * are CONTENT: they live only in this (possibly encrypted) DB column — callers must
  * never put them into logs or the audit trail. Survives re-index deliberately (like
  * `origin_json`: it states where the text CAME from; re-running the OCR task is the
@@ -1467,22 +1467,15 @@ export function getDocumentSummary(db: Db, documentId: string): DocumentSummary 
 export function setDocumentOcr(
   db: Db,
   documentId: string,
-  ocr: { pages: OcrPage[]; engineId: string; languages: string[] } | null
+  ocr: { pages: OcrPage[]; engineId: string; languages: string[] }
 ): void {
   const createdAt = nowIso()
-  const json = ocr
-    ? JSON.stringify({
-        pages: ocr.pages,
-        engineId: ocr.engineId,
-        languages: ocr.languages,
-        createdAt
-      })
-    : null
+  const json = JSON.stringify({ pages: ocr.pages, engineId: ocr.engineId, languages: ocr.languages, createdAt })
   // PERF-3: write the cheap metadata sidecar alongside the full blob so `listDocuments` reads the
-  // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json`:
-  // clearing OCR (ocr === null) nulls both. `ocrMetaOf` is the same derivation `ocrMetaFromJson`
-  // (the backfill) applies to the just-written blob (engine pages are always well-formed).
-  const meta = ocr ? ocrMetaOf(ocr.pages, { ...ocr, createdAt }) : null
+  // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json` (one
+  // statement writes both). `ocrMetaOf` is the same derivation `ocrMetaFromJson` (the backfill)
+  // applies to the just-written blob (engine pages are always well-formed).
+  const meta = ocrMetaOf(ocr.pages, { ...ocr, createdAt })
   const metaJson = meta ? JSON.stringify(meta) : null
   db.prepare('UPDATE documents SET ocr_json = ?, ocr_meta_json = ?, updated_at = ? WHERE id = ?').run(
     json,
