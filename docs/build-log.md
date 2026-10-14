@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-07 #635 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the DEP-7 entry). Its record is unchanged:
+`rag-design.md` §12.4 "#635 amendment". Citations of the form "BUILD_STATE 2026-10-07 #635 entry" now resolve here. Its closing
+"(#637: above)" means the 2026-10-07 #637 entry, still in `BUILD_STATE.md` when this one moved. Text below is byte-identical to
+what was removed.
+
+_2026-10-07 — **#635 — a Stop ends a document question's wait for a cold start, not the start (`fix/635-e5-start-stop`).** The question awaited the
+search model's (then the reranker's) shared lazy start before it read its signal, so a Stop during a hung start held the turn up to the 180 s health budget (a new
+message refused). `waitUnlessAborted` (`runtime/sidecar.ts`) ends the caller's wait with its own reason; the start runs on for an import sharing it; a caller already
+stopped starts nothing. Owner: embedder + reranker now. Real app, frozen start: master 22.0 / 24.0 s, fix 1 ms. Record: `rag-design.md` §12.4 "#635 amendment". Open: none (#637: above)._
+
 ## 2026-10-14 — the closed 2026-10-07 #634 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #685 entry). Its record is unchanged:

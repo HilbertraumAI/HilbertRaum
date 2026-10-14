@@ -144,6 +144,20 @@ the intersection of both**. All four policy strings live in `main/window-securit
   channel, so the only reachable effect of injected CSS is same-origin cosmetic manipulation
   (content hiding / UI redressing) of rendered untrusted markdown — no script execution, no data
   disclosure. The directive is therefore an accepted defence-in-depth trade-off, not a gap.
+  **KaTeX's own output is not sanitized** (wave DEP-7): Streamdown appends the math plugin's
+  rehype step after the app's `rehype-sanitize`, so that path's gate is KaTeX's `trust` option,
+  which nothing sets. With it off, `\href`, `\url`, `\includegraphics` and `\htmlStyle` /
+  `\htmlId` / `\htmlClass` / `\htmlData` render as error text (pinned in
+  `assistant-markdown.test.tsx`). KaTeX 0.16, the line every dependent's range allows, also takes
+  an INHERITED `trust` (GHSA-238p-pmpm-9mq7), so a prototype-pollution bug elsewhere in the
+  renderer would switch those commands on; none is known, and the alert was dismissed as a
+  tolerable risk. Measured with the prototype polluted: links no different from a Markdown link
+  (the `a` override admits http(s) only); a remote image, which the CSP blocks; a `data:` image,
+  which the CSP allows and Markdown's sanitize would strip; and inline CSS, classes, `data-`
+  attributes and bare ids on a span. Images and CSS are the cosmetic class above. A bare id shadows
+  only a window global that is otherwise undefined, and the renderer reads none (its globals are
+  built-ins and the preload's `api`, measured unshadowed). No script, no network. Never pass
+  `trust` to rehype-katex.
 - **Development** (HMR-compatible): both layers relax `connect-src` to allow `ws://localhost:*` /
   `http://localhost:*`, and the header additionally adds `'unsafe-inline'`/`'unsafe-eval'` to
   `script-src` for Vite hot-reload (and omits the prod hardening tail `object-src`/`base-uri`/
@@ -285,7 +299,10 @@ WebContents that proves both events are registered and a remote redirect is prev
 via the lockfile — review upstream advisories for all of them each release; the offline posture
 means there is no auto-update channel to catch a disclosed vulnerability between releases.
 The DOCX pair was missing from this list until the 0.8.15 bump, which is exactly how ten xmldom
-advisories went unwatched.
+advisories went unwatched. The Kit also carries mammoth's CLI dependencies, argparse and
+sprintf-js; sprintf-js has an advisory with no patched release (GHSA-hp3w-g68c-fv3c). The import
+path never loads either (measured from the packaged `app.asar`, pinned in `ingestion.test.ts`),
+so that alert was dismissed as not used (wave DEP-7). The pin fails if a mammoth update changes it.
 
 **Electron itself has the same exposure, and Dependabot understates it.** Electron is a
 devDependency in npm terms but the runtime of every packaged build. Dependabot files its alerts as
