@@ -2860,7 +2860,7 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   dropped or a newer task replaced is left alone. One tick runs at a time (a per-timer in-flight
   latch, fileTranslateSession's TA-3 / H4 shape), so a slow round-trip cannot land after an
   overlapping tick gave up (CODE-6) and revive a task nothing polls; a rejected cancel clears the
-  latch. **Cancel targeting (#689):** the store holds only the tasks the Documents screen started,
+  latch. The skill-run store had the same overlap and has the same latch since #688. **Cancel targeting (#689):** the store holds only the tasks the Documents screen started,
   while the lane is shared with a Translate-screen file translation, a skill's `categorize`, and an
   import's deep-index build. The row's Cancel (`cancelActiveDocTask`) therefore sends the entry's
   `jobId` (#157 DT-2's exact-id cancel, stale-safe), and sends nothing when there is no entry. With
@@ -6625,7 +6625,9 @@ the wrong chat. U6 gives the renderer the same per-document model A2 gave the co
 ChatScreen (SKA-39). ChatScreen derives the active conversation's run via `pickConversationRun` and renders
 the busy/result bar ONLY when `conversationId === activeId`; a quiet **"working in another chat"** chip covers
 runs elsewhere (SKA-6). Poll resilience: **N consecutive failures** flip the entry to a labelled
-*"state unknown"* row rather than silently dropping a live run (SKA-40). Reload re-attach: a **`listSkillRuns`
+*"state unknown"* row rather than silently dropping a live run (SKA-40). One poll runs per entry at a time
+(#688, the #680 latch): a tick that finds the previous `getSkillRun` still resolving skips, so overlapping
+fast failures cannot give up under a slow call whose late answer would revive a row nothing polls. Reload re-attach: a **`listSkillRuns`
 IPC** (ids/counts only — `SkillRunState[]`, which now additively carries the content-free `conversationId?` +
 `documentId?`) lets a freshly-mounted renderer **re-adopt** every run main still holds (running AND
 terminal-unacknowledged), so a finished run's outcome is shown/acknowledgeable after a reload; a busy refusal

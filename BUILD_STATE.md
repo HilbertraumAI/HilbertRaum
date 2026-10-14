@@ -43,7 +43,7 @@ the fix `Q:` + `sub/nested.md` / `top.txt`. Display-only; no screen shows the co
 _2026-10-14 — **#680 — a doc-task poll writes back the entry as it is after its round-trip (`fix/680-doctask-poll-writeback`).** The 400 ms tick spread the entry it read
 before awaiting `getDocTask`: a Cancel clicked meanwhile lost "Stopping if possible…" (DOC-5), a lock purge brought the task back (SH-4), overlapping slow ticks could give up
 (CODE-6) and then revive a task nothing polled, and a rejected cancel left Cancel disabled. Now the tick re-reads the entry after its round-trips and leaves a purged or replaced one
-alone, one tick runs at a time, and a rejected cancel clears the latch. 7 store rows fail on master. Record: `architecture.md` "Poll write-back (#680)". Open: skillruns' overlap (#688); the row's untargeted cancel (#689: above)._
+alone, one tick runs at a time, and a rejected cancel clears the latch. 7 store rows fail on master. Record: `architecture.md` "Poll write-back (#680)". Open: none (the skill-run store's same overlap got the same latch in #688; the row's untargeted cancel: #689, above)._
 _2026-10-13 — **#671 — a translation start's own GPU buffers say where it ran, never the offload line (`fix/671-translate-gpu-evidence`).** On a PC with no usable card the GPU posture
 printed `offloaded 49/49 layers to GPU`, so the Translate screen claimed the card; `--device none` prints the same, so every processor start (all of #473's causes, every 8 GB card) showed "49 of 49
 layers on the card" on the Performance row. The runtime reads its log with the chat placement parser and records `gpuBuffers` (#653's `holdsGpuBuffers`); the hint, the row, `gpuOccupied` and `yieldGpu`

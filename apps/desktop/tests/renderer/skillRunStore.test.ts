@@ -180,6 +180,36 @@ describe('skill-run store — poll resilience (SKA-39/40)', () => {
     expect(getSkillRunsSnapshot()).toHaveLength(0)
   })
 
+  // #688 (the #680 latch, here): a getSkillRun slower than POLL_MS was overlapped by the next ticks. Three of them could
+  // fail fast and give up (SKA-40) while the slow one was in flight; its late 'running' answer then cleared stateUnknown
+  // without restarting the timer, leaving a running row nothing polled (only Cancel, until a reload or a lock).
+  it('a poll slower than the interval is never overlapped, and polling goes on after it answers (#688)', async () => {
+    let calls = 0
+    let answerSlow!: (run: SkillRunState) => void
+    const running = mkRun()
+    setApi({
+      startSkillRun: async () => ({ started: true, run: running }),
+      getSkillRun: () => {
+        calls += 1
+        if (calls === 1) return new Promise<SkillRunState>((resolve) => (answerSlow = resolve)) // the slow round-trip
+        return Promise.reject(new Error('transient IPC error')) // every overlapping tick would fail fast
+      },
+      clearSkillRun: async () => {}
+    })
+    await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'extract_transactions', conversationId: 'conv-1', documentId: 'doc-1' })
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3) // three ticks while the first poll is still in flight
+    expect(calls).toBe(1) // skipped, not overlapped
+    expect(getSkillRunsSnapshot()[0].stateUnknown).toBe(false) // so nothing gave up
+
+    answerSlow({ ...running, progress: { done: 1, total: 4 } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(getSkillRunsSnapshot()[0]).toMatchObject({ stateUnknown: false, run: { state: 'running', progress: { done: 1 } } })
+    // The timer still runs: the next ticks poll again (and, failing three in a row, give up honestly).
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+    expect(calls).toBe(4)
+    expect(getSkillRunsSnapshot()[0].stateUnknown).toBe(true)
+  })
+
   it('a running run that polls to done stops its timer (no further polls after terminal)', async () => {
     let calls = 0
     const cur = { run: mkRun() }
