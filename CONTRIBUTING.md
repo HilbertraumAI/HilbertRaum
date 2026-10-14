@@ -225,11 +225,12 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **Search the raw value, not its JSON encoding.** A "never logs the drive path" negative over
   `JSON.stringify(meta)` passes on Windows even when the path is logged: JSON doubles every backslash,
   so `C:\…` never appears in the string. Check each logged value, or search the encoded form.
-- **Caps dialled through the environment: stub every variable.** The ingestion caps have no injection
-  parameter; tests set `HILBERTRAUM_MAX_DOC_BYTES` and its siblings with `vi.stubEnv`, which
-  `resolveIngestionLimits()` reads at call time. Stub every cap variable (to `''` where a row pins the
-  default) and `vi.unstubAllEnvs()` after: an override in the developer's shell must not change the
-  result, and `unstubAllEnvs` alone brings that override back.
+- **Behaviour overrides in your shell do not reach `npm test` (#687).** `tests/setup-env-scrub.ts`, the
+  first `setupFiles` entry, deletes the `HILBERTRAUM_*` / `HR_*` overrides `src/` reads (caps,
+  timeouts, `HR_FORCE_REINDEX`, …) before each test file loads. A new override read in `src/` goes on
+  its `SCRUBBED_ENV` list. A row that dials a cap down (the ingestion caps have no injection
+  parameter; `resolveIngestionLimits()` reads the env at call time) sets it with `vi.stubEnv` and
+  calls `vi.unstubAllEnvs()` after.
 - **A doc that names a test as its guard is a claim about that test.** model-policy.md said the OCR
   drift test checks `OCR_PINS` against its table "and fails until they agree"; the test never read
   the table, and the pinned sizes were checked nowhere. Make the test check what the doc says, or fix the

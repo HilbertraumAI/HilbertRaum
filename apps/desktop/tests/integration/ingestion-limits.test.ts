@@ -52,19 +52,9 @@ function store(): string {
   return documentsDir(tempRoot('limits-ws'))
 }
 
-// Every row starts from the SHIPPED caps: a `HILBERTRAUM_*` override set in the developer's shell
-// must not change a result (`envInt` reads '' as unset). A row that dials a cap down stubs its own
-// variable on top; the stubs are undone after every row, failed or not.
-const LIMIT_ENV = [
-  'HILBERTRAUM_MAX_DOC_BYTES',
-  'HILBERTRAUM_TEXT_MAX_BYTES',
-  'HILBERTRAUM_PARSE_TIMEOUT_MS',
-  'HILBERTRAUM_PDF_MAX_PAGES',
-  'HILBERTRAUM_DOCX_MAX_INFLATED_BYTES'
-]
-beforeEach(() => {
-  for (const name of LIMIT_ENV) vi.stubEnv(name, '')
-})
+// Every row starts from the SHIPPED caps: the harness drops a developer shell's `HILBERTRAUM_*`
+// overrides before this file loads (tests/setup-env-scrub.ts, #687). A row that dials a cap down
+// stubs its own variable; the stubs are undone after every row, failed or not.
 afterEach(() => {
   vi.unstubAllEnvs()
 })
