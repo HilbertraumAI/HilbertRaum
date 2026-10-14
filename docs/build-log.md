@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-06 #622 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #684 entry). Its record is unchanged:
+Skills §21 "#622 amendment". It named no open items. Citations of the form "BUILD_STATE 2026-10-06 #622 entry" now resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-10-06 — **#622 — the redaction / edit locate windows and replies fit the model's context (`fix/622-locate-window-budget`).** A fixed 768-token reply cap
+cut dense windows (measured 744–1,293), so they parsed to nothing: master's register copy kept 8/10 names while the run said done; 40 long paragraphs overflowed
+4,096. Now one walk (`locate-walk.ts`): a digit-aware estimate, a third of the context per window, the rest for the reply, cut/overflow → halve and re-ask, an
+over-long line → 240-char-overlap pieces (edit occurrences remapped). Real app: every name masked, the edit applied 44/44. Record: Skills §21 "#622 amendment"._
+
 ## 2026-10-13 — the closed 2026-10-06 #606 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-13 (preamble budget, making room for the #671 entry). Its record is unchanged:
