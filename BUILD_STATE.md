@@ -701,8 +701,8 @@ open round's item stays the last block of §5.)
       image + password change, evidence-pack PDF export, one IPC action after the sender guard;
       plus the macOS/Linux packaged-OCR and update-walk legs before those kits ship.
     - **Test-suite watch (no ID):** source-text wiring pins (`window-security`, `packaging`,
-      `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), `as unknown as`
-      private-field injection (the katex hoist compare became a behavioural check in #698) — convert to behavioural assertions when
+      `skills-installer`, `third-party-notices`, `ocr`, `rail-labels` tests), the KaTeX copy count
+      in the build output (`KaTeX parse error`, #698), `as unknown as` private-field injection — convert to behavioural assertions when
       touched; `FullSuiteGuard` cannot see dropped individual tests.
 
 20. **#290/#291 — server `timings` → Diagnostics decode speed + per-answer speed line — CLOSED    2026-09-04** (PRs #295/#300/#297/#299; #290/#291/#298 closed). Records: `architecture.md`

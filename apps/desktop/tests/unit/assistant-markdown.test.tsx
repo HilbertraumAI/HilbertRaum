@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
 import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
 
@@ -184,8 +185,8 @@ describe('AssistantMarkdown math (KaTeX)', () => {
   it('renders block math as real KaTeX output with the matching JS/CSS version', () => {
     // Smoke test for the version-skew blocker: rehype-katex must render with the same katex
     // VERSION whose CSS/fonts AssistantMarkdown loads. With a skew, KaTeX either misrenders or
-    // warns; package.json pins ~0.16.47 to match @streamdown/math's chain (two installed copies of
-    // that version today, #698) — assert it actually typesets.
+    // warns; package.json pins ~0.16.47 to match @streamdown/math's chain (one install serves both
+    // since #698, pinned below) — assert it actually typesets.
     const { container } = render(<AssistantMarkdown text={'$$\\frac{1}{2}$$'} />)
     const katexRoot = container.querySelector('.katex')
     expect(katexRoot, 'expected a .katex element from rehype-katex').not.toBeNull()
@@ -381,43 +382,41 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.querySelector('.katex')).toBeNull()
   })
 
-  it('the app and rehype-katex resolve one katex install, not two copies of it (#698)', async () => {
+  it('the app and rehype-katex resolve one katex install, not two copies of it (#698)', () => {
     // The CSS/fonts and the partial-TeX check (`completePartialTex`) come from the katex OUR
     // imports resolve; the math HTML comes from the katex rehype-katex resolves. KaTeX requires
     // matched JS/CSS versions (PR review blocker 2), and two copies of one version are two copies
     // in the renderer bundle (#698: four nested 0.16.47 installs, two of them bundled). Node's own
     // lookup paths are walked package by package: @streamdown/math and rehype-katex are ESM-only
     // and do not export their package.json, so require.resolve cannot reach them by name.
-    const { existsSync, realpathSync } = await import('node:fs')
-    const { createRequire } = await import('node:module')
-    const { join, dirname } = await import('node:path')
     const packageDir = (fromDir: string, name: string): string | undefined =>
       createRequire(join(fromDir, 'noop.js'))
         .resolve.paths(name)
         ?.map((dir) => join(dir, name))
         .find((dir) => existsSync(join(dir, 'package.json')))
+    // Node resolves to the real path, so one install is one string.
+    const katexFrom = (dir: string): string =>
+      dirname(createRequire(join(dir, 'package.json')).resolve('katex/package.json'))
     const appDir = join(__dirname, '..', '..')
-    const ourKatex = dirname(createRequire(join(appDir, 'package.json')).resolve('katex/package.json'))
     const streamdownMath = packageDir(appDir, '@streamdown/math')
     expect(streamdownMath, '@streamdown/math must be installed').toBeTruthy()
     const rehypeKatex = packageDir(streamdownMath!, 'rehype-katex')
     expect(rehypeKatex, 'rehype-katex must be installed (via @streamdown/math)').toBeTruthy()
-    const rkKatex = dirname(createRequire(join(rehypeKatex!, 'package.json')).resolve('katex/package.json'))
-    expect(realpathSync(rkKatex), 'rehype-katex must render with the katex install the app imports').toBe(
-      realpathSync(ourKatex)
+    expect(katexFrom(rehypeKatex!), 'rehype-katex must render with the katex install the app imports').toBe(
+      katexFrom(appDir)
     )
   })
 
   // The bundle itself (#698): an import of another katex entry file (`katex/dist/katex.mjs`
   // beside rehype-katex's `katex`) would bundle two copies from one install, which the test above
-  // cannot see. Runs against out/renderer; CI builds before it tests, and a local run without a
-  // build skips (the csp-build-output idiom).
-  const assets = join(__dirname, '..', '..', 'out', 'renderer', 'assets')
-  it.skipIf(!existsSync(assets))('the built renderer carries KaTeX once (#698)', () => {
-    // One literal of KaTeX's parser per copy: `ParseError`'s message prefix.
-    const copies = readdirSync(assets)
+  // cannot see. Runs against out/renderer, all of it. CI builds before it tests and always runs
+  // it (a skip there would hide a second copy: AUD-18's lesson in csp-build-output); a local run
+  // without a build skips. A string pin: a KaTeX that rewords `ParseError`'s prefix fails it.
+  const renderer = join(__dirname, '..', '..', 'out', 'renderer')
+  it.skipIf(!existsSync(renderer) && !process.env.CI)('the built renderer carries KaTeX once (#698)', () => {
+    const copies = readdirSync(renderer, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.js'))
-      .reduce((n, f) => n + readFileSync(join(assets, f), 'utf8').split('KaTeX parse error').length - 1, 0)
-    expect(copies, 'KaTeX copies in out/renderer/assets/*.js').toBe(1)
+      .reduce((n, f) => n + readFileSync(join(renderer, f), 'utf8').split('KaTeX parse error').length - 1, 0)
+    expect(copies, 'KaTeX copies in out/renderer (an out/ built before the current lockfile needs `npm run build`)').toBe(1)
   })
 })

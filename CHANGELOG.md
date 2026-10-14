@@ -41,8 +41,8 @@ from its first public `1.0.0` release onward.
   symbols. Long answers also take less work to show as they stream, and lists on the Review screen
   and in translations are spaced as in chat (#685).
 - **The app carries its formula typesetter once.** KaTeX, which draws the formulas in answers, was
-  included twice. Formulas look the same, and the app loads about half a megabyte less code the
-  first time an answer shows one (#698).
+  included twice. Formulas look the same, and the app loads about half a megabyte less code when
+  the first answer appears (#698).
 
 ### Fixed
 

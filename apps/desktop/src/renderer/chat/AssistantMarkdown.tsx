@@ -4,9 +4,9 @@ import { math } from '@streamdown/math'
 import { codeBlockExtension } from '@shared/code-block-export'
 import { useCodeBlockActions, type CodeBlockActions } from './CodeBlockActionsContext'
 import { useT } from '../i18n'
-// rehype-katex renders with its own katex copy; this import resolves the app's copy of the same
-// version (two copies in the bundle, #698) and is used only to VALIDATE partially-streamed TeX
-// before typesetting it (completePartialTex below). The CSS comes from the app's copy.
+// rehype-katex renders the math; this import resolves the same katex install (one copy in the
+// bundle since #698) and is used only to VALIDATE partially-streamed TeX before typesetting it
+// (completePartialTex below). The CSS comes from that install too.
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
@@ -153,8 +153,8 @@ function promoteSingleDollarMath(prose: string): string {
 // throws, and rehype-katex then falls back to raw error text — worse than showing nothing).
 // Complete it: cut a half-streamed macro name / dangling `^`/`_`, close unbalanced brace
 // groups, and if the result still lacks a pending argument group (e.g. `\frac{X}` awaiting
-// its denominator) try an appended `{}` — then VALIDATE with KaTeX itself (the app's copy, the
-// version rehype-katex renders with) and only emit TeX that actually parses. Returns null when the
+// its denominator) try an appended `{}` — then VALIDATE with KaTeX itself (the install
+// rehype-katex renders with) and only emit TeX that actually parses. Returns null when the
 // partial is unsalvageable this flush (e.g. `\left(` before its `\right` arrives) — the
 // caller then hides the math tail instead of flashing raw TeX; it appears once parseable.
 function completePartialTex(tex: string): string | null {

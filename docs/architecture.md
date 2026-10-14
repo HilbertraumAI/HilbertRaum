@@ -10993,8 +10993,9 @@ crash, permanently outside CI) closed with Phase 1's boundary tests, which use R
 **Watch-items registered in BUILD_STATE §5 item 19 as one "test-suite watch" line (refactor hazards,
 not defects):** source-text scan "wiring pins" (`window-security.test.ts`, `packaging.test.ts`,
 `skills-installer`, `third-party-notices`, `ocr.test.ts`, `rail-labels.test.ts`); the katex
-`package.json` compare across hoist locations in `assistant-markdown.test.tsx` (since #698 a behavioural check: one
-install, and the build carries KaTeX once); `as unknown as`
+`package.json` compare across hoist locations in `assistant-markdown.test.tsx` (since #698 a check that the app and
+rehype-katex resolve one install, plus a count of `KaTeX parse error` in the build output, a string pin a KaTeX
+that rewords it turns red); `as unknown as`
 private-field injection (`chat-ipc.test.ts:933`; `docs-ipc.test.ts` moved to `ctxWith` overrides in the
 documents test campaign) — whoever touches those files converts the pin to a
 behavioural assertion where the change is small, else leaves a `// watch-item` comment. Fake timers:
@@ -15060,8 +15061,9 @@ Follow-up 1, done on `fix/698-katex-dedupe`.
 - **The test.** "the installed katex package is a single, deduped version"
   (`assistant-markdown.test.tsx`) compared the two copies' versions, so it passed on two copies.
   It now walks Node's own lookup paths and requires the app and rehype-katex to resolve one install.
-  A second test needs a build (CI builds first). It requires the built renderer to carry KaTeX once,
-  which also catches an import of another katex entry file. Each check goes red under its own
+  A second test needs a build (CI builds first, and on CI the test never skips, AUD-18's lesson). It
+  requires all of `out/renderer` to carry KaTeX once, which also catches an import of another katex
+  entry file. It counts a literal (`KaTeX parse error`), so it sits on the test-suite watch list. Each check goes red under its own
   regression: a katex copy placed back under rehype-katex for the first, and the previous build for
   the second ("expected 2 to be 1").
 - **Real app** (the packaged build, a scratch drive root, the 4B on the GTX 1070 Ti):

@@ -71,7 +71,7 @@ export function builderFileNegations(repoRoot) {
 /**
  * Walk the production dependency graph of apps/desktop over package-lock entries,
  * exactly like electron-builder's collector (npm node_modules resolution).
- * Returns the set of lockfile paths ("node_modules/foo", "apps/desktop/node_modules/katex", …).
+ * Returns the set of lockfile paths ("node_modules/foo", "node_modules/katex/node_modules/commander", …).
  */
 function prodClosure(packages) {
   const resolveDep = (fromPath, name) => {
