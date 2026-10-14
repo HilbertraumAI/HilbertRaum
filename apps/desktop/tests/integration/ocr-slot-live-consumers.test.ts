@@ -14,10 +14,9 @@ import { refreshOcrSlot, type OcrSlot } from '../../src/main/services/compose-se
 import type { OcrAvailability, OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { createMockEmbedder } from '../../src/main/services/embeddings'
-import type { Translator, TranslateOptions } from '../../src/main/services/translation'
-import { TRANSLATION_STOP_TOKEN } from '../../src/main/services/translation'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { scriptedTranslator } from '../helpers/doctask-fixtures'
 
 // Issue #410 — before this wave, `DocTaskManager`'s ingestion deps and OCR-engine getter were
 // built ONCE at wiring time off the startup `ctx.ocrEngine` const. `refreshOcrSlot` (also #410)
@@ -118,26 +117,6 @@ function fakeRasterizer(pages = 1): RasterizePdf {
     }
     return { pageCount: pages }
   }
-}
-
-interface ScriptedTranslator extends Translator {
-  calls: TranslateOptions[]
-}
-
-/** A perfect-echo translator (copied/simplified from doctasks-translation.test.ts). */
-function scriptedTranslator(): ScriptedTranslator {
-  const translator: ScriptedTranslator = {
-    modelId: 'scripted-translator',
-    calls: [],
-    contextWindow: () => 4096,
-    stop: async () => {},
-    async translate(call: TranslateOptions): Promise<string> {
-      translator.calls.push(call)
-      call.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
-      return call.text
-    }
-  }
-  return translator
 }
 
 async function waitTerminal(

@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -15,18 +14,14 @@ import {
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
 import {
-  encryptFile,
-  decryptFile,
-  encryptFileAsync,
-  decryptFileAsync,
   shredStalePlaintext,
   vaultPathsFrom,
   createEncryptedVaultOnDisk,
-  WorkspaceController,
-  type DocumentCipher
+  WorkspaceController
 } from '../../src/main/services/workspace-vault'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { KdfParams } from '../../src/main/services/security/crypto'
+import { testCipher } from '../helpers/test-cipher'
 
 // H1 (audit round 4): spec §3.5 requires encrypting the workspace database AND the
 // document cache. The vault used to cover only the DB — every imported file's raw bytes
@@ -53,17 +48,6 @@ function freshDb(): Db {
 
 function freshStore(): string {
   return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-ws-')))
-}
-
-/** A cipher equivalent to the unlocked vault's (same encryptFile/decryptFile, fixed key). */
-function testCipher(): DocumentCipher {
-  const key = randomBytes(32)
-  return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
-    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
-  }
 }
 
 /** Every plaintext occurrence of SECRET_TEXT under `dir` (the store) is a leak. */

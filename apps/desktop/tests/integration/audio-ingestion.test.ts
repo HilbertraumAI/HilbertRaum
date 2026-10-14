@@ -16,14 +16,8 @@ import {
 import {
   AUDIO_NEEDS_TRANSCRIBER_MESSAGE
 } from '../../src/main/services/ingestion/parsers/audio'
-import {
-  encryptFile,
-  decryptFile,
-  encryptFileAsync,
-  decryptFileAsync,
-  type DocumentCipher
-} from '../../src/main/services/workspace-vault'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
+import { testCipher } from '../helpers/test-cipher'
 
 // Phase 36 — audio ingestion end-to-end with a FAKE transcriber behind the
 // IngestionDeps injection seam (the embedder precedent): a "recording" becomes a
@@ -73,16 +67,6 @@ function freshDb(): Db {
 
 function freshStore(): string {
   return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-audio-ws-')))
-}
-
-function testCipher(): DocumentCipher {
-  const key = randomBytes(32)
-  return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
-    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
-  }
 }
 
 describe('audio ingestion (Phase 36)', () => {

@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
 import {
   createQueuedDocument,
   getDocument,
@@ -23,17 +22,9 @@ import {
   type PageGap
 } from '../../src/main/services/doctasks'
 import { makeMixedPdf } from '../helpers/fixtures'
-import type { Translator } from '../../src/main/services/translation'
-import type { TranslateOptions, CompletionFinal } from '../../src/main/services/translation'
+import type { CompletionFinal, TranslateOptions, Translator } from '../../src/main/services/translation'
 import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
-import {
-  VaultBusyError,
-  decryptFile,
-  encryptFile,
-  decryptFileAsync,
-  encryptFileAsync,
-  type DocumentCipher
-} from '../../src/main/services/workspace-vault'
+import { VaultBusyError } from '../../src/main/services/workspace-vault'
 import { listAuditEvents } from '../../src/main/services/audit'
 import {
   addToCollection,
@@ -61,10 +52,14 @@ import {
   docTaskManager,
   docTaskWorld,
   importWords,
+  scriptedTranslator,
   waitTerminal,
   type DocTaskStatusOf,
-  type DocTaskWorld
+  type DocTaskWorld,
+  type ScriptedTranslator,
+  type ScriptedTranslatorOptions
 } from '../helpers/doctask-fixtures'
+import { testCipher } from '../helpers/test-cipher'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
 // TG-3 (translategemma plan §2 D3/D9): translation runs on the TranslateGemma SIDECAR (a
@@ -83,67 +78,6 @@ let w: DocTaskWorld
 beforeEach(() => {
   w = docTaskWorld('doctr')
 })
-
-interface ScriptedTranslatorOptions {
-  /** Reply per call; throwing fails that call. Default: a perfect echo translator. */
-  reply?: (call: TranslateOptions, index: number) => string
-  /** The sidecar's launched context window (`contextWindow()`). Default 4096 (the manifest). */
-  contextTokens?: number
-  /** Delay (ms) before each streamed token — lets cancel land mid-window. */
-  tokenDelayMs?: number
-  /**
-   * The final frame each (non-throwing) call reports via `onFinal` (TA-5 M6 — now load-bearing).
-   * Default: a CLEAN stop (`stopping_word: <end_of_turn>`). Return `{}` to model a LIMIT stop
-   * (truncation) — a non-empty window that the handler must treat as a failed attempt.
-   */
-  final?: (call: TranslateOptions, index: number) => CompletionFinal
-}
-
-interface ScriptedTranslator extends Translator {
-  calls: TranslateOptions[]
-}
-
-/**
- * A scripted Translator (the TG-3 sidecar seam). The default reply is a "perfect
- * translator": it returns the window text verbatim, so the stitched output is
- * byte-comparable to the source — exactly what the D36 regression needs.
- */
-function scriptedTranslator(opts: ScriptedTranslatorOptions = {}): ScriptedTranslator {
-  const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
-    new Promise((resolve) => {
-      if (signal?.aborted) return resolve()
-      const t = setTimeout(resolve, ms)
-      signal?.addEventListener('abort', () => {
-        clearTimeout(t)
-        resolve()
-      })
-    })
-  const translator: ScriptedTranslator = {
-    modelId: 'scripted-translator',
-    calls: [],
-    contextWindow: () => opts.contextTokens ?? 4096,
-    stop: async () => {},
-    async translate(call: TranslateOptions): Promise<string> {
-      const index = translator.calls.length
-      translator.calls.push(call)
-      const text = opts.reply ? opts.reply(call, index) : call.text
-      if (opts.tokenDelayMs) {
-        for (const token of text.match(/\S+\s*/g) ?? [text]) {
-          // The real runtime rejects on abort; a clean return exercises the handler's
-          // aborted-normalization the same way the old mock chat runtime did.
-          if (call.signal?.aborted) return ''
-          await delay(opts.tokenDelayMs, call.signal)
-          call.onToken?.(token)
-        }
-      }
-      // A normal resolve ALWAYS carries a terminal frame (the runtime throws IncompleteStreamError
-      // otherwise) — model it so `isCleanStop(final)` can tell a clean stop from a limit stop (M6).
-      call.onFinal?.(opts.final ? opts.final(call, index) : { stoppingWord: TRANSLATION_STOP_TOKEN })
-      return text
-    }
-  }
-  return translator
-}
 
 /** A chat runtime that PROVES the reroute: translation must never touch `chatStream`. */
 function stubChatRuntime(): ModelRuntime {
@@ -174,17 +108,6 @@ async function waitRunning(manager: DocTaskManager, jobId: string, translator: S
     () => manager.getDocTask(jobId).state === 'running' && translator.calls.length > before,
     `task ${jobId} to start a window`
   )
-}
-
-/** A cipher equivalent to the unlocked vault's (fixed key) — the encrypted-docs pattern. */
-function testCipher(): DocumentCipher {
-  const key = randomBytes(32)
-  return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
-    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
-  }
 }
 
 describe('validation (kind + params, the widened 10-language set)', () => {

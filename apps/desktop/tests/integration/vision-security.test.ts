@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
 import * as ocrFactory from '../../src/main/services/ocr/factory'
 
 // Security sentinel for the vision path (image-understanding plan §13/§17, CLAUDE.md §0):
@@ -24,7 +23,7 @@ vi.mock('electron', () => ({
 
 import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
 import { openDatabase } from '../../src/main/services/db'
-import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
+import { testCipher } from '../helpers/test-cipher'
 import { VisionService } from '../../src/main/services/vision'
 import { VisionRuntime } from '../../src/main/services/vision/runtime'
 import { log } from '../../src/main/services/logging'
@@ -59,7 +58,7 @@ function ctxFor(
   audit: ReturnType<typeof vi.fn>,
   rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-sec-'))
 ): AppContext {
-  const key = randomBytes(32)
+  const cipher = testCipher()
   return {
     trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath: rootPath },
@@ -69,12 +68,7 @@ function ctxFor(
     workspace: {
       isUnlocked: () => true,
       beginDocumentWork: () => () => {},
-      documentCipher: () => ({
-        encryptFile: (s: string, d: string) => encryptFile(s, d, key),
-        decryptFile: (s: string, d: string) => decryptFile(s, d, key),
-        encryptFileAsync: (s: string, d: string) => encryptFileAsync(s, d, key),
-        decryptFileAsync: (s: string, d: string) => decryptFileAsync(s, d, key)
-      })
+      documentCipher: () => cipher
     },
     audit
   } as unknown as AppContext

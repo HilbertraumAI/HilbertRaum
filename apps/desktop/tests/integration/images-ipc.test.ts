@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
 
 // IPC-layer tests for registerImagesIpc (image-understanding plan §9/§17): the images:*
 // handlers return the right DTOs, an unknown jobId is a terminal failed, a second analyze is
@@ -54,7 +53,7 @@ import type {
 } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
+import { testCipher } from '../helpers/test-cipher'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
 import { hangPolls, until } from '../helpers/hang-budget'
 import { pngHeader } from '../helpers/image-fixtures'
@@ -388,7 +387,7 @@ describe('registerImagesIpc — history persistence', () => {
   function ctxWithDb(): { ctx: AppContext; db: Db; workspacePath: string; imagesPath: string } {
     const workspacePath = mkdtempSync(join(tmpdir(), 'hr-imghist-'))
     const db = openDatabase(join(workspacePath, 'hilbertraum.sqlite'))
-    const key = randomBytes(32)
+    const cipher = testCipher()
     const ctx = {
       trustedSenders: ANY_SENDER,
       paths: { rootPath: workspacePath, workspacePath },
@@ -398,12 +397,7 @@ describe('registerImagesIpc — history persistence', () => {
       workspace: {
         isUnlocked: () => true,
         beginDocumentWork: () => () => {},
-        documentCipher: () => ({
-          encryptFile: (s: string, d: string) => encryptFile(s, d, key),
-          decryptFile: (s: string, d: string) => decryptFile(s, d, key),
-          encryptFileAsync: (s: string, d: string) => encryptFileAsync(s, d, key),
-          decryptFileAsync: (s: string, d: string) => decryptFileAsync(s, d, key)
-        })
+        documentCipher: () => cipher
       }
     } as unknown as AppContext
     return { ctx, db, workspacePath, imagesPath: join(workspacePath, 'images') }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync, renameSync } from 'node:fs'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -16,13 +16,7 @@ import {
   listDocuments,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
-import {
-  encryptFile,
-  decryptFile,
-  encryptFileAsync,
-  decryptFileAsync,
-  type DocumentCipher
-} from '../../src/main/services/workspace-vault'
+import { testCipher } from '../helpers/test-cipher'
 
 // Issue #188 — `documents.stored_path` was persisted ABSOLUTE, so a portable drive that came
 // back under a different mount point (H: → E:, or a Windows letter ↔ /Volumes/…) had EVERY
@@ -55,16 +49,6 @@ function freshDb(): Db {
 /** A workspace root; `documentsDir` makes the `documents/` child under it. */
 function freshWorkspace(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-portability-ws-'))
-}
-
-function testCipher(): DocumentCipher {
-  const key = randomBytes(32)
-  return {
-    encryptFile: (src, dest) => encryptFile(src, dest, key),
-    decryptFile: (src, dest) => decryptFile(src, dest, key),
-    encryptFileAsync: (src, dest) => encryptFileAsync(src, dest, key),
-    decryptFileAsync: (src, dest) => decryptFileAsync(src, dest, key)
-  }
 }
 
 /**
