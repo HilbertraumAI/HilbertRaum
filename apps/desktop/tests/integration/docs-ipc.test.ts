@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -114,8 +114,11 @@ import {
   createQueuedDocument,
   processDocument,
   documentsDir,
-  ENCRYPTED_DOC_SUFFIX
+  ENCRYPTED_DOC_SUFFIX,
+  setDocumentSummary
 } from '../../src/main/services/ingestion'
+import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
+import { t } from '../../src/shared/i18n'
 import {
   conversationAttachmentIds,
   createCollection,
@@ -147,6 +150,7 @@ import { fakeOcrEngine, fakeRasterizer } from '../helpers/ocr-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
+import { testCipher } from '../helpers/test-cipher'
 import { docTaskManager, docTaskRuntime, waitTerminal } from '../helpers/doctask-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -173,6 +177,8 @@ interface CtxOverrides {
   docTasks?: unknown
   audit?: AppContext['audit']
   skillRunActive?: AppContext['skillRunActive']
+  /** The knowledge-pack article-save probe registerZimIpc assigns (a doc being saved into). */
+  articleSaveActive?: AppContext['articleSaveActive']
   /** Merged over the default workspace (unlocked, a no-op lease, the `cipher` above). */
   workspace?: { isUnlocked?: () => boolean; unlockEpoch?: () => number; beginDocumentWork?: () => () => void }
 }
@@ -192,7 +198,8 @@ function ctxWith(db: Db, workspacePath: string, o: CtxOverrides = {}): AppContex
     },
     docTasks: o.docTasks,
     audit: o.audit,
-    skillRunActive: o.skillRunActive
+    skillRunActive: o.skillRunActive,
+    articleSaveActive: o.articleSaveActive
   } as unknown as AppContext
 }
 
@@ -294,6 +301,8 @@ beforeEach(() => {
   ipcState.handlers.clear()
   dialogState.result = { canceled: true, filePaths: [] }
   dialogState.onOpen = null
+  saveDialogState.result = { canceled: true, filePath: undefined }
+  saveDialogState.lastOptions = null
 })
 
 describe('registerDocsIpc', () => {
@@ -757,6 +766,43 @@ describe('registerDocsIpc', () => {
     expect(listed.find((d) => d.id === documentIds[2])?.status).toBe('indexed')
   })
 
+  // GAP-5's batch half (#682; BUILD_STATE §5 item 11): "Re-index all" skips a document another lane holds and counts it
+  // failed so the summary still adds up; the rest re-index. (The `processing` holder is the T-3 row below.)
+  it.each([
+    { holder: 'a live skill run (GAP-5)', hold: (busy: (id: string) => boolean): CtxOverrides => ({ skillRunActive: busy }) },
+    {
+      holder: 'a doc task',
+      hold: (busy: (id: string) => boolean): CtxOverrides => ({
+        docTasks: { isDocumentBusy: busy, hasActiveTask: () => false, maybeEnqueueTreeBuild: () => {} }
+      })
+    },
+    {
+      holder: 'a knowledge-pack article save',
+      hold: (busy: (id: string) => boolean): CtxOverrides => ({ articleSaveActive: busy })
+    }
+  ])('re-index all skips a document held by $holder, counts it failed and re-indexes the rest', async ({ hold }) => {
+    const { db, workspacePath } = freshWorkspace()
+    let heldId = ''
+    const reindexed: string[] = []
+    const audit = ((type: string, _message: string, metadata?: Record<string, unknown>) => {
+      if (type === 'document_reindexed') reindexed.push(String(metadata?.documentId))
+    }) as AppContext['audit']
+    registerDocsIpc(ctxWith(db, workspacePath, { audit, ...hold((id) => id === heldId) }))
+    const paths: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const f = join(workspacePath, `h${i}.txt`)
+      writeFileSync(f, `doc ${i} alpha beta gamma delta`)
+      paths.push(f)
+    }
+    const { documentIds } = await runImport(paths)
+    heldId = documentIds[1]
+
+    await invoke(handlers, IPC.startReindexAll, documentIds)
+    const job = await reindexAllDone()
+    expect(job).toMatchObject({ total: 3, completed: 2, failed: 1, cancelled: false })
+    expect(reindexed).toEqual([documentIds[0], documentIds[2]]) // the held document was never re-indexed
+  })
+
   // ---- M1 crash-resume through the REAL re-index flow (DM-1 / TEST-1) ---------------
 
   it('crash-resume re-index files by the pending destination, not Library (M1/DM-1)', async () => {
@@ -1208,11 +1254,15 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4, DB-6)', () =>
     // synthetic done:true an evicted/unknown id would produce.
     const status = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
     expect(status.done).toBe(false)
+    // DOC-1/#141 (#682): the parameterless mount re-attach finds the one live job among 16 newer finished ones…
+    expect((await invoke(handlers, IPC.getActiveImportJob)).result).toMatchObject({ jobId: gated.jobId, done: false })
     // TEETH: drop the `if (s.done)` guard (evict oldest regardless) → the OLDEST job is the in-flight
     // gated one → it is evicted → getImportJob returns synthetic done:true → this reddens.
 
     release() // let the gated embed resolve, then drain so the loop/lease unwind cleanly
     await importDone(gated.jobId)
+    // …and answers null once nothing is in flight.
+    expect((await invoke(handlers, IPC.getActiveImportJob)).result).toBeNull()
   })
 })
 
@@ -1220,12 +1270,12 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4, DB-6)', () =>
 // Tests only; each reddens if the guard/mechanism it pins regresses.
 describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/T-4)', () => {
   // T-3 (processing gate): while a document is being ingested it sits in `processing`, so
-  // delete / reindex / preview / the #90 original export must all refuse with the friendly "still being
-  // processed" copy — the docs-side mirror of the chat "refuses to delete while streaming" test. A gated
+  // delete / reindex / preview (whole and paged) / the text, summary and #90 original exports must all refuse with
+  // the friendly "still being processed" copy, and "Re-index all" skips it (#682) — the docs-side mirror of the chat "refuses to delete while streaming" test. A gated
   // embedder parks the import at the embed phase so the row stays in `processing` for the assertions.
   // (The task-busy half — and its preview negative control — is doctasks-ipc.test.ts's 'busy-document
   // guard', over a REAL DocTaskManager.)
-  it('T-3: a document in `processing` blocks delete, reindex, preview and original export (still being processed)', async () => {
+  it('T-3: a document in `processing` blocks delete, reindex, previews and exports, and re-index all skips it', async () => {
     const { db, workspacePath } = freshWorkspace()
     const { embedder, release, reached } = gatedEmbedder()
     registerDocsIpc(ctxWith(db, workspacePath, { embedder }))
@@ -1237,9 +1287,20 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
     // Loop is AT the gated embed → id in `processing` (deterministic gate, no fixed sleep — TS-1).
     await until(reached, 'the import loop reaching the gated embed')
 
-    for (const channel of [IPC.deleteDocument, IPC.reindexDocument, IPC.previewDocument, IPC.exportDocumentOriginal]) {
+    for (const channel of [
+      IPC.deleteDocument,
+      IPC.reindexDocument,
+      IPC.previewDocument,
+      IPC.previewDocumentPage,
+      IPC.exportDocument,
+      IPC.exportSummary,
+      IPC.exportDocumentOriginal
+    ]) {
       await expect(invoke(handlers, channel, id), channel).rejects.toThrow(/still being processed/)
     }
+    // The bulk loop's processing half of the GAP-5 skip: counted failed, never re-indexed underneath the import.
+    await invoke(handlers, IPC.startReindexAll, [id])
+    expect(await reindexAllDone()).toMatchObject({ total: 1, completed: 0, failed: 1 })
 
     // Release + drain so the loop/lease unwind cleanly (no leak into the next test).
     release()
@@ -1271,9 +1332,13 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
     skillBusy = true
     await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/skill is working/i)
     await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/skill is working/i)
+    // #682: the original export takes the same gate (the task gate is doctasks-ipc's busy-document row).
+    await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(/skill is working/i)
+    expect(saveDialogState.lastOptions).toBeNull() // refused before the save dialog opened
 
     // The run finishes → both proceed again (the guard is scoped to a LIVE run, not sticky).
     skillBusy = false
+    expect((await invoke(handlers, IPC.exportDocumentOriginal, id)).result).toBeNull() // admitted; dialog cancelled
     const re = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
     expect(re.id).toBe(id)
     await invoke(handlers, IPC.deleteDocument, id) // resolves cleanly — no lingering refusal
@@ -1602,6 +1667,180 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(
       /no longer on disk/
     )
+  })
+})
+
+// #682: the text export (`docs:export`) and the summary export (`docs:exportSummary`) had no main-side test beyond
+// audit-ipc's success path: the cancelled dialog, the suggested name, the BOM, the ids-only audit, the text-only refusal,
+// the no-summary answer. Plus the original export's untrusted-id guard (#90's describe drives its success paths).
+describe('registerDocsIpc — the text and summary exports (#682)', () => {
+  async function importNotes(workspacePath: string, name = 'Quarterly notes.txt'): Promise<string> {
+    const p = join(workspacePath, name)
+    writeFileSync(p, 'alpha beta gamma delta epsilon — the notes as imported')
+    return (await runImport([p])).documentIds[0]
+  }
+
+  it('docs:export suggests <title>.md, writes the stored text with a BOM, audits the id only, and a cancel writes nothing', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const audit = vi.fn()
+    registerDocsIpc(ctxWith(db, workspacePath, { audit }))
+    const id = await importNotes(workspacePath)
+    audit.mockClear()
+
+    expect((await invoke(handlers, IPC.exportDocument, id)).result).toBeNull() // the default: cancelled
+    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe('Quarterly notes.md')
+    expect(audit).not.toHaveBeenCalled()
+
+    const dest = join(workspacePath, 'out.md')
+    saveDialogState.result = { canceled: false, filePath: dest }
+    expect((await invoke(handlers, IPC.exportDocument, id)).result).toBe(dest)
+    expect(readFileSync(dest, 'utf8')).toBe('\ufeffalpha beta gamma delta epsilon — the notes as imported')
+    expect(audit).toHaveBeenCalledExactlyOnceWith('document_exported', expect.any(String), { documentId: id })
+  })
+
+  it('docs:export refuses a non-text document with the friendly text-only copy, before any dialog', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath))
+    const p = join(workspacePath, 'scan.pdf')
+    writeFileSync(p, makeScanOnlyPdf(1)) // a PDF row (scan-detected): its stored copy is the binary original
+    const id = (await runImport([p])).documentIds[0]
+    await expect(invoke(handlers, IPC.exportDocument, id)).rejects.toThrow(t('en', 'main.docs.exportTextOnly'))
+    expect(saveDialogState.lastOptions).toBeNull()
+  })
+
+  it('docs:exportSummary answers null without a dialog when there is no summary; with one it saves <title>-summary.md', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const audit = vi.fn()
+    registerDocsIpc(ctxWith(db, workspacePath, { audit }))
+    const id = await importNotes(workspacePath)
+    audit.mockClear()
+
+    expect((await invoke(handlers, IPC.exportSummary, id)).result).toBeNull()
+    expect(saveDialogState.lastOptions).toBeNull() // no summary: the dialog never opened
+
+    setDocumentSummary(db, id, { text: 'The notes, summarized.', modelId: 'm', createdAt: new Date().toISOString(), truncated: false })
+    expect((await invoke(handlers, IPC.exportSummary, id)).result).toBeNull() // cancelled
+    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe('Quarterly notes-summary.md')
+    expect(audit).not.toHaveBeenCalled()
+
+    const dest = join(workspacePath, 'summary.md')
+    saveDialogState.result = { canceled: false, filePath: dest }
+    expect((await invoke(handlers, IPC.exportSummary, id)).result).toBe(dest)
+    expect(readFileSync(dest, 'utf8')).toBe('\ufeffThe notes, summarized.')
+    expect(audit).toHaveBeenCalledExactlyOnceWith('summary_exported', expect.any(String), { documentId: id })
+  })
+
+  it('docs:exportOriginal refuses an empty or non-string id before taking the document-work lease', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const beginDocumentWork = vi.fn(() => () => {})
+    registerDocsIpc(ctxWith(db, workspacePath, { workspace: { beginDocumentWork } }))
+    for (const bad of ['', 42, null]) {
+      await expect(invoke(handlers, IPC.exportDocumentOriginal, bad), String(bad)).rejects.toThrow(/^Unknown document$/)
+    }
+    expect(beginDocumentWork).not.toHaveBeenCalled()
+    expect(saveDialogState.lastOptions).toBeNull()
+  })
+
+  // #687 / #237: an export of an ENCRYPTED stored copy decrypts it to a transient plaintext file; the reader registers it
+  // with the plaintext-op registry (ctx.plaintextOps), so a lock that outlasts the settle bound still sweeps it.
+  it.each([
+    { channel: IPC.exportDocument, transient: /\.parse-export-[0-9a-f-]+\.txt$/ },
+    { channel: IPC.exportDocumentOriginal, transient: /\.parse-export-bin-[0-9a-f-]+\.txt$/ }
+  ])('$channel tracks the decrypted transient of an encrypted copy, so the lock sweep shreds it', async ({ channel, transient }) => {
+    const { db, workspacePath } = freshWorkspace()
+    const inner = testCipher()
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let decrypted: string | null = null
+    let parkNext = false
+    // Decrypt for real, then park while the plaintext transient sits on disk (only the export's decrypt is parked).
+    const cipher: DocumentCipher = {
+      ...inner,
+      decryptFileAsync: async (src, dest) => {
+        await inner.decryptFileAsync(src, dest)
+        if (parkNext) {
+          parkNext = false
+          decrypted = dest
+          await gate
+        }
+      }
+    }
+    const ctx = ctxWith(db, workspacePath, { cipher })
+    const ops = createPlaintextOps()
+    ctx.plaintextOps = ops
+    registerDocsIpc(ctx)
+    const id = await importNotes(workspacePath)
+    saveDialogState.result = { canceled: false, filePath: join(workspacePath, 'never.txt') }
+
+    parkNext = true
+    const exported = invoke(handlers, channel, id)
+    await until(() => decrypted !== null, 'the export decrypting its stored copy')
+    expect(decrypted!).toMatch(transient)
+    expect(existsSync(decrypted!)).toBe(true)
+    expect(ops.size()).toBe(1)
+    expect(ops.sweepRegistered()).toBe(1) // tracked: the lock sweep shreds the plaintext
+    expect(existsSync(decrypted!)).toBe(false)
+    release()
+    await expect(exported).rejects.toThrow(/ENOENT/) // the read after a sweep: what production does past the bound
+    expect(ops.size()).toBe(0) // released in the reader's finally
+    expect(existsSync(join(workspacePath, 'never.txt'))).toBe(false)
+  })
+})
+
+// #687: the import path's wiring that no IPC test drove — the #527 missing-transcriber hop, and the batch insert's rollback.
+describe('registerDocsIpc — import wiring (#687)', () => {
+  it('an audio import names the missing piece read LIVE off ctx (#527), on import and on re-index', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const ctx = ctxWith(db, workspacePath)
+    registerDocsIpc(ctx)
+    // Assigned AFTER registration, as compose-services re-assigns it mid-session: the handler must read it live.
+    ctx.transcriberMissing = 'engine'
+    const p = join(workspacePath, 'meeting.mp3')
+    writeFileSync(p, randomBytes(2048))
+    const id = (await runImport([p])).documentIds[0]
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === id)).toMatchObject({
+      status: 'failed',
+      errorMessage: t('en', 'main.ingest.audioNeedsEngine')
+    })
+
+    ctx.transcriberMissing = 'model-and-engine'
+    const re = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
+    expect(re).toMatchObject({ status: 'failed', errorMessage: t('en', 'main.ingest.audioNeedsModelAndEngine') })
+  })
+
+  it('a batch insert that fails mid-way queues no row and releases the document-work lease', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let leases = 0
+    registerDocsIpc(
+      ctxWith(db, workspacePath, {
+        workspace: {
+          beginDocumentWork: () => {
+            leases += 1
+            return () => {
+              leases -= 1
+            }
+          }
+        }
+      })
+    )
+    const paths = ['a.txt', 'b.txt', 'c.txt'].map((name) => {
+      const f = join(workspacePath, name)
+      writeFileSync(f, `${name} alpha beta gamma delta`)
+      return f
+    })
+    // A real SQLite failure on the second row (a TEMP trigger lives on this connection only).
+    db.exec(
+      "CREATE TEMP TRIGGER poison BEFORE INSERT ON main.documents WHEN NEW.title = 'b.txt' " +
+        "BEGIN SELECT RAISE(ABORT, 'disk I/O error (simulated)'); END"
+    )
+    await expect(invoke(handlers, IPC.importDocuments, paths)).rejects.toThrow(/simulated/)
+    expect((db.prepare('SELECT COUNT(*) AS n FROM documents').get() as { n: number }).n).toBe(0)
+    expect(leases).toBe(0)
+
+    db.exec('DROP TRIGGER temp.poison')
+    expect((await runImport(paths)).documentIds).toHaveLength(3)
+    expect(leases).toBe(0)
   })
 })
 

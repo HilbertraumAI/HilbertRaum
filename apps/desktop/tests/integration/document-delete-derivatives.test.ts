@@ -131,6 +131,7 @@ function derivedCounts(db: Db, docId: string): Record<string, number> {
     chunks: n('SELECT COUNT(*) n FROM chunks WHERE document_id = ?'),
     embeddings: n('SELECT COUNT(*) n FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)'),
     treeNodes: n('SELECT COUNT(*) n FROM tree_nodes WHERE document_id = ?'),
+    extractionRecords: n('SELECT COUNT(*) n FROM extraction_records WHERE document_id = ?'),
     bankStatements: n('SELECT COUNT(*) n FROM bank_statements WHERE document_id = ?'),
     bankTransactions: n(
       'SELECT COUNT(*) n FROM bank_transactions WHERE statement_id IN (SELECT id FROM bank_statements WHERE document_id = ?)'
@@ -189,6 +190,11 @@ describe('deleteDocument — purges bank/invoice derivatives (audit DATA-1, exis
       `INSERT INTO tree_nodes (id, document_id, level, ordinal, is_root, summary_text, content_hash, created_at)
        VALUES (?, ?, 1, 0, 1, 'summary', 'hash', ?)`
     ).run(randomUUID(), docId, now)
+    // …an extract-pass record (#682: no explicit DELETE in deleteDocument — the chunk and document cascades remove it)…
+    db.prepare(
+      `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
+       VALUES (?, ?, ?, 'date', '1. März 2026', '2026-03-01', 'hash-x', ?)`
+    ).run(randomUUID(), docId, chunkIds[1], now)
 
     await seedExtractions(db, docId)
 
@@ -206,6 +212,7 @@ describe('deleteDocument — purges bank/invoice derivatives (audit DATA-1, exis
       chunks: 2,
       embeddings: 1,
       treeNodes: 1,
+      extractionRecords: 1,
       bankStatements: 1,
       bankTransactions: 2,
       bankCorrections: 1,
@@ -221,6 +228,7 @@ describe('deleteDocument — purges bank/invoice derivatives (audit DATA-1, exis
       chunks: 0,
       embeddings: 0,
       treeNodes: 0,
+      extractionRecords: 0,
       bankStatements: 0,
       bankTransactions: 0,
       bankCorrections: 0,

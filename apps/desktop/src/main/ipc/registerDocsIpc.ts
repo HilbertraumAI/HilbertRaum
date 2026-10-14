@@ -201,8 +201,8 @@ export function registerDocsIpc(ctx: AppContext): void {
    * vouch for these paths via a token. Keep only existing, non-symlink entries and canonicalize
    * them — a renderer can't use a `.pdf`-named symlink to read a sensitive target through the
    * importer, and a deleted/garbage entry simply drops. (A directory is still walked downstream
-   * by `expandPaths`, whose internal link-following is intentional per audit L3/L5; the walk
-   * itself is budget-bounded, #240.)
+   * by `expandPathsWithSource` → `expandPathsBoundedAsync` (#274), whose internal link-following
+   * is intentional per audit L3/L5; the walk itself is budget-bounded, #240.)
    */
   const hardenDroppedPaths = (paths: unknown): string[] => {
     const arr = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
