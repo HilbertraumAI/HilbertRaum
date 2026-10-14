@@ -9,7 +9,7 @@ import {
   statSync
 } from 'node:fs'
 import { copyFile, readFile, readdir, realpath, stat } from 'node:fs/promises'
-import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
+import { basename, extname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import { type Db, prepareCached } from '../db'
@@ -2298,7 +2298,7 @@ export interface ExpandedFile {
   path: string
   /** Path relative to the picked top-level folder root, or null for a picked file. */
   sourceRelativePath: string | null
-  /** The picked top-level folder's name, or null for a picked file. */
+  /** The picked top-level folder's name (a drive root's letter, `D:`), or null for a picked file. */
   sourceFolderLabel: string | null
 }
 
@@ -2313,7 +2313,8 @@ export interface ExpandedSelection {
 /**
  * Expand a selection like `expandPaths`, additionally capturing folder-import display
  * metadata (plan §11.2): for a picked DIRECTORY, `sourceFolderLabel` is that directory's
- * name and `sourceRelativePath` is each walked file's path relative to it; a picked FILE
+ * name (a drive root's is its letter, `D:`, #684) and `sourceRelativePath` is each walked file's
+ * path relative to it; a picked FILE
  * carries no metadata. **Display-only** (the stored copy is always
  * `workspace/documents/<id><ext>`); never used for any file I/O. Asynchronous since #274
  * (`expandPathsBoundedAsync`); `exhausted` rides along so the import job can report a cut walk.
@@ -2326,10 +2327,18 @@ export interface ExpandedSelection {
 export async function expandPathsWithSource(paths: string[]): Promise<ExpandedSelection> {
   const { files: flat, exhausted } = await expandPathsBoundedAsync(paths)
   // Map each picked DIRECTORY to its label, longest-prefix-first so a nested pick wins.
-  const roots: Array<{ dir: string; label: string }> = []
+  const roots: Array<{ dir: string; prefix: string; label: string }> = []
   for (const p of paths) {
     try {
-      if ((await stat(p)).isDirectory()) roots.push({ dir: p, label: basename(p) || p })
+      if ((await stat(p)).isDirectory()) {
+        // #684: match in the spelling `join()` gives the walked files (`normalize`: `D:/` → `D:\`,
+        // doubled separators collapsed). A pick that then ends in a separator (a drive root `D:\`,
+        // the picker's answer for a whole USB stick) is its own boundary; a drive root has no
+        // basename, so it is labelled `D:`.
+        const dir = normalize(p)
+        const prefix = dir.endsWith(sep) ? dir : dir + sep
+        roots.push({ dir: p, prefix, label: basename(dir) || dir.replace(/[\\/]+$/, '') || dir })
+      }
     } catch {
       // Unreadable pick — its files never made it into `flat` anyway.
     }
@@ -2350,7 +2359,7 @@ export async function expandPathsWithSource(paths: string[]): Promise<ExpandedSe
   const files = flat.map((path) => {
     // Match on a separator boundary, not a raw string prefix, so a file under `…\taxes`
     // can't false-attribute its folder label to a sibling picked root `…\tax` (DM-3).
-    const root = roots.find((r) => path === r.dir || path.startsWith(r.dir + sep))
+    const root = roots.find((r) => path === r.dir || path.startsWith(r.prefix))
     return root
       ? { path, sourceRelativePath: cleanRelative(root.dir, path), sourceFolderLabel: root.label }
       : { path, sourceRelativePath: null, sourceFolderLabel: null }
