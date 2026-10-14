@@ -8,14 +8,11 @@ import { assertPageWithinByteCap, OCR_MAX_PAGE_PNG_BYTES } from '../../src/main/
 // before it is fed to recognition / held resident.
 
 describe('assertPageWithinByteCap (OCR page byte cap, REL-4)', () => {
-  it('accepts a page at or under the cap, rejects one over it (explicit cap — no huge alloc)', () => {
-    expect(() => assertPageWithinByteCap(new Uint8Array(10), 10)).not.toThrow() // exactly at cap
-    expect(() => assertPageWithinByteCap(new Uint8Array(9), 10)).not.toThrow() // under
-    expect(() => assertPageWithinByteCap(new Uint8Array(11), 10)).toThrow(/too large/i) // over
-  })
-
-  it('uses the default cap when none is passed', () => {
-    expect(() => assertPageWithinByteCap(new Uint8Array(1024))).not.toThrow()
+  it('accepts a page at the shipped cap and rejects one byte over it (REL-4; no 96 MiB allocation)', () => {
+    const page = (byteLength: number): Uint8Array => ({ byteLength }) as unknown as Uint8Array // the cap reads only byteLength
+    expect(() => assertPageWithinByteCap(page(OCR_MAX_PAGE_PNG_BYTES))).not.toThrow() // exactly at cap
+    expect(() => assertPageWithinByteCap(page(OCR_MAX_PAGE_PNG_BYTES - 1))).not.toThrow() // under
+    expect(() => assertPageWithinByteCap(page(OCR_MAX_PAGE_PNG_BYTES + 1))).toThrow(/too large/i) // over
   })
 
   it('the default cap is sized for a real dense scan, not arbitrarily small', () => {
@@ -23,5 +20,7 @@ describe('assertPageWithinByteCap (OCR page byte cap, REL-4)', () => {
     // for a near-incompressible scan. The cap must clear that so real dense color scans aren't
     // rejected — guards against a future "just mirror VISION's 20 MiB" regression.
     expect(OCR_MAX_PAGE_PNG_BYTES).toBeGreaterThanOrEqual(64 * 1024 * 1024)
+    // Two resident PNGs stay well under 200 MiB (page-cap.ts).
+    expect(OCR_MAX_PAGE_PNG_BYTES).toBeLessThanOrEqual(100 * 1024 * 1024)
   })
 })

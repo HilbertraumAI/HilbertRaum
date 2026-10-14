@@ -162,12 +162,13 @@ describe('validateRuntimeSources', () => {
     expect(res.whisper?.builds[0].extractTo).toBe('runtime/whisper.cpp/win')
   })
 
-  // The forward-compat property the wave-3 plan verified: a yaml WITHOUT the new block
-  // (a pre-Phase-36 drive) parses exactly as before, with `whisper` simply absent.
-  it('leaves whisper undefined when the block is absent (older-drive compatibility)', () => {
+  // The forward-compat property the wave-3 plan verified: a yaml WITHOUT the optional blocks
+  // (a pre-Phase-36 drive) parses exactly as before, with `whisper` and `ocr` simply absent.
+  it('leaves whisper and ocr undefined when their blocks are absent (older-drive compatibility, D32)', () => {
     const res = validateRuntimeSources(sources())
     expect(res.ok).toBe(true)
     expect(res.whisper).toBeUndefined()
+    expect(res.ocr).toBeUndefined()
   })
 
   it('rejects a malformed whisper_cpp block loudly (never fetch the wrong thing)', () => {
@@ -199,6 +200,51 @@ describe('validateRuntimeSources', () => {
       whisper_cpp: { version: 'v1.8.6', builds: [whisperBuild()] }
     })
     expect(res.ok).toBe(true)
+  })
+
+  // ---- Phase 38 (D32): the optional ocr: block --------------------------------------
+
+  it('parses a valid ocr block (D32: sha256 normalised to lower case)', () => {
+    const res = validateRuntimeSources({
+      ...sources(),
+      ocr: {
+        version: '4.0.0_best_int',
+        files: [
+          { lang: 'deu', url: 'https://x/deu.gz', sha256: 'A'.repeat(64), dest: 'ocr/deu.traineddata.gz' },
+          { lang: 'eng', url: 'https://x/eng.gz', sha256: 'b'.repeat(64), dest: 'ocr/eng.traineddata.gz' }
+        ]
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.ocr?.files.map((f) => f.lang)).toEqual(['deu', 'eng'])
+    expect(res.ocr?.files[0].sha256).toBe('a'.repeat(64))
+  })
+
+  it('rejects malformed ocr blocks: missing fields, a duplicate language, a dest escaping the drive (D32)', () => {
+    const missing = validateRuntimeSources({ ...sources(), ocr: { version: 'v', files: [{ lang: 'deu' }] } })
+    expect(missing.ok).toBe(false)
+    expect(missing.errors.some((e) => e.includes('ocr.files[0].url'))).toBe(true)
+    expect(missing.errors.some((e) => e.includes('ocr.files[0].dest'))).toBe(true)
+
+    const duplicate = validateRuntimeSources({
+      ...sources(),
+      ocr: {
+        version: 'v',
+        files: [
+          { lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: 'ocr/a.gz' },
+          { lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: 'ocr/b.gz' }
+        ]
+      }
+    })
+    expect(duplicate.ok).toBe(false)
+    expect(duplicate.errors.some((e) => e.includes('duplicate ocr file for language "deu"'))).toBe(true)
+
+    const escaping = validateRuntimeSources({
+      ...sources(),
+      ocr: { version: 'v', files: [{ lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: '../escape.gz' }] }
+    })
+    expect(escaping.ok).toBe(false)
+    expect(escaping.errors.some((e) => e.includes('ocr.files[0].dest'))).toBe(true)
   })
 
   // The download layer already refuses cleartext at fetch time; the parser now refuses it at

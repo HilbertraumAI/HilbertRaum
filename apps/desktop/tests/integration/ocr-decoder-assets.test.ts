@@ -19,7 +19,8 @@ import {
 // fix/ocr-pdfjs-in-page: pdf.js now runs IN the OCR page, not a worker, under the page's CSP —
 // which has no `'wasm-unsafe-eval'`, so the rasterizer forces the JS decoders (`useWasm: false`)
 // and the build ships ONLY the `*_nowasm_fallback.js` modules (no `.wasm`). The links kept here,
-// one block each: the installed pdf.js decodes such a scan through either build given `wasmUrl`;
+// one block each: the installed pdf.js decodes such a scan through the JS build given `wasmUrl`
+// (the page never loads the wasm build);
 // the renderer build ships exactly the JS decoders the in-page worker names, byte for byte, with
 // no `.wasm` and no separate `pdf.worker-*.mjs` asset; and the page passes `wasmUrl` +
 // `useWasm: false` and sets no `workerSrc`.
@@ -82,14 +83,6 @@ describe('pdf.js decodes a CCITT G4 scan only through its decoder modules (#551)
     const { image, warnings } = await decodeScan({})
     expect(image).toBeNull()
     expect(warnings.join('\n')).toContain('`wasmUrl`')
-  })
-
-  it('with wasmUrl it decodes pixel for pixel through the wasm build', async () => {
-    // A filesystem path: pdf.js reads binary data with fs in Node.
-    const { image, warnings } = await decodeScan({ wasmUrl: `${PDFJS_WASM_DIR}/` })
-    expect(warnings).toEqual([])
-    expect(image).not.toBeNull()
-    expect(await patternMismatches(image!)).toBe(0)
   })
 
   it('it decodes the same through the plain-JS build pdf.js falls back to', async () => {

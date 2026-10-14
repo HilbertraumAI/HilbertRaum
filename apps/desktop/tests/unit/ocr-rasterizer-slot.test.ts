@@ -9,6 +9,8 @@ vi.mock('electron', () => ({
 
 import { RasterReplySlot } from '../../src/main/services/ocr/rasterizer'
 
+// One macrotask hop: a waiter that should have settled has no other observable — without the R6
+// guard it never settles (a justified single-macrotask hop).
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
 describe('RasterReplySlot — OCR rasterizer reply waiter (R6)', () => {
@@ -55,17 +57,10 @@ describe('RasterReplySlot — OCR rasterizer reply waiter (R6)', () => {
     expect(msg).toEqual({ pageCount: 3 })
     // The slot is empty after a delivery: a later error frame has no waiter to fail.
     expect(slot.fail(new Error('late'))).toBe(false)
-  })
 
-  it('fail() rejects the current waiter (error frame / abort) and returns true', async () => {
-    const slot = new RasterReplySlot()
-    let err: Error | null = null
-    const p = slot.expect('page')
-    p.catch((e: Error) => {
-      err = e
-    })
+    // An error frame / abort rejects the current waiter and reports that one was pending.
+    const q = slot.expect('page')
     expect(slot.fail(new Error('render failed'))).toBe(true)
-    await tick()
-    expect((err as Error | null)?.message).toBe('render failed')
+    await expect(q).rejects.toThrow('render failed')
   })
 })
