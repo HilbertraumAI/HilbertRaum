@@ -243,6 +243,38 @@ export function makeCcittScanPdf(): Buffer {
   ])
 }
 
+// ---- Type3 image-mask glyph (#687) ----------------------------------------------------
+//
+// pdf.js compiles a Type3 glyph that paints an IMAGE MASK into a path (`compileType3Glyph`, its only
+// DOMMatrix use in the main process) when the font loads, which text extraction does. The mask is 8×8
+// (a 1×1 mask takes a shortcut that skips the compiler): a square outline, 1 = unpainted.
+const TYPE3_GLYPH_MASK: Buffer = Buffer.from([0xff, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xff])
+
+/** A one-page PDF: `line` in Helvetica, then `AAAA` in a Type3 font whose one glyph paints an 8×8 image mask. */
+export function makeType3MaskGlyphPdf(line: string): Buffer {
+  const esc = line.replace(/([()\\])/g, '\\$1')
+  return serializePdf(
+    [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
+        '/Resources << /Font << /F1 5 0 R /T3 6 0 R >> >> /Contents 4 0 R >>',
+      streamObject(`BT /F1 12 Tf 72 720 Td (${esc}) Tj ET\nBT /T3 12 Tf 72 690 Td (AAAA) Tj ET`),
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 8 8] /FontMatrix [0.125 0 0 0.125 0 0] ' +
+        '/CharProcs << /A 7 0 R >> /Encoding << /Type /Encoding /Differences [65 /A] >> ' +
+        '/FirstChar 65 /LastChar 65 /Widths [8] /Resources << /XObject << /M 8 0 R >> >> >>',
+      // The glyph procedure: width + bbox (`d1`), then the mask scaled onto the 8×8 glyph box.
+      streamObject('8 0 0 0 8 8 d1 q 8 0 0 8 0 0 cm /M Do Q'),
+      streamObject(
+        TYPE3_GLYPH_MASK,
+        '/Type /XObject /Subtype /Image /Width 8 /Height 8 /ImageMask true /BitsPerComponent 1'
+      )
+    ],
+    true
+  )
+}
+
 /** A tiny but valid 1x1 PNG (photo-import tests; the fake engine never decodes it). */
 export const TINY_PNG: Buffer = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
