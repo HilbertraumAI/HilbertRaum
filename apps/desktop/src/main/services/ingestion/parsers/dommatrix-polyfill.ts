@@ -24,8 +24,8 @@
 // `verbosity: 0` silences. Every other DOMMatrix use in pdf.js 6.4 (the array constructor, translate,
 // scale, multiplySelf, preMultiplySelf, invertSelf) is canvas rendering, which never runs in this
 // process: OCR rasterizes in the hidden renderer window with the browser's own DOMMatrix. Hence only the
-// identity constructor, scaleSelf, translateSelf and a–f below. On a pdfjs-dist bump, re-grep both
-// legacy build files for `DOMMatrix` before trusting that list.
+// identity constructor (an init throws), scaleSelf, translateSelf and a–f below. On a pdfjs-dist bump,
+// re-grep both legacy build files for `DOMMatrix` before trusting that list.
 
 /**
  * A 2D-affine matrix `[[a c e] [b d f] [0 0 1]]` mapping a point `(x, y)` to
@@ -38,6 +38,12 @@ class DOMMatrixPolyfill {
   d = 1
   e = 0
   f = 0
+
+  constructor(init?: unknown) {
+    // An init is a use this polyfill was not built for (a pdf.js bump moving a canvas path into this
+    // process, or another library): fail loudly rather than hand back a silently wrong identity.
+    if (init !== undefined) throw new TypeError('DOMMatrix polyfill: only `new DOMMatrix()` is supported')
+  }
 
   /** `this · scale(sx, sy)` in place (post-multiplied, as DOMMatrix does). */
   scaleSelf(sx = 1, sy = sx): this {

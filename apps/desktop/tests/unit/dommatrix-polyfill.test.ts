@@ -60,9 +60,16 @@ describe('ensureDomMatrixPolyfill', () => {
 })
 
 describe('the installed DOMMatrix — the members pdf.js 6.4 calls in the main process', () => {
-  it('constructs the identity, and the in-place scaleSelf → translateSelf chain composes like DOMMatrix', () => {
+  it('constructs the identity and refuses an init it would otherwise ignore', () => {
     const Ctor = installed()
     expect(toArr(new Ctor())).toEqual([1, 0, 0, 1, 0, 0])
+    // A matrix init (the canvas paths' `new DOMMatrix(array)`) throws: a silently wrong identity is worse.
+    const WithInit = Ctor as unknown as new (init: unknown) => Matrix
+    expect(() => new WithInit([2, 0, 0, 3, 5, 7])).toThrow('only `new DOMMatrix()` is supported')
+  })
+
+  it('the in-place scaleSelf → translateSelf chain composes like DOMMatrix', () => {
+    const Ctor = installed()
     // pdf.js 6.4 runs exactly this chain in the MAIN process (compileType3Glyph in legacy/build/pdf.worker.mjs,
     // reached by getTextContent/getOperatorList on a Type3 image-mask font; Node runs pdf.js's worker in-process,
     // on this polyfill) and reads a–f off the result. Post-multiplied, as DOMMatrix does: w = 4, h = 2, so the
