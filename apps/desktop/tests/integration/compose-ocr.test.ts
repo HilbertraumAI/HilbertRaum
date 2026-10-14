@@ -44,7 +44,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
     expect(ctx.ocrEngine).toBe(made[0])
     expect(ctx.ocrEngine?.languages).toEqual(['deu', 'eng'])
     expect(made[0].probe).toHaveBeenCalledTimes(1)
-    expect(ctx.ocrEngine?.availability?.()).toBe('available')
+    expect(ctx.ocrEngine?.availability()).toBe('available')
   })
 
   it('an engine that cannot start in this build fills the slot and reports startFailed (status stays honest)', async () => {
@@ -56,7 +56,7 @@ describe('refreshOcrSlot — a null slot (#410, D2 rule 1)', () => {
     expect(outcome).toBe('startFailed')
     // Held on the slot, so `ocrState` reads 'unavailable' (files present, recognizer cannot run)
     // instead of 'missing' — the #232 distinction.
-    expect(ctx.ocrEngine?.availability?.()).toBe('unavailable')
+    expect(ctx.ocrEngine?.availability()).toBe('unavailable')
   })
 
   it('a folder that still holds no language files leaves the slot null: unchanged', async () => {
@@ -183,8 +183,8 @@ describe('composeOcrEngine + probeOcrEngine (#410, shared with startup)', () => 
     const packaged = composeOcrEngine({ rootPath: root, isDev: false })
     expect(dev).toBeInstanceOf(TesseractOcrEngine)
     expect(dev?.languages).toEqual(['deu', 'eng'])
-    expect(dev?.availability?.()).toBe('available')
-    expect(packaged?.availability?.()).toBe('probing')
+    expect(dev?.availability()).toBe('available')
+    expect(packaged?.availability()).toBe('probing')
     // Construction spawns nothing — the worker starts lazily on the first recognition / probe.
   })
 
@@ -194,23 +194,12 @@ describe('composeOcrEngine + probeOcrEngine (#410, shared with startup)', () => 
 
   it('probeOcrEngine never rejects: a throwing probe reads as false', async () => {
     const engine: OcrEngine = {
-      id: 'x',
-      languages: ['deu'],
-      recognize: async () => ({ text: '', confidence: null }),
+      ...fakeOcrEngine({ languages: ['deu'] }),
       probe: async () => {
         throw new Error('worker exploded')
       }
     }
     await expect(probeOcrEngine(engine)).resolves.toBe(false)
-  })
-
-  it('probeOcrEngine on an engine without a probe reports its availability', async () => {
-    const engine: OcrEngine = {
-      id: 'x',
-      languages: ['deu'],
-      recognize: async () => ({ text: '', confidence: null })
-    }
-    await expect(probeOcrEngine(engine)).resolves.toBe(true)
   })
 })
 

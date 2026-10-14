@@ -357,8 +357,7 @@ describe('Make searchable (OCR) end to end', () => {
     const calls: string[] = []
     const rightTurn = (page: number): number => (page <= 2 ? 270 : 0)
     const engine: OcrEngine = {
-      id: 'fake-tesseract',
-      languages: ['deu'],
+      ...fakeOcrEngine({ languages: ['deu'] }),
       recognize: async (image, opts) => {
         const page = image[0]
         const turn = opts?.turn ?? 0

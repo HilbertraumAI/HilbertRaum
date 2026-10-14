@@ -582,7 +582,7 @@ function initBackend(): void {
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
   // The helper (content-free log: outcome, duration, engine id) is shared with the #410
   // post-install refresh, which awaits it instead.
-  if (ocrEngine?.probe) void probeOcrEngine(ocrEngine)
+  if (ocrEngine) void probeOcrEngine(ocrEngine)
 
   // Document task engine: one-at-a-time summary/translation/compare jobs. The
   // chat-streaming guard reads the shared in-flight registry — tasks never put

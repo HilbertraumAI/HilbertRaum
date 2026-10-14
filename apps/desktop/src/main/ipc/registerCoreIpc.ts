@@ -75,8 +75,8 @@ export function registerCoreIpc(ctx: AppContext): void {
       // OCR is availability-driven too — gates "Make searchable (OCR)" + the photo hint. Reads
       // the engine's execution state, not mere presence (#232): false while a packaged build's
       // startup probe runs and after a worker failure. `ocrState` tells the renderer why.
-      ocrAvailable: ctx.ocrEngine != null && (ctx.ocrEngine.availability?.() ?? 'available') === 'available',
-      ocrState: ctx.ocrEngine == null ? 'missing' : (ctx.ocrEngine.availability?.() ?? 'available'),
+      ocrAvailable: ctx.ocrEngine != null && ctx.ocrEngine.availability() === 'available',
+      ocrState: ctx.ocrEngine == null ? 'missing' : ctx.ocrEngine.availability(),
       // Translation is availability-driven the same way (TG-3: the TranslateGemma
       // sidecar is selected at startup iff llama-server + the translation GGUF exist) —
       // gates the Documents "Translate" action. Reading the composed handle keeps this

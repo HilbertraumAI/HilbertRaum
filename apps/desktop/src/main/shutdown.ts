@@ -187,7 +187,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
         ctx?.embedder.stop?.() ?? Promise.resolve(),
         ctx?.reranker?.stop?.() ?? Promise.resolve(),
         ctx?.transcriber?.stop?.() ?? Promise.resolve(),
-        ctx?.ocrEngine?.stop?.() ?? Promise.resolve(),
+        ctx?.ocrEngine?.stop() ?? Promise.resolve(),
         // The vision sidecar is a 4th co-resident llama-server (PROD-1) — kill it too so no
         // child orphans on quit.
         ctx?.vision?.stop() ?? Promise.resolve(),

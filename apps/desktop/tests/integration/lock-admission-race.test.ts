@@ -869,6 +869,8 @@ function gatedOcrEngine(opts: { honoursSignal: boolean }): GatedOcrEngine {
       }
       return { text: 'SECRET PLAINTEXT', confidence: 90 }
     },
+    availability: () => 'available',
+    probe: async () => true,
     suspend: async () => {},
     stop: async () => {},
     parkNext: () => {

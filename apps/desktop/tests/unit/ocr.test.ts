@@ -118,8 +118,7 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     const controller = new AbortController()
     let seenSignal: AbortSignal | undefined
     const observing: OcrEngine = {
-      id: 'fake',
-      languages: ['eng'],
+      ...fakeOcrEngine(),
       recognize: async (_img, opts) => {
         seenSignal = opts?.signal
         return { text: 'recognized', confidence: 90 }
@@ -137,8 +136,7 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
       IMAGE_NO_TEXT_MESSAGE
     )
     const failing: OcrEngine = {
-      id: 'fake',
-      languages: ['eng'],
+      ...fakeOcrEngine(),
       recognize: async () => {
         throw new Error('wasm exploded: technical detail')
       }
@@ -158,20 +156,11 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     const dir = tmp()
     const p = join(dir, 'page.png')
     writeFileSync(p, TINY_PNG)
-    let recognized = 0
-    const degraded: OcrEngine = {
-      id: 'fake',
-      languages: ['eng'],
-      availability: () => 'unavailable',
-      recognize: async () => {
-        recognized += 1
-        return { text: 'never used', confidence: 90 }
-      }
-    }
+    const degraded = fakeOcrEngine({ state: 'unavailable', text: 'never used' })
     await expect(ImageParser.parse(p, { ocrEngine: degraded })).rejects.toThrow(
       IMAGE_OCR_UNAVAILABLE_MESSAGE
     )
-    expect(recognized).toBe(0)
+    expect(degraded.calls).toBe(0)
     // A distinct message: never the "not on this drive" copy, never the generic retry copy.
     expect(IMAGE_OCR_UNAVAILABLE_MESSAGE).not.toBe(IMAGE_NEEDS_OCR_MESSAGE)
     expect(IMAGE_OCR_UNAVAILABLE_MESSAGE).not.toBe(IMAGE_OCR_FAILED_MESSAGE)
@@ -181,8 +170,7 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     // reports the same note, not "re-index to try again" — a retry would fail identically.
     let state: OcrAvailability = 'available'
     const flipping: OcrEngine = {
-      id: 'fake',
-      languages: ['eng'],
+      ...fakeOcrEngine(),
       availability: () => state,
       recognize: async () => {
         state = 'unavailable'
@@ -194,12 +182,7 @@ describe('photo parser (.png/.jpg OCR on import)', () => {
     )
     // While the startup probe is still running the import attempts recognition (it shares the
     // in-flight worker start) — only a FAILED probe degrades.
-    const probing: OcrEngine = {
-      id: 'fake',
-      languages: ['eng'],
-      availability: () => 'probing',
-      recognize: async () => ({ text: 'recognized during probe', confidence: 90 })
-    }
+    const probing = fakeOcrEngine({ state: 'probing', text: 'recognized during probe' })
     const parsed = await ImageParser.parse(p, { ocrEngine: probing })
     expect(parsed.segments[0].text).toBe('recognized during probe')
   })
@@ -222,7 +205,7 @@ describe('OCR factory (availability-driven, D9: null — never a mock)', () => {
       rootPath: root,
       makeEngine: (langDir, languages) => {
         got = { langDir, languages }
-        return { id: 'fake', languages, recognize: async () => ({ text: '', confidence: null }) }
+        return fakeOcrEngine({ languages })
       }
     })
     expect(engine).not.toBeNull()

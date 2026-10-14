@@ -891,7 +891,11 @@ describe('#156 (DT-1) — image-source documents: re-extraction gets the OCR eng
   const fakeOcrEngine: OcrEngine = {
     id: 'fake-tesseract',
     languages: ['deu', 'eng'],
-    recognize: async () => ({ text: 'Hallo Welt aus dem Foto.', confidence: 92 })
+    recognize: async () => ({ text: 'Hallo Welt aus dem Foto.', confidence: 92 }),
+    availability: () => 'available',
+    probe: async () => true,
+    stop: async () => {},
+    suspend: async () => {}
   }
 
   async function importPhoto(): Promise<string> {

@@ -51,7 +51,7 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
   if (!engine || !rasterize) throw new Error(tMain('main.task.needsOcr'))
   // Mirrors the manager's admission guard for a task queued before the recognizer proved it
   // cannot run in this build (#232).
-  if (engine.availability?.() === 'unavailable') throw new Error(tMain('main.task.ocrUnavailable'))
+  if (engine.availability() === 'unavailable') throw new Error(tMain('main.task.ocrUnavailable'))
   const db = ctx.deps.getDb()
   const documentId = task.status.documentIds[0]
   const doc = getDocument(db, documentId)

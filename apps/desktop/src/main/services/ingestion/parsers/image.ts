@@ -58,7 +58,7 @@ export const ImageParser: DocumentParser = {
     // An engine that has proven it cannot run here is not asked again: store the photo without
     // recognition and record the note (#232). While 'probing', the recognition below simply
     // shares the in-flight worker start.
-    if (engine.availability?.() === 'unavailable') {
+    if (engine.availability() === 'unavailable') {
       throw new Error(IMAGE_OCR_UNAVAILABLE_MESSAGE)
     }
     let text: string
@@ -76,7 +76,7 @@ export const ImageParser: DocumentParser = {
       const message = err instanceof Error ? err.message : String(err)
       log.warn('Photo OCR failed', { error: message.slice(0, 600) })
       // The failure took the engine down (worker load failure / death): say so, not "retry".
-      if (engine.availability?.() === 'unavailable') {
+      if (engine.availability() === 'unavailable') {
         throw new Error(IMAGE_OCR_UNAVAILABLE_MESSAGE)
       }
       throw new Error(IMAGE_OCR_FAILED_MESSAGE)

@@ -578,7 +578,7 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // holds decoded page bytes in main-process RAM, so it too must die before the vault
     // re-encrypts. `suspend()` (not `stop()`): the engine is held on ctx for the session, so it
     // must come back lazily on the next recognition after unlock — stop() latches permanently.
-    ctx.ocrEngine?.suspend?.() ?? Promise.resolve(),
+    ctx.ocrEngine?.suspend() ?? Promise.resolve(),
     // The vision sidecar keeps the decoded image + its prompt in the llama-server KV cache,
     // so it too must die before the vault re-encrypts. `stop()` aborts any in-flight analyze
     // and kills the child; the orchestrator rebuilds a fresh runtime (cold start) on the next

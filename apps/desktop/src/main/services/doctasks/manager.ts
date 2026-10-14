@@ -309,7 +309,7 @@ export class DocTaskManager {
       }
       // Files present but the recognizer cannot run in this build (#232). The UI hides the offer
       // on `ocrAvailable === false`; this guards a status read that predates the probe's verdict.
-      if (engine.availability?.() === 'unavailable') {
+      if (engine.availability() === 'unavailable') {
         throw new Error(tMain('main.task.ocrUnavailable'))
       }
     } else if (kind === 'translation') {

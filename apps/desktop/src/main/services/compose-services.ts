@@ -290,11 +290,9 @@ export function composeOcrEngine(deps: ComposeOcrEngineDeps): OcrEngine | null {
  * The packaged-mode OCR execution probe (#232): one bounded worker start (the engine's own start
  * timeout), released on success. Shared by startup (fire-and-forget) and `refreshOcrSlot`
  * (awaited, so the install job can report a definite outcome — #410). Never rejects. Content-free
- * log: outcome, duration, engine id. An engine without `probe` (a test fake) reports its
- * availability as-is.
+ * log: outcome, duration, engine id.
  */
 export async function probeOcrEngine(engine: OcrEngine): Promise<boolean> {
-  if (!engine.probe) return (engine.availability?.() ?? 'available') === 'available'
   const t0 = performance.now()
   try {
     const ok = await engine.probe()
@@ -363,7 +361,7 @@ export async function refreshOcrSlot(
     // Trade-off: a live engine whose files were ALL deleted mid-install no longer gets the restart hint; its next
     // worker start fails and the #232 path reports OCR unavailable.
     if (onDisk.length > 0 && !sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
-    const availability = current.availability?.() ?? 'available'
+    const availability = current.availability()
     if (availability === 'unavailable') {
       return (await probeOcrEngine(current)) ? 'activated' : 'startFailed'
     }
