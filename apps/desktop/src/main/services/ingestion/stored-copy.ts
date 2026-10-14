@@ -59,9 +59,9 @@ export interface LocatedOriginal {
 }
 
 // The leaf rule lives in stored-copy-leaf.ts (dependency-free) so the vault rekey can share it
-// without an import cycle (#241); re-exported here for the existing callers.
+// without an import cycle (#241); `canonicalLeafFor` is re-exported for ingestion/index.ts.
 import { storedCopyLeaf, canonicalLeafFor } from './stored-copy-leaf'
-export { storedCopyLeaf, canonicalLeafFor }
+export { canonicalLeafFor }
 
 /**
  * Locate a document's workspace copy, or null when there is none on disk.
@@ -114,7 +114,7 @@ export function locateStoredCopy(storeDir: string, row: StoredCopyRow): LocatedS
  * BEST-EFFORT by contract: a locked/closed/read-only database must never fail a read that has
  * already succeeded. The next read simply heals again.
  */
-export function healStoredCopy(db: Db, row: StoredCopyRow, found: LocatedStoredCopy): void {
+function healStoredCopy(db: Db, row: StoredCopyRow, found: LocatedStoredCopy): void {
   if (!found.relocated) return
   try {
     db.prepare('UPDATE documents SET stored_path = ?, stored_name = ? WHERE id = ?').run(

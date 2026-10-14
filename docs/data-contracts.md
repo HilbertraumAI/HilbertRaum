@@ -626,7 +626,8 @@ head's own weights + KV.
   precedent); `isAudioPath()` + `summarizeImportPaths()` exported for the IPC layer.
 - **`chunker.ts`** — `chunkSegments(segments, opts?)` → `DocumentChunk[]`. `CHUNK_DEFAULTS =
   { chunkSizeTokens: 500, chunkOverlapTokens: 80, maxChunks: 1000 }`. **Token counting is an
-  approximation** (1 whitespace word ≈ 1 token; `tokenize`/`approxTokenCount`). Windows step by
+  approximation** (`approxTokenCount`: 1 whitespace word ≈ 1 token, a space-less-script character ≈ 1
+  token, a word over 16 characters `ceil(len / 4)`). Windows step by
   `size − overlap`, overlap clamped `< size`, no chunk crosses a segment boundary (so each chunk
   has exactly one `pageNumber`/`sectionLabel`), global cap at `maxChunks`.
 - **`index.ts`** — lifecycle + persistence. `createQueuedDocument`, `processDocument` (never

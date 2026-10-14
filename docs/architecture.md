@@ -174,8 +174,8 @@ batching — no behavior change.
   - **DATA-2 (invariant, no code change).** `tree_edges.child_id` is a polymorphic FK (chunks.id OR
     tree_nodes.id) with no FK to chunks; the no-dangling-edge invariant holds only because every
     chunk-delete path also tears down the document's `tree_nodes` (cascading the edges via `parent_id`).
-    Pinned by an integrity test (after a `deleteDocument`, zero `child_is_chunk=1` edges reference a gone
-    chunk; the forbidden chunks-only delete dangles them).
+    Pinned on the delete path by `data-layer-hardening.test.ts` (a `deleteDocument` leaves no tree edge)
+    and on the re-index path by `whole-doc-analysis.test.ts` 're-index tears the tree down (stale)…'.
   - **DATA-3 (idempotency confirmed, no code change).** `extract.ts` re-extract is idempotent per chunk:
     the main loop skips a chunk whose `__scan__` marker matches the current content hash, and `commitChunk`
     deletes the chunk's prior rows before inserting, so a forced re-commit replaces rather than doubles the
@@ -846,8 +846,9 @@ Condensed from `docs/performance-audit-2026-06-18.md` §4 after Wave P5 shipped 
   `maxPages` + `maxInflatedBytes` from the resolved `IngestionLimits` and applies the wall-clock parse
   timeout (audio exempt — its `signal` + the transcriber watchdog bound it instead); the byte ceiling
   stays the ingest path's pre-selection stat (the preview reads the already-import-capped stored copy).
-  The ingest path is byte-for-byte unchanged (the decorator injects the same caps it set inline before);
-  `ExtractPreviewOptions.limits` is a test seam to dial the caps down.
+  The ingest path is byte-for-byte unchanged (the decorator injects the same caps it set inline before).
+  The caps resolve through `resolveIngestionLimits()` on every call (env-overridable); tests dial them
+  down through the same `HILBERTRAUM_*` variables.
 
 Deferred with explicit, unmet triggers (recorded, not built): P4b worker/`SharedArrayBuffer` scan
 (trigger: cached main-thread scan >100 ms routinely; measured ≤70 ms @10k chunks), P4c ANN/sqlite-vec
@@ -863,10 +864,12 @@ sections above, the full original stays in git history). The deferred-with-trigg
 FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
 **Shipped (✅):**
-- **DB-8 — project columns on the targeted document getters** (`ingestion/index.ts`). `getDocumentOrigin`,
-  `getDocumentSummary`, `getDocumentOcrPages` now `SELECT` only the one TEXT column each needs instead of
-  the shared `getRow` `SELECT *`, so a provenance/summary read no longer also deserializes the potentially
-  large `ocr_json`. Output identical (same `parseOrigin`/`parseSummary`/`parseOcr`).
+- **DB-8 — project columns on the targeted document getters** (`ingestion/index.ts`). `getDocumentSummary`
+  and `getDocumentOcrPages` now `SELECT` only the one TEXT column each needs instead of the shared `getRow`
+  `SELECT *`, so a summary/OCR read no longer also deserializes the potentially large `ocr_json`. Output
+  identical (same `parseSummary`/`parseOcr`). (A third getter, `getDocumentOrigin`, had no production
+  caller and was removed in the 2026-10 documents test campaign; provenance is read through
+  `getDocument`/`listDocuments`' `origin`.)
 - **RAG-5 — per-embedder query-vector LRU** (`embeddings/index.ts`). `searchText` serves the query
   embedding from a small LRU (`QUERY_VECTOR_CACHE_MAX = 32`) in a `WeakMap` keyed by embedder INSTANCE, so
   re-asking / "try again" / the re-index honesty re-check skip the embed round-trip that DOMINATES the scan
@@ -12176,8 +12179,9 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   into `createConversation`/`appendMessage`/`addImageTurn`, out of test-only scope; low flake risk given ISO-ms
   resolution + real elapsed insert work); `core-model-ipc.test.ts:448` is an ABSENCE-settle for a wrongly-fired
   fire-and-forget `void startModelRuntime(…)` (in the correct case NO racing call exists to await, so the 50 ms is
-  a low-risk upper bound on a would-be async start); `ingestion-limits.test.ts:80/254` are deliberate slow-operation
-  SIMULATIONS (the duration MODELS a slow parse to exercise the wall-clock timeout — correct as-is, not a gate).
+  a low-risk upper bound on a would-be async start); `ingestion-limits.test.ts`'s audio-exemption row is a deliberate
+  slow-operation SIMULATION (the duration MODELS a long transcription outlasting the wall-clock budget — correct
+  as-is, not a gate).
   **The full-suite 3× (15 s) timeout headroom (vitest.config.ts) is RETAINED** — it absorbs the orthogonal,
   pre-existing CPU-starvation renderer flake ("1-2 per run, a different test each time, all pass in isolation"),
   which Phase F neither introduced nor is in scope to eliminate (it is a load-timeout, not a fixed-sleep premise

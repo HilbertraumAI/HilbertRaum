@@ -113,13 +113,6 @@ export interface IngestionDeps {
    */
   ocrEngine?: OcrEngine | null
   /**
-   * Resource caps applied before a parser runs (security audit M-1/M-2/M-3): a
-   * pre-parse byte ceiling, a parse wall-clock timeout, a PDF page cap, and a DOCX
-   * inflated-size ceiling. Omit to use `resolveIngestionLimits()` (env-overridable
-   * defaults). Injected mainly so tests can dial the caps down.
-   */
-  limits?: IngestionLimits
-  /**
    * Cancellation for the parse phase (REL-1). Threaded to `ParseContext.signal` so an
    * aborted import KILLS an in-flight audio transcription mid-flight (the import loop
    * aborts this when the workspace locks mid-job). Optional: text parsers ignore it and
@@ -766,7 +759,7 @@ export async function prepareDocument(
   // document content lingers on the drive.
   const transients: string[] = []
 
-  const limits = deps.limits ?? resolveIngestionLimits()
+  const limits = resolveIngestionLimits()
 
   // #237: registered for the lock/quit teardowns (aborted, settled within a bound, swept); the
   // op's signal also follows the caller's `deps.signal` (an import job's abort). Registered
@@ -1209,12 +1202,6 @@ export interface ExtractPreviewOptions {
   layout?: boolean
   /** Page cap for the layout path (plan §3.1) — threaded only when `layout` is set. */
   maxPages?: number
-  /**
-   * Resource caps for the preview re-parse (REL-5). The preview now enforces the SAME cap stack
-   * as ingest, via `parseWithLimits`. Omit → `resolveIngestionLimits()` (env-overridable
-   * defaults). Injected mainly so tests can dial the caps down to prove the preview is bounded.
-   */
-  limits?: IngestionLimits
 }
 
 export async function extractDocumentPreview(
@@ -1308,7 +1295,7 @@ export async function extractDocumentPreview(
       parser,
       parseSource,
       previewCtx,
-      opts.limits ?? resolveIngestionLimits(),
+      resolveIngestionLimits(),
       tMain('main.ingest.parseTimeout')
     )
     return {
@@ -1580,16 +1567,6 @@ export function setDocumentOrigin(db: Db, documentId: string, origin: DocumentOr
   db.prepare(
     'UPDATE documents SET origin_json = ?, original_path = NULL, updated_at = ? WHERE id = ?'
   ).run(JSON.stringify(origin), nowIso(), documentId)
-}
-
-/** Read a document's provenance, or null (missing document / malformed JSON included). */
-export function getDocumentOrigin(db: Db, documentId: string): DocumentOrigin | null {
-  // DB-8: project ONLY `origin_json` — `getDocumentOrigin` is on per-compare/per-doc paths and
-  // never needs the wide row (the old `SELECT *` pulled `ocr_json` for nothing).
-  const row = db
-    .prepare('SELECT origin_json FROM documents WHERE id = ?')
-    .get(documentId) as unknown as { origin_json: string | null } | undefined
-  return row ? parseOrigin(row.origin_json) : null
 }
 
 /** Plain-text formats `readStoredDocumentText` can export as-is (no layout re-render). */
