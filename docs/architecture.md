@@ -15550,9 +15550,11 @@ asserts none of them survive.
 **D10 — ownership is deliberately over-generous, and the id is the final word.** The error
 directions are not symmetric: under-counting orphans is merely uninformative, while over-counting
 invents an orphan out of live user data and would hand a future cleanup a file to destroy. So a
-file is claimed by a row if ANY of four sources says so — the healed `stored_name`, the leaf of the
-recorded `stored_path`, `canonicalLeafFor`, and finally the file's own **leading id**. The fourth
-was added after the first end-to-end operator smoke, which showed the hole the other three leave: a
+file is claimed by a row if ANY of three sources says so — the healed `stored_name`, the leaf of the
+recorded `stored_path`, and finally the file's own **leading id** (the audit also asks
+`canonicalLeafFor`, but that only filters: a leaf it returns is the `stored_name` or the
+`stored_path` leaf unchanged, so it is never a file's only claimant, #687). The third was added
+after the first end-to-end operator smoke, which showed the hole the other two leave: a
 row whose recorded strings are corrupt (the safety guard refuses the leaf) names *nothing*, so its
 perfectly healthy `<id><ext>.enc` was reported as an orphan. The store's naming is
 `<documentId><ext>[.enc]` and the id is a never-reused UUID primary key, so a file whose leading id
