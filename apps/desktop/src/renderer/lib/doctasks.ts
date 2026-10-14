@@ -30,7 +30,8 @@ export interface ActiveDocTask {
    * DOC-5 (#150): the user clicked Cancel on this task (OCR's honest "Stopping if
    * possible…" latch). On the STORE entry — not row state — so PERF-2 windowing can
    * unmount/remount the row without re-enabling Cancel while the cancel is pending.
-   * Survives poll ticks (they spread the current entry); a new task starts without it.
+   * Survives poll ticks (each spreads the entry as it is after its round-trip, #680); a rejected
+   * cancel clears it; a new task starts without it.
    */
   cancelRequested?: boolean
 }
@@ -115,54 +116,65 @@ export async function startTask(
   // The id this timer is watching. Reassigned when a chained follow-up task is adopted
   // (deep-index tree → extract, #38), so the same loop keeps polling through both passes.
   let watchedJobId = jobId
+  /**
+   * #680: the entry this loop polls, read NOW — null once a lock purge (SH-4) dropped it or a newer
+   * task replaced it. A tick reads it again after its round-trips: writing back the entry it read
+   * before them undid a purge and dropped a Cancel latch (DOC-5) set in between.
+   */
+  const watched = (): ActiveDocTask | null => (active?.jobId === watchedJobId ? active : null)
+  // #680: one tick at a time (fileTranslateSession's TA-3 / H4 latch, local to this timer): an
+  // overlapping tick could give up (CODE-6) while a slower one was still in flight.
+  let inFlight = false
   timer = setInterval(() => {
+    if (inFlight) return // a slower-than-POLL_MS round-trip is still resolving; skip this tick
+    inFlight = true
     void (async () => {
-      const current = active
-      if (!current || current.jobId !== watchedJobId) {
-        stopPolling()
-        return
-      }
       try {
+        if (!watched()) {
+          stopPolling()
+          return
+        }
         const status = await window.api.getDocTask(watchedJobId)
+        // Chain adoption (#38): "Build deep index" starts a 'tree' task (withExtract) that
+        // chains a backend 'extract' task over the same document. When the tree completes,
+        // adopt the running follow-up task so the row busy state and the chat task banner
+        // stay truthful through both passes. No follow-up (chain dropped: chat streaming /
+        // runtime gone) or a foreign task over other documents keeps the ordinary terminal
+        // handling — the backend ran or dropped the extract either way.
+        const next =
+          status.state === 'done' && params?.withExtract === true
+            ? await window.api.getActiveDocTask?.().catch(() => null)
+            : null
+        const current = watched()
+        if (!current) return // purged or replaced during the round-trips; its timer is gone
         pollFailures = 0 // CODE-6: only CONSECUTIVE failures count — any success resets
-        if (status.state === 'done' && params?.withExtract === true) {
-          // Chain adoption (#38): "Build deep index" starts a 'tree' task (withExtract) that
-          // chains a backend 'extract' task over the same document. When the tree completes,
-          // adopt the running follow-up task so the row busy state and the chat task banner
-          // stay truthful through both passes. No follow-up (chain dropped: chat streaming /
-          // runtime gone) or a foreign task over other documents keeps the ordinary terminal
-          // handling — the backend ran or dropped the extract either way.
-          const next = await window.api.getActiveDocTask?.().catch(() => null)
-          if (
-            next &&
-            next.jobId !== watchedJobId &&
-            !isDocTaskTerminal(next) &&
-            next.documentIds.some((id) => current.documentIds.includes(id))
-          ) {
-            watchedJobId = next.jobId
-            setActive({ jobId: next.jobId, kind: next.kind, documentIds: next.documentIds, status: next, stateUnknown: false })
-            return
-          }
+        if (
+          next &&
+          next.jobId !== watchedJobId &&
+          !isDocTaskTerminal(next) &&
+          next.documentIds.some((id) => current.documentIds.includes(id))
+        ) {
+          watchedJobId = next.jobId
+          setActive({ jobId: next.jobId, kind: next.kind, documentIds: next.documentIds, status: next, stateUnknown: false })
+          return
         }
         // PF-7b: an unchanged tick sets nothing — subscribers keep the same snapshot object.
-        // (CODE-6: a recovered poll also clears a stateUnknown flag, mirroring skillruns.)
-        if (!sameStatus(current.status, status) || current.stateUnknown) {
-          setActive({ ...current, status, stateUnknown: false })
-        }
+        if (!sameStatus(current.status, status)) setActive({ ...current, status })
         if (isDocTaskTerminal(status)) stopPolling()
       } catch {
         // CODE-6 (full-audit 2026-07-11; SKA-40 port): tolerate transient IPC errors; give up
         // only after MAX_POLL_FAILURES in a row, and KEEP a labelled "state unknown" task
         // rather than silently dropping a live one (one flaky poll used to null the store).
         // Below the max the snapshot stays untouched, so subscribers see no churn at all.
+        const current = watched()
+        if (!current) return // #680: a purged or replaced entry's failures are not this task's
         pollFailures += 1
         if (pollFailures >= MAX_POLL_FAILURES) {
           stopPolling()
-          const cur = active
-          if (cur && cur.jobId === watchedJobId && !cur.stateUnknown) {
-            setActive({ ...cur, stateUnknown: true })
-          }
+          setActive({ ...current, stateUnknown: true })
         }
+      } finally {
+        inFlight = false
       }
     })()
   }, POLL_MS)
@@ -170,7 +182,15 @@ export async function startTask(
 
 /** Cancel the currently active task (running or queued). */
 export async function cancelActiveDocTask(): Promise<void> {
-  await window.api.cancelDocTask()
+  const jobId = active?.jobId
+  try {
+    await window.api.cancelDocTask()
+  } catch (e) {
+    // #680: a rejected cancel stopped nothing — drop the DOC-5 latch so the row offers Cancel
+    // again instead of a disabled "Stopping if possible…"; the caller shows the error (CODE-29).
+    if (active?.cancelRequested && active.jobId === jobId) setActive({ ...active, cancelRequested: false })
+    throw e
+  }
 }
 
 /** DOC-5 (#150): latch a requested cancel onto the active entry (see `cancelRequested`). */
