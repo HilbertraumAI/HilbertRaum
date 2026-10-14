@@ -1540,7 +1540,9 @@ leaves ÷ chunk count; 100% only when `tree_status='ready'`, never while buildin
 from the `summary` task `params.tier` in `startDocTask`, no-arg = Tier 1, unchanged):
 **Tier 1** = stored root verbatim (**0** calls, M1 — the one-click summary serves the ready tree root
 with `truncated:false`); **Tier 2** = one reduce over the root's children; **Tier 3** = all level-1
-nodes reduced in batches bounded by **node count**, not document size. All tiers cover the whole document.
+nodes reduced in batches bounded by **node count**, not document size. All tiers cover the whole document, except a
+Tier 3 whose final reduce had to cut its batch summaries (each is capped at the summary output, never per batch, so
+at 4096 from 7 batches): it says it covers the beginning (#682).
 The renderer surface (`CoverageMeter`/`TierMenu`, the PreviewModal meter+selector+provenance, the chat
 "most relevant passages" relevance label, the "Build deep index"/"Re-index for deep index" actions — overflow-menu items on the row's "⋯"
 menu since §11.6, not inline row buttons (#151 RD-3)) honours the

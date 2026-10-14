@@ -740,6 +740,36 @@ describe('coverage tiers', () => {
     expect(s?.truncated).toBe(false)
     expect(s?.tier).toBe(3)
   })
+
+  // #682 (code review): Tier 3 caps each batch summary at SUMMARY_OUTPUT_TOKENS, never per batch, so enough batches
+  // outgrow the final reduce input (at the shipped 4096 from 7 batches) and its belt cuts the LAST ones, the end of
+  // the document. The summary must say it covers the beginning, as the capped path's belt does; it was stored as
+  // whole-document.
+  it('Tier 3 flags the summary truncated when the final reduce belt cuts the batch summaries', async () => {
+    const id = await importWords(w, 8000)
+    // ~60-word node summaries, so the level-1 layer spans several 200-word batches at ctx 1024.
+    const tree = docTaskRuntime({ reply: (call) => Array.from({ length: 60 }, (_, i) => `${hashReply(call)}x${i}`).join(' ') })
+    const tm = mgr(tree, 1024)
+    await waitTerminal(tm, tm.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
+    let batches = 0
+    const runtime = docTaskRuntime({
+      tokens: 'whole',
+      reply: (call) => {
+        if (userPromptOf(call).includes('B1w0')) return 'The final summary.' // the final reduce over the batch summaries
+        batches += 1
+        // A model writing up to its cap: maxTokens ÷ 1.3 words, each tagged with its batch and position.
+        const words = Math.floor((call.options?.maxTokens ?? 0) / 1.3)
+        return Array.from({ length: words }, (_, i) => `B${batches}w${i}`).join(' ')
+      }
+    })
+    const m = mgr(runtime, 1024)
+    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 3 } }).jobId)
+    expect(batches).toBeGreaterThanOrEqual(2)
+    const reduce = userPromptOf(runtime.calls[runtime.calls.length - 1])
+    expect(reduce).toContain('B1w0') // the first batch reached the final reduce…
+    expect(reduce).not.toContain(`B${batches}w0`) // …the last did not
+    expect(getDocumentSummary(db, id)).toMatchObject({ truncated: true, tier: 3 })
+  })
 })
 
 // ---- #38: the deep-index chain — "Build deep index" = tree + extract, one user concept ----
