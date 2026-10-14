@@ -216,6 +216,41 @@ describe('symmetric both-trees compare (mode c) — lazy node embeddings', () =>
   })
 })
 
+describe('the symmetric call ceiling (SYMMETRIC_COMPARE_CALL_CEILING = 24) at its boundary (#682)', () => {
+  it('a smaller doc with exactly 24 level-1 sections still compares symmetrically; 25 falls back to the labelled mode (b)', async () => {
+    // At ctx 1024 the tree's 200-word group budget is below one 500-token chunk, so every chunk is its own level-1
+    // section. Distinct prefixes share no words (the diff declines) and the sizes rule out a single pass, so the
+    // ceiling alone picks the mode.
+    const a = await importEmbedded(10_100, 'a.txt', 'alpha')
+    const b = await importEmbedded(10_500, 'b.txt', 'beta')
+    const c = await importEmbedded(10_500, 'c.txt', 'gamma')
+    const runtime = cmpRuntime()
+    const manager = cmpManager(runtime, () => ({ embedder: createMockEmbedder() }))
+    for (const id of [a, b, c]) await buildTreeFor(manager, id)
+    const level1 = (id: string): number =>
+      (
+        db.prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE document_id = ? AND level = 1').get(id) as {
+          n: number
+        }
+      ).n
+    expect([level1(a), level1(b), level1(c)]).toEqual([24, 25, 25])
+
+    // min(24, 25) = 24: at the ceiling, so the aligned-section path runs.
+    let before = runtime.calls.length
+    const atCeiling = await runCompare(manager, a, b)
+    expect(atCeiling.state).toBe('done')
+    expect(runtime.calls.slice(before).map(userPromptOf).some((p) => p.includes('aligned section'))).toBe(true)
+    expect(atCeiling.text).not.toContain('one-directional')
+
+    // min(25, 25) = 25: one over, so the compare falls back to mode (b) and says it is one-directional.
+    before = runtime.calls.length
+    const overCeiling = await runCompare(manager, b, c)
+    expect(overCeiling.state).toBe('done')
+    expect(runtime.calls.slice(before).map(userPromptOf).some((p) => p.includes('aligned section'))).toBe(false)
+    expect(overCeiling.text).toContain(compareAsymmetricNotice('c.txt'))
+  })
+})
+
 describe('asymmetric fallback (mode b) — labelled, reached only without both trees', () => {
   it('labels the comparison one-directional when the two documents are not both deeply indexed', async () => {
     const a = await importEmbedded(1200, 'a.txt', 'alpha')
