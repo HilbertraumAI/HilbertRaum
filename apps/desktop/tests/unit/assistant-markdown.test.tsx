@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
@@ -81,6 +81,41 @@ describe('AssistantMarkdown security posture', () => {
     expect(container.querySelector('code')?.textContent).toContain('graph TD; A-->B')
   })
 
+  it('TeX commands that need KaTeX `trust` stay error text: no link, image, style, id or data attribute', () => {
+    // DEP-7: KaTeX's output does not pass rehype-sanitize (streamdown appends the math plugin after
+    // it), so KaTeX's `trust` option is that path's only gate, and nothing here sets it. KaTeX before
+    // 0.18.2 also reads an INHERITED `trust` (GHSA-238p-pmpm-9mq7, a prototype-pollution gadget); that
+    // alert was dismissed as a tolerable risk because no code turns `trust` on. Passing it to
+    // rehype-katex fails this and reopens the triage. Ledger: architecture.md "Dependabot triage —
+    // design record (wave DEP-7)".
+    const commands = [
+      ['\\href', '\\href{https://example.com/a}{a}'],
+      ['\\url', '\\url{https://example.com/b}'],
+      ['\\includegraphics', '\\includegraphics{https://example.com/c.png}'],
+      ['\\htmlStyle', '\\htmlStyle{position:fixed}{d}'],
+      ['\\htmlId', '\\htmlId{api}{e}'],
+      ['\\htmlClass', '\\htmlClass{sidebar}{f}'],
+      ['\\htmlData', '\\htmlData{foo=bar}{g}']
+    ]
+    // KaTeX reports each `\html*` command through its strict mode ("HTML extension is disabled").
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { container } = render(
+        <AssistantMarkdown text={commands.map(([, tex]) => `$$${tex}$$`).join(' and ')} />
+      )
+      // KaTeX typeset every expression and printed each command as unsupported, so the absences
+      // below are its verdict, not math that never reached it.
+      const rendered = [...container.querySelectorAll('.katex-html')].map((e) => e.textContent)
+      expect(rendered).toHaveLength(commands.length)
+      commands.forEach(([name], i) => expect(rendered[i]).toContain(name))
+      expect(container.querySelector('a, img, #api, .sidebar, [data-foo]')).toBeNull()
+      expect(container.querySelector('[style*="position"]')).toBeNull()
+      expect(warn.mock.calls.some(([msg]) => String(msg).includes('[htmlExtension]'))).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   // streamdown 2.6 (#550) changed its sanitize schema twice; neither change may reach the DOM here.
   it('an incomplete streamed link renders as text, never as a link (2.6 lets `streamdown:` through)', () => {
     // remend completes a dangling `[text](https://exa` to `[text](streamdown:incomplete-link)`, and
@@ -147,10 +182,10 @@ describe('AssistantMarkdown layout without Tailwind (#550)', () => {
 
 describe('AssistantMarkdown math (KaTeX)', () => {
   it('renders block math as real KaTeX output with the matching JS/CSS version', () => {
-    // Smoke test for the version-skew blocker: rehype-katex must render with the SAME katex
-    // whose CSS/fonts Transcript.tsx loads. With a skew, KaTeX either misrenders or warns; a
-    // deduped single install (package.json pins ~0.16.47 to match @streamdown/math's chain)
-    // resolves 'katex' to one copy — assert it actually typesets.
+    // Smoke test for the version-skew blocker: rehype-katex must render with the same katex
+    // VERSION whose CSS/fonts AssistantMarkdown loads. With a skew, KaTeX either misrenders or
+    // warns; package.json pins ~0.16.47 to match @streamdown/math's chain (two installed copies of
+    // that version today, #698) — assert it actually typesets.
     const { container } = render(<AssistantMarkdown text={'$$\\frac{1}{2}$$'} />)
     const katexRoot = container.querySelector('.katex')
     expect(katexRoot, 'expected a .katex element from rehype-katex').not.toBeNull()
