@@ -129,6 +129,19 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
     expect(live.probe).not.toHaveBeenCalled()
   })
 
+  // #687 (owner call): a folder that cannot be listed right now (a transient read failure on the drive) is not a
+  // language change — an empty listing on a live engine means "can't tell". It used to read as a shrunken set and
+  // answered "restart required". Here `ocr` is a FILE: it exists, but listing it fails (ENOTDIR).
+  it("an 'available' engine whose folder cannot be listed: unchanged, never restartRequired (#687)", async () => {
+    const root = ocrDrive()
+    writeFileSync(join(root, 'ocr'), 'x')
+    const live = fakeEngine(['deu', 'eng'], { state: 'available' })
+    const ctx = slot(root, live)
+    expect(await refreshOcrSlot(ctx)).toBe('unchanged')
+    expect(ctx.ocrEngine).toBe(live)
+    expect(live.probe).not.toHaveBeenCalled()
+  })
+
   it("'available' and the orientation file just installed: activated — no restart, same engine (#538)", async () => {
     const root = ocrDrive(['deu', 'eng', 'osd'])
     const live = fakeEngine(['deu', 'eng'], { state: 'available' })

@@ -335,7 +335,9 @@ function sameLanguageSet(a: readonly string[], b: readonly string[]): boolean {
  *   - an engine whose language set DIFFERS from the folder's (in practice: it grew) →
  *     `'restartRequired'`. Its languages are fixed at construction, and it is never replaced
  *     mid-session: `stop()` latches permanently, tesseract.js leaves pending jobs hanging on
- *     terminate, and an un-stopped old worker would survive the lock teardown;
+ *     terminate, and an un-stopped old worker would survive the lock teardown. A folder that lists
+ *     no language at all is not a difference — it may just be unreadable right now (#687) — and
+ *     falls through to the rules below;
  *   - an available engine with the orientation file on the drive → `'activated'`: the engine looks
  *     for that file at each detection, so a just-installed one is in use without a restart (#538);
  *   - otherwise `'unchanged'`.
@@ -356,7 +358,11 @@ export async function refreshOcrSlot(
       return (await probeOcrEngine(next)) ? 'activated' : 'startFailed'
     }
     const onDisk = listOcrLanguages(ocrAssetsDir(rootPath))
-    if (!sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
+    // #687 (owner call): an EMPTY listing means "can't tell", not a change — `listOcrLanguages` reads a folder it
+    // cannot list (a transient drive read failure) as no files, and a live engine must not then be told to restart.
+    // Trade-off: a live engine whose files were ALL deleted mid-install no longer gets the restart hint; its next
+    // worker start fails and the #232 path reports OCR unavailable.
+    if (onDisk.length > 0 && !sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
     const availability = current.availability?.() ?? 'available'
     if (availability === 'unavailable') {
       return (await probeOcrEngine(current)) ? 'activated' : 'startFailed'
