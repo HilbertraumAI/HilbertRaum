@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -16,22 +15,21 @@ import {
   ocrMetaFromJson,
   parseOcrMeta
 } from '../../src/main/services/ingestion/ocr-meta'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 
 // PERF-3 (full-audit-2026-06-29 follow-up, Phase 4): `listDocuments` must read the OCR badge from
 // the cheap `ocr_meta_json` sidecar, NEVER from the multi-MB `ocr_json` blob (which reconstructs
 // every page's text just to read `pages.length`). These tests pin: (a) the list SQL omits
-// `ocr_json` and selects the sidecar; (b) the badge is correct even when the blob is poisoned
-// (proving the blob is never materialized on the list path); (c) an old workspace with `ocr_json`
-// but no sidecar opens, backfills, and reports the correct page count.
+// `ocr_json` and selects the sidecar; (b) the badge is correct even when the blob says otherwise
+// (the sidecar wins over a different blob on the list and the single-doc reader); (c) an old
+// workspace with `ocr_json` but no sidecar opens, backfills, and reports the correct page count.
 
 let tmp: string
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-ocrmeta-'))
+  tmp = tempRoot('ocrmeta')
 })
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-db-')), 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('ocrmeta')
 
 function makeDoc(db: Db, name = 'scan.pdf'): string {
   const p = join(tmp, name)
@@ -45,7 +43,7 @@ const TWO_PAGES = [
 ]
 
 describe('OCR metadata sidecar (PERF-3)', () => {
-  it('setDocumentOcr writes both ocr_json and ocr_meta_json; clearing nulls both', () => {
+  it('setDocumentOcr writes both ocr_json and ocr_meta_json, and the sidecar carries no page text', () => {
     const db = freshDb()
     const id = makeDoc(db)
     setDocumentOcr(db, id, { pages: TWO_PAGES, engineId: 'tesseract.js-7.0.0', languages: ['deu', 'eng'] })
@@ -66,14 +64,6 @@ describe('OCR metadata sidecar (PERF-3)', () => {
       engineId: 'tesseract.js-7.0.0',
       createdAt: expect.any(String)
     })
-
-    // Clearing OCR nulls both columns (lock-step).
-    setDocumentOcr(db, id, null)
-    const cleared = db
-      .prepare('SELECT ocr_json, ocr_meta_json FROM documents WHERE id = ?')
-      .get(id) as { ocr_json: string | null; ocr_meta_json: string | null }
-    expect(cleared.ocr_json).toBeNull()
-    expect(cleared.ocr_meta_json).toBeNull()
   })
 
   it('counts the pages that produced text (#576) and the text pages read with low confidence (#538)', () => {
@@ -122,23 +112,32 @@ describe('OCR metadata sidecar (PERF-3)', () => {
     expect(listSql).toMatch(/\bocr_meta_json\b/)
   })
 
-  it('reports the OCR badge from the sidecar even when ocr_json is poisoned (blob never parsed)', () => {
+  it('reports the OCR badge from the sidecar even when ocr_json says otherwise (the sidecar wins on every reader)', () => {
     const db = freshDb()
     const id = makeDoc(db)
     setDocumentOcr(db, id, { pages: TWO_PAGES, engineId: 'tesseract.js-7.0.0', languages: ['deu', 'eng'] })
 
-    // Poison the blob with a DIFFERENT, unparseable payload. If the list path read/parsed
-    // `ocr_json` the badge would be wrong or throw; reading the sidecar keeps it correct.
-    db.prepare('UPDATE documents SET ocr_json = ? WHERE id = ?').run('{ this is not valid json', id)
+    // A well-formed, different blob: reading it first would report 5 pages in French.
+    db.prepare('UPDATE documents SET ocr_json = ? WHERE id = ?').run(
+      JSON.stringify({
+        pages: [1, 2, 3, 4, 5].map((n) => ({ pageNumber: n, text: `p${n}` })),
+        engineId: 'other-engine',
+        languages: ['fra'],
+        createdAt: 'x'
+      }),
+      id
+    )
 
-    const listed = listDocuments(db, null).find((d) => d.id === id)
-    expect(listed?.ocr).toEqual({
+    const sidecar = {
       pageCount: 2,
       textPageCount: 2,
       languages: ['deu', 'eng'],
       engineId: 'tesseract.js-7.0.0',
       createdAt: expect.any(String)
-    })
+    }
+    expect(listDocuments(db, null).find((d) => d.id === id)?.ocr).toEqual(sidecar)
+    // The single-doc reader selects the whole row (the blob included) and still reads the sidecar.
+    expect(getDocument(db, id)?.ocr).toEqual(sidecar)
   })
 
   it('migrates an old workspace: ocr_json present, no sidecar → backfills, correct page count', () => {

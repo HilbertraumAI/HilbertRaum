@@ -1,11 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import { existsSync, readdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import {
   createQueuedDocument,
-  documentsDir,
+  ENCRYPTED_DOC_SUFFIX,
   extractDocumentPreview,
   getDocument,
   getDocumentOcrPages,
@@ -13,23 +11,33 @@ import {
   reindexDocument
 } from '../../src/main/services/ingestion'
 import {
-  DocTaskManager,
   TASK_DOCUMENT_BUSY_INGESTING_MESSAGE,
   TASK_NEEDS_OCR_MESSAGE,
   TASK_OCR_NOT_A_SCAN_MESSAGE,
   TASK_OCR_NO_TEXT_MESSAGE,
-  TASK_REFUSED_CHAT_STREAMING_MESSAGE
+  TASK_REFUSED_CHAT_STREAMING_MESSAGE,
+  type DocTaskDeps,
+  type DocTaskManager
 } from '../../src/main/services/doctasks'
-import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { createMockEmbedder } from '../../src/main/services/embeddings'
 import { retrieve } from '../../src/main/services/rag'
-import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
-import { matchesSmartView, type AuditEventType } from '../../src/shared/types'
-import { makeMixedPdf, makeScanOnlyPdf, TINY_PNG } from '../helpers/fixtures'
-import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { listAuditEvents } from '../../src/main/services/audit'
+import { shredStalePlaintext, vaultPathsFrom } from '../../src/main/services/workspace-vault'
+import { matchesSmartView } from '../../src/shared/types'
+import { makeMixedPdf, makePdf, TINY_PNG } from '../helpers/fixtures'
+import { until } from '../helpers/hang-budget'
+import {
+  dbAudit,
+  docTaskManager,
+  docTaskRuntime,
+  docTaskWorld,
+  waitTerminal,
+  type DocTaskWorld
+} from '../helpers/doctask-fixtures'
+import { fakeOcrEngine, fakeRasterizer, importScan } from '../helpers/ocr-fixtures'
+import { recordingCipher } from '../helpers/test-cipher'
 import {
   IMAGE_NEEDS_OCR_MESSAGE,
   IMAGE_OCR_UNAVAILABLE_MESSAGE
@@ -40,118 +48,39 @@ import {
 // app injects (the embedder/transcriber precedent). Covers: scan detection on import,
 // "Make searchable" → recognition → persisted ocr_json → re-ingest with per-page
 // chunks → page citations via the REAL retrieval path, preview from stored pages,
-// re-index reuse (no re-OCR), cancel-persists-nothing, and the D26 guards.
+// re-index reuse (no re-OCR), the encrypted stored copy, cancel-persists-nothing, and
+// the D26 guards.
 
-let tmp: string
-let db: Db
-let storeDir: string
+let w: DocTaskWorld
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-ocr-task-'))
-  db = openDatabase(join(tmp, 'test.sqlite'))
-  storeDir = documentsDir(join(tmp, 'workspace'))
+  w = docTaskWorld('ocr-task')
 })
 
-/** Import a 2-page image-only PDF → failed with the scan notice (step 0). */
-async function importScan(): Promise<string> {
-  const p = join(tmp, 'scan.pdf')
-  writeFileSync(p, makeScanOnlyPdf(2))
-  const info = createQueuedDocument(db, p)
-  const done = await processDocument(db, storeDir, info.id)
-  expect(done.status).toBe('failed')
-  expect(done.errorMessage).toBe(PDF_SCAN_DETECTED_MESSAGE)
-  expect(done.scanDetected).toBe(true)
-  return info.id
-}
-
-/** Import an N-page image-only PDF (a detected scan). */
-async function importScanPages(pages: number): Promise<string> {
-  const p = join(tmp, `scan-${pages}.pdf`)
-  writeFileSync(p, makeScanOnlyPdf(pages))
-  const info = createQueuedDocument(db, p)
-  expect((await processDocument(db, storeDir, info.id)).scanDetected).toBe(true)
-  return info.id
-}
-
-function fakeEngine(textForPage: (n: number) => string): OcrEngine & { calls: number } {
-  const engine = {
-    id: 'fake-tesseract',
-    languages: ['deu', 'eng'],
-    calls: 0,
-    recognize: async (image: Buffer) => {
-      engine.calls += 1
-      // The fake rasterizer encodes the page number as the buffer's first byte.
-      return { text: textForPage(image[0]), confidence: 90 }
-    }
-  }
-  return engine
-}
-
-/**
- * A fake rasterizer: N pages, each "PNG" = Buffer([pageNumber]). Like the real one it renders only
- * `o.pages` when given (#575) and reports how many pages it will render; `walked` records them.
- */
-function fakeRasterizer(
-  pages = 2,
-  opts: { gate?: () => Promise<void>; walked?: number[] } = {}
-): RasterizePdf {
-  return async (_pdf, o) => {
-    const walk = o.pages ? [...o.pages] : Array.from({ length: pages }, (_, i) => i + 1)
-    o.onPageCount?.(walk.length)
-    for (const n of walk) {
-      opts.walked?.push(n)
-      if (o.signal?.aborted) throw new DOMException('aborted', 'AbortError')
-      await opts.gate?.()
-      await o.onPage(n, Buffer.from([n]))
-    }
-    return { pageCount: pages }
-  }
-}
-
-interface ManagerOpts {
-  engine?: OcrEngine | null
-  rasterize?: RasterizePdf
-  chatStreaming?: boolean
-  audit?: boolean
-}
-
-function makeManager(opts: ManagerOpts = {}): DocTaskManager {
-  return new DocTaskManager({
-    getDb: () => db,
-    getRuntime: () => null, // OCR must not need the chat runtime
-    getTranslator: () => null,
-    isChatStreaming: () => opts.chatStreaming ?? false,
-    getContextTokens: () => 4096,
-    getStoreDir: () => storeDir,
+/** The OCR task's manager: the mock embedder for the re-ingest, the engine and rasterizer seams. */
+function ocrManager(
+  engine: OcrEngine | null,
+  rasterizePdf?: RasterizePdf,
+  extra: Partial<DocTaskDeps> = {}
+): DocTaskManager {
+  return docTaskManager(w, {
     getIngestionDeps: () => ({ embedder: createMockEmbedder() }),
-    beginDocumentWork: () => () => {},
-    getOcrEngine: () => (opts.engine === undefined ? null : opts.engine),
-    rasterizePdf: opts.rasterize,
-    audit: opts.audit
-      ? (type, message, metadata) => recordEvent(db, type as AuditEventType, message, metadata)
-      : undefined
+    getOcrEngine: () => engine,
+    ...(rasterizePdf ? { rasterizePdf } : {}),
+    ...extra
   })
-}
-
-async function waitTerminal(manager: DocTaskManager, jobId: string) {
-  const start = Date.now()
-  for (;;) {
-    const status = manager.getDocTask(jobId)
-    if (['done', 'failed', 'cancelled'].includes(status.state)) return status
-    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task never finished: ${status.state}`)
-    await new Promise((r) => setTimeout(r, 10))
-  }
 }
 
 describe('Make searchable (OCR) end to end', () => {
   it('recognizes pages, persists ocr_json, re-ingests with page numbers, audits ids-only', async () => {
-    const docId = await importScan()
-    const engine = fakeEngine((n) =>
-      n === 1
-        ? 'Erste Seite über Auftragsbestätigung und Lieferung.'
-        : 'Zweite Seite über Rechnungen und Zahlungen.'
-    )
-    const manager = makeManager({ engine, rasterize: fakeRasterizer(2), audit: true })
+    const docId = await importScan(w)
+    const engine = fakeOcrEngine({
+      text: (n) =>
+        n === 1
+          ? 'Erste Seite über Auftragsbestätigung und Lieferung.'
+          : 'Zweite Seite über Rechnungen und Zahlungen.'
+    })
+    const manager = ocrManager(engine, fakeRasterizer(), { audit: dbAudit(w.db) })
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
@@ -159,7 +88,7 @@ describe('Make searchable (OCR) end to end', () => {
     // pages + the final re-ingest step
     expect(status.progress).toEqual({ stepsDone: 3, stepsTotal: 3 })
 
-    const doc = getDocument(db, docId)
+    const doc = getDocument(w.db, docId)
     expect(doc?.status).toBe('indexed')
     expect(doc?.scanDetected).toBe(false)
     expect(doc?.ocr?.pageCount).toBe(2)
@@ -167,13 +96,13 @@ describe('Make searchable (OCR) end to end', () => {
     expect(doc?.chunkCount).toBeGreaterThan(0)
 
     // Per-page chunks → page numbers preserved.
-    const rows = db
+    const rows = w.db
       .prepare('SELECT text, page_number FROM chunks WHERE document_id = ? ORDER BY chunk_index')
       .all(docId) as Array<{ text: string; page_number: number | null }>
     expect(rows.map((r) => r.page_number)).toEqual([1, 2])
 
     // The audit trail carries ids/kinds only — never recognized text.
-    const events = listAuditEvents(db, { limit: 50 })
+    const events = listAuditEvents(w.db, { limit: 50 })
     const completed = events.find((e) => e.type === 'document_task_completed')
     expect(completed).toBeDefined()
     const blob = JSON.stringify(events)
@@ -182,16 +111,16 @@ describe('Make searchable (OCR) end to end', () => {
   })
 
   it('page citations work end to end through the real retrieval path', async () => {
-    const docId = await importScan()
-    const engine = fakeEngine((n) =>
-      n === 1 ? 'The kangaroo protocol handles marsupial logistics.' : 'Unrelated second page.'
-    )
-    const manager = makeManager({ engine, rasterize: fakeRasterizer(2) })
+    const docId = await importScan(w)
+    const engine = fakeOcrEngine({
+      text: (n) => (n === 1 ? 'The kangaroo protocol handles marsupial logistics.' : 'Unrelated second page.')
+    })
+    const manager = ocrManager(engine, fakeRasterizer())
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(manager, jobId)).state).toBe('done')
 
     const embedder = createMockEmbedder()
-    const { chunks } = await retrieve(db, embedder, 'kangaroo protocol marsupial', {
+    const { chunks } = await retrieve(w.db, embedder, 'kangaroo protocol marsupial', {
       topKInitial: 4,
       topKFinal: 2,
       maxContextTokens: 500,
@@ -202,62 +131,92 @@ describe('Make searchable (OCR) end to end', () => {
   })
 
   it('preview shows the recognized per-page text and re-index reuses it (no re-OCR)', async () => {
-    const docId = await importScan()
-    const engine = fakeEngine((n) => `Seite ${n} erkannt.`)
-    const manager = makeManager({ engine, rasterize: fakeRasterizer(2) })
+    const docId = await importScan(w)
+    const engine = fakeOcrEngine({ text: (n) => `Seite ${n} erkannt.` })
+    const manager = ocrManager(engine, fakeRasterizer())
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(manager, jobId)).state).toBe('done')
     const callsAfterTask = engine.calls
     expect(callsAfterTask).toBe(2)
 
-    const preview = await extractDocumentPreview(db, storeDir, docId, {})
+    const preview = await extractDocumentPreview(w.db, w.storeDir, docId, {})
     expect(preview.segments.map((s) => s.pageNumber)).toEqual([1, 2])
     expect(preview.segments[0].text).toBe('Seite 1 erkannt.')
 
     // Re-index: parses the stored PDF again, finds no text, uses the STORED pages.
-    const re = await reindexDocument(db, storeDir, docId, { embedder: createMockEmbedder() })
+    const re = await reindexDocument(w.db, w.storeDir, docId, { embedder: createMockEmbedder() })
     expect(re.status).toBe('indexed')
     expect(engine.calls).toBe(callsAfterTask) // never re-recognized
-    expect(getDocumentOcrPages(db, docId)?.length).toBe(2)
+    expect(getDocumentOcrPages(w.db, docId)?.length).toBe(2)
+  })
+
+  // Audit test-gap #5: the handler decrypts an encrypted scan to a transient beside the store and relies on
+  // the startup crash sweep to shred it if a crash lands before its own shred.
+  it('reads an ENCRYPTED stored scan through a transient the crash sweep covers, and shreds it after the read (audit test-gap #5)', async () => {
+    const rec = recordingCipher()
+    const docId = await importScan(w, { deps: { cipher: rec.cipher } }) // the stored copy is `<id>.pdf.enc`
+    const pdfs: Buffer[] = []
+    const manager = ocrManager(fakeOcrEngine({ text: (n) => `Seite ${n} erkannt.` }), fakeRasterizer({ pdfs }), {
+      getIngestionDeps: () => ({ embedder: createMockEmbedder(), cipher: rec.cipher })
+    })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    expect((await waitTerminal(manager, jobId)).state).toBe('done')
+    // Real AES: the rasterizer got the decrypted PDF, not the ciphertext.
+    expect(pdfs[0].subarray(0, 5).toString('latin1')).toBe('%PDF-')
+    // The handler's decrypt comes first (the import parsed the source; the re-ingest's own parse
+    // transient follows), inside the store…
+    const [transient] = rec.asyncDecrypts
+    expect(dirname(transient)).toBe(w.storeDir)
+    // …and is shredded after the read: only the encrypted copy is left.
+    expect(existsSync(transient)).toBe(false)
+    expect(readdirSync(w.storeDir)).toEqual([`${docId}.pdf${ENCRYPTED_DOC_SUFFIX}`])
+    // A crash before that shred: the startup sweep must find the file at the very path the handler writes.
+    writeFileSync(transient, 'plaintext page bytes')
+    shredStalePlaintext(
+      vaultPathsFrom({ configPath: join(w.root, 'config'), dbPath: join(dirname(w.storeDir), 'hilbertraum.sqlite') })
+    )
+    expect(existsSync(transient)).toBe(false)
   })
 
   it('cancel persists nothing — the document stays a detected scan', async () => {
-    const docId = await importScan()
+    const docId = await importScan(w)
     let release: () => void = () => {}
     const gate = new Promise<void>((r) => (release = r))
     // Flag set the moment the OCR task PARKS in the rasterizer (genuinely mid-flight) — lets the
     // cancel land deterministically once the task is running, instead of a fixed `sleep(30)` that
     // could cancel before the task even started under CPU starvation (T5).
     let rasterizeReached = false
-    const engine = fakeEngine(() => 'never persisted')
-    const manager = makeManager({
+    const engine = fakeOcrEngine({ text: 'never persisted' })
+    const manager = ocrManager(
       engine,
-      rasterize: fakeRasterizer(2, {
+      fakeRasterizer({
         gate: () => {
           rasterizeReached = true
           return gate
         }
       })
-    })
+    )
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
-    while (!rasterizeReached) await new Promise((r) => setTimeout(r, 1))
+    await until(() => rasterizeReached, 'the OCR task parking in the rasterizer')
     manager.cancelDocTask(jobId)
     release()
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('cancelled')
-    expect(getDocumentOcrPages(db, docId)).toBeNull()
-    expect(getDocument(db, docId)?.scanDetected).toBe(true)
+    // The walk stopped at the cancel (the row below owns the pre-persist check).
+    expect(engine.calls).toBe(1)
+    expect(getDocumentOcrPages(w.db, docId)).toBeNull()
+    expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
   })
 
   // GAP-7 (full-audit 2026-07-11) — the decided cancel contract, both halves:
   //   before the persist point → a calm cancel that persists NOTHING;
   //   after it (during the signal-less re-ingest) → the task completes as 'done' (the work is real).
   it("GAP-7: a cancel after the LAST page but before the persist still cancels — nothing persisted", async () => {
-    const docId = await importScan()
+    const docId = await importScan(w)
     let release: () => void = () => {}
     const gate = new Promise<void>((r) => (release = r))
     let recognitionDone = false
-    const engine = fakeEngine(() => 'never persisted')
+    const engine = fakeOcrEngine({ text: 'never persisted' })
     // A rasterizer that parks AFTER the last onPage — the cancel lands in the recognition→persist
     // window, exactly where the pre-persist abort check must catch it.
     const rasterize: RasterizePdf = async (_pdf, o) => {
@@ -267,19 +226,19 @@ describe('Make searchable (OCR) end to end', () => {
       await gate
       return { pageCount: 2 }
     }
-    const manager = makeManager({ engine, rasterize })
+    const manager = ocrManager(engine, rasterize)
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
-    while (!recognitionDone) await new Promise((r) => setTimeout(r, 1))
+    await until(() => recognitionDone, 'the last page recognized')
     manager.cancelDocTask(jobId)
     release()
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('cancelled')
-    expect(getDocumentOcrPages(db, docId)).toBeNull() // nothing persisted
-    expect(getDocument(db, docId)?.scanDetected).toBe(true)
+    expect(getDocumentOcrPages(w.db, docId)).toBeNull() // nothing persisted
+    expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
   })
 
   it("GAP-7: a cancel during the re-ingest completes as 'done' — the persisted work is reported honestly", async () => {
-    const docId = await importScan()
+    const docId = await importScan(w)
     let release: () => void = () => {}
     const gate = new Promise<void>((r) => (release = r))
     let embedReached = false
@@ -295,35 +254,26 @@ describe('Make searchable (OCR) end to end', () => {
         return base.embed(texts)
       }
     }
-    const manager = new DocTaskManager({
-      getDb: () => db,
-      getRuntime: () => null,
-      getTranslator: () => null,
-      isChatStreaming: () => false,
-      getContextTokens: () => 4096,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({ embedder }),
-      beginDocumentWork: () => () => {},
-      getOcrEngine: () => fakeEngine((n) => `Seite ${n} erkannt.`),
-      rasterizePdf: fakeRasterizer(2)
+    const manager = ocrManager(fakeOcrEngine({ text: (n) => `Seite ${n} erkannt.` }), fakeRasterizer(), {
+      getIngestionDeps: () => ({ embedder })
     })
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
-    while (!embedReached) await new Promise((r) => setTimeout(r, 1))
+    await until(() => embedReached, 'the re-ingest reaching the embedder')
     manager.cancelDocTask(jobId) // lands mid-re-ingest, after setDocumentOcr persisted
     release()
     const status = await waitTerminal(manager, jobId)
     // The recognition + index are real, persisted work — reported 'done', never "cancelled, nothing
     // happened" about a now-searchable document (the decided GAP-7 contract).
     expect(status.state).toBe('done')
-    expect(getDocumentOcrPages(db, docId)?.length).toBe(2)
-    expect(getDocument(db, docId)?.status).toBe('indexed')
+    expect(getDocumentOcrPages(w.db, docId)?.length).toBe(2)
+    expect(getDocument(w.db, docId)?.status).toBe('indexed')
   })
 
   // #538 — every page is read the right way up, the turn that worked for the previous page is tried
   // first (a sideways scan is usually sideways throughout), and each page keeps the reading's
   // confidence and turn. Pages 1–2 here are sideways (readable at a 270° turn), page 3 is upright.
   it('reads sideways pages upright, tries the previous turn first, keeps confidence and turn (#538)', async () => {
-    const docId = await importScanPages(3)
+    const docId = await importScan(w, { pages: 3 })
     const calls: string[] = []
     const rightTurn = (page: number): number => (page <= 2 ? 270 : 0)
     const engine: OcrEngine = {
@@ -341,7 +291,7 @@ describe('Make searchable (OCR) end to end', () => {
         return { turn: rightTurn(image[0]) as 0 | 270, confidence: 3 }
       }
     }
-    const manager = makeManager({ engine, rasterize: fakeRasterizer(3) })
+    const manager = ocrManager(engine, fakeRasterizer({ pages: 3 }))
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(manager, jobId)).state).toBe('done')
 
@@ -350,44 +300,51 @@ describe('Make searchable (OCR) end to end', () => {
       'p2@270', // the previous page's turn first: one reading
       'p3@270', 'p3?', 'p3@0' // upright again: OSD finds it
     ])
-    expect(getDocumentOcrPages(db, docId)).toEqual([
+    expect(getDocumentOcrPages(w.db, docId)).toEqual([
       { pageNumber: 1, text: 'Seite 1 lesbar.', confidence: 93, turn: 270 },
       { pageNumber: 2, text: 'Seite 2 lesbar.', confidence: 93, turn: 270 },
       { pageNumber: 3, text: 'Seite 3 lesbar.', confidence: 93 }
     ])
-    expect(getDocument(db, docId)?.ocr).toMatchObject({ pageCount: 3, textPageCount: 3, lowConfidencePageCount: 0 })
+    expect(getDocument(w.db, docId)?.ocr).toMatchObject({ pageCount: 3, textPageCount: 3, lowConfidencePageCount: 0 })
   })
 
   it('fails friendly when every recognized page is empty', async () => {
-    const docId = await importScan()
-    const manager = makeManager({ engine: fakeEngine(() => '   '), rasterize: fakeRasterizer(2) })
+    const docId = await importScan(w)
+    const manager = ocrManager(fakeOcrEngine({ text: '   ' }), fakeRasterizer())
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('failed')
     expect(status.error).toBe(TASK_OCR_NO_TEXT_MESSAGE)
-    expect(getDocumentOcrPages(db, docId)).toBeNull()
+    expect(getDocumentOcrPages(w.db, docId)).toBeNull()
   })
 
-  it('guards: no engine, not a scan, chat streaming', async () => {
-    const docId = await importScan()
+  it("guards: no engine, not a scan (a text PDF; an OCR'd photo), chat streaming, a recognizer that cannot run (#232)", async () => {
+    const docId = await importScan(w)
     // No engine (no OCR files on the drive).
-    expect(() => makeManager({}).startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
+    expect(() => ocrManager(null).startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
       TASK_NEEDS_OCR_MESSAGE
     )
-    // Not a scan: a plain text document refuses.
-    const p = join(tmp, 'plain.txt')
-    writeFileSync(p, 'just text '.repeat(50))
-    const info = createQueuedDocument(db, p)
-    await processDocument(db, storeDir, info.id)
-    const manager = makeManager({ engine: fakeEngine(() => 'x'), rasterize: fakeRasterizer(1) })
-    expect(() => manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })).toThrow(
+    const manager = ocrManager(fakeOcrEngine({ text: 'x' }), fakeRasterizer({ pages: 1 }))
+    // Not a scan: an ordinary text PDF (no scan marker — only the marker clause refuses it)…
+    writeFileSync(join(w.root, 'letter.pdf'), makePdf('An ordinary text page with plenty of readable words on it.'))
+    const text = await processDocument(w.db, w.storeDir, createQueuedDocument(w.db, join(w.root, 'letter.pdf')).id)
+    expect(text.scanDetected).toBe(false)
+    expect(text.scannedPages ?? null).toBeNull()
+    expect(() => manager.startDocTask({ kind: 'ocr', documentIds: [text.id] })).toThrow(
+      TASK_OCR_NOT_A_SCAN_MESSAGE
+    )
+    // …and a photo read by OCR on import (#574: it carries OCR metadata — only the PDF check refuses it).
+    writeFileSync(join(w.root, 'receipt.png'), TINY_PNG)
+    const photo = await processDocument(w.db, w.storeDir, createQueuedDocument(w.db, join(w.root, 'receipt.png')).id, {
+      ocrEngine: fakeOcrEngine({ text: 'Quittung über 42 Euro.' })
+    })
+    expect(photo.ocr).toBeTruthy()
+    expect(() => manager.startDocTask({ kind: 'ocr', documentIds: [photo.id] })).toThrow(
       TASK_OCR_NOT_A_SCAN_MESSAGE
     )
     // The D26 chat guard holds for OCR too.
-    const busy = makeManager({
-      engine: fakeEngine(() => 'x'),
-      rasterize: fakeRasterizer(1),
-      chatStreaming: true
+    const busy = ocrManager(fakeOcrEngine({ text: 'x' }), fakeRasterizer({ pages: 1 }), {
+      isChatStreaming: () => true
     })
     expect(() => busy.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
       TASK_REFUSED_CHAT_STREAMING_MESSAGE
@@ -395,10 +352,7 @@ describe('Make searchable (OCR) end to end', () => {
     // #232: an engine that exists but cannot run in this build is
     // refused at admission with the "could not start" copy — not the "files missing" copy, and
     // never a worker spawn attempt.
-    const unavailable = makeManager({
-      engine: { ...fakeEngine(() => 'x'), availability: () => 'unavailable' },
-      rasterize: fakeRasterizer(1)
-    })
+    const unavailable = ocrManager(fakeOcrEngine({ text: 'x', state: 'unavailable' }), fakeRasterizer({ pages: 1 }))
     expect(() => unavailable.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
       /could not start/
     )
@@ -410,22 +364,12 @@ describe('Make searchable (OCR) end to end', () => {
   // two chunk DELETE/INSERT transactions + two embed phases on one document). The predicate
   // is optional: absent/unwired ⇒ admission unchanged. Watched fail pre-fix.
   it('BE-1: refuses to start ANY kind while the target document is mid-import/re-index', async () => {
-    const docId = await importScan()
-    const busyDeps = {
-      getDb: () => db,
-      // Truthy runtime so the summary path reaches the NEW guard, not the no-model refusal.
-      getRuntime: () => ({}) as unknown as ModelRuntime,
-      getTranslator: () => null,
-      isChatStreaming: () => false,
-      getContextTokens: () => 4096,
-      getStoreDir: () => storeDir,
-      getIngestionDeps: () => ({ embedder: createMockEmbedder() }),
-      beginDocumentWork: () => () => {},
-      getOcrEngine: () => fakeEngine((n) => `Seite ${n}.`),
-      rasterizePdf: fakeRasterizer(2),
+    const docId = await importScan(w)
+    // A runtime so the summary path reaches the NEW guard, not the no-model refusal.
+    const busy = ocrManager(fakeOcrEngine({ text: (n) => `Seite ${n}.` }), fakeRasterizer(), {
+      getRuntime: () => docTaskRuntime(),
       isDocumentProcessing: () => true
-    }
-    const busy = new DocTaskManager(busyDeps)
+    })
     expect(() => busy.startDocTask({ kind: 'ocr', documentIds: [docId] })).toThrow(
       TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
     )
@@ -433,21 +377,24 @@ describe('Make searchable (OCR) end to end', () => {
       TASK_DOCUMENT_BUSY_INGESTING_MESSAGE
     )
     // A false predicate admits normally — the guard must never refuse outside a live ingestion.
-    const idle = new DocTaskManager({ ...busyDeps, isDocumentProcessing: () => false })
+    const idle = ocrManager(fakeOcrEngine({ text: (n) => `Seite ${n}.` }), fakeRasterizer(), {
+      getRuntime: () => docTaskRuntime(),
+      isDocumentProcessing: () => false
+    })
     const { jobId } = idle.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(idle, jobId)).state).toBe('done')
   })
 
   it('re-running OCR on an already-recognized PDF is allowed and overwrites', async () => {
-    const docId = await importScan()
-    const first = makeManager({ engine: fakeEngine(() => 'Alte Erkennung.'), rasterize: fakeRasterizer(2) })
+    const docId = await importScan(w)
+    const first = ocrManager(fakeOcrEngine({ text: 'Alte Erkennung.' }), fakeRasterizer())
     const r1 = first.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(first, r1.jobId)).state).toBe('done')
 
-    const second = makeManager({ engine: fakeEngine(() => 'Neue Erkennung.'), rasterize: fakeRasterizer(2) })
+    const second = ocrManager(fakeOcrEngine({ text: 'Neue Erkennung.' }), fakeRasterizer())
     const r2 = second.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(second, r2.jobId)).state).toBe('done')
-    expect(getDocumentOcrPages(db, docId)?.[0].text).toBe('Neue Erkennung.')
+    expect(getDocumentOcrPages(w.db, docId)?.[0].text).toBe('Neue Erkennung.')
   })
 })
 
@@ -455,7 +402,7 @@ describe('Make searchable (OCR) end to end', () => {
 // pages are scans; "Make searchable (OCR)" reads just those pages and merges them in, page by page.
 describe('a text PDF with scanned pages (#575)', () => {
   async function importLetter(): Promise<string> {
-    const p = join(tmp, 'letter.pdf')
+    const p = join(w.root, 'letter.pdf')
     writeFileSync(
       p,
       makeMixedPdf([
@@ -464,7 +411,7 @@ describe('a text PDF with scanned pages (#575)', () => {
         { kind: 'image' }
       ])
     )
-    const info = await processDocument(db, storeDir, createQueuedDocument(db, p).id, {
+    const info = await processDocument(w.db, w.storeDir, createQueuedDocument(w.db, p).id, {
       embedder: createMockEmbedder()
     })
     expect(info.status).toBe('indexed')
@@ -476,81 +423,60 @@ describe('a text PDF with scanned pages (#575)', () => {
   it('reads only the scanned pages and merges them into the document, cited by page', async () => {
     const docId = await importLetter()
     const walked: number[] = []
-    const engine = fakeEngine((n) => `Seite ${n}: Unterschrift und Anlage.`)
-    const manager = makeManager({ engine, rasterize: fakeRasterizer(3, { walked }) })
+    const engine = fakeOcrEngine({ text: (n) => `Seite ${n}: Unterschrift und Anlage.` })
+    const manager = ocrManager(engine, fakeRasterizer({ pages: 3, walked }))
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('done')
     expect(walked).toEqual([2, 3])
     expect(status.progress.stepsTotal).toBe(3) // two pages + the re-ingest
 
-    const preview = await extractDocumentPreview(db, storeDir, docId, {})
+    const preview = await extractDocumentPreview(w.db, w.storeDir, docId, {})
     expect(preview.segments.map((s) => [s.pageNumber, s.text])).toEqual([
       [1, 'Sehr geehrte Damen und Herren, anbei die unterschriebene Vereinbarung.'],
       [2, 'Seite 2: Unterschrift und Anlage.'],
       [3, 'Seite 3: Unterschrift und Anlage.']
     ])
-    expect(getDocument(db, docId)?.ocr).toMatchObject({ pageCount: 2, textPageCount: 2 })
-    expect(getDocument(db, docId)?.scannedPages).toEqual({ count: 2, pageCount: 3 })
+    expect(getDocument(w.db, docId)?.ocr).toMatchObject({ pageCount: 2, textPageCount: 2 })
+    expect(getDocument(w.db, docId)?.scannedPages).toEqual({ count: 2, pageCount: 3 })
   })
 
   it('a re-run that finds no text never replaces an earlier reading of the scanned pages', async () => {
     const docId = await importLetter()
-    const first = makeManager({ engine: fakeEngine((n) => `Seite ${n} gelesen.`), rasterize: fakeRasterizer(3) })
+    const first = ocrManager(fakeOcrEngine({ text: (n) => `Seite ${n} gelesen.` }), fakeRasterizer({ pages: 3 }))
     expect((await waitTerminal(first, first.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)).state).toBe('done')
-    const rerun = makeManager({ engine: fakeEngine(() => ''), rasterize: fakeRasterizer(3) })
+    const rerun = ocrManager(fakeOcrEngine({ text: '' }), fakeRasterizer({ pages: 3 }))
     const status = await waitTerminal(rerun, rerun.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
     expect(status.state).toBe('failed')
     expect(status.error).toBe(TASK_OCR_NO_TEXT_MESSAGE)
-    expect(getDocumentOcrPages(db, docId)?.map((p) => p.text)).toEqual(['Seite 2 gelesen.', 'Seite 3 gelesen.'])
+    expect(getDocumentOcrPages(w.db, docId)?.map((p) => p.text)).toEqual(['Seite 2 gelesen.', 'Seite 3 gelesen.'])
   })
 
   it('a reading that finds no text on the scanned pages is kept — the pages were read, the offer goes', async () => {
     const docId = await importLetter()
-    const manager = makeManager({ engine: fakeEngine(() => ''), rasterize: fakeRasterizer(3) })
+    const manager = ocrManager(fakeOcrEngine({ text: '' }), fakeRasterizer({ pages: 3 }))
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(manager, jobId)).state).toBe('done')
-    const doc = getDocument(db, docId)
+    const doc = getDocument(w.db, docId)
     expect(doc?.status).toBe('indexed') // its text page still searchable
     expect(doc?.ocr).toMatchObject({ pageCount: 2, textPageCount: 0 })
   })
 })
 
 describe('photo import through the real pipeline', () => {
-  it('indexes a photo via the injected engine; fails friendly without one', async () => {
-    const p = join(tmp, 'note.png')
-    writeFileSync(p, TINY_PNG)
-    const engine = fakeEngine(() => 'Handwritten note about quarterly numbers.')
-    const withEngine = createQueuedDocument(db, p)
-    const done = await processDocument(db, storeDir, withEngine.id, {
-      embedder: createMockEmbedder(),
-      ocrEngine: engine
-    })
-    expect(done.status).toBe('indexed')
-    expect(done.chunkCount).toBe(1)
-    expect(done.mimeType).toBe('image/png')
-
-    const without = createQueuedDocument(db, p)
-    const failed = await processDocument(db, storeDir, without.id, {
-      embedder: createMockEmbedder()
-    })
-    expect(failed.status).toBe('failed')
-    expect(failed.errorMessage).toBe(IMAGE_NEEDS_OCR_MESSAGE)
-    expect(failed.scanDetected).toBe(false) // the OCR offer is PDF-only
-  })
-
   // #574 — a photo read by OCR carries OCR metadata like a scanned PDF (the preview caveat, the
   // `ocr` view, "Read again (OCR)"), but no separately stored text: its text lives only in its
   // chunks. A re-read that fails takes the claim away again.
   it('#574: a photo read by OCR carries its OCR metadata, without stored text; a failed re-read clears it', async () => {
-    const p = join(tmp, 'receipt.jpg')
+    const p = join(w.root, 'receipt.jpg')
     writeFileSync(p, TINY_PNG)
-    const queued = createQueuedDocument(db, p)
-    const done = await processDocument(db, storeDir, queued.id, {
+    const queued = createQueuedDocument(w.db, p)
+    const done = await processDocument(w.db, w.storeDir, queued.id, {
       embedder: createMockEmbedder(),
-      ocrEngine: fakeEngine(() => 'Quittung über 42 Euro.')
+      ocrEngine: fakeOcrEngine({ text: 'Quittung über 42 Euro.' })
     })
     expect(done.status).toBe('indexed')
+    expect(done.chunkCount).toBe(1)
     expect(done.ocr).toEqual({
       pageCount: 1,
       textPageCount: 1,
@@ -560,45 +486,47 @@ describe('photo import through the real pipeline', () => {
       createdAt: expect.any(String)
     })
     expect(matchesSmartView(done, 'ocr')).toBe(true)
-    expect(getDocumentOcrPages(db, queued.id)).toBeNull()
+    expect(getDocumentOcrPages(w.db, queued.id)).toBeNull()
 
-    const reread = await reindexDocument(db, storeDir, queued.id, { embedder: createMockEmbedder() })
+    const reread = await reindexDocument(w.db, w.storeDir, queued.id, { embedder: createMockEmbedder() })
     expect(reread.status).toBe('failed')
-    expect(getDocument(db, queued.id)?.ocr ?? null).toBeNull()
+    expect(getDocument(w.db, queued.id)?.ocr ?? null).toBeNull()
 
     // Read fine, but its embedding failed: the row ends failed and claims no recognized text either.
     const failingEmbedder = { ...createMockEmbedder(), embed: async () => Promise.reject(new Error('embed down')) }
-    const second = createQueuedDocument(db, p)
-    const embedFailed = await processDocument(db, storeDir, second.id, {
+    const second = createQueuedDocument(w.db, p)
+    const embedFailed = await processDocument(w.db, w.storeDir, second.id, {
       embedder: failingEmbedder,
-      ocrEngine: fakeEngine(() => 'Quittung über 42 Euro.')
+      ocrEngine: fakeOcrEngine({ text: 'Quittung über 42 Euro.' })
     })
     expect(embedFailed.status).toBe('failed')
-    expect(getDocument(db, second.id)?.ocr ?? null).toBeNull()
+    expect(getDocument(w.db, second.id)?.ocr ?? null).toBeNull()
   })
 
   // #232 / #219: the OCR files are on the drive but the
   // packaged recognizer cannot run — the photo is stored (a re-index recognizes it later) and
   // its row carries the "could not run in this build" note, never the "files missing" copy and
-  // never a crash. The engine is not even asked.
-  it('#232 interim: a recognizer that cannot run in this build stores the photo with the unavailable note', async () => {
-    const p = join(tmp, 'photo.png')
+  // never a crash. The engine is not even asked. Without OCR files at all, the photo is stored
+  // the same way with the "files missing" note.
+  it.each([
+    { case: 'no OCR files on the drive', state: null, note: IMAGE_NEEDS_OCR_MESSAGE },
+    // (Case labels stay under vitest's 40-character display cut, so the titles print whole.)
+    { case: 'a recognizer that cannot run (#232)', state: 'unavailable' as const, note: IMAGE_OCR_UNAVAILABLE_MESSAGE }
+  ])('a photo with $case is stored and fails with its own note, never a crash', async ({ state, note }) => {
+    const p = join(w.root, 'photo.png')
     writeFileSync(p, TINY_PNG)
-    const engine = fakeEngine(() => 'must not be recognized')
-    const degraded: OcrEngine = { ...engine, availability: () => 'unavailable' }
-    const queued = createQueuedDocument(db, p)
-    const info = await processDocument(db, storeDir, queued.id, {
+    const engine = state ? fakeOcrEngine({ state, text: 'must not be recognized' }) : null
+    const info = await processDocument(w.db, w.storeDir, createQueuedDocument(w.db, p).id, {
       embedder: createMockEmbedder(),
-      ocrEngine: degraded
+      ...(engine ? { ocrEngine: engine } : {})
     })
     expect(info.status).toBe('failed')
-    expect(info.errorMessage).toBe(IMAGE_OCR_UNAVAILABLE_MESSAGE)
-    expect(info.errorMessage).not.toBe(IMAGE_NEEDS_OCR_MESSAGE)
-    expect(engine.calls).toBe(0)
+    expect(info.errorMessage).toBe(note)
+    expect(engine?.calls ?? 0).toBe(0) // an engine that cannot run is not even asked
     // The row keeps its type and a stored copy (processDocument stores before parsing), so
     // "re-index once OCR is available" is a real path — no scan offer (PDF-only).
     expect(info.mimeType).toBe('image/png')
-    expect(readdirSync(storeDir).length).toBeGreaterThan(0) // the stored copy landed before the parse
+    expect(readdirSync(w.storeDir).length).toBeGreaterThan(0) // the stored copy landed before the parse
     expect(info.scanDetected).toBe(false)
   })
 })
@@ -609,15 +537,15 @@ describe('#232 dequeue-time guard (#232)', () => {
   // "could not start" copy — which therefore has to pass the manager's friendly-error filter,
   // not be swallowed into `main.task.genericFailure` (PR #268 review).
   it('a task admitted before the recognizer became unavailable fails with the ocrUnavailable copy, not the generic one', async () => {
-    const docId = await importScan()
+    const docId = await importScan(w)
     // Available for the admission check (first read), unavailable for every later read — the
     // handler's dequeue-time read sees the flip however eagerly the manager starts the run.
     let reads = 0
     const engine: OcrEngine = {
-      ...fakeEngine(() => 'x'),
+      ...fakeOcrEngine({ text: 'x' }),
       availability: () => (reads++ === 0 ? 'available' : 'unavailable')
     }
-    const manager = makeManager({ engine, rasterize: fakeRasterizer(1) })
+    const manager = ocrManager(engine, fakeRasterizer({ pages: 1 }))
     const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
     const status = await waitTerminal(manager, jobId)
     expect(status.state).toBe('failed')
