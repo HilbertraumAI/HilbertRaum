@@ -1,4 +1,4 @@
-import { inFlightStreams } from './inflight'
+import { isChatStreaming } from './inflight'
 import type { AppContext } from '../services/context'
 import type { ModelBusyLane, OccupancyLane } from '../services/runtime/occupancy'
 
@@ -11,8 +11,8 @@ export type { ModelBusyLane } from '../services/runtime/occupancy'
 // It composes rather than duplicates. Each lane already owns the authoritative record of its
 // own state, and this reads each at its source:
 //
-//   chat        `inFlightStreams` — the same registry the doc-task admission guard has read
-//               since wave 3. Chat is not an occupancy span (see `runtime/occupancy.ts`).
+//   chat        `isChatStreaming()` over `inFlightStreams` — the same predicate the doc-task
+//               admission guard reads. Chat is not an occupancy span (see `runtime/occupancy.ts`).
 //   doc-task    `DocTaskManager.hasActiveTask()` — queued OR running. A queued task does not
 //               occupy the model yet, but it will the moment the pump frees, so a benchmark
 //               or a skill run admitted "into the queue's shadow" would collide seconds later.
@@ -22,10 +22,10 @@ export type { ModelBusyLane } from '../services/runtime/occupancy'
 //               global busy signal, which is exactly what #186 reported.
 //   benchmark   an occupancy span — the benchmark had no registry at all (#185).
 //
-// This lives in the IPC layer because `inFlightStreams` does: `main/index.ts` already passes it
-// INTO the doc-task manager (`isChatStreaming`) rather than letting a service import upward, and
-// that direction is kept. The doc-task manager therefore does not call this — it keeps its own
-// chat check with its own pinned copy, and consults only the occupancy half.
+// This lives in the IPC layer because `inFlightStreams` does: `main/index.ts` already passes the
+// predicate INTO the doc-task manager (`isChatStreaming`) rather than letting a service import
+// upward, and that direction is kept. The doc-task manager therefore does not call this — it reads
+// the same `isChatStreaming` predicate for chat and consults only the occupancy half.
 
 /** The context slice this needs — a `Pick` so a test can pass a two-field literal. */
 export type ModelBusyContext = Pick<AppContext, 'runtime' | 'docTasks'>
@@ -44,7 +44,7 @@ export function modelBusyLane(
   opts?: { ignore?: readonly ModelBusyLane[] }
 ): ModelBusyLane | null {
   const ignore = opts?.ignore ?? []
-  if (!ignore.includes('chat') && inFlightStreams.size > 0) return 'chat'
+  if (!ignore.includes('chat') && isChatStreaming()) return 'chat'
   if (!ignore.includes('doc-task') && (ctx.docTasks?.hasActiveTask() ?? false)) return 'doc-task'
   // `doc-task` is answered above (its span is the RUNNING subset of `hasActiveTask`), so it is
   // always excluded here — otherwise a deliberately ignored doc task would leak back in through

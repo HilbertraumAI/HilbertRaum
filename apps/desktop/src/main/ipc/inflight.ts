@@ -8,6 +8,16 @@
 // deletes its own entry on cleanup, so a canceller is never clobbered.
 export const inFlightStreams = new Map<string, AbortController>()
 
+/**
+ * Whether a chat or document answer is streaming right now: the D26 signal the doc-task manager's
+ * admission (`main/index.ts`), the model-busy lane and the AI Model card's "answering" flag read.
+ * One predicate beside the registry it reads, not a copy per reader (#682): a split build once
+ * made the copy in `main/index.ts` read a different registry (#646).
+ */
+export function isChatStreaming(): boolean {
+  return inFlightStreams.size > 0
+}
+
 /** A live snapshot of an in-flight generation's accumulated output. */
 export interface StreamBuffer {
   /** Answer tokens accumulated so far (matches the renderer's live streamText). */

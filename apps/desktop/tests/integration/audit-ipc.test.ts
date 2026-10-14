@@ -58,7 +58,7 @@ import {
 } from '../../src/main/services/workspace-vault'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { inFlightStreams, isChatStreaming } from '../../src/main/ipc/inflight'
 import type { ModelRuntime, ChatMessage } from '../../src/main/services/runtime'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
@@ -293,7 +293,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
         },
         stop: async () => {}
       }),
-      isChatStreaming: () => inFlightStreams.size > 0,
+      isChatStreaming, // the production predicate main/index.ts passes (#682)
       getContextTokens: () => getSettings(ctx.db).contextTokens,
       getStoreDir: () => documentsDir(ctx.paths.workspacePath),
       getIngestionDeps: () => ({ embedder: ctx.embedder, cipher: ctx.workspace.documentCipher() }),
