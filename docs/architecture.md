@@ -13459,8 +13459,8 @@ they rest on._
 **§4 Tests.** `ocr-install.test.ts` (gates, payload, hostile `dest`, pin mismatch, bundled
 fallback, hash-is-state skip, mismatch keeps the old file, size cap, third-language survival,
 symlinked `ocr/`, cancel in every state, single-flight, content-free logs, IPC end to end),
-`ocr-pins.test.ts` (the drift test), `preload-ocr-install.test.ts`, `compose-ocr.test.ts` (the D2
-rules + the capture pin), `ocr-slot-live-consumers.test.ts` (the split-brain regression),
+`ocr-pins.test.ts` (the drift test: `OCR_PINS` against the committed yaml and model-policy.md's
+asset table), `preload-ocr-install.test.ts`, `compose-ocr.test.ts` (the D2 rules + the capture pin), `ocr-slot-live-consumers.test.ts` (the split-brain regression),
 `download-fail-close.test.ts` (the seam fix above) and `OcrInstall.test.tsx` (rows, dialog, job
 states, focus/job re-read, AI Model row, German).
 
