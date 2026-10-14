@@ -15,8 +15,9 @@ import { describe, it, expect } from 'vitest'
 
 import { ANALYSIS_RESPONSE_RESERVE_TOKENS, CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
 import { retrieveWholeDocument, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage } from '../../src/main/services/runtime'
 import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
+import { finishScriptedRuntime, recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import {
   answerWholeDoc,
   germanDoc,
@@ -29,58 +30,12 @@ const CTX = 4096
 /** A `germanDoc(sentences)` fixture with NO tree, so an over-budget whole-doc turn takes the chunk map-reduce. */
 const makeHarness = (sentences: number): Promise<WholeDocHarness> => wholeDocHarness(germanDoc(sentences))
 
-interface RecordingRuntime extends ModelRuntime {
-  calls: number
-  turns: ChatMessage[][]
-  options: Array<RuntimeChatOptions | undefined>
-}
-
-/** Reports `ctx` as the launched window (§L0) and records EVERY call's turns AND runtime options (map steps +
- *  the reduce), so a test can assert the call count, inspect the map inputs and pin the reduce's `maxTokens` —
- *  unlike the single-`lastMessages` truncation stub. `reply` sizes the map/reduce output (long ⇒ the joined
- *  notes overflow the reduce budget → the honest truncation path). */
-function recordingRuntime(reply = 'Notiz zum Abschnitt.', ctx = CTX): RecordingRuntime {
-  const rt = {
-    modelId: 'mock',
-    calls: 0,
-    turns: [] as ChatMessage[][],
-    options: [] as Array<RuntimeChatOptions | undefined>,
-    contextWindow: () => ctx,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      rt.calls++
-      rt.turns.push(messages)
-      rt.options.push(options)
-      yield reply
-    }
-  } as unknown as RecordingRuntime
-  return rt
-}
-
-/** A runtime that Stops (throws an AbortError) on its FIRST chatStream call, before yielding any token. */
-function abortingRuntime(): RecordingRuntime {
-  const rt = {
-    modelId: 'mock',
-    calls: 0,
-    turns: [] as ChatMessage[][],
-    options: [] as Array<RuntimeChatOptions | undefined>,
-    contextWindow: () => CTX,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    // A generator that Stops (throws an AbortError) before yielding any token — the "before first token" case.
-    async *chatStream(messages: ChatMessage[]) {
-      rt.calls++
-      rt.turns.push(messages)
-      const err = new Error('aborted')
-      err.name = 'AbortError'
-      throw err
-    }
-  } as unknown as RecordingRuntime
-  return rt
-}
+/** Reports `ctx` as the launched window (§L0); the shared fake records EVERY call's turns AND runtime options (map
+ *  steps + the reduce), so a test can assert the call count, inspect the map inputs and pin the reduce's
+ *  `maxTokens`. `reply` sizes the map/reduce output (long ⇒ the joined notes overflow the reduce budget → the
+ *  honest truncation path). It never fires `onFinish`, so no Phase 1–3 case ever continues. */
+const mapReduceRuntime = (reply = 'Notiz zum Abschnitt.', ctx = CTX): RecordingRuntime =>
+  recordingRuntime(reply, { contextWindow: ctx })
 
 const userTurnOf = (turn: ChatMessage[]): string => turn.find((m) => m.role === 'user')?.content ?? ''
 const systemTurnOf = (turn: ChatMessage[]): string => turn.find((m) => m.role === 'system')?.content ?? ''
@@ -93,7 +48,7 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
     const fit = wholeDocumentFitBudgetTokens(CTX, WHOLE_DOC_QUESTION, null)
     expect(retrieveWholeDocument(h.db, h.docId, fit).truncated).toBe(true)
 
-    const runtime = recordingRuntime()
+    const runtime = mapReduceRuntime()
     const msg = await answerWholeDoc(h, runtime)
 
     // Honest WHOLE-document coverage via map-reduce — never the beginning-only "PARTIAL DOCUMENT" defect.
@@ -130,7 +85,7 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
     const fit = wholeDocumentFitBudgetTokens(CTX, WHOLE_DOC_QUESTION, null)
     expect(retrieveWholeDocument(h.db, h.docId, fit).truncated).toBe(true) // really over-budget
 
-    const runtime = recordingRuntime()
+    const runtime = mapReduceRuntime()
     const msg = await answerWholeDoc(h, runtime)
 
     expect(runtime.calls).toBe(1) // one window ⇒ reduce only, no map fan-out
@@ -145,7 +100,7 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
 
   it('Stop before the first reduce token → empty message, NO capped second pass', async () => {
     const h = await makeHarness(90) // one-window over-budget doc ⇒ the first call IS the reduce
-    const runtime = abortingRuntime()
+    const runtime = finishScriptedRuntime([{ reply: '', abort: true }], CTX) // a Stop before any token
     const msg = await answerWholeDoc(h, runtime)
 
     // The reduce aborted before any token ⇒ an empty assistant message, no coverage stamp persisted.
@@ -157,7 +112,7 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
 
   it('share-safe: the whole-document scan block rides in the reduce USER turn, never the system prompt', async () => {
     const h = await makeHarness(280) // over-budget, no tree ⇒ chunk map-reduce, PII scan requested
-    const runtime = recordingRuntime()
+    const runtime = mapReduceRuntime()
     const msg = await answerWholeDoc(h, runtime, { wholeDocumentPiiScan: true })
 
     expect(msg.coverage?.truncated).toBe(false) // whole document analysed
@@ -185,7 +140,7 @@ describe('whole-document chunk map-reduce — adaptive reduce output reserve (Ph
   it('ctx 8192: a long deliverable gets the FULL desired reserve and is NOT stamped truncated', async () => {
     const h = await makeHarness(280) // over the 8 k single-read budget ⇒ multi-window map-reduce
     // Short map notes ⇒ the joined notes are tiny, so the reduce keeps the whole ANALYSIS reserve.
-    const runtime = recordingRuntime('Notiz zum Abschnitt.', 8192)
+    const runtime = mapReduceRuntime('Notiz zum Abschnitt.', 8192)
     const msg = await answerWholeDoc(h, runtime)
 
     // Whole-document coverage survives — the long answer fit the cap, no honest-truncation badge.
@@ -201,7 +156,7 @@ describe('whole-document chunk map-reduce — adaptive reduce output reserve (Ph
     const h = await makeHarness(280)
     // Long map notes ⇒ the joined notes exceed (context − overhead − floor-output): even the floor output
     // leaves no room, so the output sits at the floor and the notes are hard-truncated (honest coverage).
-    const runtime = recordingRuntime(`${'Detailpunkt '.repeat(1000)}`.trim(), 4096)
+    const runtime = mapReduceRuntime(`${'Detailpunkt '.repeat(1000)}`.trim(), 4096)
     const msg = await answerWholeDoc(h, runtime)
 
     expect(msg.coverage?.mode).toBe('capped')
@@ -223,7 +178,7 @@ describe('whole-document chunk map-reduce — adaptive reduce output reserve (Ph
 describe('whole-document chunk map-reduce — analysis progress notice (Phase 3)', () => {
   it('fires onCompactionStart("analysis") exactly once on a multi-window (map-loop) turn', async () => {
     const h = await makeHarness(280) // over-budget, no tree ⇒ multi-window map-reduce (a real map loop)
-    const runtime = recordingRuntime()
+    const runtime = mapReduceRuntime()
     const kinds: Array<'analysis' | undefined> = []
     await answerWholeDoc(h, runtime, { onCompactionStart: (kind) => kinds.push(kind) })
 
@@ -233,7 +188,7 @@ describe('whole-document chunk map-reduce — analysis progress notice (Phase 3)
 
   it('does NOT fire on a single-window (reduce-only) whole-doc turn', async () => {
     const h = await makeHarness(90) // over-budget but packs into ONE window ⇒ reduce only, no silent map step
-    const runtime = recordingRuntime()
+    const runtime = mapReduceRuntime()
     const kinds: Array<'analysis' | undefined> = []
     await answerWholeDoc(h, runtime, { onCompactionStart: (kind) => kinds.push(kind) })
 
@@ -249,58 +204,16 @@ describe('whole-document chunk map-reduce — analysis progress notice (Phase 3)
 // (the shared engine's seam de-dup is pinned in rag.test.ts); it is bounded by a hard cap (`MAX_REDUCE_CONTINUATIONS`), and when the
 // cap is exhausted the answer carries an honest OUTPUT-truncated stamp (`Message.truncated`) — kept distinct
 // from `coverage.truncated` (INPUT coverage). These cases use a SINGLE-window fixture (90 sentences) so
-// chatStream call 0 IS the reduce (no map fan-out) and calls 1..N are its continuations.
-
-interface ScriptStep {
-  reply: string
-  /** finish_reason fired via `options.onFinish` after yielding `reply`; omit ⇒ 'stop'. Ignored when `abort`. */
-  finish?: string
-  /** Throw an AbortError after yielding `reply` (a user Stop mid-stream) — fires NO finish reason (the
-   *  runtime contract: an aborted request carries no final chunk). */
-  abort?: boolean
-}
-
-interface FinishScriptingRuntime extends ModelRuntime {
-  calls: number
-  turns: ChatMessage[][]
-}
-
-/** Scripts a finish-reason + reply per chatStream call (index-aligned): a test drives continue-generation
- *  by scripting 'length' on the first reduce and 'stop'/'length'/abort on the continuations. Unlike the
- *  recording/option runtimes above, it FIRES `options.onFinish` — the signal those runtimes never send (so
- *  every Phase 1–3 case still never continues). Calls past the script reuse its LAST step (defensive). */
-function finishScriptingRuntime(script: ScriptStep[]): FinishScriptingRuntime {
-  const rt = {
-    modelId: 'mock',
-    calls: 0,
-    turns: [] as ChatMessage[][],
-    contextWindow: () => CTX,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      const step = script[Math.min(rt.calls, script.length - 1)]
-      rt.calls++
-      rt.turns.push(messages)
-      yield step.reply
-      if (step.abort) {
-        const err = new Error('aborted')
-        err.name = 'AbortError'
-        throw err
-      }
-      options?.onFinish?.(step.finish ?? 'stop')
-    }
-  } as unknown as FinishScriptingRuntime
-  return rt
-}
+// chatStream call 0 IS the reduce (no map fan-out) and calls 1..N are its continuations; `finishScriptedRuntime`
+// scripts each pass's reply + finish reason ('length' on the first reduce, 'stop'/'length'/abort after).
 
 describe('whole-document chunk map-reduce — continue-generation for an over-cap deliverable (Phase 4)', () => {
   it('first reduce ends length, one continuation ends stop → concatenated content, >1 reduce call, no output-truncated stamp', async () => {
     const h = await makeHarness(90)
-    const runtime = finishScriptingRuntime([
+    const runtime = finishScriptedRuntime([
       { reply: 'Teil eins des Ergebnisses.', finish: 'length' },
       { reply: ' Teil zwei schließt den Bericht ab.', finish: 'stop' }
-    ])
+    ], CTX)
     const msg = await answerWholeDoc(h, runtime)
 
     expect(runtime.calls).toBe(2) // the reduce + exactly one continuation
@@ -318,11 +231,11 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
 
   it('a runtime that returns length on every pass → exactly MAX_REDUCE_CONTINUATIONS extra passes, then an honest output-truncated stamp', async () => {
     const h = await makeHarness(90)
-    const runtime = finishScriptingRuntime([
+    const runtime = finishScriptedRuntime([
       { reply: 'Eins. ', finish: 'length' },
       { reply: 'Zwei. ', finish: 'length' },
       { reply: 'Drei. ', finish: 'length' }
-    ])
+    ], CTX)
     const msg = await answerWholeDoc(h, runtime)
 
     // Exactly one reduce + MAX_REDUCE_CONTINUATIONS continuations: the runaway cap prevents a further pass
@@ -339,10 +252,10 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
 
   it('a user Stop mid-continuation persists the accumulated partial and starts no further pass', async () => {
     const h = await makeHarness(90)
-    const runtime = finishScriptingRuntime([
+    const runtime = finishScriptedRuntime([
       { reply: 'Erster vollständiger und ausführlicher Teil des Berichts.', finish: 'length' },
       { reply: ' zweiter Teil', abort: true } // a user Stop mid-continuation (no finish reason fired)
-    ])
+    ], CTX)
     const msg = await answerWholeDoc(h, runtime)
 
     // The aborted continuation's partial is folded in (seam de-duplicated), not discarded…
@@ -355,7 +268,7 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
 
   it('a first reduce that ends stop starts no continuation at all', async () => {
     const h = await makeHarness(90)
-    const runtime = finishScriptingRuntime([{ reply: 'Eine vollständige Antwort.', finish: 'stop' }])
+    const runtime = finishScriptedRuntime([{ reply: 'Eine vollständige Antwort.', finish: 'stop' }], CTX)
     const msg = await answerWholeDoc(h, runtime)
 
     expect(runtime.calls).toBe(1) // the reduce finished cleanly ⇒ zero continuation passes
@@ -380,7 +293,7 @@ describe('whole-document chunk map-reduce — hierarchical fold for the large-do
   it('folds a document beyond the single map-call ceiling into WHOLE-document coverage (not beginning-only)', async () => {
     const SENTENCES = 350 // > SUMMARY_MAP_CALL_CEILING windows at ctx 2048, comfortably ≤ the hard ceiling
     const h = await makeHarness(SENTENCES)
-    const runtime = recordingRuntime(MEDIUM_NOTE, CTX2)
+    const runtime = mapReduceRuntime(MEDIUM_NOTE, CTX2)
     const msg = await answerWholeDoc(h, runtime)
 
     // Honest WHOLE-document coverage — the tail was folded in, NOT dropped at the single-level ceiling.
@@ -398,7 +311,7 @@ describe('whole-document chunk map-reduce — hierarchical fold for the large-do
   it('beyond the HARD ceiling the tail is honestly dropped (deep-index tree territory)', async () => {
     const SENTENCES = 1000 // > SUMMARY_MAP_CALL_HARD_CEILING windows at ctx 2048 ⇒ sliced + truncated
     const h = await makeHarness(SENTENCES)
-    const runtime = recordingRuntime(MEDIUM_NOTE, CTX2)
+    const runtime = mapReduceRuntime(MEDIUM_NOTE, CTX2)
     const msg = await answerWholeDoc(h, runtime)
 
     // Beyond the hard ceiling: honestly beginning-only (INPUT coverage truncated), never a false whole-doc claim.
