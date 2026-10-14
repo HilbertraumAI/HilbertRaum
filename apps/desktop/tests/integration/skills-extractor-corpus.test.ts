@@ -91,28 +91,39 @@ interface CorpusRun {
   /** The fixture's INPUT, as hashed for the snapshot (its chunks, or its geometry pages). */
   input: unknown
   output: unknown
+  /** Why production threw for this fixture: its rows fail by name instead of the whole file failing to collect. */
+  error?: string
 }
 
 /** Every fixture through production ONCE — the figure assertions and the snapshot read the same run. */
 async function runCorpus(): Promise<Map<string, CorpusRun>> {
   const runs = new Map<string, CorpusRun>()
+  // Collection-time work (the snapshot rows are built from these runs): a fixture whose run throws is recorded,
+  // not rethrown, so one broken fixture fails its own rows by name and the rest of the corpus still runs.
+  const run = async (kind: CorpusRun['kind'], input: unknown, produce: () => Promise<unknown>): Promise<CorpusRun> => {
+    try {
+      return { kind, input, output: await produce() }
+    } catch (e) {
+      return { kind, input, output: null, error: e instanceof Error ? e.message : String(e) }
+    }
+  }
   for (const fx of BANK_FIXTURES) {
-    runs.set(fx.id, { kind: 'bank', input: fx.chunks, output: await runTool(extractTransactionsTool, toChunks(fx.chunks)) })
+    runs.set(fx.id, await run('bank', fx.chunks, () => runTool(extractTransactionsTool, toChunks(fx.chunks))))
   }
   // Geometry fixtures snapshot as 'bank': their output is keyed on BANK_EXTRACTOR_VERSION, whose bump
   // policy explicitly covers the `pdf-layout.ts` reconstruction (see the constant's docstring).
   for (const fx of GEOMETRY_BANK_FIXTURES) {
-    runs.set(fx.id, { kind: 'bank', input: fx.pages, output: await runTool(extractTransactionsTool, await layoutChunks(fx.pages)) })
+    runs.set(fx.id, await run('bank', fx.pages, async () => runTool(extractTransactionsTool, await layoutChunks(fx.pages))))
   }
   for (const fx of INVOICE_FIXTURES) {
-    runs.set(fx.id, { kind: 'invoice', input: fx.chunks, output: await runTool(extractInvoiceTool, toChunks(fx.chunks)) })
+    runs.set(fx.id, await run('invoice', fx.chunks, () => runTool(extractInvoiceTool, toChunks(fx.chunks))))
   }
   // Geometry invoice fixtures snapshot as 'invoice' (invoice-hardening P4): keyed on the INVOICE
   // extractor version; `reconstructPage` changes ride the bank version's bump policy (see above). The
   // layout read is the production shape of the P3 suspect-retry (`analysis/invoice.ts` re-reads a soup
   // document via the layout segment reader).
   for (const fx of GEOMETRY_INVOICE_FIXTURES) {
-    runs.set(fx.id, { kind: 'invoice', input: fx.pages, output: await runTool(extractInvoiceTool, await layoutChunks(fx.pages)) })
+    runs.set(fx.id, await run('invoice', fx.pages, async () => runTool(extractInvoiceTool, await layoutChunks(fx.pages))))
   }
   return runs
 }
@@ -122,6 +133,7 @@ const RUNS = await runCorpus()
 function outputOf(fx: CorpusFixture): unknown {
   const run = RUNS.get(fx.id)
   if (!run) throw new Error(`no production run for fixture "${fx.id}"`)
+  if (run.error !== undefined) throw new Error(`the production run for fixture "${fx.id}" threw: ${run.error}`)
   return run.output
 }
 const bankOut = (fx: BankFixture | GeometryBankFixture): ExtractTransactionsOutput =>
@@ -168,8 +180,10 @@ interface SnapshotFile {
 
 function currentSnapshot(): SnapshotFile {
   const fixtures: Record<string, SnapshotEntry> = {}
-  for (const [id, { kind, input, output }] of RUNS) {
-    fixtures[id] = { kind, inputHash: sha256(stableStringify(input)), hash: sha256(stableStringify(output)), output }
+  for (const [id, { kind, input, output, error }] of RUNS) {
+    // A run that threw snapshots as its error, so the per-fixture comparison names it (and regeneration refuses it).
+    const out = error === undefined ? output : { productionRunFailed: error }
+    fixtures[id] = { kind, inputHash: sha256(stableStringify(input)), hash: sha256(stableStringify(out)), output: out }
   }
   return {
     $comment:
@@ -434,6 +448,8 @@ describe('extractor output snapshot — any output change forces a version bump 
       // corpus-maintenance change, needs no extractor bump, and regenerates freely. A first-time create (no
       // committed file) is exempt (bootstrap). This makes the guard actually FORCE the bump on a real
       // extractor change, not merely flag its absence, without blocking fixture upkeep.
+      // Never commit a fixture whose production run threw.
+      expect([...RUNS].filter(([, r]) => r.error !== undefined).map(([id, r]) => `${id}: ${r.error}`)).toEqual([])
       if (existsSync(SNAPSHOT_PATH)) {
         const prior: SnapshotFile = JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8'))
         for (const [id, cur] of Object.entries(fresh.fixtures)) {

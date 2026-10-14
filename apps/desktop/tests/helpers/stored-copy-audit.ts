@@ -355,16 +355,14 @@ export function auditStoredCopies(input: AuditInput): StoredCopyAuditReport {
   // Every leaf any row could be referring to. DELIBERATELY GENEROUS: a name claimed by a row is
   // never an orphan, so both recorded names count — the healed `stored_name` and the leaf of the
   // recorded `stored_path` (which the safety guard may refuse, but a refused name is still
-  // evidence that a row is about that file). The canonical leaf is added too, but it never claims
-  // a file on its own: `canonicalLeafFor` only filters, so a leaf it returns is one of those two
-  // unchanged (#687). Over-claiming produces an UNDER-count of orphans; under-claiming produces a
-  // false orphan, and a false orphan is the one that could get a live document deleted.
+  // evidence that a row is about that file). The canonical leaf needs no claim of its own:
+  // `canonicalLeafFor` only filters, so a leaf it returns is one of those two unchanged (#687).
+  // Over-claiming produces an UNDER-count of orphans; under-claiming produces a false orphan, and a
+  // false orphan is the one that could get a live document deleted.
   const claimed = new Set<string>()
   for (const row of input.rows) {
     if (row.stored_name) claimed.add(row.stored_name)
     if (row.stored_path) claimed.add(storedCopyLeaf(row.stored_path))
-    const canonical = canonicalLeafFor(row)
-    if (canonical) claimed.add(canonical)
   }
   // The third source, and the one that closes the false-orphan hole the recorded names leave open: a
   // row whose recorded strings are corrupt or unnameable (`canonicalLeafFor` → null) names NOTHING, so

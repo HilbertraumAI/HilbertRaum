@@ -41,7 +41,9 @@ class DOMMatrixPolyfill {
 
   constructor(init?: unknown) {
     // An init is a use this polyfill was not built for (a pdf.js bump moving a canvas path into this
-    // process, or another library): fail loudly rather than hand back a silently wrong identity.
+    // process, or another library): throw rather than hand back a silently wrong identity. Inside a
+    // Type3 glyph pdf.js swallows the throw per glyph and our `verbosity: 0` hides its warning, so the
+    // guard that sees it is dommatrix-polyfill.test.ts (real pdf.js at verbosity 1) — re-run it on a bump.
     if (init !== undefined) throw new TypeError('DOMMatrix polyfill: only `new DOMMatrix()` is supported')
   }
 

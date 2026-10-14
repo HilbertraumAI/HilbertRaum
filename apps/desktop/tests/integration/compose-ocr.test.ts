@@ -142,6 +142,16 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
     expect(live.probe).not.toHaveBeenCalled()
   })
 
+  // #687 (code review): only an UNLISTABLE folder is "can't tell". One that lists but holds no language file any
+  // more (deleted by hand; only the orientation file left) is still a change — not "activated" because osd is there.
+  it("'available' with every language file gone but osd present: restartRequired, never activated (#687)", async () => {
+    const root = ocrDrive(['osd'])
+    const live = fakeEngine(['deu', 'eng'], { state: 'available' })
+    const ctx = slot(root, live)
+    expect(await refreshOcrSlot(ctx)).toBe('restartRequired')
+    expect(live.probe).not.toHaveBeenCalled()
+  })
+
   it("'available' and the orientation file just installed: activated — no restart, same engine (#538)", async () => {
     const root = ocrDrive(['deu', 'eng', 'osd'])
     const live = fakeEngine(['deu', 'eng'], { state: 'available' })

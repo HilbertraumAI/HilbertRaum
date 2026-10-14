@@ -228,7 +228,9 @@ describe('#682 wiring pin: main/index.ts hands the doc-task manager the shared c
     const src = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
     const start = src.indexOf('new DocTaskManager({')
     expect(start).toBeGreaterThanOrEqual(0)
-    const block = src.slice(start, src.indexOf('\n  })\n', start))
+    const end = src.indexOf('\n  })\n', start)
+    expect(end).toBeGreaterThan(start) // the constructor's closer, so the block cannot run on into the rest of the file
+    const block = src.slice(start, end)
     expect(src).toMatch(/import \{[^}]*\bisChatStreaming\b[^}]*\} from '\.\/ipc\/inflight'/)
     expect(block).toMatch(/^\s*isChatStreaming,$/m)
   })

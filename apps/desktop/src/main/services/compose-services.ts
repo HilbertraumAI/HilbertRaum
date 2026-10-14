@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSelectedEmbedder } from './embeddings/factory'
 import { createSelectedReranker } from './reranker'
@@ -321,6 +321,17 @@ function sameLanguageSet(a: readonly string[], b: readonly string[]): boolean {
   return sortedA.every((lang, i) => lang === sortedB[i])
 }
 
+/** `dir` exists but cannot be listed (#687): what `listOcrLanguages` reads as an empty folder. */
+function unlistable(dir: string): boolean {
+  if (!existsSync(dir)) return false
+  try {
+    readdirSync(dir)
+    return false
+  } catch {
+    return true
+  }
+}
+
 /**
  * Re-read the drive's `ocr/` folder after an in-app install and bring the OCR slot up to date
  * without a restart (#410). Every consumer reads `ctx.ocrEngine` per call (the ingestion deps,
@@ -355,12 +366,15 @@ export async function refreshOcrSlot(
       ctx.ocrEngine = next
       return (await probeOcrEngine(next)) ? 'activated' : 'startFailed'
     }
-    const onDisk = listOcrLanguages(ocrAssetsDir(rootPath))
-    // #687 (owner call): an EMPTY listing means "can't tell", not a change — `listOcrLanguages` reads a folder it
-    // cannot list (a transient drive read failure) as no files, and a live engine must not then be told to restart.
-    // Trade-off: a live engine whose files were ALL deleted mid-install no longer gets the restart hint; its next
-    // worker start fails and the #232 path reports OCR unavailable.
-    if (onDisk.length > 0 && !sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
+    const dir = ocrAssetsDir(rootPath)
+    const onDisk = listOcrLanguages(dir)
+    // #687 (owner call): a folder that exists but cannot be LISTED right now (an antivirus lock, EACCES) says
+    // nothing about the language set — `listOcrLanguages` reads it as no files — so a live engine is not told to
+    // restart. A folder that lists is compared as before, so language files deleted by hand still read as a change
+    // (and an `osd` file left alone never reads as "activated" for an engine with no languages on disk).
+    if (!(onDisk.length === 0 && unlistable(dir)) && !sameLanguageSet(current.languages, onDisk)) {
+      return 'restartRequired'
+    }
     const availability = current.availability()
     if (availability === 'unavailable') {
       return (await probeOcrEngine(current)) ? 'activated' : 'startFailed'

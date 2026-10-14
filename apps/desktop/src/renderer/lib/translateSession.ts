@@ -70,7 +70,7 @@ let unsubs: Array<(() => void) | undefined> = []
 let startGen = 0
 const listeners = new Set<() => void>()
 
-type TranslateChoice = { sourceLang: TranslationSourceLang; targetLang: TranslationTargetLang }
+export type TranslateChoice = { sourceLang: TranslationSourceLang; targetLang: TranslationTargetLang }
 
 /** Session-local last language choice, ONE memory for every translate surface (DOC-7): module-level
  *  so it persists across screen mounts within the session (never persisted to disk). Written when a
