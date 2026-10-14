@@ -8230,10 +8230,9 @@ rows is ONE call, 21 is two, a 1-row batch is one); `skills-bank-statement-tool.
 opening/closing and a lone line is closing-only → `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`);
 `skills-run.test.ts` (**Phase 3:** a v1 statement is detected stale at v2, a freshly-stamped one is
 not); `doctasks-categorize.test.ts` (model path persists, deterministic fallback persists,
-auto-extract-then-categorize, A9 stale-statement re-extract + replace; **Phase 6:** an extract run
-leaves the doctask lane untouched and the rows uncategorized — no hidden model run);
-`skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO `categorize` doctask —
-U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions" offer renders only
+auto-extract-then-categorize, A9 stale-statement re-extract + replace);
+`skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO `categorize` doctask and
+leaves the rows uncategorized — no hidden model run, U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions" offer renders only
 after a successful rows>0 extract and fires the categorize path with the remembered id; absent for a
 0-row / non-extract / non-done run); `skills-analysis-bank.test.ts` (persisted model categories surface +
 the model-assisted label; **Phase 2:** the rule-based note when `modelAssisted` is false, absent when

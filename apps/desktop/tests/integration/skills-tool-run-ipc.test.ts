@@ -756,13 +756,15 @@ describe('skills tool-run IPC — two conversations, same document (A2 semantics
 describe('skills tool-run IPC — extract does not auto-categorize (U-2)', () => {
   const STATEMENT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
 
-  it('an extract with rows enqueues NO categorize doctask (the model pass is user-initiated)', async () => {
+  it('an extract with rows enqueues NO categorize doctask and leaves the rows uncategorized (the model pass is user-initiated)', async () => {
     const { db, skillInstallId, conversationId } = makeHarness(STATEMENT)
     const docId = resolveInScopeDocumentIds(db, conversationId)[0]
     // A docTasks spy that records every enqueue. The old auto-offer would have started a 'categorize'
     // here (synchronously, inside the runner) whenever rows>0 and no categorize was already pending —
-    // so this spy would catch a regression. The runner is exercised directly: the CI IPC ctx wires no
-    // doctask lane, so the auto-offer could only be observed through the dispatch with one supplied.
+    // so this spy would catch a regression. `hasPendingKind` answers "none pending" so a reinstated
+    // auto-offer reaches `startDocTask` (and fails on `enqueued`, not on a missing method). The runner
+    // is exercised directly: the CI IPC ctx wires no doctask lane, so the auto-offer could only be
+    // observed through the dispatch with one supplied.
     const enqueued: Array<{ kind: string }> = []
     const docTasks = {
       startDocTask: (req: { kind: string }) => {
@@ -783,6 +785,16 @@ describe('skills tool-run IPC — extract does not auto-categorize (U-2)', () =>
     expect(outcome.count).toBe(2) // rows WERE extracted (A2: the runner emits the generic `count`)
     // …yet the LLM categorizer was never started on its own — nothing reached the doctask lane.
     expect(enqueued).toHaveLength(0)
+    // …and no categorization happened inline either: the freshly-extracted rows stay UNcategorized until
+    // the user taps "Categorize" (moved here from doctasks-categorize.test.ts, #682).
+    const categories = db
+      .prepare(
+        `SELECT t.category_id AS c FROM bank_transactions t
+         JOIN bank_statements s ON s.id = t.statement_id
+         WHERE s.document_id = ? ORDER BY t.row_index`
+      )
+      .all(docId) as Array<{ c: string | null }>
+    expect(categories.map((r) => r.c)).toEqual([null, null])
   })
 })
 
