@@ -25,7 +25,7 @@ import { join } from 'node:path'
 // NOTE: this also SUBSUMES Phase-5 item T3 (rag:ask lock-rejection) — registerRagIpc is
 // driven here against a locked ctx, so T3 needs no separate test.
 
-const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>(), dialogOpens: 0 }))
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
@@ -33,7 +33,16 @@ vi.mock('electron', () => ({
   },
   // registerCoreIpc imports `app`/`clipboard`; only referenced inside handlers we don't drive.
   app: { getVersion: () => '0.0.0-test' },
-  clipboard: { writeText: () => {}, readText: () => '', clear: () => {} }
+  clipboard: { writeText: () => {}, readText: () => '', clear: () => {} },
+  // A picker that skips its lock gate, or runs it only after the dialog, reaches the OS dialog: count
+  // it, and answer it (cancelled) so an ungated one reports "resolved instead of rejecting" (#681).
+  BrowserWindow: { getFocusedWindow: () => null },
+  dialog: {
+    showOpenDialog: async () => {
+      ipcState.dialogOpens += 1
+      return { canceled: true, filePaths: [] }
+    }
+  }
 }))
 
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
@@ -156,12 +165,10 @@ const MODULES: Array<{
       ),
     exempt: new Set<string>([IPC.imageGetStatus])
   },
-  // Documents: every DB-touching handler opens with requireUnlocked() — 14 channels, among them the old
-  // docs-ipc "M6" subset, the L-3 preflight gate and the #90 original export. Exempt, each read from its handler:
-  //  - docs:pick — the accepted residual SEC-3 (Info) in architecture.md's follow-up-audit ledger: the dialog
-  //    opens and mints a D1 token while locked; the token is inert until unlock because both consumers
-  //    (importDocuments, importPreflight) are refused here. (The images picker is gated since #119, skills since
-  //    #240.) Gate it (#681) and this entry drops out of the exempt set.
+  // Documents: every DB-touching handler opens with requireUnlocked() — 15 channels, among them the old
+  // docs-ipc "M6" subset, the L-3 preflight gate, the #90 original export and, since #681, docs:pick (the last
+  // picker that opened the OS dialog and minted a D1 token while locked: SEC-3 (Info) in architecture.md's
+  // follow-up-audit ledger; images gated since #119, skills since #240). Exempt, each read from its handler:
   //  - docs:getImportJob / docs:getActiveImportJob — in-memory import aggregates; a poll must still settle after a
   //    mid-job lock (docs-ipc T-4 drives getImportJob while locked).
   //  - docs:getReindexAllJob — the in-memory bulk re-index aggregate (the remount recovery read).
@@ -171,7 +178,6 @@ const MODULES: Array<{
     name: 'registerDocsIpc',
     register: registerDocsIpc,
     exempt: new Set<string>([
-      IPC.pickDocuments,
       IPC.getImportJob,
       IPC.getActiveImportJob,
       IPC.getReindexAllJob,
@@ -221,6 +227,7 @@ describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', (
   for (const mod of MODULES) {
     it(`${mod.name}: every DB-touching handler refuses with the friendly copy when locked`, async () => {
       ipcState.handlers.clear()
+      ipcState.dialogOpens = 0
       mod.register(lockedCtx(tmp))
       const channels = [...handlers.keys()]
       expect(channels.length).toBeGreaterThan(0) // the module registered something
@@ -236,6 +243,9 @@ describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', (
       }
       // Guard against an exempt set that accidentally swallows the whole surface.
       expect(checked).toBeGreaterThan(0)
+      // No picker opened the OS dialog while locked: a gate that runs only after the dialog still
+      // refuses above, but the dialog was already on screen (#681).
+      expect(ipcState.dialogOpens).toBe(0)
     })
   }
 
