@@ -233,6 +233,10 @@ describe('state machine guards (D26)', () => {
 
     manager.cancelDocTask(second.jobId) // queued → dequeued immediately
     expect(manager.getDocTask(second.jobId).state).toBe('cancelled')
+    // #682: the cancelled task frees its document at once, so re-index and delete work again
+    // without waiting for the running task; that one still holds its own.
+    expect(manager.isDocumentBusy(doc2)).toBe(false)
+    expect(manager.isDocumentBusy(doc1)).toBe(true)
 
     manager.cancelDocTask() // no jobId → the running task
     release()

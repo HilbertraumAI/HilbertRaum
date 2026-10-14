@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-14 — the closed 2026-10-06 #613 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #689 entry). Its record is unchanged:
+CB-5 "#613 amendment", design-guidelines §11.21. Its one open item (only the last unanswered question offers "Send again") is a
+design limit recorded there. Citations of the form "BUILD_STATE 2026-10-06 #613 entry" now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-10-06 — **#613 — "Send again" under a question that got no answer (`feat/613-resend-unanswered`).** After an error, a crash or a stop before the first word
+the question was a dead end ("Try again" is answer-only, the banner had no retry, the next send dropped it from the prompt). The last unanswered question now shows "↺ Send
+again" in both modes: `ChatOptions.resendMessageId` / `askDocuments`' 6th argument; main answers the stored question in place (id re-checked, else `nothingToResend`; auto-fire
+scores it) and a started attempt drops the old "Not answered" cause. Record: CB-5 "#613 amendment", design-guidelines §11.21. Open: only the last question._
+
 ## 2026-10-14 — the closed 2026-10-06 #581 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-14 (preamble budget, making room for the #681 entry). Its record is unchanged:

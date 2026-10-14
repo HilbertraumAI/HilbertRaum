@@ -67,7 +67,9 @@ export function registerDocTasksIpc(ctx: AppContext): void {
     // active-task match made Stop a silent no-op for a translation queued behind a foreign
     // running task, which then ran to completion). The FA-3 / F-6 stale-Stop property holds:
     // a settled task is terminal (no-op), and a newer task on the lane has a different id.
-    // An ABSENT id keeps the active-task fallback (the chat busy banner) — old callers unchanged.
+    // #689: one exception, a finished deep-index tree passes the cancel on to the extract it
+    // chained (manager.ts `cancelDocTask`). An ABSENT id keeps the active-task fallback: since
+    // #689 only the chat busy banner sends none, the Documents row sends its task's id.
     if (id) manager.cancelDocTask(id)
     else manager.cancelDocTask(null)
   })

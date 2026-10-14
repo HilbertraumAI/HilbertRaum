@@ -23,7 +23,7 @@ import {
 import type { AnswerSpeed } from '@shared/ipc'
 import { isReviewEligible } from '@shared/evidence-review'
 import type { ReviewHandoffTarget } from '../lib/reviewSession'
-import { cancelActiveDocTask } from '../lib/doctasks'
+import { cancelRunningDocTask } from '../lib/doctasks'
 import {
   acknowledgeSkillRun,
   adoptSkillRuns,
@@ -2600,7 +2600,9 @@ export function ChatScreen({
             </div>
           )}
           {/* Chat refused while a document task runs: the shared
-              copy comes with an actionable cancel — the task, not the chat. */}
+              copy comes with an actionable cancel — the task, not the chat. #689: the running
+              task, whichever screen started it (`cancelRunningDocTask`), not the Documents
+              store's, which may be queued behind it or absent. */}
           {error != null && error.includes(DOC_TASK_BUSY_MESSAGE) && (
             <>
               {' '}
@@ -2609,7 +2611,7 @@ export function ChatScreen({
                 onClick={() => {
                   // full-audit 2026-07-11 CODE-39: a rejected cancel was swallowed here (an
                   // explicit no-op catch) — the banner stayed up with zero feedback. Surface it.
-                  void cancelActiveDocTask()
+                  void cancelRunningDocTask()
                     .then(() => setError(null))
                     .catch((e) => setError(friendlyIpcError(e)))
                 }}

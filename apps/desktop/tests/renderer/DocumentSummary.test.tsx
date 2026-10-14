@@ -3,23 +3,15 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { ToastProvider } from '../../src/renderer/components'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
-import {
-  DOC_TASK_BUSY_MESSAGE,
-  type DocTaskStatus,
-  type DocumentInfo,
-  type DocumentSummary,
-  type RuntimeStatus
-} from '../../src/shared/types'
+import { type DocTaskStatus, type DocumentInfo, type DocumentSummary } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
-// Phase 33 renderer tests: the Summarize row action + polling busy state, the summary
-// display in the preview (attribution line, truncated note, Regenerate), and the chat-during-task
-// busy copy with its cancel option. The failed-task banner is kind-agnostic: DocumentsScreenPolish
-// DR-7 owns it.
+// Phase 33 renderer tests: the Summarize row action + polling busy state, and the summary
+// display in the preview (attribution line, truncated note, Regenerate). The chat busy banner's
+// cancel lives with ChatScreen's other send-failure rows (ChatSendFailure.test.tsx). The
+// failed-task banner is kind-agnostic: DocumentsScreenPolish DR-7 owns it.
 
 function doc(over: Partial<DocumentInfo> = {}): DocumentInfo {
   return {
@@ -142,10 +134,9 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     await user.click(await screen.findByRole('menuitem', { name: /^summarize$/i }))
     await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
     // full-audit 2026-07-11 CODE-47: assert the EXACT args so cancelling the wrong task can't
-    // stay green. The row Cancel routes through `cancelActiveDocTask()`, the no-arg active-task
-    // fallback (`cancelDocTask(null)` server-side — manager.ts), so the truthful teeth-giving
-    // pin is zero args; any stale/foreign jobId slipping in would redden this.
-    expect(cancelDocTask).toHaveBeenCalledWith()
+    // stay green. #689: the row's own task by its id. With no id, main cancelled whatever held
+    // the lane, so a summary queued behind another screen's task stopped that task instead.
+    expect(cancelDocTask).toHaveBeenCalledWith('j1')
   })
 
   // full-audit 2026-07-11 CODE-29: the row's Cancel was fire-and-forget (`void
@@ -260,61 +251,5 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     // The menu opened (its Re-index item renders, disabled while the row reads) — so the absence below is the gate's.
     expect(await screen.findByRole('menuitem', { name: 'Re-index' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /^summarize$/i })).not.toBeInTheDocument()
-  })
-})
-
-describe('ChatScreen — chat during a document task (D26 friendly copy)', () => {
-  const runningStatus: RuntimeStatus = {
-    running: true,
-    modelId: 'm1',
-    port: 1234,
-    healthy: true,
-    message: 'ok'
-  }
-
-  it('shows the shared busy copy with a working cancel option', async () => {
-    const user = userEvent.setup()
-    const cancelDocTask = vi.fn(async () => {})
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      listMessages: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [doc()]),
-      createConversation: vi.fn(async () => ({
-        id: 'c1',
-        title: 'New chat',
-        createdAt: '2026-06-11T00:00:00Z',
-        updatedAt: '2026-06-11T00:00:00Z',
-        modelId: null,
-        mode: 'chat' as const,
-        scopeDocumentIds: null,
-        collectionId: null,
-        scope: null
-      })),
-      sendChatMessage: vi.fn(async () => {
-        throw new Error(DOC_TASK_BUSY_MESSAGE)
-      }),
-      onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {}),
-      cancelDocTask
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
-    )
-
-    const input = await screen.findByPlaceholderText('Message…')
-    await user.type(input, 'hello')
-    await user.click(screen.getByRole('button', { name: /^send$/i }))
-
-    expect(await screen.findByText(new RegExp(DOC_TASK_BUSY_MESSAGE.slice(0, 30)))).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /cancel document task/i }))
-    expect(cancelDocTask).toHaveBeenCalled()
-    // The banner clears once the task was cancelled.
-    await waitFor(() =>
-      expect(screen.queryByText(new RegExp(DOC_TASK_BUSY_MESSAGE.slice(0, 30)))).not.toBeInTheDocument()
-    )
   })
 })
