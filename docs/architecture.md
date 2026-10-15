@@ -2133,21 +2133,28 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     error box), and a one-line `$$ x $$` paragraph rendered inline (the 4B's own shape). A `$$ … $$`
     pair on lines of its own is now rewritten into the fence form at its line's indentation
     (`canonicalizeDisplayDollars`), as a line-anchored `\[ … \]` always was. That rule now keeps the
-    indentation too, so a formula in a list item stays in it. A pair sharing its line with prose
-    stays inline, as do `$x$` and `\(x\)`. A lone `$$` at the start of a line (a stopped or cut-off
-    turn) keeps the TeX on its line: typeset if it parses, else KaTeX's error text.
+    indentation too, so a formula in a list item stays in it. A fence keeps an indentation only
+    under four columns (`fenceIndent`): four or more, or a tab, is an indented code block outside a
+    list, so such a line keeps its earlier reading (a `\[` drops the indentation, a `$$` pair is
+    left alone). A pair sharing its line with prose stays inline, as do `$x$` and `\(x\)`. A lone
+    `$$` at the start of a line (a stopped or cut-off turn) keeps the TeX on its line: typeset if it
+    parses, else KaTeX's error text. A `\[`, `\]`, `\(` or `\)` whose backslash is itself escaped is
+    no delimiter: `\\[2pt]` is a TeX row break.
     While streaming, the remend handler (`trailing-math`, priority 10) completes a dangling `\[`, `\(`,
     `$` or `$$` through `completePartialTex`, which KaTeX validates, or hides it for that flush.
     Before this, a dangling `$$` went to remend's own katex handler, which only appends the closer:
     the error box until the TeX parsed (~200 ms in the real app). Four details keep the bubble free
     of error boxes:
     - A lone `$` at the end counts as half a closer.
-    - `\\[2pt]` (a TeX row break) is no `\[` opener. Read as one, it hid the rest of the answer.
+    - `\\[2pt]` is no `\[` opener here either. Read as one, it hid the rest of the answer.
     - A completed display tail ends in a newline, so the closers remend's later handlers append
       cannot glue to its fence.
-    - An unmatched `[` inside a formula is spelled `\lbrack{}`, the same glyph. Otherwise remend's
-      links completion read it as an unfinished link, appending `](streamdown:incomplete-link)`
-      after a half-open interval like `[0, 1)`, or into a formula still streaming.
+    - An unmatched `[` inside a formula is spelled `\lbrack ` (with the space), the same glyph and
+      spacing. Otherwise remend's links completion read it as an unfinished link, appending
+      `](streamdown:incomplete-link)` after a half-open interval like `[0, 1)`, or into a formula
+      still streaming.
+    The handler completes a dangling `$$` only when it is the last of the trailing prose segment;
+    one that lies before a code span is left to remend's katex handler, as before.
     The persisted turn renders statically, without remend, from the model's own TeX. The two passes
     cost under 1 ms per flush on a 20 KB answer. Known limits:
     - An environment (`\begin{aligned}`) or a `\left` streams hidden until it closes.

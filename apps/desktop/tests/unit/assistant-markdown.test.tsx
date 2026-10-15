@@ -455,6 +455,16 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(shown.prose).not.toContain('streamdown:incomplete-link')
   })
 
+  it('STREAMING: a shielded [ draws exactly the formula the persisted turn draws (#701)', () => {
+    // The spelling must not change the spacing: after `\lbrack{}` a `-` became a binary minus.
+    const text = 'Interval:\n\n$$ x \\in [-1, 1) $$\n\nMore'
+    const live = rendered(text, true).container.querySelector('.katex-html')?.innerHTML
+    cleanup()
+    const settled = rendered(text).container.querySelector('.katex-html')?.innerHTML
+    expect(live).toBeTruthy()
+    expect(live).toBe(settled)
+  })
+
   it.each([
     ['$$', 'See [1\n\n$$ x = 1'],
     ['\\[', 'See [1\n\n\\[ x = 1']
@@ -518,13 +528,41 @@ describe('AssistantMarkdown math (KaTeX)', () => {
   })
 
   it.each([
-    ['$$', '1. Root:\n   $$ x = 1 $$\n2. Next'],
-    ['\\[', '1. Root:\n   \\[ x = 1 \\]\n2. Next']
-  ])('STATIC: a %s display formula in a list item stays in the item (#701)', (_form, text) => {
-    const { container } = render(<AssistantMarkdown text={text} />)
-    const items = container.querySelectorAll('li')
-    expect(items).toHaveLength(2)
-    expect(items[0]!.querySelector('.katex-display')).not.toBeNull()
+    ['$$', '1. Root:\n   $$ x = 1 $$\n2. Next', false, 2],
+    ['\\[', '1. Root:\n   \\[ x = 1 \\]\n2. Next', false, 2],
+    ['streamed \\[ alone on its line', '1. Root:\n   \\[\n   x = \\frac{1}{2}', true, 1]
+  ])('a %s display formula in a list item stays in the item (#701)', (_form, text, streaming, items) => {
+    const { container } = render(<AssistantMarkdown text={text} streaming={streaming} />)
+    const listItems = container.querySelectorAll('li')
+    expect(listItems).toHaveLength(items)
+    expect(listItems[0]!.querySelector('.katex-display')).not.toBeNull()
+  })
+
+  // Four columns or more outside a list is an indented code block, so a fence keeping that
+  // indentation would be code: such a line keeps the reading it had.
+  it.each([
+    ['a \\[ pair typesets', 'Text\n\n    \\[ x = \\frac{1}{2} \\]\n\nmore', false],
+    ['a streamed \\[ typesets', 'Text\n\n    \\[ x = \\frac{1}{2}', true]
+  ])('a formula indented four columns outside a list keeps its reading: %s (#701)', (_case, text, streaming) => {
+    const shown = rendered(text, streaming)
+    expect(shown.display).toBe(1)
+    expect(shown.tex, 'the formula, not an empty block after a code line').toEqual(['x = \\frac{1}{2}'])
+  })
+
+  it('STATIC: a $$ pair indented four columns stays the one-line code block it was (#701)', () => {
+    const { container } = render(<AssistantMarkdown text={'Text\n\n    $$x$$\n\nmore'} />)
+    expect(container.querySelector('.katex')).toBeNull()
+    // Streamdown renders each code line as an element of its own, with no newline between them.
+    const lines = [...(container.querySelector('pre code')?.children ?? [])].map((line) => line.textContent)
+    expect(lines).toEqual(['$$x$$'])
+  })
+
+  it('STATIC: a \\\\[2pt] row break is no \\[ opener, so the formulas around it keep their pairs (#701)', () => {
+    const shown = rendered(
+      'Aligned:\n\n$$\n\\begin{aligned} a &= b \\\\[2pt] c &= d \\end{aligned}\n$$\n\nand \\[ y \\] too'
+    )
+    expect(shown.math).toBe(2)
+    expect(shown.errors).toBe(0)
   })
 
   it('STATIC: a turn stopped inside a one-line $$ formula keeps its TeX on screen (#701)', () => {

@@ -48,19 +48,34 @@ function normalizeMathDelimiters(text: string): string {
       canonicalizeDisplayDollars(parts[i]!)
         // Line-anchored \[ … \] next: micromark's DISPLAY (flow) math needs `$$` on its own
         // lines, so a block-shaped bracket pair becomes the fence form, at the line's indentation
-        // (#701: dropping it took a formula in a list item out of the list)…
+        // when a fence may keep it (#701: dropping it took a formula in a list item out of the
+        // list)… A delimiter's backslash must not be escaped itself: `\\[2pt]` is a TeX row break.
         .replace(
-          /^([ \t]*)\\\[([\s\S]+?)\\\][ \t]*$/gm,
-          (_m, indent: string, inner: string) => `${indent}$$\n${indent}${inner.trim()}\n${indent}$$`
+          /^([ \t]*)\\\[([\s\S]+?)(?<!\\)\\\][ \t]*$/gm,
+          (_m, indent: string, inner: string) => displayFence(fenceIndent(indent) ?? '', inner.trim())
         )
         // …and anything left (mid-sentence brackets, \( … \)) becomes inline math text.
-        .replace(/\\\[([\s\S]+?)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
-        .replace(/\\\(([\s\S]+?)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
+        .replace(/(?<!\\)\\\[([\s\S]+?)(?<!\\)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
+        .replace(/(?<!\\)\\\(([\s\S]+?)(?<!\\)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
     )
   }
   const last = parts.length - 1
-  if (last % 2 === 0) parts[last] = openDanglingDisplayDollar(parts, parts[last]!)
+  if (last % 2 === 0) parts[last] = openDanglingDisplayDollar(parts)
   return parts.join('')
+}
+
+/** A display formula in micromark's fence form: `$$` alone on the lines around its TeX. */
+function displayFence(indent: string, tex: string): string {
+  return `${indent}$$\n${indent}${tex}\n${indent}$$`
+}
+
+/**
+ * The indentation a display fence may keep, or null. Under four columns it is a list item's
+ * content line (or none). Four or more, or a tab, is an indented code block outside a list, so
+ * a fence kept there would turn the formula into code; such lines keep their earlier reading.
+ */
+function fenceIndent(indent: string): string | null {
+  return /^ {0,3}$/.test(indent) ? indent : null
 }
 
 // #701 — models write display math as `$$ … $$` in shapes micromark's flow construct does not
@@ -70,31 +85,37 @@ function normalizeMathDelimiters(text: string): string {
 // → one KaTeX error box over everything after it); and a one-line `$$ x $$` paragraph became
 // INLINE math. A `$$ … $$` pair that occupies whole lines is therefore rewritten into the fence
 // form, as the line-anchored `\[ … \]` rule already is, keeping the line's indentation so a formula
-// in a list item stays in it. The pair never spans a blank line or another `$$`: a line holding
-// `$$a$$ and $$b$$` is two inline formulas and does not match, nor does a `$$$` run.
-const BLOCK_DOLLAR_RE = /^([ \t]*)\$\$(?!\$)((?:(?!\$\$|\n[ \t]*\n)[\s\S])+?)(?<!\$)\$\$(?!\$)[ \t]*$/gm
+// in a list item stays in it (`fenceIndent`: four columns or more stay as they were). The pair
+// never spans a blank line or another `$$`: a line holding `$$a$$ and $$b$$` is two inline
+// formulas and does not match, nor does a `$$$` run.
+const BLOCK_DOLLAR_RE = /^( {0,3})\$\$(?!\$)((?:(?!\$\$|\n[ \t]*\n)[\s\S])+?)(?<!\$)\$\$(?!\$)[ \t]*$/gm
 
 function canonicalizeDisplayDollars(prose: string): string {
   if (!prose.includes('$$')) return prose
   return prose.replace(BLOCK_DOLLAR_RE, (m, indent: string, inner: string) =>
-    inner.trim() === '' ? m : `${indent}$$\n${indent}${inner.trim()}\n${indent}$$`
+    inner.trim() === '' ? m : displayFence(indent, inner.trim())
   )
 }
 
 /** A `$$` delimiter: exactly two dollars, not a backslash-escaped `\$` (micromark's reading). */
 const DISPLAY_DOLLAR_RE = /(?<![\\$])\$\$(?!\$)/g
 
-function displayDollarCount(parts: string[]): number {
-  let n = 0
-  for (let i = 0; i < parts.length; i += 2) n += parts[i]!.match(DISPLAY_DOLLAR_RE)?.length ?? 0
-  return n
-}
-
-/** Index of the last `$$` delimiter in `prose`, or -1. */
-function lastDisplayDollar(prose: string): number {
-  let at = -1
-  for (const m of prose.matchAll(DISPLAY_DOLLAR_RE)) at = m.index
-  return at
+/**
+ * The `$$` left without a partner, when it is the trailing prose segment's own last one: its
+ * index there, and the indentation its display fence keeps (null mid-line, or where a fence may
+ * not keep it). Null when every `$$` has its partner, when the buffer ends inside code, or when
+ * the unpaired one lies before a code span: which `$$` that is cannot be told from here.
+ */
+function danglingDisplayDollar(parts: string[]): { open: number; fence: string | null } | null {
+  const last = parts.length - 1
+  if (last % 2 === 1) return null
+  const inTail = [...parts[last]!.matchAll(DISPLAY_DOLLAR_RE)]
+  let before = 0
+  for (let i = 0; i < last; i += 2) before += parts[i]!.match(DISPLAY_DOLLAR_RE)?.length ?? 0
+  if (inTail.length % 2 === 0 || before % 2 === 1) return null
+  const open = inTail[inTail.length - 1]!.index
+  const head = parts[last]!.slice(0, open)
+  return { open, fence: fenceIndent(head.slice(head.lastIndexOf('\n') + 1)) }
 }
 
 // #701 — the one `$$` left without a partner (a turn stopped or cut off mid-formula, or the live
@@ -103,16 +124,16 @@ function lastDisplayDollar(prose: string): number {
 // formula had been. Move that TeX to its own line so it is kept: typeset when it parses, otherwise
 // KaTeX's error text, which is the raw TeX. Mid-line, or with a `$` after it, micromark reads the
 // line as paragraph text and an unclosed `$$` stays literal; that needs nothing.
-function openDanglingDisplayDollar(parts: string[], tail: string): string {
-  if (displayDollarCount(parts) % 2 === 0) return tail
-  const open = lastDisplayDollar(tail)
-  if (open === -1) return tail
-  const lineStart = tail.lastIndexOf('\n', open - 1) + 1
-  const indent = tail.slice(lineStart, open)
-  const lineEnd = tail.indexOf('\n', open) === -1 ? tail.length : tail.indexOf('\n', open)
+function openDanglingDisplayDollar(parts: string[]): string {
+  const tail = parts[parts.length - 1]!
+  const dangling = danglingDisplayDollar(parts)
+  if (dangling === null || dangling.fence === null) return tail
+  const { open, fence } = dangling
+  const newline = tail.indexOf('\n', open)
+  const lineEnd = newline === -1 ? tail.length : newline
   const rest = tail.slice(open + 2, lineEnd)
-  if (!/^[ \t]*$/.test(indent) || rest.trim() === '' || rest.includes('$')) return tail
-  return `${tail.slice(0, open + 2)}\n${indent}${rest.trimStart()}${tail.slice(lineEnd)}`
+  if (rest.trim() === '' || rest.includes('$')) return tail
+  return `${tail.slice(0, open + 2)}\n${fence}${rest.trimStart()}${tail.slice(lineEnd)}`
 }
 
 // #501 — models write inline math as `$ … $` at least as often as `$$ … $$`, and remark-math's
@@ -276,7 +297,9 @@ function completeTrailingBracketMath(text: string): string {
   const before = tail.slice(0, open)
   const indent = before.slice(before.lastIndexOf('\n') + 1)
   const blockShaped = isBlock && /^[ \t]*$/.test(indent)
-  parts[last] = before + (blockShaped ? displayTail(indent, fixed) : `$$${fixed}$$`)
+  parts[last] = blockShaped
+    ? before.slice(0, before.length - indent.length) + displayTail(fenceIndent(indent) ?? '', fixed.trim())
+    : `${before}$$${fixed}$$`
   return parts.join('')
 }
 
@@ -295,13 +318,13 @@ function lastUnescaped(s: string, opener: string): number {
 }
 
 /**
- * A completed DISPLAY tail in the fence form, at its line's indentation. The trailing newline
- * keeps the closing `$$` a fence line of its own: remend's later handlers append their closers to
- * the buffer (an unmatched `[` in the prose above gets `](streamdown:incomplete-link)`), and glued
- * to the fence that text left the formula open, a KaTeX error box (#701).
+ * A completed DISPLAY tail: the fence form, then a newline that keeps the closing `$$` a fence
+ * line of its own. remend's later handlers append their closers to the buffer (an unmatched `[`
+ * in the prose above gets `](streamdown:incomplete-link)`), and glued to the fence that text left
+ * the formula open, a KaTeX error box (#701).
  */
 function displayTail(indent: string, tex: string): string {
-  return `$$\n${indent}${tex}\n${indent}$$\n`
+  return `${displayFence(indent, tex)}\n`
 }
 
 // Streaming companion to `promoteSingleDollarMath` (#501): a trailing `$ E = mc^` has no closer
@@ -337,15 +360,14 @@ function completeTrailingDollarMath(text: string): string {
 function completeTrailingDisplayDollarMath(text: string): string {
   if (!text.includes('$$')) return text
   const parts = text.split(CODE_SPLIT_RE)
+  // Null also when the unpaired `$$` lies before a code span: remend's katex handler closes that
+  // one, as it did before.
+  const dangling = danglingDisplayDollar(parts)
+  if (dangling === null) return text
+  const { open, fence } = dangling
   const last = parts.length - 1
-  if (last % 2 === 1) return text // the buffer currently ends inside code — leave it alone
-  if (displayDollarCount(parts) % 2 === 0) return text // every `$$` has its partner
   const tail = parts[last]!
-  const open = lastDisplayDollar(tail)
-  if (open === -1) return text
   const before = tail.slice(0, open)
-  const indent = before.slice(before.lastIndexOf('\n') + 1)
-  const isBlock = /^[ \t]*$/.test(indent)
   // A lone `$` at the very end is the closer's first half: without this cut the formula would
   // vanish for the one flush between the two dollars.
   const inner = tail.slice(open + 2).replace(/(?<![\\$])\$[ \t]*$/, '')
@@ -353,7 +375,7 @@ function completeTrailingDisplayDollarMath(text: string): string {
   // (the persisted turn shows it so). Escape it rather than complete it: completed, everything
   // after it stayed hidden while it did not parse as TeX (`&` does not), and left as it is,
   // remend's katex handler would close it at the end of the buffer instead.
-  if (!isBlock && /\n[ \t]*\n/.test(inner)) {
+  if (fence === null && /\n[ \t]*\n/.test(inner)) {
     parts[last] = `${before}\\$\\$${tail.slice(open + 2)}`
     return parts.join('')
   }
@@ -362,8 +384,10 @@ function completeTrailingDisplayDollarMath(text: string): string {
   // flush rather than flash a stray `$$`, raw TeX or a KaTeX error box.
   if (fixed === null) {
     parts[last] = before
+  } else if (fence === null) {
+    parts[last] = `${before}$$${fixed}$$`
   } else {
-    parts[last] = before + (isBlock ? displayTail(indent, fixed.trim()) : `$$${fixed}$$`)
+    parts[last] = before.slice(0, before.length - fence.length) + displayTail(fence, fixed.trim())
   }
   return parts.join('')
 }
@@ -373,8 +397,10 @@ function completeTrailingDisplayDollarMath(text: string): string {
 // to the buffer. A half-open interval in a formula already closed (`$$ x \in [0, 1) $$`) left
 // that text at the end of the live bubble for the rest of the stream; inside the formula still
 // streaming (`x \in [a, b`) it landed after the closing `$$` and broke the formula into a KaTeX
-// error box. Such a `[` becomes `\lbrack{}`, which KaTeX draws as the same glyph. Streaming
-// only: the persisted turn renders statically, with no remend and its own TeX.
+// error box. Such a `[` becomes `\lbrack ` (the space ends the control word and adds nothing),
+// which KaTeX draws as the same glyph with the same spacing; `\lbrack{}` would not: its empty
+// group is an atom of its own, and a `-` after it became a binary minus. Streaming only: the
+// persisted turn renders statically, with no remend and its own TeX.
 const MATH_SPAN_RE = /(?<![\\$])\$\$(?!\$)([\s\S]*?)(?<![\\$])\$\$(?!\$)/g
 
 function shieldMathBrackets(text: string): string {
@@ -391,7 +417,7 @@ function shieldMathBrackets(text: string): string {
       }
       if (open.length === 0) return span
       let out = tex
-      for (const j of open.reverse()) out = `${out.slice(0, j)}\\lbrack{}${out.slice(j + 1)}`
+      for (const j of open.reverse()) out = `${out.slice(0, j)}\\lbrack ${out.slice(j + 1)}`
       return `$$${out}$$`
     })
   }
