@@ -182,6 +182,24 @@ describe('AssistantMarkdown layout without Tailwind (#550)', () => {
 })
 
 describe('AssistantMarkdown math (KaTeX)', () => {
+  /**
+   * What a reader sees: how many formulas KaTeX typeset and how many of them as display math,
+   * its error boxes, the TeX of each typeset formula, and the text outside the formulas.
+   */
+  function rendered(text: string, streaming = false) {
+    const { container } = render(<AssistantMarkdown text={text} streaming={streaming} />)
+    const prose = container.cloneNode(true) as HTMLElement
+    for (const formula of prose.querySelectorAll('.katex')) formula.remove()
+    return {
+      container,
+      math: container.querySelectorAll('.katex').length,
+      display: container.querySelectorAll('.katex-display').length,
+      errors: container.querySelectorAll('.katex-error').length,
+      tex: [...container.querySelectorAll('.katex annotation')].map((a) => a.textContent),
+      prose: prose.textContent ?? ''
+    }
+  }
+
   it('renders block math as real KaTeX output with the matching JS/CSS version', () => {
     // Smoke test for the version-skew blocker: rehype-katex must render with the same katex
     // VERSION whose CSS/fonts AssistantMarkdown loads. With a skew, KaTeX either misrenders or
@@ -332,15 +350,20 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.querySelector('.katex-error'), 'must not render as a KaTeX error').toBeNull()
   })
 
-  it('STREAMING: an unsalvageable partial is HIDDEN, not shown as raw TeX or an error', () => {
+  it.each([
+    ['\\[', 'so:\n\n\\[ \\left( x + 1'],
+    ['$ (#501)', 'so:\n\n$\\left( x + 1'],
+    ['$$ (#701)', 'so:\n\n$$ \\left( x + 1'],
+    ['$$ with nothing after it yet (#701)', 'so:\n\n$$']
+  ])('STREAMING: an unsalvageable %s partial is HIDDEN, not shown as raw TeX or an error', (_form, text) => {
     // \left( with no \right cannot be balanced by brace-closing — hold the math back this
-    // flush instead of flashing raw TeX; it appears once enough streams in to parse.
-    const { container } = render(
-      <AssistantMarkdown text={'so:\n\n\\[ \\left( x + 1'} streaming />
-    )
+    // flush instead of flashing raw TeX; it appears once enough streams in to parse. A bare
+    // `$$` has nothing to typeset yet: no stray delimiter, no empty block.
+    const { container } = render(<AssistantMarkdown text={text} streaming />)
     expect(container.querySelector('.katex')).toBeNull()
     expect(container.querySelector('.katex-error')).toBeNull()
     expect(container.textContent).not.toContain('\\left')
+    expect(container.textContent).not.toContain('$')
     expect(container.textContent).toContain('so:')
   })
 
@@ -361,18 +384,97 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.textContent).toContain('$5 and the')
   })
 
-  it('STREAMING: an unsalvageable $ tail is HIDDEN, not shown as raw TeX or an error (#501)', () => {
-    const { container } = render(<AssistantMarkdown text={'so:\n\n$\\left( x + 1'} streaming />)
-    expect(container.querySelector('.katex')).toBeNull()
-    expect(container.querySelector('.katex-error')).toBeNull()
-    expect(container.textContent).not.toContain('\\left')
-    expect(container.textContent).toContain('so:')
-  })
-
   it('STREAMING: a $ tail inside an unclosed code fence stays verbatim (#501)', () => {
     const { container } = render(<AssistantMarkdown text={'```\n$x^2'} streaming />)
     expect(container.querySelector('.katex')).toBeNull()
     expect(container.textContent).toContain('$x^2')
+  })
+
+  // #701: a dangling `$$` was closed by remend's own katex handler, which appends `$$` and
+  // nothing more, so rehype-katex got TeX that could not parse yet and showed its error box.
+  it.each([
+    ['the half-streamed macro', '$$ x = \\frac{-b \\pm \\sqrt', true],
+    ['a numerator awaiting its denominator', '$$ x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}', true],
+    ['the fence form', '$$\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}', true],
+    ['the closer’s first dollar', '$$ x = 1 $', true],
+    ['mid-sentence (inline)', 'so an $$x^2 + \\frac{', false]
+  ])('STREAMING: a dangling $$ typesets, never a KaTeX error box: %s (#701)', (_case, text, display) => {
+    const shown = rendered(text, true)
+    expect(shown.math, 'the partial should typeset').toBe(1)
+    expect(shown.errors).toBe(0)
+    expect(shown.display).toBe(display ? 1 : 0)
+    expect(shown.prose, 'no delimiter left on screen').not.toContain('$')
+  })
+
+  // The acceptance property over every flush a real stream can produce: no prefix shows an error
+  // box or a stray `$$`, and a formula keeps the mode it ends in. The first answer is the 4B's own
+  // shape in the #698 real-app leg: on master it flashed the error box and then settled INLINE.
+  it.each([
+    ['a one-line display formula', 'Root:\n\n$$ x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a} $$\n\nDone.', 'display'],
+    [
+      'an environment glued to both fences',
+      'Sys:\n\n$$\\begin{aligned}\na &= b + c \\\\\nd &= \\frac{e}{f}\n\\end{aligned}$$\n\nDone.',
+      'display'
+    ],
+    ['an inline formula', 'Inline $$x^2 + \\frac{1}{2}$$ in text.', 'inline']
+  ])('STREAMING: every prefix of %s shows no error box, no stray $$ and one mode (#701)', (_case, answer, mode) => {
+    for (let n = 1; n <= answer.length; n++) {
+      const prefix = JSON.stringify(answer.slice(0, n))
+      const shown = rendered(answer.slice(0, n), true)
+      expect(shown.errors, prefix).toBe(0)
+      expect(shown.prose, prefix).not.toContain('$$')
+      if (shown.math > 0) expect(shown.display > 0 ? 'display' : 'inline', prefix).toBe(mode)
+      cleanup()
+    }
+    const settled = rendered(answer)
+    expect(settled.errors).toBe(0)
+    expect(settled.display > 0 ? 'display' : 'inline').toBe(mode)
+  })
+
+  it('STREAMING: a $$ mid-sentence with a paragraph after it stays literal; the paragraph shows (#701)', () => {
+    // Inline math never crosses a blank line, so that `$$` was prose. Completed as one formula,
+    // what follows was hidden for as long as it did not parse as TeX (`&` does not).
+    const { container } = render(<AssistantMarkdown text={'It costs $$5.\n\nTom & Jerry agree.'} streaming />)
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('$$5.')
+    expect(container.textContent).toContain('Tom & Jerry agree.')
+  })
+
+  // #701: remend's links completion runs after the math completions and reads every `[` without a
+  // matching `]` as an unfinished link, math included: it appended `](streamdown:incomplete-link)`.
+  it.each([
+    ['a closed formula with text after it', 'Interval:\n\n$$ x \\in [0, 1) $$\n\nMore text'],
+    ['a $$ formula still streaming', 'Range:\n\n$$ x \\in [a, b'],
+    ['a \\[ formula still streaming', 'Range:\n\n\\[ x \\in [a, b'],
+    ['a $ formula still streaming', 'Range: $x \\in [a, b']
+  ])('STREAMING: an open interval in %s is typeset, not an unfinished link (#701)', (_case, text) => {
+    const shown = rendered(text, true)
+    expect(shown.math).toBe(1)
+    expect(shown.errors).toBe(0)
+    expect(shown.container.querySelector('.katex-html')?.textContent).toContain('[')
+    expect(shown.prose).not.toContain('streamdown:incomplete-link')
+  })
+
+  it.each([
+    ['$$', 'See [1\n\n$$ x = 1'],
+    ['\\[', 'See [1\n\n\\[ x = 1']
+  ])('STREAMING: an open %s formula after an unmatched [ in the prose still typesets (#701)', (_form, text) => {
+    // remend appends its link closer to the buffer, here right after the completed formula; on
+    // the closing fence line it kept the formula open (an error box, or an empty block).
+    const shown = rendered(text, true)
+    expect(shown.display).toBe(1)
+    expect(shown.errors).toBe(0)
+    expect(shown.tex.map((t) => t?.trim())).toEqual(['x = 1'])
+  })
+
+  it('STREAMING: a \\\\[2pt] row break is no \\[ opener; the formula and what follows show (#701)', () => {
+    const shown = rendered(
+      'Aligned:\n\n$$\n\\begin{aligned} a &= b \\\\[2pt] c &= d \\end{aligned}\n$$\n\nMore',
+      true
+    )
+    expect(shown.display).toBe(1)
+    expect(shown.errors).toBe(0)
+    expect(shown.prose).toContain('More')
   })
 
   it('STATIC: an unclosed \\[ stays literal (no remend on persisted turns — self-healing)', () => {
@@ -380,6 +482,65 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     // persisted re-render (static mode, no remend) shows it literally again.
     const { container } = render(<AssistantMarkdown text={'see \\[ this never closes'} />)
     expect(container.querySelector('.katex')).toBeNull()
+  })
+
+  // #701: micromark takes a DISPLAY `$$` only alone on its fence lines. TeX on the opening line
+  // was dropped as the fence's "meta", TeX glued to the closer left the block open to the end of
+  // the answer (an error box), and a one-line pair became inline math.
+  it.each([
+    ['TeX on the opening line', 'Root:\n\n$$ x = \\frac{a}{b}\n$$\n\nDone.', 'x = \\frac{a}{b}'],
+    ['TeX glued to the closer', 'Root:\n\n$$\nx = \\frac{a}{b} $$\n\nDone.', 'x = \\frac{a}{b}'],
+    [
+      'an environment glued to both fences',
+      'Sys:\n\n$$\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}$$\n\nDone.',
+      '\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}'
+    ],
+    ['one line, its own paragraph', 'Root:\n\n$$ x = \\frac{a}{b} $$\n\nDone.', 'x = \\frac{a}{b}'],
+    ['one line inside a paragraph', 'Root:\n$$x = \\frac{a}{b}$$\nDone.', 'x = \\frac{a}{b}']
+  ])('STATIC: a $$ pair on lines of its own is DISPLAY math with all its TeX: %s (#701)', (_case, text, tex) => {
+    const shown = rendered(text)
+    expect(shown.display).toBe(1)
+    expect(shown.errors).toBe(0)
+    expect(shown.tex).toEqual([tex])
+    expect(shown.prose).toContain('Done.')
+  })
+
+  // The rule's edges: only a pair that owns its lines changes, and math written as inline stays so.
+  it.each([
+    ['two formulas on one line', '$$a$$ and $$b$$', 2],
+    ['after a list marker', '- $$x$$\n- y', 1],
+    ['a promoted $x^2$ alone on its line (#501)', 'Text\n\n$x^2$\n\nmore', 1],
+    ['\\( x^2 \\) alone on its line', 'Text\n\n\\( x^2 \\)\n\nmore', 1]
+  ])('STATIC: %s stays INLINE math (#701)', (_case, text, formulas) => {
+    const shown = rendered(text)
+    expect(shown.math).toBe(formulas)
+    expect(shown.display).toBe(0)
+  })
+
+  it.each([
+    ['$$', '1. Root:\n   $$ x = 1 $$\n2. Next'],
+    ['\\[', '1. Root:\n   \\[ x = 1 \\]\n2. Next']
+  ])('STATIC: a %s display formula in a list item stays in the item (#701)', (_form, text) => {
+    const { container } = render(<AssistantMarkdown text={text} />)
+    const items = container.querySelectorAll('li')
+    expect(items).toHaveLength(2)
+    expect(items[0]!.querySelector('.katex-display')).not.toBeNull()
+  })
+
+  it('STATIC: a turn stopped inside a one-line $$ formula keeps its TeX on screen (#701)', () => {
+    // A stopped or cut-off turn persists the partial. TeX after a lone opening `$$` was the
+    // fence's dropped "meta": the turn showed an empty block where the formula had been.
+    const { container } = render(<AssistantMarkdown text={'Root:\n\n$$ x = \\frac{-b \\pm \\sqrt'} />)
+    expect(container.textContent).toContain('\\frac{-b \\pm \\sqrt')
+  })
+
+  it('does NOT rewrite a $$ pair inside code (#701)', () => {
+    const { container } = render(
+      <AssistantMarkdown text={'```\n$$ x $$\n```\n\nand inline `$$ y $$` too'} />
+    )
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('$$ x $$')
+    expect(container.textContent).toContain('$$ y $$')
   })
 
   it('the app and rehype-katex resolve one katex install, not two copies of it (#698)', () => {

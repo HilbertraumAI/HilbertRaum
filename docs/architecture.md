@@ -2126,6 +2126,33 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     space just inside the delimiters, no digit right after the closer, same line) plus a TeX signal
     (`\ ^ _ { } = + < > |`) or a one-or-two-letter span like `$x$`. remark-math's own single-`$` mode
     stays off, so prose like "owes $5 and $10", `$HOME/$USER` and escaped `\$` are never mangled.
+  - **Display `$$` and the live bubble (#701, `AssistantMarkdown.tsx`).** remark-math's flow
+    construct takes `$$` only alone on its fence lines. Models write display math otherwise, so
+    before this, TeX on the opening line was dropped as the fence's "meta" (an empty block), TeX
+    glued to the closer kept the block open to the end of the answer (`\end{aligned}$$`: one KaTeX
+    error box), and a one-line `$$ x $$` paragraph rendered inline (the 4B's own shape). A `$$ … $$`
+    pair on lines of its own is now rewritten into the fence form at its line's indentation
+    (`canonicalizeDisplayDollars`), as a line-anchored `\[ … \]` always was. That rule now keeps the
+    indentation too, so a formula in a list item stays in it. A pair sharing its line with prose
+    stays inline, as do `$x$` and `\(x\)`. A lone `$$` at the start of a line (a stopped or cut-off
+    turn) keeps the TeX on its line: typeset if it parses, else KaTeX's error text.
+    While streaming, the remend handler (`trailing-math`, priority 10) completes a dangling `\[`, `\(`,
+    `$` or `$$` through `completePartialTex`, which KaTeX validates, or hides it for that flush.
+    Before this, a dangling `$$` went to remend's own katex handler, which only appends the closer:
+    the error box until the TeX parsed (~200 ms in the real app). Four details keep the bubble free
+    of error boxes:
+    - A lone `$` at the end counts as half a closer.
+    - `\\[2pt]` (a TeX row break) is no `\[` opener. Read as one, it hid the rest of the answer.
+    - A completed display tail ends in a newline, so the closers remend's later handlers append
+      cannot glue to its fence.
+    - An unmatched `[` inside a formula is spelled `\lbrack{}`, the same glyph. Otherwise remend's
+      links completion read it as an unfinished link, appending `](streamdown:incomplete-link)`
+      after a half-open interval like `[0, 1)`, or into a formula still streaming.
+    The persisted turn renders statically, without remend, from the model's own TeX. The two passes
+    cost under 1 ms per flush on a 20 KB answer. Known limits:
+    - An environment (`\begin{aligned}`) or a `\left` streams hidden until it closes.
+    - A line that starts with `$$x$$` and goes on in prose streams as display until the prose
+      arrives, as `\[ x \]` does.
 - **Runtime requirement (decision).** `sendChatMessage` does **not** auto-start a runtime: a chat
   needs a started model (`RuntimeManager.start()`). With no active runtime the handler throws and
   the Chat screen shows a "start a model" empty state that links to Models (and polls
@@ -15074,7 +15101,8 @@ Follow-up 1, done on `fix/698-katex-dedupe`.
   The streaming completions (`completeTrailingMath`) handle `\[`, `\(` and `$`, not `$$`, and
   Streamdown closes the `$$` without checking that the TeX parses. Which KaTeX copy runs does not
   matter: the app's copy only validates candidates through the stateless `renderToString`. Filed as
-  #701.
+  #701. **Fixed** (`fix/701-display-dollar-math`), with the persisted `$$` shapes found on the way:
+  the chat record's KaTeX bullet, "Display `$$` and the live bubble (#701)".
 
 ## App scheme `hilbertraum://app/` — design record (#560)
 

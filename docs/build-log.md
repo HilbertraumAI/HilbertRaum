@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-15 — the closed 2026-10-12 #646 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-15 (preamble budget, making room for the #701 entry). Its record is unchanged:
+`packaging.md` "Build paths — design record (#646)", which keeps its residual (a junction, `subst` or mapped-drive build that splits is refused,
+not repaired). Citations of the form "BUILD_STATE 2026-10-12 #646 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-12 — **#646 — a build started from a lower-case drive letter bundles each main module once (`fix/646-canonical-build-paths`).** From `c:\…`, Vite's Windows realpath kept `c:/…` until its
+`net use` probe answered and then went canonical: 302 main modules instead of 261, 41 files twice, `index.ts` alone on the `c:` copies, so main-side text came out English on a German OS. The same build also left the log off disk, packaged binary checks off and the quit reaper empty. Now every config path
+comes from `canonicalCase(__dirname)`, a lower-case build is byte-identical to a canonical one, the `one-module-per-file` guard fails any split build, and vitest refuses a mis-cased cwd or CLI path. Real app before/after
+from `c:\…`: English → German, `app.log.enc` absent → written. v0.1.62 verified clean. Record: `packaging.md` "Build paths — design record (#646)". Open: a junction/`subst`/mapped-drive build that splits is refused, not repaired (not observed)._
+
 ## 2026-10-15 — the closed 2026-10-11 #641 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-15 (preamble budget, making room for the #673 entry). Its record is unchanged:
