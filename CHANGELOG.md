@@ -46,6 +46,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Formulas written with `$$ … $$` show as formulas, while the answer is coming in and after.**
+  While an answer was still being written, such a formula showed a red error box with its raw text
+  until it was complete. In a finished answer, a formula spread over several lines with the `$$`
+  on the same line as its first or last row (common for step-by-step derivations) stayed an error
+  box for good, a formula written on a single line came out small inside the text instead of
+  centred on its own line, and text on the same line as the opening `$$` could be dropped. A range
+  like `[0, 1)` inside a formula, a line break with extra space (`\\[2pt]`) and a formula inside a
+  list item no longer break the layout either (#701).
 - **The Translate screen now says how much of translation really runs on the graphics card.** It
   said "runs on the graphics card" after every graphics-card start, even when the chat model had
   left no room and translation actually ran at processor speed. The Performance screen now also

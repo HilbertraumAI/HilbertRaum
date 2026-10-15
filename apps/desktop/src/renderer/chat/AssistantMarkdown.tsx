@@ -44,19 +44,96 @@ function normalizeMathDelimiters(text: string): string {
   const parts = text.split(CODE_SPLIT_RE)
   for (let i = 0; i < parts.length; i += 2) {
     parts[i] = promoteSingleDollarMath(
-      parts[i]!
-        // Line-anchored \[ … \] first: micromark's DISPLAY (flow) math needs `$$` on its own
-        // lines, so a block-shaped bracket pair becomes the fence form…
+      // The model's own `$$` pairs first, before the bracket rules below emit any of theirs.
+      canonicalizeDisplayDollars(parts[i]!)
+        // Line-anchored \[ … \] next: micromark's DISPLAY (flow) math needs `$$` on its own
+        // lines, so a block-shaped bracket pair becomes the fence form, at the line's indentation
+        // when a fence may keep it (#701: dropping it took a formula in a list item out of the
+        // list)… A delimiter's backslash must not be escaped itself: `\\[2pt]` is a TeX row break.
         .replace(
-          /^[ \t]*\\\[([\s\S]+?)\\\][ \t]*$/gm,
-          (_m, inner: string) => `$$\n${inner.trim()}\n$$`
+          /^([ \t]*)\\\[([\s\S]+?)(?<!\\)\\\][ \t]*$/gm,
+          (_m, indent: string, inner: string) => displayFence(fenceIndent(indent) ?? '', inner.trim())
         )
         // …and anything left (mid-sentence brackets, \( … \)) becomes inline math text.
-        .replace(/\\\[([\s\S]+?)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
-        .replace(/\\\(([\s\S]+?)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
+        .replace(/(?<!\\)\\\[([\s\S]+?)(?<!\\)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
+        .replace(/(?<!\\)\\\(([\s\S]+?)(?<!\\)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
     )
   }
+  const last = parts.length - 1
+  if (last % 2 === 0) parts[last] = openDanglingDisplayDollar(parts)
   return parts.join('')
+}
+
+/** A display formula in micromark's fence form: `$$` alone on the lines around its TeX. */
+function displayFence(indent: string, tex: string): string {
+  return `${indent}$$\n${indent}${tex}\n${indent}$$`
+}
+
+/**
+ * The indentation a display fence may keep, or null. Under four columns it is a list item's
+ * content line (or none). Four or more, or a tab, is an indented code block outside a list, so
+ * a fence kept there would turn the formula into code; such lines keep their earlier reading.
+ */
+function fenceIndent(indent: string): string | null {
+  return /^ {0,3}$/.test(indent) ? indent : null
+}
+
+// #701 — models write display math as `$$ … $$` in shapes micromark's flow construct does not
+// read the way LaTeX (or Pandoc, or GitHub) does: it takes `$$` only ALONE on a fence line. TeX
+// on the opening line became the fence's "meta" and vanished (`$$ x = 1⏎$$` rendered an empty
+// block); TeX glued to the closer left the block open to the end of the answer (`\end{aligned}$$`
+// → one KaTeX error box over everything after it); and a one-line `$$ x $$` paragraph became
+// INLINE math. A `$$ … $$` pair that occupies whole lines is therefore rewritten into the fence
+// form, as the line-anchored `\[ … \]` rule already is, keeping the line's indentation so a formula
+// in a list item stays in it (`fenceIndent`: four columns or more stay as they were). The pair
+// never spans a blank line or another `$$`: a line holding `$$a$$ and $$b$$` is two inline
+// formulas and does not match, nor does a `$$$` run.
+const BLOCK_DOLLAR_RE = /^( {0,3})\$\$(?!\$)((?:(?!\$\$|\n[ \t]*\n)[\s\S])+?)(?<!\$)\$\$(?!\$)[ \t]*$/gm
+
+function canonicalizeDisplayDollars(prose: string): string {
+  if (!prose.includes('$$')) return prose
+  return prose.replace(BLOCK_DOLLAR_RE, (m, indent: string, inner: string) =>
+    inner.trim() === '' ? m : displayFence(indent, inner.trim())
+  )
+}
+
+/** A `$$` delimiter: exactly two dollars, not a backslash-escaped `\$` (micromark's reading). */
+const DISPLAY_DOLLAR_RE = /(?<![\\$])\$\$(?!\$)/g
+
+/**
+ * The `$$` left without a partner, when it is the trailing prose segment's own last one: its
+ * index there, and the indentation its display fence keeps (null mid-line, or where a fence may
+ * not keep it). Null when every `$$` has its partner, when the buffer ends inside code, or when
+ * the unpaired one lies before a code span: which `$$` that is cannot be told from here.
+ */
+function danglingDisplayDollar(parts: string[]): { open: number; fence: string | null } | null {
+  const last = parts.length - 1
+  if (last % 2 === 1) return null
+  const inTail = [...parts[last]!.matchAll(DISPLAY_DOLLAR_RE)]
+  let before = 0
+  for (let i = 0; i < last; i += 2) before += parts[i]!.match(DISPLAY_DOLLAR_RE)?.length ?? 0
+  if (inTail.length % 2 === 0 || before % 2 === 1) return null
+  const open = inTail[inTail.length - 1]!.index
+  const head = parts[last]!.slice(0, open)
+  return { open, fence: fenceIndent(head.slice(head.lastIndexOf('\n') + 1)) }
+}
+
+// #701 — the one `$$` left without a partner (a turn stopped or cut off mid-formula, or the live
+// tail before its closer streams in) is, at the start of a line with TeX after it and no `$`, the
+// same flow fence whose "meta" micromark drops: the persisted turn showed an empty block where the
+// formula had been. Move that TeX to its own line so it is kept: typeset when it parses, otherwise
+// KaTeX's error text, which is the raw TeX. Mid-line, or with a `$` after it, micromark reads the
+// line as paragraph text and an unclosed `$$` stays literal; that needs nothing.
+function openDanglingDisplayDollar(parts: string[]): string {
+  const tail = parts[parts.length - 1]!
+  const dangling = danglingDisplayDollar(parts)
+  if (dangling === null || dangling.fence === null) return tail
+  const { open, fence } = dangling
+  const newline = tail.indexOf('\n', open)
+  const lineEnd = newline === -1 ? tail.length : newline
+  const rest = tail.slice(open + 2, lineEnd)
+  if (rest.trim() === '' || rest.includes('$')) return tail
+  return `${tail.slice(0, open + 2)}\n${fence}${rest.trimStart()}${tail.slice(lineEnd)}`
 }
 
 // #501 — models write inline math as `$ … $` at least as often as `$$ … $$`, and remark-math's
@@ -202,8 +279,8 @@ function completeTrailingBracketMath(text: string): string {
   const tail = parts[last]!
   // The LAST opener in the trailing prose segment; a closed pair was already converted to $$
   // by normalizeMathDelimiters, so anything still bracket-form here is the dangling tail.
-  const b = tail.lastIndexOf('\\[')
-  const p = tail.lastIndexOf('\\(')
+  const b = lastUnescaped(tail, '\\[')
+  const p = lastUnescaped(tail, '\\(')
   const open = Math.max(b, p)
   if (open === -1) return text
   const isBlock = open === b
@@ -217,9 +294,37 @@ function completeTrailingBracketMath(text: string): string {
     parts[last] = tail.slice(0, open)
     return parts.join('')
   }
-  const blockShaped = isBlock && /(^|\n)[ \t]*$/.test(tail.slice(0, open))
-  parts[last] = tail.slice(0, open) + (blockShaped ? `$$\n${fixed}\n$$` : `$$${fixed}$$`)
+  const before = tail.slice(0, open)
+  const indent = before.slice(before.lastIndexOf('\n') + 1)
+  const blockShaped = isBlock && /^[ \t]*$/.test(indent)
+  parts[last] = blockShaped
+    ? before.slice(0, before.length - indent.length) + displayTail(fenceIndent(indent) ?? '', fixed.trim())
+    : `${before}$$${fixed}$$`
   return parts.join('')
+}
+
+/**
+ * The last `opener` (`\[` or `\(`) whose backslash is not itself escaped, or -1. In TeX `\\[2pt]`
+ * is a row break with extra space, not a bracket opener (#701: taken for one, it hid the formula
+ * and everything streamed after it).
+ */
+function lastUnescaped(s: string, opener: string): number {
+  for (let i = s.lastIndexOf(opener); i !== -1; i = i === 0 ? -1 : s.lastIndexOf(opener, i - 1)) {
+    let k = i
+    while (k > 0 && s[k - 1] === '\\') k--
+    if ((i - k) % 2 === 0) return i
+  }
+  return -1
+}
+
+/**
+ * A completed DISPLAY tail: the fence form, then a newline that keeps the closing `$$` a fence
+ * line of its own. remend's later handlers append their closers to the buffer (an unmatched `[`
+ * in the prose above gets `](streamdown:incomplete-link)`), and glued to the fence that text left
+ * the formula open, a KaTeX error box (#701).
+ */
+function displayTail(indent: string, tex: string): string {
+  return `${displayFence(indent, tex)}\n`
 }
 
 // Streaming companion to `promoteSingleDollarMath` (#501): a trailing `$ E = mc^` has no closer
@@ -245,16 +350,98 @@ function completeTrailingDollarMath(text: string): string {
   return parts.join('')
 }
 
-/** Both streaming completions in one handler, brackets first (they may emit `$$` the second reads). */
+// #701 — streaming companion for a dangling `$$`. Without it, remend's built-in katex handler
+// closed the tail by appending `$$` and nothing more, so a partial like `$$ x = \frac{-b \pm \sqrt`
+// reached rehype-katex as TeX that cannot parse and showed KaTeX's error box until it did. Same
+// treatment as the other tails: complete through `completePartialTex`, typeset what parses, hide
+// the tail this flush when nothing does. A dangling `$$` at the start of a line is display math,
+// as the pair will be once its closer ends the line (`canonicalizeDisplayDollars`); mid-line it is
+// inline. Prose after the closer on the same line turns it inline then, as for `\[ … \]`.
+function completeTrailingDisplayDollarMath(text: string): string {
+  if (!text.includes('$$')) return text
+  const parts = text.split(CODE_SPLIT_RE)
+  // Null also when the unpaired `$$` lies before a code span: remend's katex handler closes that
+  // one, as it did before.
+  const dangling = danglingDisplayDollar(parts)
+  if (dangling === null) return text
+  const { open, fence } = dangling
+  const last = parts.length - 1
+  const tail = parts[last]!
+  const before = tail.slice(0, open)
+  // A lone `$` at the very end is the closer's first half: without this cut the formula would
+  // vanish for the one flush between the two dollars.
+  const inner = tail.slice(open + 2).replace(/(?<![\\$])\$[ \t]*$/, '')
+  // Inline math never crosses a blank line, so a mid-line `$$` followed by one was a literal `$$`
+  // (the persisted turn shows it so). Escape it rather than complete it: completed, everything
+  // after it stayed hidden while it did not parse as TeX (`&` does not), and left as it is,
+  // remend's katex handler would close it at the end of the buffer instead.
+  if (fence === null && /\n[ \t]*\n/.test(inner)) {
+    parts[last] = `${before}\\$\\$${tail.slice(open + 2)}`
+    return parts.join('')
+  }
+  const fixed = inner.trim() === '' ? null : completePartialTex(inner)
+  // Just the opener so far, or not (yet) parseable even after completion: hide the tail this
+  // flush rather than flash a stray `$$`, raw TeX or a KaTeX error box.
+  if (fixed === null) {
+    parts[last] = before
+  } else if (fence === null) {
+    parts[last] = `${before}$$${fixed}$$`
+  } else {
+    parts[last] = before.slice(0, before.length - fence.length) + displayTail(fence, fixed.trim())
+  }
+  return parts.join('')
+}
+
+// #701 — remend's links completion (priority 20, after us) reads every `[` with no matching `]`
+// outside code as an unfinished link, math included, and appends `](streamdown:incomplete-link)`
+// to the buffer. A half-open interval in a formula already closed (`$$ x \in [0, 1) $$`) left
+// that text at the end of the live bubble for the rest of the stream; inside the formula still
+// streaming (`x \in [a, b`) it landed after the closing `$$` and broke the formula into a KaTeX
+// error box. Such a `[` becomes `\lbrack ` (the space ends the control word and adds nothing),
+// which KaTeX draws as the same glyph with the same spacing; `\lbrack{}` would not: its empty
+// group is an atom of its own, and a `-` after it became a binary minus. Streaming only: the
+// persisted turn renders statically, with no remend and its own TeX.
+const MATH_SPAN_RE = /(?<![\\$])\$\$(?!\$)([\s\S]*?)(?<![\\$])\$\$(?!\$)/g
+
+function shieldMathBrackets(text: string): string {
+  if (!text.includes('[')) return text
+  const parts = text.split(CODE_SPLIT_RE)
+  for (let i = 0; i < parts.length; i += 2) {
+    if (!parts[i]!.includes('[')) continue
+    parts[i] = parts[i]!.replace(MATH_SPAN_RE, (span, tex: string) => {
+      const open: number[] = []
+      for (let j = 0; j < tex.length; j++) {
+        if (tex[j] === '\\') j++ // a control symbol: `\{`, `\\` (so `\\[2pt]` stays a pair)
+        else if (tex[j] === '[') open.push(j)
+        else if (tex[j] === ']') open.pop()
+      }
+      if (open.length === 0) return span
+      let out = tex
+      for (const j of open.reverse()) out = `${out.slice(0, j)}\\lbrack ${out.slice(j + 1)}`
+      return `$$${out}$$`
+    })
+  }
+  return parts.join('')
+}
+
+/**
+ * All three streaming completions in one handler. Brackets first (they may emit `$$` the others
+ * read), then a dangling `$$` (it owns the rest of the buffer, so the single-`$` scan then finds
+ * no tail after it), then a dangling `$`; last, the `[` shield over every formula they left.
+ */
 function completeTrailingMath(text: string): string {
-  return completeTrailingDollarMath(completeTrailingBracketMath(text))
+  return shieldMathBrackets(
+    completeTrailingDollarMath(completeTrailingDisplayDollarMath(completeTrailingBracketMath(text)))
+  )
 }
 
 // Module-level (stable reference for Streamdown's memoization). Priority 10 puts the handler
 // BEFORE remend's built-in links completion (20) — that handler treats a dangling `\[ …` tail
 // as an incomplete LINK, completes it to `](streamdown:incomplete-link)`, and EARLY-RETURNS
 // the whole pipeline, so at any later priority we would never run. Converting first also means
-// links sees no unclosed `[` and the katex built-ins (70/75) see our `$$` already balanced.
+// links sees no unclosed `[` and the katex built-ins (70/75) see our `$$` already balanced: the
+// `$$` one only acts on a dangling `$$` this handler leaves alone, one that began before a code
+// span in the tail.
 const mdRemend = {
   handlers: [{ name: 'trailing-math', priority: 10, handle: completeTrailingMath }]
 }
