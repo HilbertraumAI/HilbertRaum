@@ -34,7 +34,7 @@
     "@radix-ui/react-popover": "1.1.16",
     "@radix-ui/react-tooltip": "1.2.9",
     "@streamdown/math": "^1.0.3",
-    "@tanstack/react-virtual": "^3.14.13",
+    "@tanstack/react-virtual": "^3.14.15",
     "jszip": "^3.10.2",
     "katex": "~0.16.47",
     "mammoth": "^1.13.0",
