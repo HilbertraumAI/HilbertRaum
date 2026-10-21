@@ -1061,8 +1061,15 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 - **Recommendation is RAM-best-fit (post-MVP).** `recommendModelIdByRam(manifests, ramGb)` picks the
   LARGEST model whose comfortable RAM (`recommended_ram_gb`) fits this machine; if nothing fits
   comfortably, the lightest model meeting its minimum; else none. Used by `listModels` (live
-  `machineRamGb()` = `totalmem` rounded to whole GB) and by the benchmark (same rounding, so the two
-  surfaces always agree). The legacy `recommended_profiles` lookup remains the fallback when RAM is
+  `machineRamGb()` = `ramClassGb` of `totalmem`) and by the benchmark (the same class, so the two
+  surfaces always agree). **The RAM class (2026-10-21):** the manifests' RAM lines are written
+  against the installed size ("an 8 GB laptop"), but `totalmem` counts only what the OS may use, and
+  integrated graphics reserve up to 2 GiB of it — an 8 GB Ryzen 3 7320U / Radeon 610M laptop reports
+  5.8 GiB, met no chat model's 8 GB floor and was refused every start although 8 GB is the
+  advertised minimum. `ramClassGb` takes the smallest installed size (4, 8, 12, 16, 24, 32, 48, …)
+  at or above the visible figure when the gap is at most 2.5 GiB, else the figure rounded (so an
+  18 GB Mac stays 18). It feeds the start gate, the `insufficientRam` badge and both pickers; the
+  Performance tile, `machineKey` and the placement verdict keep the measured figure. The legacy `recommended_profiles` lookup remains the fallback when RAM is
   unknown. **2026-09-06 amendment (PR #308 audit):** on a machine with a usable discrete graphics
   card (and graphics acceleration not switched off), `recommendChatModelId` dispatches instead to
   `recommendModelIdByVram` (`services/models.ts`), which judges fit against the budget device's

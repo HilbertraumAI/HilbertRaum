@@ -23,7 +23,7 @@ import type {
   SpeedSampleIdentity
 } from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
-import { recommendChatModelId, recommendModelId } from './models'
+import { ramClassGb, recommendChatModelId, recommendModelId } from './models'
 import { SLOW_READ_MBPS, VERY_LOW_TOKENS_PER_SECOND } from '../../shared/performance-rules'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
@@ -633,20 +633,21 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // Issue #52: did the tok/s reading actually move the profile? (A TINY machine can't go
   // lower, so "tps < threshold" alone would over-claim.) Feeds the named downgrade warning.
   const tokensDowngraded = profile !== classifyProfile(sys.ramGb, { gpuUseful })
-  // RAM-best-fit first — rounded to whole GB, the SAME rounding the Models screen's
-  // gate uses (`machineRamGb`), so the two surfaces can never disagree at boundary
-  // values like 15.7 GiB. The profile-table lookup remains the fallback when RAM
-  // could not be detected. The §6.5 speed signal (issue #95) applies with the
-  // just-measured values — the SAME rule listModels applies with the persisted ones,
-  // so the Diagnostics card and the Models screen ★ agree within one run.
-  const ramRounded = Math.round(sys.ramGb)
+  // RAM-best-fit first — on the RAM class (`ramClassGb`), the SAME figure the Models
+  // screen's gate uses (`machineRamGb`), so the two surfaces can never disagree at
+  // boundary values like 15.7 GiB or an 8 GB laptop reporting 5.8. The profile-table
+  // lookup remains the fallback when RAM could not be detected. The §6.5 speed signal
+  // (issue #95) applies with the just-measured values — the SAME rule listModels applies
+  // with the persisted ones, so the Diagnostics card and the Models screen ★ agree within
+  // one run.
+  const ramClass = ramClassGb(sys.ramGb)
   const speedSignal = { tokensPerSecond, measuredModelId }
   // §6.6 rule C: on a discrete card the RAM pick stands where it fits the card's BUDGET (free
   // memory, else total − 1024 — decision 10), else the best eligible model; unified memory and
   // no-card machines keep the RAM pick. `totalMb` stays the tile's figure, never the budget.
   const memory = {
     memoryClass: deps.gpu?.memoryClass ?? 'cpu',
-    ramGb: ramRounded,
+    ramGb: ramClass,
     budgetMb: deps.gpu?.budgetMb ?? null
   } as const
   const ramPick = recommendChatModelId(deps.manifests, memory, speedSignal)
