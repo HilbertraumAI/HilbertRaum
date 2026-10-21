@@ -453,8 +453,9 @@ drive. Since the performance wave the settings store also keeps **one result per
 other machine falls off the cap.
 
 **The machine fingerprint** (`machineKey`) is OS, arch, CPU model, core count and RAM rounded to
-whole GB (`os.totalmem()` drifts by a few MB between boots of one machine; the Models screen
-rounds the same way). A result with no usable identity (an empty `cpuModel`, `ramGb` of 0, or a
+whole GB (`os.totalmem()` drifts by a few MB between boots of one machine). The Models screen and
+the pick compare the coarser RAM class instead (`ramClassGb`, `architecture.md` "Recommendation is
+RAM-best-fit"). A result with no usable identity (an empty `cpuModel`, `ramGb` of 0, or a
 blob persisted before these fields were reliably filled) has a **null key**: it is never filed in
 the history and never counts as "another computer", so an old workspace keeps behaving as before.
 

@@ -46,6 +46,12 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **8 GB laptops can start the models made for 8 GB.** On a laptop whose built-in graphics set
+  aside part of the memory, Windows reports less than is installed — 5.8 GB on an 8 GB machine
+  with AMD Radeon graphics. HilbertRaum compared that figure with the 8 GB the smallest models
+  ask for, refused every chat model and said no model fits this computer. It now counts such a
+  machine as the 8 GB computer it is: the small models start, and the Performance screen
+  recommends one. The memory figure shown stays the one Windows reports.
 - **Formulas written with `$$ … $$` show as formulas, while the answer is coming in and after.**
   While an answer was still being written, such a formula showed a red error box with its raw text
   until it was complete. In a finished answer, a formula spread over several lines with the `$$`

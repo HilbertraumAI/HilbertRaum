@@ -25,6 +25,7 @@ import {
   invalidateChecksum,
   manifestFiles,
   primeChecksum,
+  ramClassGb,
   recommendModelId,
   recommendModelIdByRam,
   recommendModelIdByVram,
@@ -1014,6 +1015,37 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
 
 // LARGEST model that runs comfortably (recommended_ram_gb fits); if nothing fits
 // comfortably, the lightest model that at least meets its minimum; else null.
+// An 8 GB laptop whose integrated graphics reserved 2 GiB reports 5.8 GiB to the OS. The
+// manifests' RAM lines are written against the installed size, so the gate, the badge and the
+// picker compare against the class, not the visible figure.
+describe('ramClassGb', () => {
+  it('counts a machine whose graphics took part of the RAM in its installed class', () => {
+    expect(ramClassGb(5.8)).toBe(8) // Ryzen 3 7320U / Radeon 610M, 8 GB installed
+    expect(ramClassGb(7.4)).toBe(8)
+    expect(ramClassGb(13.8)).toBe(16)
+    expect(ramClassGb(15.9)).toBe(16)
+    expect(ramClassGb(30)).toBe(32)
+  })
+
+  it('keeps exact and in-between sizes as reported', () => {
+    expect(ramClassGb(8)).toBe(8)
+    expect(ramClassGb(16)).toBe(16)
+    expect(ramClassGb(18)).toBe(18) // a Mac sold with 18 GB
+    expect(ramClassGb(36)).toBe(36)
+  })
+
+  it('does not round up a gap the hardware cannot explain', () => {
+    expect(ramClassGb(5.4)).toBe(5) // 2.6 GiB below 8
+    expect(ramClassGb(9.4)).toBe(9)
+    expect(ramClassGb(300)).toBe(300)
+  })
+
+  it('returns 0 for an unknown figure', () => {
+    expect(ramClassGb(0)).toBe(0)
+    expect(ramClassGb(Number.NaN)).toBe(0)
+  })
+})
+
 describe('recommendModelIdByRam', () => {
   const small = asManifest({
     id: 'small',

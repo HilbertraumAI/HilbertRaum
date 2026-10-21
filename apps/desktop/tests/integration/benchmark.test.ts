@@ -10,6 +10,7 @@ import { seedSettings, getSettings, updateSettings } from '../../src/main/servic
 import {
   buildModelList,
   discoverManifests,
+  ramClassGb,
   resolveManifestsDir,
   recommendModelIdByRam,
   SLOW_PICK_TOKENS_PER_SECOND
@@ -230,6 +231,42 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
     const base = { workspacePath: workspace(), manifests, runtime: null }
     const roomy = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, budgetMb: 8100, memoryClass: 'discrete' } })
     expect(roomy.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
+  })
+})
+
+// An 8 GB laptop (Ryzen 3 7320U / Radeon 610M) whose integrated graphics reserved 2 GiB reports
+// 5.8 GiB. It met no chat model's 8 GB floor: "no model in the catalog fits this computer", and
+// every start was refused although 8 GB is the advertised minimum.
+describe('runBenchmark on an 8 GB laptop that reports 5.8 GiB (integrated graphics reserve)', () => {
+  beforeEach(() => {
+    ramState.totalmemBytes = Math.round(5.8 * 1024 ** 3)
+  })
+  afterEach(() => {
+    ramState.totalmemBytes = null
+  })
+
+  it('keeps the measured figure on the tile and picks for the 8 GB class', async () => {
+    const manifests = realManifests()
+    const result = await runBenchmark({ workspacePath: workspace(), manifests, runtime: null, gpu: null })
+    expect(result.ramGb).toBe(5.8)
+    expect(result.recommendedModelId).toBe(recommendModelIdByRam(manifests, 8, 'chat'))
+    expect(result.recommendedModelId).not.toBeNull()
+  })
+
+  it('lets every 8 GB-floor chat model start, the 0.8B included', async () => {
+    const { models } = await buildModelList({
+      manifestsDir: resolveManifestsDir(process.cwd())!,
+      rootPath: workspace(),
+      profile: 'UNKNOWN',
+      developerMode: true,
+      machineRamGb: ramClassGb(5.8)
+    })
+    const byId = Object.fromEntries(models.map((m) => [m.id, m]))
+    expect(byId['qwen3.5-0.8b-q6'].insufficientRam).toBe(false)
+    expect(byId['qwen3.5-4b-ud-q4kxl'].insufficientRam).toBe(false)
+    // Twelve-GB models stay gated.
+    expect(byId['qwen3.5-9b-ud-q4kxl'].insufficientRam).toBe(true)
+    expect(models.some((m) => m.role === 'chat' && m.recommended)).toBe(true)
   })
 })
 
@@ -769,7 +806,7 @@ describe('runBenchmark', () => {
     const manifests = realManifests()
     // A crawl "measured on" the machine's own no-signal pick: the predicate applies at
     // every RAM level, so on any CI box the recommendation follows the stepped rule.
-    const ownPick = recommendModelIdByRam(manifests, Math.round(detectSystem().ramGb), 'chat')
+    const ownPick = recommendModelIdByRam(manifests, ramClassGb(detectSystem().ramGb), 'chat')
     const result = await runBenchmark({
       workspacePath: workspace(),
       manifests,
@@ -777,7 +814,7 @@ describe('runBenchmark', () => {
     })
     expect(result.tokensPerSecond).not.toBeNull()
     expect(result.tokensPerSecond!).toBeLessThan(SLOW_PICK_TOKENS_PER_SECOND)
-    const ram = Math.round(result.ramGb)
+    const ram = ramClassGb(result.ramGb)
     const expected = recommendModelIdByRam(manifests, ram, 'chat', {
       tokensPerSecond: result.tokensPerSecond,
       measuredModelId: result.measuredModelId
@@ -800,7 +837,7 @@ describe('runBenchmark', () => {
       runtime: slowRuntime('mock-not-in-catalog')
     })
     expect(result.recommendedModelId).toBe(
-      recommendModelIdByRam(manifests, Math.round(result.ramGb), 'chat')
+      recommendModelIdByRam(manifests, ramClassGb(result.ramGb), 'chat')
     )
     expect(result.warnings.some((w) => w.includes('moved down one size tier'))).toBe(false)
   })
@@ -820,14 +857,14 @@ describe('runBenchmark', () => {
 
     // buildModelList consumes the same persisted profile + machine RAM, exactly like
     // the production listModels wiring — the RAM-best-fit recommendation must agree
-    // with the benchmark's (same rule, same whole-GB rounding).
+    // with the benchmark's (same rule, same RAM class).
     const dir = resolveManifestsDir(process.cwd())!
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: workspace(),
       profile: persistedProfile,
       developerMode: true,
-      machineRamGb: Math.round(result.ramGb)
+      machineRamGb: ramClassGb(result.ramGb)
     })
     const recommended = models.filter((m) => m.recommended).map((m) => m.id)
     if (result.recommendedModelId) {

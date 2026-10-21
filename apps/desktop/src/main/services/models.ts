@@ -997,12 +997,38 @@ export function recommendModelId(
 }
 
 /**
- * Total RAM of this machine in whole GB. Rounded (not floored) so a "16 GB" machine
- * reporting 15.9 GiB usable still counts as 16 — a min-RAM-16 model must not be flagged
- * unusable on the exact hardware it was sized for.
+ * Installed memory sizes a computer is sold with, in GB. A size between two steps (18 or 36 on
+ * a Mac) reports exactly and is kept by the rounding fallback in `ramClassGb`.
  */
+const INSTALLED_RAM_SIZES_GB = [4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256] as const
+
+/**
+ * The most memory the hardware can withhold from the operating system: integrated graphics
+ * reserve up to 2 GiB of installed RAM (an AMD APU's UMA frame buffer on an 8 GB laptop),
+ * plus a few hundred MiB of firmware reservations. Measured: a Ryzen 3 7320U / Radeon 610M
+ * laptop with 8 GB installed reports 5.8 GiB.
+ */
+const MAX_HARDWARE_RESERVED_GIB = 2.5
+
+/**
+ * The RAM class of a machine that reports `visibleGib` to the operating system, in whole GB —
+ * the figure the manifests' `recommended_min_ram_gb` / `recommended_ram_gb` are written
+ * against ("an 8 GB laptop"). `os.totalmem()` counts only what the OS can use, so an 8 GB
+ * laptop whose integrated graphics took 2 GiB reports 5.8 and was refused every chat model
+ * although 8 GB is the advertised minimum. The class is the smallest installed size at or
+ * above the visible figure when the gap is one the hardware can explain; otherwise the
+ * visible figure rounded (not floored), so a 15.9 GiB machine still counts as 16.
+ */
+export function ramClassGb(visibleGib: number): number {
+  if (!Number.isFinite(visibleGib) || visibleGib <= 0) return 0
+  const installed = INSTALLED_RAM_SIZES_GB.find((size) => size >= visibleGib)
+  if (installed !== undefined && installed - visibleGib <= MAX_HARDWARE_RESERVED_GIB) return installed
+  return Math.round(visibleGib)
+}
+
+/** This machine's RAM class in whole GB (`ramClassGb` of what the OS reports). */
 export function machineRamGb(): number {
-  return Math.round(totalmem() / 1024 ** 3)
+  return ramClassGb(totalmem() / 1024 ** 3)
 }
 
 /**
