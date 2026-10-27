@@ -3514,7 +3514,9 @@ reports and phase plans were working papers; their full text lives in git histor
   table delivery shipped — prose kept today's flattening (`m<sup>2</sup>` → `m2`) as a
   deliberate scoping decision, reported rather than fixed there. It is fixed now (#488):
   prose and headings emit the same markers, from the same module as the table path
-  (`zim/supsub.ts`), and the retrieval matchers fold the markers back out of BOTH the
+  (`zim/supsub.ts`) — every heading except the article's title, which keeps the archive's
+  own spelling (`CO2-Steuer`) because it is the citation and the viewer's heading (#711) —
+  and the retrieval matchers fold the markers back out of BOTH the
   question and the article text, so every alphanumeric run of the text a matcher compared
   before is still a substring of what it compares now. A marker is written only where it
   will sit BETWEEN two alphanumerics, so the reference back-links, the bracketed notes

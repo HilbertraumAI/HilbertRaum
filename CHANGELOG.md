@@ -48,6 +48,10 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A knowledge-pack article's title reads as the archive spells it.** Since chemical formulas in
+  pack articles became readable (`H_2O`), an article whose title holds one was cited as
+  `CO_2-Steuer`, and the article viewer and a saved copy showed it the same way. The title is
+  `CO2-Steuer` again; the article's headings and text keep the readable form (#711).
 - **A knowledge-pack file no longer waits in your workspace for the app to restart.** When the
   program that serves your knowledge packs, or the helper that reads a pack's details, did not stop
   within its time limit, the app kept the file it had been given: a plain-text list of your packs'
