@@ -35,10 +35,9 @@ import { KiwixManageError } from './tools'
 // needs no libzim binding (the Windows blocker the 2026-08-22 spike established).
 
 /** Adds one ZIM to a library.xml — bound to the real kiwix-manage in index.ts; tests fake it.
- *  `signal` (additive third param, P3a/M9) is forwarded from `writeLibraryXml` so a caller
- *  teardown can cancel an in-flight `kiwix-manage` child; every existing fake still
- *  type-checks (it simply never reads a third argument). */
-export type ManageAddFn = (libraryXmlPath: string, zimPath: string, signal?: AbortSignal) => Promise<void>
+ *  A caller's teardown reaches the `kiwix-manage` child through the signal that binding closes
+ *  over (`ZimService.packDeps(signal)`). */
+export type ManageAddFn = (libraryXmlPath: string, zimPath: string) => Promise<void>
 
 export interface PackDeps {
   /** The drive's `zim/` folder (canonical pack home; may not exist). */
@@ -835,8 +834,9 @@ function isCancellation(err: unknown): boolean {
  * never be handed two books that map to one name and quietly answer for the wrong one.
  * Returns the number of books included (0 ⇒ the caller should not start the sidecar).
  *
- * `signal` (P3a/M9) is forwarded to every `manageAdd` call. An ordinary per-pack failure
- * (a corrupt archive) is still skipped with a warn — one bad pack must not block the others.
+ * `signal` (P3a/M9) is checked before every pack; the manager children see it through the
+ * caller's `manageAdd` binding. An ordinary per-pack failure (a corrupt archive) is still
+ * skipped with a warn — one bad pack must not block the others.
  * But a `KiwixManageError` with `childState === 'uncertain'`, or `kind === 'abort'`, or the
  * signal already being aborted STOPS the build and RETHROWS: a shared library.xml with an
  * unconfirmed writer (the kiwix-manage child may still be appending to it) is not a
@@ -857,7 +857,7 @@ export async function writeLibraryXml(
   for (const book of served) {
     if (signal?.aborted) throw new DOMException('writeLibraryXml aborted', 'AbortError')
     try {
-      await deps.manageAdd(libraryXmlPath, book.path, signal)
+      await deps.manageAdd(libraryXmlPath, book.path)
       count++
     } catch (err) {
       if (err instanceof KiwixManageError && (err.childState === 'uncertain' || err.kind === 'abort')) {

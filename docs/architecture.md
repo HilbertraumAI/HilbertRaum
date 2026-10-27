@@ -12074,9 +12074,9 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   The sidecar-services test campaign did the same for whisper-cli: it retired the injected-verdict copy in
   `transcriber.test.ts` and removed `WhisperCliOptions.verifyBinary`.
   #656 added the knowledge packs' `kiwix-serve` (`KiwixServer.ensureStarted`: no port, no child) and
-  `kiwix-manage` (`kiwixManageAdd`: a `verify` error, `not-spawned`). Their `verifyBinary` option stays: no
-  production caller passes it, but the ZIM suites inject verdicts through it, and one uses it to hold a
-  start inside the verify step, so retiring it is a ZIM test pass of its own.
+  `kiwix-manage` (`kiwixManageAdd`: a `verify` error, `not-spawned`). The ZIM test campaign then removed
+  their `verifyBinary` option too: T05 holds a start inside the verify step through a test-side `vi.mock`
+  of the real verifier, and T06 and `zim-serve` walk the verdicts on real install markers.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but

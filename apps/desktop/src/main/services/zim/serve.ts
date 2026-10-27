@@ -1,5 +1,5 @@
 import { log } from '../logging'
-import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { verifyBinaryBeforeSpawn } from '../binary-verifier'
 import {
   LOOPBACK_HOST,
   findFreePort,
@@ -16,11 +16,6 @@ import { kiwixGet } from './client'
  *  start, and never with a path (the sentinel rule). */
 let warnedServeSkipLegacy = false
 
-/** Test-only: let each test see its own first-warn behaviour. */
-export function _resetKiwixServeSkipLegacyWarnForTests(): void {
-  warnedServeSkipLegacy = false
-}
-
 // kiwix-serve sidecar lifecycle (knowledge packs). A compact sibling of LlamaServer
 // (runtime/sidecar.ts) — same seams (injectable spawn/port/probe for tests), same
 // pre-spawn verification, same crash-reap registration — minus everything model-specific
@@ -34,15 +29,14 @@ export function _resetKiwixServeSkipLegacyWarnForTests(): void {
 // per-child mutable state on `this`: every spawn produces a `ChildRecord` and the
 // `error`/`exit`/`stderr` handlers close over THAT record and write only to it. An
 // obsolete child's late `exit`, a late `error`, a late health poll or a late `finally`
-// therefore completes its own cleanup and can never flip readiness, the failure latch or
-// the in-flight start of a NEWER record — the H3 bug was exactly that cross-talk
+// therefore completes its own cleanup and can never flip readiness or the in-flight start
+// of a NEWER record — the H3 bug was exactly that cross-talk
 // (`this.exited = true` from a superseded child made the live child's health wait throw
 // and latched a start failure while the live child was missed by `stop()`).
 //
 // Each start is handed its OWN immutable library path (`ensureStarted({ libraryXmlPath })`
 // — plan §9.15 item 4): the service builds `library.<generation>.xml` per pack revision,
-// so a constructor-only path could not serve a new build. The constructor path survives
-// only as the DEFAULT for the compatibility tests.
+// so a constructor-only path could not serve a new build.
 //
 // Teardown is single-flight and SELF-BOUNDED (plan §9.15 item 6, the translation
 // `teardown()`/`doTeardown()` shape): abort the in-flight start, SIGTERM, grace, SIGKILL,
@@ -65,14 +59,6 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 /** The `AbortError` shape `isStartAbortError` (runtime/sidecar.ts) recognises — the #159
  *  convention, reused for every cancellation seam of the ZIM service. */
 const abortError = (message: string): DOMException => new DOMException(message, 'AbortError')
-
-/**
- * Module-level generation allocator — the DEFAULT for a `KiwixServer` constructed without
- * one. Production passes `ZimService.nextGeneration`, so builds and children draw from a
- * single service-owned counter (plan §9.15 item 1); this fallback keeps the standalone
- * compatibility tests (`zim-serve.test.ts`) working unchanged.
- */
-let moduleGeneration = 0
 
 /**
  * Everything one spawned child owns. The only mutable state of a start; `this.activeRecord`
@@ -108,20 +94,13 @@ export interface ChildRecord {
 
 export interface KiwixServerOptions {
   binPath: string
-  /**
-   * DEFAULT library path for an `ensureStarted()` call that passes no `cfg`. Production
-   * always passes the path per start (plan §9.15 item 4); this option exists so the
-   * standalone compatibility tests keep constructing a server without a service.
-   */
-  libraryXmlPath?: string
   spawn?: SpawnFn
   findPort?: () => Promise<number>
   /** Probe seam: true when the server answers on `port`. Default hits /catalog/v2/root.xml. */
   probe?: (port: number) => Promise<boolean>
-  /** Pre-spawn integrity seam (the LlamaServer shape). Default `verifyBinaryBeforeSpawn`. */
-  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
-  /** Generation source; default a module counter. `ZimService` passes its own allocator. */
-  allocateGeneration?: () => number
+  /** Generation source. `ZimService` passes its own allocator, so builds and children draw
+   *  from one service-owned counter (plan §9.15 item 1). */
+  allocateGeneration: () => number
   healthTimeoutMs?: number
   healthIntervalMs?: number
   killGraceMs?: number
@@ -145,7 +124,6 @@ export class KiwixServer {
   private readonly spawnFn: SpawnFn
   private readonly portFn: () => Promise<number>
   private readonly probeFn: (port: number) => Promise<boolean>
-  private readonly verifyFn: (binPath: string) => Promise<BinaryVerifyResult>
   private readonly allocateGeneration: () => number
   private readonly killGraceMs: number
   private readonly forceKillWaitMs: number
@@ -153,8 +131,6 @@ export class KiwixServer {
   /** The published child, or null (never started / died on its own / torn down). */
   private activeRecord: ChildRecord | null = null
   private starting: StartEntry | null = null
-  /** Instance failure latch — compatibility only; the SERVICE latches by revision (item 7). */
-  private startFailure: Error | null = null
   /** Single-flight teardown (the translation `teardownPromise`/`tearingDown` pair). */
   private teardownPromise: Promise<void> | null = null
   private tearingDown = false
@@ -170,8 +146,7 @@ export class KiwixServer {
     this.opts = opts
     this.spawnFn = opts.spawn ?? ((cmd, args, o) => nodeSpawn(cmd, args, o))
     this.portFn = opts.findPort ?? ((): Promise<number> => findFreePort())
-    this.verifyFn = opts.verifyBinary ?? verifyBinaryBeforeSpawn
-    this.allocateGeneration = opts.allocateGeneration ?? ((): number => ++moduleGeneration)
+    this.allocateGeneration = opts.allocateGeneration
     this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
     this.forceKillWaitMs = opts.forceKillWaitMs ?? DEFAULT_FORCE_KILL_WAIT_MS
     this.probeFn =
@@ -236,12 +211,6 @@ export class KiwixServer {
     return record
   }
 
-  /** Re-arm after a latched start failure (pack registration changed → worth retrying).
-   *  Compatibility surface: the service's own revision-keyed latch is the real one. */
-  resetFailureLatch(): void {
-    this.startFailure = null
-  }
-
   /**
    * Ensure a healthy server for `cfg.libraryXmlPath`; resolves its port AND generation.
    *
@@ -251,20 +220,15 @@ export class KiwixServer {
    *   Defensive only: `ZimService` serializes rebuild/teardown/start on one chain.
    *
    * A bind race retries ONCE on a fresh port AND a fresh generation, the first record torn
-   * down first; any other failure latches until `resetFailureLatch()`.
+   * down first; any other failure rejects. Nothing here latches: the SERVICE latches a failed
+   * start by pack revision (plan §9.15 item 7).
    */
-  async ensureStarted(cfg?: {
-    libraryXmlPath?: string
-    signal?: AbortSignal
-  }): Promise<KiwixServerStart> {
+  async ensureStarted(cfg: { libraryXmlPath: string; signal?: AbortSignal }): Promise<KiwixServerStart> {
     // Never race a teardown: join it, then start fresh (a `suspend()` must be able to be
     // followed by a lazy restart — this is not a latch).
     if (this.teardownPromise) await this.teardownPromise
-    const libraryXmlPath = cfg?.libraryXmlPath ?? this.opts.libraryXmlPath
-    if (!libraryXmlPath) {
-      throw new Error('kiwix-serve needs a library.xml path (none passed, none configured)')
-    }
-    if (cfg?.signal?.aborted) throw abortError('kiwix-serve start aborted')
+    const { libraryXmlPath } = cfg
+    if (cfg.signal?.aborted) throw abortError('kiwix-serve start aborted')
 
     const live = this.liveRecord()
     if (live && live.libraryXmlPath === libraryXmlPath) {
@@ -276,13 +240,12 @@ export class KiwixServer {
       await this.stop()
       // #554: a cancel during that teardown fired its one 'abort' before the subscription
       // below exists, so check again or the new child spawns anyway.
-      if (cfg?.signal?.aborted) throw abortError('kiwix-serve start aborted')
+      if (cfg.signal?.aborted) throw abortError('kiwix-serve start aborted')
     }
-    if (this.startFailure) throw this.startFailure
 
     const abort = new AbortController()
     const forward = (): void => abort.abort()
-    cfg?.signal?.addEventListener('abort', forward, { once: true })
+    cfg.signal?.addEventListener('abort', forward, { once: true })
     const entry: StartEntry = {
       libraryXmlPath,
       promise: this.runStart(libraryXmlPath, abort.signal),
@@ -291,15 +254,8 @@ export class KiwixServer {
     this.starting = entry
     try {
       return await entry.promise
-    } catch (err) {
-      // An ABORTED start never latches (the translation rule): the pack set or the session
-      // moved on, which says nothing about whether this binary can serve.
-      if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        this.startFailure = err instanceof Error ? err : new Error(String(err))
-      }
-      throw err
     } finally {
-      cfg?.signal?.removeEventListener('abort', forward)
+      cfg.signal?.removeEventListener('abort', forward)
       if (this.starting === entry) this.starting = null
     }
   }
@@ -335,7 +291,7 @@ export class KiwixServer {
     const generation = this.allocateGeneration()
     // Same pre-spawn integrity rule as every sidecar: a packaged-build tamper refuses
     // to spawn; dev/legacy installs resolve skip-* and proceed (binary-verifier.ts).
-    const verdict = await this.verifyFn(this.opts.binPath)
+    const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
     if (verdict === 'mismatch') {
       throw new Error('kiwix-serve failed pre-spawn integrity verification')
     }

@@ -13,9 +13,6 @@ import { ZIM_HEADER_BYTES, ZIM_MAGIC } from '../../src/main/services/zim/identit
 export interface ZimFixtureOptions {
   /** Bytes appended AFTER the 80-byte header (a "body"), so the file is not header-sized. */
   trailing?: Buffer | string
-  /** Header version, purely cosmetic for our reader — recorded so a fixture can pin it. */
-  major?: number
-  minor?: number
 }
 
 /** The 16 raw bytes of a `8-4-4-4-12` hex UUID, IN ORDER (no GUID field swapping — §2.4). */
@@ -26,15 +23,15 @@ export function uuidBytes(uuid: string): Buffer {
 }
 
 /**
- * Write a real ZIM archive stub at `path`: the little-endian magic at offset 0, major/minor at
- * 4/6, the 16 UUID bytes at 8–23, zeros for every other header field, plus optional trailing
- * bytes. Returns `path` so a test can inline it.
+ * Write a real ZIM archive stub at `path`: the little-endian magic at offset 0, version 6.1 at
+ * 4/6 (cosmetic for our reader), the 16 UUID bytes at 8–23, zeros for every other header field,
+ * plus optional trailing bytes. Returns `path` so a test can inline it.
  */
 export function writeZimFixture(path: string, uuid: string, opts: ZimFixtureOptions = {}): string {
   const header = Buffer.alloc(ZIM_HEADER_BYTES)
   header.writeUInt32LE(ZIM_MAGIC, 0)
-  header.writeUInt16LE(opts.major ?? 6, 4)
-  header.writeUInt16LE(opts.minor ?? 1, 6)
+  header.writeUInt16LE(6, 4)
+  header.writeUInt16LE(1, 6)
   uuidBytes(uuid).copy(header, 8)
   const trailing =
     opts.trailing === undefined

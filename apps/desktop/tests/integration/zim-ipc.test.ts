@@ -107,7 +107,6 @@ function fakeZimService(db: () => Db, zimDir: string): unknown {
       unconfirmedChildren: 0,
       confirmed: true
     }),
-    whenSettled: async () => {},
     stop: async () => {}
   }
 }
