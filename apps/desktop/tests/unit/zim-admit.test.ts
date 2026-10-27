@@ -180,6 +180,8 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
       'Kraken in der Kultur. Der Spielfilm um einen Riesenkraken praegte das Bild des Tieres. ' +
       'Ein Roman von Jules Verne machte ihn beruehmt.'
     const wide = `${segment0} ${segment1}` // unchanged by N1 — only the LEAD narrows
+    // The SHORTER lead (segments[0] alone) being admitted is the same input as "the trap itself
+    // still uses only the LEAD…" above, which pins it.
 
     it('lead = segments[0] + segments[1] (the pre-N1 window, `dd85f361`): refused — the trap sees the fiction marker and nothing rescues it', () => {
       const result = admitArticle(QUESTION, TITLE, `${segment0} ${segment1}`, wide, 'fts')

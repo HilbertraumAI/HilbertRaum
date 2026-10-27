@@ -313,10 +313,13 @@ describe('makeQueryExpander — the one bounded planner call', () => {
       ...scripted(),
       async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
         await new Promise<void>((resolve) => {
-          options?.signal?.addEventListener('abort', () => {
+          const end = (): void => {
             sawAbort = true
             resolve()
-          })
+          }
+          // An already-aborted signal ends at once, so that regression fails a named assertion.
+          if (options?.signal?.aborted) end()
+          else options?.signal?.addEventListener('abort', end)
         })
       }
     }
@@ -329,6 +332,7 @@ describe('makeQueryExpander — the one bounded planner call', () => {
     expect(settled).toBe(false)
     expect(sawAbort).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
+    expect(settled).toBe(true) // fails here, not on the test timeout, if the bound is late
     expect(await pending).toBeNull()
     expect(sawAbort).toBe(true)
   })

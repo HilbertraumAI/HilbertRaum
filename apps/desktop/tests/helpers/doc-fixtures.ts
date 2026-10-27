@@ -97,17 +97,9 @@ export function seedStoredTextDoc(
 /**
  * An indexed document whose chunks carry REAL embedding vectors from `embedder` (one chunk per entry of `texts`,
  * source_label = title). `token_count` is `approxTokenCount(text)`, the estimate the production chunker persists;
- * a budget-sensitive suite may pass its own `tokenCount`. `modelId` overrides the embeddings row's model id
- * (default `embedder.id`).
+ * the embeddings rows carry `embedder.id`.
  */
-export async function seedEmbeddedDoc(
-  db: Db,
-  embedder: Embedder,
-  title: string,
-  texts: string[],
-  opts: { modelId?: string; tokenCount?: (text: string) => number } = {}
-): Promise<string> {
-  const tokenCount = opts.tokenCount ?? approxTokenCount
+export async function seedEmbeddedDoc(db: Db, embedder: Embedder, title: string, texts: string[]): Promise<string> {
   const now = new Date().toISOString()
   const docId = randomUUID()
   db.prepare(
@@ -124,8 +116,8 @@ export async function seedEmbeddedDoc(
   )
   for (let i = 0; i < texts.length; i++) {
     const chunkId = randomUUID()
-    insertChunk.run(chunkId, docId, i, texts[i]!, title, tokenCount(texts[i]!), now)
-    insertEmbedding.run(chunkId, opts.modelId ?? embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
+    insertChunk.run(chunkId, docId, i, texts[i]!, title, approxTokenCount(texts[i]!), now)
+    insertEmbedding.run(chunkId, embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
   }
   return docId
 }

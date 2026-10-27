@@ -658,8 +658,10 @@ describe('candidate scope (step 4-4)', () => {
     // Overlaps out of index order, with a tie at every finite cut: capped (4) cuts inside the
     // overlap-3 run and top48 (8) inside the overlap-2 run, so the index-asc tie-break decides
     // what is kept. Every scope's pick is a prefix of the one order: capped ⊆ top48 ⊆ top96 ⊆ all.
+    // Fed in REVERSE index order, so the index-asc tie-break, not a stable sort of an
+    // already-ordered input, puts the ties in order.
     const overlaps = [1, 3, 3, 0, 3, 2, 2, 0, 1, 3, 0, 2, 1, 0, 3, 1, 2, 0, 3, 1]
-    const chunks = overlaps.map((overlap, index) => ({ index, overlap, text: `c${index}` }))
+    const chunks = overlaps.map((overlap, index) => ({ index, overlap, text: `c${index}` })).reverse()
     const order = [1, 2, 4, 9, 14, 18, 5, 6, 11, 16, 0, 8, 12, 15, 19, 3, 7, 10, 13, 17]
     for (const isList of [false, true]) {
       for (const scope of SCOPES) {

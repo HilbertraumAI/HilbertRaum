@@ -3507,7 +3507,7 @@ the figures they support are quoted in the text.
   single pack-rare or misspelled five-plus-character word (`"eigenschaftn"`) still ANDs the
   query to zero, and libzim 9.4.0's Xapian parser has no boolean flag to drop one term
   deliberately (no `OR`, no `-term` exclusion — see the parser facts above). `searchPattern` now
-  reports `terms` / `retryTerms` alongside `pattern` / `retry` — the KEPT TOKENS themselves, not
+  reports `terms` / `retryTerms` (since removed) alongside `pattern` / `retry` — the KEPT TOKENS themselves, not
   the joined string — so the ladder never re-tokenizes a pattern (which would probe raw
   punctuation for a raw-fallback question like "Was ist das?"; `terms` is empty exactly for that
   fallback, which also skips the ladder for free). When stages 1–2 both find nothing and the
@@ -3620,7 +3620,8 @@ the figures they support are quoted in the text.
   was raised 96 → 220 while `PLAN_TIMEOUT_MS` stayed 12 s and these two pins were deleted with no
   replacement, so on every CPU decode rate this project has ever measured the planner could no
   longer emit its own cap. F1's fix restores the SAME shape on the new names
-  (`PLAN_TIMEOUT_MS`/`PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`), with the cap set
+  (`PLAN_TIMEOUT_MS`/`PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`, the last since
+  dropped, see F1), with the cap set
   from a fresh measurement (run M, `core200`, 2026-09-14) rather than reused from this one — see
   §17 F1 for the measured p99, the cap and which pin branch applied. NOT claimed: no re-run of the
   list-group fixture was needed for the constant (the lever's
