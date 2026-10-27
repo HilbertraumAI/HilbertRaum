@@ -126,8 +126,8 @@ import { cleanupZimTransients, type ZimCleanupReport } from './transients'
 // builds under `<workspacePath>/zim-transient/` — `library.<build>.xml` (served builds) and
 // `meta-<n>/library.xml` (registration throwaways) — which are PLAINTEXT while present and are
 // removed at lock, at quit and at every session start (`transients.ts`, contained and
-// link-refusing). The file of a child whose death could not be confirmed is KEPT and reported,
-// and removed by the next session start.
+// link-refusing). The file of a child whose death could not be confirmed is KEPT and reported
+// by every cleanup in this process; only the next app start's sweep removes it (#713).
 
 /** How many times one `ensureServer` call re-loops under a newly current revision before
  *  giving up: a pack set that keeps changing must not spin. */
@@ -189,17 +189,6 @@ export interface ZimServiceDeps {
    * instead of waiting twenty seconds. Production never sets it.
    */
   externalDeadlineMs?: number
-  /**
-   * The per-request timeout of the `/suggest` capability probe. Test seam only, so the "a
-   * timeout leaves the pack unknown" leg does not sit out the client's real 15 s default.
-   */
-  probeTimeoutMs?: number
-  /**
-   * The per-ATTEMPT timeout of the viewer's `/raw` article read (`ARTICLE_READ_TIMEOUT_MS`,
-   * #301 P7 T19 — the stall retry). Test seam only, so a "the first read stalled" leg costs
-   * milliseconds instead of the real 4 s. Production never sets it.
-   */
-  articleTimeoutMs?: number
 }
 
 /**
@@ -362,7 +351,7 @@ export class ZimService {
   private unconfirmedChildren = 0
   /** Transient paths the cleanup must NOT remove: the library file of a serve child, or the
    *  meta dir of a manager child, whose teardown could not be confirmed (plan §9.17 (c)2).
-   *  They are reported as `kept` and removed by the next session-start pass. */
+   *  Never cleared in-process: reported as `kept` until the next app start's sweep (#713). */
   private readonly keptPaths = new Set<string>()
   /** The reconciliation pass currently running, or null — the single-flight latch (§9.17 (d)4). */
   private reconcileInFlight: Promise<void> | null = null
@@ -659,9 +648,7 @@ export class ZimService {
           // An excluded collision loser or a pack that stopped resolving is not served under
           // any name — it stays unknown rather than being probed under someone else's.
           if (name === undefined) continue
-          const verdict = await probeSearchable(library.port, name, op.signal, {
-            timeoutMs: this.deps.probeTimeoutMs
-          })
+          const verdict = await probeSearchable(library.port, name, op.signal)
           if (verdict !== null) found.push({ id: pack.id, verdict, searchableKey: pack.searchableKey })
         }
         return found
@@ -1533,9 +1520,7 @@ export class ZimService {
         // a collision loser returns the honest "unavailable" null, not another book's text.
         const name = library.names.get(packId)
         if (name === undefined) return null
-        return fetchArticleHtml(library.port, name, articlePath, op.signal, {
-          timeoutMs: this.deps.articleTimeoutMs
-        })
+        return fetchArticleHtml(library.port, name, articlePath, op.signal)
       })
       op.assert()
       // Null covers all three honest "unavailable" cases: nothing to serve, an unmapped pack,

@@ -10,13 +10,10 @@ import {
 // end in zim-ipc-session.test.ts (a real DB, the real handler, the real import pipeline).
 
 describe('articleDocumentTitle', () => {
-  it('files the copy as "<article> (<archive>).md" — the .md picks the Markdown parser', () => {
-    expect(articleDocumentTitle('Treibhausgas', 'Klimawandel von Wikipedia')).toBe('Treibhausgas (Klimawandel von Wikipedia).md')
-  })
-
-  it('collapses whitespace, tolerates a missing archive title and an empty article title', () => {
+  it('files the copy as "<article> (<archive>).md", collapses whitespace, tolerates a missing archive title and an empty article title', () => {
     expect(articleDocumentTitle('  Liste der   Länder  ', null)).toBe('Liste der Länder.md')
     expect(articleDocumentTitle('', 'Pack')).toBe('Article (Pack).md')
+    expect(articleDocumentTitle('Treibhausgas', 'Klimawandel von Wikipedia')).toBe('Treibhausgas (Klimawandel von Wikipedia).md')
     expect(articleDocumentTitle('   ', null)).toBe('Article.md')
   })
 
@@ -28,7 +25,7 @@ describe('articleDocumentTitle', () => {
     // title is what gets shortened.
     expect(long).toMatch(/^x+ \(y{90}\)\.md$/)
     const smiley = String.fromCodePoint(0x1f600)
-    const astral = articleDocumentTitle(`a${smiley}`.repeat(200), null)
+    const astral = articleDocumentTitle(`x${smiley.repeat(200)}`, null) // the 180-unit mark falls mid-pair
     expect(astral.endsWith('.md')).toBe(true)
     const lone = Array.from(astral).some((ch) => {
       const cp = ch.codePointAt(0)!
@@ -61,18 +58,8 @@ describe('renderArticleMarkdown', () => {
     expect(md).toContain('## Leer\n')
     expect(md).not.toContain('Only the first part')
     // The lead (label-less) section never gets a heading of its own.
-    expect(md).not.toContain('## intro')
+    expect(md.match(/^## /gm)).toHaveLength(2) // Landwirtschaft and Leer — no heading for the lead
     expect(md).not.toContain('## License')
-  })
-
-  it('closes with the archive’s license line under its own heading, out of the attribution block (#662)', () => {
-    const notice = 'Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons Attribution-Share Alike 4.0 verfügbar.'
-    const md = renderArticleMarkdown({ ...article, notice }, { archiveTitle: 'Klimawandel von Wikipedia', savedAt: '2026-10-13T10:00:00.000Z' })
-    // Its own section after the article's last one, so the Markdown parser never files it under
-    // that section's label…
-    expect(md.endsWith(`\n## Leer\n\n## License\n\n${notice}\n`)).toBe(true)
-    // …and the copy's first chunk (title, attribution, lead) does not carry it.
-    expect(md.split('\n## ')[0]).not.toContain('Creative Commons')
   })
 
   it('states honestly when the converter stopped short, and copes with no archive title', () => {

@@ -146,7 +146,7 @@ describe('cleanupZimTransients — the contained ZIM transient sweep (#301 P3b, 
     expect(existsSync(join(meta, 'library.xml'))).toBe(true)
     expect(existsSync(otherBuild)).toBe(false)
 
-    // The next session start (nothing kept any more) finally removes them.
+    // The next app start (the sweep passes an empty keep set) finally removes them (#713).
     const later = cleanupZimTransients(zimTransientDir(ws), ws, { keep: new Set<string>() })
     expect(later).toMatchObject({ removed: 2, kept: 0, confirmed: true })
     expect(readdirSync(zimTransientDir(ws))).toEqual([])

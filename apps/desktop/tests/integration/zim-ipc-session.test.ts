@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -11,10 +10,10 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs'
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { testBudgetMs } from '../helpers/hang-budget'
+import { hangPolls, testBudgetMs, within } from '../helpers/hang-budget'
 
 // #301 P3b — the knowledge-pack SESSION BOUNDARY (findings H4 and M4; checks T07 and T08).
 //
@@ -63,19 +62,9 @@ vi.mock('electron', () => ({
   clipboard: { writeText: () => {} }
 }))
 
-import { randomUUID } from 'node:crypto'
-import {
-  appendMessage,
-  createConversation,
-  deleteLastAssistantMessage,
-  exportTranscript,
-  listMessages,
-  restoreMessage,
-  setScope
-} from '../../src/main/services/chat'
+import { appendMessage, createConversation, listMessages, setScope } from '../../src/main/services/chat'
 import { getBuiltinCollection, resolveScope } from '../../src/main/services/collections'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
-import { createMockRuntime } from '../../src/main/services/runtime/mock'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import {
   generateGroundedAnswer,
@@ -104,7 +93,7 @@ import { createPlaintextOps, type PlaintextOpsRegistry } from '../../src/main/se
 import { getDocument, listDocuments } from '../../src/main/services/ingestion'
 import { registeredSidecarPids, type SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { ZimService, type ServedLibrary, type ZimPacksChangedNotice } from '../../src/main/services/zim'
-import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
+import { servingNameFor } from '../../src/main/services/zim/identity'
 import { encodeArticlePath } from '../../src/main/services/zim/client'
 import { packUuid, writeZimFixture } from '../helpers/zim-header'
 import { zimTransientDir } from '../../src/main/services/zim/transients'
@@ -112,7 +101,17 @@ import { startKnowledgePackSession } from '../../src/main/services/zim/session'
 import { performShutdown } from '../../src/main/shutdown'
 import { log } from '../../src/main/services/logging'
 import { t } from '../../src/shared/i18n'
-import { ServeFakeChild, serveGate, type ServeChildMode } from '../helpers/zim-fakes'
+import {
+  ServeFakeChild,
+  expectAbortError,
+  fakeManageSpawn,
+  serveGate,
+  zimServiceDeps,
+  type ServeChildMode
+} from '../helpers/zim-fakes'
+import { rangeStart, sendRawAnswer, sendRawStall } from '../helpers/zim-http'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -126,7 +125,7 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
 
 /** Drain up to `ceiling` ticks, resolving as soon as `pred` holds. Never a fixed sleep. */
-async function waitUntil(pred: () => boolean, ceiling = 400): Promise<boolean> {
+async function waitUntil(pred: () => boolean, ceiling = hangPolls(400, 1)): Promise<boolean> {
   for (let i = 0; i < ceiling; i++) {
     if (pred()) return true
     await tick()
@@ -143,18 +142,6 @@ async function waitUntil(pred: () => boolean, ceiling = 400): Promise<boolean> {
 function keepHandled<T>(promise: Promise<T>): Promise<T> {
   promise.catch(() => undefined)
   return promise
-}
-
-/** Assert a promise rejects with the #159 AbortError convention. */
-async function expectAbortError(promise: Promise<unknown>): Promise<void> {
-  const err = await promise.then(
-    () => {
-      throw new Error('expected an AbortError rejection, but the call resolved')
-    },
-    (e: unknown) => e
-  )
-  expect(err).toBeInstanceOf(DOMException)
-  expect((err as DOMException).name).toBe('AbortError')
 }
 
 /** Per-service seam overrides a test can hand `newService` (#301 P4, T16-a needs a service whose
@@ -183,12 +170,6 @@ interface SessionHooks {
    * never arrives. Null answers normally. Runs after `beforeRespond`, before `respond`.
    */
   truncate: (url: string) => { partial: string; total: number } | null
-  /**
-   * The per-ATTEMPT `/raw` timeout of the stall retry (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19).
-   * A hook rather than a fixed dep so ONE leg can shrink it: every other article read in this
-   * file keeps the shipped 4 s, T07's parked-read-under-lock leg included.
-   */
-  articleTimeoutMs?: number
 }
 
 interface SessionHarness {
@@ -246,34 +227,6 @@ interface HarnessOptions {
    *  pin it to drive the win32-only `'path-unsupported'` classification independently of the
    *  host running the suite. */
   platform?: NodeJS.Platform
-}
-
-/**
- * Answer a `/raw` request the way libkiwix does under the Range-first read (#339 D-Z22): a
- * `Range: bytes=<n>-` on a 200 becomes `206` + `Content-Range` + the tail. Anything else — no
- * Range header, a redirect, an error status — is answered verbatim.
- */
-function sendRangeAware(
-  res: ServerResponse,
-  status: number,
-  body: string,
-  from: number | null,
-  headers: Record<string, string> = {}
-): void {
-  const buf = Buffer.from(body, 'utf8')
-  const base = { 'content-type': 'text/html', ...headers }
-  if (from === null || status !== 200 || from >= buf.length) {
-    res.writeHead(status, base)
-    res.end(buf)
-    return
-  }
-  const tail = buf.subarray(from)
-  res.writeHead(206, {
-    ...base,
-    'content-length': String(tail.length),
-    'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}`
-  })
-  res.end(tail)
 }
 
 async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness> {
@@ -335,31 +288,19 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       // #339 D-Z22: every `/raw` article request now carries `Range: bytes=<n>-`, and libkiwix
       // answers it `206` + `Content-Range` + the tail. The fake does the same, so the resume
       // path is what these legs exercise — the way the real server behaves.
-      const rangeFrom = ((): number | null => {
-        const h = req.headers.range
-        if (typeof h !== 'string') return null
-        const m = /^bytes=(\d+)-$/.exec(h.trim())
-        return m ? Number(m[1]) : null
-      })()
+      const rangeFrom = rangeStart(req.headers.range)
       // #301 P7 T19: the measured stall — headers, an honest length, most of the body, then
-      // silence. Left hanging on purpose; the client's per-attempt timeout is what ends it.
+      // silence. Left hanging on purpose; the client's inter-chunk detector is what ends it.
       const cut = hooks.truncate(url)
       if (cut) {
-        res.writeHead(rangeFrom === null ? 200 : 206, {
-          'content-type': 'text/html',
-          'content-length': String(cut.total),
-          ...(rangeFrom === null
-            ? {}
-            : { 'content-range': `bytes ${rangeFrom}-${cut.total - 1}/${cut.total}` })
-        })
-        res.write(cut.partial) // …and the rest never arrives
+        sendRawStall(res, { stall: 'truncated', partial: cut.partial, total: cut.total }, rangeFrom)
         return
       }
       // The T12 seam: a test that needs per-book / per-entry bytes answers here, so
       // "the viewer fetched the OTHER archive" cannot pass as a success.
       const custom = hooks.respond(url)
       if (custom) {
-        sendRangeAware(res, custom.status, custom.body, rangeFrom, custom.headers)
+        sendRawAnswer(res, custom, rangeFrom)
         return
       }
       if (url.startsWith('/search')) {
@@ -368,7 +309,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         return
       }
       if (url.startsWith('/raw/')) {
-        sendRangeAware(res, 200, ARTICLE_HTML, rangeFrom)
+        sendRawAnswer(res, { status: 200, body: ARTICLE_HTML }, rangeFrom)
         return
       }
       res.writeHead(404)
@@ -385,7 +326,6 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
   const buildAdds: string[] = []
   const metaAdds: string[] = []
   let servePid = 9700
-  let managePid = 7700
   const transientDir = zimTransientDir(workspacePath)
 
   const modes: { serve: ServeChildMode; manage: ServeChildMode } = {
@@ -398,45 +338,16 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     serveSpawns.push({ libraryXmlPath: args[args.indexOf('--library') + 1] as string, child })
     return child
   }
-  const manageSpawn: SpawnFn = (_command, args) => {
-    const libraryXmlPath = args[0] as string
-    const zimPath = args[2] as string
-    const child = new ServeFakeChild(managePid++, modes.manage)
-    if (dirname(libraryXmlPath) === transientDir) buildAdds.push(basename(zimPath))
-    else metaAdds.push(basename(zimPath))
-    void (async () => {
-      let failure: unknown = null
-      try {
-        await hooks.manage(libraryXmlPath, zimPath)
-      } catch (err) {
-        failure = err
-      }
-      await tick()
-      if (child.killed) return // a killed kiwix-manage never appends anything
-      if (failure) {
-        child.stderr.emit('data', String(failure))
-        child.emit('exit', 1, null)
-        return
-      }
-      const stem = basename(zimPath).replace(/\.zim$/i, '')
-      // The real kiwix-manage exits non-zero when the archive (or the library file) is gone —
-      // e.g. a background probe's library build (D-Z15) landing after a test's temp root was
-      // removed. The fake must fail the same way, never reject out of this detached IIFE.
-      try {
-        appendFileSync(
-          libraryXmlPath,
-          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
-            `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
-        )
-      } catch (err) {
-        child.stderr.emit('data', `Cannot add ZIM to the library: ${err instanceof Error ? err.name : 'error'}`)
-        child.emit('exit', 1, null)
-        return
-      }
-      child.emit('exit', 0, null)
-    })()
-    return child
-  }
+  // `hooks.manage` and `modes.manage` are read per spawn, so a leg can swap them mid-test.
+  const { spawn: manageSpawn } = fakeManageSpawn({
+    firstPid: 7700,
+    mode: () => modes.manage,
+    before: (libraryXmlPath, zimPath) => hooks.manage(libraryXmlPath, zimPath),
+    onSpawn: ({ libraryXmlPath, zimPath }) => {
+      if (dirname(libraryXmlPath) === transientDir) buildAdds.push(basename(zimPath))
+      else metaAdds.push(basename(zimPath))
+    }
+  })
 
   const zimOpsReal = createPlaintextOps()
   const bound = opts.settleBoundMs
@@ -460,23 +371,13 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       ops: zimOps,
       transientDir,
       notify: (event) => notices.push(event),
-      deps: {
-        resolveTools:
-          over.resolveTools ?? (() => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' })),
+      deps: zimServiceDeps({
+        resolveTools: over.resolveTools,
         spawn: serveSpawn,
         manageSpawn,
         findPort: () => hooks.findPort(),
-        probe: (port) => hooks.probe(port),
-        healthTimeoutMs: 1_000,
-        healthIntervalMs: 1,
-        killGraceMs: 5,
-        forceKillWaitMs: 5,
-        // Read at CALL time (#301 P7 T19), so the stall-retry leg shrinks the per-attempt
-        // budget for itself and leaves every other read on the shipped default.
-        get articleTimeoutMs(): number | undefined {
-          return hooks.articleTimeoutMs
-        }
-      }
+        probe: (port) => hooks.probe(port)
+      })
     })
   const svc = makeService()
 
@@ -798,13 +699,16 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         const httpGate = serveGate<void>()
         h.hooks.beforeRespond = (url) => (url.startsWith('/raw/') ? httpGate.wait() : Promise.resolve())
         const readP = keepHandled(invoke(handlers, IPC.getPackArticle, alpha, 'A/Alpha'))
+        const serviceReadP = keepHandled(h.svc.getArticle(h.db(), alpha, 'A/Alpha'))
         await httpGate.entered
         const { lockP } = await parkedLock(h)
         h.hooks.beforeRespond = async () => undefined
         httpGate.release()
 
-        // NEVER content: the viewer gets the honest "unavailable" null, never sections read
-        // out of an archive after the workspace locked.
+        // NEVER content: the SERVICE refuses with the #159 AbortError, and the REAL handler turns
+        // that into the viewer's honest "unavailable" null — never sections read out of an
+        // archive after the workspace locked.
+        await expectAbortError(serviceReadP)
         const { result } = await readP
         expect(result).toBeNull()
 
@@ -939,6 +843,10 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         // seam directly after `maybeStartLocalApi`. That call is what this drives (the module
         // itself needs Electron, so it cannot be driven end to end here).
         h.addPackFile('startup-drive-pack.zim')
+        // A build file a crash left behind: the session pass cleans the transient dir first.
+        mkdirSync(zimTransientDir(h.workspacePath), { recursive: true })
+        const stranded = join(zimTransientDir(h.workspacePath), 'library.99.xml')
+        writeFileSync(stranded, '<library><book title="Private archive" /></library>')
         const pass = vi.spyOn(h.svc, 'reconcile')
         startKnowledgePackSession(h.ctx)
         expect(pass).not.toHaveBeenCalled() // scheduled, never inline
@@ -947,6 +855,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         for (let i = 0; i < 30; i++) await tick()
         expect(pass).toHaveBeenCalledTimes(1)
         expect(h.packRows()).toHaveLength(1)
+        expect(existsSync(stranded)).toBe(false)
 
         // A session that is no longer admitted does nothing at all when its timer fires.
         h.ctrl.beginLock()
@@ -1036,9 +945,12 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       expect(notConfirmed[0]?.[1]).toMatchObject({ kept: 1 })
       // The sentinel rule: counts only — no pack title, no path.
       expect(JSON.stringify(notConfirmed[0])).not.toContain('stubborn')
-      expect(JSON.stringify(notConfirmed[0])).not.toContain(h.workspacePath)
+      const meta = notConfirmed[0]![1] as Record<string, unknown>
+      expect(Object.keys(meta).sort()).toEqual(['kept', 'unconfirmedChildren', 'unknownEntries', 'unsettledOps'])
+      expect(Object.values(meta).every((v) => typeof v === 'number')).toBe(true)
 
-      // The NEXT session start removes what the lock deliberately kept.
+      // A session start keeps it too: the keep set lives as long as the process, so only the
+      // next app start's sweep removes it (#713).
       h.ctrl.unlock('right-password')
       const report = h.svc.cleanupTransients('session-start')
       expect(report).toMatchObject({ removed: 0, kept: 1 })
@@ -1166,7 +1078,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // ---- (2) THE REQUEST PATH CARRIES THE EXACT servingNameFor VALUE --------------------
       const unicodeFile = join(h.zimDir, 'Groß Wiki+2024 100%.zim')
       const expectedName = servingNameFor(unicodeFile)
-      expect(expectedName).toBe(servingNameFor(unicodeFile)) // pinned below by the URL itself
       expect(library.names.get(unicodePack)).toBe(expectedName)
       h.requests.length = 0
       await readArticle(h.svc, unicodePack, 'A/Alpha')
@@ -1361,6 +1272,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
     // request normally. Before the retry the viewer showed "This article is not available
     // right now"; the truncated body must never be shown as the article either.
     const h = await sessionHarness()
+    const warn = vi.spyOn(log, 'warn')
     try {
       const packId = await h.registerPack('klima.zim', '66666666-0000-4000-8000-000000000000')
       const library = (await h.svc.ensureServer(h.db())) as ServedLibrary
@@ -1372,8 +1284,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         'Der Treibhauseffekt beschreibt die Erwärmung der Atmosphäre. '.repeat(40) +
         '</p><p>Schlussabsatz: der letzte Teil des Artikels.</p></body></html>'
       h.hooks.respond = (url) => (url === entryUrl ? { status: 200, body: html } : null)
-      // Shrunk for this leg only: the shipped budget is 4 s per attempt.
-      h.hooks.articleTimeoutMs = 300
       let stalls = 0
       h.hooks.truncate = (url) => {
         // The FIRST read of this entry is cut at ~85 %: the closing paragraph — the only place
@@ -1384,11 +1294,19 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       }
 
       const mark = h.requests.length
-      const opened = (await invoke(handlers, IPC.getPackArticle, packId, entry)).result as {
+      const opened = (
+        await within(invoke(handlers, IPC.getPackArticle, packId, entry), 'the viewer read over a stalled /raw settled')
+      ).result as {
         title: string
         sections: Array<{ label: string | null; text: string }>
       } | null
 
+      // The shipped 1 s inter-chunk detector ended the stall, not the 4 s whole-attempt timer,
+      // and the missing tail was resumed.
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('article read short'),
+        expect.objectContaining({ kind: 'idle', resume: true })
+      )
       // The viewer gets the WHOLE article, not the honest-but-wrong "unavailable" null and not
       // the truncated body either.
       expect(opened).not.toBeNull()
@@ -1403,15 +1321,16 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // No child was restarted for it — the server tuple never changed across the stall.
       expect(h.svc.serverState()).toMatchObject({ port: h.httpPort, alive: true })
     } finally {
+      warn.mockRestore()
       await h.close()
     }
   })
 
   // ---------------------------------------------------------------------------------------
-  // T13 — packs:list, refresh serialization, the pack-update event, remove/disable winning
-  // (#301 P3b, finding L7; plan §9.17 (e))
+  // T13 — packs:list, refresh serialization, the pack-update notices, remove/disable winning
+  // (#301 P3b, finding L7; plan §9.17 (e)). The mounted Chat's refetch is ChatPacksRefresh.test.tsx.
   // ---------------------------------------------------------------------------------------
-  it('T13 packs:list performs no discovery or filesystem writes; startup reconciliation and explicit Refresh are serialized; the update event reaches a mounted Chat and old-epoch events are ignored; a user remove / disable wins over late metadata', async () => {
+  it('T13 packs:list performs no discovery or filesystem writes; startup reconciliation and explicit Refresh are serialized; update notices carry the current epoch and a pass a lock aborted announces no end; a user remove / disable wins over late metadata', async () => {
     const h = await sessionHarness()
     try {
       // ---- (1) packs:list is DATABASE-ONLY: a dropped, unregistered file triggers no manager
@@ -1433,6 +1352,9 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const noticesAtStep2 = h.notices.length
       const parkedStartP = keepHandled(h.svc.reconcile(h.db()))
       await manageGate.entered
+      const refreshingNow = async (): Promise<boolean> =>
+        ((await invoke(handlers, IPC.getKnowledgePackStatus)).result as KnowledgePackStatus).refreshing
+      expect(await refreshingNow()).toBe(true) // packs:status reads the live pass
       // Two explicit Refresh calls while the pass is in flight: the single-flight latch
       // (`runAgain`) coalesces them into exactly ONE more pass, however many Refreshes arrived.
       const refresh1P = invoke(handlers, IPC.refreshKnowledgePacks)
@@ -1443,6 +1365,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       manageGate.release()
       await parkedStartP
       for (let i = 0; i < 20; i++) await tick() // drain the coalesced rerun
+      expect(await refreshingNow()).toBe(false)
       // The rerun finds `never-discovered.zim` ALREADY registered by the parked pass, so it
       // spawns no second manager call — proof there was no THIRD, uncoalesced pass either.
       expect(h.metaAdds.length).toBe(metaAddsAtPark)
@@ -1510,6 +1433,10 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const betaAfterMutation = rowById(betaId)
       expect(alphaAfterMutation.removed_at).not.toBeNull()
       expect(betaAfterMutation.enabled).toBe(0)
+      // The remove is audited by id alone.
+      expect(h.auditCalls.filter((c) => c.type === 'knowledge_pack_removed').map((c) => c.metadata)).toEqual([
+        { packId: alphaId }
+      ])
 
       h.hooks.manage = async () => undefined
       gammaGate.release()
@@ -1786,9 +1713,9 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(h.serveSpawns).toHaveLength(spawnsBefore + 2)
         h.hooks.beforeRespond = async () => undefined
       }
-      // ---- (7) THE VIEWER: the same guard on getArticle, and the lock leg ----------------
+      // ---- (7) THE VIEWER: the same guard on getArticle (a lock during the read: T07 (7)) --
       {
-        // (a) death mid-read → one retry → the article of the SECOND attempt.
+        // Death mid-read → one retry → the article of the SECOND attempt.
         await h.svc.ensureServer(h.db())
         const mark = h.requests.length
         let rawResponses = 0
@@ -1807,24 +1734,6 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(rawsSince(mark)).toHaveLength(2)
         h.hooks.respond = () => null
         h.hooks.beforeRespond = async () => undefined
-
-        // (b) a lock lands during the read: the SERVICE refuses with the #159 AbortError and
-        //     the REAL `packs:getArticle` handler turns that into the viewer's honest null.
-        const gate = serveGate<void>()
-        h.hooks.beforeRespond = (url) =>
-          url.startsWith('/raw/') ? gate.wait() : Promise.resolve()
-        const handlerReadP = keepHandled(invoke(handlers, IPC.getPackArticle, alpha, 'A/Alpha'))
-        const serviceReadP = keepHandled(h.svc.getArticle(h.db(), alpha, 'A/Alpha'))
-        await gate.entered
-        const { lockP } = await parkedLock(h)
-        h.hooks.beforeRespond = async () => undefined
-        gate.release()
-        await expectAbortError(serviceReadP)
-        expect((await handlerReadP).result).toBeNull()
-        h.releaseSuspend()
-        await lockP
-        expect(h.ctrl.isUnlocked()).toBe(false)
-        h.ctrl.unlock('right-password')
       }
 
       // --- L5 legs (#301 P5, finding L5; plan §9.19 (b)) — the entry-key contract runs FIRST inside
@@ -1835,6 +1744,10 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         try {
           const alpha = await l5.registerPack('alpha-l5.zim')
           l5.requests.length = 0
+          // A non-string key from the untrusted bridge is refused before the service: the
+          // sidecar stays cold (the service would start it before rejecting the key).
+          expect((await invoke(handlers, IPC.getPackArticle, alpha, 42 as unknown as string)).result).toBeNull()
+          expect(l5.serveSpawns).toHaveLength(0)
           const hazardous = [
             'A/../B', // a dot segment
             'A/x' + String.fromCharCode(0) + 'y', // a C0 control
@@ -1900,10 +1813,16 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           expect(mixed.failureReason).toBe('manager')
           const mixedJson = JSON.stringify(mixed)
           expect(mixedJson).not.toContain('XSENTINEL_T17_DTO_MIXED')
-          expect(mixedJson).not.toContain(badPath)
+          // No recorded path on the wire (D-Z9): the scratch root's name is in every path.
+          expect(mixedJson).not.toContain(basename(dto.root))
           expect(mixedJson).not.toContain('Cannot add ZIM')
           const added = dto.auditCalls.filter((c) => c.type === 'knowledge_pack_added')
           expect(added).toHaveLength(1) // the failed file audits nothing
+          expect(added[0]!.metadata).toEqual({
+            packId: mixed.added[0]!.id,
+            sizeBytes: mixed.added[0]!.sizeBytes,
+            articleCount: 41
+          })
           expect(JSON.stringify(dto.auditCalls)).not.toContain('XSENTINEL_T17_DTO_MIXED')
           expect(JSON.stringify(dto.auditCalls)).not.toContain('good-t17-dto')
 
@@ -1922,7 +1841,19 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           expect(allFailJson).not.toContain('all-fail-t17-a.zim')
           expect(allFailJson).not.toContain('all-fail-t17-b.zim')
           expect(dto.auditCalls.filter((c) => c.type === 'knowledge_pack_added')).toHaveLength(1)
+
+          // An error that is neither the manager's nor the header's falls back to 'other'. The
+          // spy stands in for an error class these fakes cannot produce.
           dto.hooks.manage = async () => undefined
+          const otherPath = dto.addPackFile('XSENTINEL_T17_DTO_OTHER.zim')
+          vi.spyOn(dto.svc, 'registerPack').mockRejectedValueOnce(new Error(`disk I/O error at ${otherPath}`))
+          dialogState.paths = [otherPath]
+          expect((await invoke(handlers, IPC.addKnowledgePacks)).result).toEqual({
+            outcome: 'failure',
+            added: [],
+            failed: 1,
+            failureReason: 'other'
+          })
         } finally {
           await dto.close()
         }
@@ -1954,8 +1885,8 @@ describe('packs:add classifies a non-ASCII-path manager refusal as path-unsuppor
       expect(dto.outcome).toBe('failure')
       expect(dto.failed).toBe(1)
       expect(dto.failureReason).toBe('path-unsupported')
-      // The reason code is a CODE — never the path itself.
-      expect(JSON.stringify(dto)).not.toContain(badPath)
+      // The reason code is a CODE — never the path itself (JSON keeps the non-ASCII leaf raw).
+      expect(JSON.stringify(dto)).not.toContain('Jörg-test')
     } finally {
       await win.close()
     }
@@ -1988,43 +1919,20 @@ describe('packs:add classifies a non-ASCII-path manager refusal as path-unsuppor
 //
 // Everything below runs on the real session harness: a real vault, a real `ZimService` with a
 // real op registry, fake kiwix children, the real loopback server standing in for kiwix-serve,
-// and a REAL `retrieve` / `generateGroundedAnswer` over the mock runtime with a real
-// `createConversation` / `setScope` / `resolveScope`. Ordering is controlled promises only.
+// and a REAL `retrieve` / `generateGroundedAnswer` with a real `createConversation` / `setScope` /
+// `resolveScope`. Ordering is controlled promises only.
 
 const EMPTY_SEARCH_XML = '<?xml version="1.0" encoding="UTF-8"?><rss><channel></channel></rss>'
 
-/** The mock chat runtime the grounded answers stream from (no network, no model). */
-const askRuntime = (): ModelRuntime =>
-  createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 4096 })
+/** The chat runtime the grounded answers come from: one fixed reply, with the 4,096-token window
+ *  the budgets are computed against. No leg reads the answer text — citations and outcomes are
+ *  retrieval's. */
+const askRuntime = (): ModelRuntime => ({
+  ...scriptedRuntime('ok', [], { tokens: 'whole' }),
+  contextWindow: () => 4096
+})
 
 const ASK_SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
-
-/** Seed one indexed document with real embeddings, and return its id. */
-async function seedAskDocument(
-  db: Db,
-  embedder: MockEmbedder,
-  title: string,
-  texts: string[]
-): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const vectors = await embedder.embed(texts)
-  for (let i = 0; i < texts.length; i++) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(chunkId, docId, i, texts[i], title, texts[i]!.split(/\s+/).length, now)
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
-  }
-  return docId
-}
 
 /** Just the comparable part of an outcome — titles vary with the fixture's file names. */
 const shape = (outcomes: KnowledgePackOutcome[] | undefined) =>
@@ -2042,11 +1950,11 @@ describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', 
       const question = 'alpha climate'
       // A document that WOULD answer the question, so the "documents on" legs really do produce a
       // documents-only answer whose only honest pack signal is the outcome set.
-      const docA = await seedAskDocument(db, embedder, 'climate-notes.txt', [
+      const docA = await seedEmbeddedDoc(db, embedder, 'climate-notes.txt', [
         'Alpha and the climate: a local note about the climate of alpha.',
         'An unrelated paragraph about invoices and tax.'
       ])
-      const docB = await seedAskDocument(db, embedder, 'climate-notes-v2.txt', [
+      const docB = await seedEmbeddedDoc(db, embedder, 'climate-notes-v2.txt', [
         'Alpha and the climate: a revised local note about the climate of alpha.',
         'An unrelated paragraph about invoices and tax.'
       ])
@@ -2057,11 +1965,8 @@ describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', 
       // cold start (which would serialize the two asks and prove nothing about ordering).
       expect(await h.svc.ensureServer(db)).not.toBeNull()
 
-      // The harness's default article fixture is ~2 kB, and the mock runtime ECHOES the grounded
-      // prompt token by token — so a successful archive leg would spend seconds streaming an
-      // excerpt none of these assertions read. A SHORT article keeps every leg's behaviour
-      // identical (it still carries both query terms, so it still produces a candidate) and the
-      // test fast. Legs that need a specific failure layer their own responder over this one.
+      // A short article that carries both query terms, so a successful archive leg still produces
+      // a candidate. Legs that need a specific failure layer their own responder over this one.
       const shortArticle =
         '<html><body><h1>Alpha and the climate</h1><p>' +
         'Alpha climate note. '.repeat(6) +
@@ -2073,8 +1978,9 @@ describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', 
       const searchesSince = (mark: number): string[] =>
         h.requests.slice(mark).filter((u) => u.startsWith('/search'))
 
-      /** One ask, exactly as `registerRagIpc` composes it: resolve the stored scope, build the
-       *  arm from `scope.packIds`, and stream a real grounded answer over the mock runtime. */
+      /** One ask: resolve the stored scope, build the arm from `scope.packIds`, and run a real
+       *  grounded answer. `registerRagIpc` also passes `expand` and `candidateScope`, which these
+       *  outcome legs do not need. */
       const ask = async (
         conversationId: string,
         svc: ZimService = h.svc,
@@ -2294,27 +2200,7 @@ describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', 
           { packId: alpha, status: 'searched', reason: null }
         ])
       }
-      // ---- (11) REGENERATE (delete + restore) and EXPORT --------------------------------------
-      {
-        const conv = newChat([alpha])
-        const msg = await ask(conv.id)
-        const storedBefore = (
-          db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }
-        ).j
-        expect(storedBefore).not.toBeNull()
-        const snapshot = deleteLastAssistantMessage(db, conv.id)
-        expect(snapshot!.packOutcomesJson).toBe(storedBefore)
-        restoreMessage(db, snapshot!)
-        expect(
-          (db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }).j
-        ).toBe(storedBefore) // byte-identical across the regenerate round trip
-        expect(shape(listMessages(db, conv.id).at(-1)?.packOutcomes)).toEqual([
-          { packId: alpha, status: 'searched', reason: null }
-        ])
-        const { markdown } = exportTranscript(db, conv.id)
-        expect(markdown).toContain('Knowledge packs:')
-        expect(markdown).toMatch(/- .*: searched — \d+ passage\(s\)/)
-      }
+      // ---- (11) regenerate and export carry the stored outcomes: chat.test.ts ----------------
       // ---- (12) WHOLE-DOCUMENT and COMPARE: `mode`, and NOT ONE pack request ------------------
       // These paths read the document(s) by definition. Saying nothing would let the user read the
       // answer as "the packs were consulted and added nothing".
@@ -2349,11 +2235,11 @@ describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', 
     } finally {
       await h.close()
     }
-    // A whole-pipeline test: twelve legs, each a REAL grounded answer over the mock runtime
-    // against a real service and a real loopback sidecar. The ceiling is generous on purpose —
-    // it bounds a hang, it is never the proof of anything (§10.1: every ordering fact below is a
-    // controlled promise with an entered/release pair, and no leg waits on a fixed sleep).
-  }, 120_000)
+    // A whole-pipeline test: eleven legs, each a REAL grounded answer against a real service and
+    // a real loopback sidecar. The ceiling bounds a hang, it is never the proof of anything
+    // (§10.1: every ordering fact above is a controlled promise with an entered/release pair, and
+    // no leg waits on a fixed sleep).
+  }, testBudgetMs(60_000))
 })
 
 // ---- #340 — the searchability probe after Add packs… / Enable (rag-design §17 D-Z15) ----------
@@ -2467,7 +2353,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
       expect(unlocked).toMatchObject({ ok: true })
       expect(searchableOf(h, delta).searchable).toBeNull()
-      expect(await waitUntil(() => searchableOf(h, delta).searchable === 'yes', 2_000)).toBe(true)
+      expect(await waitUntil(() => searchableOf(h, delta).searchable === 'yes', hangPolls(2_000, 1))).toBe(true)
     } finally {
       await h.close()
     }
@@ -2521,9 +2407,13 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
         await waitUntil(() => {
           const s = h.svc.excluded()
           return s !== null && s.length === 1 && s[0]!.packId === loserId
-        }, 2_000)
+        }, hangPolls(2_000, 1))
       ).toBe(true)
       expect((await status()).excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
+
+      // No service at all (a partial context) reads as tools not installed, nothing computed.
+      h.ctx.zim = undefined
+      expect(await status()).toEqual({ toolsInstalled: false, refreshing: false, revision: 0, excluded: null })
     } finally {
       await h.close()
     }

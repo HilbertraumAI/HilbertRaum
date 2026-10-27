@@ -61,7 +61,7 @@ export interface PackDeps {
   /**
    * Called with the throwaway directory when the manager child could not be confirmed dead: it
    * is kept (a possibly-live child may still write into it) and the caller adds it to the set
-   * the transient cleanup must leave alone until the next session start.
+   * the transient cleanup must leave alone until the next app start (#713).
    */
   onUncertain?: (path: string) => void
   /**
@@ -877,8 +877,8 @@ export async function writeLibraryXml(
  *
  * It is normally removed in `finally` — EXCEPT when the manager settled `'uncertain'` (the
  * SIGKILLed child may still be writing into it): removing it then would race a child that might
- * still be alive, so the dir is KEPT, reported through `deps.onUncertain` and removed by the
- * next session-start cleanup (R-7).
+ * still be alive, so the dir is KEPT, reported through `deps.onUncertain` and removed only by the
+ * next app-start sweep (R-7, #713).
  */
 async function readZimMetadata(deps: PackDeps, zimPath: string): Promise<KiwixBook> {
   const dir = deps.metaDir
@@ -899,7 +899,7 @@ async function readZimMetadata(deps: PackDeps, zimPath: string): Promise<KiwixBo
   } finally {
     if (manageErr instanceof KiwixManageError && manageErr.childState === 'uncertain') {
       log.warn('kiwix-manage cleanup not confirmed — leaving the throwaway metadata dir for the startup sweep (R-7)')
-      // The caller keeps this path out of the transient cleanup until the next session start.
+      // The caller keeps this path out of the transient cleanup until the next app start (#713).
       deps.onUncertain?.(dir)
     } else {
       try {

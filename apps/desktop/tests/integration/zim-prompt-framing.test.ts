@@ -1,17 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import {
   buildGroundedPrompt,
   generateGroundedAnswer,
   ragSettingsFrom,
   retrieve,
   TOKENS_PER_WORD,
-  type ExternalRetrievalOutput,
   type RagRetrievalSettings,
   type RetrievedChunk
 } from '../../src/main/services/rag'
@@ -23,6 +17,9 @@ import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import type { ExternalCandidate } from '../../src/main/services/zim/arm'
 import type { Reranker } from '../../src/main/services/reranker'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
+import { archiveCandidate as sharedCandidate, testArm } from '../helpers/zim-retrieval-fixtures'
 
 // ZIM knowledge packs (PR #294 → #301), Phase 0 check T01: the #228 excerpt framing (PR #293) was
 // merged UNDER the archive arm — the PR's fork predates it — so nothing had ever shown that archive
@@ -35,51 +32,9 @@ import type { Reranker } from '../../src/main/services/reranker'
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-zim-framing-')), 'test.sqlite'))
-}
-
-async function seedDocument(db: Db, embedder: MockEmbedder, title: string, texts: string[]): Promise<void> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const vectors = await embedder.embed(texts)
-  for (let i = 0; i < texts.length; i++) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(chunkId, docId, i, texts[i], title, approxTokenCount(texts[i]!), now)
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
-  }
-}
-
-function archiveCandidate(n: number, text: string, section = 'Landwirtschaft'): ExternalCandidate {
-  return {
-    chunkId: `zim:pack-climate:Treibhausgas#${n}`,
-    documentId: 'zim:pack-climate',
-    text,
-    sourceTitle: 'Treibhausgas',
-    pageNumber: null,
-    sectionLabel: section,
-    score: 1,
-    sourceKind: 'archive' as const,
-    packId: 'pack-climate',
-    archiveTitle: 'Wikipedia (Test)',
-    articlePath: 'Treibhausgas'
-  }
-}
-
-/** The arm's result shape (#301 P4, plan §9.21 (e)3). These cases are about the excerpt framing and
- *  the budget loop, so the outcome half is empty — T16-a owns the outcome contract. */
-function testArm(...candidates: ExternalCandidate[]): ExternalRetrievalOutput {
-  return { candidates, outcomes: [] }
-}
+/** This suite's pack, article and default section, over the shared candidate builder. */
+const archiveCandidate = (n: number, text: string, section = 'Landwirtschaft'): ExternalCandidate =>
+  sharedCandidate(n, text, { packId: 'pack-climate', article: 'Treibhausgas', section })
 
 /** Same unit as retrieve()'s budget loop: persisted/recomputed word estimate × TOKENS_PER_WORD. */
 const budgetTokens = (text: string): number => Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
@@ -144,9 +99,9 @@ describe('T01 — #293 excerpt framing over mixed document + archive excerpts', 
   })
 
   it('T01 an echoed framing line is scrubbed from the persisted answer when archive excerpts are in the prompt', async () => {
-    const db = freshDb()
+    const db = openFreshDb('zim-framing')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'klimabericht.pdf', [
+    await seedEmbeddedDoc(db, embedder, 'klimabericht.pdf', [
       'Treibhausgase entstehen in der Landwirtschaft vor allem durch Methan.'
     ])
     const conv = createConversation(db, { mode: 'documents' })
@@ -198,9 +153,9 @@ describe('T01 — #293 excerpt framing over mixed document + archive excerpts', 
 
     // Direction 1: a huge ARCHIVE candidate behind a short document chunk is dropped by the budget.
     {
-      const db = freshDb()
+      const db = openFreshDb('zim-framing')
       const embedder = new MockEmbedder()
-      await seedDocument(db, embedder, 'notes.txt', [short])
+      await seedEmbeddedDoc(db, embedder, 'notes.txt', [short])
       const r = await retrieve(db, embedder, query, smallBudget, null, orderingReranker, undefined, async () => testArm(
         archiveCandidate(0, huge),
         archiveCandidate(1, 'Lachgas ist ein Treibhausgas.', 'Lachgas')
@@ -220,9 +175,9 @@ describe('T01 — #293 excerpt framing over mixed document + archive excerpts', 
     // Direction 2: a huge DOCUMENT chunk behind a short document chunk and a small archive candidate
     // is dropped by the same loop — documents are not privileged over archives.
     {
-      const db = freshDb()
+      const db = openFreshDb('zim-framing')
       const embedder = new MockEmbedder()
-      await seedDocument(db, embedder, 'notes.txt', [short, huge])
+      await seedEmbeddedDoc(db, embedder, 'notes.txt', [short, huge])
       const r = await retrieve(db, embedder, query, smallBudget, null, orderingReranker, undefined, async () => testArm(
         archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')
       ))
