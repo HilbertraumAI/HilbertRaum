@@ -1351,7 +1351,7 @@ optional — each has a default or is only needed by its harness:
 | `HILBERTRAUM_ZIM_FILE` | `zim-real` | an existing `.zim` archive whose 80-byte header `readZimHeader` accepts — **required once requested**; it must carry a **full-text index** (the smoke asserts search hits — an index-less archive fails the run by design; index-less behaviour is covered by `zim-packs`' T14 leg and was accepted on real tools at P7) |
 | `HILBERTRAUM_ZIM_QUERY` | `zim-real` | a non-empty search term the archive's index will hit — **required once requested; deliberately has NO default** (the old hardcoded `'Treibhausgas'` fallback let an unset query pass silently) |
 | `HILBERTRAUM_ZIM_EXPECT_ARTICLE` | `zim-real` | optional — a known entry key; when set, the harness also asserts the viewer reads it with a non-empty title |
-| `HILBERTRAUM_ZIM_FIXTURES_DIR` | `zim-html.test.ts` (unit, CI-run) | optional realism leg — a dir of real mwoffliner `*.html` articles; the committed fixture pins the contract regardless |
+| `HILBERTRAUM_ZIM_FIXTURES_DIR` | `zim-html.test.ts` (unit, env-gated: skipped unless set) | optional realism leg — a dir holding the real mwoffliner articles `kontaktverfahren.html`, `treibhausgas.html` and `georgia.html`, re-extracted from a German Wikipedia pack over a loopback `kiwix-serve` (`/raw/<book>/content/<Title>`); set but missing a file FAILS the run. The committed fixture pins the contract regardless |
 | `HILBERTRAUM_KIWIX_BIN` | `zim-real` / dev runs | dev-only resolver override for `kiwix-serve` (kiwix-manage resolves as its sibling); **ignored in packaged builds** |
 
 **Canned-real-output regression-fixture policy:** because these never run in CI, an

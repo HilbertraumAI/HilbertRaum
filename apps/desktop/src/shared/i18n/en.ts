@@ -471,9 +471,8 @@ export const en = {
     'How fast this answer was generated: decode speed from the AI engine, the wait until the first word, and the number of tokens produced. Shown for answers from this session only.',
 
   // ---- Chat: document scope (ScopePopover.tsx) ----
-  // Truthful, calm scope copy: never "Using all 0 documents". Zero documents routes to
-  // a "No documents yet · Add documents" affordance; "all" never shows a count.
-  'chat.scope.usingAll': 'Using all documents',
+  // Truthful, calm scope copy: zero documents routes to a "No documents yet · Add documents"
+  // affordance, never a count of 0.
   'chat.scope.none': 'No documents yet · Add documents',
   'chat.scope.stopAsking': 'Stop asking {title}',
   'chat.scope.askToo': 'Ask {title} too',
@@ -3073,7 +3072,6 @@ export const en = {
   'docs.provenance.staleRemoved': 'A source was removed since this was made — re-run to update.',
 
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
-  'chat.scope.using': 'Using {sources}',
   'chat.scope.library': 'Library',
   'chat.scope.projectNamed': 'Project: {name}',
   'chat.scope.projectCount.one': '{count} project',

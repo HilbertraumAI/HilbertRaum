@@ -116,9 +116,9 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
   const [confirmRemove, setConfirmRemove] = useState<KnowledgePack | null>(null)
   // #339 P8-2 (the owner's ruling): the "kiwix-tools not installed" notice's own install action.
   // The hook only fetches getEngineStatus/getPolicy while the tools are actually missing — a
-  // workspace whose tools are already installed never makes these calls (KnowledgePacks.test.tsx
-  // leg (d)). `refresh()` on `done` makes the notice disappear even before the packs:changed
-  // broadcast's own refetch lands.
+  // workspace whose tools are already installed never makes these calls (KnowledgePacks.test.tsx,
+  // "never calls getEngineStatus…"). `refresh()` on `done` makes the notice disappear even before
+  // the packs:changed broadcast's own refetch lands.
   const [toolsDialogOpen, setToolsDialogOpen] = useState(false)
   const toolsInstall = useKnowledgePackToolsInstall(!toolsInstalled, () => {
     showToast(t('packs.tools.doneToast'))

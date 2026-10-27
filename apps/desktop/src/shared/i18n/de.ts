@@ -484,7 +484,6 @@ export const de: Record<keyof typeof en, string> = {
     'Diese Dokumentantwort hat die feste Länge erreicht, die die App für eine einzelne Antwort zulässt. Bitte das Modell, dort fortzufahren, wo es aufgehört hat.',
 
   // ---- Chat: document scope ----
-  'chat.scope.usingAll': 'Nutzt alle Dokumente',
   'chat.scope.none': 'Noch keine Dokumente · Dokumente hinzufügen',
   'chat.scope.stopAsking': '{title} nicht mehr fragen',
   'chat.scope.askToo': '{title} auch fragen',
@@ -3059,7 +3058,6 @@ export const de: Record<keyof typeof en, string> = {
   'docs.provenance.staleRemoved': 'Eine Quelle wurde seit der Erstellung entfernt — zum Aktualisieren neu ausführen.',
 
   // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review erledigt (2026-06-14). ----
-  'chat.scope.using': 'Quelle: {sources}',
   'chat.scope.library': 'Bibliothek',
   'chat.scope.projectNamed': 'Projekt: {name}',
   'chat.scope.projectCount.one': '{count} Projekt',

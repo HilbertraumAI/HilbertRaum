@@ -128,11 +128,13 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   blanket `} as never)`. A one-way ratchet (`tests/unit/as-never-ratchet.test.ts`) fails if the
   tests/ `as never` count climbs — the remaining casts get converted **fix-when-touched** (lower
   the ratchet baseline when you remove some).
-- **An eval measures production, not a copy of it.** The skill-trigger eval once scored its corpus
+- **A test or eval measures production, not a copy of it.** The skill-trigger eval once scored its corpus
   through a hand-written copy of the selector, and its auto-fire gate never compared that copy with
   production; it stayed green while production missed the bar. Drive the production entry point —
   `tests/eval/skill-triggers.ts` runs every row through `suggestSkillsForTurn` /
-  `resolveAutoFireSkill` on a real temp database.
+  `resolveAutoFireSkill` on a real temp database. The same held for two ZIM rows: one ran a retyped
+  copy of the pack-routing SQL, another rebuilt the arm's admission loop from its parts
+  (`composeAdmitted`); both proved the copy whatever production did.
 - **A negative must fail for the reason its title gives.** `not.toContain`, `toEqual([])`,
   `toBeNull()` and "nothing persisted" checks pass just as well when the input never reaches the
   guard you mean (a reader that throws before any persist step; an ID that a filler check rejects
@@ -154,7 +156,14 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   options only tests passed: they proved a 50 ms teardown bound and a 0 or 60,000 ms probe TTL while
   5 s and 10 s shipped, and a probe test passed with the start's probe time never recorded. Drive
   the real constant with fake timers (`vi.useFakeTimers({ toFake: ['performance'] })` for a
-  `performance.now()` clock) and advance to just past it, and to just short of it.
+  `performance.now()` clock) and advance to just past it, and to just short of it. A shorter seam can
+  also prove a different mechanism: a 300 ms `articleTimeoutMs` cut the ZIM article read before the
+  shipped 1 s idle detector could fire, so the "stalled read" row proved the timeout, not the detector.
+- **A once-per-process latch makes every later "stays silent" row vacuous.** kiwix-serve warns about a
+  hand-placed bundle once per process: after any earlier row trips the warning, a "does not warn" row
+  passes with the check deleted, and the `…ForTests` reset that hid this kept a test-only export
+  alive. Assert the silence before anything trips the latch, in a file of its own if need be (each
+  test file is a fresh fork).
 - **`expect(() => fn()).not.toThrow()` proves nothing when `fn` is async**: a rejection is not a
   throw. Await the outcome, or call `fn` again and assert what the guard re-armed.
 - **The start-ladder fake lives in `tests/helpers/ladder-harness.ts`** (fake rungs and their stderr,
@@ -219,6 +228,13 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   (a scan through the real pipeline, asserting it fails as a detected scan) and `ocrDrive` (a temp drive
   with language files). The two OCR task suites each carried their own rasterizer, and one copy had
   stopped honouring the page list.
+- **ZIM test setup lives in `tests/helpers/zim-*.ts`**: `zim-fakes` (`ServeFakeChild`,
+  `fakeManageSpawn`, `zimServiceDeps`, marker binaries, `expectAbortError`), `zim-library` (library
+  XML books, `manageAddFromHeader`), `zim-http` (`/raw` answers with Range and stalls),
+  `zim-retrieval-fixtures` (`archiveCandidate`, `testArm`, `searchXml`), `zim-header` (archive
+  headers) and `zim-smoke-env` (the manual smoke's gate); the renderer pack suites share
+  `knowledge-pack-fixtures`. The ZIM suites used to carry their own fake children, library XML and
+  `/raw` responders.
 - **A skipped `describe` still runs its body at collection.** `describe.skipIf(!built)` skips the tests,
   not the code between them: `ocr-decoder-assets` read `out/renderer/assets` in the describe body, so a
   fresh checkout's `npm test` before a build failed the whole file instead of skipping it. Read build

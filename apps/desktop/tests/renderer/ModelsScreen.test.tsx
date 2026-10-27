@@ -6,7 +6,6 @@ import {
   ModelsScreen,
   __resetModelsScreenMemoryForTests
 } from '../../src/renderer/screens/ModelsScreen'
-import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib/useKnowledgePackToolsInstall'
 import {
   DEFAULT_SETTINGS,
   type AppStatus,
@@ -113,10 +112,6 @@ afterEach(cleanup)
 // start from a known state instead of inheriting whatever the previous case left behind.
 beforeEach(() => {
   __resetModelsScreenMemoryForTests()
-  // #339 P8-2: the knowledge-pack tools install hook keeps its job in MODULE state too (the
-  // same remembered-job pattern) — reset it alongside so a live/failed job from one test never
-  // leaks into the next.
-  __resetKnowledgePackToolsInstallForTests()
 })
 
 describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Settings)', () => {

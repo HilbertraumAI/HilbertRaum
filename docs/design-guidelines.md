@@ -1205,7 +1205,7 @@ above it — the tools are optional in a way the chat engine is not, and the row
 secondary. `lib/useKnowledgePackToolsInstall.ts` is the shared poll/cancel/remembered-job hook
 (mirroring `ModelsScreen.tsx`'s own engine-job handling) — it fetches `getEngineStatus`/
 `getPolicy` lazily, only while the affordance is actually needed, so a workspace with the tools
-already installed makes neither call. Tests: `KnowledgePacks.test.tsx` ("#339 P8-2: …" legs),
+already installed makes neither call. Tests: `KnowledgePackToolsInstall.test.tsx` ("#339 P8-2: …"),
 `ModelsScreen.test.tsx` ("ModelsScreen — knowledge-pack tools row" describe block).
 
 **Tier-2 save action (2026-09-07, #340, D-Z21):** "Save to my documents" lives inside

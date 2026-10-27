@@ -1,5 +1,5 @@
-import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -14,7 +14,11 @@ import { afterAll, describe, expect, it } from 'vitest'
 const repoRoot = join(__dirname, '..', '..', '..', '..')
 const fixtures = join(__dirname, '..', 'fixtures', 'zim')
 const scratch = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-diff-test-'))
-afterAll(() => rmSync(scratch, { recursive: true, force: true }))
+const scratchRepo = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-dev-set-diff-'))
+afterAll(() => {
+  rmSync(scratch, { recursive: true, force: true })
+  rmSync(scratchRepo, { recursive: true, force: true })
+})
 
 describe.skipIf(!process.features.typescript)('zim-dev-set-diff.mjs (stage A of the acceptance read)', () => {
   it('loads a git ref’s converter, converts every cached article twice and reports them word-identical', () => {
@@ -31,5 +35,59 @@ describe.skipIf(!process.features.typescript)('zim-dev-set-diff.mjs (stage A of 
     const articles = readdirSync(fixtures).filter((f) => f.endsWith('.html')).length
     expect(report.identical).toBe(true)
     expect(report.total).toEqual({ articles, identical: articles, whitespaceOnly: 0, wordsChanged: 0 })
+  })
+
+  // Negative control: HEAD against HEAD can only ever say IDENTICAL, so a comparator that always
+  // said so would pass the test above. A throwaway repo with a stub converter gives the script a
+  // real words-changed pair and a whitespace-only pair, independent of this repo's history.
+  it('reports a changed word as WORDS CHANGED (exit 1) and a whitespace-only change as identical words (exit 0)', () => {
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-c', 'user.name=zim-test', '-c', 'user.email=zim-test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args], {
+        cwd: scratchRepo,
+        encoding: 'utf8'
+      })
+    const zimDir = join(scratchRepo, 'apps', 'desktop', 'src', 'main', 'services', 'zim')
+    mkdirSync(zimDir, { recursive: true })
+    mkdirSync(join(scratchRepo, 'scripts'), { recursive: true })
+    copyFileSync(join(repoRoot, 'scripts', 'zim-dev-set-diff.mjs'), join(scratchRepo, 'scripts', 'zim-dev-set-diff.mjs'))
+    const pages = join(scratchRepo, 'pages')
+    mkdirSync(pages)
+    writeFileSync(join(pages, 'a.html'), '<p>x</p>')
+    const commitConverter = (text: string): string => {
+      writeFileSync(
+        join(zimDir, 'html.ts'),
+        `export function zimArticleToSegments(_html) { return { title: 'T', segments: [{ sectionLabel: 'S', text: ${JSON.stringify(text)} }] } }
+`
+      )
+      git('add', '--', 'apps/desktop/src/main/services/zim/html.ts', 'scripts/zim-dev-set-diff.mjs')
+      git('commit', '-m', text)
+      return git('rev-parse', 'HEAD').trim()
+    }
+    git('init', '-q')
+    const c1 = commitConverter('alpha beta gamma')
+    const c2 = commitConverter('alpha beta delta')
+    const c3 = commitConverter('alpha  beta  delta')
+
+    const run = (base: string, head: string, jsonName: string) => {
+      const json = join(scratch, jsonName)
+      const result = spawnSync(
+        process.execPath,
+        ['--no-warnings', 'scripts/zim-dev-set-diff.mjs', '--pages', pages, '--base', base, '--head', head, '--json', json],
+        { cwd: scratchRepo, encoding: 'utf8' }
+      )
+      return { result, report: JSON.parse(readFileSync(json, 'utf8')) }
+    }
+
+    const changed = run(c1, c2, 'changed.json')
+    expect(changed.result.status).toBe(1)
+    expect(changed.result.stdout).toContain('VERDICT: WORDS CHANGED')
+    expect(changed.report.identical).toBe(false)
+    expect(changed.report.total).toEqual({ articles: 1, identical: 0, whitespaceOnly: 0, wordsChanged: 1 })
+
+    const spaced = run(c2, c3, 'spaced.json')
+    expect(spaced.result.status).toBe(0)
+    expect(spaced.result.stdout).toContain('VERDICT: WORDS IDENTICAL')
+    expect(spaced.report.identical).toBe(true)
+    expect(spaced.report.total).toEqual({ articles: 1, identical: 0, whitespaceOnly: 1, wordsChanged: 0 })
   })
 })

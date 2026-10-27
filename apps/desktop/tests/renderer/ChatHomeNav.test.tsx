@@ -7,7 +7,7 @@ import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
-import type { KnowledgePack } from '../../src/shared/types'
+import { knowledgePack, WIKIPEDIA_EN_PACK } from '../helpers/knowledge-pack-fixtures'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer tests for the chat screen's structural behaviors (Phase 25 layout, same
@@ -299,20 +299,7 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
   // scope, and the chip says so before any conversation exists.
   it('applies the pending pack handoff (documents off) to the next documents conversation', async () => {
     const user = userEvent.setup()
-    const wikipedia: KnowledgePack = {
-      id: 'p1',
-      title: 'Wikipedia (English)',
-      description: null,
-      language: 'eng',
-      zimDate: '2026-07-01',
-      articleCount: 100,
-      sizeBytes: 1024,
-      leaf: 'wikipedia_en.zim',
-      enabled: true,
-      available: true,
-      unavailableReason: null,
-      addedAt: '2026-09-01T00:00:00Z'
-    }
+    const wikipedia = knowledgePack({ ...WIKIPEDIA_EN_PACK })
     const created = conv({ id: 'c3', title: 'New chat', mode: 'documents' })
     const createConversation = vi.fn(async () => created)
     stubApi({

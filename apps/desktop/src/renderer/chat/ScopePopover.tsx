@@ -120,18 +120,6 @@ export function scopeSources(
   return parts.length === 0 ? null : parts.join(' + ')
 }
 
-/** Compose the footer label from a resolved scope (plan §13.1). Exported for tests. */
-export function scopeFooterLabel(
-  scope: DocumentScope | null,
-  collections: Collection[],
-  t: I18n['t'],
-  tCount: I18n['tCount'],
-  packs: KnowledgePack[] = []
-): string {
-  const sources = scopeSources(scope, collections, t, tCount, packs)
-  return sources ? t('chat.scope.using', { sources }) : t('chat.scope.usingAll')
-}
-
 export function ScopePopover({
   docs,
   collections,

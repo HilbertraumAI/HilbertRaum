@@ -117,7 +117,7 @@ describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
     expect(screen.queryByText('0 passages')).not.toBeInTheDocument()
   })
 
-  it('renders the German copy for the summary and every reason code', async () => {
+  it('renders the German copy for the summary, the plural pair and a skip reason', async () => {
     const user = userEvent.setup()
     renderTranscript('de', [
       assistantMsg({

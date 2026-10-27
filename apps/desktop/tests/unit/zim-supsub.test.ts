@@ -134,11 +134,6 @@ describe('foldSupSub — what it deliberately leaves alone', () => {
 })
 
 describe('the emitting side and the folding side cannot drift', () => {
-  it('exports the literals the converter writes', () => {
-    expect(SUP_MARK).toBe('^')
-    expect(SUB_MARK).toBe('_')
-  })
-
   it('folds every shape `shouldMark` admits, except the sign-suffixed ones', () => {
     // The emitted shapes are a subset of the folded shapes by construction — this pins that
     // relation rather than trusting the two regexes to be read together.

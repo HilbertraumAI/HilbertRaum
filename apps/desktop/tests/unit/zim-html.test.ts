@@ -35,6 +35,12 @@ import {
 // nested tables, figures with captions, lists, numeric + named entities.
 const FIXTURE = readFileSync(join(__dirname, '../fixtures/zim/article.html'), 'utf8')
 
+const textOf = (html: string): string =>
+  zimArticleToSegments(html)
+    .segments.map((s) => s.text)
+    .join('\n')
+const textOfArticle = (a: ZimArticle): string => a.segments.map((s) => s.text).join('\n')
+
 describe('zimArticleToSegments', () => {
   const article = zimArticleToSegments(FIXTURE)
   const all = article.segments.map((s) => s.text).join('\n\n')
@@ -267,10 +273,6 @@ describe('zimArticleToSegments', () => {
 // <caption>. The image, its alt text, and everything else in the figure subtree stay dropped.
 // ---------------------------------------------------------------------------------------
 describe('zimArticleToSegments — figure captions', () => {
-  const textOf = (html: string): string =>
-    zimArticleToSegments(html)
-      .segments.map((s) => s.text)
-      .join('\n')
 
   it('captures a figcaption as its own "Caption: " segment while the image and its alt stay dropped', () => {
     const html =
@@ -383,6 +385,7 @@ describe('zimArticleToSegments — figure captions', () => {
     expect(() => zimArticleToSegments(html)).not.toThrow()
     const text = textOf(html)
     expect(text).toContain('lead')
+    expect(zimArticleToSegments(html).segments.some((s) => s.text.startsWith('Caption:'))).toBe(false)
   })
 
   it("MediaWiki's div.thumbcaption sitting OUTSIDE a <figure> is ordinary prose already, " +
@@ -647,10 +650,6 @@ describe('zimArticleToSegments — the archive’s license line (#662)', () => {
 })
 
 describe('zimArticleToSegments — preformatted text (#627)', () => {
-  const textOf = (html: string): string =>
-    zimArticleToSegments(html)
-      .segments.map((s) => s.text)
-      .join('\n')
   const words = (text: string): string => text.split(/\s+/).filter(Boolean).join(' ')
 
   it.each([
@@ -779,10 +778,6 @@ describe('zimArticleToSegments — preformatted text (#627)', () => {
 // the figure subtree stays dropped, exactly as before.
 // ---------------------------------------------------------------------------------------
 describe('zimArticleToSegments — table delivery', () => {
-  const textOf = (html: string): string =>
-    zimArticleToSegments(html)
-      .segments.map((s) => s.text)
-      .join('\n')
 
   it('delivers a simple table as key: value lines', () => {
     const html = '<table><tr><th>Name</th><th>Value</th></tr><tr><td>Density</td><td>19.3</td></tr></table>'
@@ -855,13 +850,17 @@ describe('zimArticleToSegments — table delivery', () => {
   })
 
   it('a table nested deeper than the safety cap is dropped, not inlined (pathological input)', () => {
-    let html = '<table><tr><td>'
-    for (let i = 0; i < 12; i += 1) html += `<table><tr><td>depth${i}`
+    // Header-bearing levels: a headerless single-column table is dropped as layout, which would
+    // make the absence check below vacuous.
+    let html = '<table><tr><th>k</th><td>'
+    for (let i = 0; i < 12; i += 1) html += `<table><tr><th>k${i}</th><td>depth${i}`
     html += '</td></tr></table>'.repeat(12) + '</td></tr></table>'
     expect(() => zimArticleToSegments(html)).not.toThrow()
     // At least the deepest levels (beyond the cap) must not survive as inlined text; the exact
     // cutoff is an implementation constant, not part of the contract.
     const text = textOf(html)
+    expect(text).toContain('depth0')
+    expect(text).toContain('depth5')
     expect(text).not.toContain('depth11')
   })
 
@@ -1039,6 +1038,7 @@ describe('zimArticleToSegments — table delivery', () => {
       '</table>'
     // A rowspan far beyond the cap must not throw or hang; the cap silently bounds it.
     expect(() => zimArticleToSegments(html)).not.toThrow()
+    expect((textOf(html).match(/huge/g) ?? []).length).toBeLessThanOrEqual(TABLE_MAX_ROWSPAN)
   })
 
   it('is total on junk table input: an unterminated tag inside a cell must not throw', () => {
@@ -1244,7 +1244,7 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(textOf(html)).toBe('Messwerte — 1990: 12,4')
   })
 
-  it('the article.html infobox row (a real fixture, not a synthetic one) is keyed exactly, ' +
+  it('the article.html infobox row (from the hand-written fixture) is keyed exactly, ' +
     'not "Column 1: ... Column 2: ..." (pins the exact rendering shape, not just presence)', () => {
     const fixtureText = zimArticleToSegments(FIXTURE).segments.map((s) => s.text).join('\n\n')
     expect(fixtureText).toContain('Infobox-Zelle: Tabelleninhalt darf nicht erscheinen')
@@ -1562,24 +1562,19 @@ describe('zimArticleToSegments — table delivery', () => {
 // previously unbounded and uncharged, so a small, plausible-looking input could cost seconds,
 // tens of MB of text and gigabytes of heap in one uninterruptible slice. These are the
 // reviewer's own crafted reproducing inputs (scaled to the caps now in force), asserted the
-// H1 way -- the `work` counter and useful output, never wall-clock -- plus one explicit timing
-// sanity check (generous, not a CI-flake risk) to confirm the fix is not merely "bounded in
-// theory".
+// H1 way -- the `work` counter and useful output, never wall-clock.
 // ---------------------------------------------------------------------------------------
 describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
   it('a single cell at the max rowspan/colspan cap, repeated across many real rows, ' +
-    'completes fast and produces a small, bounded amount of text', () => {
+    'produces a small, bounded amount of text', () => {
     // 50 real rows (so rowspan has somewhere real to expand into after B5's fix) each holding
     // one maximally-spanning cell -- the reviewer's "1 MiB of colspan=24 rowspan=40" shape,
     // reproduced with real rows instead of relying on an unclamped rowspan to fake them.
     const row = '<tr><td colspan="24" rowspan="40">w</td></tr>'
     const html = `<table>${row.repeat(50)}</table>`
-    const t0 = performance.now()
     const article = zimArticleToSegments(html)
-    const ms = performance.now() - t0
     const text = article.segments.map((s) => s.text).join('\n')
     expect(text.length).toBeLessThan(20_000)
-    expect(ms).toBeLessThan(500) // generous; before the fix this shape ran into seconds
     expect(article.work).toBeGreaterThan(0)
     // html.ts's header record derives a combined ceiling for one outermost table's own share
     // plus the last nested table it may still admit (the nested test below pins the same bound
@@ -1587,32 +1582,19 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
     expect(article.work).toBeLessThanOrEqual(html.length + 2 * (TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS)
   })
 
-  it('a plain, evenly-filled 400×100 grid (no crafted spans at all) completes fast and ' +
+  it('a plain, evenly-filled 400×100 grid (no crafted spans at all) ' +
     'is cut at the documented caps, not silently truncated', () => {
     const rows = Array.from(
       { length: 400 },
       (_, r) => `<tr>${Array.from({ length: 100 }, (_, c) => `<td>${r}-${c}</td>`).join('')}</tr>`
     )
     const html = `<table>${rows.join('')}</table>`
-    const t0 = performance.now()
     const article = zimArticleToSegments(html)
-    const ms = performance.now() - t0
     const text = article.segments.map((s) => s.text).join('\n')
-    expect(ms).toBeLessThan(500)
     expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
     expect(article.work).toBeGreaterThan(0)
     // Same header-record ceiling as the max-span single-cell case above.
     expect(article.work).toBeLessThanOrEqual(html.length + 2 * (TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS)
-  })
-
-  it('the reviewer’s adversarial input (thousands of source cells in one row) is bounded ' +
-    'by the column cap alone, independent of how many source cells the row actually contains', () => {
-    const cells = '<td colspan="24">w</td>'.repeat(2000)
-    const html = `<table><tr>${cells}</tr></table>`
-    const t0 = performance.now()
-    expect(() => zimArticleToSegments(html)).not.toThrow()
-    const ms = performance.now() - t0
-    expect(ms).toBeLessThan(200)
   })
 
   it('the documented additive table-work bound holds: work ≤ 5·n + 64 + ' +
@@ -1622,6 +1604,10 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
     const article = zimArticleToSegments(html)
     const proseBound = 5 * html.length + 64
     expect(article.work).toBeLessThanOrEqual(proseBound + TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS)
+    // Two thousand source cells in one row: the column cap alone bounds the output.
+    const text = article.segments.map((s) => s.text).join('\n')
+    expect((text.match(/\bw\b/g) ?? []).length).toBeLessThanOrEqual(TABLE_MAX_COLUMNS)
+    expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
   })
 
   // -------------------------------------------------------------------------------------
@@ -1631,14 +1617,12 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
   // `maxWork` alike (issue #478). The global nested-work budget bounds this the same way the
   // per-table caps already bound a single huge table.
   // -------------------------------------------------------------------------------------
-  it('thousands of small nested max-span tables in one wrapper cell complete fast and with ' +
+  it('thousands of small nested max-span tables in one wrapper cell complete with ' +
     'small, bounded output -- nested work is charged and budgeted, not free and unbounded', () => {
     const nestedUnit = '<table><tr><td colspan="24" rowspan="40">w</td></tr></table>'
     const count = Math.ceil((1024 * 1024) / nestedUnit.length)
     const html = `<table><tr><td>${nestedUnit.repeat(count)}</td></tr></table>`
-    const t0 = performance.now()
     const article = zimArticleToSegments(html)
-    const ms = performance.now() - t0
     const text = article.segments.map((s) => s.text).join('\n')
     // Only the first ~TABLE_MAX_RAW_CHARS worth of nested content is ever inlined -- output
     // stays small and bounded regardless of how many thousand nested tables the input has.
@@ -1650,10 +1634,6 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
     // how many thousand nested tables the input actually has.
     expect(article.work).toBeGreaterThan(html.length)
     expect(article.work).toBeLessThan(html.length + 2 * (TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS)
-    // Generous wall-clock smoke check only (CI machines vary by an order of magnitude): before
-    // this fix the reviewer measured 173.7 ms for this exact shape on their own desktop
-    // (already down from seconds/gigabytes pre-cap); this is not the pass/fail oracle above.
-    expect(ms).toBeLessThan(2_000)
     // The budget cutoff is disclosed like any other cap hit, not silently invisible.
     expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
   })
@@ -1866,9 +1846,6 @@ const NON_WIKIPEDIA: ReadonlyArray<{
 ]
 
 describe('zimArticleToSegments — H1 linear scanner', () => {
-  const textOf = (a: ReturnType<typeof zimArticleToSegments>): string =>
-    a.segments.map((s) => s.text).join('\n')
-
   it("T02 the scanner's work counter is nonzero and scales linearly: work(60k) ≤ 2.5 × work(30k) on the unclosed-< pathology (no wall-clock)", () => {
     const small = pathology('<x ', 30_000)
     const large = pathology('<x ', 60_000)
@@ -1889,8 +1866,8 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
     // …and the output is still useful: an unclosed-`<` run is recovered at each `<`, so
     // both the lead and the tail survive and nothing is reported as lost.
     for (const r of [a, b]) {
-      expect(textOf(r)).toContain('lead')
-      expect(textOf(r)).toContain('tail')
+      expect(textOfArticle(r)).toContain('lead')
+      expect(textOfArticle(r)).toContain('tail')
       expect(r.truncated).toBeNull()
     }
   })
@@ -1908,12 +1885,12 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
       expect(b.work, `${f.what}: work(60k) ≤ 2.5 × work(30k)`).toBeLessThanOrEqual(2.5 * a.work)
 
       // Useful output: the lead is ALWAYS extracted, however malformed the rest is.
-      expect(textOf(a), f.what).toContain('lead')
-      expect(textOf(b), f.what).toContain('lead')
+      expect(textOfArticle(a), f.what).toContain('lead')
+      expect(textOfArticle(b), f.what).toContain('lead')
 
       // The tail is extracted whenever the recovery can reach it; the families that
       // legitimately lose it are exactly the ones that report `unterminated`.
-      expect(textOf(a).includes('tail'), `${f.what}: tail reachable`).toBe(f.keepsTail)
+      expect(textOfArticle(a).includes('tail'), `${f.what}: tail reachable`).toBe(f.keepsTail)
       if (f.truncation === null) {
         expect(a.truncated, f.what).toBeNull()
       } else {
@@ -1928,7 +1905,7 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
     for (const f of NON_WIKIPEDIA) {
       const html = readFileSync(join(__dirname, '../fixtures/zim', f.file), 'utf8')
       const r = zimArticleToSegments(html)
-      const text = textOf(r)
+      const text = textOfArticle(r)
       expect(r.title, f.file).toBe(f.title)
       for (const wanted of f.contains) expect(text, `${f.file}: ${wanted}`).toContain(wanted)
       for (const banned of f.omits) expect(text, `${f.file}: ${banned}`).not.toContain(banned)
@@ -1943,7 +1920,7 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
 
   it('normalises a math alttext after decoding its entities (decode-then-normalise order)', () => {
     const html = '<p><math alttext="\\text{CO}_2 &lt; 400"></math></p>'
-    const text = textOf(zimArticleToSegments(html))
+    const text = textOfArticle(zimArticleToSegments(html))
     expect(text).toContain('CO2 < 400')
   })
 
@@ -1960,32 +1937,32 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
 
   it('recovers at the `<` inside a malformed tag instead of swallowing the document', () => {
     const r = zimArticleToSegments('<p>lead</p><x <y <z <p>tail</p>')
-    expect(textOf(r)).toContain('lead')
-    expect(textOf(r)).toContain('tail')
+    expect(textOfArticle(r)).toContain('lead')
+    expect(textOfArticle(r)).toContain('tail')
     expect(r.truncated).toBeNull()
   })
 
   it('keeps scanning after an attribute quote that never closes inside the tag', () => {
     // The `>` still ends the tag, so nothing is lost and nothing is reported.
     const r = zimArticleToSegments('<p>lead</p><p t="x> middle </p><p>tail</p>')
-    expect(textOf(r)).toContain('lead')
-    expect(textOf(r)).toContain('middle')
-    expect(textOf(r)).toContain('tail')
+    expect(textOfArticle(r)).toContain('lead')
+    expect(textOfArticle(r)).toContain('middle')
+    expect(textOfArticle(r)).toContain('tail')
     expect(r.truncated).toBeNull()
   })
 
   it('treats a `<` that starts nothing as text and advances one char', () => {
     const r = zimArticleToSegments('<p>a <<<< b < c <1 d</p>')
-    const text = textOf(r)
+    const text = textOfArticle(r)
     expect(text).toContain('a <<<< b < c <1 d')
     expect(r.truncated).toBeNull()
   })
 
   it('drops a `</` with no tag name and a `<?…>` processing instruction as bogus comments', () => {
     const r = zimArticleToSegments('<p>lead</> </ x> <?php echo 1; ?> tail</p>')
-    expect(textOf(r)).toContain('lead')
-    expect(textOf(r)).toContain('tail')
-    expect(textOf(r)).not.toContain('php')
+    expect(textOfArticle(r)).toContain('lead')
+    expect(textOfArticle(r)).toContain('tail')
+    expect(textOfArticle(r)).not.toContain('php')
     expect(r.truncated).toBeNull()
   })
 
@@ -2005,7 +1982,7 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
       expect(r.truncated?.at, html).toBeGreaterThanOrEqual(LEAD.length)
       expect(r.truncated?.at, html).toBeLessThan(html.length)
       // Never throws, and the segments emitted before the cut are still returned.
-      expect(textOf(r), html).toContain('lead')
+      expect(textOfArticle(r), html).toContain('lead')
     }
   })
 
@@ -2019,7 +1996,7 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
     expect(r.work).toBeLessThanOrEqual(bound(html.length))
     // Partial, but not empty: the ask path still gets chunks out of the article.
     expect(r.segments.length).toBeGreaterThan(0)
-    expect(textOf(r)).toContain('lead')
+    expect(textOfArticle(r)).toContain('lead')
     // The same input without the tiny budget converts completely.
     expect(zimArticleToSegments(html).truncated).toBeNull()
   })
@@ -2053,7 +2030,7 @@ describe('zimArticleToSegments — H1 linear scanner', () => {
     // U+0130 lowercases to two code units in JS; a whole-input toLowerCase() would shift
     // every index after it. Uppercase end tags must still close their raw-text element.
     const r = zimArticleToSegments('<p>İ lead</p><SCRIPT>hidden</SCRIPT><p>tail</p>')
-    const text = textOf(r)
+    const text = textOfArticle(r)
     expect(text).toContain('İ lead')
     expect(text).toContain('tail')
     expect(text).not.toContain('hidden')
@@ -2101,8 +2078,6 @@ async function withHopCounter<T>(
 }
 
 describe('zimArticleToSegments — P1b cooperative slicing', () => {
-  const textOf = (a: ZimArticle): string => a.segments.map((s) => s.text).join('\n')
-
   it('P1b slices the scan: a small article is one slice, and slices never exceed work / DEFAULT_SLICE_WORK + 1', () => {
     // A ~30 KB real article — the common case — must not be sliced at all.
     for (const f of NON_WIKIPEDIA) {
@@ -2234,7 +2209,7 @@ describe('zimArticleToSegments — P1b cooperative slicing', () => {
       expect(async_.work, unit).toBe(sync.work)
       expect(async_.slices, unit).toBe(sync.slices)
       expect(async_.truncated, unit).toEqual(sync.truncated)
-      expect(textOf(async_), unit).toBe(textOf(sync))
+      expect(textOfArticle(async_), unit).toBe(textOfArticle(sync))
     }
   })
 })
@@ -2457,13 +2432,20 @@ describe('decodeEntities', () => {
 // committed fixture pins the contract; this leg pins realism (manual-smoke convention).
 // (#301 P5, finding L8, plan §9.19 (d)1: renamed from HILBERTRAUM_ZIM_FIXTURES for the
 // HILBERTRAUM_<FEATURE>_<KIND> naming convention the rest of the ZIM env vars follow.)
-const realDir = process.env.HILBERTRAUM_ZIM_FIXTURES_DIR
-describe.runIf(!!realDir && existsSync(realDir!))('real mwoffliner articles', () => {
-  for (const name of ['kontaktverfahren.html', 'treibhausgas.html', 'georgia.html']) {
+// Requested means set and non-blank, never "exists": a wrong directory fails instead of skipping.
+const realDirRaw = process.env.HILBERTRAUM_ZIM_FIXTURES_DIR
+const realRequested = realDirRaw !== undefined && realDirRaw.trim() !== ''
+const REAL_ARTICLES = ['kontaktverfahren.html', 'treibhausgas.html', 'georgia.html']
+describe.runIf(realRequested)('real mwoffliner articles', () => {
+  it('the requested directory holds all three articles', () => {
+    for (const name of REAL_ARTICLES) {
+      expect(existsSync(join(realDirRaw!, name)), `${name} missing from HILBERTRAUM_ZIM_FIXTURES_DIR`).toBe(true)
+    }
+  })
+
+  for (const name of REAL_ARTICLES) {
     it(`extracts clean sectioned text from ${name}`, () => {
-      const file = join(realDir!, name)
-      if (!existsSync(file)) return
-      const html = readFileSync(file, 'utf8')
+      const html = readFileSync(join(realDirRaw!, name), 'utf8')
       const { title, segments } = zimArticleToSegments(html)
       expect(title).toBeTruthy()
       expect(segments.length).toBeGreaterThan(3)
