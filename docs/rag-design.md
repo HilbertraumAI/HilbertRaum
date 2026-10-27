@@ -5485,6 +5485,28 @@ counting. Measured old against new converter: 0 of the 949 + 1,024 cached Wikipe
 change (none carries a `<figure>`), and 1 caption in the 488 articles from seven other archives
 changes: a `[2]` bracket is dropped.
 
+**The title takes no marker (#711, 2026-10-27).** The first heading is the article's title — the
+citation's `sourceTitle`, the viewer's and a saved copy's heading, and the per-pack
+de-duplication key — and since #488 it carried the markers too: German Wikipedia's DISPLAYTITLE
+formulas came out as `CO_2-Steuer`, `Liste der Länder nach CO_2-Emission pro Kopf`. Owner call:
+the heading that becomes the title is written WITHOUT markers (`emit` skips the armed marker while
+`title === null` and a heading is open), so it reads exactly as before #488 (`CO2-Steuer`,
+`Na+-Kanal`); every later heading and all prose keep theirs. Folding the finished title instead
+was refused: it would turn a literal `snake_case` title in a code archive into `snakecase` and
+leave `Na^+`. Admission cannot move — its title predicates are word-shaped regexes and `norm`
+already split `CO_2` into `co 2` — and the dedup key only returns to its pre-#488 form.
+Stage A (`zim-dev-set-diff.mjs`, base `a691d1eb`): **1 of 949** core200 articles changes and **1 of
+1,024** in the second cache — the same page, title `δ^18O` → `δ18O`, every segment's words
+identical; the 488 articles from seven other archives (devdocs and gobyexample among them,
+where a literal `_` in a title would show) are identical. Acceptance read (the 4-z-r harness, gpu
+profile, both packs, 200/200; its `ZimService` now takes `transientDir`, the seam PR #717 made
+required): all six floors pass with delivery identical to master's own read the same night —
+allPacked 109, anyCandidate 151, anyArticle 151, the same candidate chunks on 200/200 questions,
+and one question (H021) citing `δ18O` where master cites `δ^18O` — arm p90 804 ms, rerank p90
+2,875 ms, planner p90 673 ms.
+The real-tools smoke compares titles exactly again (qwen3-4b-instruct: core 9/9, list 4/6 asserted;
+its citations read `CO2-Steuer`, `Liste der Länder nach CO2-Emission pro Kopf`).
+
 **Site furniture and code blocks on archives that are not Wikipedia (#627, 2026-10-13).** Two
 gaps, both measured on the archives the issue named (`gobyexample.com_en_all_2026-05`,
 `devdocs_en_q_2026-07`, read through `/raw` from the pinned kiwix-serve 3.8.1): every one of
@@ -5604,6 +5626,7 @@ sections; System 7 5,241 → 5,012, 22 → 20), and the saved copy holds it only
 **Acceptance read:** stage A cannot pass: words change on almost every development-set article by
 design, so the full read on the 200-question development set runs, on the machine that holds the
 harness. #663 (below) merged first and is in the read's base, so a floor miss is #662's alone.
+**Run 2026-10-27**, together with #673's (below): all six floors pass.
 Residuals: `known-limitations.md` "Wikipedia's license line and German navigation boxes
 (#662)".
 
@@ -5720,6 +5743,10 @@ As built (`html.ts`):
 the 200-question development set runs, on the machine that holds the harness. The sample covers
 computer topics; the development set's general topics (people, places) likely carry more Normdaten
 boxes. #662's own read is owed too: run it first, so that a floor miss here is #673's alone.
+**Run 2026-10-27** on master `a691d1eb`, ONE read for #662 and #673 (both merged by then, so a miss
+could not have been split between them; none came): all six floors pass — allPacked 109,
+anyCandidate 151, anyArticle 151 (the #488 read: 102 / 143 / 143), arm p90 1,009 ms, rerank p90
+2,900 ms, planner p90 685 ms. The 4-z-r harness's `ZimService` takes `transientDir` now (PR #717).
 Residuals: `known-limitations.md` "German Wikipedia's Normdaten, Rechtshinweis and Schwesterprojekte
 boxes (#673)".
 
