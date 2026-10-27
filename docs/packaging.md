@@ -346,14 +346,14 @@ maps every option and still writes the integrity hash, and fails on `asar: false
 `disableAsarIntegrity`.
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
-Decode it with the library, not by hand. Expected for 43.7.7: `001011001`.
+Decode it with the library, not by hand. Expected for 43.8.0 (as for 43.7.7): `001011001`.
 
 ```bash
 # from the repo root; prints index → state ('0' off, '1' on)
 node -e "require('@electron/fuses').getCurrentFuseWire(process.argv[1]).then((w) => console.log(Object.keys(w).filter((k) => /^\d+$/.test(k)).map((k) => String.fromCharCode(w[k])).join('')))" apps/desktop/release/win-unpacked/HilbertRaum.exe
 ```
 
-The nine positions on Electron 43.7.7, as shipped: **0 RunAsNode (off, #562)**,
+The nine positions on Electron 43.8.0 (unchanged from 43.7.7), as shipped: **0 RunAsNode (off, #562)**,
 1 EnableCookieEncryption (off), 2 EnableNodeOptionsEnvironmentVariable (on),
 **3 EnableNodeCliInspectArguments (off, #562)**, **4 EnableEmbeddedAsarIntegrityValidation (on,
 #562)**, **5 OnlyLoadAppFromAsar (on, #562)**, 6 LoadBrowserProcessSpecificV8Snapshot (off),

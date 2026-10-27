@@ -647,7 +647,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     `defaultPath` resolves to the drive, not Downloads (D-2 void); a real drag-and-drop imports;
     the portable `.exe` starts by double-click on a prepared drive.
     (g) **DEP-5 (2026-10-01, Electron 43.7.7; record "Electron 43.4.0 → 43.7.7" §3):** from 43.7.2
-    the first window paints later (packaged +64 ms, dev +435 ms). Re-measure at every 43.x bump.
+    the first window paints later (packaged +64 ms, dev +435 ms). Re-measure at every 43.x bump. 43.8.0 (#708, 2026-10-27): probe equal to 43.7.7 (374 vs 383 ms), the stall itself not reproduced, the perf-log A/B owed (§3).
     #560 (2026-10-03): any non-stock binary paints ~600 ms later on that desktop; compare like binaries.
 17. **STR-1 follow-up register (owner-facing; registered at the 2026-07-20 close-out; durable
     ledger = `docs/architecture.md` "Skills & tools architecture review (2026-07-19) — design

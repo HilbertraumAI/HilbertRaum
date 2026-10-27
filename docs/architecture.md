@@ -14235,6 +14235,13 @@ window loading a static page; first-contentful-paint in ms after the window is c
   medians (`HILBERTRAUM_PERF_LOG=1`, n = 5 interleaved, warm profile): packaged
   `window_ready_to_show` 1,165 → 1,229 ms (**+64**), `gate_visible` 1,193 → 1,278 ms (**+85**);
   the unpackaged dev app 491 → 926 ms (+435). Slower machines and drives were not measured.
+- **43.8.0 (#708, 2026-10-27), same desktop.** The `show: false` probe now mostly reports no
+  first-contentful-paint at all, on both binaries. A visible window reports it every time: median
+  383 ms on 43.7.7 and 374 ms on 43.8.0 (7 interleaved runs each, stock binaries). No new cost,
+  but the stall above does not reproduce on 43.7.7 with that probe either, so it cannot say whether
+  43.8.0 changed it. The perf-log A/B was not re-run. Between the two versions only Node moves
+  (24.21.0 → 24.22.0); Chromium 150.0.7871.250, V8, SQLite 3.53.4 and undici 7.29.1 are unchanged,
+  and the flipped fuse wire is `001011001` on both.
 
 ### §4 Re-verification ledger (2026-10-01, the desktop above)
 

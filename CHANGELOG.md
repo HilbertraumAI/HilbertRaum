@@ -107,6 +107,10 @@ from its first public `1.0.0` release onward.
   of crafted PDF, among them files built to keep the app busy for a long time. On the 52 PDFs we
   compared, it read exactly the same text as before, and our test scans were still recognised word
   for word (#685).
+- **Electron 43.7.7 → 43.8.0**, the browser engine the app runs on, with the Chromium security
+  fixes released since 43.7.7 and Node.js 24.22.0. On Linux it also fixes crashes under
+  GTK and Wayland. Workspaces open exactly as before, and the minimum operating systems are
+  unchanged (#708).
 
 ## [0.1.63] — 2026-10-12
 
