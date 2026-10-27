@@ -35,11 +35,13 @@ from its first public `1.0.0` release onward.
   that leaves too little room, it now runs on the processor, and the Translate screen says why.
   Before, it squeezed onto the card and ran at about processor speed anyway (#473).
 - **Answers look cleaner while they are being written.** Streamdown, which lays out the
-  assistant's answers, moves to version 2.7. While an answer is still coming in, a `<` inside a
+  assistant's answers, moves to version 2.7.1. While an answer is still coming in, a `<` inside a
   formula no longer hides the rest of the answer, a name like `snake__case` no longer leaves stray
   underscores at the end, and code fenced with `~~~` or containing `$$` no longer shows stray
-  symbols. Long answers also take less work to show as they stream, and lists on the Review screen
-  and in translations are spaced as in chat (#685).
+  symbols. A link written as `[guide][1]`, with its address on a line of its own, is a link while
+  the answer is still coming in, not only once it is finished. Long answers also take less work to
+  show as they stream, and lists on the Review screen and in translations are spaced as in chat
+  (#685, #709).
 - **The app carries its formula typesetter once.** KaTeX, which draws the formulas in answers, was
   included twice. Formulas look the same, and the app loads about half a megabyte less code when
   the first answer appears (#698).

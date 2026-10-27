@@ -63,8 +63,8 @@ node scripts/generate-third-party-notices.mjs
 @radix-ui/react-visually-hidden@1.2.5
 @radix-ui/rect@1.1.2
 @streamdown/math@1.0.3
-@tanstack/react-virtual@3.14.13
-@tanstack/virtual-core@3.17.11
+@tanstack/react-virtual@3.14.21
+@tanstack/virtual-core@3.19.6
 @types/debug@4.1.13
 @types/estree@1.0.9
 @types/estree-jsx@1.0.5
@@ -216,7 +216,7 @@ scheduler@0.23.2
 setimmediate@1.0.5
 space-separated-tokens@2.0.2
 sprintf-js@1.0.3
-streamdown@2.7.0
+streamdown@2.7.1
 string_decoder@1.1.1
 stringify-entities@4.0.4
 style-to-js@1.1.21
@@ -1365,7 +1365,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### @tanstack/react-virtual@3.14.13
+### @tanstack/react-virtual@3.14.21
 
 - License: MIT
 - Author: Tanner Linsley
@@ -1397,7 +1397,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### @tanstack/virtual-core@3.17.11
+### @tanstack/virtual-core@3.19.6
 
 - License: MIT
 - Author: Tanner Linsley
@@ -7650,7 +7650,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### streamdown@2.7.0
+### streamdown@2.7.1
 
 - License: Apache-2.0
 - Author: Hayden Bleasel <hayden.bleasel@vercel.com>
