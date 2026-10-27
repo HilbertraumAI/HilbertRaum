@@ -14445,6 +14445,12 @@ changes below would have made the suite quietly prove less, and neither is in th
   Library `findBy*` / `waitFor` options); `environmentMatchGlobs`, `poolMatchGlobs`, `deps.*`, `workspace` (none
   used); `invocationCallOrder` now starting at 1 (only compared relatively); the
   `// @vitest-environment jsdom` docblocks; `npm test -- <file>` and the CI shard flags.
+- **The layout trap comes back on a patch bump (#710, 4.1.11 → 4.1.12).** Dependabot's updater put
+  vitest under `apps/desktop/node_modules` again, with no root copy: 2,290 typecheck errors, and
+  every test file failed at setup with `Cannot find package 'vitest'`. The repair is the pinned npm
+  11.6.2 doing the group's four bumps in one `install -D -w apps/desktop --package-lock-only`, which
+  hoists vitest to the root: 11 entries move, none are added or removed, and a re-run is
+  byte-identical. Expect the same on the next vitest bump.
 
 ### §6 PR C: `.github/dependabot.yml`
 

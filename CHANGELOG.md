@@ -98,6 +98,9 @@ from its first public `1.0.0` release onward.
 
 ### Security
 
+- **Two advisories cleared in the test runner.** Vitest moves to 4.1.12, which closes two
+  advisories in its mocking module (GHSA-xp26-3454-mjgp, GHSA-qxg6-89mg-rqv8). Vitest is not part
+  of the app you run, so nothing changes in use (#710).
 - **The PDF reader is updated.** PDF reading moves to pdf.js 6.4, which guards against more kinds
   of crafted PDF, among them files built to keep the app busy for a long time. On the 52 PDFs we
   compared, it read exactly the same text as before, and our test scans were still recognised word
