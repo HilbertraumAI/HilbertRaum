@@ -5,7 +5,6 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { ZimService } from '../../src/main/services/zim'
 import { nativeArchivePath, readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
-import { foldSupSub } from '../../src/main/services/zim/supsub'
 import { kiwixServeBinaryName, kiwixToolsDir } from '../../src/main/services/zim/tools'
 import { zimSmokeEnv } from '../helpers/zim-smoke-env'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -48,12 +47,10 @@ const gate = zimSmokeEnv(process.env)
 const LIST_GROUP_MIN_HITS = 4
 const LIST_GROUP_REFERENCE_MODEL = 'qwen3-4b-instruct-q4.gguf'
 
-/** hit@5 as the shipped matchers read a title: a `^`/`_` sup/sub marker between alphanumerics
- *  (#488) is not part of its spelling, so both sides are folded. Whether titles should carry the
- *  markers at all is open (#711); this stays neutral and still misses an absent article. */
+/** hit@5 by exact title. A title carries no `^`/`_` sup/sub marker (#711), so a marked title
+ *  (`CO_2-Emission`) is a miss here, as it would be in the citation the user reads. */
 function hitAt5(topFive: string[], expected: string[]): boolean {
-  const folded = new Set(topFive.map(foldSupSub))
-  return expected.some((t) => folded.has(foldSupSub(t)))
+  return expected.some((t) => topFive.includes(t))
 }
 
 let svc: ZimService | null = null

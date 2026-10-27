@@ -7,7 +7,7 @@
 // six. Table-derived text already kept them readable (#478, `tables.ts`); this module is what
 // lets the SAME convention reach ordinary prose without moving retrieval. Two sides:
 //
-//   • EMITTING — `html.ts` (prose, headings) and `tables.ts` (cells, captions) ARM
+//   • EMITTING — `html.ts` (prose, and every heading but the title, #711) and `tables.ts` (cells, captions) ARM
 //     `SUP_MARK` / `SUB_MARK` on an ordinary `<sup>`/`<sub>` open tag and write it immediately
 //     before the element's own text, but ONLY where `shouldMark` holds: a bare marker, no
 //     braces, no spaces, so `g/cm<sup>3</sup>` reads `g/cm^3` and `H<sub>2</sub>O` reads

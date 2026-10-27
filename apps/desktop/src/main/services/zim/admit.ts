@@ -148,8 +148,8 @@ export function admitArticle(
   // string that mixes both uses of `_`, which underscores are separators. Nothing here needs
   // that decision: the title is read only by `t`/`titleAndLead`, whose every predicate is a
   // word-shaped regex (`mytholog`, `atemregler`, `roman`, `heraldik`), and no marker can appear
-  // inside one of those words. A `<sup>`/`<sub>` in a page's own `<h1>` (rare — a DISPLAYTITLE
-  // formula) therefore reaches `t` marked, and that is the one accepted residual of this seam.
+  // inside one of those words. Nor does the converter write a marker into a title any more
+  // (#711), so a DISPLAYTITLE formula (`CO<sub>2</sub>-Steuer`) reaches `t` as `CO2-Steuer`.
   const q = norm(foldSupSub(question))
   const t = norm(title)
   const lead = norm(foldSupSub(leadText))

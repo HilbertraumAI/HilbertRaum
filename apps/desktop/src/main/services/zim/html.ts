@@ -59,7 +59,9 @@ import {
 // left unmarked. Retrieval does NOT move with the markers: the matchers (`arm.ts`, `admit.ts`)
 // run `foldSupSub` over both the question and the article text, so every alphanumeric run of
 // the pre-#488 text is still a substring of what they compare — the markers change what is
-// read, never what is retrieved.
+// read, never what is retrieved. The one heading that takes no marker is the TITLE (#711): it is
+// the citation, the viewer's heading and the per-pack de-duplication key, so it keeps the
+// archive's own spelling (`CO2-Steuer`, never `CO_2-Steuer`).
 //
 // ---------------------------------------------------------------------------------------
 // LINEAR FORWARD SCANNER — complexity record (PR #294 review H1)
@@ -1178,10 +1180,14 @@ export function* zimArticleSlices(
     let text = raw
     if (pendingMark !== null) {
       // The armed marker is resolved by the FIRST text emitted after it — the sup/sub's own
-      // text — and is consumed either way, so it can never attach to a later run.
+      // text — and is consumed either way, so it can never attach to a later run. The heading
+      // that becomes the TITLE never takes one (#711): a title is a label, a citation and a
+      // de-duplication key, so `CO<sub>2</sub>-Steuer` stays `CO2-Steuer`; every later heading
+      // marks like prose.
       const mark = pendingMark
       pendingMark = null
-      if (shouldMark(lastEmittedChar, text)) text = mark + text
+      const inTitle = headingLevel > 0 && title === null
+      if (!inTitle && shouldMark(lastEmittedChar, text)) text = mark + text
     }
     if (headingLevel > 0) {
       headingBuf += text
