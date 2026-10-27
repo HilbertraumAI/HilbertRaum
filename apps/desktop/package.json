@@ -34,7 +34,7 @@
     "@radix-ui/react-popover": "1.1.16",
     "@radix-ui/react-tooltip": "1.2.9",
     "@streamdown/math": "^1.0.3",
-    "@tanstack/react-virtual": "^3.14.13",
+    "@tanstack/react-virtual": "^3.14.21",
     "jszip": "^3.10.2",
     "katex": "~0.16.47",
     "mammoth": "^1.13.0",
@@ -42,7 +42,7 @@
     "pdfjs-dist": "^6.4.299",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "streamdown": "^2.7.0",
+    "streamdown": "^2.7.1",
     "tesseract.js": "7.0.0",
     "yaml": "^2.9.1"
   },
@@ -50,19 +50,19 @@
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
-    "@testing-library/user-event": "^14.6.7",
-    "@types/node": "^24.19.1",
+    "@testing-library/user-event": "^14.6.8",
+    "@types/node": "^24.19.2",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "electron": "^43.8.0",
     "electron-builder": "^26.17.0",
     "electron-vite": "^3.1.0",
     "jsdom": "^29.1.1",
     "typescript": "^5.5.4",
     "vite": "^6.4.4",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

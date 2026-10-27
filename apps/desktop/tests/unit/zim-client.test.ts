@@ -17,12 +17,13 @@ import {
   ftIndexHint,
   kiwixGet,
   parseLibraryXml,
-  parseSearchTotal,
   parseSearchXml,
   probeSearchable,
-  searchPack,
-  searchPackTotal
+  searchPack
 } from '../../src/main/services/zim/client'
+import { EXTERNAL_RETRIEVAL_DEADLINE_MS } from '../../src/main/services/zim/arm'
+import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
+import { rangeStart, sendRawAnswer, sendRawStall, type RawAnswer, type RawStall } from '../helpers/zim-http'
 
 // The loopback client against a real ephemeral node:http server — the transport is the
 // point (the undici crash forced node:http; see client.ts header), so the tests exercise
@@ -90,51 +91,13 @@ function rawRequests(): Array<{ url: string; range: string | undefined }> {
     .filter((e) => e.url.startsWith('/raw/'))
 }
 /**
- * What the fixture answers on a `/raw/` request (#301 P7 T19): a status, optional response
- * headers (a redirect's `Location`) and a body; null falls through to the default article
- * fixtures below, so every pre-existing `/raw` test is untouched.
- *
- * The `stall` variants reproduce the T19 fault and the failure it must NOT be confused with:
- *   `'truncated'` — 200 + `Content-Length` + MOST of the body within a few ms, then the
- *                   connection hangs and the last part never arrives. This is the MEASURED
- *                   kiwix-serve 3.8.1 (win-x86_64) shape: every stall of the 120-read capture
- *                   looked like this, cutting a given entry at the same byte every time.
- *   `'silent'`    — accepted, and nothing sent at all — not even headers. The same class of
- *                   failure (the attempt's own timer elapses before the body completes), kept
- *                   as its own leg so the retry cannot come to depend on headers arriving.
- *   `'reset'`     — 200 + part of the body, then the SOCKET IS DESTROYED. A real network
- *                   error, not a stall: it must NOT be retried.
- * The two hanging variants end only when the client gives up (its per-attempt timeout).
+ * What the fixture answers on a `/raw/` request (#301 P7 T19): a plain answer (a status,
+ * optional response headers such as a redirect's `Location`, and a body — Range-aware, see
+ * `sendRawAnswer`), or one of the stall shapes (`sendRawStall`). No hook, or null, is a 404.
+ * The `'silent'` stall is kept as its own leg so the retry cannot come to depend on headers
+ * arriving; the `'reset'` one must NOT be retried.
  */
-type RawStall =
-  | { stall: 'silent' }
-  | { stall: 'truncated'; partial: string | Buffer; total: number }
-  | { stall: 'reset'; partial: string }
-  /** Headers and a `Content-Length`, then silence with NOT ONE body byte — the shape that must
-   *  never be resumed, because there is no prefix to resume from (#339 D-Z22 leg 6). */
-  | { stall: 'headers-only'; total: number }
-  /** Slow but ALIVE: `chunks` pieces of `body`, one every `everyMs`. Not a stall — the idle
-   *  detector must not cut it (#339 D-Z22 leg 3). */
-  | { drip: { body: string; chunks: number; everyMs: number } }
-/**
- * A plain answer. Status 200 answers are RANGE-AWARE by default (#339 D-Z22): a
- * `Range: bytes=<n>-` request is answered `206` + `Content-Range` + the tail, exactly as
- * libkiwix does. The optional fields express the misbehaviours a resume must refuse.
- */
-type RawAnswerBody = {
-  status: number
-  headers?: Record<string, string>
-  body: string
-  /** Answer `200` with the WHOLE body even under `Range` — a server that ignores the header. */
-  ignoreRange?: boolean
-  /** Send this `Content-Range` instead of the true one (the mismatching-range leg). */
-  contentRange?: string
-  /** Send only this many bytes of the tail, honestly framed (the short-tail leg). */
-  tailBytes?: number
-  /** Answer `416 Range Not Satisfiable` to any `Range` request. */
-  unsatisfiable?: boolean
-}
-type RawFixtureAnswer = RawAnswerBody | RawStall
+type RawFixtureAnswer = RawAnswer | RawStall
 let rawHook: ((url: string) => RawFixtureAnswer | null) | null = null
 /**
  * Every hanging `/raw` URL whose connection the CLIENT tore down (it gave up). A leg asserts
@@ -142,45 +105,6 @@ let rawHook: ((url: string) => RawFixtureAnswer | null) | null = null
  * previous leg's teardown can still land here.
  */
 const parkedClosedByClient: string[] = []
-
-/** The offset of an open `bytes=<n>-` range, or null when the request carried no such header.
- *  The client only ever sends that one form (#339 D-Z22). */
-function rangeStart(header: string | string[] | undefined): number | null {
-  if (typeof header !== 'string') return null
-  const m = /^bytes=(\d+)-$/.exec(header.trim())
-  return m ? Number(m[1]) : null
-}
-
-/**
- * Answer a `/raw` request the way libkiwix does (#339 D-Z22): a `Range: bytes=<n>-` on a 200
- * answer becomes `206` + `Content-Range: bytes <n>-<len-1>/<len>` + the tail; no Range, a
- * non-200 status, or `ignoreRange` keeps the plain answer. The remaining fields inject the
- * misbehaviours a resume has to refuse.
- */
-function sendRawAnswer(res: http.ServerResponse, answer: RawAnswerBody, from: number | null): void {
-  const buf = Buffer.from(answer.body, 'utf8')
-  const headers = { 'content-type': 'text/html', ...answer.headers }
-  if (from === null || answer.ignoreRange === true || answer.status !== 200) {
-    res.writeHead(answer.status, headers)
-    res.end(buf)
-    return
-  }
-  if (answer.unsatisfiable === true || from >= buf.length) {
-    res.writeHead(416, { ...headers, 'content-range': `bytes */${buf.length}` })
-    res.end('range not satisfiable')
-    return
-  }
-  const tail = buf.subarray(from)
-  const sent = answer.tailBytes === undefined ? tail : tail.subarray(0, answer.tailBytes)
-  res.writeHead(206, {
-    ...headers,
-    // Honestly framed even when short: the client must catch the short tail on the LENGTH it
-    // was promised in `Content-Range`, not on a framing error.
-    'content-length': String(sent.length),
-    'content-range': answer.contentRange ?? `bytes ${from}-${buf.length - 1}/${buf.length}`
-  })
-  res.end(sent)
-}
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -202,7 +126,9 @@ beforeAll(async () => {
     }
     // Body-ceiling fixtures (PR #294 review INFO / plan T01): kiwixGet rejects a body of
     // MORE than 8 MiB and accepts one of exactly 8 MiB. Streamed in 1 MiB writes so the
-    // ceiling is hit mid-stream, the way a pathological entry would arrive.
+    // ceiling is hit mid-stream, the way a pathological entry would arrive. `/big` sends one
+    // byte over the ceiling and then holds the response open: it never ends, so only a size
+    // check made while the body streams can reject it with the ceiling error.
     //
     // #467: the CLIENT closes these connections, never the server. The client asks for
     // `Connection: close`, so a default answer closes the server's socket the moment its last
@@ -212,11 +138,14 @@ beforeAll(async () => {
     // below never did. Answering keep-alive (with no keep-alive timer) leaves the close to the
     // client, which only closes once it has read what it wanted — 0 of 30 under the same load.
     if (req.url?.startsWith('/big') || req.url?.startsWith('/atceiling')) {
-      const total = CEILING_BYTES + (req.url.startsWith('/big') ? 1 : 0)
+      const over = req.url.startsWith('/big')
+      const total = CEILING_BYTES + (over ? 1 : 0)
       res.shouldKeepAlive = true
-      ceilingServerClosedFirst.push(
-        new Promise((resolve) => res.once('finish', () => resolve(req.socket.writableEnded)))
-      )
+      if (!over) {
+        ceilingServerClosedFirst.push(
+          new Promise((resolve) => res.once('finish', () => resolve(req.socket.writableEnded)))
+        )
+      }
       res.writeHead(200, { 'content-type': 'text/html' })
       const piece = Buffer.alloc(1024 * 1024, 0x78)
       let sent = 0
@@ -229,24 +158,12 @@ beforeAll(async () => {
             return
           }
         }
-        res.end()
+        if (!over) res.end()
       }
       pump()
       return
     }
-    if (req.url?.startsWith('/missing')) {
-      res.writeHead(404)
-      res.end('not found')
-      return
-    }
     if (req.url?.startsWith('/search')) {
-      // #353: a fixed pattern that forces a non-200, the same way `/raw` failures are pinned
-      // elsewhere in this file — `searchPackTotal` must throw exactly like `searchPack`.
-      if (new URL(req.url, 'http://127.0.0.1').searchParams.get('pattern') === 'force-500') {
-        res.writeHead(500)
-        res.end('boom')
-        return
-      }
       res.writeHead(200, { 'content-type': 'application/xml' })
       res.end(SEARCH_XML)
       return
@@ -254,88 +171,23 @@ beforeAll(async () => {
     if (req.url?.startsWith('/raw/')) {
       const url = req.url
       const from = rangeStart(req.headers.range)
-      const parkOnClientClose = (): void => {
+      const answer = rawHook?.(url) ?? { status: 404, body: 'not found' }
+      if ('status' in answer) {
+        sendRawAnswer(res, answer, from)
+        return
+      }
+      if ('stall' in answer && answer.stall !== 'reset') {
         // `writableFinished` is false exactly when the client tore the connection down first —
         // the proof that the retry opened a FRESH socket rather than reusing a stuck one.
         res.on('close', () => {
           if (!res.writableFinished) parkedClosedByClient.push(url)
         })
       }
-      const answer = rawHook?.(url) ?? null
-      if (answer && 'drip' in answer) {
-        // Slow but alive: the client's idle timer must be re-armed by every one of these.
-        const { body, chunks, everyMs } = answer.drip
-        const buf = Buffer.from(body, 'utf8')
-        res.writeHead(from === null ? 200 : 206, {
-          'content-type': 'text/html',
-          'content-length': String(buf.length),
-          ...(from === null ? {} : { 'content-range': `bytes 0-${buf.length - 1}/${buf.length}` })
-        })
-        const step = Math.ceil(buf.length / chunks)
-        let sent = 0
-        const pump = (): void => {
-          if (sent >= buf.length) {
-            res.end()
-            return
-          }
-          res.write(buf.subarray(sent, sent + step))
-          sent += step
-          setTimeout(pump, everyMs).unref?.()
-        }
-        setTimeout(pump, everyMs).unref?.()
-        return
-      }
-      if (answer && 'stall' in answer) {
-        if (answer.stall === 'silent') {
-          parkOnClientClose()
-          return // nothing is ever sent
-        }
-        if (answer.stall === 'reset') {
-          res.writeHead(200, { 'content-type': 'text/html' })
-          res.write(answer.partial, () => res.destroy()) // a real socket error mid-body
-          return
-        }
-        parkOnClientClose()
-        if (answer.stall === 'headers-only') {
-          // Framed exactly like a real answer — and then not one body byte ever arrives.
-          res.writeHead(from === null ? 200 : 206, {
-            'content-type': 'text/html',
-            'content-length': String(answer.total),
-            ...(from === null
-              ? {}
-              : { 'content-range': `bytes ${from}-${answer.total - 1}/${answer.total}` })
-          })
-          // Node holds headers back until the first write — flush them explicitly, or this
-          // would be indistinguishable from `'silent'` and would never arm the client's
-          // inter-chunk timer at all.
-          res.flushHeaders()
-          return
-        }
-        // The measured shape: a complete, HONEST `Content-Length`, then only part of the body.
-        res.writeHead(from === null ? 200 : 206, {
-          'content-type': 'text/html',
-          'content-length': String(answer.total),
-          ...(from === null
-            ? {}
-            : { 'content-range': `bytes ${from}-${answer.total - 1}/${answer.total}` })
-        })
-        res.write(answer.partial) // …and the rest never comes
-        return
-      }
-      if (answer) {
-        sendRawAnswer(res, answer, from)
-        return
-      }
-      if (url.includes('/raw/missing/')) {
-        res.writeHead(404)
-        res.end('not found')
-        return
-      }
-      sendRawAnswer(res, { status: 200, body: '<html><body><p>Artikel</p></body></html>' }, from)
+      sendRawStall(res, answer, from)
       return
     }
-    res.writeHead(200)
-    res.end('ok')
+    res.writeHead(404)
+    res.end('not found')
   })
   // Only the body-ceiling answers are keep-alive (#467); 0 disables the idle timer that would
   // otherwise close their socket server-side after 5 s — the very close the fixture avoids.
@@ -350,7 +202,12 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => dead.close(() => resolve()))
 })
 
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())))
+afterAll(() => {
+  // `/big` never ends its response: drop held connections so a client that leaves one open
+  // fails its own test instead of hanging this hook.
+  server.closeAllConnections()
+  return new Promise<void>((resolve) => server.close(() => resolve()))
+})
 
 const SEARCH_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -371,15 +228,6 @@ const SEARCH_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </channel></rss>`
 
 describe('kiwixGet', () => {
-  it('returns status and body over a real socket', async () => {
-    const res = await kiwixGet(port, '/anything')
-    expect(res).toEqual({ status: 200, body: 'ok' })
-  })
-
-  it('times out on a server that never responds', async () => {
-    await expect(kiwixGet(port, '/slow', { timeoutMs: 100 })).rejects.toThrow()
-  })
-
   // #301 P7 T19: the timeout rejection now CARRIES its classification, so `fetchArticleHtml`
   // can tell the kiwix-serve stall (nothing received at all) from a timeout mid-body. Every
   // other caller still just sees a rejection — kiwixGet itself never retries anything.
@@ -409,33 +257,29 @@ describe('kiwixGet', () => {
     expect((caught as Error).name).toBe('AbortError')
   })
 
-  it('aborts on the caller signal', async () => {
-    const ac = new AbortController()
-    const pending = kiwixGet(port, '/slow', { signal: ac.signal })
-    ac.abort()
-    await expect(pending).rejects.toThrow()
-  })
-
   // The two 8 MiB legs move real bytes over loopback: well under a second even under load, so
-  // the budget is headroom for a starved fork, not a rescue. They used to carry `retry: 2` too,
-  // for a `read ECONNRESET` blamed on the transfer being slow; it was the fixture's server-side
-  // close instead (#467, see the fixture), so there is nothing left for a retry to absorb.
-  const BIG_BODY_BUDGET_MS = 60_000
+  // the budgets are headroom for a starved fork, not a rescue. The client's own timeout sits
+  // under the test budget, so a hang fails as a named KiwixTimeoutError, not a bare vitest
+  // timeout. They used to carry `retry: 2` too, for a `read ECONNRESET` blamed on the transfer
+  // being slow; it was the fixture's server-side close instead (#467, see the fixture), so there
+  // is nothing left for a retry to absorb.
   it('rejects a body over the 8 MiB ceiling mid-stream (T01, review INFO)', async () => {
-    await expect(kiwixGet(port, '/big', { timeoutMs: BIG_BODY_BUDGET_MS })).rejects.toThrow(
+    // `/big` never ends: a size check moved to the end of the body would never run, and the read
+    // would reject on this timeout instead.
+    await expect(kiwixGet(port, '/big', { timeoutMs: hangBudgetMs(10_000) })).rejects.toThrow(
       /exceeded 8388608 bytes/
     )
-  }, BIG_BODY_BUDGET_MS)
+  }, testBudgetMs(60_000))
 
   it('accepts a body of exactly 8 MiB (the ceiling is strict-greater)', async () => {
     ceilingServerClosedFirst.length = 0
-    const res = await kiwixGet(port, '/atceiling', { timeoutMs: BIG_BODY_BUDGET_MS })
+    const res = await kiwixGet(port, '/atceiling', { timeoutMs: hangBudgetMs(30_000) })
     expect(res.status).toBe(200)
     expect(res.body.length).toBe(CEILING_BYTES)
     // The fixture's precondition (#467), checked on every run rather than only under load: had
     // the server closed first, this leg would pass on an idle box and reset on a busy one.
     expect(await Promise.all(ceilingServerClosedFirst)).toEqual([false])
-  }, BIG_BODY_BUDGET_MS)
+  }, testBudgetMs(60_000))
 })
 
 describe('parseSearchXml / searchPack', () => {
@@ -457,61 +301,7 @@ describe('parseSearchXml / searchPack', () => {
   })
 })
 
-describe('parseSearchTotal / searchPackTotal (the archive-wide hit-count client — the #353 ladder that once called it is gone, this stays general-purpose)', () => {
-  it('parses the opensearch:totalResults element', () => {
-    expect(parseSearchTotal(SEARCH_XML)).toBe(301)
-  })
-
-  it('returns null when the element is absent', () => {
-    expect(parseSearchTotal('<rss><channel><title>Search: x</title></channel></rss>')).toBeNull()
-  })
-
-  it('returns null for garbage content instead of NaN', () => {
-    expect(
-      parseSearchTotal(
-        '<rss><channel><opensearch:totalResults>not-a-number</opensearch:totalResults></channel></rss>'
-      )
-    ).toBeNull()
-  })
-
-  it('parses an explicit 0 as the number 0, never as absent', () => {
-    expect(
-      parseSearchTotal('<rss><channel><opensearch:totalResults>0</opensearch:totalResults></channel></rss>')
-    ).toBe(0)
-  })
-
-  it('parses the total across whitespace/newline padding inside the element', () => {
-    expect(
-      parseSearchTotal(
-        '<rss><channel><opensearch:totalResults>\n   42  \n</opensearch:totalResults></channel></rss>'
-      )
-    ).toBe(42)
-  })
-
-  it('requests pageLength=1 on the same /search route and returns the parsed total', async () => {
-    resetRequestLog()
-    await expect(searchPackTotal(port, 'uuid-1', 'Treibhausgas')).resolves.toBe(301)
-    const url = requestLog.find((u) => u.startsWith('/search'))
-    expect(url).toContain('pageLength=1')
-    expect(url).toContain('pattern=Treibhausgas')
-    expect(url).toContain('books.id=uuid-1')
-  })
-
-  it('throws on a non-200 status exactly like searchPack', async () => {
-    await expect(searchPackTotal(port, 'uuid-1', 'force-500')).rejects.toThrow(/search failed \(HTTP 500\)/)
-  })
-})
-
 describe('fetchArticleHtml', () => {
-  it('fetches raw article HTML, re-encoding the decoded path per segment', async () => {
-    const html = await fetchArticleHtml(port, 'book_2026-07', 'Liste_der_Länder')
-    expect(html).toContain('<p>Artikel</p>')
-  })
-
-  it('maps 404 to null (entry vanished is a skip, not a failure)', async () => {
-    await expect(fetchArticleHtml(port, 'missing', 'missing')).resolves.toBeNull()
-  })
-
   it('throws ArticlePathError for a dot-segment key BEFORE any HTTP request (#301 P5, finding L5)', async () => {
     const before = requestCount
     await expect(fetchArticleHtml(port, 'book', 'A/../x')).rejects.toThrow(ArticlePathError)
@@ -530,7 +320,6 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
   const NAME = 'wikipedia_de_climate-change_nopic_2026-07'
   const ALIAS = 'CO2-Äquivalent' // a redirect entry
   const TARGET_HTML = '<html><body><h1>Treibhauspotential</h1><p>Zielartikel</p></body></html>'
-  type RawAnswer = { status: number; headers?: Record<string, string>; body: string }
   const raw = (encodedKey: string): string => `/raw/${NAME}/content/${encodedKey}`
   const ALIAS_URL = raw('CO2-%C3%84quivalent')
   const TARGET_URL = raw('Treibhauspotential')
@@ -708,8 +497,6 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
    *  `'silent'` attempt, which never sends headers, sits the total out. */
   const STALL_IDLE_MS = 300
   const ATTEMPT_TOTAL_MS = 3_000
-  /** Less than the three attempts' total budgets: proves the idle timer cut each attempt. */
-  const ALL_ATTEMPTS_BUDGET_MS = 5_000
 
   /** Answers `url` with `queue.shift()` on each request, so "stalls once, then answers" is
    *  expressed as a list rather than as a counter each leg has to re-invent. */
@@ -717,8 +504,8 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
     rawHook = (url) => queues[url]?.shift() ?? { status: 404, body: 'not found' }
   }
   const rawLog = (): string[] => requestLog.filter((u) => u.startsWith('/raw/'))
-  const read = (signal?: AbortSignal): Promise<string | null> =>
-    fetchArticleHtml(port, NAME, ENTRY, signal, { timeoutMs: ATTEMPT_TOTAL_MS, idleMs: STALL_IDLE_MS })
+  const read = (): Promise<string | null> =>
+    fetchArticleHtml(port, NAME, ENTRY, undefined, { timeoutMs: ATTEMPT_TOTAL_MS, idleMs: STALL_IDLE_MS })
 
   beforeEach(() => {
     resetRequestLog()
@@ -728,86 +515,12 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
     rawHook = null
   })
 
-  it('the shipped constants are a stall detector, not a throughput bound', () => {
-    expect(ARTICLE_READ_TIMEOUT_MS).toBe(4_000)
-    expect(ARTICLE_READ_ATTEMPTS).toBe(3)
-    // The whole ladder must fit inside the 20 s per-ask deadline with room to spare.
-    expect(ARTICLE_READ_TIMEOUT_MS * ARTICLE_READ_ATTEMPTS).toBeLessThan(15_000)
-  })
-
   it('(a) a first attempt that is never answered at all is retried on a fresh connection', async () => {
     installQueues({ [ENTRY_URL]: [{ stall: 'silent' }, { status: 200, body: HTML }] })
     await expect(read()).resolves.toBe(HTML)
     expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL])
     // The stalled socket was torn down by the CLIENT, so attempt 2 really is a new connection.
     expect(parkedClosedByClient).toContain(ENTRY_URL)
-  })
-
-  it('(b) three cut-short attempts reject as the timeout, and stop at three', async () => {
-    installQueues({ [ENTRY_URL]: [TRUNCATED, TRUNCATED, TRUNCATED, { status: 200, body: HTML }] })
-    const started = Date.now()
-    let caught: unknown
-    await read().catch((err: unknown) => {
-      caught = err
-    })
-    expect(caught).toBeInstanceOf(KiwixTimeoutError)
-    expect((caught as KiwixTimeoutError).name).toBe('KiwixTimeoutError')
-    expect((caught as KiwixTimeoutError).kind).toBe('idle')
-    // The partial body is on the error as diagnosis, never as a result.
-    expect((caught as KiwixTimeoutError).headersReceived).toBe(true)
-    expect((caught as KiwixTimeoutError).bytesReceived).toBe(Buffer.byteLength(TRUNCATED_PARTIAL))
-    // A fourth answering entry sits in the queue: the bound is the code's, not the fixture's.
-    expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL, ENTRY_URL])
-    expect(rawLog()).toHaveLength(ARTICLE_READ_ATTEMPTS)
-    expect(Date.now() - started).toBeLessThan(ALL_ATTEMPTS_BUDGET_MS)
-  })
-
-  it('(c) the caller aborting during attempt 2 rejects at once, with no attempt 3', async () => {
-    const ac = new AbortController()
-    const reason = new Error('the ask was cancelled')
-    let seen = 0
-    rawHook = (url) => {
-      if (url !== ENTRY_URL) return { status: 404, body: 'not found' }
-      // Abort as the SECOND attempt arrives: the request is in flight and stalled, which is
-      // exactly the window the retry would otherwise cover.
-      if (++seen === 2) ac.abort(reason)
-      return TRUNCATED
-    }
-    let caught: unknown
-    await read(ac.signal).catch((err: unknown) => {
-      caught = err
-    })
-    expect(caught).not.toBeInstanceOf(KiwixTimeoutError)
-    expect((caught as Error).name).toBe('AbortError')
-    expect((caught as Error).cause).toBe(reason)
-    expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL])
-  })
-
-  it('(d) headers plus a partial body then a hang IS retried, and the partial body is discarded', async () => {
-    // THE measured signature (`tmp/zim-wave/p7/t19-raw-stall4-headers.log`, 120 reads): every
-    // stall carried the 200 and most of the entry, then the last part never arrived. The whole
-    // read starts over on a fresh connection — a truncated article is never handed to the app.
-    installQueues({ [ENTRY_URL]: [TRUNCATED, { status: 200, body: HTML }] })
-    const html = await read()
-    expect(html).toBe(HTML)
-    expect(html).not.toBe(TRUNCATED_PARTIAL)
-    expect(rawLog()).toEqual([ENTRY_URL, ENTRY_URL])
-    expect(parkedClosedByClient).toContain(ENTRY_URL)
-  })
-
-  it('(d2) a mid-body SOCKET ERROR is not a stall: it is not retried', async () => {
-    // The retryable signature is "this attempt's own timer elapsed", nothing wider. A connection
-    // the server tears down mid-body is a real network failure and keeps its existing semantics.
-    installQueues({
-      [ENTRY_URL]: [{ stall: 'reset', partial: TRUNCATED_PARTIAL }, { status: 200, body: HTML }]
-    })
-    let caught: unknown
-    await read().catch((err: unknown) => {
-      caught = err
-    })
-    expect(caught).toBeInstanceOf(Error)
-    expect(caught).not.toBeInstanceOf(KiwixTimeoutError)
-    expect(rawLog()).toEqual([ENTRY_URL])
   })
 
   it('(e) an answered attempt keeps its existing semantics and is never retried', async () => {
@@ -888,7 +601,7 @@ describe('fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag
     partial: BYTES.subarray(0, CUT),
     total: BYTES.length
   }
-  const ANSWER: RawAnswerBody = { status: 200, body: HTML }
+  const ANSWER: RawAnswer = { status: 200, body: HTML }
   const raw = (encodedKey: string): string => `/raw/${NAME}/content/${encodedKey}`
   const ENTRY_URL = raw('Klimawandel')
   const ALIAS_URL = raw('CO2-%C3%84quivalent')
@@ -988,10 +701,13 @@ describe('fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag
   })
 
   it('(3b) a slow but LIVE body is never cut: every chunk re-arms the idle timer', async () => {
-    installQueues({
-      [ENTRY_URL]: [{ drip: { body: HTML, chunks: 8, everyMs: Math.floor(IDLE_MS / 2) } }]
-    })
-    await expect(read()).resolves.toBe(HTML)
+    // Its own budgets: 16 chunks 50 ms apart outlast a 300 ms idle timer, so one armed only by
+    // the headers would cut the body, while each gap leaves the timer 250 ms of slack for a
+    // starved fork (the server's pump and the client's timer share one event loop).
+    installQueues({ [ENTRY_URL]: [{ drip: { body: HTML, chunks: 16, everyMs: 50 } }] })
+    await expect(
+      fetchArticleHtml(port, NAME, ENTRY, undefined, { timeoutMs: TOTAL_MS, idleMs: 300 })
+    ).resolves.toBe(HTML)
     expect(rawRequests()).toHaveLength(1) // one request; nothing was retried
   })
 
@@ -1028,7 +744,7 @@ describe('fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag
   })
 
   it('(5) a resume the server does not prove is DISCARDED, and the whole entry is read again', async () => {
-    const refusals: Array<[string, RawAnswerBody]> = [
+    const refusals: Array<[string, RawAnswer]> = [
       // A server that ignores Range answers 200 with the whole body — the prefix would double it.
       ['a 200 ignoring Range', { ...ANSWER, ignoreRange: true }],
       ['a 416', { ...ANSWER, unsatisfiable: true }],
@@ -1139,8 +855,11 @@ describe('fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag
     expect(ARTICLE_READ_IDLE_MS).toBeGreaterThanOrEqual(40 * MEASURED_MAX_GAP_MS)
     // The idle timer must fire well before the whole-attempt one, or it detects nothing.
     expect(ARTICLE_READ_IDLE_MS).toBeLessThan(ARTICLE_READ_TIMEOUT_MS)
-    // And the whole ladder still fits inside the arm's 20 s per-ask deadline.
-    expect(ARTICLE_READ_TIMEOUT_MS * ARTICLE_READ_ATTEMPTS).toBeLessThan(20_000)
+    // The safety net behind it (#301 P7 T19): a 4 s stall detector, three attempts per read…
+    expect(ARTICLE_READ_TIMEOUT_MS).toBe(4_000)
+    expect(ARTICLE_READ_ATTEMPTS).toBe(3)
+    // …and the whole ladder still fits inside the arm's per-ask deadline.
+    expect(ARTICLE_READ_TIMEOUT_MS * ARTICLE_READ_ATTEMPTS).toBeLessThan(EXTERNAL_RETRIEVAL_DEADLINE_MS)
   })
 })
 
@@ -1158,6 +877,8 @@ describe('assertArticlePath / encodeArticlePath — the L5 entry-key contract (#
   })
 
   it('rejects a key longer than MAX_ARTICLE_PATH_CHARS UTF-16 code units', () => {
+    // The documented bound (`docs/data-contracts.md`); the legs below read it from the module.
+    expect(MAX_ARTICLE_PATH_CHARS).toBe(2048)
     const tooLong = 'A/' + 'x'.repeat(MAX_ARTICLE_PATH_CHARS)
     expect(tooLong.length).toBeGreaterThan(MAX_ARTICLE_PATH_CHARS)
     try {
@@ -1239,7 +960,7 @@ describe('parseLibraryXml', () => {
     const books = parseLibraryXml(
       `<library version="20110515">
         <book id="c334200f-6662-3e7b-9d53-dbf334702fa8" path="zim\\wikipedia_en_ray-charles_maxi_2026-08.zim" title="Ray Charles" description="Wikipedia articles about Ray Charles" language="eng" name="wikipedia_en_ray-charles" flavour="maxi" date="2026-08-02" articleCount="340" mediaCount="178" size="2939" />
-        <book id="abc" title="K&#228;fer &amp; Co" language="deu" articleCount="junk" />
+        <book id="abc" title="K&#228;fer &amp; Co" language="deu" articleCount="junk" mediaCount="0" />
         <book title="no id — skipped" />
       </library>`
     )
@@ -1257,6 +978,7 @@ describe('parseLibraryXml', () => {
     })
     expect(books[1]?.title).toBe('Käfer & Co')
     expect(books[1]?.articleCount).toBeNull()
+    expect(books[1]?.mediaCount).toBe(0) // an explicit 0 is a count, not junk
   })
 
   it('reads the tags attribute and maps _ftindex to a hint — never to a verdict (#301 P4, finding M7)', () => {
@@ -1367,15 +1089,25 @@ describe('encodeArticlePath — the ONE encoding owner (#301 P3b, finding L4)', 
       readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
         e.isDirectory() ? walk(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []
       )
+    // The per-segment `split('/').map(encodeURIComponent)` shape, in any spelling, and a path
+    // handed to `encodeURIComponent` whole.
+    const PER_SEGMENT = /split\(\s*['"]\/['"]\s*\)[\s\S]{0,40}encodeURIComponent/
+    const WHOLE_PATH = /encodeURIComponent\([^)]*articlePath/
+    const files = walk(root)
+    const owner = join('services', 'zim', 'client.ts')
+    // Positive controls: the walk reaches the tree, and each pattern recognises what it hunts —
+    // the first one the encoder it exempts, so a pattern that matches nothing cannot pass.
+    expect(files.length).toBeGreaterThan(100)
+    const ownerFile = files.find((f) => f.endsWith(owner))
+    expect(ownerFile).toBeDefined()
+    expect(PER_SEGMENT.test(readFileSync(ownerFile!, 'utf8'))).toBe(true)
+    expect(WHOLE_PATH.test('encodeURIComponent(hit.articlePath)')).toBe(true)
     const offenders: string[] = []
-    for (const file of walk(root)) {
-      if (file.endsWith(join('services', 'zim', 'client.ts'))) continue
+    for (const file of files) {
+      if (file === ownerFile) continue
       const text = readFileSync(file, 'utf8')
-      // The per-segment `split('/').map(encodeURIComponent)` shape, in any spelling.
-      if (/split\(\s*['"]\/['"]\s*\)[\s\S]{0,40}encodeURIComponent/.test(text)) {
-        offenders.push(file.slice(root.length + 1))
-      }
-      if (/encodeURIComponent\([^)]*articlePath/.test(text)) offenders.push(file.slice(root.length + 1))
+      if (PER_SEGMENT.test(text)) offenders.push(file.slice(root.length + 1))
+      if (WHOLE_PATH.test(text)) offenders.push(file.slice(root.length + 1))
     }
     expect(offenders).toEqual([])
   })

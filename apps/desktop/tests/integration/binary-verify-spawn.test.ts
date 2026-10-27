@@ -27,15 +27,14 @@ import { kiwixManageAdd } from '../../src/main/services/zim/tools'
 // So this file drives the REAL `verifyBinaryBeforeSpawn` end-to-end at the spawn seams:
 // `LlamaServer.start`, the GPU `--list-devices` probe, the `whisper-cli` spawn, the #530
 // "Check again" engine check (`checkProgramLoads`), and the knowledge packs' `kiwix-serve` and
-// `kiwix-manage` (#656; the ZIM suites inject a verdict). PACKAGED enforcement ON
+// `kiwix-manage` (#656). PACKAGED enforcement ON
 // (`initBinaryVerification(false)`) + a real on-disk install marker whose recorded hash does NOT
 // match the binary's bytes → each seam must REFUSE to spawn (no child created). They
 // deliberately do NOT inject a seam's `verify` option — the wiring IS the point. The
 // LlamaServer seam's positive controls run through the real verifier too: a matching marker (`ok`)
 // and a legacy, hash-less marker (`skip-legacy`, security-model.md §3's non-breaking rollout). The
 // injected-verdict copies in sidecar.test.ts (LlamaServer) and transcriber.test.ts (whisper-cli) were
-// retired for these, and neither seam takes a verifier option any more. The kiwix seams still take
-// one (`verifyBinary`, which no production caller passes); their rows below leave it unset.
+// retired for these, and neither seam takes a verifier option any more; nor do the kiwix seams.
 //
 // TEETH: delete the `verifyBinaryBeforeSpawn`/`verify` call at a seam → the spawn proceeds (`calls` non-empty /
 // the refusal vanishes) → the matching test reddens. The matching-marker positive control proves the
@@ -229,17 +228,19 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
     let ports = 0
     const server = new KiwixServer({
       binPath: bin,
-      libraryXmlPath: join(tmpdir(), 'library.1.xml'),
       spawn,
       findPort: async () => {
         ports++
         return 51002
       },
       probe: async () => true,
+      allocateGeneration: () => 1,
       healthIntervalMs: 1
-      // NB: no `verifyBinary` → the REAL verifyBinaryBeforeSpawn, as ZimService builds it in production.
+      // NB: KiwixServer has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     })
-    await expect(server.ensureStarted()).rejects.toThrow(/^kiwix-serve failed pre-spawn integrity verification$/)
+    await expect(server.ensureStarted({ libraryXmlPath: join(tmpdir(), 'library.1.xml') })).rejects.toThrow(
+      /^kiwix-serve failed pre-spawn integrity verification$/
+    )
     expect(calls).toHaveLength(0)
     expect(ports).toBe(0) // refused before a port was even taken
   })
@@ -254,7 +255,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       queueMicrotask(() => child.emit('exit', 0, null)) // if (wrongly) spawned, settle fast
       return child
     }
-    // NB: no `verifyBinary` → the REAL verifier, as ZimService's pack import calls it in production.
+    // NB: kiwixManageAdd has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     await expect(
       kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
     ).rejects.toMatchObject({ name: 'KiwixManageError', kind: 'verify', childState: 'not-spawned' })

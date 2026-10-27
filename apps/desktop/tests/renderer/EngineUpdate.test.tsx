@@ -5,7 +5,6 @@ import userEvent from '@testing-library/user-event'
 import { ToastProvider } from '../../src/renderer/components'
 import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../../src/renderer/screens/ModelsScreen'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
-import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib/useKnowledgePackToolsInstall'
 import { t } from '../../src/shared/i18n'
 import {
   DEFAULT_SETTINGS,
@@ -54,7 +53,6 @@ const NO_OCR_SOURCES: OcrInstallStatus = { available: false, languages: [], tota
 describe('ModelsScreen — the engine update notice (#516)', () => {
   beforeEach(() => {
     __resetModelsScreenMemoryForTests()
-    __resetKnowledgePackToolsInstallForTests()
   })
 
   function stubModels(opts: {

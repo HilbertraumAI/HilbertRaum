@@ -85,7 +85,7 @@ function attrValue(attrs, name) {
 
 /**
  * Parse `<book …/>` elements out of a kiwix-manage library.xml. The outer regex is
- * character-identical to `parseLibraryXml` (apps/desktop/src/main/services/zim/client.ts:167)
+ * character-identical to `parseLibraryXml` (apps/desktop/src/main/services/zim/client.ts)
  * — keep in sync with that file if kiwix-manage's output shape ever changes.
  */
 function parseLibraryXml(xml) {

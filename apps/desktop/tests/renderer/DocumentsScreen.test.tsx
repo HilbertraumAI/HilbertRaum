@@ -1422,8 +1422,9 @@ describe('DocumentsScreen — list windowing (PERF-2)', () => {
   const VIEWPORT = 600
   const ROW = 57
   let content: HTMLDivElement
-  // @tanstack/react-virtual measures via offsetWidth/offsetHeight (NOT getBoundingClientRect),
-  // both 0 under jsdom. Feed it a real viewport + row height so it can compute a bounded range:
+  // @tanstack/react-virtual measures the scroll element via clientHeight (since virtual-core 3.19;
+  // offsetHeight before) and each row via offsetHeight, NOT getBoundingClientRect: all 0 under
+  // jsdom. Feed it a real viewport + row height so it can compute a bounded range:
   // the `.content` scroll element → VIEWPORT, each measured row (a `[data-index]` wrapper) → ROW.
   let offsetHeightDesc: PropertyDescriptor | undefined
 

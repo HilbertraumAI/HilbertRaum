@@ -2241,7 +2241,7 @@ a removed pack degrades to “not retrieved from” (the skills C3 rule).
 
 **Audit:** `knowledge_pack_added` ({ packId, sizeBytes, articleCount }) ·
 `knowledge_pack_removed` ({ packId }). Pack titles/filenames are CONTENT — never in
-`runtime_events` (sentinel-tested in zim-ipc.test.ts).
+`runtime_events` (sentinel-tested in zim-ipc-session.test.ts: the T17 add-DTO legs and the save-article legs).
 
 **Service publication (P3a):** `ZimService` (`services/zim/index.ts`) publishes one
 tuple per pack revision, `{ revision, build, generation, port, libraryXmlPath }` (or,

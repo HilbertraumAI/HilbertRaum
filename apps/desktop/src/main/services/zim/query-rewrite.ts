@@ -23,16 +23,14 @@
 // cheaper than a "not found" the archive would have answered.
 //
 // #353 amendment (historical). A #353 document-frequency ladder once sat downstream of the
-// length-based `retry` here (`narrowByFrequency`, probed via `client.ts` `searchPackTotal`) for
+// length-based `retry` here (`narrowByFrequency`, probing a since-removed `searchPackTotal`) for
 // the case where a pattern's terms were ALL already `RETRY_MIN_TERM_CHARS` or longer. Phase 4
 // PR-A's discovery port (`docs/rag-design.md` §17 "Discovery port (Phase 4 PR-A)") replaced
 // `arm.ts`'s single-pattern-with-retry search with route F's multi-query FTS (the plan's own
 // queries plus this module's `pattern` as the last query), which does not retry a zero-hit
 // pattern by term frequency — the ladder's only caller — so `narrowByFrequency` and
-// `DF_PROBE_MAX_TERMS` were removed with it. `searchPattern` still reports `terms`/`retryTerms`
-// alongside `pattern`/`retry` (the length-based retry stays available as a general utility),
-// so the ladder's own probes, if ever revived, would still probe the TOKENS Xapian actually
-// saw, never a naive re-split of the pattern string.
+// `DF_PROBE_MAX_TERMS` were removed with it, together with the `terms`/`retryTerms` fields
+// that fed it; the length-based `retry` stays.
 
 /** German + English function words (articles, pronouns, prepositions, auxiliaries, …). */
 const STOP_WORDS = new Set<string>(
@@ -78,18 +76,9 @@ export const RETRY_MIN_TERM_CHARS = 5
 export interface SearchRewrite {
   /** The pattern to send first: the question's content words, original spelling and order. */
   pattern: string
-  /** `pattern`'s own kept terms, in order — the tokens Xapian actually receives, never a
-   *  re-split of the joined string (punctuation-free by construction, unlike `pattern.split(' ')`
-   *  on a raw-fallback question). Empty exactly when `pattern` IS the raw-question fallback
-   *  (#353: the ladder reads this instead of re-tokenizing, and a length < 2 skips it for free). */
-  terms: string[]
   /** A narrower pattern to try ONCE when `pattern` finds nothing, or null when it would be the
    *  same query (or empty): the kept terms of `RETRY_MIN_TERM_CHARS` or more characters. */
   retry: string | null
-  /** `retry`'s own kept terms, in the same order as `terms` — empty when `retry` is null. */
-  retryTerms: string[]
-  /** True when the strip changed the question (false = the raw question is the pattern). */
-  rewritten: boolean
 }
 
 /** Tokens: letters/digits with inner hyphens (`CO2-Konzentration`), no trailing hyphen. */
@@ -120,10 +109,10 @@ export function searchPattern(question: string): SearchRewrite {
     seen.add(key)
     kept.push(token)
   }
-  if (kept.length === 0) return { pattern: raw, terms: [], retry: null, retryTerms: [], rewritten: false }
+  if (kept.length === 0) return { pattern: raw, retry: null }
   const pattern = kept.join(' ')
   const longer = kept.filter((t) => t.length >= RETRY_MIN_TERM_CHARS)
   const retry = kept.length >= 2 && longer.length > 0 && longer.length < kept.length ? longer.join(' ') : null
-  return { pattern, terms: kept, retry, retryTerms: retry !== null ? longer : [], rewritten: pattern !== raw }
+  return { pattern, retry }
 }
 

@@ -25,7 +25,7 @@
 //                      regardless of H1). Full sizes are the orchestrator's run post-scanner.
 //   --json <path>     Also write the full result set as JSON to <path>.
 //   --fixtures <dir>  Real *.html kiwix-serve articles for Section B (cycled to 60); falls back
-//                      to $HILBERTRAUM_ZIM_FIXTURES, else synthetic articles.
+//                      to $HILBERTRAUM_ZIM_FIXTURES_DIR, else synthetic articles.
 //   --slice-work <n>  Section D slice size in work units (default: the converter's
 //                      DEFAULT_SLICE_WORK). Lets a slow machine try a smaller slice without a code
 //                      change — the per-slice gate is what it tunes.
@@ -85,7 +85,7 @@ const flagValue = (name, fallback) => {
 }
 const quick = hasFlag('--quick')
 const jsonPath = flagValue('--json', null)
-const fixturesDir = flagValue('--fixtures', process.env.HILBERTRAUM_ZIM_FIXTURES || null)
+const fixturesDir = flagValue('--fixtures', process.env.HILBERTRAUM_ZIM_FIXTURES_DIR || null)
 const gateProfile = flagValue('--gate', 'early-warning')
 const sliceWorkArg = Number.parseInt(flagValue('--slice-work', ''), 10)
 const sliceWork = Number.isFinite(sliceWorkArg) && sliceWorkArg > 0 ? sliceWorkArg : DEFAULT_SLICE_WORK

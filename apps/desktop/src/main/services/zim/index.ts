@@ -1,6 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type {
   KnowledgePack,
@@ -10,7 +9,6 @@ import type {
 import type { Db } from '../db'
 import { log } from '../logging'
 import { resolveZimDir } from '../drive'
-import type { BinaryVerifyResult } from '../binary-verifier'
 import { combineSignals, type SpawnFn } from '../runtime/sidecar'
 import type { ExternalRetrievalArm, ExternalRetrievalOutput } from '../rag'
 import type { RerankScope } from '../rag/rerank-profile'
@@ -38,12 +36,7 @@ import { computeServedSet, type ServingNameCollision } from './identity'
 import { KiwixServer } from './serve'
 import { kiwixManageAdd, resolveKiwixManagePath, resolveKiwixServePath } from './tools'
 import type { PlaintextOpKind, PlaintextOpsRegistry } from '../ingestion/plaintext-ops'
-import {
-  ZIM_TRANSIENT_DIR_NAME,
-  cleanupZimTransients,
-  sweepZimTransientDir,
-  type ZimCleanupReport
-} from './transients'
+import { cleanupZimTransients, type ZimCleanupReport } from './transients'
 
 // ZimService — the knowledge-packs facade the IPC layer and the RAG ask path talk to.
 // Owns: kiwix-tools resolution, the (lazy, single) kiwix-serve instance, the generated
@@ -133,8 +126,8 @@ import {
 // builds under `<workspacePath>/zim-transient/` — `library.<build>.xml` (served builds) and
 // `meta-<n>/library.xml` (registration throwaways) — which are PLAINTEXT while present and are
 // removed at lock, at quit and at every session start (`transients.ts`, contained and
-// link-refusing). The file of a child whose death could not be confirmed is KEPT and reported,
-// and removed by the next session start.
+// link-refusing). The file of a child whose death could not be confirmed is KEPT and reported
+// by every cleanup in this process; only the next app start's sweep removes it (#713).
 
 /** How many times one `ensureServer` call re-loops under a newly current revision before
  *  giving up: a pack set that keeps changing must not spin. */
@@ -180,14 +173,10 @@ export interface ZimServiceDeps {
   manageSpawn?: SpawnFn
   findPort?: () => Promise<number>
   probe?: (port: number) => Promise<boolean>
-  /** Pre-spawn integrity seam shared by kiwix-serve and kiwix-manage. */
-  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
   healthTimeoutMs?: number
   healthIntervalMs?: number
   killGraceMs?: number
   forceKillWaitMs?: number
-  /** Where `library.<build>.xml` files are written (default: a fresh OS temp dir). */
-  libraryDir?: string
   /**
    * The kiwix-serve binary's identity for the searchability cache key (#301 P4, finding M7).
    * Production computes `"<size>:<mtimeMs>"` from the resolved binary; a test injects it to
@@ -200,17 +189,6 @@ export interface ZimServiceDeps {
    * instead of waiting twenty seconds. Production never sets it.
    */
   externalDeadlineMs?: number
-  /**
-   * The per-request timeout of the `/suggest` capability probe. Test seam only, so the "a
-   * timeout leaves the pack unknown" leg does not sit out the client's real 15 s default.
-   */
-  probeTimeoutMs?: number
-  /**
-   * The per-ATTEMPT timeout of a `/raw` article read (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19 —
-   * the stall retry). Test seam only, so a "the first read stalled" leg costs milliseconds
-   * instead of the real 4 s. Production never sets it.
-   */
-  articleTimeoutMs?: number
 }
 
 /**
@@ -236,11 +214,11 @@ export interface ZimServiceOptions {
    */
   ops?: PlaintextOpsRegistry
   /**
-   * `<workspacePath>/zim-transient` — where `library.<build>.xml` and `meta-<n>/` live in
-   * production (#301 P3b, L3/M4). `deps.libraryDir` (the test seam) still WINS when both are
-   * given; absent ⇒ the pre-P3b OS-temp fallback.
+   * `<workspacePath>/zim-transient` — where `library.<build>.xml` and `meta-<n>/` live
+   * (#301 P3b, L3/M4). Created lazily; cleaned by the contained, link-refusing sweep, which
+   * takes the folder's parent as the workspace — so pass `zimTransientDir(workspacePath)`.
    */
-  transientDir?: string
+  transientDir: string
   /**
    * Broadcast one pack-set change to every window (#301 P3b, plan §9.17 (e)3 — wired in
    * `main/index.ts` like `notifyRenderer`, over `EVENTS.knowledgePacksChanged`). ABSENT ⇒
@@ -356,8 +334,7 @@ export class ZimService {
   private chain: Promise<unknown> = Promise.resolve()
 
   private server: KiwixServer | null = null
-  private libraryDir: string | null = null
-  private ownsLibraryDir = false
+  private transientDirCreated = false
   private published: Published | null = null
   private starting: StartEntry | null = null
   /** Revision-keyed start-failure latch: "a start failure latches until the pack set changes". */
@@ -374,7 +351,7 @@ export class ZimService {
   private unconfirmedChildren = 0
   /** Transient paths the cleanup must NOT remove: the library file of a serve child, or the
    *  meta dir of a manager child, whose teardown could not be confirmed (plan §9.17 (c)2).
-   *  They are reported as `kept` and removed by the next session-start pass. */
+   *  Never cleared in-process: reported as `kept` until the next app start's sweep (#713). */
   private readonly keptPaths = new Set<string>()
   /** The reconciliation pass currently running, or null — the single-flight latch (§9.17 (d)4). */
   private reconcileInFlight: Promise<void> | null = null
@@ -514,11 +491,10 @@ export class ZimService {
       // kiwix-tools bundle invalidates every verdict, because "this archive has no full-text
       // index" is a statement about a binary as much as about a file.
       toolsFingerprint: () => this.toolsFingerprint(),
-      manageAdd: async (libraryXmlPath, zimPath, perCallSignal) => {
+      manageAdd: async (libraryXmlPath, zimPath) => {
         if (!tools) throw new Error('kiwix-tools is not installed')
         await kiwixManageAdd(tools.manage, libraryXmlPath, zimPath, spawnFn, {
-          signal: perCallSignal ?? signal,
-          verifyBinary: this.deps.verifyBinary,
+          signal,
           killGraceMs: this.deps.killGraceMs,
           forceKillWaitMs: this.deps.forceKillWaitMs,
           // #301 P5, finding L9: injected, not read from `process.platform`, so the native
@@ -672,9 +648,7 @@ export class ZimService {
           // An excluded collision loser or a pack that stopped resolving is not served under
           // any name — it stays unknown rather than being probed under someone else's.
           if (name === undefined) continue
-          const verdict = await probeSearchable(library.port, name, op.signal, {
-            timeoutMs: this.deps.probeTimeoutMs
-          })
+          const verdict = await probeSearchable(library.port, name, op.signal)
           if (verdict !== null) found.push({ id: pack.id, verdict, searchableKey: pack.searchableKey })
         }
         return found
@@ -832,7 +806,6 @@ export class ZimService {
     const inFlight = this.starting
     this.starting = null
     inFlight?.abort.abort()
-    this.server?.resetFailureLatch()
     const stale = this.published
     this.published = null
     void this.enqueue(() => this.teardownPublished(stale)).catch(() => {
@@ -850,14 +823,6 @@ export class ZimService {
   /** The next generation for a library build or a kiwix-serve child. Monotonic per process. */
   private nextGeneration(): number {
     return ++this.generationCounter
-  }
-
-  /** Resolves once every queued rebuild / teardown / start has settled (tests; P3b). */
-  whenSettled(): Promise<void> {
-    return this.chain.then(
-      () => undefined,
-      () => undefined
-    )
   }
 
   /**
@@ -1210,7 +1175,6 @@ export class ZimService {
         spawn: this.deps.spawn,
         findPort: this.deps.findPort,
         probe: this.deps.probe,
-        verifyBinary: this.deps.verifyBinary,
         healthTimeoutMs: this.deps.healthTimeoutMs,
         healthIntervalMs: this.deps.healthIntervalMs,
         killGraceMs: this.deps.killGraceMs,
@@ -1234,24 +1198,13 @@ export class ZimService {
     return run
   }
 
-  /**
-   * The transient directory, created lazily. Production is
-   * `<workspacePath>/zim-transient` (`opts.transientDir`); `deps.libraryDir` is the test seam
-   * and WINS when both are given; neither ⇒ the pre-P3b OS-temp fallback.
-   */
+  /** The transient directory (`opts.transientDir`), created lazily. */
   private ensureLibraryDir(): string {
-    if (!this.libraryDir) {
-      const injected = this.deps.libraryDir ?? this.opts.transientDir
-      if (injected) {
-        mkdirSync(injected, { recursive: true })
-        this.libraryDir = injected
-        this.ownsLibraryDir = false
-      } else {
-        this.libraryDir = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-library-'))
-        this.ownsLibraryDir = true
-      }
+    if (!this.transientDirCreated) {
+      mkdirSync(this.opts.transientDir, { recursive: true })
+      this.transientDirCreated = true
     }
-    return this.libraryDir
+    return this.opts.transientDir
   }
 
   /** Delete ONE build's own file. Never called for a build this operation did not own, and
@@ -1327,23 +1280,13 @@ export class ZimService {
    */
   cleanupTransients(reason: ZimCleanupReason): ZimCleanupReport {
     const unsettledOps = this.opts.ops?.size() ?? 0
-    const dir = this.libraryDir ?? this.deps.libraryDir ?? this.opts.transientDir ?? null
-    if (!dir) {
-      return {
-        removed: 0,
-        kept: 0,
-        unknownEntries: 0,
-        unsettledOps,
-        unconfirmedChildren: this.unconfirmedChildren,
-        confirmed: unsettledOps === 0
-      }
-    }
-    // A real `<workspacePath>/zim-transient` goes through the CONTAINED cleanup (containment +
-    // link refusal); a test seam or the OS-temp fallback has no workspace to be contained by.
-    const base = basename(dir) === ZIM_TRANSIENT_DIR_NAME ? dirname(dir) : null
-    const report = base
-      ? cleanupZimTransients(dir, base, { keep: this.keptPaths, platform: this.opts.platform })
-      : sweepZimTransientDir(dir, { keep: this.keptPaths })
+    // `<workspacePath>/zim-transient` goes through the CONTAINED cleanup (containment + link
+    // refusal) against its parent, the workspace.
+    const dir = this.opts.transientDir
+    const report = cleanupZimTransients(dir, dirname(dir), {
+      keep: this.keptPaths,
+      platform: this.opts.platform
+    })
     log.info('Knowledge-pack transient cleanup', {
       reason,
       removed: report.removed,
@@ -1472,7 +1415,6 @@ export class ZimService {
           library.names,
           {
             askSignal: op.signal,
-            articleTimeoutMs: this.deps.articleTimeoutMs,
             expand: expandOnce,
             candidateScope
           }
@@ -1578,9 +1520,7 @@ export class ZimService {
         // a collision loser returns the honest "unavailable" null, not another book's text.
         const name = library.names.get(packId)
         if (name === undefined) return null
-        return fetchArticleHtml(library.port, name, articlePath, op.signal, {
-          timeoutMs: this.deps.articleTimeoutMs
-        })
+        return fetchArticleHtml(library.port, name, articlePath, op.signal)
       })
       op.assert()
       // Null covers all three honest "unavailable" cases: nothing to serve, an unmapped pack,

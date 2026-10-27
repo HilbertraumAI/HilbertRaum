@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { log } from '../logging'
-import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { verifyBinaryBeforeSpawn } from '../binary-verifier'
 import { KIWIX_MANAGE_BINARY_BASE, KIWIX_SERVE_BINARY_BASE } from '../assets'
 import {
   llamaOsDir,
@@ -114,9 +114,6 @@ export interface KiwixManageOptions {
   /** Caller cancellation (e.g. a lock/quit teardown). Checked once right after the
    *  pre-spawn verifier (no spawn if already aborted) and for the life of the child. */
   signal?: AbortSignal
-  /** Re-hash the binary immediately before spawn (vuln-scan B). Defaults to the shared
-   *  `verifyBinaryBeforeSpawn` (session-cached). Injected by tests. */
-  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
   /** Defensive ceiling on the whole invocation (default 30s — kiwix-manage reads only
    *  the ZIM header, so a healthy run finishes in well under this). */
   timeoutMs?: number
@@ -135,11 +132,6 @@ export interface KiwixManageOptions {
 /** One `log.warn` per process for a hashless install marker (R-1) — never per call, and
  *  never with a path (the sentinel rule). */
 let warnedManageSkipLegacy = false
-
-/** Test-only: let each test see its own first-warn behaviour. */
-export function _resetKiwixManageSkipLegacyWarnForTests(): void {
-  warnedManageSkipLegacy = false
-}
 
 /**
  * Run one `kiwix-manage LIBRARY add ZIM` invocation. kiwix-manage reads only the ZIM
@@ -162,7 +154,6 @@ export async function kiwixManageAdd(
   spawnFn: SpawnFn,
   opts: KiwixManageOptions = {}
 ): Promise<void> {
-  const verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
   const timeoutMs = opts.timeoutMs ?? MANAGE_TIMEOUT_MS
   const killGraceMs = opts.killGraceMs ?? MANAGE_KILL_GRACE_MS
   const forceKillWaitMs = opts.forceKillWaitMs ?? MANAGE_FORCE_KILL_WAIT_MS
@@ -170,7 +161,7 @@ export async function kiwixManageAdd(
 
   // Re-hash kiwix-manage against its install marker BEFORE spawning it (vuln-scan B) —
   // the same pre-spawn gate every llama-server spawn already runs (sidecar.ts doStart).
-  const verdict = await verifyBinary(managePath)
+  const verdict = await verifyBinaryBeforeSpawn(managePath)
   if (verdict === 'mismatch') {
     throw new KiwixManageError(
       'kiwix-manage failed pre-spawn integrity verification',

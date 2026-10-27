@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { EventEmitter } from 'node:events'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
+import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import {
   kiwixManageAdd,
   kiwixManageBinaryName,
@@ -12,21 +11,11 @@ import {
   resolveKiwixManagePath,
   resolveKiwixServePath
 } from '../../src/main/services/zim/tools'
+import { ServeFakeChild } from '../helpers/zim-fakes'
 
-class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 777
-  killed = false
-  stderr = new EventEmitter()
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', null, 'SIGKILL'))
-    return true
-  }
-}
-
-function fakeSpawn(): { spawn: SpawnFn; calls: Array<{ command: string; args: string[] }>; child: FakeChild } {
+function fakeSpawn(): { spawn: SpawnFn; calls: Array<{ command: string; args: string[] }>; child: ServeFakeChild } {
   const calls: Array<{ command: string; args: string[] }> = []
-  const child = new FakeChild()
+  const child = new ServeFakeChild(777, 'exit-on-sigterm')
   const spawn: SpawnFn = (command, args) => {
     calls.push({ command, args })
     return child
@@ -37,12 +26,12 @@ function fakeSpawn(): { spawn: SpawnFn; calls: Array<{ command: string; args: st
 describe('kiwix binary discovery', () => {
   it('finds kiwix-serve under runtime/kiwix-tools/<os>/', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-kiwix-'))
-    const dir = kiwixToolsDir(root, 'win32')
-    mkdirSync(dir, { recursive: true })
-    const bin = join(dir, kiwixServeBinaryName('win32'))
+    // The drive layout spelled out, not built from the resolver's own helpers.
+    const bin = join(root, 'runtime', 'kiwix-tools', 'win', 'kiwix-serve.exe')
+    mkdirSync(join(root, 'runtime', 'kiwix-tools', 'win'), { recursive: true })
     writeFileSync(bin, 'x')
     expect(resolveKiwixServePath(root, 'win32', {})).toBe(bin)
-    expect(resolveKiwixServePath(mkdtempSync(join(tmpdir(), 'empty-')), 'win32', {})).toBeNull()
+    expect(resolveKiwixServePath(mkdtempSync(join(tmpdir(), 'hilbertraum-kiwix-empty-')), 'win32', {})).toBeNull()
   })
 
   it('honours HILBERTRAUM_KIWIX_BIN in dev only (M-5)', () => {
@@ -78,15 +67,6 @@ describe('kiwix binary discovery', () => {
 })
 
 describe('kiwixManageAdd', () => {
-  it('spawns `kiwix-manage LIBRARY add ZIM` and resolves on exit 0', async () => {
-    const { spawn, calls, child } = fakeSpawn()
-    const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn)
-    queueMicrotask(() => child.emit('exit', 0, null))
-    await expect(done).resolves.toBeUndefined()
-    expect(calls[0]?.command).toBe('/bin/kiwix-manage')
-    expect(calls[0]?.args[1]).toBe('add')
-  })
-
   // #301 P5, finding L9 (plan §9.19 (e)): `platform` is injected, not read from
   // `process.platform`, so both native-separator branches are pinned independently of the
   // host running the test — replaces the earlier "assert shape, not separators" hedge.
@@ -108,8 +88,11 @@ describe('kiwixManageAdd', () => {
     })
     queueMicrotask(() => child.emit('exit', 0, null))
     await expect(done).resolves.toBeUndefined()
-    expect(calls[0]?.args[0]).toBe('/lib/dir/library.xml')
-    expect(calls[0]?.args[2]).toBe('/zim/sub/a.zim')
+    // The whole spawn: kiwix-manage's CLI is `LIBRARY add ZIM`, in that order.
+    expect(calls[0]).toEqual({
+      command: '/bin/kiwix-manage',
+      args: ['/lib/dir/library.xml', 'add', '/zim/sub/a.zim']
+    })
   })
 
   it('rejects with the stderr tail on a non-zero exit', async () => {

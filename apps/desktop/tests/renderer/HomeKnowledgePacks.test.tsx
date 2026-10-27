@@ -4,6 +4,7 @@ import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import type { AppStatus, KnowledgePack, PreflightResult, RuntimeStatus } from '../../src/shared/types'
+import { knowledgePack, WIKIPEDIA_EN_PACK } from '../helpers/knowledge-pack-fixtures'
 import { stubApi } from '../helpers/renderer'
 
 // §11.16: Home's fourth readiness row — the knowledge packs (an offline Wikipedia) as a source
@@ -17,23 +18,7 @@ const APP_STATUS = {
 const PREFLIGHT = { ok: true, problems: [], slowDriveWarning: null } as unknown as PreflightResult
 const RUNTIME: RuntimeStatus = { running: true, modelId: 'qwen3-chat', port: 1, healthy: true, message: '' }
 
-function pack(over: Partial<KnowledgePack> = {}): KnowledgePack {
-  return {
-    id: 'p1',
-    title: 'Wikipedia (English)',
-    description: null,
-    language: 'eng',
-    zimDate: '2026-07-01',
-    articleCount: 100,
-    sizeBytes: 1024,
-    leaf: 'wikipedia_en.zim',
-    enabled: true,
-    available: true,
-    unavailableReason: null,
-    addedAt: '2026-09-01T00:00:00Z',
-    ...over
-  }
-}
+const pack = (over: Partial<KnowledgePack> = {}): KnowledgePack => knowledgePack({ ...WIKIPEDIA_EN_PACK, ...over })
 
 function stubs(listKnowledgePacks?: () => Promise<KnowledgePack[]>): void {
   stubApi({

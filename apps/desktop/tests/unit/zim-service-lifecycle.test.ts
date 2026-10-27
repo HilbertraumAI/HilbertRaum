@@ -1,28 +1,46 @@
-import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
-import { EventEmitter } from 'node:events'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
-import { registeredSidecarPids, type ChildProcessLike, type SpawnFn } from '../../src/main/services/runtime/sidecar'
+import { registeredSidecarPids, type SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { registerPack, servedCandidates, writeLibraryXml, type PackDeps } from '../../src/main/services/zim/packs'
 import { readZimHeader } from '../../src/main/services/zim/identity'
 import { packUuid, writeZimFixture } from '../helpers/zim-header'
+import { KiwixManageError, kiwixManageAdd } from '../../src/main/services/zim/tools'
 import {
-  KiwixManageError,
-  kiwixManageAdd,
-  _resetKiwixManageSkipLegacyWarnForTests
-} from '../../src/main/services/zim/tools'
-import type { BinaryVerifyResult } from '../../src/main/services/binary-verifier'
+  initBinaryVerification,
+  _resetBinaryVerificationForTests,
+  type BinaryVerifyResult
+} from '../../src/main/services/binary-verifier'
+import { ZimService, type ServedLibrary, type ZimAdmission } from '../../src/main/services/zim'
 import {
-  StaleServerError,
-  ZimService,
-  type ServedLibrary,
-  type ZimAdmission
-} from '../../src/main/services/zim'
-import { KiwixServer } from '../../src/main/services/zim/serve'
-import { ServeFakeChild, serveGate, type ServeChildMode } from '../helpers/zim-fakes'
+  ServeFakeChild,
+  binaryWithMarker,
+  expectAbortError,
+  fakeManageSpawn,
+  serveGate,
+  zimServiceDeps,
+  type ServeChildMode,
+  type ServeGate
+} from '../helpers/zim-fakes'
+import { manageAddFromHeader } from '../helpers/zim-library'
+import { until, within } from '../helpers/hang-budget'
+
+// T05 parks kiwix-serve's pre-spawn verifier. The REAL verifier is wrapped here, on the test side
+// (production has no verifier seam); with no gate set, every call goes straight through to it.
+const parkedVerifier = vi.hoisted(() => ({ gate: null as ServeGate<BinaryVerifyResult> | null }))
+vi.mock('../../src/main/services/binary-verifier', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/main/services/binary-verifier')>()
+  return {
+    ...real,
+    verifyBinaryBeforeSpawn: (binPath: string, io?: Parameters<typeof real.verifyBinaryBeforeSpawn>[1]) =>
+      parkedVerifier.gate && binPath.includes('kiwix-serve')
+        ? parkedVerifier.gate.wait()
+        : real.verifyBinaryBeforeSpawn(binPath, io)
+  }
+})
 
 // P3a — service generations, publication and cancellation. This file is shared with a
 // parallel agent's T05 (`KiwixServer`/`ZimService`) block; this describe covers ONLY
@@ -32,33 +50,16 @@ import { ServeFakeChild, serveGate, type ServeChildMode } from '../helpers/zim-f
 
 // ---- shared test doubles (prefixed `manage*` so names cannot clash with T05's) -----
 
-/** A controllable fake `kiwix-manage` child: `kill()` only RECORDS the call — it never
- *  emits `'exit'`/`'error'` on its own. The test decides when (or whether) the child
- *  actually dies, so the timeout/abort kill-escalation path can be observed step by
- *  step instead of asserted only via elapsed wall-clock time. */
-class ManageFakeChild extends EventEmitter implements ChildProcessLike {
-  pid: number
-  killed = false
-  stderr = new EventEmitter()
-  readonly killCalls: Array<NodeJS.Signals | number | undefined> = []
-  constructor(pid: number) {
-    super()
-    this.pid = pid
-  }
-  kill(signal?: NodeJS.Signals | number): boolean {
-    this.killCalls.push(signal)
-    this.killed = true
-    return true
-  }
-}
-
+/** A fake `kiwix-manage` spawn whose child only RECORDS `kill()` (`ignore-all`): the test
+ *  decides when (or whether) it actually dies, so the timeout/abort kill-escalation path can
+ *  be observed step by step instead of asserted only via elapsed wall-clock time. */
 function manageFakeSpawn(pid = 9001): {
   spawn: SpawnFn
-  child: ManageFakeChild
+  child: ServeFakeChild
   calls: Array<{ command: string; args: string[] }>
 } {
   const calls: Array<{ command: string; args: string[] }> = []
-  const child = new ManageFakeChild(pid)
+  const child = new ServeFakeChild(pid, 'ignore-all')
   const spawn: SpawnFn = (command, args) => {
     calls.push({ command, args })
     return child
@@ -104,55 +105,66 @@ function addManageZimFile(dir: string, leaf: string): string {
 // from the real method.
 afterEach(() => {
   vi.restoreAllMocks()
+  parkedVerifier.gate = null // a failed T05 must not park every later start
 })
 
 describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanup (M9, P3a)', () => {
-  beforeEach(() => {
-    _resetKiwixManageSkipLegacyWarnForTests()
-  })
-
   it('T06 kiwix-manage runs under the verifier (match / mismatch / hashless policy), every PID is registered, timeout and caller abort settle before cleanup, late exit and ignored kill are bounded', async () => {
-    // --- verify: 'mismatch' refuses with NO spawn -----------------------------------
-    {
-      const { spawn, calls } = manageFakeSpawn(1)
-      const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'mismatch'
-      })
-      await expect(done).rejects.toBeInstanceOf(KiwixManageError)
-      await expect(done).rejects.toMatchObject({ kind: 'verify', childState: 'not-spawned' })
-      expect(calls).toHaveLength(0)
-    }
-
-    // --- verify: 'ok' proceeds; PID registered while running, unregistered at exit --
-    {
-      const { spawn, calls, child } = manageFakeSpawn(2001)
-      const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'ok'
-      })
-      await tick()
-      expect(calls).toHaveLength(1)
-      expect(registeredSidecarPids('kiwix_tools')).toContain(2001)
-      child.emit('exit', 0, null)
-      await expect(done).resolves.toBeUndefined()
-      expect(registeredSidecarPids('kiwix_tools')).not.toContain(2001)
-    }
-
-    // --- verify: 'skip-legacy' still spawns; the R-1 warn fires ONCE across two calls
-    {
-      const warn = vi.spyOn(log, 'warn')
-      for (const pid of [2101, 2102]) {
-        const { spawn, calls, child } = manageFakeSpawn(pid)
-        const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-          verifyBinary: async () => 'skip-legacy'
-        })
+    // The verdicts come from the REAL verifier on real install markers. The R-1 warning fires
+    // once per process, so the silent verdicts run first: after it fired, "says nothing" would
+    // hold whatever the verdict. This is the file's first kiwix-manage call, in a fresh fork.
+    const warn = vi.spyOn(log, 'warn')
+    const r1Warnings = (): string[] =>
+      warn.mock.calls.map((c) => c[0]).filter((m): m is string => typeof m === 'string' && m.includes('R-1'))
+    try {
+      // --- unenforced (a dev build): 'skip-dev' spawns -------------------------------
+      {
+        const { spawn, calls, child } = manageFakeSpawn(1001)
+        const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn)
         await tick()
-        expect(calls).toHaveLength(1) // spawn happens — 'skip-legacy' never blocks
+        expect(calls).toHaveLength(1)
         child.emit('exit', 0, null)
         await expect(done).resolves.toBeUndefined()
       }
-      const r1Warnings = warn.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].includes('R-1'))
-      expect(r1Warnings).toHaveLength(1) // once per process, not once per call
-      expect(r1Warnings[0]?.[0]).not.toMatch(/[\\/]/) // never a path in the message
+
+      initBinaryVerification(false) // a packaged build: the install marker decides
+
+      // --- 'mismatch' (a tampered binary) refuses with NO spawn ------------------------
+      {
+        const { spawn, calls } = manageFakeSpawn(1)
+        const tampered = await binaryWithMarker('kiwix-manage.exe', 'mismatch')
+        const done = kiwixManageAdd(tampered, '/lib/library.xml', '/zim/a.zim', spawn)
+        await expect(done).rejects.toBeInstanceOf(KiwixManageError)
+        await expect(done).rejects.toMatchObject({ kind: 'verify', childState: 'not-spawned' })
+        expect(calls).toHaveLength(0)
+      }
+
+      // --- 'ok' proceeds; PID registered while running, unregistered at exit --------
+      {
+        const { spawn, calls, child } = manageFakeSpawn(2001)
+        const matching = await binaryWithMarker('kiwix-manage.exe', 'ok')
+        const done = kiwixManageAdd(matching, '/lib/library.xml', '/zim/a.zim', spawn)
+        await until(() => calls.length === 1, 'the kiwix-manage spawn after a matching hash')
+        expect(registeredSidecarPids('kiwix_tools')).toContain(2001)
+        child.emit('exit', 0, null)
+        await expect(done).resolves.toBeUndefined()
+        expect(registeredSidecarPids('kiwix_tools')).not.toContain(2001)
+      }
+      expect(r1Warnings()).toEqual([]) // skip-dev and ok say nothing
+
+      // --- 'skip-legacy' (a hashless marker) still spawns; the R-1 warn fires ONCE across two calls
+      const hashless = await binaryWithMarker('kiwix-manage.exe', 'legacy')
+      for (const pid of [2101, 2102]) {
+        const { spawn, calls, child } = manageFakeSpawn(pid)
+        const done = kiwixManageAdd(hashless, '/lib/library.xml', '/zim/a.zim', spawn)
+        await until(() => calls.length === 1, 'the kiwix-manage spawn on a hashless marker')
+        child.emit('exit', 0, null) // spawn happened — 'skip-legacy' never blocks
+        await expect(done).resolves.toBeUndefined()
+      }
+      expect(r1Warnings()).toHaveLength(1) // once per process, not once per call
+      expect(r1Warnings()[0]).not.toMatch(/[\\/]/) // never a path in the message
+    } finally {
+      _resetBinaryVerificationForTests()
     }
 
     // --- timeout: the promise stays pending after kill() while the fake ignores it,
@@ -160,7 +172,6 @@ describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanu
     {
       const { spawn, calls, child } = manageFakeSpawn(3001)
       const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'ok',
         timeoutMs: 5,
         killGraceMs: 500,
         forceKillWaitMs: 500
@@ -187,7 +198,6 @@ describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanu
       const { spawn, child } = manageFakeSpawn(3101)
       const controller = new AbortController()
       const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'ok',
         signal: controller.signal,
         timeoutMs: 100_000,
         killGraceMs: 500,
@@ -214,7 +224,6 @@ describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanu
     {
       const { spawn, child } = manageFakeSpawn(3201)
       const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'ok',
         timeoutMs: 1,
         killGraceMs: 1,
         forceKillWaitMs: 1
@@ -234,38 +243,14 @@ describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanu
     }
   })
 
-  it('verifyBinary mismatch refuses with zero spawns; ok / skip-dev spawn silently (no R-1 warn)', async () => {
-    const warn = vi.spyOn(log, 'warn')
-    for (const verdict of ['ok', 'skip-dev'] as const) {
-      const { spawn, calls, child } = manageFakeSpawn()
-      const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => verdict
-      })
-      await tick()
-      expect(calls).toHaveLength(1)
-      child.emit('exit', 0, null)
-      await expect(done).resolves.toBeUndefined()
-    }
-    expect(warn.mock.calls.filter((c) => typeof c[0] === 'string' && c[0].includes('R-1'))).toHaveLength(0)
-
-    const { spawn, calls } = manageFakeSpawn()
-    await expect(
-      kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'mismatch'
-      })
-    ).rejects.toMatchObject({ kind: 'verify', childState: 'not-spawned' })
-    expect(calls).toHaveLength(0)
-  })
-
-  it('a sync spawn throw rejects kind "spawn" with childState "not-spawned" and never registers a PID', async () => {
+  it('a sync spawn throw rejects kind "spawn" with childState "not-spawned"', async () => {
     const spawn: SpawnFn = () => {
       throw new Error('spawn ENOENT')
     }
-    await expect(
-      kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'ok'
-      })
-    ).rejects.toMatchObject({ kind: 'spawn', childState: 'not-spawned' })
+    await expect(kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn)).rejects.toMatchObject({
+      kind: 'spawn',
+      childState: 'not-spawned'
+    })
   })
 
   it('an already-aborted caller signal refuses after the verifier with no spawn', async () => {
@@ -274,22 +259,10 @@ describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanu
     controller.abort()
     await expect(
       kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn, {
-        verifyBinary: async () => 'ok',
         signal: controller.signal
       })
     ).rejects.toMatchObject({ kind: 'abort', childState: 'not-spawned' })
     expect(calls).toHaveLength(0)
-  })
-
-  it('preserves the existing ordinary-exit message shape (regex /code 1 — Cannot add ZIM/ still matches)', async () => {
-    const { spawn, child } = manageFakeSpawn()
-    const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/bad.zim', spawn, {
-      verifyBinary: async () => 'ok'
-    })
-    await tick()
-    child.stderr.emit('data', 'Cannot add ZIM /zim/bad.zim to the library.')
-    child.emit('exit', 1, null)
-    await expect(done).rejects.toThrow(/code 1 — Cannot add ZIM/)
   })
 })
 
@@ -298,18 +271,13 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
     const { db, zimDir, root } = managePackHarness()
     let mode: 'register' | 'build' = 'register'
     const buildCalls: string[] = []
+    const register = manageAddFromHeader()
     const manageAdd: PackDeps['manageAdd'] = async (libraryXmlPath, zimPath) => {
+      if (mode === 'register') return register(libraryXmlPath, zimPath)
       const leaf = basename(zimPath)
-      if (mode === 'register') {
-        appendFileSync(
-          libraryXmlPath,
-          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" ` +
-            `language="deu" date="2026-07-01" articleCount="1" mediaCount="0" />\n`
-        )
-        return
-      }
       buildCalls.push(leaf)
-      if (leaf.includes('badordinary')) throw new Error('Cannot add ZIM — ordinary failure')
+      // The real binary's stderr names the archive, so a log that printed the error would leak it.
+      if (leaf.includes('badordinary')) throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
       if (leaf.includes('uncertain')) {
         throw new KiwixManageError('kiwix-manage timed out — cleanup not confirmed', 'timeout', 'uncertain')
       }
@@ -347,16 +315,10 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
     const { db, zimDir, root } = managePackHarness()
     let mode: 'register' | 'build' = 'register'
     const buildCalls: string[] = []
+    const register = manageAddFromHeader()
     const manageAdd: PackDeps['manageAdd'] = async (libraryXmlPath, zimPath) => {
-      const leaf = basename(zimPath)
-      if (mode === 'register') {
-        appendFileSync(
-          libraryXmlPath,
-          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" language="deu" />\n`
-        )
-        return
-      }
-      buildCalls.push(leaf)
+      if (mode === 'register') return register(libraryXmlPath, zimPath)
+      buildCalls.push(basename(zimPath))
     }
     const deps: PackDeps = { zimDir, manageAdd }
     await registerPack(db, deps, addManageZimFile(zimDir, 'only.zim'))
@@ -370,31 +332,6 @@ describe('writeLibraryXml — stops on an unconfirmed manager child (M9 → pack
       name: 'AbortError'
     })
     expect(buildCalls).toEqual([])
-  })
-
-  it('forwards its signal to manageAdd (the additive third ManageAddFn param)', async () => {
-    const { db, zimDir, root } = managePackHarness()
-    let mode: 'register' | 'build' = 'register'
-    let receivedSignal: AbortSignal | undefined
-    const manageAdd: PackDeps['manageAdd'] = async (libraryXmlPath, zimPath, signal) => {
-      const leaf = basename(zimPath)
-      if (mode === 'register') {
-        appendFileSync(
-          libraryXmlPath,
-          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="T ${leaf}" language="deu" />\n`
-        )
-        return
-      }
-      receivedSignal = signal
-      appendFileSync(libraryXmlPath, `<book id="uuid-${leaf}" path="x" title="T" language="deu" />\n`)
-    }
-    const deps: PackDeps = { zimDir, manageAdd }
-    await registerPack(db, deps, addManageZimFile(zimDir, 'a.zim'))
-    mode = 'build'
-    const controller = new AbortController()
-    const libraryPath = join(root, 'library.xml')
-    await writeLibraryXml(deps, libraryPath, servedCandidates(db, zimDir), controller.signal)
-    expect(receivedSignal).toBe(controller.signal)
   })
 })
 
@@ -433,8 +370,8 @@ describe('readZimMetadata (via registerPack) — the throwaway meta dir on an un
 })
 
 // =====================================================================================
-// Brief A — `KiwixServer` per-child records + `ZimService` generations (H3, M2; T05).
-// Binding design note: tmp/zim-wave/p3a/ledger-9.15.md items 1–7 and 9–11 (a copy of plan
+// Brief A — `ZimService` generations over the real `KiwixServer` (H3, M2; T05); the rows that
+// drive `KiwixServer` alone live in zim-serve.test.ts. Binding design note: tmp/zim-wave/p3a/ledger-9.15.md items 1–7 and 9–11 (a copy of plan
 // §9.15, PR #294 / issue #301). Helpers below are prefixed `serve*`/`svc*` so they cannot
 // clash with the `manage*` doubles of the M9 block above.
 //
@@ -444,9 +381,9 @@ describe('readZimMetadata (via registerPack) — the throwaway meta dir on an un
 // kill-grace timers elapse, and what is asserted afterwards is a fake's RECORDED state.
 // =====================================================================================
 
-// The controlled gate and the fake serve child now live in tests/helpers/zim-fakes.ts —
-// shared verbatim with the P3b session suite so the two cannot drift on what "the child
-// ignored SIGTERM" means (#301).
+// The controlled gate, the fake children and the fake kiwix-manage live in
+// tests/helpers/zim-fakes.ts — shared with the P3b session suite so the two cannot drift on
+// what "the child ignored SIGTERM" means (#301).
 
 interface ServeSpawnRecord {
   args: string[]
@@ -457,7 +394,6 @@ interface ServeSpawnRecord {
 }
 
 interface SvcHooks {
-  verify: (binPath: string) => Promise<BinaryVerifyResult>
   findPort: () => Promise<number>
   probe: (port: number) => Promise<boolean>
   /** Runs inside a fake kiwix-manage child before it appends its `<book>` and exits 0. */
@@ -468,13 +404,16 @@ interface SvcHarness {
   db: Db
   root: string
   zimDir: string
-  libraryDir: string
+  /** The service's `transientDir`, where every library build is written. */
+  transientDir: string
   svc: ZimService
   hooks: SvcHooks
   /** kiwix-serve spawns, in order. */
   serveSpawns: ServeSpawnRecord[]
   /** kiwix-manage invocations that wrote a LIBRARY BUILD (registration throwaways excluded). */
   buildAdds: Array<{ libraryXmlPath: string; zimPath: string }>
+  /** Every kiwix-manage child, in spawn order. */
+  manageChildren: ServeFakeChild[]
   /** Mode applied to the NEXT spawned kiwix-serve child. */
   nextChildMode: ServeChildMode
   addPack(leaf: string): Promise<string>
@@ -494,17 +433,14 @@ function svcHarness(
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-svc-'))
   const zimDir = join(root, 'zim')
   mkdirSync(zimDir, { recursive: true })
-  const libraryDir = join(root, 'library')
-  mkdirSync(libraryDir, { recursive: true })
+  const transientDir = join(root, 'zim-transient')
   const db = openDatabase(join(root, 'test.sqlite'))
 
   const serveSpawns: ServeSpawnRecord[] = []
   const buildAdds: Array<{ libraryXmlPath: string; zimPath: string }> = []
   let servePid = 9100
-  let managePid = 7100
 
   const hooks: SvcHooks = {
-    verify: async () => 'ok',
     findPort: async () => 8300 + serveSpawns.length,
     probe: async () => true,
     manage: async () => undefined
@@ -514,10 +450,11 @@ function svcHarness(
     db,
     root,
     zimDir,
-    libraryDir,
+    transientDir,
     hooks,
     serveSpawns,
     buildAdds,
+    manageChildren: [],
     nextChildMode: 'exit-on-sigterm',
     svc: null as unknown as ZimService,
     addPack: async (leaf) => {
@@ -533,7 +470,7 @@ function svcHarness(
       return last.child
     },
     builds: () =>
-      readdirSync(libraryDir)
+      readdirSync(transientDir)
         .filter((f) => /^library\.\d+\.xml$/.test(f))
         .sort()
   }
@@ -550,56 +487,30 @@ function svcHarness(
     return child
   }
 
-  // A fake kiwix-manage: `LIBRARY add ZIM` appends one <book> derived from the file name
-  // (the zim-packs.test.ts shape) and exits 0 — but only if it was not killed first, so an
-  // aborted/timed-out manager writes nothing more (the settle-before-cleanup contract).
-  const manageSpawn: SpawnFn = (_command, args) => {
-    const libraryXmlPath = args[0] as string
-    const zimPath = args[2] as string
-    const child = new ServeFakeChild(managePid++, 'exit-on-sigterm')
-    if (dirname(libraryXmlPath) === libraryDir) buildAdds.push({ libraryXmlPath, zimPath })
-    void (async () => {
-      let failure: unknown = null
-      try {
-        await hooks.manage(libraryXmlPath, zimPath)
-      } catch (err) {
-        failure = err
-      }
-      await tick()
-      if (child.killed) return // a killed kiwix-manage never appends anything
-      if (failure) {
-        child.stderr.emit('data', String(failure))
-        child.emit('exit', 1, null)
-        return
-      }
-      const stem = basename(zimPath).replace(/\.zim$/i, '')
-      appendFileSync(
-        libraryXmlPath,
-        `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${stem}" ` +
-          `description="Test archive" language="deu" date="2026-07-01" articleCount="41" mediaCount="7" />\n`
-      )
-      child.emit('exit', 0, null)
-    })()
-    return child
-  }
+  // Library builds go straight into the transient dir; a registration's throwaway is a meta-<n>/.
+  const manage = fakeManageSpawn({
+    firstPid: 7100,
+    before: (libraryXmlPath, zimPath) => hooks.manage(libraryXmlPath, zimPath),
+    onSpawn: ({ libraryXmlPath, zimPath }) => {
+      if (dirname(libraryXmlPath) === transientDir) buildAdds.push({ libraryXmlPath, zimPath })
+    }
+  })
+  harness.manageChildren = manage.children
 
   harness.svc = new ZimService({
     rootPath: root,
     isDev: true,
     admission: opts.admission,
-    deps: {
-      resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
+    transientDir,
+    deps: zimServiceDeps({
       spawn: serveSpawn,
-      manageSpawn,
+      manageSpawn: manage.spawn,
       findPort: () => hooks.findPort(),
       probe: (port) => hooks.probe(port),
-      verifyBinary: (bin) => hooks.verify(bin),
-      healthTimeoutMs: opts.healthTimeoutMs ?? 1_000,
-      healthIntervalMs: 1,
-      killGraceMs: opts.killGraceMs ?? 5,
-      forceKillWaitMs: opts.forceKillWaitMs ?? 5,
-      libraryDir
-    }
+      healthTimeoutMs: opts.healthTimeoutMs,
+      killGraceMs: opts.killGraceMs,
+      forceKillWaitMs: opts.forceKillWaitMs
+    })
   })
   return harness
 }
@@ -617,19 +528,6 @@ function serveAssertSingleWriter(adds: Array<{ libraryXmlPath: string }>): void 
   }
 }
 
-/** Assert a promise rejects with the #159 AbortError convention (a DOMException named
- *  `AbortError`, the shape `isStartAbortError` in runtime/sidecar.ts recognises). */
-async function serveExpectAbortError(promise: Promise<unknown>): Promise<void> {
-  const err = await promise.then(
-    () => {
-      throw new Error('expected an AbortError rejection, but the call resolved')
-    },
-    (e: unknown) => e
-  )
-  expect(err).toBeInstanceOf(DOMException)
-  expect((err as DOMException).name).toBe('AbortError')
-}
-
 describe('ZimService + KiwixServer — generations, publication and cancellation (H3/M2, P3a)', () => {
   it('T05 parked verifier / port / manager / publication / health with overlapping stop, invalidate and restart: no obsolete spawn or publication, no old callback or finally mutates the current child, one writer, latest revision served, current XML path in argv', async () => {
     const h = svcHarness()
@@ -637,7 +535,12 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
 
     // --- (1) PARKED VERIFIER: a pack change while a start sits in the pre-spawn verifier -
     const verifyGate = serveGate<BinaryVerifyResult>()
-    h.hooks.verify = async (bin) => (bin.includes('serve') ? verifyGate.wait() : 'ok')
+    parkedVerifier.gate = verifyGate
+    let portCalls = 0
+    h.hooks.findPort = async () => {
+      portCalls++
+      return 8300 + h.serveSpawns.length
+    }
     const firstAsk = h.svc.ensureServer(h.db)
     await verifyGate.entered
     expect(h.buildAdds).toHaveLength(1) // build A written, one book (alpha)
@@ -646,10 +549,12 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(h.serveSpawns).toHaveLength(0)
 
     const beta = await h.addPack('beta.zim') // revision 2 — aborts the parked start
-    h.hooks.verify = async () => 'ok'
+    parkedVerifier.gate = null
     verifyGate.release('ok')
     const portAfterOne = await svcPort(firstAsk) // the ask re-loops onto revision 2 rather than failing
 
+    // The aborted start stopped right after the verifier: only the re-looped start took a port.
+    expect(portCalls).toBe(1)
     // No obsolete spawn: nothing was ever launched with build A, and A deleted its OWN file.
     expect(h.serveSpawns).toHaveLength(1)
     expect(h.serveSpawns[0]!.libraryXmlPath).not.toBe(buildA)
@@ -699,12 +604,14 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     const thirdAsk = h.svc.ensureServer(h.db)
     await manageGate.entered
     const buildD = h.buildAdds[h.buildAdds.length - 1]!.libraryXmlPath
+    const managerD = h.manageChildren[h.manageChildren.length - 1]!
     const spawnsBeforeD = h.serveSpawns.length
     h.svc.setPackEnabled(h.db, alpha, true) // revision 6 — aborts the parked manager
     h.hooks.manage = async () => undefined
     manageGate.release()
     const portAfterThree = await svcPort(thirdAsk)
 
+    expect(managerD.killed).toBe(true) // the teardown reached the running manager, not just its file
     expect(h.serveSpawns.map((s) => s.libraryXmlPath)).not.toContain(buildD)
     expect(h.builds()).not.toContain(basename(buildD))
     expect(h.serveSpawns).toHaveLength(spawnsBeforeD + 1)
@@ -768,12 +675,12 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     const stubbornBuild = h.serveSpawns[h.serveSpawns.length - 1]!.libraryXmlPath
     h.nextChildMode = 'exit-on-sigterm'
     h.svc.setPackEnabled(h.db, alpha, true) // revision 10 — tears the stubborn child down
-    await h.svc.whenSettled()
+    // The next start queues behind that teardown on the one FIFO chain, so it is over here.
+    const portAfterStubborn = await svcPort(h.svc.ensureServer(h.db))
     expect(stubborn.killCalls).toEqual([undefined, 'SIGKILL']) // escalated, then gave up
     expect(registeredSidecarPids('kiwix_tools')).toContain(stubborn.pid) // stays reapable
     expect(h.builds()).toContain(basename(stubbornBuild)) // its file is NOT deleted
 
-    const portAfterStubborn = await svcPort(h.svc.ensureServer(h.db))
     const currentChild = h.lastServeChild()
     const stateBeforeLateExit = h.svc.serverState()!
     expect(stateBeforeLateExit).toMatchObject({ revision: 10, port: portAfterStubborn, alive: true })
@@ -795,12 +702,12 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     const quitChild = h.lastServeChild()
     const stopping = h.svc.stop()
     quitGate.release(true) // the probe succeeds — but the quit already happened
-    await serveExpectAbortError(lastAsk)
+    await expectAbortError(lastAsk)
     await stopping
     expect(h.svc.serverState()).toBeNull() // nothing published
     expect(quitChild.killCalls.length).toBeGreaterThan(0)
     const spawnsAtQuit = h.serveSpawns.length
-    await serveExpectAbortError(h.svc.ensureServer(h.db)) // terminal
+    await expectAbortError(h.svc.ensureServer(h.db)) // terminal
     expect(h.serveSpawns).toHaveLength(spawnsAtQuit)
   })
 
@@ -817,7 +724,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(h.serveSpawns).toHaveLength(1) // one shared start for both waiters
 
     ac.abort()
-    await serveExpectAbortError(cancelled)
+    await expectAbortError(cancelled)
     expect(h.serveSpawns).toHaveLength(1) // the cancelled waiter did NOT abort the start
 
     probeGate.release(true)
@@ -841,8 +748,8 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     const suspending = h.svc.suspend()
     h.hooks.probe = async () => true
     probeGate.release(true) // the parked probe succeeds only AFTER the lock
-    await serveExpectAbortError(first)
-    await serveExpectAbortError(second)
+    await expectAbortError(first)
+    await expectAbortError(second)
     await suspending
     expect(h.svc.serverState()).toBeNull()
     expect(lockedChild.killCalls.length).toBeGreaterThan(0)
@@ -867,11 +774,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(h.serveSpawns).toHaveLength(1)
 
     // The failed start left nothing awaiting itself: stop() completes rather than deadlocking.
-    const outcome = await Promise.race([
-      h.svc.stop().then(() => 'stopped'),
-      waitMs(2_000).then(() => 'deadlocked')
-    ])
-    expect(outcome).toBe('stopped')
+    await within(h.svc.stop(), 'stop() after a latched start failure')
 
     // A fresh service proves the other half: a pack change clears the latch.
     const h2 = svcHarness({ healthTimeoutMs: 15 })
@@ -918,7 +821,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
       expect(uncertain).toHaveLength(1)
       expect(uncertain[0]).toContain(`generation ${generation}`)
       expect(uncertain[0]).toContain(`pid ${child.pid}`)
-      expect(uncertain[0]).not.toContain(h.libraryDir) // the sentinel rule: no paths
+      expect(uncertain[0]).not.toContain(h.transientDir) // the sentinel rule: no paths
       expect(uncertain[0]).not.toContain('.zim')
     } finally {
       warn.mockRestore()
@@ -1000,7 +903,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     epoch = 2 // the workspace locked and unlocked while the library was being written
     h.hooks.manage = async () => undefined
     manageGate.release()
-    await serveExpectAbortError(duringBuild)
+    await expectAbortError(duringBuild)
     expect(h.serveSpawns).toHaveLength(0) // no child was ever launched for that build
     expect(h.builds()).toEqual([]) // and the build deleted its own file
     expect(h.svc.serverState()).toBeNull()
@@ -1013,14 +916,14 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     await gate.entered
     epoch = 3 // the workspace locked and unlocked again while this start was in the probe
     gate.release(true) // the probe succeeds — nothing aborted the signal
-    await serveExpectAbortError(ask)
+    await expectAbortError(ask)
     expect(h.svc.serverState()).toBeNull() // the old epoch never publishes
     expect(h.lastServeChild().killCalls.length).toBeGreaterThan(0) // and its child is gone
 
     // A workspace that stopped admitting work refuses at the entry recheck, before any work.
     admits = false
     const spawnsBefore = h.serveSpawns.length
-    await serveExpectAbortError(h.svc.ensureServer(h.db))
+    await expectAbortError(h.svc.ensureServer(h.db))
     expect(h.serveSpawns).toHaveLength(spawnsBefore)
 
     // Admitted again under the new epoch: an ordinary start publishes.
@@ -1054,176 +957,31 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     const arm = h.svc.makeArm(h.db, [alpha])
     expect(arm).not.toBeNull()
 
+    // The start parks in its health probe. Only the ask's own signal can end the wait there: a
+    // start that never saw it would hold the arm until the probe answers.
+    const probeGate = serveGate<boolean>()
+    h.hooks.probe = () => probeGate.wait()
     const ac = new AbortController()
-    ac.abort()
-    await serveExpectAbortError(arm!('a question', ac.signal))
-    expect(h.serveSpawns).toHaveLength(0) // the cancelled ask never spawned a sidecar
-    await h.svc.stop()
-  })
-})
-
-// --- KiwixServer on its own: the per-child record boundary (H3) -----------------------
-// The service's own pre-publication recheck would mask a missing recheck INSIDE the server,
-// so these drive `KiwixServer` directly.
-
-interface ServeOnlyHarness {
-  server: KiwixServer
-  spawns: ServeSpawnRecord[]
-  hooks: { probe: () => Promise<boolean>; findPort: () => Promise<number> }
-  nextChildMode: ServeChildMode
-}
-
-function serveOnlyHarness(): ServeOnlyHarness {
-  const spawns: ServeSpawnRecord[] = []
-  let pid = 9500
-  const hooks = {
-    probe: async (): Promise<boolean> => true,
-    findPort: async (): Promise<number> => 8500 + spawns.length
-  }
-  const harness: ServeOnlyHarness = {
-    spawns,
-    hooks,
-    nextChildMode: 'exit-on-sigterm',
-    server: null as unknown as KiwixServer
-  }
-  harness.server = new KiwixServer({
-    binPath: '/bin/kiwix-serve',
-    spawn: (_command, args) => {
-      const child = new ServeFakeChild(pid++, harness.nextChildMode)
-      spawns.push({
-        args: [...args],
-        libraryXmlPath: args[args.indexOf('--library') + 1] as string,
-        child,
-        priorChildrenAllExited: spawns.every((s) => s.child.exited)
-      })
-      return child
-    },
-    findPort: () => hooks.findPort(),
-    probe: () => hooks.probe(),
-    verifyBinary: async () => 'ok',
-    healthTimeoutMs: 1_000,
-    healthIntervalMs: 1,
-    killGraceMs: 5,
-    forceKillWaitMs: 5
-  })
-  return harness
-}
-
-describe('KiwixServer — per-child records (H3, P3a)', () => {
-  it('a superseded start never publishes its child even when its parked probe finally succeeds', async () => {
-    const h = serveOnlyHarness()
-    h.nextChildMode = 'ignore-all' // it also never reaches a terminal state on its own
-    const gate = serveGate<boolean>()
-    h.hooks.probe = () => gate.wait()
-
-    const start = h.server.ensureStarted({ libraryXmlPath: '/ws/library.1.xml' })
-    await gate.entered
-    const stale = h.spawns[0]!.child
-    const stopping = h.server.stop()
-    gate.release(true) // the OLD probe succeeds — after the teardown began
-    await serveExpectAbortError(start)
-    await stopping
-
-    expect(h.server.alive()).toBe(false)
-    expect(h.server.port()).toBeNull()
-    expect(h.server.generation()).toBeNull()
-    expect(h.server.current()).toBeNull()
-    expect(stale.killCalls).toEqual([undefined, 'SIGKILL']) // bounded escalation, then given up
-    expect(h.server.lastStopUncertain()).toBe(true)
-
-    // The restart is an independent record with its own generation and its own path.
-    h.nextChildMode = 'exit-on-sigterm'
-    h.hooks.probe = async () => true
-    const again = await h.server.ensureStarted({ libraryXmlPath: '/ws/library.2.xml' })
-    const live = h.spawns[1]!.child
-    expect(h.server.current()).toEqual({
-      port: again.port,
-      generation: again.generation,
-      libraryXmlPath: '/ws/library.2.xml'
-    })
-
-    // The obsolete record's LATE terminal event mutates only itself.
-    stale.emit('exit', 1, null)
-    await tick()
-    expect(h.server.alive()).toBe(true)
-    expect(h.server.generation()).toBe(again.generation)
-    expect(h.server.port()).toBe(again.port)
-    expect(live.killCalls).toEqual([])
-    await h.server.stop()
-  })
-
-  it('overlapping stops share ONE teardown pass (the translation single-flight shape)', async () => {
-    const h = serveOnlyHarness()
-    h.nextChildMode = 'ignore-sigterm' // a real grace window for a second stop to arrive in
-    await h.server.ensureStarted({ libraryXmlPath: '/ws/library.1.xml' })
-    const child = h.spawns[0]!.child
-
-    const firstStop = h.server.stop()
-    const secondStop = h.server.stop() // arrives inside the SIGTERM → SIGKILL window
-    expect(secondStop).toBe(firstStop) // the same pass, not a second no-op body
-    await Promise.all([firstStop, secondStop])
-    expect(child.killCalls).toEqual([undefined, 'SIGKILL']) // killed once, escalated once
-    expect(h.server.alive()).toBe(false)
-    expect(h.server.lastStopUncertain()).toBe(false)
-  })
-
-  it('every child of the process takes a distinct generation, and a start aborted by a teardown never latches', async () => {
-    const h = serveOnlyHarness()
-    const first = await h.server.ensureStarted({ libraryXmlPath: '/ws/library.1.xml' })
-    await h.server.stop()
-    const second = await h.server.ensureStarted({ libraryXmlPath: '/ws/library.1.xml' })
-    expect(second.generation).toBeGreaterThan(first.generation)
-    expect(second.port).not.toBe(first.port)
-
-    // An aborted start must not arm the compatibility failure latch: the very next
-    // ensureStarted() spawns again instead of rethrowing the abort forever.
-    const gate = serveGate<boolean>()
-    h.hooks.probe = () => gate.wait()
-    const parked = h.server.ensureStarted({ libraryXmlPath: '/ws/library.2.xml' })
-    await gate.entered
-    const stopping = h.server.stop()
-    gate.release(false)
-    await serveExpectAbortError(parked)
-    await stopping
-    h.hooks.probe = async () => true
-    const third = await h.server.ensureStarted({ libraryXmlPath: '/ws/library.2.xml' })
-    expect(third.generation).toBeGreaterThan(second.generation)
-    expect(h.spawns).toHaveLength(4)
-    await h.server.stop()
-  })
-})
-
-// ---------------------------------------------------------------------------------------
-// P5 — the alive/generation REQUEST GUARD (#301, finding M1; plan §9.19 (a)). Focused
-// ordinary cases per race; the walked reproduction on the real vault + the real handlers is
-// T17-a in `tests/integration/zim-ipc-session.test.ts`. Every ordering fact below is the
-// callback's own position in the lifecycle — the child dies INSIDE the request, which is the
-// only moment at which "the response may not have come from our child" is true — never a sleep.
-// ---------------------------------------------------------------------------------------
-describe('ZimService.withServer — the alive/generation request guard (M1, P5)', () => {
-  it('returns the callback value on a clean request and reads the same live generation before and after it', async () => {
-    const h = svcHarness()
-    await h.addPack('alpha.zim')
-    const op = h.svc.beginRegistration()
+    const armP = arm!('a question', ac.signal)
     try {
-      const handed: number[] = []
-      const observedInside: Array<number | null> = []
-      const value = await h.svc.withServer(h.db, op, async (library) => {
-        handed.push(library.generation)
-        observedInside.push(h.svc.serverState()?.generation ?? null)
-        return 'the callback value'
-      })
-      expect(value).toBe('the callback value')
-      expect(h.serveSpawns).toHaveLength(1)
-      // The tuple the callback was handed IS the published one, and it is still that one
-      // afterwards — the accept condition, spelled out.
-      expect(handed).toEqual(observedInside)
-      expect(h.svc.serverState()).toMatchObject({ generation: handed[0], alive: true })
+      await probeGate.entered
+      ac.abort()
+      await within(expectAbortError(armP), 'the arm settling while the probe is parked')
+      expect(h.serveSpawns).toHaveLength(1) // the shared start was not cancelled with the ask
     } finally {
-      op.release()
+      probeGate.release(true)
+      await h.svc.stop()
     }
   })
+})
 
+// ---------------------------------------------------------------------------------------
+// P5 — the alive/generation REQUEST GUARD (#301, finding M1; plan §9.19 (a)). The races are
+// walked on the real vault + the real handlers by T17-a in
+// `tests/integration/zim-ipc-session.test.ts`; these are the two ordinary paths that walk
+// cannot reach on their own: nothing to serve, and an ordinary failure under a live child.
+// ---------------------------------------------------------------------------------------
+describe('ZimService.withServer — the alive/generation request guard (M1, P5)', () => {
   it('resolves null without running the callback when there is nothing to serve', async () => {
     const h = svcHarness() // no packs registered at all
     const op = h.svc.beginRegistration()
@@ -1236,89 +994,6 @@ describe('ZimService.withServer — the alive/generation request guard (M1, P5)'
       expect(value).toBeNull()
       expect(ran).toBe(0)
       expect(h.serveSpawns).toHaveLength(0)
-    } finally {
-      op.release()
-    }
-  })
-
-  it('discards a result observed across a child death and retries EXACTLY once, with the callback re-entered under the NEW generation', async () => {
-    const h = svcHarness()
-    await h.addPack('alpha.zim')
-    const op = h.svc.beginRegistration()
-    try {
-      const handed: number[] = []
-      const value = await h.svc.withServer(h.db, op, async (library) => {
-        handed.push(library.generation)
-        if (handed.length === 1) {
-          // The child dies while OUR response is in flight: everything this attempt
-          // produced — a successful body included — may have come from another process
-          // that answered on the same loopback port.
-          h.lastServeChild().emit('exit', 0, null)
-          return 'FIRST-ATTEMPT-RESULT'
-        }
-        return 'SECOND-ATTEMPT-RESULT'
-      })
-      expect(value).toBe('SECOND-ATTEMPT-RESULT') // the first attempt's body is gone
-      expect(handed).toHaveLength(2)
-      expect(handed[1]!).toBeGreaterThan(handed[0]!) // a genuinely new child
-      expect(h.serveSpawns).toHaveLength(2)
-      // The pack set did not change, so the retry restarted over the SAME library build:
-      // one manager pass, one build file, a new generation.
-      expect(h.buildAdds).toHaveLength(1)
-      expect(h.builds()).toHaveLength(1)
-      expect(h.svc.serverState()).toMatchObject({ generation: handed[1], alive: true })
-    } finally {
-      op.release()
-    }
-  })
-
-  it('rejects with StaleServerError (child-died) after a SECOND discarded attempt, and never makes a third', async () => {
-    const h = svcHarness()
-    await h.addPack('alpha.zim')
-    const op = h.svc.beginRegistration()
-    try {
-      let attempts = 0
-      const failing = h.svc.withServer(h.db, op, async () => {
-        attempts++
-        h.lastServeChild().emit('exit', 0, null)
-        return 'never accepted'
-      })
-      const err = await failing.then(
-        () => {
-          throw new Error('expected a StaleServerError rejection, but the call resolved')
-        },
-        (e: unknown) => e
-      )
-      expect(err).toBeInstanceOf(StaleServerError)
-      expect(err).toMatchObject({ name: 'StaleServerError', reason: 'child-died' })
-      // An ORDINARY error, never the #159 abort convention: the session still admits the
-      // work, so the caller reports an outcome rather than a cancellation.
-      expect(err).not.toBeInstanceOf(DOMException)
-      expect(attempts).toBe(2)
-      expect(h.serveSpawns).toHaveLength(2)
-    } finally {
-      op.release()
-    }
-  })
-
-  it('a stopped service rejects with an AbortError before the request and never retries', async () => {
-    const h = svcHarness()
-    await h.addPack('alpha.zim')
-    const op = h.svc.beginRegistration()
-    try {
-      expect(await h.svc.withServer(h.db, op, async () => 'warm')).toBe('warm')
-      const spawnsBeforeStop = h.serveSpawns.length
-      await h.svc.stop()
-
-      let ran = 0
-      await serveExpectAbortError(
-        h.svc.withServer(h.db, op, async () => {
-          ran++
-          return 'unreachable'
-        })
-      )
-      expect(ran).toBe(0)
-      expect(h.serveSpawns).toHaveLength(spawnsBeforeStop) // no retry, no resurrection
     } finally {
       op.release()
     }

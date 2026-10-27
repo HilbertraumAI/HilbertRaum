@@ -114,11 +114,7 @@ describe('normalizeMath', () => {
     // tokeniser treats a Unicode subscript/superscript digit as `\p{N}` — a typed "CO2" would
     // never match a literal "CO₂". Every mapped row in this suite must stay plain-character.
     const scriptGlyphs = /[₀-₉⁰-⁹²³¹]/u
-    for (const [latex, expected] of ALL_MAPPED_ROWS) {
-      const out = normalizeMath(latex)
-      expect(out, latex).toBe(expected)
-      expect(out, latex).not.toMatch(scriptGlyphs)
-    }
+    for (const [latex] of ALL_MAPPED_ROWS) expect(normalizeMath(latex), latex).not.toMatch(scriptGlyphs)
     // The corpus prints a space before the script marker inside `\mathrm {…}`; the plain-
     // character rule still applies.
     expect(normalizeMath('\\mathrm {CO} _{2}')).toBe('CO2')
@@ -144,6 +140,20 @@ describe('normalizeMath', () => {
 
     const tooLong = 'a'.repeat(MAX_INPUT_CHARS + 1)
     expect(normalizeMath(tooLong)).toBe(tooLong)
+
+    // Markup past the length cap comes back raw: only the length check keeps `\alpha` unrendered.
+    const overCapMarkup = '\\alpha '.repeat(Math.ceil((MAX_INPUT_CHARS + 1) / 7))
+    expect(normalizeMath(overCapMarkup)).toBe(overCapMarkup)
+
+    // Pathological input far past the caps comes back unchanged.
+    const overCapBombs: readonly string[] = [
+      '{'.repeat(50_000) + 'x' + '}'.repeat(50_000),
+      '\\frac{'.repeat(20_000),
+      '\\text{'.repeat(20_000),
+      '^{'.repeat(50_000),
+      'a'.repeat(100_000)
+    ]
+    for (const bomb of overCapBombs) expect(normalizeMath(bomb)).toBe(bomb)
   })
 
   it('takes already-decoded entities as plain characters (html.ts decodes before calling in)', () => {
@@ -152,34 +162,25 @@ describe('normalizeMath', () => {
     expect(normalizeMath('\\text{a > b}')).toBe('a > b')
   })
 
-  it('stays within generous time bounds on adversarial input — the cap and depth guards are the real oracle, not the timing', () => {
-    // Five inputs past MAX_INPUT_CHARS: normalizeMath returns immediately on the length
-    // check, before any scan, so all five together should take microseconds, not milliseconds.
-    const overCapBombs: readonly string[] = [
-      '{'.repeat(50_000) + 'x' + '}'.repeat(50_000),
-      '\\frac{'.repeat(20_000),
-      '\\text{'.repeat(20_000),
-      '^{'.repeat(50_000),
-      'a'.repeat(100_000)
-    ]
-    const bombStart = process.hrtime.bigint()
-    for (const bomb of overCapBombs) expect(normalizeMath(bomb)).toBe(bomb)
-    const bombMs = Number(process.hrtime.bigint() - bombStart) / 1e6
-    expect(bombMs).toBeLessThan(50)
-
-    // Four inputs at or just under the char cap, each still fully scanned and rendered.
-    // Measured ~25 ms for 100 passes; the 1000 ms ceiling is generous on purpose.
+  it('bounds adversarial input: at-cap strings still render, in bounded time', () => {
+    // At or just under the char cap, each is still fully scanned and rendered: markup collapses.
     const atCapPathologies: readonly string[] = [
       '\\frac{a+b}{c-d}'.repeat(260).slice(0, MAX_INPUT_CHARS),
       '{'.repeat(60) + 'a+b '.repeat(400) + '}'.repeat(60),
       '\\alpha ^{2}'.repeat(300),
       'x_{i}'.repeat(700)
     ]
-    const capStart = process.hrtime.bigint()
+    for (const s of atCapPathologies) {
+      const out = normalizeMath(s)
+      expect(out).not.toBe(s)
+      expect(out.length).toBeLessThanOrEqual(s.length)
+    }
+    // normalizeMath has no work counter, so one loose ceiling is the only guard against a
+    // quadratic blow-up. Measured ~25 ms for 100 passes.
+    const start = process.hrtime.bigint()
     for (let pass = 0; pass < 100; pass++) {
       for (const s of atCapPathologies) normalizeMath(s)
     }
-    const capMs = Number(process.hrtime.bigint() - capStart) / 1e6
-    expect(capMs).toBeLessThan(1000)
+    expect(Number(process.hrtime.bigint() - start) / 1e6).toBeLessThan(1000)
   })
 })

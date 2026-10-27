@@ -9,7 +9,6 @@ import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { AnswerThread, type ImageTurn } from '../../src/renderer/images'
 import { App } from '../../src/renderer/App'
-import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib/useKnowledgePackToolsInstall'
 import { t } from '../../src/shared/i18n'
 import {
   DEFAULT_SETTINGS,
@@ -263,7 +262,6 @@ const NO_OCR_SOURCES: OcrInstallStatus = {
 describe('ModelsScreen — engine problem banner (#530)', () => {
   beforeEach(() => {
     __resetModelsScreenMemoryForTests()
-    __resetKnowledgePackToolsInstallForTests()
   })
 
   function stubModels(opts: {
@@ -558,7 +556,6 @@ describe('App — runtime notice target (#530)', () => {
   })
   beforeEach(() => {
     __resetModelsScreenMemoryForTests()
-    __resetKnowledgePackToolsInstallForTests()
   })
 
   const unlocked: WorkspaceStateInfo = {

@@ -1,4 +1,4 @@
-// Temp-root + fresh-DB helpers for the skills suites. Constraint: every temp root is minted HERE (directly under
+// Temp-root + fresh-DB helpers for the suites that need a scratch workspace DB. Constraint: every temp root is minted HERE (directly under
 // os.tmpdir(), prefixed `hilbertraum-`) so the `setup-temp-roots.ts` sweep removes it; no other helper calls mkdtemp.
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'

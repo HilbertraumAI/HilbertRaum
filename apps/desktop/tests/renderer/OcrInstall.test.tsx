@@ -11,7 +11,6 @@ import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../../src/renderer/screens/ModelsScreen'
 import { __resetOcrInstallForTests, useOcrInstall } from '../../src/renderer/lib/useOcrInstall'
-import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib/useKnowledgePackToolsInstall'
 import { ToastProvider } from '../../src/renderer/components'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { en, de, t as translate } from '../../src/shared/i18n'
@@ -128,7 +127,6 @@ function german(node: JSX.Element): JSX.Element {
 
 beforeEach(() => {
   __resetOcrInstallForTests()
-  __resetKnowledgePackToolsInstallForTests()
   __resetModelsScreenMemoryForTests()
 })
 
@@ -216,7 +214,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     expect(screen.queryByRole('button', { name: en['ocr.install.action'] })).not.toBeInTheDocument()
   })
 
-  // The Settings-toggle branch of the shared gate is owned by KnowledgePacks.test.tsx (#339 P8-2 it.each).
+  // The Settings-toggle branch of the shared gate is owned by KnowledgePackToolsInstall.test.tsx (#339 P8-2 it.each).
   it('5: gates closed (the drive policy denies downloads) disable the download button and show why', async () => {
     stubApi({
       listDocuments: vi.fn(async () => [scanDoc()]),

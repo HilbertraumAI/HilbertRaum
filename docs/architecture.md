@@ -9186,7 +9186,8 @@ bundles offline — no runtime fetch).
     to virtualize, so it falls back to rendering **every** row, byte-identical to the pre-PERF-2 list. A 0px
     viewport genuinely can't be windowed; the guard is honest, and it keeps the existing DocumentsScreen
     test corpus on the un-windowed path while a dedicated test drives the **real** windowed path (mocking
-    `offsetHeight` — which react-virtual measures, not `getBoundingClientRect`).
+    the viewport's `clientHeight` and the rows' `offsetHeight`, which react-virtual measures, not
+    `getBoundingClientRect`; before virtual-core 3.19 it read the viewport's `offsetHeight` too).
   - **KNOWN TRADEOFF (recorded in known-limitations.md):** the browser's find-in-page (Ctrl+F) can't match a
     row that isn't currently mounted. Acceptable for a name-scannable library list (the in-app section/smart-
     view filters search the full set); deliberately **not** applied to the chat transcript.
@@ -12074,9 +12075,9 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   The sidecar-services test campaign did the same for whisper-cli: it retired the injected-verdict copy in
   `transcriber.test.ts` and removed `WhisperCliOptions.verifyBinary`.
   #656 added the knowledge packs' `kiwix-serve` (`KiwixServer.ensureStarted`: no port, no child) and
-  `kiwix-manage` (`kiwixManageAdd`: a `verify` error, `not-spawned`). Their `verifyBinary` option stays: no
-  production caller passes it, but the ZIM suites inject verdicts through it, and one uses it to hold a
-  start inside the verify step, so retiring it is a ZIM test pass of its own.
+  `kiwix-manage` (`kiwixManageAdd`: a `verify` error, `not-spawned`). The ZIM test campaign then removed
+  their `verifyBinary` option too: T05 holds a start inside the verify step through a test-side `vi.mock`
+  of the real verifier, and T06 and `zim-serve` walk the verdicts on real install markers.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
@@ -14452,6 +14453,12 @@ changes below would have made the suite quietly prove less, and neither is in th
   Library `findBy*` / `waitFor` options); `environmentMatchGlobs`, `poolMatchGlobs`, `deps.*`, `workspace` (none
   used); `invocationCallOrder` now starting at 1 (only compared relatively); the
   `// @vitest-environment jsdom` docblocks; `npm test -- <file>` and the CI shard flags.
+- **The layout trap comes back on a patch bump (#710, 4.1.11 → 4.1.12).** Dependabot's updater put
+  vitest under `apps/desktop/node_modules` again, with no root copy: 2,290 typecheck errors, and
+  every test file failed at setup with `Cannot find package 'vitest'`. The repair is the pinned npm
+  11.6.2 doing the group's four bumps in one `install -D -w apps/desktop --package-lock-only`, which
+  hoists vitest to the root: 11 entries move, none are added or removed, and a re-run is
+  byte-identical. Expect the same on the next vitest bump.
 
 ### §6 PR C: `.github/dependabot.yml`
 
@@ -14944,6 +14951,18 @@ writes, and each old tarball matched the pre-merge lockfile's integrity.
   `pdf-parser-packaged.test.ts`. The differential took minutes: the old tarball from the registry,
   both builds outside `node_modules`, the same calls, a byte comparison. For streamdown: the §9
   render comparison.
+- **streamdown 2.7.0 → 2.7.1 (#709, 2026-10-27).** The §9 comparison, rebuilt (the harness was
+  never committed, and still is not): 36 samples through `AssistantMarkdown` in jsdom, each mounted
+  finished and streamed into one live bubble in 3-character steps (876 frames). Finished output is
+  identical for every sample. 39 streamed frames differ, all in the four samples with link reference
+  definitions (`[guide][1]` plus a `[1]: …` line): 2.7.0 showed the raw brackets until the answer
+  finished, 2.7.1 resolves them while streaming, so its last streamed frame now equals the finished
+  render. A `javascript:` definition renders as an inert `<span>` on both; no live `javascript:` or
+  `file:` href in any frame. The math path (remend 1.4.0, #701) is untouched. A quirk older than
+  this bump: a `[S1]` cited in an answer that also holds a `[S1]: contract.pdf` line shows as "S1"
+  without brackets in a finished answer. The same PR moves `@tanstack/react-virtual` 3.14.13 →
+  3.14.21 (virtual-core 3.17.11 → 3.19.6): the viewport is now measured by `clientHeight`, which the
+  Documents list's gate already reads; no code change.
 
 ## Dependabot triage — design record (wave DEP-7)
 

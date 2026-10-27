@@ -1,20 +1,17 @@
 import { describe, it, expect, afterAll, beforeAll } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { MockEmbedder, VectorIndex, encodeVector, type Embedder } from '../../src/main/services/embeddings'
+import { MockEmbedder, VectorIndex, type Embedder } from '../../src/main/services/embeddings'
 import {
   corpusNeedsReindex,
   detectFilenameScope,
   ragSettingsFrom,
   retrieve,
-  type ExternalRetrievalOutput,
-  type RagRetrievalSettings,
-  type RetrievalResult
+  type RagRetrievalSettings
 } from '../../src/main/services/rag'
 import { keywordSearchChunks } from '../../src/main/services/rag/hybrid'
 import { buildScopeFilter } from '../../src/main/services/retrieval-scope'
@@ -30,7 +27,7 @@ import {
 } from '../../src/main/services/collections'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS, MAX_SELECTED_PACKS } from '../../src/shared/types'
-import type { Citation, EvidencePackOptions, EvidenceSourceSnapshot, KnowledgePack } from '../../src/shared/types'
+import type { Citation, EvidencePackOptions, KnowledgePack } from '../../src/shared/types'
 import {
   appendMessage,
   createConversation,
@@ -39,10 +36,20 @@ import {
   setScope
 } from '../../src/main/services/chat'
 import { ZimService } from '../../src/main/services/zim'
-import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
+import { servingNameFor } from '../../src/main/services/zim/identity'
 import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
-import { ServeFakeChild, serveGate, type ServeGate } from '../helpers/zim-fakes'
+import {
+  ServeFakeChild,
+  fakeManageSpawn,
+  serveGate,
+  zimServiceDeps,
+  type ServeGate
+} from '../helpers/zim-fakes'
 import { packUuid, writeZimFixture } from '../helpers/zim-header'
+import { rangeStart, sendRawAnswer } from '../helpers/zim-http'
+import { archiveCandidate, searchXml, testArm } from '../helpers/zim-retrieval-fixtures'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 import {
   buildEvidenceSourceSnapshots,
   createEvidenceReviewFromMessage
@@ -64,80 +71,17 @@ import {
 // The chip/footer phrase is a PURE function of the stored scope (no React state), so the node
 // test can pin "the chip agrees with the resolved scope" (T10) directly against it.
 import { scopeSources } from '../../src/renderer/chat/ScopePopover'
-import { testBudgetMs } from '../helpers/hang-budget'
+import { testBudgetMs, until } from '../helpers/hang-budget'
 
-// ZIM knowledge packs (PR #294 → #301) — desired-behaviour regressions for reviewed defects that
-// a LATER phase repairs. Each is an `it.fails` BASELINE (Vitest: the test is reported green while
-// its body throws, and turns red — "Expect test to fail" — the moment the body passes), so the
-// owning phase is forced to flip it to a plain `it` when it lands the fix. The inventory
-// `tests/fixtures/zim/required-checks.json` lists every one of them as `baseline-pending`, and
-// `repo-hygiene.test.ts` refuses any `it.fails` in the ZIM suites that is not listed there.
-//
-// Shape rule (plan §0.3): every fixture, call and prerequisite check lives in a NON-inverted
-// test or hook and asserts only facts that hold before AND after the fix (the call returned, the
-// row exists). The inverted body asserts ONLY the desired behaviour — never the current wrong
-// behaviour first, because a broken fixture, the broken code and the fixed code would then all
-// report green. The prerequisite tests are ordinary `it`s: if the harness itself breaks, they go
-// red instead of the baseline silently "passing".
-//
-// Baseline evidence (recorded 2026-09-05 on the merge commit, plain-`it` scratch run): H2 failed at
-// `expected 'resolved' to be 'unresolved'`; M3 at `expected false to be true` (no archive chunk
-// survives the topKFinal trim); M8 at `expected [ 'pack-A', 'pack-B' ] to include 'pack-C'`.
-// H2 was REPAIRED by P2 (the archive guard in `evidence-pack/snapshot.ts`, the read whitelist in
-// `evidence-reviews.ts`, the explicit archive branches in `freshness.ts`/`source-context.ts`), so
-// its case is a plain `it` from here on and T03-b below extends it to the full T03 matrix. M3 and
-// M8 stay `it.fails` baselines until P4 lands their fixes.
-// The review's H1 (quadratic converter) is deliberately NOT here: a timing-only expected failure
-// is prohibited (CI contention), P1 pins it with a work counter (T02).
+// ZIM knowledge packs (PR #294 → #301): the #294 review defects H2, M3 and M8 and the acceptance
+// rows T03, T04, T09, T10 and T15 of `tests/fixtures/zim/required-checks.json`. H2, M3 and M8
+// began as `it.fails` baselines; the phases that repaired them flipped them, and each now lives in
+// its row's test (H2 in T03, M3 in T09, M8 in T15). The two `prerequisite:` tests are positive
+// controls: documents alone fill every final slot (so T09's surviving archives are not vacuous),
+// and without the flag every route reads the corpus (so T10's empty results come from the flag).
+// The review's H1 (quadratic converter) is not here: P1 pins it with a work counter (T02).
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
-
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-zim-regr-')), 'test.sqlite'))
-}
-
-// ---- H2 — archive citations must never resolve to a same-titled document (P2, T03) -----
-
-describe('H2 — evidence snapshot identity for archive citations', () => {
-  let snap: EvidenceSourceSnapshot | undefined
-  const docSha = 'cd'.repeat(32)
-
-  beforeAll(() => {
-    const db = freshDb()
-    const now = new Date().toISOString()
-    // A library document whose title happens to equal the cited Wikipedia article title.
-    db.prepare(
-      `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-       VALUES (?, ?, 'application/pdf', ?, 'indexed', ?, ?)`
-    ).run(randomUUID(), 'Treibhausgas', docSha, now, now)
-
-    const citation: Citation = {
-      label: 'S1',
-      sourceTitle: 'Treibhausgas',
-      pageNumber: null,
-      section: 'Landwirtschaft',
-      snippet: 'Methan aus der Landwirtschaft ist ein Treibhausgas.',
-      sourceKind: 'archive',
-      packId: 'pack-climate',
-      archiveTitle: 'Wikipedia (DE)',
-      articlePath: 'Treibhausgas'
-      // NO documentId by construction (rag/index.ts archive citation branch).
-    }
-    ;[snap] = buildEvidenceSourceSnapshots(db, [citation], 'direct_excerpt')
-  })
-
-  it('prerequisite: the snapshot builder returns one snapshot for the archive citation', () => {
-    expect(snap).toBeDefined()
-    expect(snap!.kind).toBe('direct_excerpt')
-    expect(snap!.documentTitle).toBe('Treibhausgas')
-  })
-
-  it('H2 archive citation never resolves to a same-titled document', () => {
-    expect(snap!.identity).toBe('unresolved')
-    expect(snap!.documentSha256).toBeNull()
-    expect(snap!.documentId).toBeNull()
-  })
-})
 
 // ---- T03 — the full archive-identity matrix + the legacy document control (P2, H2) ------
 
@@ -179,7 +123,7 @@ function documentsQueryCounter(db: Db): { db: Db; executed: () => number } {
 
 describe('T03 — archive identity, freshness and the legacy document control (P2, H2)', () => {
   it('T03 multiple same-title documents, an absent source and accidental document-ID fields on an archive citation all stay unresolved with freshness explicitly unverifiable; a legacy document citation resolves as before', () => {
-    const db = freshDb()
+    const db = openFreshDb('zim-regr')
     const now = new Date().toISOString()
     const seedDoc = (title: string, sha: string): string => {
       const id = randomUUID()
@@ -406,9 +350,8 @@ describe('T03 — archive identity, freshness and the legacy document control (P
 // ---- T04 — the archive locator survives the WHOLE evidence chain (P2, M11) --------------
 
 describe('T04 — mixed review: archive locator through storage, reopen, model, Markdown and HTML (P2, M11)', () => {
-  // ONE fixture shared by the prerequisites and the integration case: a mixed answer whose
-  // [S1] is a library document and whose [S2] is a knowledge-pack article carrying long,
-  // non-ASCII AND hostile text inside the same locator values (#294 review M11).
+  // A mixed answer whose [S1] is a library document and whose [S2] is a knowledge-pack article
+  // carrying long, non-ASCII AND hostile text inside the same locator values (#294 review M11).
   const DOC_SHA = 'ab'.repeat(32)
   const PACK_UUID = '3f8c1b5e-2a47-4d90-9c6b-7e0f1a2b3c4d'
   const ARCHIVE_TITLE = `Wikipedia (DE) – Klimawandel <script>alert("x&y'z")</script>`
@@ -423,7 +366,7 @@ describe('T04 — mixed review: archive locator through storage, reopen, model, 
   }
 
   function seedMixedReview(): Fixture {
-    const db = freshDb()
+    const db = openFreshDb('zim-regr')
     const now = new Date().toISOString()
     const documentId = randomUUID()
     db.prepare(
@@ -475,29 +418,9 @@ describe('T04 — mixed review: archive locator through storage, reopen, model, 
     return { db, conversationId: conv.id, documentId, detail }
   }
 
-  let fx: Fixture | undefined
-
-  beforeAll(() => {
-    fx = seedMixedReview()
-  })
-
-  it('prerequisite: the mixed review persisted with exactly the two snapshots S1 (document) and S2 (archive)', () => {
-    expect(fx).toBeDefined()
-    expect(fx!.detail.sources.map((s) => s.key)).toEqual(['S1', 'S2'])
-    expect(fx!.detail.sources.map((s) => s.documentTitle)).toEqual(['Vertrag.pdf', ARTICLE_TITLE])
-  })
-
-  it('prerequisite: the workspace really holds the cited library document with the seeded hash', () => {
-    const row = fx!.db
-      .prepare('SELECT title, sha256 FROM documents WHERE id = ?')
-      .get(fx!.documentId) as { title: string; sha256: string } | undefined
-    expect(row).toBeDefined()
-    expect(row!.title).toBe('Vertrag.pdf')
-    expect(row!.sha256).toBe(DOC_SHA)
-  })
-
   it("T04 a mixed review's archive locator (pack id + article path + archive title) survives stored JSON, reopen, the export model and the Markdown / HTML renderers with escaping, in EN and DE, without an invented document identity", () => {
-    const { db, detail } = fx!
+    const fx = seedMixedReview()
+    const { db, detail } = fx
 
     // (a) CREATE — the two snapshots the resolver produced.
     const created = new Map(detail.sources.map((s) => [s.key, s]))
@@ -514,7 +437,7 @@ describe('T04 — mixed review: archive locator through storage, reopen, model, 
     })
     expect(created.get('S1')).toMatchObject({
       identity: 'resolved',
-      documentId: fx!.documentId,
+      documentId: fx.documentId,
       documentSha256: DOC_SHA,
       sourceKind: 'document',
       archiveTitle: null,
@@ -569,7 +492,7 @@ describe('T04 — mixed review: archive locator through storage, reopen, model, 
     })
     expect(read.get('S1')).toMatchObject({
       identity: 'resolved',
-      documentId: fx!.documentId,
+      documentId: fx.documentId,
       documentSha256: DOC_SHA,
       sourceKind: 'document',
       archiveTitle: null,
@@ -681,7 +604,7 @@ describe('T04 — mixed review: archive locator through storage, reopen, model, 
 
     // (g) MARKDOWN transcript — the archive line keeps the article title, the pack title, the
     // pack id and the article path; the document line is the unchanged legacy shape.
-    const markdown = exportTranscript(db, fx!.conversationId).markdown
+    const markdown = exportTranscript(db, fx.conversationId).markdown
     expect(markdown.split('\n').filter((l) => l.startsWith('- ['))).toEqual([
       '- [S1] Vertrag.pdf, p. 12',
       `- [S2] ${ARTICLE_TITLE}, Landwirtschaft — knowledge pack: ${ARCHIVE_TITLE}; pack id ${PACK_UUID}; article ${ARTICLE_PATH}`
@@ -720,120 +643,17 @@ describe('T04 — mixed review: archive locator through storage, reopen, model, 
   })
 })
 
-// ---- M3 — a failing reranker must not silently drop archive candidates (P4, T09) --------
-
-/** Seed one indexed document with chunks + real vectors; returns its id (P4 needs the id). */
-async function seedDocument(
-  db: Db,
-  embedder: MockEmbedder,
-  title: string,
-  texts: string[]
-): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const vectors = await embedder.embed(texts)
-  for (let i = 0; i < texts.length; i++) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(chunkId, docId, i, texts[i], title, texts[i]!.split(/\s+/).length, now)
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
-  }
-  return docId
-}
-
-function archiveCandidate(n: number, text: string): ExternalCandidate {
-  return {
-    chunkId: `zim:pack-1:Artikel#${n}`,
-    documentId: 'zim:pack-1',
-    text,
-    sourceTitle: 'Artikel',
-    pageNumber: null,
-    sectionLabel: 'Abschnitt',
-    score: 1,
-    sourceKind: 'archive' as const,
-    packId: 'pack-1',
-    archiveTitle: 'Wikipedia (Test)',
-    articlePath: 'Artikel'
-  }
-}
-
-describe('M3 — reranker failure fallback', () => {
-  let result: RetrievalResult | undefined
-  let rerankCalls = 0
-
-  beforeAll(async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    // topKFinal is 6 (DEFAULT_SETTINGS.ragTopKFinal): the defect only bites when at least that
-    // many document chunks rank ahead of the appended-last archive candidates — eight here.
-    await seedDocument(
-      db,
-      embedder,
-      'notes.txt',
-      Array.from(
-        { length: 8 },
-        (_, i) => `Treibhausgas Landwirtschaft Abschnitt ${i} über Methan und Emissionen.`
-      )
-    )
-    const throwingReranker: Reranker = {
-      async rerank() {
-        rerankCalls++
-        throw new Error('reranker model failed to load')
-      }
-    } as unknown as Reranker
-
-    result = await retrieve(
-      db,
-      embedder,
-      'Treibhausgas Landwirtschaft',
-      SETTINGS,
-      null,
-      throwingReranker,
-      undefined,
-      async () =>
-        testArm(
-          archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
-          archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
-        )
-    )
-  })
-
-  it('prerequisite: the reranker was called and threw, and retrieval still produced a final set', () => {
-    expect(rerankCalls).toBeGreaterThan(0)
-    expect(result).toBeDefined()
-    expect(result!.chunks.length).toBeGreaterThan(0)
-    expect(result!.chunks.length).toBeLessThanOrEqual(SETTINGS.topKFinal)
-  })
-
-  // FLIPPED by P4 (#301, plan §9.21 (b), §0.3 item 2). Demonstration on the repaired code, this
-  // worktree, before the flip: `× M3 — reranker failure fallback > M3 failing reranker keeps
-  // archive candidates through final selection → Expect test to fail` (vitest 3.2.6). The fix is
-  // the `reranked` flag in `retrieve()`: the round-robin interleave now runs whenever no reranker
-  // RANKED the candidates — absent or threw alike — instead of hanging off an `else if` that the
-  // catch path skipped.
-  it('M3 failing reranker keeps archive candidates through final selection', () => {
-    expect(result!.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
-  })
-})
-
 // ---- T09-c — the reranker matrix and the abort discipline (P4, M3, plan §9.21 (b)) ------
 
 const T09_QUESTION = 'Treibhausgas Landwirtschaft'
 
-/** Eight document chunks that all answer the question — with `topKFinal` = 6 they fill every
- *  final slot, which is the exact state in which appended-last archive candidates disappear. */
+/** Eight document chunks that all answer the question — with `topKFinal` = 6
+ *  (`DEFAULT_SETTINGS.ragTopKFinal`) they fill every final slot, which is the exact state in which
+ *  appended-last archive candidates disappear. */
 async function seedT09Corpus(): Promise<{ db: Db; embedder: MockEmbedder }> {
-  const db = freshDb()
+  const db = openFreshDb('zim-regr')
   const embedder = new MockEmbedder()
-  await seedDocument(
+  await seedEmbeddedDoc(
     db,
     embedder,
     'notes.txt',
@@ -852,13 +672,6 @@ function t09Archives(): ExternalCandidate[] {
     archiveCandidate(0, 'Wikipedia-Auszug: Methan aus der Landwirtschaft ist ein Treibhausgas.'),
     archiveCandidate(1, 'Wikipedia-Auszug: Weitere Treibhausgase sind Lachgas und CO2.')
   ]
-}
-
-/** The arm's result shape (#301 P4, plan §9.21 (e)3): `{ candidates, outcomes }`. The M3/T09/T10
- *  cases are about the CANDIDATE pipeline (interleave, abort discipline, scope), so they report no
- *  outcomes — T15-b and T16-a own the outcome contract. */
-function testArm(...candidates: ExternalCandidate[]): ExternalRetrievalOutput {
-  return { candidates, outcomes: [] }
 }
 
 /** A reranker that prefers the archive marker; `calls` proves it actually ran. */
@@ -918,21 +731,41 @@ describe('T09 — reranker present / absent / throwing, and abort as a refusal (
     expect(interleaved.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
     expect(interleaved.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
     expect(interleaved.chunks[1]?.sourceKind).toBe('archive')
-    expect(interleaved.citations.filter((c) => c.sourceKind === 'archive').length).toBeGreaterThan(0)
+    // The archive citation names the article and its section, and carries no synthetic row id; a
+    // document citation keeps its real document id.
+    const archiveCited = interleaved.citations.find((c) => c.sourceKind === 'archive')
+    expect(archiveCited).toMatchObject({
+      sourceTitle: 'Artikel',
+      section: 'Abschnitt',
+      packId: 'pack-1',
+      archiveTitle: 'Wikipedia (Test)',
+      articlePath: 'Artikel'
+    })
+    expect(archiveCited?.chunkId).toBeUndefined()
+    expect(archiveCited?.documentId).toBeUndefined()
+    expect(interleaved.citations.find((c) => c.sourceKind !== 'archive')?.documentId).toBeTruthy()
 
-    // ---- (3) reranker THROWING (M3): the same interleave, reached through the catch path.
+    // ---- (3) reranker THROWING (M3): the same interleave, reached through the catch path
+    // (`retrieve()`'s `reranked` flag: no reranker RANKED the candidates, absent or threw alike).
     // Inspected on the FINAL chunks AND citations, not on a helper's intermediate order.
     const failing = await seedT09Corpus()
+    const throwCalls = { n: 0 }
     const threw = await retrieve(
       failing.db,
       failing.embedder,
       T09_QUESTION,
       SETTINGS,
       null,
-      { async rerank() { throw new Error('reranker model failed to load') } } as unknown as Reranker,
+      {
+        async rerank() {
+          throwCalls.n++
+          throw new Error('reranker model failed to load')
+        }
+      } as unknown as Reranker,
       undefined,
       async () => testArm(...t09Archives())
     )
+    expect(throwCalls.n).toBe(1) // the catch path was really reached
     expect(threw.chunks.length).toBeLessThanOrEqual(SETTINGS.topKFinal)
     expect(threw.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
     expect(threw.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
@@ -1056,13 +889,13 @@ interface ScopeHarness {
  * fast path (which bypasses the SQL builder) is really exercised.
  */
 async function seedScopeHarness(): Promise<ScopeHarness> {
-  const db = freshDb()
+  const db = openFreshDb('zim-regr')
   const embedder = new MockEmbedder()
-  const notesId = await seedDocument(db, embedder, 'notes.txt', [
+  const notesId = await seedEmbeddedDoc(db, embedder, 'notes.txt', [
     'Treibhausgas Landwirtschaft: Methan und Emissionen im Betrieb.',
     'Treibhausgas Landwirtschaft: Lachgas aus Düngemitteln.'
   ])
-  const attachmentId = await seedDocument(db, embedder, 'attachment.txt', [
+  const attachmentId = await seedEmbeddedDoc(db, embedder, 'attachment.txt', [
     'Treibhausgas Landwirtschaft: die angehängte Datei über Emissionen.'
   ])
   const libraryId = getBuiltinCollection(db, 'library')!.id
@@ -1162,6 +995,11 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     expect(rawScope(conv.id)).toBe(
       '{"collectionIds":[],"documentIds":[],"packIds":["p1"],"documentsOff":true}'
     )
+    // A pack-less scope keeps the pre-wave bytes: no `packIds` key, and it resolves to null.
+    const packless = createConversation(h.db, { mode: 'documents' }).id
+    setScope(h.db, packless, { collectionIds: [], documentIds: ['d1'] })
+    expect(rawScope(packless)).toBe('{"collectionIds":[],"documentIds":["d1"]}')
+    expect(resolveScope(h.db, packless).packIds).toBeNull()
     expect(getConversation(h.db, conv.id)!.scope).toEqual({
       collectionIds: [],
       documentIds: [],
@@ -1257,6 +1095,7 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     setScope(h.db, last.id, { collectionIds: [], documentIds: [], documentsOff: true })
     const r7 = resolveScope(h.db, last.id)
     expect(r7).toMatchObject({ collectionIds: null, documentIds: null, packIds: null, noDocuments: true })
+    const lastStoredOff = getConversation(h.db, last.id)!.scope // read by the chip leg (F)
     // The explicit reset (the popover's button) restores all documents.
     setScope(h.db, last.id, { collectionIds: [], documentIds: [] })
     expect(resolveScope(h.db, last.id).noDocuments).toBeUndefined()
@@ -1306,38 +1145,7 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     expect(aggregated.items).toEqual([])
     expect(aggregated.scannedChunks).toBe(0)
     expect(aggregated.totalChunks).toBe(0)
-    // The three `registerRagIpc.ts` routing helpers are module-private; each splices this same
-    // builder into ` AND ${filter.sql}`. Replicating that one-line composition shows the `0`
-    // reaches them: the scan marker is not found and both counters read 0.
-    const recFilter = buildScopeFilter(denyAll, 'document_id')!
-    expect(
-      h.db
-        .prepare(
-          `SELECT 1 FROM extraction_records WHERE record_type = ? AND ${recFilter.sql} LIMIT 1`
-        )
-        .get('__scan__', ...recFilter.params)
-    ).toBeUndefined()
-    const docFilter = buildScopeFilter(denyAll, 'd.id')!
-    expect(
-      (
-        h.db
-          .prepare(
-            `SELECT COUNT(*) AS n FROM documents d WHERE d.tree_status = 'ready' AND ${docFilter.sql}`
-          )
-          .get(...docFilter.params) as unknown as { n: number }
-      ).n
-    ).toBe(0)
-    expect(
-      (
-        h.db
-          .prepare(
-            `SELECT COUNT(*) AS n FROM documents d WHERE d.status = 'indexed'
-               AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)
-               AND d.fully_chunked IS NULL AND ${docFilter.sql}`
-          )
-          .get(...docFilter.params) as unknown as { n: number }
-      ).n
-    ).toBe(0)
+    // The three `registerRagIpc.ts` routing helpers have no deny-all proof here (#714).
 
     // ---- (D) THE RESIDENT-VECTOR BYPASS, with REAL embeddings and no archived documents —
     // the state in which `canIterateResident()` is true and the SQL builder is never consulted.
@@ -1390,10 +1198,11 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     )
     expect(withDocuments.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
 
-    // ---- (F) THE CHIP AGREES with the resolved scope: the stored scope that resolves to
-    // deny-all renders as the packs phrase plus the honest "documents off" tail, and with no
-    // pack ticked it names the state instead of a corpus. (The popover's own emit/tick cases
-    // are pinned in tests/renderer/KnowledgePacks.test.tsx.)
+    // ---- (F) THE CHIP AGREES with the resolved scope: the chip reads the STORED scope (as the
+    // chat screen does), and each stored scope above that resolved to deny-all renders as the
+    // packs phrase plus the honest "documents off" tail, or, with no pack ticked, names the state
+    // instead of a corpus. (The popover's own emit/tick cases are pinned in
+    // tests/renderer/KnowledgePacks.test.tsx.)
     // Typed through the shared i18n module (the renderer's `I18n` binds these to a language the
     // same way) — no casts, so the F-41 `as never` ratchet stays where it is.
     const tt: I18n['t'] = (key, params) => t('en', key, params)
@@ -1412,27 +1221,30 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
       unavailableReason: null,
       addedAt: '2026-09-06T00:00:00.000Z'
     }
-    const chip = scopeSources(
-      { collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true },
-      [],
-      tt,
-      tCount,
-      [pack]
+    // Leg (A)'s conversation: p1 ticked, documents off.
+    expect(resolveScope(h.db, conv.id).noDocuments).toBe(true)
+    expect(scopeSources(getConversation(h.db, conv.id)!.scope, [], tt, tCount, [pack])).toBe(
+      `Pack: Wikipedia (DE) · ${t('en', 'chat.scope.documentsOffSuffix')}`
     )
-    expect(chip).toBe(`Pack: Wikipedia (DE) · ${t('en', 'chat.scope.documentsOffSuffix')}`)
-    expect(
-      scopeSources({ collectionIds: [], documentIds: [], documentsOff: true }, [], tt, tCount, [])
-    ).toBe(t('en', 'chat.scope.documentsOffNoPacks'))
-    // Without the flag the same empty scope still means the whole corpus (null = no phrase).
-    expect(scopeSources({ collectionIds: [], documentIds: [] }, [], tt, tCount, [])).toBeNull()
+    // Row 7's conversation before its reset: documents off, no pack left.
+    expect(scopeSources(lastStoredOff, [], tt, tCount, [pack])).toBe(
+      t('en', 'chat.scope.documentsOffNoPacks')
+    )
+    // After the reset the same empty scope means the whole corpus again (null = no phrase).
+    expect(scopeSources(getConversation(h.db, last.id)!.scope, [], tt, tCount, [pack])).toBeNull()
   })
 })
 
-// ---- M8 — every selected pack must be searched (P4, T15) -------------------------------
-
-let server: http.Server
-let port = 0
-const searched: string[] = []
+// ---- T15 — allocation, concurrency, the selection cap, the deadline and abort (P4, M8) ---
+//
+// The whole contract of plan §9.21 (c): that every selected pack is searched (the M8 defect: the
+// budget ran out before the third pack), WHICH candidates are admitted, that the answer does not
+// depend on which pack happened to finish first, that at most two packs are in flight, that a
+// persisted 13-pack selection is trimmed in title order and told so, that the per-ask deadline
+// truncates instead of hanging, and that an abort stops the work dead.
+//
+// Everything ordering-related is established with controlled promises (entered/release pairs on
+// the fixture server) and counters, never with a sleep.
 
 /** ~700 words per section, four distinct sections ⇒ ≥4 chunks per article. */
 function longArticleHtml(title: string): string {
@@ -1451,94 +1263,6 @@ function longArticleHtml(title: string): string {
     `<section data-mw-section-id="0"><p>Einleitung zu ${title}.</p></section>${body}</body></html>`
   )
 }
-
-function searchXml(bookUrlId: string, titles: string[]): string {
-  const items = titles
-    .map(
-      (t) =>
-        `<item><title>${t}</title><link>/content/${bookUrlId}/${encodeURIComponent(
-          t.replace(/ /g, '_')
-        )}</link><wordCount>3,000</wordCount></item>`
-    )
-    .join('')
-  return `<?xml version="1.0" encoding="UTF-8"?><rss><channel><title>Search</title>${items}</channel></rss>`
-}
-
-beforeAll(async () => {
-  server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-    if (url.pathname === '/search') {
-      const book = url.searchParams.get('books.id') ?? ''
-      searched.push(book)
-      // A and B: five long articles each. C: the single relevant one.
-      const titles =
-        book === 'pack-C'
-          ? ['Treibhausgas Bilanz']
-          : Array.from({ length: 5 }, (_, i) => `${book} Artikel ${i}`)
-      res.writeHead(200, { 'content-type': 'application/xml' })
-      res.end(searchXml(`book-${book}`, titles))
-      return
-    }
-    if (url.pathname.startsWith('/raw/')) {
-      const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(
-        /_/g,
-        ' '
-      )
-      res.writeHead(200, { 'content-type': 'text/html' })
-      res.end(longArticleHtml(article))
-      return
-    }
-    res.writeHead(404)
-    res.end()
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  port = (server.address() as AddressInfo).port
-})
-
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())))
-
-describe('M8 — per-pack allocation', () => {
-  const packs = [
-    { id: 'pack-A', title: 'Pack A' },
-    { id: 'pack-B', title: 'Pack B' },
-    { id: 'pack-C', title: 'Pack C' }
-  ]
-  let out: ExternalCandidate[] = []
-
-  beforeAll(async () => {
-    searched.length = 0
-    const produced = await collectPackCandidates(
-      port,
-      packs,
-      'Wie entsteht Treibhausgas in der Landwirtschaft?'
-    )
-    out = produced.candidates
-  })
-
-  it('prerequisite: the arm searched at least one pack and produced candidates', () => {
-    expect(searched.length).toBeGreaterThan(0)
-    expect(out.length).toBeGreaterThan(0)
-    expect(out.every((c) => c.sourceKind === 'archive')).toBe(true)
-  })
-
-  // FLIPPED from `it.fails` to `it` by #301 P4 (plan §9.21 (c), §0.3 item 2). The inverted
-  // baseline was demonstrated RED against the repaired arm first — "Expect test to fail" on
-  // 2026-09-06 — and only then flipped, so a green here is the fix, not a broken fixture.
-  it('M8 three productive packs are all searched', () => {
-    expect(searched).toContain('pack-C')
-  })
-})
-
-// ---- T15 — allocation, concurrency, the selection cap, the deadline and abort (P4, M8) ---
-//
-// The M8 case above proves only that a third pack is reached. This one is the whole contract of
-// plan §9.21 (c): WHICH candidates are admitted (not merely which packs were searched), that the
-// answer does not depend on which pack happened to finish first, that at most two packs are in
-// flight, that a persisted 13-pack selection is trimmed in title order and told so, that the
-// per-ask deadline truncates instead of hanging, and that an abort stops the work dead.
-//
-// Everything ordering-related is established with controlled promises (entered/release pairs on
-// the fixture server) and counters, never with a sleep.
 
 describe('T15 — fair allocation, bounded concurrency, the selection cap, the deadline and abort (P4, M8)', () => {
   let t15Server: http.Server
@@ -1569,13 +1293,6 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
    *  "prove" that a socket never answered. Used to let already-scheduled work run before a
    *  "nothing more happened" assertion — never as the proof of an ordering (the gates do that). */
   const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
-  const waitUntil = async (cond: () => boolean, rounds = 500): Promise<boolean> => {
-    for (let i = 0; i < rounds; i++) {
-      if (cond()) return true
-      await tick()
-    }
-    return cond()
-  }
 
   beforeAll(async () => {
     t15Server = http.createServer((req, res) => {
@@ -1588,12 +1305,7 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       }
       if (url.pathname === '/search') {
         const book = url.searchParams.get('books.id') ?? ''
-        // #353: a zero-hit pack's document-frequency ladder probes with `pageLength=1` — those
-        // are extra `/search` requests for the same book, not a second "was this pack asked at
-        // all" participation event, so they are excluded here (this fixture carries no
-        // `opensearch:totalResults`, so every probe just resolves unknown and changes nothing
-        // about which pack gets searched or admitted).
-        if (url.searchParams.get('pageLength') !== '1') t15Searches.push(book)
+        t15Searches.push(book)
         const send = (): void => {
           leave()
           const behaviour = t15Behaviour.get(book) ?? 'long'
@@ -1609,7 +1321,7 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
                 ? [`${book} Artikel 0`]
                 : Array.from({ length: FTS_HITS_PER_QUERY }, (_, i) => `${book} Artikel ${i}`)
           res.writeHead(200, { 'content-type': 'application/xml' })
-          res.end(searchXml(t15Names.get(book) ?? `book-${book}`, titles))
+          res.end(searchXml(t15Names.get(book) ?? `book-${book}`, titles, '3,000'))
         }
         const held = t15Hold?.('search', book)
         if (held) void held.then(send)
@@ -1621,8 +1333,7 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
         const book = article.split(' Artikel')[0] ?? ''
         const send = (): void => {
           leave()
-          res.writeHead(200, { 'content-type': 'text/html' })
-          res.end(longArticleHtml(article))
+          sendRawAnswer(res, { status: 200, body: longArticleHtml(article) }, rangeStart(req.headers.range))
         }
         const held = t15Hold?.('raw', book)
         if (held) void held.then(send)
@@ -1657,48 +1368,22 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
     addPack(leaf: string): Promise<string>
     close(): Promise<void>
   } {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-t15-'))
+    const root = tempRoot('zim-t15')
     const zimDir = join(root, 'zim')
     mkdirSync(zimDir, { recursive: true })
-    const libraryDir = join(root, 'library')
-    mkdirSync(libraryDir, { recursive: true })
     const db = openDatabase(join(root, 'test.sqlite'))
     let pid = 6100
     const spawn: SpawnFn = () => new ServeFakeChild(pid++, 'exit-on-sigterm')
-    const manageSpawn: SpawnFn = (_command, args) => {
-      const libraryXmlPath = args[0] as string
-      const zimPath = args[2] as string
-      const child = new ServeFakeChild(pid++, 'exit-on-sigterm')
-      queueMicrotask(() => {
-        if (child.killed) return
-        const leaf = basename(zimPath)
-        appendFileSync(
-          libraryXmlPath,
-          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" ` +
-            `title="Title of ${leaf}" description="Test archive" language="deu" ` +
-            `date="2026-07-01" articleCount="41" mediaCount="7" />\n`
-        )
-        child.emit('exit', 0, null)
-      })
-      return child
-    }
     const svc = new ZimService({
       rootPath: root,
       isDev: true,
-      deps: {
-        resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
+      transientDir: join(root, 'zim-transient'),
+      deps: zimServiceDeps({
         spawn,
-        manageSpawn,
+        manageSpawn: fakeManageSpawn({ firstPid: 6500 }).spawn,
         findPort: async () => t15Port,
-        probe: async () => true,
-        verifyBinary: async () => 'ok',
-        healthTimeoutMs: 1_000,
-        healthIntervalMs: 1,
-        killGraceMs: 5,
-        forceKillWaitMs: 5,
-        libraryDir,
         externalDeadlineMs: opts.externalDeadlineMs
-      }
+      })
     })
     return {
       db,
@@ -1721,7 +1406,12 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
 
   const QUESTION = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
 
-  it("T15 1 / 3 / 7 / 12 packs and a 13-pack persisted selection with short / empty / long / failed packs and varied completion order: search participation AND candidate admission are fair, at most 24 candidates, MAX_SELECTED_PACKS = 12 enforced in the popover and by trimming with a 'not searched: selection limit' outcome, concurrency ≤ 2, a late most-relevant hit reaches the reranker, no work after abort", async () => {
+  it("T15 1 / 3 / 7 / 12 packs and a 13-pack persisted selection with short / empty / long / failed packs and varied completion order: search participation AND candidate admission are fair, at most 24 candidates, MAX_SELECTED_PACKS = 12 enforced by trimming with a 'not searched: selection limit' outcome, concurrency ≤ 2, a late most-relevant hit reaches the reranker, no work after abort", async () => {
+    // The shipped bounds this row names (the popover's own 12-pack cap is
+    // tests/renderer/KnowledgePacks.test.tsx "refuses the 13th tick…").
+    expect(MAX_EXTERNAL_CANDIDATES).toBe(24)
+    expect(MAX_SELECTED_PACKS).toBe(12)
+
     // ---- (1) 1 / 3 / 7 / 12 PRODUCTIVE PACKS: the quota arithmetic, in pack order --------
     for (const n of [1, 3, 7, 12]) {
       t15Reset()
@@ -1783,12 +1473,16 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       // The four productive packs all reached the candidate set…
       for (const i of [0, 2, 4, 6]) expect(outcomeOf(i).admitted).toBeGreaterThan(0)
       // …and every empty/failed pack's slots went to them: nothing was left unused while a
-      // productive pack still had fetched material waiting.
-      expect(candidates.length).toBeLessThanOrEqual(MAX_EXTERNAL_CANDIDATES)
-      expect(candidates.length).toBe(outcomes.reduce((sum, o) => sum + o.admitted, 0))
-      for (const outcome of outcomes) expect(outcome.admitted).toBe(
-        Math.min(outcome.found, outcome.admitted || outcome.found)
+      // productive pack still had fetched material waiting. Spare material existed (the packs
+      // found more than their own quotas), so without the reclaim this would fall short.
+      const found = outcomes.reduce((sum, o) => sum + o.found, 0)
+      const withinQuotas = packs.reduce(
+        (sum, _, i) => sum + Math.min(outcomeOf(i).found, packQuota(i, packs.length)),
+        0
       )
+      expect(found).toBeGreaterThan(withinQuotas)
+      expect(candidates.length).toBe(Math.min(MAX_EXTERNAL_CANDIDATES, found))
+      expect(candidates.length).toBe(outcomes.reduce((sum, o) => sum + o.admitted, 0))
       // The failed and empty packs were still ASKED — participation is not silently skipped.
       expect(t15Searches.sort()).toEqual(packs.map((p) => p.id).sort())
       // The empty pack's zero-hit query is a single, honest `/search` (no `pageLength=1`
@@ -1913,6 +1607,9 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
         t15Reset()
         const ids: string[] = []
         for (let i = 1; i <= 5; i++) ids.push(await h.addPack(`d${i}.zim`))
+        // `runArm` arms its deadline before it starts the sidecar: with the server already up,
+        // the 150 ms go to the searches, not to the library build.
+        expect(await h.svc.ensureServer(h.db)).not.toBeNull()
         // Nothing is ever released: every search hangs, so the deadline is the only way out.
         t15Hold = (kind) => (kind === 'search' ? new Promise<void>(() => {}) : undefined)
         const { candidates, outcomes } = await h.svc.runArm(h.db, ids, QUESTION)
@@ -1966,7 +1663,7 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
         )
         // Both workers are really inside a parked request before the abort — the entered half
         // of the entered/release pair.
-        expect(await waitUntil(() => gates.length >= 2)).toBe(true)
+        await until(() => gates.length >= 2, 'both workers parked')
         const requestsAtAbort = t15Requests.length
         ctrl.abort() // the user cancelled the ask
         t15Hold = null
@@ -1989,8 +1686,8 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
   // `externalArm: ctx.zim?.makeArm(...)`) would then never see it, making `retrieve()`'s
   // non-regressive rerank-failure fallback dead code for every real ask despite every unit test
   // (which stubs the arm directly) passing green. This exercises the REAL service end to end —
-  // no hand-made arm result anywhere — the same gap class T15's own header comment (four lines
-  // up) exists to close for the admission/fairness contract.
+  // no hand-made arm result anywhere — the same gap class T15 closes for the admission/fairness
+  // contract.
   it("step 4-5 (ruling (e)(i)): makeArm/runArm forward collectPackCandidates' cappedCandidates end to end — the production wiring the non-regressive fallback depends on", async () => {
     const h = t15Service()
     try {
