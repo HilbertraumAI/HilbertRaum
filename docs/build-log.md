@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-27 — the closed 2026-10-12 #643 / #642 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the DEP-8 entry). Its record is unchanged:
+`rag-design.md` §14.5 "#643 / #642", §14.4. #642, #643 and #644 are closed. Citations of the form "BUILD_STATE 2026-10-12 #643 / #642 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-12 — **#643 / #642 — one document that fits the window is read whole; a summary ask with a ready deep index reads the tree (`fix/643-small-doc-whole-read`).** Top-k keeps ≤ 6 sections, one per PDF page, so a
+2-page PDF of 3 sections read at most 2. A top-k-bound turn, skill or not, over ONE fully chunked document that fits `wholeDocumentFitBudgetTokens` (~3 pages at 4k, ~7 at 8k) is now read in order (`wholeReadDocumentId`); a `tree-summary`
+ask over one too-large document with its own ready tree reads the tree. Multi-doc, packs, small talk, legacy docs stay top-k. `CoverageInfo.labelledExcerpts` keeps `[Sn]` cards + review marker links for a one-turn whole read (whole-doc skills too).
+Owner calls as recommended. Real app (4B, scratch root + D:): 1/8 → 8/8 medications named (2/3 → 3/3 sections, heads-up gone); report summary 6/12 → tree 12/12. Record: `rag-design.md` §14.5 "#643 / #642", §14.4. Open: multi-doc whole read (#644: above)._
+
 ## 2026-10-15 — the closed 2026-10-12 #646 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-15 (preamble budget, making room for the #701 entry). Its record is unchanged:

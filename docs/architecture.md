@@ -15149,6 +15149,52 @@ Follow-up 1, done on `fix/698-katex-dedupe`.
   #701. **Fixed** (`fix/701-display-dollar-math`), with the persisted `$$` shapes found on the way:
   the chat record's KaTeX bullet, "Display `$$` and the live bubble (#701)".
 
+## Dependabot triage — design record (wave DEP-8)
+
+_Wave DEP-8 (2026-10-27) covers Dependabot's three PRs of 2026-10-26 and the seven alerts GitHub
+opened on 2026-10-27. #708 (Electron 43.8.0), #709 (production group: `@tanstack/react-virtual`
+3.14.21, streamdown 2.7.1) and #710 (development group: vitest 4.1.12, closing alerts #128/#129)
+each failed CI on a step Dependabot does not take; each was repaired on its own branch and merged,
+#708 last. Six of the new alerts are in build and test tools and are fixed in the lockfile
+(`fix/dep8-alerts-131-139`); #130 is fixed by Electron 43.8.3 (`fix/dep8-electron-43-8-3`)._
+
+### §1 Dependabot's PRs of 2026-10-26
+
+| PR | What failed | Repair | Record |
+|---|---|---|---|
+| #710 | typecheck (2,290 errors) and every test file: vitest installed under `apps/desktop/node_modules`, none at the root | the pinned npm 11.6.2 doing the group's four bumps in one install | DEP-6 §5, last bullet |
+| #709 | `third-party-notices.test.ts`: the notices named the old versions | `generate-third-party-notices.mjs`, plus the render comparison `dependabot.yml` asks for on a streamdown bump | DEP-6 §13, last bullet |
+| #708 | `packaging.test.ts`: `electronVersion` still 43.7.7 | `electronVersion: 43.8.0`, fuse wire re-checked | DEP-5 §3, last bullet |
+
+- A push to a Dependabot branch ends `@dependabot rebase` for it. #708 and #710 change neighbouring
+  lines of `apps/desktop/package.json` and of the lockfile's workspace entry, so whichever merges
+  second conflicts. #708 merged master and redid its bump with the pinned npm, naming the version
+  **exactly**: `electron@^43.8.0` resolves to the newest 43.x (43.8.3 that day) and saves that as
+  the range.
+
+### §2 The alerts of 2026-10-27
+
+| Alerts | Package (locked → fixed) | Pulled in by | Scope | Disposition |
+|---|---|---|---|---|
+| #130 (high), GHSA-jr5w-w6x2-84p9 | electron 43.8.0 → 43.8.3 | the app's runtime | ships | **Fixed** by the Electron bump; record DEP-5 §3, last bullet |
+| #138, #139 (high), GHSA-xjj6-f33q-929c | undici 6.29.0 → 6.29.1; 7.30.0 → 7.30.1 (two copies) | node-gyp 12.4.0 (`^6.25.0`); jsdom 29.1.1 (`^7.25.0`) and @electron/get 5.1.0 (optional, `^7.24.4`) | development | **Fixed**, lockfile only |
+| #131–#134 (two medium, two low) | fast-uri 3.1.8 → 3.1.9 | ajv 8.20.0 (`^3.0.1`), from app-builder-lib 26.17.0 | development | **Fixed**, lockfile only |
+
+- **undici.** `fetch()` crashes the process when a server answers with more than five content
+  codings and closes the connection before the body. The npm copies run in node-gyp (header
+  downloads for native builds), @electron/get (the Electron binary at install and package time) and
+  jsdom (tests, no real network): a hostile server could stop a build or an install, nothing more.
+  The app's own downloads use the `fetch` of the Node.js inside Electron, which Dependabot cannot
+  see; DEP-5 §3 records which undici that is.
+- **fast-uri.** Four URI-normalisation flaws (scheme spoofing, host confusion, path equivalence,
+  scheme injection). Its only user is ajv inside electron-builder, validating our own
+  `electron-builder.yml`.
+- **The lockfile change.** `npm update undici fast-uri --package-lock-only` with the pinned npm
+  11.6.2: four entries move, none are added or removed, each fix lies inside the declared range, and
+  a re-run is byte-identical. `npm audit` afterwards: the Electron advisory (until the Electron PR)
+  and the five katex lows of DEP-7 §1, nothing else.
+- **The gates** (fresh `npm ci`, typecheck, build, full suite): green.
+
 ## App scheme `hilbertraum://app/` — design record (#560)
 
 _The app's own pages (the main window's `index.html`, the OCR rasterizer's `ocr.html`) moved from
