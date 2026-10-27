@@ -185,6 +185,8 @@ interface SessionHarness {
   /** Every kiwix-manage invocation, split by what it was writing. */
   buildAdds: string[]
   metaAdds: string[]
+  /** Every kiwix-manage child, in spawn order — a leg makes a stubborn one exit late (#713). */
+  manageChildren: ServeFakeChild[]
   httpPort: number
   /** Every URL the loopback server was asked for, in order (T12 route assertions). */
   requests: string[]
@@ -339,7 +341,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     return child
   }
   // `hooks.manage` and `modes.manage` are read per spawn, so a leg can swap them mid-test.
-  const { spawn: manageSpawn } = fakeManageSpawn({
+  const { spawn: manageSpawn, children: manageChildren } = fakeManageSpawn({
     firstPid: 7700,
     mode: () => modes.manage,
     before: (libraryXmlPath, zimPath) => hooks.manage(libraryXmlPath, zimPath),
@@ -452,6 +454,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     serveSpawns,
     buildAdds,
     metaAdds,
+    manageChildren,
     httpPort,
     requests,
     newService: makeService,
@@ -915,7 +918,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
     }
   })
 
-  it('a manager child that cannot be confirmed dead keeps its meta dir: the lock reports kept, NOT confirmed, and the PID stays reapable', async () => {
+  it('a manager child that cannot be confirmed dead keeps its meta dir: the lock reports kept, NOT confirmed, and the PID stays reapable — until the child is seen to exit (#713)', async () => {
     const h = await sessionHarness()
     const warn = vi.spyOn(log, 'warn')
     try {
@@ -945,18 +948,68 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         (c) => typeof c[0] === 'string' && c[0] === 'Lock: ZIM cleanup NOT confirmed'
       )
       expect(notConfirmed).toHaveLength(1)
-      expect(notConfirmed[0]?.[1]).toMatchObject({ kept: 1 })
+      expect(notConfirmed[0]?.[1]).toMatchObject({ kept: 1, unconfirmedChildren: 1 })
       // The sentinel rule: counts only — no pack title, no path.
       expect(JSON.stringify(notConfirmed[0])).not.toContain('stubborn')
       const meta = notConfirmed[0]![1] as Record<string, unknown>
       expect(Object.keys(meta).sort()).toEqual(['kept', 'unconfirmedChildren', 'unknownEntries', 'unsettledOps'])
       expect(Object.values(meta).every((v) => typeof v === 'number')).toBe(true)
 
-      // A session start keeps it too: the keep set lives as long as the process, so only the
-      // next app start's sweep removes it (#713).
+      // A session start keeps it too: nothing has shown that the child is gone.
       h.ctrl.unlock('right-password')
-      const report = h.svc.cleanupTransients('session-start')
-      expect(report).toMatchObject({ removed: 0, kept: 1 })
+      expect(h.svc.cleanupTransients('session-start')).toMatchObject({ removed: 0, kept: 1 })
+
+      // Its own exit is that evidence: the dir goes at once, and the next pass is clean (#713).
+      const stubborn = h.manageChildren.find((c) => c.pid === stubbornPid)!
+      stubborn.emit('exit', null, 'SIGKILL')
+      await tick()
+      expect(h.transientEntries().filter((e) => /^meta-\d+$/.test(e))).toEqual([])
+      expect(h.svc.cleanupTransients('session-start')).toMatchObject({
+        removed: 0,
+        kept: 0,
+        unconfirmedChildren: 0,
+        confirmed: true
+      })
+    } finally {
+      warn.mockRestore()
+      await h.close()
+    }
+  })
+
+  it('a library build whose manager child cannot be confirmed stopped keeps its file until that child is seen to exit (#713)', async () => {
+    const h = await sessionHarness()
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      await h.registerPack('alpha.zim')
+      await h.registerPack('beta.zim')
+      // The build's first manager child writes its book; the second parks, and then ignores
+      // every signal the lock's abort sends it — it may still be appending to the shared file.
+      h.modes.manage = 'ignore-all'
+      const gate = serveGate<void>()
+      let buildChildren = 0
+      h.hooks.manage = (libraryXmlPath) =>
+        dirname(libraryXmlPath) === zimTransientDir(h.workspacePath) && ++buildChildren === 2
+          ? gate.wait()
+          : Promise.resolve()
+      const askP = keepHandled(h.svc.ensureServer(h.db()))
+      await gate.entered
+      const stubbornPid = registeredSidecarPids('kiwix_tools').slice(-1)[0]
+      const builds = (): string[] => h.transientEntries().filter((e) => /^library\.\d+\.xml$/.test(e))
+      expect(builds()).toHaveLength(1)
+
+      const { lockP } = await parkedLock(h)
+      gate.release()
+      await expectAbortError(askP)
+      h.releaseSuspend()
+      await lockP
+
+      expect(builds()).toHaveLength(1)
+      const notConfirmed = warn.mock.calls.filter((c) => c[0] === 'Lock: ZIM cleanup NOT confirmed')
+      expect(notConfirmed[0]?.[1]).toMatchObject({ kept: 1, unconfirmedChildren: 1 })
+
+      h.manageChildren.find((c) => c.pid === stubbornPid)!.emit('exit', null, 'SIGKILL')
+      await tick()
+      expect(h.transientEntries()).toEqual([])
     } finally {
       warn.mockRestore()
       await h.close()

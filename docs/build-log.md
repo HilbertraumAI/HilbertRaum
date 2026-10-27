@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-27 — the closed 2026-10-12 #644 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #713 entry). Its record is unchanged:
+`rag-design.md` §14.5 "#644"; its open residuals ("how much" lookups, closed by #649; "Zählen alle …?") are carried there. Citations of the form "BUILD_STATE 2026-10-12 #644 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-12 — **#644 — a quantifier asks for a list only at the head of a request; a yes/no question gets an answer (`fix/644-quantifier-lookup`).** After #641 any all/every/each/alle/jede/sämtliche still asked for a list: with extract data "Gilt die Frist für alle Mieter?" got every date,
+without it the deep-index heads-up. Now a quantifier lists only at the head of a request (after please / can you / give me / nenne / zeig mir / was sind …) or with a list verb; a yes/no question is a plain answer even with a list verb, unless a polite request; a quantifier inside another question is labelled (#641).
+The listing's type is the one the list request names first; terms/names/Daten map to none. Owner calls as recommended (the type rule revised once, sentence-scoped); two /code-review passes hardened fillers, polite forms, claims, sentence splits, compounds. 57 golden rows fail on master; 62/63 mutations red. Real app (4B, a fictional lease with extract data, scratch root + D:): master listed 4 dates
+for 3/3 lookups, the fix answered them from the whole document; the report's yes/no lost the heads-up. Record: `rag-design.md` §14.5 "#644". Open: "how much" lookups (#649); "Zählen alle …?" still lists._
+
 ## 2026-10-27 — the closed 2026-10-12 #643 / #642 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the DEP-8 entry). Its record is unchanged:

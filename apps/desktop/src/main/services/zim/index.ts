@@ -34,7 +34,7 @@ import {
 } from './packs'
 import { computeServedSet, type ServingNameCollision } from './identity'
 import { KiwixServer } from './serve'
-import { kiwixManageAdd, resolveKiwixManagePath, resolveKiwixServePath } from './tools'
+import { KiwixManageError, kiwixManageAdd, resolveKiwixManagePath, resolveKiwixServePath } from './tools'
 import type { PlaintextOpKind, PlaintextOpsRegistry } from '../ingestion/plaintext-ops'
 import { cleanupZimTransients, type ZimCleanupReport } from './transients'
 
@@ -127,7 +127,8 @@ import { cleanupZimTransients, type ZimCleanupReport } from './transients'
 // `meta-<n>/library.xml` (registration throwaways) — which are PLAINTEXT while present and are
 // removed at lock, at quit and at every session start (`transients.ts`, contained and
 // link-refusing). The file of a child whose death could not be confirmed is KEPT and reported
-// by every cleanup in this process; only the next app start's sweep removes it (#713).
+// by every cleanup until that child's own exit is observed; it is removed then, through a pass
+// scoped to it, or by the next app start's sweep if the exit never comes (#713).
 
 /** How many times one `ensureServer` call re-loops under a newly current revision before
  *  giving up: a pack set that keeps changing must not spin. */
@@ -341,18 +342,11 @@ export class ZimService {
   private startFailure: { revision: number; error: Error } | null = null
   /** Permanent quit latch (only `stop()` arms it; `suspend()` deliberately does not). */
   private stopped = false
-  /** The most recent teardown could not confirm the child was gone (plan §9.15 item 6): its
-   *  PID stays in the reaper registry and its build file is kept. */
-  private lastTeardownUncertain = false
-  /** How many children this service could never confirm dead. STICKY for the life of the
-   *  process: once one may still be writing a build file, no later path — quit included —
-   *  may clear the transient directory. The crash reaper and P3b's startup sweep own it,
-   *  and a teardown report says "cleanup not confirmed", never "complete".*/
-  private unconfirmedChildren = 0
-  /** Transient paths the cleanup must NOT remove: the library file of a serve child, or the
-   *  meta dir of a manager child, whose teardown could not be confirmed (plan §9.17 (c)2).
-   *  Never cleared in-process: reported as `kept` until the next app start's sweep (#713). */
-  private readonly keptPaths = new Set<string>()
+  /** Transient paths no cleanup may remove, each with the number of kiwix children holding it
+   *  whose stop could not be confirmed (plan §9.17 (c)2): the library file of a serve child, the
+   *  meta dir or build file of a manager child. A path leaves when the last of those children is
+   *  seen to exit (#713); the counts' sum is the cleanup report's `unconfirmedChildren`. */
+  private readonly kept = new Map<string, number>()
   /** The reconciliation pass currently running, or null — the single-flight latch (§9.17 (d)4). */
   private reconcileInFlight: Promise<void> | null = null
   /** A Refresh arrived while a pass was running: run exactly ONE more, however many arrived. */
@@ -485,7 +479,7 @@ export class ZimService {
         op?.track(join(dir, 'library.xml'))
         return dir
       },
-      onUncertain: (path) => this.keptPaths.add(path),
+      onUncertain: (path, settled) => this.keepUntilExit(path, settled),
       assert: op ? () => op.assert() : undefined,
       // The TOOL half of the searchability cache key (#301 P4, finding M7): a swapped
       // kiwix-tools bundle invalidates every verdict, because "this archive has no full-text
@@ -1116,6 +1110,11 @@ export class ZimService {
         // and only ever THIS build's own file.
         this.assertCurrent(cap)
       } catch (err) {
+        // A manager child that could not be confirmed stopped may still be appending to this
+        // very file (`writeLibraryXml` rethrows exactly that case): keep it until it exits.
+        if (err instanceof KiwixManageError && err.childState === 'uncertain' && err.settled) {
+          this.keepUntilExit(libraryXmlPath, err.settled)
+        }
         this.discardBuild(libraryXmlPath)
         // A build the teardown cancelled surfaces as the #159 `AbortError`, not as the
         // manager's own error class: every waiter rejects with one convention, and a start
@@ -1139,7 +1138,8 @@ export class ZimService {
       started = await server.ensureStarted({ libraryXmlPath, signal })
     } catch (err) {
       // A failing start never calls the service's own stop() (self-await): the server tore
-      // its own record down through the bounded record-level path before rejecting.
+      // its own record down through the bounded record-level path before rejecting. A child
+      // it could not confirm stopped has already been reported, so the build stays (#713).
       if (ownsBuild) this.discardBuild(libraryXmlPath)
       throw err
     }
@@ -1148,10 +1148,7 @@ export class ZimService {
       this.assertCurrent(cap)
     } catch (err) {
       await server.stop()
-      this.lastTeardownUncertain = server.lastStopUncertain()
-      this.syncUnconfirmed(server)
-      if (this.lastTeardownUncertain) this.keptPaths.add(libraryXmlPath)
-      else if (ownsBuild) this.discardBuild(libraryXmlPath)
+      if (ownsBuild) this.discardBuild(libraryXmlPath)
       throw err
     }
     const pub: Published = {
@@ -1179,6 +1176,7 @@ export class ZimService {
         healthIntervalMs: this.deps.healthIntervalMs,
         killGraceMs: this.deps.killGraceMs,
         forceKillWaitMs: this.deps.forceKillWaitMs,
+        onUnconfirmedChild: (path, settled) => this.keepUntilExit(path, settled),
         // Builds and children draw from ONE service-owned counter, so every child of this
         // process — including a bind-race retry and a crash restart — has a distinct,
         // service-observable generation.
@@ -1207,9 +1205,10 @@ export class ZimService {
     return this.opts.transientDir
   }
 
-  /** Delete ONE build's own file. Never called for a build this operation did not own, and
-   *  never for the file of a child whose death could not be confirmed. */
+  /** Delete ONE build's own file. Never called for a build this operation did not own; a file
+   *  a child whose stop could not be confirmed still holds is left alone (#713). */
   private discardBuild(libraryXmlPath: string): void {
+    if (this.kept.has(libraryXmlPath)) return
     try {
       rmSync(libraryXmlPath, { force: true })
     } catch {
@@ -1217,24 +1216,38 @@ export class ZimService {
     }
   }
 
-  /** Stop the current child, then delete the build it was serving — only after a CONFIRMED
-   *  terminal state (an uncertain child may still be writing; its file and PID are kept). */
+  /**
+   * Keep `path` out of every cleanup while a kiwix child whose stop could not be confirmed may
+   * still be writing it (plan §9.17 (c)2), and release it when `settled` — that child's own
+   * `exit`/`error`, the evidence that the writer is gone — resolves (#713). The last release
+   * removes the path at once, through the contained cleanup scoped to that one entry, so the
+   * plaintext file does not wait for the next lock or session start; if the exit never comes,
+   * the next app start's sweep removes it.
+   */
+  private keepUntilExit(path: string, settled: Promise<void>): void {
+    this.kept.set(path, (this.kept.get(path) ?? 0) + 1)
+    void settled.then(() => {
+      const holders = (this.kept.get(path) ?? 1) - 1
+      if (holders > 0) {
+        this.kept.set(path, holders)
+        return
+      }
+      this.kept.delete(path)
+      const dir = this.opts.transientDir
+      const report = cleanupZimTransients(dir, dirname(dir), {
+        keep: new Set(this.kept.keys()),
+        only: new Set([path]),
+        platform: this.opts.platform
+      })
+      log.info('Knowledge-pack transient released: its kiwix child exited', { removed: report.removed })
+    })
+  }
+
+  /** Stop the current child, then delete the build it was serving. A child the server could
+   *  not confirm stopped has reported its build, so `discardBuild` leaves that file (#713). */
   private async teardownPublished(stale: Published | null): Promise<void> {
-    const server = this.server
-    let uncertain = false
-    if (server) {
-      await server.stop()
-      uncertain = server.lastStopUncertain()
-      this.syncUnconfirmed(server)
-    }
-    this.lastTeardownUncertain = uncertain
-    if (stale && stale.kind === 'served') {
-      // An unconfirmed child may still be writing its build: keep the file AND remember it, so
-      // the lock/quit/session-start cleanup reports it as `kept` instead of removing it under
-      // a possibly-live process (plan §9.17 (c)2).
-      if (uncertain) this.keptPaths.add(stale.libraryXmlPath)
-      else this.discardBuild(stale.libraryXmlPath)
-    }
+    if (this.server) await this.server.stop()
+    if (stale && stale.kind === 'served') this.discardBuild(stale.libraryXmlPath)
   }
 
   /**
@@ -1264,11 +1277,10 @@ export class ZimService {
     const stale = this.published
     this.published = null
     await this.enqueue(() => this.teardownPublished(stale))
-    if (this.server) this.syncUnconfirmed(this.server)
     this.server = null
     // The SAME dedicated cleanup the lock and the session start run — idempotent and kept-set
     // aware, so a quit that skipped `shutdown.ts`'s explicit step still cleans, and the file of
-    // a child this service could never confirm dead is kept and reported rather than removed
+    // a child this service could not confirm stopped is kept and reported rather than removed
     // under a possibly-live process.
     this.cleanupTransients('quit')
   }
@@ -1284,7 +1296,7 @@ export class ZimService {
     // refusal) against its parent, the workspace.
     const dir = this.opts.transientDir
     const report = cleanupZimTransients(dir, dirname(dir), {
-      keep: this.keptPaths,
+      keep: new Set(this.kept.keys()),
       platform: this.opts.platform
     })
     log.info('Knowledge-pack transient cleanup', {
@@ -1293,18 +1305,14 @@ export class ZimService {
       kept: report.kept,
       unknownEntries: report.unknownEntries
     })
+    let unconfirmedChildren = 0
+    for (const holders of this.kept.values()) unconfirmedChildren += holders
     return {
       ...report,
       unsettledOps,
-      unconfirmedChildren: this.unconfirmedChildren,
+      unconfirmedChildren,
       confirmed: report.confirmed && unsettledOps === 0
     }
-  }
-
-  /** Carry the server's monotonic 'could not confirm this child dead' count onto the service,
-   *  where it outlives the server instance the quit path drops. */
-  private syncUnconfirmed(server: KiwixServer): void {
-    this.unconfirmedChildren = Math.max(this.unconfirmedChildren, server.unconfirmedChildren())
   }
 
   // ---- retrieval + viewer -------------------------------------------------------

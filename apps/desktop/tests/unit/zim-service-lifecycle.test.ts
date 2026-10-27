@@ -351,7 +351,7 @@ describe('readZimMetadata (via registerPack) — the throwaway meta dir on an un
       KiwixManageError
     )
     expect(capturedMetaDir).not.toBeNull()
-    expect(existsSync(capturedMetaDir as unknown as string)).toBe(true) // left for P3b's startup sweep (R-7)
+    expect(existsSync(capturedMetaDir as unknown as string)).toBe(true) // kept until the child is seen to exit (R-7, #713)
 
     capturedMetaDir = null
     const ordinaryDeps: PackDeps = {
@@ -835,6 +835,60 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     child.emit('exit', 0, null)
     await tick()
     expect(registeredSidecarPids('kiwix_tools')).not.toContain(child.pid)
+  })
+
+  it('a kept build goes the moment its child is seen to exit — that entry only, beside a newer live build — and the next pass keeps nothing (#713)', async () => {
+    const h = svcHarness()
+    await h.addPack('alpha.zim')
+    h.nextChildMode = 'ignore-all'
+    await svcPort(h.svc.ensureServer(h.db))
+    const stubborn = h.lastServeChild()
+    const keptBuild = h.serveSpawns[0]!.libraryXmlPath
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      await h.svc.suspend()
+    } finally {
+      warn.mockRestore()
+    }
+    expect(h.svc.cleanupTransients('lock')).toMatchObject({ kept: 1, unconfirmedChildren: 1, confirmed: false })
+
+    // The next session serves a NEW build while the old child is still unaccounted for.
+    h.nextChildMode = 'exit-on-sigterm'
+    await svcPort(h.svc.ensureServer(h.db))
+    const liveBuild = h.serveSpawns[1]!.libraryXmlPath
+    expect(liveBuild).not.toBe(keptBuild)
+
+    stubborn.emit('exit', 0, null)
+    await tick()
+    expect(existsSync(keptBuild)).toBe(false)
+    expect(existsSync(liveBuild)).toBe(true)
+
+    await h.svc.suspend()
+    expect(h.svc.cleanupTransients('session-start')).toMatchObject({
+      removed: 0,
+      kept: 0,
+      unconfirmedChildren: 0,
+      confirmed: true
+    })
+  })
+
+  it('a start that fails with a child it cannot confirm stopped keeps that build until the child is seen to exit (#713)', async () => {
+    const h = svcHarness({ healthTimeoutMs: 20 })
+    await h.addPack('alpha.zim')
+    h.nextChildMode = 'ignore-all'
+    h.hooks.probe = async () => false
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      await expect(h.svc.ensureServer(h.db)).rejects.toThrow(/did not become healthy/)
+    } finally {
+      warn.mockRestore()
+    }
+    const build = h.serveSpawns[0]!.libraryXmlPath
+    expect(existsSync(build)).toBe(true) // the child may still hold it
+
+    h.lastServeChild().emit('exit', 0, null)
+    await tick()
+    expect(existsSync(build)).toBe(false)
   })
 
   it('an empty pack set publishes a revision-keyed "nothing to serve": no child, no XML, no rebuild on the next ask', async () => {

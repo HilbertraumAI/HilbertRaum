@@ -48,6 +48,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A knowledge-pack file no longer waits in your workspace for the app to restart.** When the
+  program that serves your knowledge packs, or the helper that reads a pack's details, did not stop
+  within its time limit, the app kept the file it had been given: a plain-text list of your packs'
+  titles and where they are stored. It stayed in the workspace, through locking and unlocking, until
+  the app was next started. The app now removes it as soon as it sees that program end (#713).
 - **Formulas written with `$$ … $$` show as formulas, while the answer is coming in and after.**
   While an answer was still being written, such a formula showed a red error box with its raw text
   until it was complete. In a finished answer, a formula spread over several lines with the `$$`

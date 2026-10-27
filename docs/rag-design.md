@@ -3140,9 +3140,15 @@ the figures they support are quoted in the text.
   plaintext while present in BOTH workspace modes. Removed at lock, at quit and at every
   session start (containment + link checks; `transients.ts`), never while the child that
   read it could still be writing it: the file of a child whose death could not be
-  confirmed is kept and reported, and stays until the next app start: the service lives as long
-  as the process and keeps every kept path in its keep set, so lock, quit and session start all
-  leave it, and only the app-start sweep removes it (#713).
+  confirmed is kept and reported until that child's own `exit`/`error` is observed — the
+  evidence the writer is gone — and is removed at that moment, by the same contained cleanup
+  scoped to that one entry (#713). The service counts the children holding each kept path and
+  releases it with the last; the serve child reports itself (`onUnconfirmedChild`), a manager
+  child through its `'uncertain'` error, whether it was writing a registration's `meta-<n>/`
+  or a library build. A child whose exit never comes leaves its file to the next app start's
+  sweep. A failed start whose child could not be confirmed keeps its build too (it used to be
+  deleted at once). The cleanup report's `unconfirmedChildren` counts the kiwix children, serve
+  and manager alike, still unconfirmed at that moment.
 - **D-Z9 — dialog-in-handler registration.** `packs:add` opens the native picker AND
   registers inside one main-side handler, so no path is ever ACCEPTED FROM the renderer —
   the renderer never supplies or sees a file-dialog result. The other direction is narrower
