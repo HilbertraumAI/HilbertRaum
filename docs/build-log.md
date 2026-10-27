@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-27 — the closed 2026-10-13 #656 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #716 entry). Its record is unchanged:
+`architecture.md` (the runtime-ladder records citing #656: `LlamaServer`'s one-death report, the kiwix verifier rows). Citations of the form "BUILD_STATE 2026-10-13 #656 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#656 — the runtime-ladder campaign's leftovers: one crash reported once, the untested wiring covered, the GPU suites host-independent (`fix/656-runtime-gpu-test-gaps`).**
+`LlamaServer` reported a healthy server's death twice when Node emitted `'exit'` after `'error'`; the chat crash handlers ignore a repeat only while their restart runs. One per-spawn flag
+now covers both handlers. New rows: kiwix-serve / kiwix-manage through the real verifier, `startEngineCheck`, the unlock heal before the auto-start, "Check again"'s `--version` / `--help` (b11146
+with no arguments serves on 127.0.0.1:8080 until killed), the null-after-lock probe, #107 `expectedMs`, the four b11146 captures. `performance-gpu` pinned to win32/x64 (12 of 29 rows failed
+as darwin/arm64); 11 replayed GPU-rule tests and the test-only `memoryClassOf` removed. The GPU smoke now feeds the placement parser: b11146 on the GTX 1070 Ti 5/5. Open: none (#653–#655 separate)._
+
 ## 2026-10-27 — the closed 2026-10-12 #473 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #711 entry). Its record is unchanged:

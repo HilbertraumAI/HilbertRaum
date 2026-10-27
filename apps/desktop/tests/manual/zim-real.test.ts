@@ -11,6 +11,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { makeQueryExpander, type QueryExpander } from '../../src/main/services/zim/expand'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { defaultThreadCount } from '../../src/main/services/runtime/sidecar'
 
 // REAL kiwix-tools + REAL ZIM end-to-end (manual smoke, the HILBERTRAUM_* convention):
 // registration via real kiwix-manage, the real kiwix-serve sidecar over a generated
@@ -24,8 +25,8 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 //   HILBERTRAUM_ZIM_QUERY=<a word the pack's index will hit, e.g. Treibhausgas>
 //   HILBERTRAUM_ZIM_EXPECT_ARTICLE=<optional — an entry key known to exist in that archive>
 //   HILBERTRAUM_ZIM_MODEL=<optional — a chat GGUF; with HILBERTRAUM_ZIM_LLAMA_SERVER=<llama-server
-//                          binary> the smoke starts it (CPU only, -ngl 0, unless
-//                          HILBERTRAUM_ZIM_MODEL_NGL says otherwise) and replays the quality
+//                          binary> the smoke starts it (on the processor the way the app does,
+//                          unless HILBERTRAUM_ZIM_MODEL_NGL names a layer count) and replays the quality
 //                          fixture through the planner the arm ships (`expand.ts`, rag-design §17
 //                          "Discovery port (Phase 4 PR-A)"), asserting the list group for the
 //                          reference model (LIST_GROUP_REFERENCE_MODEL) and logging it otherwise>
@@ -43,7 +44,8 @@ const gate = zimSmokeEnv(process.env)
  *  the reference model only; any other model logs its figure. Set from the superseded D-Z20
  *  expander's 5/6 (2026-09-07); re-ratified on the discovery-port planner on 2026-10-27, CPU only:
  *  qwen3-4b-instruct 4/6. qwen3.5-4b reached 2/6 and 3/6 there, two of its six plans timing out
- *  at `PLAN_TIMEOUT_MS` (#716). */
+ *  at `PLAN_TIMEOUT_MS` — under this smoke's old launch (every core, `-ngl 0`). Launched the way
+ *  the app runs on the processor, none of its plans timed out and it reached 3/6 (#716). */
 const LIST_GROUP_MIN_HITS = 4
 const LIST_GROUP_REFERENCE_MODEL = 'qwen3-4b-instruct-q4.gguf'
 
@@ -78,6 +80,11 @@ async function freePort(): Promise<number> {
  * by the smoke over the GGUF the operator named, and a minimal `ModelRuntime` over its OpenAI endpoint
  * (non-streaming; the same request body `runtime/llama.ts` sends — thinking switch, temperature,
  * max_tokens, the grammar-constrained `response_format`). Null when the operator set no model.
+ *
+ * Launched like the app's processor start (#716): `--device none` and the app's thread count
+ * (`defaultThreadCount`). llama-server's own default took every core of the i9-14900K, E-cores
+ * included, and `-ngl 0` on a machine with a graphics card still decoded about 15 % slower than
+ * `--device none`; together they put the planner near `PLAN_TIMEOUT_MS` where the app is not.
  */
 async function startExpansionModel(): Promise<ModelRuntime | null> {
   const model = process.env.HILBERTRAUM_ZIM_MODEL ?? ''
@@ -86,10 +93,11 @@ async function startExpansionModel(): Promise<ModelRuntime | null> {
   expect(existsSync(model), 'HILBERTRAUM_ZIM_MODEL must be a file').toBe(true)
   expect(existsSync(exe), 'HILBERTRAUM_ZIM_LLAMA_SERVER must be a file').toBe(true)
   const port = await freePort()
-  const ngl = process.env.HILBERTRAUM_ZIM_MODEL_NGL ?? '0'
+  const ngl = process.env.HILBERTRAUM_ZIM_MODEL_NGL
+  const placement = ngl === undefined ? ['--device', 'none'] : ['-ngl', ngl]
   llama = spawn(
     exe,
-    ['-m', model, '--host', '127.0.0.1', '--port', String(port), '-c', '4096', '-ngl', ngl, '--jinja', '--reasoning-format', 'deepseek', '-np', '1'],
+    ['-m', model, '--host', '127.0.0.1', '--port', String(port), '-c', '4096', '--threads', String(defaultThreadCount()), ...placement, '--jinja', '--reasoning-format', 'deepseek', '-np', '1'],
     { stdio: ['ignore', 'ignore', 'ignore'] }
   )
   const deadline = Date.now() + 180_000

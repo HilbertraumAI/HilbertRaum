@@ -4523,6 +4523,30 @@ provisional 220-token ceiling under which the distribution was MEASURED, not abo
 104-token cap the measurement then produced — the two are easy to conflate and are kept distinct
 here on purpose.
 
+**The twelve seconds on a processor (#716, 2026-10-27): measured, kept.** The issue reported
+qwen3.5-4b's planner timing out on 2 of the climate pack's 6 list questions on the i9-14900K.
+That was the real-tools smoke's launch, not the app's: llama-server's own default thread count
+(24 here, E-cores included) and `-ngl 0` beside a graphics card, which still decodes about 15 %
+slower than the app's processor start (`--device none`, `defaultThreadCount` = 16). Launched
+the app's way, qwen3.5-4b's plans took 5.8–10.1 s (34 calls, 0 past the bound) and
+qwen3-4b-instruct's 3.7–6.0 s; the smoke now launches that way. The cost is decode: 64–92 output
+tokens at ~10 tok/s, prefill 0.1–0.4 s even after an answer has shared the slot (b11146 restores
+the cached prefix), and qwen3.5-4b indents its JSON, 32 of those tokens being whitespace the
+schema grammar allows (llama.cpp's `space` rule). A processor about a fifth slower than this one
+puts qwen3.5-4b's longest plans past `PLAN_TIMEOUT_MS`. Three levers were measured on the
+real-tools smoke with the bound lowered to emulate slower processors (5 s and 3 s, i.e. 2.4×
+and 4× slower) and none was taken: **(1)** keeping the entries a cut-off reply had finished
+(titles close at about half the reply) — list hit@5 2/6 with or without it at both bounds, core
+9/9 either way: the salvaged titles were good guesses (`Liste der CO2-Emissionen nach Ländern`)
+that match no archive title, and the one list article a whole plan wins over no plan (`Liste der
+Länder nach CO2-Emission pro Kopf`) comes from its queries; **(2)** writing the queries first so
+a cut-off reply keeps them — still 2/6 at both bounds, and at the full bound three of six plans
+grew past it where none had; **(3)** a whitespace-free grammar — the plans shrank by a third but
+changed on every one of 17 questions and came out garbled on 5 (qwen3.5-4b) and 6
+(qwen3-4b-instruct) of them, with entries such as `,Treibhauseffekt` and `], `.
+`PLAN_TIMEOUT_MS` stays 12 s and nothing in the planner changed. The exposure is
+recorded in `known-limitations.md`'s twelve-second paragraph.
+
 **Acceptance (core200, no rerank unless noted; run A is the ONE acceptance read for this PR).**
 Reproduction of 4-i's M1 no-rerank row on core200, pre-port (step 4, unchanged by step 4-2):
 **exact match**, 0 deviation on all four co-primaries — `anyArticle` 32, `allArticle` 24,
