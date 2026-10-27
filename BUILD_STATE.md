@@ -28,11 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
-_2026-10-27 — **DEP-8 — Dependabot #708–#710 repaired and merged; the seven alerts opened the same day fixed: #131–#134, #138, #139 in the lockfile (`fix/dep8-alerts-131-139`), #130 by Electron 43.8.3 (`fix/dep8-electron-43-8-3`).** #710 (vitest 4.1.12,
+_2026-10-27 — **DEP-8 — Dependabot #708–#710 repaired and merged; the ten alerts opened the same day fixed: #131–#139 in the lockfile (`fix/dep8-alerts-131-139`), #130 by Electron 43.8.3 (`fix/dep8-electron-43-8-3`).** #710 (vitest 4.1.12,
 alerts #128/#129): Dependabot installed vitest under `apps/desktop/node_modules`, so jest-dom could not import it; the pinned npm 11.6.2 redid the four bumps in one install. #709: notices regenerated; the streamdown 2.7.1 render comparison: finished output identical,
 link references resolve while streaming. #708: `electronVersion` 43.8.0, merged after #710 with the bump redone (exact version: a caret picks the newest 43.x). undici 6.29.1/7.30.1 and fast-uri 3.1.9: build and test tools only, lockfile only. Electron 43.8.3 blocks
 the compromised eMudhra intermediates in Chromium and Node TLS (the app downloads through Node's `fetch`); fuse wire unchanged, first paint unchanged. Record: architecture.md "Dependabot triage — design record (wave DEP-8)", DEP-5 §3, DEP-6 §5/§13. Open: Electron's
-Node still bundles undici 7.29.1 (GHSA-xjj6: a hostile download server can crash the main process; no 43.x fixes it yet); the packaged perf-log A/B (§5 item 18(g))._
+Node still bundles undici 7.29.1 (GHSA-xjj6: a hostile download server can crash the main process; Electron 43.8.4 fixes it, due after the cooldown on 2026-11-03); the packaged perf-log A/B (§5 item 18(g))._
 _2026-10-15 — **#701 — a streamed `$$ …` formula typesets as it arrives; a `$$` pair on lines of its own is display math with all its TeX (`fix/701-display-dollar-math`).** A dangling `$$` went to remend's own katex handler, which
 appends the closer without a parse check: KaTeX's error box until the TeX parsed. It now takes the `\[` / `\(` / `$` path (`completePartialTex`, or hidden for that flush). Found on the way, in persisted answers: TeX on a `$$` fence's
 opening line was dropped as "meta", TeX glued to the closer kept the block open (`\end{aligned}$$`: a permanent error box), a one-line `$$ x $$` paragraph was inline; while streaming, a `[` in a formula became remend's unfinished

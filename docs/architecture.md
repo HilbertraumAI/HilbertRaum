@@ -14253,7 +14253,9 @@ window loading a static page; first-contentful-paint in ms after the window is c
   **Residual:** the Node.js inside 43.8.3 still bundles undici 7.29.1, inside the range of
   GHSA-xjj6-f33q-929c (fixed in 7.30.1; DEP-8 §2). A download server that answers with more than five
   content codings and then drops the connection crashes the main process, whose last-resort handler
-  locks the vault and exits. No 43.x release carries the fixed undici yet.
+  locks the vault and exits. Electron 43.8.4 (published 2026-10-27, Node 24.22.1) bundles undici
+  7.30.1, going by the version strings in its Windows binary; it is due once Dependabot's 7-day
+  cooldown ends on 2026-11-03.
 
 ### §4 Re-verification ledger (2026-10-01, the desktop above)
 
@@ -15151,12 +15153,13 @@ Follow-up 1, done on `fix/698-katex-dedupe`.
 
 ## Dependabot triage — design record (wave DEP-8)
 
-_Wave DEP-8 (2026-10-27) covers Dependabot's three PRs of 2026-10-26 and the seven alerts GitHub
+_Wave DEP-8 (2026-10-27) covers Dependabot's three PRs of 2026-10-26 and the ten alerts GitHub
 opened on 2026-10-27. #708 (Electron 43.8.0), #709 (production group: `@tanstack/react-virtual`
 3.14.21, streamdown 2.7.1) and #710 (development group: vitest 4.1.12, closing alerts #128/#129)
 each failed CI on a step Dependabot does not take; each was repaired on its own branch and merged,
-#708 last. Six of the new alerts are in build and test tools and are fixed in the lockfile
-(`fix/dep8-alerts-131-139`); #130 is fixed by Electron 43.8.3 (`fix/dep8-electron-43-8-3`)._
+#708 last. Nine of the new alerts are in build and test tools and are fixed in the lockfile
+(`fix/dep8-alerts-131-139`, PR #722); #130 is fixed by Electron 43.8.3 (`fix/dep8-electron-43-8-3`,
+PR #721)._
 
 ### §1 Dependabot's PRs of 2026-10-26
 
@@ -15178,14 +15181,18 @@ each failed CI on a step Dependabot does not take; each was repaired on its own 
 |---|---|---|---|---|
 | #130 (high), GHSA-jr5w-w6x2-84p9 | electron 43.8.0 → 43.8.3 | the app's runtime | ships | **Fixed** by the Electron bump; record DEP-5 §3, last bullet |
 | #138, #139 (high), GHSA-xjj6-f33q-929c | undici 6.29.0 → 6.29.1; 7.30.0 → 7.30.1 (two copies) | node-gyp 12.4.0 (`^6.25.0`); jsdom 29.1.1 (`^7.25.0`) and @electron/get 5.1.0 (optional, `^7.24.4`) | development | **Fixed**, lockfile only |
+| #135–#137 (medium), GHSA-4qv8-2p9j-2685 (6.x and 7.x), GHSA-f72v-6w45-q472 (7.x) | undici, the same two moves | the same | development | **Fixed** by the same lockfile change. Left out of this record's first version (PR #722); found when the alerts closed |
 | #131–#134 (two medium, two low) | fast-uri 3.1.8 → 3.1.9 | ajv 8.20.0 (`^3.0.1`), from app-builder-lib 26.17.0 | development | **Fixed**, lockfile only |
 
 - **undici.** `fetch()` crashes the process when a server answers with more than five content
-  codings and closes the connection before the body. The npm copies run in node-gyp (header
-  downloads for native builds), @electron/get (the Electron binary at install and package time) and
-  jsdom (tests, no real network): a hostile server could stop a build or an install, nothing more.
-  The app's own downloads use the `fetch` of the Node.js inside Electron, which Dependabot cannot
-  see; DEP-5 §3 records which undici that is.
+  codings and closes the connection before the body (GHSA-xjj6); `EventSource` can be made to hold
+  unbounded memory (GHSA-4qv8); `fetch` skips a Subresource Integrity check whose algorithm token is
+  not lowercase (GHSA-f72v). The npm copies run in node-gyp (header downloads for native builds),
+  @electron/get (the Electron binary at install and package time) and jsdom (tests, no real
+  network): a hostile server could stop a build or an install, nothing more. The app's own
+  downloads use the `fetch` of the Node.js inside Electron, which Dependabot cannot see; DEP-5 §3
+  records which undici that is. It lies inside all three ranges, but only the crash is reachable:
+  nothing in `apps/desktop/src` opens an `EventSource` or passes `integrity` to `fetch`.
 - **fast-uri.** Four URI-normalisation flaws (scheme spoofing, host confusion, path equivalence,
   scheme injection). Its only user is ajv inside electron-builder, validating our own
   `electron-builder.yml`.

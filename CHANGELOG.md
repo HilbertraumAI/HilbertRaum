@@ -102,7 +102,7 @@ from its first public `1.0.0` release onward.
 
 - **Advisories cleared in the build and test tools.** Vitest moves to 4.1.12, which closes two
   advisories in its mocking module (GHSA-xp26-3454-mjgp, GHSA-qxg6-89mg-rqv8) (#710). `undici`
-  moves to 6.29.1 and 7.30.1 (GHSA-xjj6-f33q-929c) and `fast-uri` to 3.1.9 (four advisories). None
+  moves to 6.29.1 and 7.30.1 (three advisories) and `fast-uri` to 3.1.9 (four advisories). None
   of these packages is part of the app you run, so nothing changes in use.
 - **The PDF reader is updated.** PDF reading moves to pdf.js 6.4, which guards against more kinds
   of crafted PDF, among them files built to keep the app busy for a long time. On the 52 PDFs we
