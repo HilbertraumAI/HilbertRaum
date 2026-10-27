@@ -141,7 +141,11 @@ describe('normalizeMath', () => {
     const tooLong = 'a'.repeat(MAX_INPUT_CHARS + 1)
     expect(normalizeMath(tooLong)).toBe(tooLong)
 
-    // Over-cap bombs return on the length check, before any scan.
+    // Markup past the length cap comes back raw: only the length check keeps `\alpha` unrendered.
+    const overCapMarkup = '\\alpha '.repeat(Math.ceil((MAX_INPUT_CHARS + 1) / 7))
+    expect(normalizeMath(overCapMarkup)).toBe(overCapMarkup)
+
+    // Pathological input far past the caps comes back unchanged.
     const overCapBombs: readonly string[] = [
       '{'.repeat(50_000) + 'x' + '}'.repeat(50_000),
       '\\frac{'.repeat(20_000),
@@ -158,7 +162,7 @@ describe('normalizeMath', () => {
     expect(normalizeMath('\\text{a > b}')).toBe('a > b')
   })
 
-  it('bounds adversarial input: over-cap bombs unchanged, at-cap strings still render', () => {
+  it('bounds adversarial input: at-cap strings still render, in bounded time', () => {
     // At or just under the char cap, each is still fully scanned and rendered: markup collapses.
     const atCapPathologies: readonly string[] = [
       '\\frac{a+b}{c-d}'.repeat(260).slice(0, MAX_INPUT_CHARS),

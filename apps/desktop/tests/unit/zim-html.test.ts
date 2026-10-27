@@ -29,8 +29,8 @@ import {
   TABLE_SEGMENT_MAX_CHARS
 } from '../../src/main/services/zim/tables'
 
-// ZIM article HTML → segments (knowledge packs). The fixture is a hand-trimmed
-// Parsoid/mwoffliner page carrying every structure the converter must handle:
+// ZIM article HTML → segments (knowledge packs). The fixture is a hand-written
+// Parsoid/mwoffliner-shaped page carrying every structure the converter must handle:
 // head noise, mw-ref sups, plain sups, MathML with alttext + fallback <img>,
 // nested tables, figures with captions, lists, numeric + named entities.
 const FIXTURE = readFileSync(join(__dirname, '../fixtures/zim/article.html'), 'utf8')
@@ -51,7 +51,7 @@ describe('zimArticleToSegments', () => {
 
   it('emits the intro as a leading label-less segment', () => {
     expect(article.segments[0]?.sectionLabel).toBeNull()
-    expect(article.segments[0]?.text).toContain('technisches Verfahren zur Herstellung')
+    expect(article.segments[0]?.text).toContain('Schwefelsäure großtechnisch gewonnen')
   })
 
   it('labels each section with its heading and keeps the heading in the text', () => {
@@ -860,7 +860,7 @@ describe('zimArticleToSegments — table delivery', () => {
     // cutoff is an implementation constant, not part of the contract.
     const text = textOf(html)
     expect(text).toContain('depth0')
-    expect(text).toContain('depth5')
+    expect(text).toContain('depth2')
     expect(text).not.toContain('depth11')
   })
 

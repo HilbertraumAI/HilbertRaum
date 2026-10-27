@@ -117,7 +117,7 @@ describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
     expect(screen.queryByText('0 passages')).not.toBeInTheDocument()
   })
 
-  it('renders the German copy for the summary, the plural pair and a skip reason', async () => {
+  it('renders the German copy for the summary, a one-passage count and a skip reason', async () => {
     const user = userEvent.setup()
     renderTranscript('de', [
       assistantMsg({
@@ -139,7 +139,7 @@ describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
     })
     await user.click(toggle)
     expect(screen.getByText('durchsucht')).toBeInTheDocument()
-    // The plural pair: one admitted passage takes the `.one` variant.
+    // One admitted passage takes the `.one` variant.
     expect(screen.getByText('1 Fundstelle')).toBeInTheDocument()
     expect(screen.getByText('nicht durchsucht: Auswahlgrenze (12 pro Chat)')).toBeInTheDocument()
   })
