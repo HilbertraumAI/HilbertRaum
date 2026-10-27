@@ -28,8 +28,8 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 // so the path never crosses the bridge at all).
 //
 // Audit privacy: pack ids (archive UUIDs) + sizes/counts only. The pack TITLE and FILENAME
-// name what the user reads — content by the export rule, like project names (sentinel-grep
-// enforced in tests/integration/audit-ipc.test.ts).
+// name what the user reads — content by the export rule, like project names (sentinel-checked in
+// tests/integration/zim-ipc-session.test.ts: the T17 add-DTO legs and the #340 Tier-2 save leg).
 
 /**
  * Map a per-file registration failure to a reason CODE — never the raw message or a path (#301

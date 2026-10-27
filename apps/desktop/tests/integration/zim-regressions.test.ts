@@ -995,6 +995,11 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     expect(rawScope(conv.id)).toBe(
       '{"collectionIds":[],"documentIds":[],"packIds":["p1"],"documentsOff":true}'
     )
+    // A pack-less scope keeps the pre-wave bytes: no `packIds` key, and it resolves to null.
+    const packless = createConversation(h.db, { mode: 'documents' }).id
+    setScope(h.db, packless, { collectionIds: [], documentIds: ['d1'] })
+    expect(rawScope(packless)).toBe('{"collectionIds":[],"documentIds":["d1"]}')
+    expect(resolveScope(h.db, packless).packIds).toBeNull()
     expect(getConversation(h.db, conv.id)!.scope).toEqual({
       collectionIds: [],
       documentIds: [],

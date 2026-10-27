@@ -3140,7 +3140,9 @@ the figures they support are quoted in the text.
   plaintext while present in BOTH workspace modes. Removed at lock, at quit and at every
   session start (containment + link checks; `transients.ts`), never while the child that
   read it could still be writing it: the file of a child whose death could not be
-  confirmed is kept and reported, and removed by the next session-start cleanup.
+  confirmed is kept and reported, and stays until the next app start: the service lives as long
+  as the process and keeps every kept path in its keep set, so lock, quit and session start all
+  leave it, and only the app-start sweep removes it (#713).
 - **D-Z9 — dialog-in-handler registration.** `packs:add` opens the native picker AND
   registers inside one main-side handler, so no path is ever ACCEPTED FROM the renderer —
   the renderer never supplies or sees a file-dialog result. The other direction is narrower
@@ -3402,9 +3404,9 @@ the figures they support are quoted in the text.
   (the recorded count was 145 at D-Z16; 147 since #340 Tier-2 added `packs:saveArticle`, D-Z21), no
   preload change. Tests: `zim-ipc-session` "#340 packs:status.excluded
   …" (null → [] → the larger UUID after a same-leaf registration → cleared by disabling → the build
-  agrees → null after a lock → recomputed by the next session), `KnowledgePacks.test.tsx` (badge +
-  winner named; stale winner; null / absent status show nothing), `zim-ipc` (the fake reports
-  null).
+  agrees → null after a lock → recomputed by the next session; its closing leg: no service reports
+  null), `KnowledgePacks.test.tsx` (badge + winner named; stale winner; null / absent status show
+  nothing).
 
 - **D-Z17 — the `kiwix_tools` family contract and the R-1 closure (#339 P8-1, 2026-09-06;
   `feat/339-p8-1-kiwix-family`).** `runtime-sources.yaml`'s `kiwix_tools:` block is the third
@@ -3936,7 +3938,7 @@ lock (`suspend()`) aborting every waiter, a revision-keyed failure latch cleared
 pack change, and an ignored SIGTERM escalating to SIGKILL and reporting the child
 unconfirmed with its PID and file kept; test T06 walks `kiwix-manage`'s verifier
 outcomes (match/mismatch/hashless), PID registration bounded to the child's lifetime,
-and timeout/abort settling only after a terminal state — `zim-arm/zim-ipc`
+and timeout/abort settling only after a terminal state — `zim-arm`
 (integration), `KnowledgePacks.test.tsx` (renderer, incl. the `partial`-hint case);
 real-article checks are env-gated (`HILBERTRAUM_ZIM_FIXTURES_DIR`).
 `zim-ipc-session.test.ts` (integration, NEW, P3b) drives the REAL service + registry over
@@ -3948,7 +3950,8 @@ seam, and a terminal quit; test T12 proves the collision/Unicode/locator contrac
 end (a rename/restart/drive-letter change all resolve the same citation); test T13 proves
 `packs:list` performs no discovery, a parked reconcile plus two Refreshes coalesce into
 exactly one rerun, the `packs:changed` notices carry the correct epoch and stop at a lock,
-and a user remove/disable during a parked pass wins; test T17 (P5, the `withServer` request
+and a user remove/disable during a parked pass wins (the mounted Chat's refetch on such a notice,
+and its ignoring an older epoch, are `ChatPacksRefresh.test.tsx`'s, row T13-b); test T17 (P5, the `withServer` request
 guard) lives in the same file — child death/reused port/stale response rejected with exactly
 one admitted retry, no retry into a new session or after cancellation, the L5 entry-key
 contract enforced with zero `/raw` requests on a refused key, and the cancelled/partial
@@ -3974,9 +3977,10 @@ real embeddings, a throwing embedder under true packs-only, and the chip agreeme
 fingerprint reset, a probe across a child death, confirmed-no still readable);
 `zim-regressions.test.ts` — T15-b (1/3/7/12 packs and a 13-pack persisted selection,
 varied completion order, the concurrency-2 and deadline bounds); `zim-ipc-session.test.ts`
-— T16-a (twelve outcome legs over the real vault harness: all failed, zero hits, missing
+— T16-a (outcome legs over the real vault harness: all failed, zero hits, missing
 tools, removed/disabled selection, mixed, all fetches failed, two concurrent chats, a
-mid-ask scope change, reload, regenerate/restore, export, whole-doc/compare `mode`).
+mid-ask scope change, reload, whole-doc/compare `mode`; regenerate/restore and export carrying
+the stored outcomes are `chat.test.ts`'s).
 P6 (2026-09-06; design and frontend review) by file: `KnowledgePacks.test.tsx` — T18-a (the
 UI acceptance row, seven legs (a)–(g): every pack/scope/outcome state in both languages,
 empty source sets, 200-character non-ASCII titles, popover/modal keyboard + focus-trap +

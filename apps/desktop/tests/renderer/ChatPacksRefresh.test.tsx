@@ -160,7 +160,7 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
     expect(listKnowledgePacks).toHaveBeenCalledTimes(2)
   })
 
-  it('a reconcile-end event refetches packs and the mounted ScopePopover shows the new pack', async () => {
+  it('a reconcile-end event refetches packs and the mounted ScopePopover shows the new pack; an older-epoch event refetches nothing', async () => {
     const user = userEvent.setup()
     const docConv = conv()
     const emitter = packsEventEmitter()
@@ -191,38 +191,14 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
 
     // The main process finishes a reconciliation — the mounted popover sees the new pack
     // WITHOUT the chat being navigated away and back.
-    act(() => emitter.emit({ epoch: 1, revision: 1, refreshing: false, reason: 'reconcile-end' }))
+    act(() => emitter.emit({ epoch: 2, revision: 1, refreshing: false, reason: 'reconcile-end' }))
     await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(2))
     expect(
       await screen.findByRole('checkbox', { name: /Klimawandel von Wikipedia/ })
     ).toBeInTheDocument()
-  })
-
-  it('an older-epoch event is ignored: no refetch', async () => {
-    const user = userEvent.setup()
-    const docConv = conv()
-    const emitter = packsEventEmitter()
-    const listKnowledgePacks = vi.fn(async () => [] as KnowledgePack[])
-    stubApi({
-      listConversations: vi.fn(async () => [docConv]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
-      listCollections: vi.fn(async () => [collection({})]),
-      listAttachments: vi.fn(async () => []),
-      listKnowledgePacks,
-      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByText('Doc Q&A'))
-    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(1))
-
-    // A newer epoch first advances what counts as "last seen"…
-    act(() => emitter.emit({ epoch: 5, revision: 2, refreshing: false, reason: 'mutation' }))
-    await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(2))
-    // …then an OLDER epoch (an old session's late announcement) must change nothing.
-    act(() => emitter.emit({ epoch: 3, revision: 3, refreshing: false, reason: 'reconcile-end' }))
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // An OLDER epoch (an old session's late announcement) changes nothing, whatever its revision.
+    // Exact without a wait: the listener calls `listKnowledgePacks` synchronously.
+    act(() => emitter.emit({ epoch: 1, revision: 9, refreshing: false, reason: 'reconcile-end' }))
     expect(listKnowledgePacks).toHaveBeenCalledTimes(2)
   })
 
@@ -255,9 +231,14 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
     await user.click(await screen.findByRole('button', { name: /answering from/i }))
     expect(await screen.findByRole('checkbox', { name: /Klimawandel von Wikipedia/ })).toBeInTheDocument()
 
-    // The refetch this event triggers throws — the mounted popover must still list the pack.
+    // The refetch this event triggers throws — the mounted popover must still list the pack once
+    // that failure has been handled, before anything else refetches.
     act(() => emitter.emit({ epoch: 1, revision: 1, refreshing: false, reason: 'reconcile-end' }))
     await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(2))
+    await act(async () => {
+      await (listKnowledgePacks.mock.results[1]!.value as Promise<unknown>).catch(() => undefined)
+    })
+    expect(screen.getByRole('checkbox', { name: /Klimawandel von Wikipedia/ })).toBeInTheDocument()
     // A later successful refetch proves the subscription is still alive after the failure.
     act(() => emitter.emit({ epoch: 2, revision: 2, refreshing: false, reason: 'mutation' }))
     await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(3))

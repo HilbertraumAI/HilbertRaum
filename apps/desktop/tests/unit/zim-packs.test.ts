@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { EventEmitter } from 'node:events'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs'
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, sep } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
-import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
+import { servingNameFor } from '../../src/main/services/zim/identity'
 import {
   listPacks,
   reconcile,
@@ -22,9 +21,11 @@ import {
   type PackDeps
 } from '../../src/main/services/zim/packs'
 import { ZimService, type ZimAdmission } from '../../src/main/services/zim'
-import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
+import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { malformedZimFixture, packUuid, writeZimFixture } from '../helpers/zim-header'
-import { ServeFakeChild, serveGate } from '../helpers/zim-fakes'
+import { ServeFakeChild, fakeManageSpawn, serveGate, zimServiceDeps } from '../helpers/zim-fakes'
+import { appendLibraryBook, manageAddFromHeader } from '../helpers/zim-library'
+import { rangeStart, sendRawAnswer } from '../helpers/zim-http'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // Registry over a REAL temp database (the collections-ipc harness precedent). The kiwix-manage
@@ -38,16 +39,7 @@ function makeHarness(): { db: Db; deps: PackDeps; root: string; zimDir: string }
   const zimDir = join(root, 'zim')
   mkdirSync(zimDir, { recursive: true })
   const db = openDatabase(join(root, 'test.sqlite'))
-  const manageAdd: PackDeps['manageAdd'] = async (libraryXmlPath, zimPath) => {
-    const leaf = basename(zimPath)
-    if (leaf.includes('corrupt')) throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
-    const { uuid } = readZimHeader(zimPath)
-    appendFileSync(
-      libraryXmlPath,
-      `<book id="${uuid}" path="${zimPath.replace(/\\/g, '/')}" title="Title of ${leaf}" ` +
-        `description="Test archive" language="deu" date="2026-07-01" articleCount="4102" mediaCount="7" />\n`
-    )
-  }
+  const manageAdd = manageAddFromHeader({ rejectLeaf: 'corrupt', book: () => ({ articleCount: 4102 }) })
   return { db, deps: { zimDir, manageAdd }, root, zimDir }
 }
 
@@ -168,20 +160,6 @@ describe('knowledge-pack registry', () => {
     expect(listPacks(db)[0]).toMatchObject({ available: true, unavailableReason: null })
   })
 
-  it('resolves by IDENTITY: the drive zim/<leaf> location first, the recorded path second', async () => {
-    const { db, deps, root, zimDir } = makeHarness()
-    const elsewhere = join(root, 'elsewhere')
-    mkdirSync(elsewhere)
-    const external = addZimFile(elsewhere, 'ext.zim', U.alpha)
-    await registerPack(db, deps, external)
-    const row = { id: U.alpha, leaf: 'ext.zim', recorded_path: external }
-    // Recorded (external) path resolves while no drive copy exists.
-    expect(resolvePack(zimDir, row)).toEqual({ path: external, uuid: U.alpha })
-    // A copy under zim/ wins — the drive-relative location is canonical after a remount.
-    const canonical = addZimFile(zimDir, 'ext.zim', U.alpha)
-    expect(resolvePack(zimDir, row)).toEqual({ path: canonical, uuid: U.alpha })
-  })
-
   it('#429 — a recorded path with a foreign separator still resolves, in the native form', async () => {
     // A row written before the registration boundary normalized separators (or edited by hand)
     // can carry forward slashes on Windows. Such a path OPENS fine on Windows — which is why
@@ -213,6 +191,16 @@ describe('knowledge-pack registry', () => {
     // On POSIX a backslash is an ordinary filename character, so nothing is rewritten and a
     // native path resolves exactly as before — the contract this fix must not break.
     expect(resolvePack(zimDir, row(external), 'linux')).toEqual({ path: external, uuid: U.alpha })
+
+    // The write half, on every host: registering a forward-slash path under win32 STORES the
+    // native (backslash) form. The path is only read as given, so the leg needs no such file.
+    const foreign = external.split(sep).join('/')
+    await registerPack(db, { ...deps, platform: 'win32' }, foreign)
+    const stored = (
+      db.prepare('SELECT recorded_path AS p FROM knowledge_packs WHERE id = ?').get(U.alpha) as { p: string }
+    ).p
+    expect(stored).toBe(foreign.split('/').join('\\'))
+    expect(stored).not.toContain('/')
   })
 
   it('remove and enable/disable behave and report row existence', async () => {
@@ -259,14 +247,21 @@ describe('knowledge-pack registry', () => {
     const a = await registerPack(db, deps, addZimFile(zimDir, 'a.zim', U.alpha))
     const b = await registerPack(db, deps, addZimFile(zimDir, 'b.zim', U.beta))
     await registerPack(db, deps, addZimFile(zimDir, 'gone.zim', U.gamma))
+    // A stale build at the same path still lists beta and gamma: the writer starts from an empty
+    // file, so neither survives into the new library.
+    const libraryPath = join(root, 'library.xml')
+    appendLibraryBook(libraryPath, join(zimDir, 'b.zim'))
+    appendLibraryBook(libraryPath, join(zimDir, 'gone.zim'))
     setPackEnabled(db, b.id, false)
     rmSync(join(zimDir, 'gone.zim'))
     // The caller resolves + de-collides first; the writer no longer re-queries the rows.
     const served = servedCandidates(db, zimDir)
     expect(served).toEqual([{ id: a.id, path: join(zimDir, 'a.zim') }])
-    const libraryPath = join(root, 'library.xml')
     await expect(writeLibraryXml(deps, libraryPath, served)).resolves.toBe(1)
-    expect(a.enabled).toBe(true)
+    const xml = readFileSync(libraryPath, 'utf8')
+    expect(xml).toContain(U.alpha)
+    expect(xml).not.toContain(U.beta) // disabled
+    expect(xml).not.toContain(U.gamma) // vanished
   })
 
   it('T11 same basename at two locations, wrong drive candidate with correct external fallback, header magic / length / UUID-order mismatches, same UUID after rename / copy: correct identity chosen, invalid headers unavailable without leaks, tombstones and disabled flags preserved', async () => {
@@ -283,10 +278,9 @@ describe('knowledge-pack registry', () => {
     // the M5 bug: `zim/<leaf>` was tried first and won on EXISTENCE alone, so the arm filtered
     // `books.id=<alpha>` against the intruder and got zero hits forever, while the panel said
     // "available".
-    const intruder = addZimFile(zimDir, 'wikipedia_de.zim', U.intruder)
+    addZimFile(zimDir, 'wikipedia_de.zim', U.intruder)
     const row = { id: U.alpha, leaf: 'wikipedia_de.zim', recorded_path: external }
     expect(resolvePack(zimDir, row)).toEqual({ path: external, uuid: U.alpha })
-    expect(resolvePack(zimDir, row)).not.toMatchObject({ path: intruder })
     // …and the identical row resolves to the DRIVE copy the moment the drive copy IS the pack.
     const realOnDrive = addZimFile(zimDir, 'alpha-on-drive.zim', U.alpha)
     expect(
@@ -305,9 +299,8 @@ describe('knowledge-pack registry', () => {
       expect(resolved, kind).toEqual({ path: null, reason: 'identity-mismatch' })
       const lines = JSON.stringify(warn.mock.calls)
       expect(lines).toContain('could not be identified from its header')
-      expect(lines).not.toContain(leaf)
+      expect(lines).not.toContain('broken-') // not even the leaf's stem
       expect(lines).not.toContain(zimDir.replace(/\\/g, '\\\\'))
-      expect(lines).not.toContain('broken-')
     }
     // A row with no candidate file anywhere is MISSING — a different user-facing state.
     expect(resolvePack(zimDir, { id: U.beta, leaf: 'never-existed.zim', recorded_path: '' })).toEqual({
@@ -355,6 +348,13 @@ describe('knowledge-pack registry', () => {
     copyFileSync(join(zimDir, 'renamed-after-removal.zim'), join(zimDir, 'unrelated.zim'))
     const copied = addZimFile(zimDir, 'delta-copy.zim', U.delta)
     await reconcile(db, deps)
+    // The copy of the tombstoned beta archive stays removed: a copy is not a re-add.
+    expect(listPacks(db).map((p) => p.id)).not.toContain(U.beta)
+    expect(
+      (db.prepare('SELECT removed_at FROM knowledge_packs WHERE id = ?').get(U.beta) as {
+        removed_at: string | null
+      }).removed_at
+    ).not.toBeNull()
     const deltaRow = db
       .prepare(
         'SELECT leaf, recorded_path, enabled, removed_at, unavailable_at FROM knowledge_packs WHERE id = ?'
@@ -423,16 +423,6 @@ describe('knowledge-pack registry', () => {
 })
 
 describe('ZimService.packDeps — injected platform reaches kiwix-manage argv (#301 P5, finding L9, plan §9.19 (e))', () => {
-  class FakeManageChild extends EventEmitter implements ChildProcessLike {
-    pid = 4242
-    killed = false
-    stderr = new EventEmitter()
-    kill(): boolean {
-      this.killed = true
-      return true
-    }
-  }
-
   /** One registration through a REAL `ZimService`, `platform` as given, a fake `manageSpawn`
    *  that records argv and answers as a successful kiwix-manage. `zimPath` is passed through
    *  a forward-slash form regardless of the test host, so a passing assertion actually proves
@@ -444,35 +434,34 @@ describe('ZimService.packDeps — injected platform reaches kiwix-manage argv (#
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-svc-platform-'))
     const db = openDatabase(join(root, 'test.sqlite'))
     const calls: Array<{ command: string; args: string[] }> = []
-    const manageSpawn: SpawnFn = (command, args) => {
-      const child = new FakeManageChild()
+    // Answers as a successful kiwix-manage: it appends the `<book>` element the real binary
+    // would (the manager's `id` must equal the header uuid or registration fails).
+    const answering = fakeManageSpawn({
+      firstPid: 4242,
+      mode: 'ignore-all',
+      book: () => ({ id: U.alpha, title: 'Title', description: 'Test', articleCount: 1, mediaCount: 0 })
+    })
+    const manageSpawn: SpawnFn = (command, args, options) => {
       calls.push({ command, args: args as string[] })
-      // Answer as a successful kiwix-manage: append the `<book>` element the real binary would
-      // (the manager's `id` must equal the header uuid or registration fails).
-      queueMicrotask(() => {
-        // argv[0] is the PLATFORM-normalised spelling (`\tmp\…` when platform is win32 on a POSIX
-        // host); the real temp library lives at the host-separator spelling, which is where the
-        // service reads the metadata back from. A real kiwix-manage on Windows sees the same file
-        // either way; the fake has to map it back explicitly.
-        const libraryXmlPath = (args[0] as string).split("\\").join(sep)
-        appendFileSync(
-          libraryXmlPath,
-          `<book id="${U.alpha}" path="${zimPath.replace(/\\/g, '/')}" title="Title" ` +
-            `description="Test" language="deu" date="2026-07-01" articleCount="1" mediaCount="0" />\n`
-        )
-        child.emit('exit', 0, null)
-      })
-      return child
+      // argv[0] is the PLATFORM-normalised spelling (`\tmp\…` when platform is win32 on a POSIX
+      // host); the real temp library lives at the host-separator spelling, which is where the
+      // service reads the metadata back from. A real kiwix-manage on Windows sees the same file
+      // either way; the fake has to map it back explicitly.
+      const libraryXmlPath = (args[0] as string).split('\\').join(sep)
+      return answering.spawn(command, [libraryXmlPath, ...args.slice(1)], options)
     }
     const svc = new ZimService({
       rootPath: root,
       isDev: true,
       platform,
       transientDir: join(root, 'zim-transient'),
-      deps: {
-        resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
-        manageSpawn
-      }
+      deps: zimServiceDeps({
+        manageSpawn,
+        spawn: () => {
+          throw new Error('registration must not start kiwix-serve')
+        },
+        findPort: async () => 0
+      })
     })
     const pack = await svc.registerPack(db, zimPath)
     expect(pack.id).toBe(U.alpha)
@@ -524,7 +513,7 @@ const T14_ARTICLE_HTML =
   '<section data-mw-section-id="0"><p>Alpha Artikel über Treibhausgas in der Landwirtschaft.</p></section>' +
   '</body></html>'
 
-type SuggestAnswer = 'pattern' | 'no-pattern' | 'four-oh-four' | 'bad-json' | 'not-json-array' | 'park'
+type SuggestAnswer = 'pattern' | 'no-pattern' | 'four-oh-four'
 
 describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
   let server: http.Server
@@ -553,22 +542,13 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
         onSuggest?.()
         const answer = suggestAnswers.get(name) ?? 'four-oh-four'
         const send = (): void => {
-          if (answer === 'park') return
           if (answer === 'four-oh-four') {
             res.writeHead(404)
             res.end('not found')
             return
           }
           res.writeHead(200, { 'content-type': 'application/json' })
-          res.end(
-            answer === 'pattern'
-              ? SUGGEST_WITH_PATTERN
-              : answer === 'no-pattern'
-                ? SUGGEST_WITHOUT_PATTERN
-                : answer === 'bad-json'
-                  ? '{ not json'
-                  : JSON.stringify({ kind: 'pattern' })
-          )
+          res.end(answer === 'pattern' ? SUGGEST_WITH_PATTERN : SUGGEST_WITHOUT_PATTERN)
         }
         if (suggestGate) void suggestGate.wait().then(send)
         else send()
@@ -593,8 +573,7 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
         return
       }
       if (url.pathname.startsWith('/raw/')) {
-        res.writeHead(200, { 'content-type': 'text/html' })
-        res.end(T14_ARTICLE_HTML)
+        sendRawAnswer(res, { status: 200, body: T14_ARTICLE_HTML }, rangeStart(req.headers.range))
         return
       }
       res.writeHead(404)
@@ -622,7 +601,7 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
     close(): Promise<void>
   }
 
-  function searchableHarness(opts: { probeTimeoutMs?: number } = {}): SearchableHarness {
+  function searchableHarness(): SearchableHarness {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-searchable-'))
     const zimDir = join(root, 'zim')
     mkdirSync(zimDir, { recursive: true })
@@ -641,44 +620,22 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
     // A fake kiwix-manage that echoes the FILE'S OWN header uuid and the tags the test chose
     // for that leaf — the same construction the registry suite uses, so the manager and the
     // header can never disagree by accident.
-    const manageSpawn: SpawnFn = (_command, args) => {
-      const libraryXmlPath = args[0] as string
-      const zimPath = args[2] as string
-      const child = new ServeFakeChild(pid++, 'exit-on-sigterm')
-      queueMicrotask(() => {
-        if (child.killed) return
-        const leaf = basename(zimPath)
-        const tags = tagsByLeaf.get(leaf) ?? null
-        appendFileSync(
-          libraryXmlPath,
-          `<book id="${readZimHeader(zimPath).uuid}" path="${zimPath.replace(/\\/g, '/')}" ` +
-            `title="Title of ${leaf}" description="Test archive" language="deu" date="2026-07-01" ` +
-            (tags === null ? '' : `tags="${tags}" `) +
-            `articleCount="41" mediaCount="7" />\n`
-        )
-        child.emit('exit', 0, null)
-      })
-      return child
-    }
+    const manageSpawn = fakeManageSpawn({
+      firstPid: 5900,
+      book: (zimPath) => ({ tags: tagsByLeaf.get(basename(zimPath)) ?? null })
+    }).spawn
 
     const svc = new ZimService({
       rootPath: root,
       isDev: true,
       admission: { admitsWork: () => admits.value, epoch: () => 1 } satisfies ZimAdmission,
       transientDir: join(root, 'zim-transient'),
-      deps: {
-        resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
+      deps: zimServiceDeps({
         spawn,
         manageSpawn,
         findPort: async () => port,
-        probe: async () => true,
-        healthTimeoutMs: 1_000,
-        healthIntervalMs: 1,
-        killGraceMs: 5,
-        forceKillWaitMs: 5,
-        toolsFingerprint: () => fingerprint.value,
-        probeTimeoutMs: opts.probeTimeoutMs ?? 5_000
-      }
+        toolsFingerprint: () => fingerprint.value
+      })
     })
 
     return {
@@ -717,7 +674,7 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
       searchable_key: string | null
     }).searchable_key
 
-  it('T14 searchable column migration on an existing table and a fresh DB, NULL / tag variants, probe 200-no-hits vs 404 / timeout / bad JSON, tool or file revision change: correct unknown / yes / no, no false persistent no, reprobe possible, no post-lock capability write, index-less article still readable', async () => {
+  it('T14 searchable column migration on an existing table and a fresh DB, NULL / tag variants, probe 200-no-hits vs an unknown answer, tool or file revision change: correct unknown / yes / no, no false persistent no, reprobe possible, no post-lock capability write, index-less article still readable', async () => {
     // ---- (1) MIGRATION of an EXISTING table, and a fresh one ---------------------------
     {
       const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-migrate-'))
@@ -790,7 +747,7 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
     }
 
     // ---- (3) THE PROBE MATRIX through a real service, at the reconcile's end ------------
-    const h = searchableHarness({ probeTimeoutMs: 150 })
+    const h = searchableHarness()
     let yesPack = ''
     let noPack = ''
     let unknownPack = ''
@@ -800,28 +757,19 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
       yesPack = await h.addPack('indexed.zim', packUuid('aaaa1111', 'idx'), '_ftindex:no')
       noPack = await h.addPack('indexless.zim', packUuid('bbbb2222', 'nidx'), '_ftindex:yes')
       unknownPack = await h.addPack('ambiguous.zim', packUuid('cccc3333', 'amb'), null)
-      const parkedPack = await h.addPack('parked.zim', packUuid('dddd4444', 'prk'), null)
-      const junkPack = await h.addPack('junkjson.zim', packUuid('eeee5555', 'jnk'), null)
-      const objectPack = await h.addPack('objectjson.zim', packUuid('ffff6666', 'obj'), null)
       suggestAnswers = new Map([
         [bookNames.get(yesPack)!, 'pattern'],
         [bookNames.get(noPack)!, 'no-pattern'],
-        [bookNames.get(unknownPack)!, 'four-oh-four'],
-        [bookNames.get(parkedPack)!, 'park'],
-        [bookNames.get(junkPack)!, 'bad-json'],
-        [bookNames.get(objectPack)!, 'not-json-array']
+        [bookNames.get(unknownPack)!, 'four-oh-four']
       ])
 
       await h.svc.reconcile(h.db)
 
       // The verdicts: only a 200 with the pattern entry is "yes", only a 200 array without one
-      // is "no", and a 404, a timeout, a malformed body and a non-array body ALL stay unknown.
+      // is "no", and an unknown answer (a 404 here; the client owns the other shapes) writes nothing.
       expect(searchableOf(h.db, yesPack)).toBe('yes')
       expect(searchableOf(h.db, noPack)).toBe('no')
       expect(searchableOf(h.db, unknownPack)).toBeNull()
-      expect(searchableOf(h.db, parkedPack)).toBeNull()
-      expect(searchableOf(h.db, junkPack)).toBeNull()
-      expect(searchableOf(h.db, objectPack)).toBeNull()
       // The archive's own tag said the opposite for both confirmed packs — the LIVE probe wins,
       // and the hint is still recorded beside it, unchanged.
       const listed = listPacks(h.db)
@@ -964,11 +912,12 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
         expect(searchableOf(quiet.db, pack)).toBe('yes')
         const spawnsAfterFirst = quiet.serveChildren.length
         expect(spawnsAfterFirst).toBeGreaterThan(0)
-        await quiet.svc.stop()
+        await quiet.svc.suspend() // not stop(): that latches and the next reconcile would reject
         suggested = []
         // A fresh reconcile with nothing unknown left: no probe, and no child for one.
-        await quiet.svc.reconcile(quiet.db).catch(() => undefined)
+        await quiet.svc.reconcile(quiet.db)
         expect(suggested).toEqual([])
+        expect(quiet.serveChildren).toHaveLength(spawnsAfterFirst)
       } finally {
         await quiet.close()
       }

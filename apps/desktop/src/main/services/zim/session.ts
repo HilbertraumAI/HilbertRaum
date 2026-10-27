@@ -8,8 +8,9 @@ import type { AppContext } from '../context'
 // startup — and each one calls this right after `maybeStartLocalApi(ctx)`, whose shape it
 // mirrors. Two things happen per session and only per session:
 //
-//   1. the workspace's own `zim-transient/` directory is cleaned (whatever a crash, an
-//      unconfirmed child or a previous lock left behind), and
+//   1. the workspace's own `zim-transient/` directory is cleaned (whatever a crash or a
+//      previous lock left behind — a file kept for a child whose death could not be confirmed
+//      stays until the next app start, #713), and
 //   2. the drive folder is reconciled once in the background.
 //
 // D3: NEVER on the unlock/create critical path. The `setTimeout(0)` puts the whole pass after
