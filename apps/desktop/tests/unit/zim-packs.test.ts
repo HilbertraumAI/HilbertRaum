@@ -24,7 +24,7 @@ import { ZimService, type ZimAdmission } from '../../src/main/services/zim'
 import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { malformedZimFixture, packUuid, writeZimFixture } from '../helpers/zim-header'
 import { ServeFakeChild, fakeManageSpawn, serveGate, zimServiceDeps } from '../helpers/zim-fakes'
-import { manageAddFromHeader } from '../helpers/zim-library'
+import { appendLibraryBook, manageAddFromHeader } from '../helpers/zim-library'
 import { rangeStart, sendRawAnswer } from '../helpers/zim-http'
 import { testBudgetMs } from '../helpers/hang-budget'
 
@@ -247,12 +247,16 @@ describe('knowledge-pack registry', () => {
     const a = await registerPack(db, deps, addZimFile(zimDir, 'a.zim', U.alpha))
     const b = await registerPack(db, deps, addZimFile(zimDir, 'b.zim', U.beta))
     await registerPack(db, deps, addZimFile(zimDir, 'gone.zim', U.gamma))
+    // A stale build at the same path still lists beta and gamma: the writer starts from an empty
+    // file, so neither survives into the new library.
+    const libraryPath = join(root, 'library.xml')
+    appendLibraryBook(libraryPath, join(zimDir, 'b.zim'))
+    appendLibraryBook(libraryPath, join(zimDir, 'gone.zim'))
     setPackEnabled(db, b.id, false)
     rmSync(join(zimDir, 'gone.zim'))
     // The caller resolves + de-collides first; the writer no longer re-queries the rows.
     const served = servedCandidates(db, zimDir)
     expect(served).toEqual([{ id: a.id, path: join(zimDir, 'a.zim') }])
-    const libraryPath = join(root, 'library.xml')
     await expect(writeLibraryXml(deps, libraryPath, served)).resolves.toBe(1)
     const xml = readFileSync(libraryPath, 'utf8')
     expect(xml).toContain(U.alpha)
@@ -295,7 +299,7 @@ describe('knowledge-pack registry', () => {
       expect(resolved, kind).toEqual({ path: null, reason: 'identity-mismatch' })
       const lines = JSON.stringify(warn.mock.calls)
       expect(lines).toContain('could not be identified from its header')
-      expect(lines).not.toContain(leaf)
+      expect(lines).not.toContain('broken-') // not even the leaf's stem
       expect(lines).not.toContain(zimDir.replace(/\\/g, '\\\\'))
     }
     // A row with no candidate file anywhere is MISSING — a different user-facing state.

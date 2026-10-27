@@ -77,7 +77,7 @@ import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { KnowledgePackAddResult, KnowledgePackStatus, PrivacyPolicy } from '../../src/shared/types'
+import type { KnowledgePack, KnowledgePackAddResult, KnowledgePackStatus, PrivacyPolicy } from '../../src/shared/types'
 import {
   WorkspaceController,
   createEncryptedVaultOnDisk,
@@ -111,7 +111,7 @@ import {
 } from '../helpers/zim-fakes'
 import { rangeStart, sendRawAnswer, sendRawStall } from '../helpers/zim-http'
 import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
-import { scriptedRuntime } from '../helpers/scripted-runtime'
+import { recordingRuntime } from '../helpers/scripted-runtime'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -771,7 +771,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         dialogState.paths = [h.addPackFile('added-after-failed-lock.zim')]
         const { result } = await invoke(handlers, IPC.addKnowledgePacks)
         // #301 P5 (L1): `packs:add` answers the typed DTO, not a bare array.
-        expect((result as KnowledgePackAddResult).outcome).toBe('success')
+        expect(result).toMatchObject({ outcome: 'success', failed: 0, failureReason: null })
         expect((result as KnowledgePackAddResult).added).toHaveLength(1)
         expect(h.packRows()).toHaveLength(2)
 
@@ -850,6 +850,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         const pass = vi.spyOn(h.svc, 'reconcile')
         startKnowledgePackSession(h.ctx)
         expect(pass).not.toHaveBeenCalled() // scheduled, never inline
+        expect(existsSync(stranded)).toBe(true) // the cleanup is scheduled too
 
         expect(await waitUntil(() => h.metaAdds.length > 0)).toBe(true)
         for (let i = 0; i < 30; i++) await tick()
@@ -862,9 +863,11 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         // A fresh observation window. Spying again is no longer one: since vitest 4 it returns
         // the same spy, with the pass above still in its history.
         pass.mockClear()
+        writeFileSync(stranded, '<library />')
         startKnowledgePackSession(h.ctx)
         for (let i = 0; i < 30; i++) await tick()
         expect(pass).not.toHaveBeenCalled()
+        expect(existsSync(stranded)).toBe(true) // nor does it clean
         h.ctrl.cancelLock()
       } finally {
         await h.close()
@@ -1364,7 +1367,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const metaAddsAtPark = h.metaAdds.length
       manageGate.release()
       await parkedStartP
-      for (let i = 0; i < 20; i++) await tick() // drain the coalesced rerun
+      expect(await waitUntil(() => !h.svc.refreshing())).toBe(true) // the coalesced rerun finished
       expect(await refreshingNow()).toBe(false)
       // The rerun finds `never-discovered.zim` ALREADY registered by the parked pass, so it
       // spawns no second manager call — proof there was no THIRD, uncoalesced pass either.
@@ -1413,6 +1416,9 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // aborted pass never got to.
       expect(h.metaAdds.length).toBe(metaAddsBeforeNewSession + 1)
       expect(h.metaAdds.slice(-1)).toEqual(['discovered-across-lock.zim'])
+      // …and packs:list shows it (a handler that always answered [] would not).
+      const listedAfterPass = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+      expect(listedAfterPass.map((p) => p.leaf)).toContain('discovered-across-lock.zim')
       // ---- (4) packs:remove / packs:setEnabled(false) issued while a reconcile is parked WIN:
       //      after release the rows stay tombstoned / disabled, and the columns the reconcile
       //      does not own (`enabled`, `removed_at`) — nor even touch when nothing else about
@@ -1452,6 +1458,10 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // …and gamma — the file the pass actually had work for — DID get registered, proving the
       // pass really ran to completion rather than the assertions above passing vacuously.
       expect(h.metaAdds).toContain('gamma-t13.zim')
+      // packs:list drops the removed pack and keeps the disabled one, marked disabled.
+      const listedFinal = (await invoke(handlers, IPC.listKnowledgePacks)).result as KnowledgePack[]
+      expect(listedFinal.map((p) => p.id)).not.toContain(alphaId)
+      expect(listedFinal.find((p) => p.id === betaId)).toMatchObject({ enabled: false })
     } finally {
       await h.close()
     }
@@ -1927,10 +1937,7 @@ const EMPTY_SEARCH_XML = '<?xml version="1.0" encoding="UTF-8"?><rss><channel></
 /** The chat runtime the grounded answers come from: one fixed reply, with the 4,096-token window
  *  the budgets are computed against. No leg reads the answer text — citations and outcomes are
  *  retrieval's. */
-const askRuntime = (): ModelRuntime => ({
-  ...scriptedRuntime('ok', [], { tokens: 'whole' }),
-  contextWindow: () => 4096
-})
+const askRuntime = (): ModelRuntime => recordingRuntime('ok', { contextWindow: 4096 })
 
 const ASK_SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 

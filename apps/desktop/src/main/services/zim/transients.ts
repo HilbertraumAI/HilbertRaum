@@ -22,8 +22,9 @@ import { shredFile } from '../workspace-vault'
 // Both are PLAINTEXT while they exist — the XML names every enabled pack's title and absolute
 // path — in BOTH workspace modes (an encrypted vault and plaintext_dev alike). Before this
 // they lived in the host's temp directory and survived a lock, which is exactly what M4/L3
-// reported. They are removed at lock, at quit, at every session start and at app start; a file kept for a child whose
-// death could not be confirmed stays until the next APP start (#713).
+// reported. They are removed at lock, at quit, at every session start and at app start; a
+// file kept for a child whose death could not be confirmed stays until the next APP start
+// (#713).
 //
 // This is a DEDICATED entry point, not a case in `shredStalePlaintext`'s documents/images
 // loop: that loop visits only `documents/` and `images/`, its predicate matches neither name,
