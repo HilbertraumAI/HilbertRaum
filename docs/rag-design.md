@@ -3491,7 +3491,7 @@ the figures they support are quoted in the text.
   `engine-consent-ipc.test.ts` (the explicit request installs kiwix alone and reconciles once;
   the argument-less call never fetches it; malformed and mixed payloads are refused before any
   gate; the PID-registry refusal; `optionalFamilies` from the pin; the every-file `installed`),
-  `preload-engine.test.ts` (no payload when absent), `KnowledgePacks.test.tsx` /
+  `preload-engine.test.ts` (no payload when absent), `KnowledgePackToolsInstall.test.tsx` /
   `ModelsScreen.test.tsx` (the two surfaces, the required acknowledgement, the gate-off reason).
   Record of the UI: design-guidelines §11.15 "P8-2 consent surfaces".
 
@@ -3662,7 +3662,8 @@ the figures they support are quoted in the text.
   packs"). Tests: `zim-expand.test.ts` (`parseExpansion`'s sanitiser rules, `buildExpansionMessages`,
   and `makeQueryExpander`'s call shape, timeout, abort-vs-fallback split, and mock invariant) and
   the L3-b legs of `zim-arm.test.ts` (the expansion-articles-first fetch order, the per-pack caps,
-  the `Liste …` / `List of …` chunk-keep switch, and the ask-abort-rethrown leg at this layer).
+  the `Liste …` / `List of …` chunk-keep switch, and the ask-abort-rethrown leg at this layer) —
+  rewritten for the planner when the discovery port replaced this expander (`24741f60`).
 
 - **D-Z21 — "Save article to my documents" (#340 Tier-2, owner ruling C3 (a) 2026-09-06: the
   save button in the article viewer first, the citation-card shortcut later).** An article the
@@ -4052,8 +4053,9 @@ the list shape were not helped by hits 6–10, and one selected pack already get
   what is in them: nothing any fixture question was looking for.
   So the surviving reason for 5 is the one that was always the stronger half — **one selected pack
   already gets the whole 24-candidate quota** — and a longer page buys `/raw` reads, not answers.
-  `ARTICLES_PER_PACK` is pinned at 5 with this measurement in `zim-arm.test.ts` ("the shipped
-  per-pack article cap"). **Caveat on scope:** one pack, one 27 MB archive — the only ZIM on K:.
+  `ARTICLES_PER_PACK` was pinned at 5 with this measurement in `zim-arm.test.ts` ("the shipped
+  per-pack article cap", deleted with the constant). **Caveat on scope:** one pack, one 27 MB
+  archive — the only ZIM on K:.
   A full Wikipedia is a different rank distribution, and #417 is what would put one on a drive.
 *L1* — the title-index `/suggest` arm stays unbuilt and an index-less pack keeps "not searched:
 no full-text index": alone it is prefix-bound (no title match for "österreichische

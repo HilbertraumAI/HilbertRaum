@@ -700,7 +700,7 @@ async function installKiwix(
 }
 
 describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)', () => {
-  it('T20 kiwix_tools family: both executable hashes checked, the optional family never breaks core-engine readiness, per-platform artifacts / digests / notices / source record complete, script-drift matrices green', async () => {
+  it('T20 kiwix_tools family: both executable hashes checked, the optional family never breaks core-engine readiness, per-platform artifacts / digests / notices / source record complete', async () => {
     const { rootPath, manifestsDir } = makeKiwixDrive()
     // Readiness before anything is installed: the chat engine is what is missing; kiwix is
     // reported apart, never as a prerequisite.

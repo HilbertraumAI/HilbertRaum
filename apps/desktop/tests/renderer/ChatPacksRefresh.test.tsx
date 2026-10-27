@@ -7,10 +7,9 @@ import type {
   Collection,
   Conversation,
   DocumentInfo,
-  KnowledgePack,
-  KnowledgePacksChangedEvent,
   RuntimeStatus
 } from '../../src/shared/types'
+import { knowledgePack, packsEventEmitter } from '../helpers/knowledge-pack-fixtures'
 import { stubApi } from '../helpers/renderer'
 
 // #301 P3b, finding L7 (plan §9.17 (e)3) — the Chat half of T13, modelled on
@@ -75,42 +74,6 @@ function collection(over: Partial<Collection>): Collection {
   } as Collection
 }
 
-function pack(over: Partial<KnowledgePack> = {}): KnowledgePack {
-  return {
-    id: 'uuid-climate',
-    title: 'Klimawandel von Wikipedia',
-    description: null,
-    language: 'deu',
-    zimDate: '2026-07-01',
-    articleCount: 4102,
-    sizeBytes: 27 * 1024 * 1024,
-    leaf: 'wikipedia_de_climate.zim',
-    enabled: true,
-    available: true,
-    unavailableReason: null,
-    addedAt: '2026-09-01T00:00:00Z',
-    ...over
-  }
-}
-
-/** A controllable `onKnowledgePacksChanged` stand-in: the test holds `emit` and calls it
- *  whenever the "main process" would broadcast the event. */
-function packsEventEmitter(): {
-  onKnowledgePacksChanged: (cb: (event: KnowledgePacksChangedEvent) => void) => () => void
-  emit: (event: KnowledgePacksChangedEvent) => void
-} {
-  let cb: ((event: KnowledgePacksChangedEvent) => void) | null = null
-  return {
-    onKnowledgePacksChanged: (fn) => {
-      cb = fn
-      return () => {
-        cb = null
-      }
-    },
-    emit: (event) => cb?.(event)
-  }
-}
-
 beforeAll(() => {
   Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
     configurable: true,
@@ -132,7 +95,7 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
     const user = userEvent.setup()
     const docConv = conv()
     const emitter = packsEventEmitter()
-    const listKnowledgePacks = vi.fn(async () => [pack()])
+    const listKnowledgePacks = vi.fn(async () => [knowledgePack()])
     stubApi({
       listConversations: vi.fn(async () => [docConv]),
       getRuntimeStatus: vi.fn(async () => runningStatus),
@@ -167,7 +130,7 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
     let listCalls = 0
     const listKnowledgePacks = vi.fn(async () => {
       listCalls++
-      return listCalls === 1 ? [] : [pack()]
+      return listCalls === 1 ? [] : [knowledgePack()]
     })
     stubApi({
       listConversations: vi.fn(async () => [docConv]),
@@ -213,7 +176,7 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
     const listKnowledgePacks = vi.fn(async () => {
       listCalls++
       if (listCalls === 2) throw new Error('transient IPC failure')
-      return [pack()]
+      return [knowledgePack()]
     })
     stubApi({
       listConversations: vi.fn(async () => [docConv]),

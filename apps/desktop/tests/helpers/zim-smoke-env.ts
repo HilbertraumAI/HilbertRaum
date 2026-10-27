@@ -7,14 +7,10 @@ import { kiwixManageBinaryName, kiwixServeBinaryName } from '../../src/main/serv
 // plan §9.19 (d)). `tests/manual/zim-real.test.ts` used to derive its `enabled` flag from input
 // EXISTENCE (`!!toolsDir && !!zimFile && existsSync(...)`), which cannot express "requested but
 // invalid" — a wrong path, a missing binary, or an unset query all silently SKIPPED the smoke
-// instead of failing it. `zimSmokeEnv` is a pure function: the gate gate is
+// instead of failing it. `zimSmokeEnv` is a pure function: the gate is
 // `HILBERTRAUM_ZIM_SMOKE` (set and not `''`/`'0'`/`'false'`); once requested, every input is
 // REQUIRED and every failure is a named problem, never a value — a wrong path or a missing
 // binary must fail the run, not quietly skip it.
-
-/** Filesystem seam — real `node:fs` by default; tests pass a real temp dir through it, never a
- *  mock, so only the two existence/kind checks this module needs are named here. */
-export type ZimSmokeFs = Pick<typeof nodeFs, 'existsSync' | 'statSync'>
 
 export interface ZimSmokeInputs {
   toolsDir: string
@@ -45,8 +41,7 @@ const UNSET_OR_FALSY = new Set(['', '0', 'false'])
  */
 export function zimSmokeEnv(
   env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform,
-  fs: ZimSmokeFs = nodeFs
+  platform: NodeJS.Platform = process.platform
 ): ZimSmokeGate {
   const smoke = env.HILBERTRAUM_ZIM_SMOKE
   const requested = smoke !== undefined && !UNSET_OR_FALSY.has(smoke)
@@ -57,13 +52,13 @@ export function zimSmokeEnv(
   const toolsDir = env.HILBERTRAUM_ZIM_TOOLS_DIR ?? ''
   if (toolsDir === '') {
     problems.push('HILBERTRAUM_ZIM_TOOLS_DIR is not set')
-  } else if (!isDirectory(fs, toolsDir)) {
+  } else if (!isDirectory(toolsDir)) {
     problems.push('HILBERTRAUM_ZIM_TOOLS_DIR is not a directory')
   } else {
-    if (!fs.existsSync(join(toolsDir, kiwixServeBinaryName(platform)))) {
+    if (!nodeFs.existsSync(join(toolsDir, kiwixServeBinaryName(platform)))) {
       problems.push(`HILBERTRAUM_ZIM_TOOLS_DIR is missing ${kiwixServeBinaryName(platform)}`)
     }
-    if (!fs.existsSync(join(toolsDir, kiwixManageBinaryName(platform)))) {
+    if (!nodeFs.existsSync(join(toolsDir, kiwixManageBinaryName(platform)))) {
       problems.push(`HILBERTRAUM_ZIM_TOOLS_DIR is missing ${kiwixManageBinaryName(platform)}`)
     }
   }
@@ -71,7 +66,7 @@ export function zimSmokeEnv(
   const zimFile = env.HILBERTRAUM_ZIM_FILE ?? ''
   if (zimFile === '') {
     problems.push('HILBERTRAUM_ZIM_FILE is not set')
-  } else if (!isFile(fs, zimFile)) {
+  } else if (!isFile(zimFile)) {
     problems.push('HILBERTRAUM_ZIM_FILE is not a file')
   } else {
     try {
@@ -92,17 +87,17 @@ export function zimSmokeEnv(
   return { requested: true, problems, toolsDir, zimFile, query, expectArticle }
 }
 
-function isDirectory(fs: ZimSmokeFs, path: string): boolean {
+function isDirectory(path: string): boolean {
   try {
-    return fs.existsSync(path) && fs.statSync(path).isDirectory()
+    return nodeFs.existsSync(path) && nodeFs.statSync(path).isDirectory()
   } catch {
     return false
   }
 }
 
-function isFile(fs: ZimSmokeFs, path: string): boolean {
+function isFile(path: string): boolean {
   try {
-    return fs.existsSync(path) && fs.statSync(path).isFile()
+    return nodeFs.existsSync(path) && nodeFs.statSync(path).isFile()
   } catch {
     return false
   }

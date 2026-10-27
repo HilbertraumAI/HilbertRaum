@@ -22,11 +22,6 @@ const JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
 // instead of losing the job.
 let rememberedJob: EngineDownloadJob | null = null
 
-/** Test/preview-only reset. Production code never calls this (mirrors ModelsScreen's own). */
-export function __resetKnowledgePackToolsInstallForTests(): void {
-  rememberedJob = null
-}
-
 export interface KnowledgePackToolsInstall {
   /** The `kiwix_tools` entry of `optionalFamilies` — null while loading, absent, or installed. */
   family: EngineOptionalFamily | null

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import * as nodeFs from 'node:fs'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -235,32 +234,5 @@ describe('zimSmokeEnv — the platform parameter, injected not read', () => {
       'HILBERTRAUM_ZIM_TOOLS_DIR is missing kiwix-serve.exe',
       'HILBERTRAUM_ZIM_TOOLS_DIR is missing kiwix-manage.exe'
     ])
-  })
-})
-
-describe('zimSmokeEnv — the fs seam', () => {
-  it('accepts an injected fs implementation (mirrors production default of node:fs)', () => {
-    const toolsDir = validToolsDir('linux')
-    const zimFile = validZimFile()
-    const calls: string[] = []
-    const fs = {
-      existsSync: (p: nodeFs.PathLike) => {
-        calls.push(String(p))
-        return nodeFs.existsSync(p)
-      },
-      statSync: nodeFs.statSync
-    }
-    const gate = zimSmokeEnv(
-      {
-        HILBERTRAUM_ZIM_SMOKE: '1',
-        HILBERTRAUM_ZIM_TOOLS_DIR: toolsDir,
-        HILBERTRAUM_ZIM_FILE: zimFile,
-        HILBERTRAUM_ZIM_QUERY: 'q'
-      },
-      'linux',
-      fs
-    )
-    expect(gate).toMatchObject({ requested: true, problems: [] })
-    expect(calls.length).toBeGreaterThan(0)
   })
 })
