@@ -4216,8 +4216,9 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   reaches the server's lifecycle). The other routes (`/suggest`, `/search`, the health probe) are
   unchanged — the stall was measured on `/raw` bodies only. Tests: `zim-client.test.ts` describe
   "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (four legs — a never-answered
-  attempt, completed statuses untouched, the redirect hop, the other routes; the cut-short, abort
-  and socket-error legs belong to the D-Z22 describe — plus two `kiwixGet` classification legs), the `zim-ipc-session` leg
+  attempt, completed statuses untouched, the redirect hop, the other routes — plus two `kiwixGet`
+  classification legs; the cut-short, abort and socket-error legs belong to the D-Z22
+  describe), the `zim-ipc-session` leg
   "T19 an article whose first /raw read is cut short still opens whole…" (a paragraph past the cut
   reaches the viewer), the `zim-arm` leg "… an article whose first read is cut short keeps its
   chunks"; reporting

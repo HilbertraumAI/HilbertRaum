@@ -202,7 +202,12 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => dead.close(() => resolve()))
 })
 
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())))
+afterAll(() => {
+  // `/big` never ends its response: drop held connections so a client that leaves one open
+  // fails its own test instead of hanging this hook.
+  server.closeAllConnections()
+  return new Promise<void>((resolve) => server.close(() => resolve()))
+})
 
 const SEARCH_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>

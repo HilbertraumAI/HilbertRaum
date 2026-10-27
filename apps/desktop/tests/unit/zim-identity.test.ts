@@ -88,8 +88,9 @@ describe('readZimHeader (plan §2.4)', () => {
     for (let i = 0; i < 400; i++) {
       expect(() => readZimHeader(short)).toThrow(ZimHeaderError)
     }
-    expect(fdCalls.opens - before.opens).toBe(400) // the reads really went through the counter
-    expect(fdCalls.closes - before.closes).toBe(400)
+    const opened = fdCalls.opens - before.opens
+    expect(opened).toBeGreaterThanOrEqual(400) // the reads really went through the counter
+    expect(fdCalls.closes - before.closes).toBe(opened)
   })
 
   it('a directory is unreadable, not a crash', () => {

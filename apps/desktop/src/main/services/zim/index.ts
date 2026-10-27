@@ -226,7 +226,8 @@ export interface ZimServiceOptions {
   ops?: PlaintextOpsRegistry
   /**
    * `<workspacePath>/zim-transient` — where `library.<build>.xml` and `meta-<n>/` live
-   * (#301 P3b, L3/M4). Created lazily; cleaned by the contained, link-refusing sweep.
+   * (#301 P3b, L3/M4). Created lazily; cleaned by the contained, link-refusing sweep, which
+   * takes the folder's parent as the workspace — so pass `zimTransientDir(workspacePath)`.
    */
   transientDir: string
   /**
@@ -344,7 +345,7 @@ export class ZimService {
   private chain: Promise<unknown> = Promise.resolve()
 
   private server: KiwixServer | null = null
-  private libraryDir: string | null = null
+  private transientDirCreated = false
   private published: Published | null = null
   private starting: StartEntry | null = null
   /** Revision-keyed start-failure latch: "a start failure latches until the pack set changes". */
@@ -1212,11 +1213,11 @@ export class ZimService {
 
   /** The transient directory (`opts.transientDir`), created lazily. */
   private ensureLibraryDir(): string {
-    if (!this.libraryDir) {
+    if (!this.transientDirCreated) {
       mkdirSync(this.opts.transientDir, { recursive: true })
-      this.libraryDir = this.opts.transientDir
+      this.transientDirCreated = true
     }
-    return this.libraryDir
+    return this.opts.transientDir
   }
 
   /** Delete ONE build's own file. Never called for a build this operation did not own, and
