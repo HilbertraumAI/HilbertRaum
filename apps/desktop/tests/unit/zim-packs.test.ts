@@ -468,10 +468,10 @@ describe('ZimService.packDeps — injected platform reaches kiwix-manage argv (#
       rootPath: root,
       isDev: true,
       platform,
+      transientDir: join(root, 'zim-transient'),
       deps: {
         resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
-        manageSpawn,
-        verifyBinary: async () => 'ok'
+        manageSpawn
       }
     })
     const pack = await svc.registerPack(db, zimPath)
@@ -626,8 +626,6 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-searchable-'))
     const zimDir = join(root, 'zim')
     mkdirSync(zimDir, { recursive: true })
-    const libraryDir = join(root, 'library')
-    mkdirSync(libraryDir, { recursive: true })
     const db = openDatabase(join(root, 'test.sqlite'))
     const serveChildren: ServeFakeChild[] = []
     const tagsByLeaf = new Map<string, string | null>()
@@ -667,18 +665,17 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
       rootPath: root,
       isDev: true,
       admission: { admitsWork: () => admits.value, epoch: () => 1 } satisfies ZimAdmission,
+      transientDir: join(root, 'zim-transient'),
       deps: {
         resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
         spawn,
         manageSpawn,
         findPort: async () => port,
         probe: async () => true,
-        verifyBinary: async () => 'ok',
         healthTimeoutMs: 1_000,
         healthIntervalMs: 1,
         killGraceMs: 5,
         forceKillWaitMs: 5,
-        libraryDir,
         toolsFingerprint: () => fingerprint.value,
         probeTimeoutMs: opts.probeTimeoutMs ?? 5_000
       }

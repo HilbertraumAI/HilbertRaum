@@ -3542,6 +3542,9 @@ the figures they support are quoted in the text.
   the real Windows binaries and the pinned climate archive (`tests/manual/zim-real.test.ts`,
   `HILBERTRAUM_ZIM_SMOKE=1` against K:): `searchPackTotal(port, pack.id, "Treibhausgas")` → 301
   (17 ms), the invented word `"qzxvwtrkp"` → 0 (15 ms); the quality fixture still hit 9/9.
+  (Removed since: the ladder, `narrowByFrequency` and their tests with the discovery port
+  (`24741f60`); `searchPackTotal` / `parseSearchTotal`, their `zim-client` tests and the smoke's
+  search-total legs in the October 2026 ZIM test campaign, as nothing shipped read the total.)
 
 - **D-Z20 — question → concept expansion (#340 L3-b, owner ruling 2026-09-07, option (a)
   "always") — SUPERSEDED 2026-09-14 by §17 "Discovery port (Phase 4 PR-A)".** The `{concepts,
@@ -4212,10 +4215,9 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   is retried the same way, and the request guard's lifecycle retry is untouched (a stall never
   reaches the server's lifecycle). The other routes (`/suggest`, `/search`, the health probe) are
   unchanged — the stall was measured on `/raw` bodies only. Tests: `zim-client.test.ts` describe
-  "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (eight legs — a never-answered
-  attempt, three cut-short attempts, the caller's abort, a cut-short body retried with the partial
-  body discarded, a mid-body socket error NOT retried, completed statuses untouched, the redirect
-  hop, the other routes — plus two `kiwixGet` classification legs), the `zim-ipc-session` leg
+  "fetchArticleHtml retries a stalled /raw read (#301 P7 T19)" (four legs — a never-answered
+  attempt, completed statuses untouched, the redirect hop, the other routes; the cut-short, abort
+  and socket-error legs belong to the D-Z22 describe — plus two `kiwixGet` classification legs), the `zim-ipc-session` leg
   "T19 an article whose first /raw read is cut short still opens whole…" (a paragraph past the cut
   reaches the viewer), the `zim-arm` leg "… an article whose first read is cut short keeps its
   chunks"; reporting

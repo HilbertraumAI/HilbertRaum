@@ -4,8 +4,8 @@ import { basename, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { ZimService } from '../../src/main/services/zim'
-import { searchPackTotal } from '../../src/main/services/zim/client'
 import { nativeArchivePath, readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
+import { foldSupSub } from '../../src/main/services/zim/supsub'
 import { kiwixServeBinaryName, kiwixToolsDir } from '../../src/main/services/zim/tools'
 import { zimSmokeEnv } from '../helpers/zim-smoke-env'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -27,8 +27,9 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 //   HILBERTRAUM_ZIM_MODEL=<optional — a chat GGUF; with HILBERTRAUM_ZIM_LLAMA_SERVER=<llama-server
 //                          binary> the smoke starts it (CPU only, -ngl 0, unless
 //                          HILBERTRAUM_ZIM_MODEL_NGL says otherwise) and replays the quality
-//                          fixture THROUGH the #340 L3-b expansion (D-Z20), asserting the list
-//                          group too — the measurement of that lever on real tools + a real model>
+//                          fixture through the planner the arm ships (`expand.ts`, rag-design §17
+//                          "Discovery port (Phase 4 PR-A)"), asserting the list group for the
+//                          reference model (LIST_GROUP_REFERENCE_MODEL) and logging it otherwise>
 //
 // FAIL-CLOSED (#301 P5, finding L8, plan §9.19 (d)): CI never sets HILBERTRAUM_ZIM_SMOKE, so
 // `zimSmokeEnv` reports `{ requested: false }` and the suite below is a genuine skip — no test
@@ -39,9 +40,21 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 
 const gate = zimSmokeEnv(process.env)
 
-/** The list group's hit@5 the #340 L3-b expansion reached on the real climate pack with a real
- *  chat model at the ruling (D-Z20) — the smoke asserts it whenever a model is configured. */
+/** The list group's hit@5 floor on the real climate pack behind the shipped planner, asserted for
+ *  the reference model only; any other model logs its figure. Set from the superseded D-Z20
+ *  expander's 5/6 (2026-09-07); re-ratified on the discovery-port planner on 2026-10-27, CPU only:
+ *  qwen3-4b-instruct 4/6. qwen3.5-4b reached 2/6 and 3/6 there, two of its six plans timing out
+ *  at `PLAN_TIMEOUT_MS` (#716). */
 const LIST_GROUP_MIN_HITS = 4
+const LIST_GROUP_REFERENCE_MODEL = 'qwen3-4b-instruct-q4.gguf'
+
+/** hit@5 as the shipped matchers read a title: a `^`/`_` sup/sub marker between alphanumerics
+ *  (#488) is not part of its spelling, so both sides are folded. Whether titles should carry the
+ *  markers at all is open (#711); this stays neutral and still misses an absent article. */
+function hitAt5(topFive: string[], expected: string[]): boolean {
+  const folded = new Set(topFive.map(foldSupSub))
+  return expected.some((t) => folded.has(foldSupSub(t)))
+}
 
 let svc: ZimService | null = null
 let llama: ChildProcess | null = null
@@ -64,8 +77,8 @@ async function freePort(): Promise<number> {
 }
 
 /**
- * The optional real model behind the #340 L3-b expansion (D-Z20): a llama-server started by the
- * smoke over the GGUF the operator named, and a minimal `ModelRuntime` over its OpenAI endpoint
+ * The optional real model behind the shipped planner (`makeQueryExpander`): a llama-server started
+ * by the smoke over the GGUF the operator named, and a minimal `ModelRuntime` over its OpenAI endpoint
  * (non-streaming; the same request body `runtime/llama.ts` sends — thinking switch, temperature,
  * max_tokens, the grammar-constrained `response_format`). Null when the operator set no model.
  */
@@ -159,7 +172,11 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
       expect(existsSync(join(binDir, kiwixServeBinaryName()))).toBe(true)
       mkdirSync(join(root, 'zim'), { recursive: true })
       const db: Db = openDatabase(join(root, 'test.sqlite'))
-      svc = new ZimService({ rootPath: root, isDev: true })
+      svc = new ZimService({
+        rootPath: root,
+        isDev: true,
+        transientDir: join(root, 'workspace', 'zim-transient')
+      })
       expect(svc.toolsInstalled()).toBe(true)
 
       // Register the real archive (kiwix-manage reads the header).
@@ -190,7 +207,7 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
       expect((await routeProbe.text()).trim()).toBe(pack.title)
 
       // The arm: real sidecar start + Xapian search + article fetch + chunking — through the
-      // #340 L3-b expansion when the operator named a model (D-Z20), plain otherwise.
+      // shipped planner when the operator named a model, plain otherwise.
       const expansionRuntime = await startExpansionModel()
       const expand: QueryExpander | null = makeQueryExpander(expansionRuntime)
       // eslint-disable-next-line no-console
@@ -213,25 +230,6 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
           `(first: "${first.sourceTitle}" › ${first.sectionLabel ?? '—'})`
       )
 
-      // #353 review fix 6: the ladder's whole premise — that a REAL kiwix-serve 3.8.1 emits
-      // `<opensearch:totalResults>` for `format=xml` and honours `pageLength=1` — was proven only
-      // against this repo's own fixture servers until now. Ask the real sidecar directly.
-      const totalStart = performance.now()
-      const knownTotal = await searchPackTotal(library!.port, pack.id, query)
-      const knownMs = performance.now() - totalStart
-      const inventedWord = 'qzxvwtrkp'
-      const inventedStart = performance.now()
-      const inventedTotal = await searchPackTotal(library!.port, pack.id, inventedWord)
-      const inventedMs = performance.now() - inventedStart
-      // eslint-disable-next-line no-console
-      console.info(
-        `[zim-real] searchPackTotal: "${query}" → ${String(knownTotal)} (${knownMs.toFixed(0)} ms); ` +
-          `"${inventedWord}" → ${String(inventedTotal)} (${inventedMs.toFixed(0)} ms)`
-      )
-      expect(knownTotal).not.toBeNull()
-      expect(knownTotal!).toBeGreaterThan(0)
-      expect(inventedTotal).toBe(0)
-
       // #340 L3 (D-Z18): the retrieval-quality fixture, replayed only when the registered archive
       // IS the fixture's pack (the expected titles are that pack's). Every answerable question
       // must reach one of its expected articles among the top five the arm searched — the
@@ -247,7 +245,8 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
           rawHit: boolean
           answerable: boolean
           group?: string
-          /** #340 L3-b: logged through the arm, never asserted — the lever is not built. */
+          /** #340 L3-b: the list group, outside the core assertion — asserted against
+           *  LIST_GROUP_MIN_HITS for the reference model, logged otherwise. */
           measuredOnly?: boolean
         }>
       }
@@ -257,17 +256,17 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
         for (const q of asserted) {
           const { candidates: found } = await arm!(q.question)
           const titles = [...new Set(found.map((c) => c.sourceTitle))].slice(0, 5)
-          if (!q.expectedTitles.some((t) => titles.includes(t))) misses.push(`${q.question} → ${titles.join(' | ')}`)
+          if (!hitAt5(titles, q.expectedTitles)) misses.push(`${q.question} → ${titles.join(' | ')}`)
         }
         // eslint-disable-next-line no-console
         console.info(`[zim-real] quality fixture: ${asserted.length - misses.length}/${asserted.length} answerable questions hit@5`)
         expect(misses).toEqual([])
-        // #340 L3-b: the list / superlative shape, measured through the app's arm as it ships
-        // and LOGGED only (the concept-expansion lever is an open owner question, not code).
+        // #340 L3-b: the list / superlative shape through the app's arm as it ships — asserted
+        // against LIST_GROUP_MIN_HITS for the reference model, logged for any other or none.
         const measured = fixture.questions.filter((x) => x.answerable && x.measuredOnly)
         let hits = 0
         for (const q of measured) {
-          // With a model: the expansion the arm will use, logged once more here for the record
+          // With a model: the plan the arm will use, logged once more here for the record
           // (one extra call per question — a smoke, not the app path).
           let note = ''
           if (expand) {
@@ -277,17 +276,19 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
           }
           const { candidates: found } = await arm!(q.question)
           const titles = [...new Set(found.map((c) => c.sourceTitle))].slice(0, 5)
-          const hit = q.expectedTitles.some((t) => titles.includes(t))
+          const hit = hitAt5(titles, q.expectedTitles)
           if (hit) hits++
           // eslint-disable-next-line no-console
           console.info(`[zim-real] ${q.group ?? 'measured'} ${hit ? 'HIT ' : 'miss'} ${q.question} → ${titles.join(' | ')}${note}`)
         }
         if (measured.length > 0) {
+          // The floor was measured on one model; another model's planner may need more than
+          // PLAN_TIMEOUT_MS on this machine (#716), so its figure is logged, not asserted.
+          const listAsserted = expand !== null && expansionRuntime?.modelId === LIST_GROUP_REFERENCE_MODEL
+          const how = listAsserted ? 'with the planner — asserted' : expand ? 'with the planner — logged, not the reference model' : 'no model — logged, not asserted'
           // eslint-disable-next-line no-console
-          console.info(`[zim-real] ${measured[0]!.group ?? 'measured'} questions through the arm: ${hits}/${measured.length} hit@5${expand ? ' (with the L3-b expansion — asserted)' : ' (no model — logged, not asserted)'}`)
-          // D-Z20: with a real model the list group must reach the figure measured at the
-          // ruling (2026-09-07); without one the plain arm's 2/6 is the honest, logged state.
-          if (expand) expect(hits).toBeGreaterThanOrEqual(LIST_GROUP_MIN_HITS)
+          console.info(`[zim-real] ${measured[0]!.group ?? 'measured'} questions through the arm: ${hits}/${measured.length} hit@5 (${how})`)
+          if (listAsserted) expect(hits).toBeGreaterThanOrEqual(LIST_GROUP_MIN_HITS)
         }
       } else {
         // eslint-disable-next-line no-console
@@ -320,7 +321,7 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
       expect(after.candidates).toEqual([])
       expect(after.outcomes.map((o) => [o.packId, o.status, o.reason])).toEqual([[pack.id, 'skipped', 'disabled']])
     },
-    // A model-backed replay spends several seconds per question on a CPU (D-Z20).
+    // A model-backed replay spends several seconds per question on a CPU (one planner call each).
     process.env.HILBERTRAUM_ZIM_MODEL ? 600_000 : 120_000
   )
 })

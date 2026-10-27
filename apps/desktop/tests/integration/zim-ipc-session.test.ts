@@ -467,7 +467,6 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         manageSpawn,
         findPort: () => hooks.findPort(),
         probe: (port) => hooks.probe(port),
-        verifyBinary: async () => 'ok',
         healthTimeoutMs: 1_000,
         healthIntervalMs: 1,
         killGraceMs: 5,

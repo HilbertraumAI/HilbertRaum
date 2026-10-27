@@ -23,7 +23,7 @@
 // cheaper than a "not found" the archive would have answered.
 //
 // #353 amendment (historical). A #353 document-frequency ladder once sat downstream of the
-// length-based `retry` here (`narrowByFrequency`, probed via `client.ts` `searchPackTotal`) for
+// length-based `retry` here (`narrowByFrequency`, probing a since-removed `searchPackTotal`) for
 // the case where a pattern's terms were ALL already `RETRY_MIN_TERM_CHARS` or longer. Phase 4
 // PR-A's discovery port (`docs/rag-design.md` §17 "Discovery port (Phase 4 PR-A)") replaced
 // `arm.ts`'s single-pattern-with-retry search with route F's multi-query FTS (the plan's own

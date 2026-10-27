@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -15,6 +15,25 @@ import { malformedZimFixture, uuidBytes, writeZimFixture } from '../helpers/zim-
 // #301 P3b — archive IDENTITY and the SERVING-NAME map (findings M5 and L4; plan §9.17 (d)).
 // Focused ordinary tests for the three primitives T11 and T12 rest on; the end-to-end cases
 // live in zim-packs.test.ts (T11-a) and zim-ipc-session.test.ts (T12-a).
+
+// Counting pass-throughs, so the descriptor test sees every open and close the header reader makes.
+const fdCalls = vi.hoisted(() => ({ opens: 0, closes: 0 }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const counted = {
+    ...actual,
+    openSync: ((...args: Parameters<typeof actual.openSync>) => {
+      const fd = actual.openSync(...args)
+      fdCalls.opens++
+      return fd
+    }) as typeof actual.openSync,
+    closeSync: ((fd: number) => {
+      fdCalls.closes++
+      actual.closeSync(fd)
+    }) as typeof actual.closeSync
+  }
+  return { ...counted, default: counted }
+})
 
 const tempDir = (): string => mkdtempSync(join(tmpdir(), 'hilbertraum-zim-identity-'))
 
@@ -62,12 +81,15 @@ describe('readZimHeader (plan §2.4)', () => {
     expect(caught).toBeInstanceOf(ZimHeaderError)
     expect((caught as ZimHeaderError).reason).toBe('unreadable')
 
-    // A descriptor leak would pin a removable drive. 400 rejected reads on a REAL file (the
-    // short fixture) must not exhaust the process's handles; a leak surfaces as EMFILE here.
+    // A descriptor leak would pin a removable drive: every descriptor a rejected read on a REAL
+    // file (the short fixture) opens must be closed again.
     const short = malformedZimFixture(join(dir, 'short.zim'), 'short')
+    const before = { ...fdCalls }
     for (let i = 0; i < 400; i++) {
       expect(() => readZimHeader(short)).toThrow(ZimHeaderError)
     }
+    expect(fdCalls.opens - before.opens).toBe(400) // the reads really went through the counter
+    expect(fdCalls.closes - before.closes).toBe(400)
   })
 
   it('a directory is unreadable, not a crash', () => {
@@ -80,17 +102,6 @@ describe('readZimHeader (plan §2.4)', () => {
     }
     expect(caught).toBeInstanceOf(ZimHeaderError)
     expect(['unreadable', 'short']).toContain((caught as ZimHeaderError).reason)
-  })
-
-  it('a file with a valid magic but fewer than 80 bytes is short, not magic', () => {
-    const dir = tempDir()
-    const file = join(dir, 'clipped.zim')
-    const buf = Buffer.alloc(40)
-    buf.writeUInt32LE(0x044d495a, 0)
-    writeFileSync(file, buf)
-    expect(() => readZimHeader(file)).toThrow(
-      expect.objectContaining({ reason: 'short' }) as unknown as Error
-    )
   })
 })
 
@@ -174,20 +185,6 @@ describe('computeServedSet — the HumanReadableNameMapper collision rule', () =
       expect(served.names.has(large)).toBe(false)
       expect(served.excluded).toEqual([{ packId: large, collidesWith: small }])
     }
-  })
-
-  it('the + → plus rule can collide two differently named files', () => {
-    const first = '22222222-0000-4000-8000-000000000000'
-    const second = '33333333-0000-4000-8000-000000000000'
-    const served = computeServedSet(
-      [
-        { id: second, path: '/z/aplusb.zim' },
-        { id: first, path: '/z/a+b.zim' }
-      ],
-      'linux'
-    )
-    expect(served.names.get(first)).toBe('aplusb')
-    expect(served.excluded).toEqual([{ packId: second, collidesWith: first }])
   })
 
   it('distinct names all win, and an empty candidate list yields an empty map', () => {

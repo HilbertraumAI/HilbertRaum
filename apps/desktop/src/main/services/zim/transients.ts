@@ -279,21 +279,3 @@ export function cleanupZimTransients(
   }
   return toReport(counts)
 }
-
-/**
- * The same classification WITHOUT the workspace containment gate, for a service whose library
- * directory is a test seam (`ZimServiceDeps.libraryDir`) or the pre-P3b OS-temp fallback —
- * neither sits under a workspace, so there is nothing to contain it against. Still removes
- * only `library.<n>.xml` files and `meta-<n>/` directories, still never follows a link.
- * Production always goes through {@link cleanupZimTransients}.
- */
-export function sweepZimTransientDir(dir: string, opts: ZimCleanupOptions = {}): ZimCleanupReport {
-  const keep = opts.keep ?? new Set<string>()
-  try {
-    const stat = lstatSync(dir)
-    if (stat.isSymbolicLink() || !stat.isDirectory()) return emptyReport(false)
-  } catch {
-    return emptyReport(true)
-  }
-  return toReport(sweepEntries(dir, keep))
-}

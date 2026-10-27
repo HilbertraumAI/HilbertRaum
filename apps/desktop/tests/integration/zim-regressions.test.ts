@@ -1660,8 +1660,6 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-t15-'))
     const zimDir = join(root, 'zim')
     mkdirSync(zimDir, { recursive: true })
-    const libraryDir = join(root, 'library')
-    mkdirSync(libraryDir, { recursive: true })
     const db = openDatabase(join(root, 'test.sqlite'))
     let pid = 6100
     const spawn: SpawnFn = () => new ServeFakeChild(pid++, 'exit-on-sigterm')
@@ -1685,18 +1683,17 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
     const svc = new ZimService({
       rootPath: root,
       isDev: true,
+      transientDir: join(root, 'zim-transient'),
       deps: {
         resolveTools: () => ({ serve: '/bin/kiwix-serve', manage: '/bin/kiwix-manage' }),
         spawn,
         manageSpawn,
         findPort: async () => t15Port,
         probe: async () => true,
-        verifyBinary: async () => 'ok',
         healthTimeoutMs: 1_000,
         healthIntervalMs: 1,
         killGraceMs: 5,
         forceKillWaitMs: 5,
-        libraryDir,
         externalDeadlineMs: opts.externalDeadlineMs
       }
     })
