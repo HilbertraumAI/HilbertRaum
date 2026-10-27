@@ -14242,6 +14242,18 @@ window loading a static page; first-contentful-paint in ms after the window is c
   43.8.0 changed it. The perf-log A/B was not re-run. Between the two versions only Node moves
   (24.21.0 → 24.22.0); Chromium 150.0.7871.250, V8, SQLite 3.53.4 and undici 7.29.1 are unchanged,
   and the flipped fuse wire is `001011001` on both.
+- **43.8.3 (Dependabot alert #130, 2026-10-27), same desktop.** It carries the fix for
+  GHSA-jr5w-w6x2-84p9 (since 43.8.1): Chromium networking and Node's `tls`, `https` and `fetch`
+  refuse certificates issued through the compromised eMudhra intermediates. The app's model, engine
+  and OCR downloads go through Node's `fetch` in the main process, so before this an attacker holding
+  such a certificate and able to intercept the connection could have served them. 43.8.3 also brings
+  a round of ANGLE, Chromium, PDFium, Skia and V8 backports. Node 24.22.0, the Chromium string, V8
+  and SQLite 3.53.4 are unchanged from 43.8.0, the fuse wire is `001011001`, and the visible-window
+  probe gives 386 ms (43.8.0) and 391 ms (43.8.3), 7 interleaved runs each: no change.
+  **Residual:** the Node.js inside 43.8.3 still bundles undici 7.29.1, inside the range of
+  GHSA-xjj6-f33q-929c (fixed in 7.30.1; DEP-8 §2). A download server that answers with more than five
+  content codings and then drops the connection crashes the main process, whose last-resort handler
+  locks the vault and exits. No 43.x release carries the fixed undici yet.
 
 ### §4 Re-verification ledger (2026-10-01, the desktop above)
 
