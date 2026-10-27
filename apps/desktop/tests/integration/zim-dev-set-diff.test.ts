@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -41,11 +41,18 @@ describe.skipIf(!process.features.typescript)('zim-dev-set-diff.mjs (stage A of 
   // said so would pass the test above. A throwaway repo with a stub converter gives the script a
   // real words-changed pair and a whitespace-only pair, independent of this repo's history.
   it('reports a changed word as WORDS CHANGED (exit 1) and a whitespace-only change as identical words (exit 0)', () => {
+    // The developer's global/system git config (hooks, templates, signing) and a hook's GIT_DIR
+    // must not reach the scratch repo.
+    const emptyConfig = join(scratch, 'empty.gitconfig')
+    writeFileSync(emptyConfig, '')
+    const gitEnv: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_NOSYSTEM: '1' }
+    for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete gitEnv[k]
     const git = (...args: string[]): string =>
-      execFileSync('git', ['-c', 'user.name=zim-test', '-c', 'user.email=zim-test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args], {
-        cwd: scratchRepo,
-        encoding: 'utf8'
-      })
+      execFileSync(
+        'git',
+        ['-c', 'user.name=zim-test', '-c', 'user.email=zim-test@example.invalid', '-c', 'core.autocrlf=false', ...args],
+        { cwd: scratchRepo, env: gitEnv, encoding: 'utf8' }
+      )
     const zimDir = join(scratchRepo, 'apps', 'desktop', 'src', 'main', 'services', 'zim')
     mkdirSync(zimDir, { recursive: true })
     mkdirSync(join(scratchRepo, 'scripts'), { recursive: true })
@@ -73,8 +80,9 @@ describe.skipIf(!process.features.typescript)('zim-dev-set-diff.mjs (stage A of 
       const result = spawnSync(
         process.execPath,
         ['--no-warnings', 'scripts/zim-dev-set-diff.mjs', '--pages', pages, '--base', base, '--head', head, '--json', json],
-        { cwd: scratchRepo, encoding: 'utf8' }
+        { cwd: scratchRepo, env: gitEnv, encoding: 'utf8' }
       )
+      expect(existsSync(json), result.stderr).toBe(true)
       return { result, report: JSON.parse(readFileSync(json, 'utf8')) }
     }
 

@@ -2433,19 +2433,19 @@ describe('decodeEntities', () => {
 // (#301 P5, finding L8, plan §9.19 (d)1: renamed from HILBERTRAUM_ZIM_FIXTURES for the
 // HILBERTRAUM_<FEATURE>_<KIND> naming convention the rest of the ZIM env vars follow.)
 // Requested means set and non-blank, never "exists": a wrong directory fails instead of skipping.
-const realDirRaw = process.env.HILBERTRAUM_ZIM_FIXTURES_DIR
-const realRequested = realDirRaw !== undefined && realDirRaw.trim() !== ''
+const realDir = process.env.HILBERTRAUM_ZIM_FIXTURES_DIR?.trim() ?? ''
+const realRequested = realDir !== ''
 const REAL_ARTICLES = ['kontaktverfahren.html', 'treibhausgas.html', 'georgia.html']
 describe.runIf(realRequested)('real mwoffliner articles', () => {
   it('the requested directory holds all three articles', () => {
     for (const name of REAL_ARTICLES) {
-      expect(existsSync(join(realDirRaw!, name)), `${name} missing from HILBERTRAUM_ZIM_FIXTURES_DIR`).toBe(true)
+      expect(existsSync(join(realDir, name)), `${name} missing from HILBERTRAUM_ZIM_FIXTURES_DIR`).toBe(true)
     }
   })
 
   for (const name of REAL_ARTICLES) {
     it(`extracts clean sectioned text from ${name}`, () => {
-      const html = readFileSync(join(realDirRaw!, name), 'utf8')
+      const html = readFileSync(join(realDir, name), 'utf8')
       const { title, segments } = zimArticleToSegments(html)
       expect(title).toBeTruthy()
       expect(segments.length).toBeGreaterThan(3)

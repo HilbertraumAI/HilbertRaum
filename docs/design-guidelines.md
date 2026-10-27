@@ -1206,6 +1206,7 @@ secondary. `lib/useKnowledgePackToolsInstall.ts` is the shared poll/cancel/remem
 (mirroring `ModelsScreen.tsx`'s own engine-job handling) — it fetches `getEngineStatus`/
 `getPolicy` lazily, only while the affordance is actually needed, so a workspace with the tools
 already installed makes neither call. Tests: `KnowledgePackToolsInstall.test.tsx` ("#339 P8-2: …"),
+`KnowledgePacks.test.tsx` ("#339 P8-2: never calls getEngineStatus or getPolicy…", the lazy fetch),
 `ModelsScreen.test.tsx` ("ModelsScreen — knowledge-pack tools row" describe block).
 
 **Tier-2 save action (2026-09-07, #340, D-Z21):** "Save to my documents" lives inside
@@ -1875,6 +1876,8 @@ backend/data-contract/IPC changes. Before/after eyeball captures lived in
    becomes a direct "📄 No documents yet · Add documents" jump (`chat.scope.none` →
    Documents); some selected → "Using N documents"; all (count>0) → "Using all documents" (no
    count). `chat.scope.usingAll.*` plurals were collapsed to a single `chat.scope.usingAll`.
+   (The "Using …" labels later went unused — the "Answering from:" chip names the scope — and
+   their `chat.scope.using` / `chat.scope.usingAll` keys were removed in October 2026.)
 8. **Responsive (§8).** History **auto-collapses ≤1150px** (`ChatScreen.LIST_AUTO_COLLAPSE_PX`
    via a `matchMedia('change')` listener; `effectiveCollapsed = narrow ? !narrowPeek :
    listCollapsed`, so the persisted desktop preference is untouched and a session "peek"

@@ -5,7 +5,7 @@ import { MAX_SELECTED_PACKS } from '@shared/types'
 import { Button, Chip, Icon } from '../components'
 import { useT, type I18n } from '../i18n'
 
-// "📄 Using Library + Project: Tax 2025 ▾" (guidelines §3): the composer-footer affordance
+// "📄 Answering from: Library + Project: Tax 2025 ▾" (guidelines §3): the composer-footer affordance
 // for the documents-mode retrieval scope. The popover is a MULTI-SELECT source picker
 // (document-organization plan §13.2/D1): tick Library and/or any project, add specific
 // documents, or tap "All documents". Underneath, the composed `DocumentScope` is the UNION
@@ -57,8 +57,7 @@ const EMPTY_IDS: string[] = []
 
 /**
  * The composed sources phrase for a resolved scope — e.g. "Library + 2 documents" — or null
- * when the scope is empty (= the whole corpus). The single source of truth for both the footer
- * label and the "Answering from:" chip (D71), so they never drift.
+ * when the scope is empty (= the whole corpus). The "Answering from:" chip (D71) reads it.
  */
 export function scopeSources(
   scope: DocumentScope | null,
@@ -273,7 +272,7 @@ export function ScopePopover({
     ) {
       return tCount('chat.scope.wholeLibrary', indexed.length)
     }
-    // Projects / multi-doc / packs / mixed → the composed sources phrase (single-sourced with the footer).
+    // Projects / multi-doc / packs / mixed → the composed sources phrase.
     return (
       scopeSources(scope, collections, t, tCount, packs) ?? tCount('chat.scope.wholeLibrary', indexed.length)
     )

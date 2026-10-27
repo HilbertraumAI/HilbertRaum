@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, within } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PacksPanel } from '../../src/renderer/screens/documents/PacksPanel'
 import { I18nProvider } from '../../src/renderer/i18n'
@@ -137,6 +137,8 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
     expect(
       await screen.findByText('Knowledge-pack tools installed', undefined, { timeout: hangBudgetMs(5_000) })
     ).toBeInTheDocument()
+    // The refetch on `done`: the tools-missing notice goes without waiting for a packs:changed broadcast.
+    await waitFor(() => expect(screen.queryByText(/kiwix-tools binaries are not installed/)).toBeNull())
   })
 
   // The two gate-off cases share the SAME copy ModelsScreen's own download gate uses

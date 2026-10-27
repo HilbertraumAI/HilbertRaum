@@ -3663,7 +3663,7 @@ the figures they support are quoted in the text.
   and `makeQueryExpander`'s call shape, timeout, abort-vs-fallback split, and mock invariant) and
   the L3-b legs of `zim-arm.test.ts` (the expansion-articles-first fetch order, the per-pack caps,
   the `Liste …` / `List of …` chunk-keep switch, and the ask-abort-rethrown leg at this layer) —
-  removed with the expander itself in the discovery port (`24741f60`).
+  rewritten for the planner when the discovery port replaced this expander (`24741f60`).
 
 - **D-Z21 — "Save article to my documents" (#340 Tier-2, owner ruling C3 (a) 2026-09-06: the
   save button in the article viewer first, the citation-card shortcut later).** An article the
