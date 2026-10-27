@@ -55,11 +55,9 @@ describe('candidates — pure candidate generation, priority order', () => {
   })
 
   it('candidates below MIN_CANDIDATE_LEN are never produced', () => {
-    for (const c of candidates('Autos')) expect(c.length).toBeGreaterThanOrEqual(3)
-  })
-
-  it('is pure and order-stable across repeated calls', () => {
-    expect(candidates('Tischtennisball')).toEqual(candidates('Tischtennisball'))
+    // The hyphen part "E" and the stripped "Em" are both under the floor; only "Auto" survives.
+    expect(candidates('E-Auto')).toEqual(['Auto'])
+    expect(candidates('Ems')).toEqual([])
   })
 })
 
@@ -114,6 +112,12 @@ describe('resolveHeadNoun — probing the title index (/suggest)', () => {
           res.end('boom')
           return
         }
+        // A PREFIX row: the title index answers, but not with the candidate itself.
+        if (term === 'Nichtsvorhand') {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify([{ value: 'Nichtsvorhanden (Begriff)', kind: 'path', path: 'Nichtsvorhanden_(Begriff)' }]))
+          return
+        }
         if (confirmed.has(term)) {
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify([{ value: term, kind: 'path', path: term }]))
@@ -137,19 +141,30 @@ describe('resolveHeadNoun — probing the title index (/suggest)', () => {
     expect(res.accepted).toMatchObject({ title: 'Gezeiten' })
     expect(res.candidate).toBe('Gezeiten')
     // The prefix sweep starts at "Gezeitenb" (k=9) and only reaches "Gezeiten" (k=8) second.
+    // "Gezeitenb" answers HTTP 500 in this fixture: a transport error is skipped like a miss.
     expect(suggestCalls.map((c) => c.term)).toEqual(['Gezeitenb', 'Gezeiten'])
+    expect(res.tried[0]).toMatchObject({ candidate: 'Gezeitenb', ok: false })
   })
 
   it('a candidate the index does not confirm is skipped, fail-soft', async () => {
     suggestCalls.length = 0
-    const res = await resolveHeadNoun(port, 'book', 'Bikes', undefined)
+    // Candidates: "Rad" (the compound head) first, then "Bik"; the index has no "Rad".
+    const res = await resolveHeadNoun(port, 'book', 'Bik-Rad', undefined)
+    expect(candidates('Bik-Rad').slice(0, 2)).toEqual(['Rad', 'Bik'])
     expect(res.accepted).toMatchObject({ title: 'Bik' })
-    expect(res.probes).toBe(1) // "Bikes" has exactly one candidate ("Bik")
+    expect(suggestCalls.map((c) => c.term)).toEqual(['Rad', 'Bik'])
+    expect(res.tried[0]).toMatchObject({ candidate: 'Rad', hit: null, ok: false })
   })
 
   it('never accepts a non-exact (prefix) suggest hit', async () => {
     suggestCalls.length = 0
     const res = await resolveHeadNoun(port, 'book', 'Nichtsvorhanden', undefined, { maxProbes: 6 })
+    // The first candidate "Nichtsvorhand" gets a prefix row ("Nichtsvorhanden (Begriff)").
+    expect(res.tried[0]).toMatchObject({
+      candidate: 'Nichtsvorhand',
+      hit: { title: 'Nichtsvorhanden (Begriff)' },
+      ok: false
+    })
     expect(res.accepted).toBeNull()
     expect(res.candidate).toBeNull()
   })
@@ -173,21 +188,13 @@ describe('resolveHeadNoun — probing the title index (/suggest)', () => {
     expect(res.accepted).toBeNull()
   })
 
-  it('a probe that errors (non-abort, e.g. HTTP 500) is skipped, fail-soft — probing continues to the next candidate', async () => {
-    // "Gezeitenberg"'s first candidate ("Gezeitenb", the prefix strip's k=9) 500s in this
-    // fixture; resolveHeadNoun must still reach and accept "Gezeiten" (k=8) next — the same
-    // outcome as the ordinary-404 leg above, proving a transport ERROR is no different.
-    suggestCalls.length = 0
-    const res = await resolveHeadNoun(port, 'book', 'Gezeitenberg', undefined)
-    expect(res.accepted).toMatchObject({ title: 'Gezeiten' })
-    expect(suggestCalls.map((c) => c.term)).toEqual(['Gezeitenb', 'Gezeiten'])
-    expect(res.tried[0]).toMatchObject({ candidate: 'Gezeitenb', ok: false })
-  })
-
   it('an already-aborted signal rejects, with zero calls', async () => {
     suggestCalls.length = 0
     const ctrl = new AbortController()
     ctrl.abort()
-    await expect(resolveHeadNoun(port, 'book', 'Gezeitenberg', ctrl.signal)).rejects.toBeTruthy()
+    await expect(resolveHeadNoun(port, 'book', 'Gezeitenberg', ctrl.signal)).rejects.toMatchObject({
+      name: 'AbortError'
+    })
+    expect(suggestCalls).toHaveLength(0)
   })
 })

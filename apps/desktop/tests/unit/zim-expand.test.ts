@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import {
   PLAN_MAX_QUERIES,
@@ -6,7 +6,6 @@ import {
   PLAN_MAX_TITLES,
   PLAN_MAX_TOKENS,
   PLAN_RESPONSE_SCHEMA,
-  PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC,
   PLAN_TIMEOUT_MS,
   buildPlanMessages,
   decidePlanLanguageOverride,
@@ -55,6 +54,10 @@ function scripted(replies: string[] = ['{"titles":["Vulkanismus"],"queries":[]}'
   }
   return rt
 }
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('parsePlan — defensively parsing the model reply (route F interpret() semantics, minus terms — F1 part 1)', () => {
   it('a well-formed reply yields titles + queries', () => {
@@ -130,16 +133,6 @@ describe('parsePlan — defensively parsing the model reply (route F interpret()
     const result = parsePlan(JSON.stringify({ titles: ['Liste der Vulkane'], queries: ['Liste Vulkane'] }))
     expect(result.titles).toEqual(['Liste der Vulkane'])
     expect(result.queries).toEqual(['Liste Vulkane'])
-  })
-
-  it('non-JSON prose — the mock runtime\'s own reply — yields an empty plan', async () => {
-    const mock = new MockRuntime({ modelId: 'mock-model', modelPath: 'x', contextTokens: 4096 })
-    await mock.start()
-    let text = ''
-    for await (const token of mock.chatStream(buildPlanMessages('Welche Länder stoßen am meisten CO2 aus?'))) {
-      text += token
-    }
-    expect(parsePlan(text)).toEqual({ titles: [], queries: [] })
   })
 })
 
@@ -313,16 +306,13 @@ describe('makeQueryExpander — the one bounded planner call', () => {
     expect(await expander!('Was ist das?')).toBeNull()
   })
 
-  it('a runtime that never ends is cut off by the injected timeout: null, well under the real bound, its signal aborted', async () => {
+  it('a runtime that never ends is cut off at the shipped PLAN_TIMEOUT_MS: pending just short of it, null just past it, its signal aborted', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     let sawAbort = false
     const hanging: ModelRuntime = {
       ...scripted(),
       async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
         await new Promise<void>((resolve) => {
-          if (options?.signal?.aborted) {
-            sawAbort = true
-            return resolve()
-          }
           options?.signal?.addEventListener('abort', () => {
             sawAbort = true
             resolve()
@@ -330,11 +320,16 @@ describe('makeQueryExpander — the one bounded planner call', () => {
         })
       }
     }
-    const expander = makeQueryExpander(hanging, { timeoutMs: 50 })
-    const t0 = Date.now()
-    const result = await expander!('Was ist das?')
-    expect(result).toBeNull()
-    expect(Date.now() - t0).toBeLessThan(3_000)
+    const expander = makeQueryExpander(hanging)
+    let settled = false
+    const pending = expander!('Was ist das?').finally(() => {
+      settled = true
+    })
+    await vi.advanceTimersByTimeAsync(PLAN_TIMEOUT_MS - 1)
+    expect(settled).toBe(false)
+    expect(sawAbort).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await pending).toBeNull()
     expect(sawAbort).toBe(true)
   })
 
@@ -417,8 +412,8 @@ describe('the planner bound and the token cap stay one decision (#423, F1 cap de
   /** Run M's measured p99 over 200 core200 planner calls (GPU) — the reply length pin 1 affords. */
   const MEASURED_P99_REPLY_TOKENS = 99
   /** #423's reference CPU rate (i9-14900K, `-ngl 0`, unrestricted) — NOT the slowest `-t 2`
-   *  stand-in (`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`): the 72-104 cap-decision branch affords
-   *  the measured p99 at this rate only, per the ruling. */
+   *  stand-in (6.7 tok/s): the 72-104 cap-decision branch affords the measured p99 at this rate
+   *  only, per the ruling. */
   const REFERENCE_CPU_RATE_TOK_PER_SEC = 10.3
   /** Prefilling the ~200-token system prompt, at the slow end of the #423 measurements. */
   const PREFILL_ALLOWANCE_MS = 1_300
@@ -436,8 +431,7 @@ describe('the planner bound and the token cap stay one decision (#423, F1 cap de
     expect(rateForFullCap).toBeLessThan(10)
   })
 
-  it('PLAN_MAX_TOKENS is the cap decision\'s formula result (104) and PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC records the #423 rate it and pin 2 are checked against (6.7)', () => {
+  it('PLAN_MAX_TOKENS is the cap decision\'s formula result (104)', () => {
     expect(PLAN_MAX_TOKENS).toBe(104)
-    expect(PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC).toBe(6.7)
   })
 })

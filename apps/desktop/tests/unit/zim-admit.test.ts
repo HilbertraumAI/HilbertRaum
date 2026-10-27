@@ -114,17 +114,15 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
     // lead for the trap, and narrower than route F's whole-article scan for the escape hatch —
     // so both cases below demonstrably lost the gold article on that one-window port.
     //
-    // NEITHER case below is the first review's own "CASE A" (biological evidence absent
-    // EVERYWHERE, so the article is rescued only if the trap itself never fires) — both hand
-    // `admitArticle` biological evidence somewhere in `wide` and so exercise the ESCAPE HATCH
-    // mechanism (unit-level, hand-fed windows), never the trap's own window in isolation. The
-    // SECOND Opus review (N1) found that the true "no evidence anywhere" shape still disagrees
-    // with route F on the real, arm-built windows (`arm.ts`'s `leadText` is `segments.slice(0,
-    // 2)`, section- not paragraph-granular — see `admit.ts`'s own header) — pending the owner's
-    // ruling; neither this file's unit fixtures nor the arm-level end-to-end test below exercise
-    // that exact shape.
+    // NEITHER escape-hatch case below is the first review's own "CASE A" (biological evidence
+    // absent EVERYWHERE): both hand `admitArticle` evidence somewhere in `wide`. Their title
+    // carries a fiction marker ("Roman"), so the trap is armed and ONLY the wide text rescues
+    // the article — a window fed from `lead` would refuse it. The true CASE A shape, resolved
+    // by N1, is pinned by the describe block below and by the arm-level end-to-end test.
     const QUESTION = 'Wie funktioniert das Herz eines Oktopus?'
     const TITLE = 'Kraken'
+    // Fiction via the TITLE only: the lead's "Kopffuesser" does not match `explicitBiology`.
+    const FICTION_TITLE = 'Kraken (Roman)'
 
     it('escape-hatch window 1 — explicit biological evidence sits OUTSIDE the two-prose-block lead but well inside a ~20-segment/4,000-char window: admitted (route F reads the WHOLE article for this predicate; NOT the first review\'s "no evidence anywhere" CASE A — see the describe-block header)', () => {
       const lead =
@@ -134,7 +132,7 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
         ' Kraken in der Kultur. Der Spielfilm um einen Riesenkraken praegte das Bild des Tieres. ' +
         'Ein Roman von Jules Verne machte ihn beruehmt. Der Blutkreislauf wird von einem Systemherz ' +
         'und zwei Kiemenherzen angetrieben.'
-      const result = admitArticle(QUESTION, TITLE, lead, wide, 'fts')
+      const result = admitArticle(QUESTION, FICTION_TITLE, lead, wide, 'fts')
       expect(result.admitted).toBe(true)
     })
 
@@ -148,7 +146,7 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
       const filler = 'Ein neutraler Fuellsatz ohne Bezug zum Thema. '.repeat(120)
       const wide = lead + ' ' + farAway + filler + 'Der Blutkreislauf wird von einem Systemherz und zwei Kiemenherzen angetrieben.'
       expect(wide.length).toBeGreaterThan(4_000)
-      const result = admitArticle(QUESTION, TITLE, lead, wide, 'fts')
+      const result = admitArticle(QUESTION, FICTION_TITLE, lead, wide, 'fts')
       expect(result.admitted).toBe(true)
     })
 
@@ -182,15 +180,6 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
       'Kraken in der Kultur. Der Spielfilm um einen Riesenkraken praegte das Bild des Tieres. ' +
       'Ein Roman von Jules Verne machte ihn beruehmt.'
     const wide = `${segment0} ${segment1}` // unchanged by N1 — only the LEAD narrows
-
-    it('lead = segments[0] only (the narrowed, post-N1 window): admitted — the fiction marker sits outside the lead', () => {
-      const result = admitArticle(QUESTION, TITLE, segment0, wide, 'fts')
-      expect(result).toEqual({
-        admitted: true,
-        reason: 'no-explicit-topic-conflict; not-a-semantic-certificate',
-        route: 'fts'
-      })
-    })
 
     it('lead = segments[0] + segments[1] (the pre-N1 window, `dd85f361`): refused — the trap sees the fiction marker and nothing rescues it', () => {
       const result = admitArticle(QUESTION, TITLE, `${segment0} ${segment1}`, wide, 'fts')

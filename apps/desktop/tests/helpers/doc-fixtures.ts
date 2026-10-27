@@ -1,9 +1,12 @@
-// Document seeding for the skills suites (rows only, except `seedStoredTextDoc`, which also writes a real .txt).
+// Document seeding for the skills and ZIM retrieval suites (rows only, except `seedStoredTextDoc`, which also writes a real .txt;
+// `seedEmbeddedDoc` also writes real embedding vectors).
 // Constraint: a stored-file root is minted via `tempRoot`, so it carries the swept `hilbertraum-` prefix.
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from '../../src/main/services/db'
+import { encodeVector, type Embedder } from '../../src/main/services/embeddings'
+import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { tempRoot } from './db-fixtures'
 
 export interface ChunkSeed {
@@ -88,5 +91,41 @@ export function seedStoredTextDoc(
     `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
      VALUES (?, ?, 0, ?, 'p', 1, ?)`
   ).run(randomUUID(), docId, text, now)
+  return docId
+}
+
+/**
+ * An indexed document whose chunks carry REAL embedding vectors from `embedder` (one chunk per entry of `texts`,
+ * source_label = title). `token_count` is `approxTokenCount(text)`, the estimate the production chunker persists;
+ * a budget-sensitive suite may pass its own `tokenCount`. `modelId` overrides the embeddings row's model id
+ * (default `embedder.id`).
+ */
+export async function seedEmbeddedDoc(
+  db: Db,
+  embedder: Embedder,
+  title: string,
+  texts: string[],
+  opts: { modelId?: string; tokenCount?: (text: string) => number } = {}
+): Promise<string> {
+  const tokenCount = opts.tokenCount ?? approxTokenCount
+  const now = new Date().toISOString()
+  const docId = randomUUID()
+  db.prepare(
+    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
+  ).run(docId, title, now, now)
+  const vectors = await embedder.embed(texts)
+  const insertChunk = db.prepare(
+    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
+     VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
+  )
+  const insertEmbedding = db.prepare(
+    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+  for (let i = 0; i < texts.length; i++) {
+    const chunkId = randomUUID()
+    insertChunk.run(chunkId, docId, i, texts[i]!, title, tokenCount(texts[i]!), now)
+    insertEmbedding.run(chunkId, opts.modelId ?? embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
+  }
   return docId
 }
