@@ -34,7 +34,7 @@
     "@radix-ui/react-popover": "1.1.16",
     "@radix-ui/react-tooltip": "1.2.9",
     "@streamdown/math": "^1.0.3",
-    "@tanstack/react-virtual": "^3.14.13",
+    "@tanstack/react-virtual": "^3.14.21",
     "jszip": "^3.10.2",
     "katex": "~0.16.47",
     "mammoth": "^1.13.0",
@@ -42,7 +42,7 @@
     "pdfjs-dist": "^6.4.299",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "streamdown": "^2.7.0",
+    "streamdown": "^2.7.1",
     "tesseract.js": "7.0.0",
     "yaml": "^2.9.1"
   },
