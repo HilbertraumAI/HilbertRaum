@@ -195,9 +195,9 @@ export interface ZimServiceDeps {
    */
   probeTimeoutMs?: number
   /**
-   * The per-ATTEMPT timeout of a `/raw` article read (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19 —
-   * the stall retry). Test seam only, so a "the first read stalled" leg costs milliseconds
-   * instead of the real 4 s. Production never sets it.
+   * The per-ATTEMPT timeout of the viewer's `/raw` article read (`ARTICLE_READ_TIMEOUT_MS`,
+   * #301 P7 T19 — the stall retry). Test seam only, so a "the first read stalled" leg costs
+   * milliseconds instead of the real 4 s. Production never sets it.
    */
   articleTimeoutMs?: number
 }
@@ -1428,7 +1428,6 @@ export class ZimService {
           library.names,
           {
             askSignal: op.signal,
-            articleTimeoutMs: this.deps.articleTimeoutMs,
             expand: expandOnce,
             candidateScope
           }

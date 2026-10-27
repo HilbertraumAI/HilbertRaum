@@ -57,8 +57,9 @@ describe('detectQuestionLanguage', () => {
     expect(detectQuestionLanguage('Vulkanismus Wattenmeer 1234')).toBeNull()
   })
 
-  it('resolves null on a genuine 0-0 tie with no umlaut to break it', () => {
-    expect(detectQuestionLanguage('Kork Wattenmeer')).toBeNull()
+  it('resolves null on a genuine n-n tie with no umlaut to break it', () => {
+    // "die" is a German-list word, "the" an English-list one: a 1-1 tie, not the empty 0-0 above.
+    expect(detectQuestionLanguage('die the Kork')).toBeNull()
   })
 
   it('the deliberate asymmetry: German-leaning homographs count only as German', () => {

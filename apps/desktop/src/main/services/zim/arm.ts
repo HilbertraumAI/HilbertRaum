@@ -91,10 +91,11 @@ export function isListArticleTitle(title: string): boolean {
 // (`rag/rerank-profile.ts`) is a pure widening of the SAME per-article overlap-pick construction
 // `capped` (today, unchanged) already does — never a re-implementation. `top48`/`top96` double/
 // quadruple both the per-article slice and the total pack-quota cap; `all` (the bgeP recipe)
-// drops both bounds entirely (every chunk of every admitted article, no per-article slice, no
-// total cap — the pack quota does not bind). `top48` is therefore a SUPERSET of `capped` (the
-// same articles in the same order, each article's top-4/top-8 ⊆ its top-8/top-16), `top96` a
-// superset of `top48`, and `all` a superset of `top96` — pinned in `zim-arm.test.ts`.
+// drops the per-article slice (every chunk of every admitted article) and, since step 4-5, caps
+// the total at `ALL_SCOPE_MAX_DOCS`. Per article every scope is a prefix of ONE overlap-desc,
+// index-asc order (`chunksForScope`), so capped ⊆ top48 ⊆ top96 ⊆ all holds there by
+// construction; on the composed admission `top96 ⊆ all` can break once that ceiling binds
+// (`docs/rag-design.md` §17, the relation measured in step 4-5).
 /** Per-article chunk budget for a scope (Frozen parameters, step 4-4). `Infinity` for `all` —
  *  `Array.prototype.slice(0, Infinity)` returns the whole array, so no special-casing is needed
  *  where this feeds a `.slice()`. */
@@ -204,17 +205,6 @@ export interface CollectPackCandidatesOptions {
    */
   askSignal?: AbortSignal
   /**
-   * The per-ATTEMPT `/raw` timeout of the stall retry (`ARTICLE_READ_TIMEOUT_MS`, #301 P7 T19).
-   * Test seam only, so the "one article's first read stalls" leg does not sit out the real 4 s.
-   * Production never sets it.
-   */
-  articleTimeoutMs?: number
-  /**
-   * The budget for the small JSON probes — the title-index `/suggest` lookups (plan titles and
-   * the head-noun rule), `PROBE_TIMEOUT_MS`. Test seam only; production never sets it.
-   */
-  probeTimeoutMs?: number
-  /**
    * The ask's search planner — ONE local-model call per ask, before any pack is searched; its
    * titles/queries/terms feed the discovery routes below. Absent or resolving null ⇒ discovery
    * still runs, using only the plan-independent routes (the head-noun rule and the plain
@@ -227,19 +217,6 @@ export interface CollectPackCandidatesOptions {
    * Absent ⇒ `'capped'` — today's behaviour, byte-identical to every existing caller and test.
    */
   candidateScope?: RerankScope
-  /**
-   * Step 4-5 (run L2, ruling (e)(ii)): overrides `totalCandidateCapFor(candidateScope)` for
-   * THIS call's total admission cap — measurement/test seam only, mirroring
-   * `articleTimeoutMs`/`probeTimeoutMs` above; production never sets it. Needed because run L2
-   * must capture the genuinely UNCAPPED `all` candidate list (per id, per pack) to derive every
-   * ceiling {192, 256, 384, 512} offline from ONE capture; once `ALL_SCOPE_MAX_DOCS` ships
-   * finite (this step), an ordinary `candidateScope: 'all'` call truncates at that value, which
-   * would make every WIDER cell derived from it measure identically to the narrowest one — a
-   * methodologically unsound "the wider cell always clears the bound" result. The `capped`
-   * companion selection (`cappedCandidates`, ruling (e)(i)) is UNAFFECTED: it always uses
-   * `totalCandidateCapFor('capped')`, never this override.
-   */
-  totalCandidateCapOverride?: number
 }
 
 /** One pack's produced candidates, in the pack's own rank order (search hit order). */
@@ -268,9 +245,7 @@ export function packQuota(index: number, total: number, cap: number = MAX_EXTERN
   // is `ALL_SCOPE_MAX_DOCS` (512), a genuine finite cap, so this "+1 for the first `cap mod N`
   // packs" term DOES fire under `all` now (e.g. 512 / 12 packs → `512 % 12 = 8`, so the first
   // eight packs get one extra), exactly like every other finite-cap scope — the non-uniform-quota
-  // case 4-4's B10 flagged. Only an explicit `Number.POSITIVE_INFINITY` (the run-L2 measurement
-  // seam, `totalCandidateCapOverride`) still hits the `NaN`/always-0 case this comment used to
-  // describe unconditionally.
+  // case 4-4's B10 flagged.
   return base + (index < cap % total ? 1 : 0)
 }
 
@@ -286,9 +261,7 @@ export function packQuota(index: number, total: number, cap: number = MAX_EXTERN
  * `cap` defaults to `MAX_EXTERNAL_CANDIDATES` (today's `capped` scope, byte-identical to every
  * existing caller); step 4-4 passes `totalCandidateCapFor(scope)`, which step 4-5 (ruling
  * (e)(ii)) made finite for EVERY scope including `all` (`ALL_SCOPE_MAX_DOCS`, 512) — the loop
- * below now always stops at a fixed count. Only the measurement-only `totalCandidateCapOverride`
- * seam (run L2) can still pass `Number.POSITIVE_INFINITY`, in which case the loop runs until
- * every pack's cursor is exhausted instead.
+ * below now always stops at a fixed count.
  */
 export function allocateCandidates(
   perPack: readonly PackCandidateList[],
@@ -342,18 +315,6 @@ interface PackWork {
   cappedCandidates: ExternalCandidate[]
 }
 
-/** Read-budget accounting (Phase 4 PR-A) — pure, so it is unit-testable in isolation from any
- *  transport. A read is admitted only while BOTH the read count and the admitted-article count
- *  are under their limits; every route (head-noun, title, alias, fts) shares one instance of
- *  this per pack. */
-export interface ReadBudgetLimits {
-  maxReads: number
-  maxAdmitted: number
-}
-export function withinReadBudget(reads: number, admitted: number, limits: ReadBudgetLimits): boolean {
-  return reads < limits.maxReads && admitted < limits.maxAdmitted
-}
-
 /** One aggregate-scored discovery candidate — fed by the plan-title suggest hits and the FTS
  *  hits, exactly like route F's shared `candidates` map (`prototype.mjs` `add()`). NEVER fed by
  *  the head-noun rule (STAGE 1, below): the frozen 1a-i patch (`prototype-a1.diff`) reads its
@@ -404,9 +365,7 @@ export async function collectPackCandidates(
   // Step 4-4 (ruling (a)): the scope for THIS ask, resolved once and applied to every pack —
   // absent ⇒ 'capped', so every existing caller keeps today's exact quota/slice.
   const scope: RerankScope = opts.candidateScope ?? 'capped'
-  // Step 4-5 (run L2 measurement seam): opts.totalCandidateCapOverride, when set, replaces the
-  // scope's own cap for this call only — see the option's own doc comment.
-  const cap = opts.totalCandidateCapOverride ?? totalCandidateCapFor(scope)
+  const cap = totalCandidateCapFor(scope)
   // Step 4-5 (ruling (e)(i)): the SAME `capped` cap/quota, computed unconditionally beside the
   // ask's own — cheap (no extra network read, just a second `chunksForScope`/`allocateCandidates`
   // pass over already-fetched material) and needed on EVERY ask, not only a wide one, so a
@@ -482,13 +441,12 @@ export async function collectPackCandidates(
         .slice(0, n)
         .map((e) => e.hit)
 
-    /** One candidate read: fetch, convert, admit. Bounded by the read budget and de-duplicated
-     *  by target; a route disagreement (#429) is refused before any request is made. */
+    /** One candidate read: fetch, convert, admit. De-duplicated by target; a route disagreement
+     *  (#429) is refused before any request is made. Every route (head-noun, title, alias, fts)
+     *  shares this pack's read budget: a read happens only while BOTH the read count and the
+     *  admitted-article count are under their caps. */
     async function readHit(hit: KiwixSearchHit, route: string): Promise<void> {
-      if (!withinReadBudget(reads, admittedArticles.length, {
-        maxReads: DISCOVERY_MAX_READS_PER_PACK,
-        maxAdmitted: DISCOVERY_MAX_ADMITTED_PER_PACK
-      })) {
+      if (reads >= DISCOVERY_MAX_READS_PER_PACK || admittedArticles.length >= DISCOVERY_MAX_ADMITTED_PER_PACK) {
         return
       }
       if (seenTargets.has(hit.articlePath)) return
@@ -501,9 +459,7 @@ export async function collectPackCandidates(
       fetchAttempts++
       let html: string | null
       try {
-        html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal, {
-          timeoutMs: opts.articleTimeoutMs
-        })
+        html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal)
       } catch (err) {
         if (aborted()) throw new PackAbort(err)
         return
@@ -556,7 +512,7 @@ export async function collectPackCandidates(
           if (probeBudget <= 0) break
           const res = await resolveHeadNoun(port, expected, w, signal, {
             maxProbes: probeBudget,
-            timeoutMs: opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS
+            timeoutMs: PROBE_TIMEOUT_MS
           }).catch((err) => {
             throw new PackAbort(err) // resolveHeadNoun only ever rejects on the ask's own abort
           })
@@ -583,7 +539,7 @@ export async function collectPackCandidates(
           let hits: KiwixSearchHit[] = []
           try {
             hits = await suggestTitles(port, expected, title, TITLE_SUGGEST_ROWS, signal, {
-              timeoutMs: opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS
+              timeoutMs: PROBE_TIMEOUT_MS
             })
           } catch (err) {
             if (aborted()) throw new PackAbort(err)

@@ -950,10 +950,9 @@ fires *inside* the 60 s CI test budget and you keep its named error instead of a
 it means "it never finished", never "it was slow".
 
 **What must NOT go through it:** a bound that is itself the evidence. `fts-rowid-sync`'s 500 ms
-(#84) and `zim-arm`'s `elapsedMs < 1_500` (the `probeTimeoutMs` seam behavioural test, below) are
-timing PROOFS — the second exists to show a slow `/suggest` is cut off at the SEAM's bound, not
-the server's, so widening it would stop it discriminating. Those are marked as deliberate
-exceptions in place.
+(#84) is a timing PROOF, so widening it would stop it discriminating; it is marked as a deliberate
+exception in place. A test whose subject is a product timer does not race it on the wall clock at
+all: it drives the shipped constant with fake timers (CONTRIBUTING "Pin the bound that ships").
 
 **A literal per-test timeout does not widen either — `testBudgetMs` (#458 residual).** The third
 shape of the same trap: `it('…', fn, 60_000)` *replaces* the config's `testTimeout`, so it is as
@@ -998,8 +997,9 @@ made after the file's last `afterAll` (setup-file hooks run last), run over the 
 `mergeConfig` copy of `vitest.config.ts`, names it with a stack. `--detectAsyncLeaks` is too blunt
 for this, reporting about 360 leaks, nearly all promises that never log.
 
-**When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
-assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run
+**When a test that is NOT about timing depends on a budget inside the PRODUCT, keep the timer
+from racing it instead of loosening the assertion.** A test whose subject IS the timer drives the
+shipped constant with fake timers instead (CONTRIBUTING "Pin the bound that ships"). The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run
 `34659678616`): the arm's title lookup and document-frequency probes ran against a real 3 s
 `DF_PROBE_TIMEOUT_MS`, and on a starved runner that timer won — the list article was never read,
 so `rawReads` came back holding only the plain reads. The assertion was about *which articles get
@@ -1010,11 +1010,11 @@ expansion cases fail, which is what makes the seam's wiring provable rather than
 **SUPERSEDED 2026-09-14 by the §17 discovery port (Phase 4 PR-A):** the #353 document-frequency
 ladder this paragraph's expansion cases exercised (`DF_PROBE_MAX_TERMS`, `DF_PROBE_TIMEOUT_MS`,
 `narrowByFrequency`) was removed with the L3-b `{concepts,listTitle}` expander it belonged to;
-`probeTimeoutMs` itself survives (now gating the discovery port's own title-index `/suggest`
-lookups, `PROBE_TIMEOUT_MS = 3_000`) and is proven the same way — `zim-arm.test.ts` "a /suggest
-lookup held well past PROBE_TIMEOUT_MS is cut off at the probeTimeoutMs seam, not the server"
-(review 2026-09-14, test gap 3): a fixture holds a `/suggest` response 2,000 ms and the seam set
-to 50 ms still returns in well under 1,500 ms.
+`probeTimeoutMs` then gated the discovery port's own title-index `/suggest` lookups
+(`PROBE_TIMEOUT_MS = 3_000`) until the October 2026 ZIM test campaign removed it: a 50 ms seam
+proved the seam, not the shipped bound. `zim-arm.test.ts` "a /suggest title lookup still open just
+short of PROBE_TIMEOUT_MS is kept; held past it, it is cut off and discovery completes without that
+title's hit" now drives the shipped 3 s bound with fake timers.
 
 **There are TWO shapes of hand-rolled bound, and the counted one is nastier.** The first sweep
 caught only `Date.now() - start > N`. CI then failed `vision-security.test.ts` (run

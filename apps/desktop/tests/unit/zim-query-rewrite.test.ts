@@ -21,7 +21,6 @@ describe('searchPattern (#340 L3, D-Z18)', () => {
   it('keeps hyphenated terms, numbers and case as typed (Xapian stems and folds itself)', () => {
     const r = searchPattern('Wie hoch ist die CO2-Konzentration in der Atmosphäre seit 1850?')
     expect(r.pattern).toBe('CO2-Konzentration Atmosphäre 1850')
-    expect(r.rewritten).toBe(true)
     // A trailing hyphen is noise, an inner one is part of the term.
     expect(searchPattern('Kohlenstoff- und Methanemissionen').pattern).toBe('Kohlenstoff Methanemissionen')
   })
@@ -29,7 +28,6 @@ describe('searchPattern (#340 L3, D-Z18)', () => {
   it('never emits an empty pattern: a pure function/frame question falls back to the raw question', () => {
     const r = searchPattern('Was ist das?')
     expect(r.pattern).toBe('Was ist das?')
-    expect(r.rewritten).toBe(false)
     expect(r.retry).toBeNull()
     expect(searchPattern('   ').pattern).toBe('')
   })
@@ -37,38 +35,19 @@ describe('searchPattern (#340 L3, D-Z18)', () => {
   it('deduplicates repeated terms and leaves a single content word alone', () => {
     expect(searchPattern('Klima Klima klima').pattern).toBe('Klima')
     const one = searchPattern('Permafrost')
-    expect(one).toEqual({
-      pattern: 'Permafrost',
-      terms: ['Permafrost'],
-      retry: null,
-      retryTerms: [],
-      rewritten: false
-    })
+    expect(one).toEqual({ pattern: 'Permafrost', retry: null })
   })
 
   it('offers a narrower retry only when it differs from the first pattern', () => {
     // Two kept terms, one short: the retry keeps the long one.
     const r = searchPattern('Wie wirkt CO2 auf das Eis?')
     expect(r.pattern).toBe('wirkt CO2 Eis')
-    expect(r.terms).toEqual(['wirkt', 'CO2', 'Eis'])
     expect(r.retry).toBe('wirkt')
-    expect(r.retryTerms).toEqual(['wirkt'])
-    // Every kept term is long enough: the retry would be the same query — none offered, and
-    // `retryTerms` is empty (#353: the ladder must never re-split `retry`, which is null here).
-    const noRetry = searchPattern('Warum steigt der Meeresspiegel?')
-    expect(noRetry.retry).toBeNull()
-    expect(noRetry.retryTerms).toEqual([])
+    // Every kept term is long enough: the retry would be the same query — none offered.
+    expect(searchPattern('Warum steigt der Meeresspiegel?').retry).toBeNull()
     // Every kept term is short: nothing narrower to try.
     expect(searchPattern('Was ist Eis und CO2?').retry).toBeNull()
     expect(RETRY_MIN_TERM_CHARS).toBe(5)
-  })
-
-  it('the raw-fallback pattern carries no terms at all (#353: the ladder must never tokenize it)', () => {
-    const r = searchPattern('Was ist das?')
-    expect(r.pattern).toBe('Was ist das?')
-    expect(r.terms).toEqual([])
-    expect(r.retry).toBeNull()
-    expect(r.retryTerms).toEqual([])
   })
 
   it('reproduces the measured 2026-09-06 fixture patterns (the real-pack hit@5 9/9 forms)', () => {

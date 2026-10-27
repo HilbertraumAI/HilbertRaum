@@ -113,13 +113,6 @@ export const PLAN_TIMEOUT_MS = 12_000
 export const PLAN_MAX_TOKENS = 104
 export const PLAN_MAX_TITLES = 3
 export const PLAN_MAX_QUERIES = 2
-/**
- * The decode rate {@link PLAN_TIMEOUT_MS} is derived from (output tokens per second) for pin 2
- * below — the slowest measured on any configuration (#423, 2026-09-08: `-t 2` on the i9-14900K).
- * Record only — nothing reads it at runtime; `zim-expand.test.ts` uses it to keep the bound and
- * the token cap consistent, mirroring master's `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`.
- */
-export const PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7
 /** Longest single plan string kept (route F's own `interpret()` parse: `x.length<=140`).
  *  Anything longer is dropped, not cut. */
 export const PLAN_MAX_STRING_CHARS = 140
@@ -357,10 +350,7 @@ export function parsePlan(text: string): SearchPlan {
  * Build the planner over the turn's runtime, or null when there is no runtime (the arm then
  * discovers using only the plan-independent routes). Single-shot, never retried.
  */
-export function makeQueryExpander(
-  runtime: ModelRuntime | null | undefined,
-  opts: { timeoutMs?: number } = {}
-): QueryExpander | null {
+export function makeQueryExpander(runtime: ModelRuntime | null | undefined): QueryExpander | null {
   if (!runtime) return null
   return async (question, signal, archiveLanguages) => {
     if (signal?.aborted) throw abortError()
@@ -368,7 +358,7 @@ export function makeQueryExpander(
     const inner = new AbortController()
     const onOuterAbort = (): void => inner.abort()
     signal?.addEventListener('abort', onOuterAbort)
-    const timer = setTimeout(() => inner.abort(), opts.timeoutMs ?? PLAN_TIMEOUT_MS)
+    const timer = setTimeout(() => inner.abort(), PLAN_TIMEOUT_MS)
     try {
       let text = ''
       const stream = runtime.chatStream(buildPlanMessages(question, archiveLanguages), {

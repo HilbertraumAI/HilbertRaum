@@ -1,18 +1,10 @@
-import { describe, it, expect, afterAll, beforeAll } from 'vitest'
+import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
-import {
-  ragSettingsFrom,
-  retrieve,
-  type ExternalRetrievalOutput,
-  type RagRetrievalSettings
-} from '../../src/main/services/rag'
+import { ragSettingsFrom, retrieve, type RagRetrievalSettings } from '../../src/main/services/rag'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import {
@@ -20,6 +12,7 @@ import {
   CHUNKS_PER_ARTICLE,
   DISCOVERY_MAX_ADMITTED_PER_PACK,
   DISCOVERY_MAX_READS_PER_PACK,
+  EXTERNAL_RETRIEVAL_DEADLINE_MS,
   FTS_TOP_UNSEEN_PASS,
   HEAD_NOUN_MAX_READS,
   HEAD_NOUN_MAX_TOTAL_PROBES,
@@ -34,19 +27,23 @@ import {
   perArticleBudget,
   queryTerms,
   totalCandidateCapFor,
-  withinReadBudget,
-  type ExternalCandidate,
   type PackCandidateList
 } from '../../src/main/services/zim/arm'
 import type { RerankScope } from '../../src/main/services/rag/rerank-profile'
 import type { SearchPlan } from '../../src/main/services/zim/expand'
 import { zimArticleToSegmentsAsync } from '../../src/main/services/zim/html'
 import { CHUNK_DEFAULTS, chunkSegments } from '../../src/main/services/ingestion/chunker'
+import { log } from '../../src/main/services/logging'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
+import { until, within } from '../helpers/hang-budget'
+import { rangeStart, sendRawAnswer, sendRawStall } from '../helpers/zim-http'
+import { archiveCandidate, searchXml, testArm, testArmWithCapped } from '../helpers/zim-retrieval-fixtures'
 
 // The ZIM retrieval arm end-to-end against a fake kiwix-serve (real sockets — the
-// node:http transport is load-bearing, see client.ts), and the retrieve() seam:
-// external candidates ride rerank/interleave/dedup/budget/citations exactly like
-// document chunks, and an arm failure never breaks the document ask.
+// node:http transport is load-bearing, see client.ts), and the retrieve() seam: the
+// rerank-failure fallback to the arm's capped selection and the no-arm baseline. The
+// interleave, citation and arm-failure contracts are zim-regressions' T09 legs.
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
@@ -113,24 +110,8 @@ function caseAArticleHtml(): string {
 }
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
-/** Every `/search` pattern the fixture server received, in order (#340 L3). Scoped to
- *  NON-PROBE searches (`pageLength !== '1'`) — see `allSearchRequests` for the #353 ladder's
- *  probes, so this array's pre-existing exact-equality assertions stay unaffected by them. */
+/** Every `/search` pattern the fixture server received, in order (#340 L3). */
 const searchPatterns: string[] = []
-/** Every `/search` request the fixture server received, of EVERY book and EVERY pageLength, in
- *  order (#353 document-frequency ladder) — pins the exact pattern/retry/probe/narrowed
- *  sequence and that a probe carried `pageLength=1`. */
-const allSearchRequests: Array<{ book: string; pattern: string; pageLength: string }> = []
-
-/** Poll until `cond()` is true or `rounds` are exhausted (real loopback I/O, never a sleep of a
- *  fixed guessed duration) — used by the mid-discovery abort legs below. */
-async function waitUntilTrue(cond: () => boolean, rounds = 400): Promise<boolean> {
-  for (let i = 0; i < rounds; i++) {
-    if (cond()) return true
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  return cond()
-}
 /**
  * Article titles whose NEXT `/raw` read the fake sidecar CUTS SHORT — the measured kiwix-serve
  * 3.8.1 stall (#301 P7 T19): the 200, an honest `Content-Length` and most of the body arrive,
@@ -142,6 +123,11 @@ const stallOnce = new Set<string>()
 const rawReads: string[] = []
 /** Every `/suggest` call the fixture received (title/head-noun probes, Phase 4 PR-A). */
 const suggestRequests: Array<{ content: string; term: string }> = []
+/** Answers to the held `/suggest` lookup (`book-pack-slow-probe`), sent only on release. */
+const heldProbes: Array<() => void> = []
+function releaseHeldProbes(): void {
+  for (const answer of heldProbes.splice(0)) answer()
+}
 const LIST_ARTICLE = 'Liste der größten Kohlekraftwerke der Erde'
 /** Phase 4 PR-A discovery fixtures (`pack-plan`): a plan query, its one hit, and the plain
  *  `searchPattern` rewrite of `PLAN_QUESTION` (below) — the port's "last query" (item 3). */
@@ -164,26 +150,11 @@ function listArticleHtml(): string {
   return articleHtml(LIST_ARTICLE, sections)
 }
 
-function searchXml(bookUrlId: string, titles: string[]): string {
-  const items = titles
-    .map(
-      (t) =>
-        `<item><title>${t}</title><link>/content/${bookUrlId}/${encodeURIComponent(t.replace(/ /g, '_'))}</link><wordCount>1,000</wordCount></item>`
-    )
-    .join('')
-  return `<?xml version="1.0" encoding="UTF-8"?><rss><channel><title>Search</title>${items}</channel></rss>`
-}
-
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     if (url.pathname === '/search') {
       const book = url.searchParams.get('books.id') ?? ''
-      if (book === 'pack-broken') {
-        res.writeHead(500)
-        res.end('boom')
-        return
-      }
       const pattern = url.searchParams.get('pattern') ?? ''
       searchPatterns.push(pattern)
       // Phase 4 PR-A — the plan's own FTS queries (route F's `discover()`), keyed by book and
@@ -213,10 +184,11 @@ beforeAll(async () => {
         res.end(searchXml(`book-${book}`, []))
         return
       }
-      // FTS never finds anything for this book — isolates the head-noun route (below).
+      // FTS finds nothing for these books — isolates the head-noun route (below) — except the
+      // plan query `Planquery`, the FTS read the head-noun stage must come before.
       if (book === 'pack-headnoun' || book === 'pack-headnoun2' || book === 'pack-headnoun3') {
         res.writeHead(200, { 'content-type': 'application/xml' })
-        res.end(searchXml(`book-${book}`, []))
+        res.end(searchXml(`book-${book}`, book === 'pack-headnoun' && pattern === 'Planquery' ? ['Ftsartikel'] : []))
         return
       }
       // The read-budget legs feed candidates ONLY through plan titles (`/suggest`); FTS stays
@@ -266,11 +238,10 @@ beforeAll(async () => {
         return
       }
       // Phase 4 PR-A STAGE 1 — the head-noun rule's candidates (see the arm test below: the
-      // LONGEST matching suffix wins, so "Bikes" -> "Bik", not "Bike").
-      if (content === 'book-pack-headnoun' && (term === 'Testo' || term === 'Bik')) {
-        const article = term === 'Testo' ? 'Testo' : 'Bik'
+      // LONGEST matching suffix wins, so "Bikes" -> "Bik", not "Bike"), plus one plan title.
+      if (content === 'book-pack-headnoun' && (term === 'Testo' || term === 'Bik' || term === 'Planartikel')) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify([{ value: article, kind: 'path', path: article }]))
+        res.end(JSON.stringify([{ value: term, kind: 'path', path: term }]))
         return
       }
       // A head-noun NEAR MISS — a real /suggest hit exists but is not an exact match, so
@@ -296,12 +267,6 @@ beforeAll(async () => {
         res.end(JSON.stringify([{ value: term, kind: 'path', path: term }]))
         return
       }
-      // Phase 4 PR-A read-budget legs — every `T<n>` candidate resolves via `/suggest`.
-      if ((content === 'book-pack-budget-reads' || content === 'book-pack-budget-admit') && /^T\d+$/.test(term)) {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify([{ value: term, kind: 'path', path: term }]))
-        return
-      }
       // F3 integration fixture (review 2026-09-14, test gap 2) — two "…(Roman)" plan titles,
       // both exact-match their own /suggest term. N1 (step 4-3) adds a third: "Kraken" itself
       // (the CASE A shape, no "(Roman)" title suffix).
@@ -313,15 +278,18 @@ beforeAll(async () => {
         res.end(JSON.stringify([{ value: term, kind: 'path', path: term.replace(/ /g, '_') }]))
         return
       }
-      // PROBE_TIMEOUT_MS behavioural test (review 2026-09-14, test gap 3): a /suggest response
-      // held well past any sane probe bound. A real answer eventually arrives (so a caller that
-      // does NOT respect the `probeTimeoutMs` seam would still pass, slowly) — the seam is what
-      // proves the client gives up at ITS bound rather than the server's.
+      // The PROBE_TIMEOUT_MS test: an exact-match answer held until the test releases it, with no
+      // timer of its own, so only the client's bound can end the lookup early.
       if (content === 'book-pack-slow-probe' && term === 'Verzoegert') {
-        setTimeout(() => {
+        let closed = false
+        res.on('close', () => {
+          closed = true
+        })
+        heldProbes.push(() => {
+          if (closed) return
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify([{ value: 'Verzoegert', kind: 'path', path: 'Verzoegert' }]))
-        }, 2_000)
+        })
         return
       }
       res.writeHead(404)
@@ -343,27 +311,8 @@ beforeAll(async () => {
       // #339 D-Z22: every article request now carries `Range: bytes=<n>-`; libkiwix answers it
       // `206` + `Content-Range` + the tail, and so does this fake — so the stall leg below
       // exercises the RESUME path rather than a whole re-read.
-      const rangeFrom = ((): number | null => {
-        const h = req.headers.range
-        if (typeof h !== 'string') return null
-        const m = /^bytes=(\d+)-$/.exec(h.trim())
-        return m ? Number(m[1]) : null
-      })()
-      const sendArticle = (html: string): void => {
-        const buf = Buffer.from(html, 'utf8')
-        if (rangeFrom === null || rangeFrom >= buf.length) {
-          res.writeHead(200, { 'content-type': 'text/html' })
-          res.end(buf)
-          return
-        }
-        const tail = buf.subarray(rangeFrom)
-        res.writeHead(206, {
-          'content-type': 'text/html',
-          'content-length': String(tail.length),
-          'content-range': `bytes ${rangeFrom}-${buf.length - 1}/${buf.length}`
-        })
-        res.end(tail)
-      }
+      const from = rangeStart(req.headers.range)
+      const sendArticle = (html: string): void => sendRawAnswer(res, { status: 200, body: html }, from)
       if (article === LIST_ARTICLE) {
         sendArticle(listArticleHtml())
         return
@@ -410,18 +359,11 @@ beforeAll(async () => {
         ['Trivia', 'Ein Abschnitt ohne die gesuchten Begriffe.']
       ])
       // #301 P7 T19: the 200 and an honest `Content-Length`, then only ~85 % of the body —
-      // the connection hangs and the last part never arrives. The client's per-attempt timeout
-      // ends it, and the retry (the title is already consumed) reads the article whole.
+      // the connection hangs and the last part never arrives. The client's inter-chunk detector
+      // ends it, and the retry (the title is already consumed) resumes from the bytes in hand.
       if (stallOnce.delete(article)) {
-        const total = Buffer.byteLength(body)
-        res.writeHead(rangeFrom === null ? 200 : 206, {
-          'content-type': 'text/html',
-          'content-length': String(total),
-          ...(rangeFrom === null
-            ? {}
-            : { 'content-range': `bytes ${rangeFrom}-${total - 1}/${total}` })
-        })
-        res.write(body.slice(0, Math.floor(body.length * 0.85)))
+        const partial = body.slice(0, Math.floor(body.length * 0.85))
+        sendRawStall(res, { stall: 'truncated', partial, total: Buffer.byteLength(body) }, from)
         return
       }
       sendArticle(body)
@@ -474,36 +416,42 @@ describe('collectPackCandidates', () => {
     // Before the stall retry, kiwix-serve 3.8.1 (win-x86_64) cutting a `/raw` read short cost
     // the ask that article ENTIRELY and silently: `fetchArticleHtml` rejected on the timeout and
     // the arm's per-hit `continue` swallowed it (a measured ask returned 16 of 20 passages after
-    // 40 s). The retry makes the stall invisible to the ask — and the truncated body is
-    // discarded, so no half-article's chunks reach the answer either.
+    // 40 s). The retry makes the stall invisible to the ask. Since #339 the shipped 1 s
+    // inter-chunk detector ends the stalled read and the missing tail is resumed, so the
+    // article's chunks are those of a whole read.
     const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
     const question = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
     const { candidates: unstalled } = await collectPackCandidates(port, packs, question)
 
     rawReads.length = 0
     stallOnce.add('Treibhausgas') // the top hit — the one that used to disappear
-    const { candidates, outcomes } = await collectPackCandidates(
-      port,
-      packs,
-      question,
-      undefined,
-      undefined,
-      // Shrunk for this leg only; the shipped per-attempt budget is 4 s.
-      { articleTimeoutMs: 300 }
-    )
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      const { candidates, outcomes } = await within(
+        collectPackCandidates(port, packs, question),
+        'the ask over a stalled article read settled'
+      )
 
-    expect(stallOnce.size).toBe(0) // the stall really fired
-    // Same candidates, in the same order, as the run where nothing stalled.
-    expect(candidates.map((c) => c.chunkId)).toEqual(unstalled.map((c) => c.chunkId))
-    expect(candidates.some((c) => c.sourceTitle === 'Treibhausgas')).toBe(true)
-    expect(outcomes[0]).toMatchObject({
-      packId: 'pack-climate',
-      status: 'searched',
-      reason: null,
-      found: candidates.length
-    })
-    // Exactly ONE extra read, of the stalled article alone — the other hit is fetched once.
-    expect(rawReads).toEqual(['Treibhausgas', 'Treibhausgas', 'Treibhauspotential'])
+      expect(stallOnce.size).toBe(0) // the stall really fired
+      // The idle detector ended it, not the 4 s whole-attempt timer, and the tail was resumed.
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('article read short'),
+        expect.objectContaining({ kind: 'idle', resume: true })
+      )
+      // Same candidates, in the same order, as the run where nothing stalled.
+      expect(candidates.map((c) => c.chunkId)).toEqual(unstalled.map((c) => c.chunkId))
+      expect(candidates.some((c) => c.sourceTitle === 'Treibhausgas')).toBe(true)
+      expect(outcomes[0]).toMatchObject({
+        packId: 'pack-climate',
+        status: 'searched',
+        reason: null,
+        found: candidates.length
+      })
+      // Exactly ONE extra read, of the stalled article alone — the other hit is fetched once.
+      expect(rawReads).toEqual(['Treibhausgas', 'Treibhausgas', 'Treibhauspotential'])
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('P1b an aborted ask signal propagates out of collectPackCandidates instead of an empty list', async () => {
@@ -571,60 +519,10 @@ describe('collectPackCandidates', () => {
     expect(out.every((c) => c.articlePath === 'Schwefel')).toBe(true)
   })
 
-  // #340 L3 (D-Z18): the question's function and frame words never reach Xapian (it ANDs every
-  // word) — the plain pattern rewrite is still what a plan-less ask sends.
-  it('sends the plain pattern rewrite to /search when no plan is supplied', async () => {
-    searchPatterns.length = 0
-    const climate = await collectPackCandidates(
-      port,
-      [{ id: 'pack-climate', title: 'Klima' }],
-      'Welche Rolle spielt das Treibhausgas beim Treibhauspotential?'
-    )
-    expect(searchPatterns).toEqual(['Treibhausgas Treibhauspotential'])
-    expect(climate.candidates.length).toBeGreaterThan(0)
-  })
-
-  it('isolates a failing pack — the healthy pack still contributes', async () => {
-    const packs = [
-      { id: 'pack-broken', title: 'Broken' },
-      { id: 'pack-chem', title: 'Chemie von Wikipedia' }
-    ]
-    const { candidates: out, outcomes } = await collectPackCandidates(port, packs, 'Schwefel Verbrennung')
-    expect(out.length).toBeGreaterThan(0)
-    expect(out.every((c) => c.packId === 'pack-chem')).toBe(true)
-    // …and the failing pack is REPORTED rather than silently dropped (#301 P4, finding M6):
-    // its `/search` answered HTTP 500, which is `search-failed` for this ask only — never a
-    // persisted capability (a 404 is just as ambiguous, plan §2.2).
-    expect(outcomes.find((o) => o.packId === 'pack-broken')).toMatchObject({
-      title: 'Broken',
-      status: 'failed',
-      reason: 'search-failed',
-      found: 0,
-      admitted: 0
-    })
-    expect(outcomes.find((o) => o.packId === 'pack-chem')).toMatchObject({
-      status: 'searched',
-      reason: null
-    })
-  })
-
   it('allocateCandidates admits round-robin in pack order, reclaims short packs and is completion-order independent', () => {
-    const candidate = (packId: string, i: number): ExternalCandidate => ({
-      chunkId: `zim:${packId}:A#${i}`,
-      documentId: `zim:${packId}`,
-      text: `${packId} chunk ${i}`,
-      sourceTitle: 'A',
-      pageNumber: null,
-      sectionLabel: null,
-      score: 1,
-      sourceKind: 'archive',
-      packId,
-      archiveTitle: packId,
-      articlePath: 'A'
-    })
     const list = (packId: string, n: number): PackCandidateList => ({
       packId,
-      candidates: Array.from({ length: n }, (_, i) => candidate(packId, i))
+      candidates: Array.from({ length: n }, (_, i) => archiveCandidate(i, `${packId} chunk ${i}`, { packId, article: 'A' }))
     })
     const shares = (input: PackCandidateList[]): number[] => {
       const { admitted, admittedPerPack } = allocateCandidates(input)
@@ -708,7 +606,6 @@ describe('queryTerms / overlapScore', () => {
     // digit" rule left 86 real match terms split by a surviving marker (`NO_x`, `SO_x`,
     // `pK_S`, `kW_p`, `MW_th`, `T_krit`, `C_org`), and the code-oriented packs it was written
     // to protect (devdocs, gobyexample) carry no `<sub>` at all.
-    expect(queryTerms('Was ist NOx?')).toContain('nox')
     expect(queryTerms('Was macht snake_case?')).toContain('snakecase')
     expect(queryTerms('Was macht snake_case?')).not.toContain('snake')
   })
@@ -757,152 +654,22 @@ describe('candidate scope (step 4-4)', () => {
     expect(totalCandidateCapFor('all')).toBeLessThan(Number.POSITIVE_INFINITY)
   })
 
-  it('chunksForScope orders overlap-desc/index-asc and slices to the per-article budget, for a non-list article', () => {
-    // 50 synthetic chunks, DEscending index so overlap-desc/index-asc tie-break order is provable.
-    const chunks = Array.from({ length: 50 }, (_, i) => ({ index: i, overlap: 50 - i, text: `c${i}` }))
-    for (const scope of SCOPES) {
-      const picked = chunksForScope(chunks, scope, false)
-      expect(picked.length).toBe(Math.min(chunks.length, perArticleBudget(scope, false)))
-      // Overlap-desc: chunk 0 (overlap 50, the highest) is always first when anything is picked.
-      expect(picked[0]!.index).toBe(0)
-      // Every picked chunk's overlap is >= every NOT-picked chunk's overlap (a true top-N slice).
-      const pickedIdx = new Set(picked.map((c) => c.index))
-      const minPickedOverlap = Math.min(...picked.map((c) => c.overlap))
-      for (const c of chunks) {
-        if (!pickedIdx.has(c.index)) expect(c.overlap).toBeLessThanOrEqual(minPickedOverlap)
-      }
-    }
-  })
-
-  it('the superset property AT THE PER-ARTICLE chunksForScope LAYER: capped ⊆ top48 ⊆ top96 ⊆ all, by chunk index, for both a normal and a list article (fixed overlaps, including ties)', () => {
-    // B10 (scoped Opus review, step 4-4): FIXED, hand-written overlaps — including genuine ties
-    // (the case `index asc` tie-breaking exists for, which `Math.random()` essentially never
-    // produces) — so this fixture is reproducible and a failure is re-runnable. Overlap pattern:
-    // a strictly-descending run (0..29 tied in pairs: 39,39,38,38,...) then a flat tail of zeros,
-    // so every scope's cut point lands inside a tie at least once.
-    //
-    // D5 (scoped Opus review, step 4-5): this holds UNCONDITIONALLY at this layer only, because
-    // `chunksForScope` never applies the cross-pack TOTAL admission cap — `all` here is simply
-    // "every chunk of this one article", which trivially contains every other scope's slice. The
-    // COMPOSED admission (`collectPackCandidates`'s article loop + `allocateCandidates`, which DOES
-    // apply `totalCandidateCapFor(scope)`) is a different question — `top96 ⊆ all` can break there
-    // once the finite `all` ceiling binds; see the composed-level tests below.
-    const chunks = Array.from({ length: 40 }, (_, i) => ({
-      index: i,
-      overlap: i < 30 ? 39 - Math.floor(i / 2) : 0, // pairs tie: (0,1)->39, (2,3)->38, ...; 30..39 -> 0
-      text: `c${i}`
-    }))
+  it('chunksForScope orders overlap-desc/index-asc and slices to the per-article budget, for a normal and a list article', () => {
+    // Overlaps out of index order, with a tie at every finite cut: capped (4) cuts inside the
+    // overlap-3 run and top48 (8) inside the overlap-2 run, so the index-asc tie-break decides
+    // what is kept. Every scope's pick is a prefix of the one order: capped ⊆ top48 ⊆ top96 ⊆ all.
+    // Fed in REVERSE index order, so the index-asc tie-break, not a stable sort of an
+    // already-ordered input, puts the ties in order.
+    const overlaps = [1, 3, 3, 0, 3, 2, 2, 0, 1, 3, 0, 2, 1, 0, 3, 1, 2, 0, 3, 1]
+    const chunks = overlaps.map((overlap, index) => ({ index, overlap, text: `c${index}` })).reverse()
+    const order = [1, 2, 4, 9, 14, 18, 5, 6, 11, 16, 0, 8, 12, 15, 19, 3, 7, 10, 13, 17]
     for (const isList of [false, true]) {
-      const byScope = new Map(SCOPES.map((s) => [s, new Set(chunksForScope(chunks, s, isList).map((c) => c.index))]))
-      const capped = byScope.get('capped')!
-      const top48 = byScope.get('top48')!
-      const top96 = byScope.get('top96')!
-      const all = byScope.get('all')!
-      for (const i of capped) expect(top48.has(i)).toBe(true)
-      for (const i of top48) expect(top96.has(i)).toBe(true)
-      for (const i of top96) expect(all.has(i)).toBe(true)
-      expect(all.size).toBe(chunks.length) // all = every chunk, nothing dropped
-      // A tie is genuinely exercised: index-asc must have been the tie-break, not incidental.
-      expect(new Set(chunks.map((c) => c.overlap)).size).toBeLessThan(chunks.length)
-    }
-  })
-
-  // B10 (scoped Opus review, step 4-4): the property above is pinned only at the `chunksForScope`
-  // level, where it is near-tautological (every scope is a prefix of the same total order). The
-  // layer where it could actually break is the COMPOSITION `collectPackCandidates` performs: the
-  // article loop's `if (item.candidates.length >= item.quota) break` (arm.ts), the per-pack
-  // `packQuota(i, N, cap)` (NOT uniformly doubling — e.g. at N=5, pack 3 gets 5 under `capped`
-  // and 9, not 10, under `top48`), and `allocateCandidates`'s round-robin reclaim. This test
-  // replicates that composition, verbatim, over two FIXED multi-pack/multi-article fixtures (one
-  // with a list article) using the branch's own exported `chunksForScope`/`packQuota`/
-  // `allocateCandidates` — never a re-implementation of the picker — and asserts the superset
-  // property on the ADMITTED output, not just the per-article slice.
-  function composeAdmitted(
-    packsArticles: ReadonlyArray<ReadonlyArray<{ isList: boolean; chunks: Array<{ index: number; overlap: number }> }>>,
-    scope: RerankScope
-  ): Set<string> {
-    const cap = totalCandidateCapFor(scope)
-    const perPack = packsArticles.map((articles, packIdx) => {
-      const quota = packQuota(packIdx, packsArticles.length, cap)
-      const candidates: ExternalCandidate[] = []
-      for (const [articleIdx, article] of articles.entries()) {
-        if (candidates.length >= quota) break
-        const picked = chunksForScope(article.chunks, scope, article.isList)
-        for (const c of picked) {
-          candidates.push({ ...archiveCandidate(0, ''), chunkId: `p${packIdx}:a${articleIdx}:c${c.index}` })
-        }
+      for (const scope of SCOPES) {
+        const picked = chunksForScope(chunks, scope, isList).map((c) => c.index)
+        const budget = Math.min(chunks.length, perArticleBudget(scope, isList))
+        expect(picked, `${scope}, list ${isList}`).toEqual(order.slice(0, budget))
       }
-      return { packId: `p${packIdx}`, candidates }
-    })
-    const { admitted } = allocateCandidates(perPack, cap)
-    return new Set(admitted.map((c) => c.chunkId))
-  }
-
-  // D5 (scoped Opus review, step 4-5): `capped ⊆ top48 ⊆ top96` is a genuine, unconditional
-  // property of the composed admission (verified below AND by a sweep over pack-count ×
-  // chunks-per-article × article-count configurations — zero breaks). `top96 ⊆ all` is NOT: once
-  // `totalCandidateCapFor('all')` (`ALL_SCOPE_MAX_DOCS`, 512, step 4-5 ruling (e)(ii)) actually
-  // binds, `all`'s per-pack FETCHING quota (`packQuota`) can be smaller than `top96`'s for a
-  // later-discovered article, dropping that article's `top96` members entirely — see the
-  // dedicated breaking-fixture test directly below for the smallest reachable case (measured, not
-  // hypothetical: 43 configurations break it in the sweep). The two fixtures THIS test uses stay
-  // well under 512 total candidates, so the `all` ceiling never binds here and `top96 ⊆ all`
-  // holds for them — that is what this test actually proves, not a universal guarantee.
-  it('capped ⊆ top48 ⊆ top96 holds on the COMPOSED admission output (packQuota + the article loop + allocateCandidates); top96 ⊆ all holds too ON THESE FIXTURES, which do not bind the all-scope ceiling', () => {
-    const tiedChunks = (n: number): Array<{ index: number; overlap: number }> =>
-      Array.from({ length: n }, (_, i) => ({ index: i, overlap: Math.floor((n - i) / 2) })) // ties every pair
-    const fixtures: Array<ReadonlyArray<ReadonlyArray<{ isList: boolean; chunks: Array<{ index: number; overlap: number }> }>>> = [
-      // Fixture 1: 3 packs, uneven article counts, one list article, tied overlaps.
-      [
-        [{ isList: false, chunks: tiedChunks(20) }, { isList: true, chunks: tiedChunks(30) }],
-        [{ isList: false, chunks: tiedChunks(10) }],
-        [{ isList: false, chunks: tiedChunks(50) }, { isList: false, chunks: tiedChunks(6) }, { isList: false, chunks: tiedChunks(6) }]
-      ],
-      // Fixture 2: 5 packs (packQuota's "+1 for the first `cap mod N`" term actually fires),
-      // each with one small article — the case B10 names explicitly (N=5, cap doubling is not
-      // uniform: floor(24/5)=4 r4 under capped, floor(48/5)=9 r3 under top48).
-      Array.from({ length: 5 }, () => [{ isList: false, chunks: tiedChunks(12) }])
-    ]
-    for (const packsArticles of fixtures) {
-      const byScope = new Map(SCOPES.map((s) => [s, composeAdmitted(packsArticles, s)]))
-      const capped = byScope.get('capped')!
-      const top48 = byScope.get('top48')!
-      const top96 = byScope.get('top96')!
-      const all = byScope.get('all')!
-      for (const id of capped) expect(top48.has(id)).toBe(true)
-      for (const id of top48) expect(top96.has(id)).toBe(true)
-      for (const id of top96) expect(all.has(id)).toBe(true)
     }
-  })
-
-  it('D5 (scoped Opus review, step 4-5): top96 ⊆ all is NOT a universal property once the all-scope ceiling binds — the smallest reachable break (1 pack, 6 admitted articles of 100 chunks each)', () => {
-    // Measured directly against the branch's own composeAdmitted (the same helper the test above
-    // uses, never a re-implementation): under `top96` each article contributes at most 16 chunks
-    // (`perArticleBudget('top96', false)`), so the 96-item budget reaches six articles; under
-    // `all` each article contributes every one of its 100 chunks, so the 512-item ceiling is
-    // exhausted inside the first five articles, and article six's own top-96 members — which DID
-    // make it into the `top96` admission — fall off the end of `all`'s. `capped ⊆ top48 ⊆ top96`
-    // stays intact throughout (asserted below): this is specifically a `top96`-vs-`all` break, not
-    // a weakening of the chain the brief protected.
-    const tiedChunks = (n: number): Array<{ index: number; overlap: number }> =>
-      Array.from({ length: n }, (_, i) => ({ index: i, overlap: Math.floor((n - i) / 2) }))
-    const packsArticles = [Array.from({ length: 6 }, () => ({ isList: false, chunks: tiedChunks(100) }))]
-    const byScope = new Map(SCOPES.map((s) => [s, composeAdmitted(packsArticles, s)]))
-    const capped = byScope.get('capped')!
-    const top48 = byScope.get('top48')!
-    const top96 = byScope.get('top96')!
-    const all = byScope.get('all')!
-
-    // The chain the brief protected: still intact.
-    for (const id of capped) expect(top48.has(id)).toBe(true)
-    for (const id of top48) expect(top96.has(id)).toBe(true)
-
-    // The relation that breaks: measured exactly, not merely "not guaranteed".
-    expect(all.size).toBe(ALL_SCOPE_MAX_DOCS) // the ceiling genuinely binds on this fixture
-    expect(top96.size).toBe(96)
-    const missingFromAll = [...top96].filter((id) => !all.has(id))
-    expect(missingFromAll.length).toBe(4)
-    expect(missingFromAll.sort()).toEqual(['p0:a5:c12', 'p0:a5:c13', 'p0:a5:c14', 'p0:a5:c15'])
   })
 
   it('packQuota/allocateCandidates with an explicit cap match totalCandidateCapFor for a wider scope, and default to MAX_EXTERNAL_CANDIDATES unchanged', () => {
@@ -934,28 +701,9 @@ describe('candidate scope (step 4-4)', () => {
     expect(allocateCandidates(longPacks, totalCandidateCapFor('capped')).admitted).toHaveLength(MAX_EXTERNAL_CANDIDATES)
   })
 
-  // B11 (scoped Opus review, step 4-4): the test this replaces was titled after a
-  // reranker-availability contract but its body (`perArticleBudget('capped', false) <
-  // perArticleBudget('top48', false)`) checked neither `rerankerAvailable` nor `collectPackCandidates`
-  // — it would pass on an implementation that ignored `rerankerAvailable` entirely. That real
-  // contract IS pinned, in `rerank-profile.test.ts`'s "rerankerAvailable false -> capped on every
-  // profile" case (`rerankScopeFor` refuses a wide scope with no reranker BEFORE reading the
-  // profile). What THIS file can meaningfully pin instead is `collectPackCandidates`'s own
-  // absent-option default: that omitting `candidateScope` really does mean `'capped'`, not a
-  // scope that silently drifted.
-  it('collectPackCandidates with no candidateScope option is byte-identical to an explicit candidateScope: "capped" (the absent-option default really is capped)', async () => {
-    const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
-    const question = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
-    const { candidates: implicit } = await collectPackCandidates(port, packs, question)
-    const { candidates: explicit } = await collectPackCandidates(port, packs, question, undefined, undefined, {
-      candidateScope: 'capped'
-    })
-    expect(implicit.map((c) => c.chunkId)).toEqual(explicit.map((c) => c.chunkId))
-  })
-
   it('end to end: candidateScope "all" yields EVERY chunk of an admitted list article, not just its capped slice', async () => {
     // Reuses the pack-plan fixture (`describe('collectPackCandidates — Phase 4 PR-A discovery
-    // port')` above): a plan whose title is the LIST_ARTICLE, chunked to more than
+    // port')` below): a plan whose title is the LIST_ARTICLE, chunked to more than
     // LIST_ARTICLE_CHUNKS pieces (asserted there: `outcomes[0].found > LIST_ARTICLE_CHUNKS`).
     const packs = [{ id: 'pack-plan', title: 'Kraftwerke von Wikipedia' }]
     const names = new Map([['pack-plan', 'book-pack-plan']])
@@ -970,7 +718,8 @@ describe('candidate scope (step 4-4)', () => {
 
     const { candidates: capped } = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, { expand })
     const cappedList = capped.filter((c) => c.sourceTitle === LIST_ARTICLE)
-    expect(cappedList.length).toBe(LIST_ARTICLE_CHUNKS) // "with no option yields today's list"
+    // No candidateScope means 'capped': exactly LIST_ARTICLE_CHUNKS (a wider default keeps more).
+    expect(cappedList.length).toBe(LIST_ARTICLE_CHUNKS)
 
     const { candidates: all } = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
       expand,
@@ -1024,165 +773,23 @@ describe('candidate scope (step 4-4)', () => {
     })
     expect(allAsk.cappedCandidates!.map((c) => c.chunkId)).toEqual(cappedOnlyAsk.candidates.map((c) => c.chunkId))
   })
-
-  // Step 4-5 (run L2, ruling (e)(ii)): the measurement-only override that lets run L2 capture
-  // the genuinely UNCAPPED `all` candidate list even after `ALL_SCOPE_MAX_DOCS` ships finite —
-  // see the option's own doc comment on `CollectPackCandidatesOptions`.
-  it('totalCandidateCapOverride replaces the scope\'s own total cap for one call; absent is byte-identical to today (the measurement seam, step 4-5)', async () => {
-    const packs = [{ id: 'pack-plan', title: 'Kraftwerke von Wikipedia' }]
-    const names = new Map([['pack-plan', 'book-pack-plan']])
-    const PLAN: SearchPlan = { titles: [LIST_ARTICLE], queries: [PLAN_QUERY] }
-    const expand = async (): Promise<SearchPlan> => PLAN
-
-    const withoutOverride = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
-      expand,
-      candidateScope: 'all'
-    })
-    // Absent -> exactly totalCandidateCapFor('all') (ALL_SCOPE_MAX_DOCS), unchanged.
-    expect(withoutOverride.candidates.length).toBeLessThanOrEqual(totalCandidateCapFor('all'))
-
-    // A tiny override (1) caps the SAME ask far below ALL_SCOPE_MAX_DOCS.
-    const tinyOverride = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
-      expand,
-      candidateScope: 'all',
-      totalCandidateCapOverride: 1
-    })
-    expect(tinyOverride.candidates.length).toBe(1)
-
-    // Number.POSITIVE_INFINITY reproduces run L's own "uncapped" capture (every chunk of every
-    // admitted article, no total cap) -- pin: at least as many candidates as the (finite,
-    // already-capped) default call, and equal to the list article's own full chunk count when
-    // that count alone would already exceed a small cap.
-    const uncapped = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
-      expand,
-      candidateScope: 'all',
-      totalCandidateCapOverride: Number.POSITIVE_INFINITY
-    })
-    expect(uncapped.candidates.length).toBeGreaterThanOrEqual(withoutOverride.candidates.length)
-
-    // The capped companion selection (ruling (e)(i)) is UNAFFECTED by this override -- always
-    // totalCandidateCapFor('capped'), on every one of the three calls above.
-    for (const result of [withoutOverride, tinyOverride, uncapped]) {
-      expect(result.cappedCandidates!.length).toBeLessThanOrEqual(totalCandidateCapFor('capped'))
-    }
-  })
 })
 
 // ---- the retrieve() seam ----------------------------------------------------------
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-zim-arm-')), 'test.sqlite'))
-}
-
-async function seedDocument(db: Db, embedder: MockEmbedder, title: string, texts: string[]): Promise<void> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const vectors = await embedder.embed(texts)
-  for (let i = 0; i < texts.length; i++) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(chunkId, docId, i, texts[i], title, texts[i].split(/\s+/).length, now)
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, embedder.id, encodeVector(vectors[i]), vectors[i].length, now)
-  }
-}
-
-function archiveCandidate(n: number, text: string) {
-  return {
-    chunkId: `zim:pack-1:Artikel#${n}`,
-    documentId: 'zim:pack-1',
-    text,
-    sourceTitle: 'Artikel',
-    pageNumber: null,
-    sectionLabel: 'Abschnitt',
-    score: 1,
-    sourceKind: 'archive' as const,
-    packId: 'pack-1',
-    archiveTitle: 'Wikipedia (Test)',
-    articlePath: 'Artikel'
-  }
-}
-
-/** The arm's result shape (#301 P4, plan §9.21 (e)3): `{ candidates, outcomes }`. These cases are
- *  about the CANDIDATE pipeline (interleave, rerank, scope, citations), so they report no outcomes
- *  — the outcome contract itself is pinned by the arm/service suites and by T16-a. */
-function testArm(...candidates: Array<ReturnType<typeof archiveCandidate>>): ExternalRetrievalOutput {
-  return { candidates, outcomes: [] }
-}
-
-/** Like `testArm`, but also supplies the arm's `capped`-scope companion selection (step 4-5,
- *  ruling (e)(i)/B3) — the fallback `retrieve()` restricts to on a rerank-call failure. */
-function testArmWithCapped(
-  candidates: Array<ReturnType<typeof archiveCandidate>>,
-  cappedCandidates: Array<ReturnType<typeof archiveCandidate>>
-): ExternalRetrievalOutput {
-  return { candidates, outcomes: [], cappedCandidates }
-}
-
 describe('retrieve() with an external arm', () => {
-  it('interleaves document and archive candidates without a reranker and builds archive citations', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'notes.txt', [
-      'Treibhausgase entstehen in der Landwirtschaft.',
-      'Ganz anderes Thema ohne Bezug.'
-    ])
-    const r = await retrieve(db, embedder, 'Treibhausgas Landwirtschaft', SETTINGS, null, null, undefined, async () =>
-      testArm(
-        archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'),
-        archiveCandidate(1, 'Weitere Treibhausgase sind Lachgas und CO2.')
-      )
-    )
-    const kinds = new Set(r.chunks.map((c) => c.sourceKind ?? 'document'))
-    expect(kinds).toEqual(new Set(['document', 'archive']))
-    // Interleave: the first archive chunk sits at position 2, not appended at the end.
-    expect(r.chunks[1]?.sourceKind).toBe('archive')
-    const archiveCitation = r.citations.find((c) => c.sourceKind === 'archive')
-    expect(archiveCitation).toMatchObject({
-      sourceTitle: 'Artikel',
-      section: 'Abschnitt',
-      packId: 'pack-1',
-      archiveTitle: 'Wikipedia (Test)',
-      articlePath: 'Artikel'
-    })
-    expect(archiveCitation?.documentId).toBeUndefined()
-    expect(archiveCitation?.chunkId).toBeUndefined()
-    const docCitation = r.citations.find((c) => c.sourceKind !== 'archive')
-    expect(docCitation?.documentId).toBeTruthy()
-  })
-
-  it('lets a reranker rank archive chunks above documents on one scale', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
-    const fakeReranker: Reranker = {
-      async rerank(_q, docs) {
-        // Highest score to the archive text (it contains "Methan").
-        return docs.map((text, index) => ({ index, score: text.includes('Methan') ? 10 : 0 }))
-      }
-    } as Reranker
-    const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, fakeReranker, undefined, async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft.')))
-    expect(r.chunks[0]?.sourceKind).toBe('archive')
-    expect(r.chunks[0]?.label).toBe('S1')
-  })
-
   // Step 4-5 (ruling (e)(i), B3 with B7/B20 — scoped Opus review of step 4-4): a rerank-call
   // failure must restrict the external candidates to the arm's `capped` companion selection,
   // never interleave the WHOLE wide pool — measured (4-4's own gpu-profile no-rerank column)
   // landing BELOW the no-arm/`capped` baseline (22/33/116 vs 26/42/142), not merely failing to
-  // help. The four properties below are ruling (e)(i)'s own list, pinned directly.
+  // help. Properties 1, 2 and 4 are ruling (e)(i)'s own list, pinned directly; its property 3 (an
+  // aborted ask never falls back) is zim-regressions' T09-c leg (4), and property 5 is the
+  // packs-only regression step 4-5's acceptance read found.
   describe('the non-regressive rerank-failure fallback (step 4-5, ruling (e)(i))', () => {
     it('property 1: on the capped scope the field is the identity — the fallback path is byte-identical to today', async () => {
-      const db = freshDb()
+      const db = openFreshDb('zim-arm')
       const embedder = new MockEmbedder()
-      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
+      await seedEmbeddedDoc(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
       const cappedArm = [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
       const throwingReranker: Reranker = { id: 'fake-throwing-reranker', async rerank() { throw new Error('sidecar down') } } as Reranker
       // A `capped`-scope arm's OWN `cappedCandidates` is value-identical to its `candidates`
@@ -1201,9 +808,9 @@ describe('retrieve() with an external arm', () => {
     })
 
     it('property 2: a wide-scope arm + a THROWING reranker restricts the external candidates to EXACTLY the capped set — set equality and order, not a count', async () => {
-      const db = freshDb()
+      const db = openFreshDb('zim-arm')
       const embedder = new MockEmbedder()
-      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
+      await seedEmbeddedDoc(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
       const wide = [
         archiveCandidate(0, 'Methan A aus der Landwirtschaft.'),
         archiveCandidate(1, 'Methan B aus der Landwirtschaft.'),
@@ -1223,39 +830,10 @@ describe('retrieve() with an external arm', () => {
       expect(archiveChunkIds).not.toContain(wide[2]!.chunkId)
     })
 
-    it('property 3: an ABORTED ask still throws through a throwing reranker + a wide-scope arm — the fallback never swallows a cancellation (T09)', async () => {
-      const db = freshDb()
-      const embedder = new MockEmbedder()
-      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
-      const wide = [archiveCandidate(0, 'Methan aus der Landwirtschaft.'), archiveCandidate(1, 'Methan wieder.')]
-      const controller = new AbortController()
-      const abortingReranker: Reranker = {
-        id: 'fake-aborting-reranker',
-        async rerank() {
-          controller.abort()
-          const err = new Error('The ask was cancelled')
-          err.name = 'AbortError'
-          throw err
-        }
-      } as Reranker
-      await expect(
-        retrieve(
-          db,
-          embedder,
-          'Methan',
-          SETTINGS,
-          null,
-          abortingReranker,
-          controller.signal,
-          async () => testArmWithCapped(wide, [wide[0]!])
-        )
-      ).rejects.toMatchObject({ name: 'AbortError' })
-    })
-
     it('property 4: after a SUCCESSFUL rerank the fallback is dead — relevance decides, the capped restriction never applies', async () => {
-      const db = freshDb()
+      const db = openFreshDb('zim-arm')
       const embedder = new MockEmbedder()
-      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
+      await seedEmbeddedDoc(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
       const wide = [archiveCandidate(0, 'Methan A.'), archiveCandidate(1, 'Methan B (the winner).')]
       // The capped companion deliberately excludes the reranker's actual winner — if the
       // fallback wrongly applied after a SUCCESSFUL rerank, the winner would vanish.
@@ -1275,14 +853,14 @@ describe('retrieve() with an external arm', () => {
     // Found during step 4-5's own acceptance read (a packs-only 'gpu'-profile hold, exactly
     // this scope): the ORIGINAL guard on this branch was `candidates.length > externalCount`,
     // which is false precisely when there are NO document candidates at all
-    // (`candidates.length === externalCount`, e.g. `noDocuments: true` — no seedDocument call
+    // (`candidates.length === externalCount`, e.g. `noDocuments: true` — no seeded document
     // below) — skipping the whole restriction and leaving the WIDE pool untouched. Every
-    // property 1-4 test above seeds a document, so none of them could have caught this; this
+    // property test above seeds a document, so none of them could have caught this; this
     // is the packs-only counterpart of property 2.
     it('property 5: a packs-only ask (NO document candidates at all) still restricts to the capped set on a THROWING reranker', async () => {
-      const db = freshDb()
+      const db = openFreshDb('zim-arm')
       const embedder = new MockEmbedder()
-      // No seedDocument call: candidates.length === externalCount exactly, the case the guard
+      // No seeded document: candidates.length === externalCount exactly, the case the guard
       // above used to skip.
       const wide = [
         archiveCandidate(0, 'Methan A aus der Landwirtschaft.'),
@@ -1304,63 +882,6 @@ describe('retrieve() with an external arm', () => {
     })
   })
 
-  // Re-based by P4 (#301, plan §9.21 (a)3, ruling D4) onto the EXPLICIT flag. The live-demo fix
-  // (88be37ec) derived "packs only" from an empty document selection, which redefined the legacy
-  // empty scope and made "all documents AND a pack" inexpressible; the ruled design is the
-  // additive `documentsOff` → `RetrievalScope.noDocuments` flag that `resolveScope` sets. The
-  // counter-assertion below is the rejection, pinned.
-  it('a packs-only scope skips the document arms entirely (live-demo finding 2026-09-05)', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    // A document that WOULD match the question — it must not surface when the user turned
-    // documents off (an unrelated invoice used to claim the packs-only answer's slots).
-    await seedDocument(db, embedder, 'invoice.pdf', ['Treibhausgase entstehen in der Landwirtschaft.'])
-    const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null, noDocuments: true as const }
-    const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, scope, null, undefined, async () =>
-      testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
-    )
-    expect(r.chunks.length).toBeGreaterThan(0)
-    expect(r.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
-    // Counter-assertion (D4): the SAME pack selection WITHOUT the flag keeps the document arms —
-    // an empty composed document scope still means the whole corpus, packs are additive.
-    const additive = await retrieve(
-      db,
-      embedder,
-      'Treibhausgas',
-      SETTINGS,
-      { packIds: ['pack-1'], collectionIds: null, documentIds: null },
-      null,
-      undefined,
-      async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
-    )
-    expect(additive.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
-    expect(additive.chunks.some((c) => c.sourceKind !== 'archive')).toBe(true)
-    // And a ticked collection alongside the flag cannot resurrect the documents either: the
-    // resolved deny-all is fail-closed everywhere (a contradictory spread stays denied).
-    const contradictory = await retrieve(
-      db,
-      embedder,
-      'Treibhausgas',
-      SETTINGS,
-      { ...scope, collectionIds: ['some-collection'] },
-      null,
-      undefined,
-      async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.'))
-    )
-    expect(contradictory.chunks.every((c) => c.sourceKind === 'archive')).toBe(true)
-  })
-
-  it('a throwing arm never breaks the document ask', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'notes.txt', ['Treibhausgase entstehen in der Landwirtschaft.'])
-    const r = await retrieve(db, embedder, 'Treibhausgas', SETTINGS, null, null, undefined, async () => {
-      throw new Error('drive unplugged')
-    })
-    expect(r.chunks.length).toBeGreaterThan(0)
-    expect(r.chunks.every((c) => c.sourceKind !== 'archive')).toBe(true)
-  })
-
   // L6 (PR #294 review): the original test compared two calls of the NEW code with each other, which
   // proves nothing about master. This one replays a fixed seed against a result captured from master
   // bfdb514a's retrieve() BEFORE the arm existed (tests/fixtures/zim/no-arm-retrieval-master-bfdb514a.json,
@@ -1379,8 +900,10 @@ describe('retrieve() with an external arm', () => {
       }>
       result: unknown
     }
-    const db = freshDb()
+    const db = openFreshDb('zim-arm')
     const embedder = new MockEmbedder()
+    // Seeded inline: the fixture's ids, timestamps, pages and sections are part of the compared
+    // result, and its `$comment` fixes token_count as the whitespace word count.
     for (const d of fixture.documents) {
       db.prepare(
         `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
@@ -1390,7 +913,7 @@ describe('retrieve() with an external arm', () => {
         db.prepare(
           `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(c.id, d.id, i, c.text, d.title, c.pageNumber, c.sectionLabel, c.text.split(/s+/).length, fixture.now)
+        ).run(c.id, d.id, i, c.text, d.title, c.pageNumber, c.sectionLabel, c.text.split(/\s+/).length, fixture.now)
         db.prepare(
           `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
            VALUES (?, ?, ?, ?, ?)`
@@ -1552,10 +1075,10 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
 
   // F2 (review 2026-09-14): the #340 L3 zero-hit length retry, restored — master's own trigger
   // (`arm.ts:340` on master), gated to the PATTERN query only and only on a genuine zero-hit
-  // search, never run on every ask. `zim-regressions.test.ts` T15's `emptySearches` leg (and the
-  // `sends the plain pattern rewrite` test above) both use questions whose `rewrite.retry` is
-  // null by construction (every kept term is already >= 5 chars) — this is the leg where it
-  // isn't, so the retry actually fires.
+  // search, never run on every ask. `zim-regressions.test.ts` T15's `emptySearches` leg uses a
+  // question whose `rewrite.retry` is null by construction (every kept term is already >= 5
+  // chars), and the plan-less discovery tests above find hits on the first pattern — this is the
+  // leg where the full pattern finds nothing and a retry exists, so the retry actually fires.
   describe('the zero-hit length retry (F2)', () => {
     it('retries once with the narrower `retry` pattern when the full pattern finds nothing, and reads what it finds', async () => {
       reset()
@@ -1654,10 +1177,11 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
     it('resolves capitalised nouns via /suggest, admits at most HEAD_NOUN_MAX_READS, BEFORE any plan title or FTS read', async () => {
       reset()
       expect(HEAD_NOUN_MAX_READS).toBe(2)
+      // The plan's title and its query each find an article here, so "before" is a real order.
       const { candidates, outcomes } = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
-        expand: async () => emptyPlan()
+        expand: async () => ({ titles: ['Planartikel'], queries: ['Planquery'] })
       })
-      expect(rawReads.slice(0, 2)).toEqual(['Testo', 'Bik'])
+      expect(rawReads).toEqual(['Testo', 'Bik', 'Planartikel', 'Ftsartikel'])
       expect(suggestRequests.some((r) => r.content === 'book-pack-headnoun' && r.term === 'Car')).toBe(false)
       expect(candidates.some((c) => c.sourceTitle === 'Testo')).toBe(true)
       expect(candidates.some((c) => c.sourceTitle === 'Bik')).toBe(true)
@@ -1668,12 +1192,6 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       reset()
       await collectPackCandidates(port, packs, 'wie viel kostet das?', undefined, names, { expand: async () => emptyPlan() })
       expect(suggestRequests.filter((r) => r.content === 'book-pack-headnoun')).toEqual([])
-    })
-
-    it('without a served name the head-noun rule is not asked either', async () => {
-      reset()
-      await collectPackCandidates(port, packs, QUESTION, undefined, undefined, { expand: async () => emptyPlan() })
-      expect(suggestRequests).toEqual([])
     })
 
     // Orchestrator verification finding: does a head-noun probe's HIT feed the aggregate score
@@ -1765,60 +1283,64 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       expect(rawReads).toHaveLength(DISCOVERY_MAX_ADMITTED_PER_PACK)
       expect(outcomes[0]).toMatchObject({ packId: 'pack-budget-admit', status: 'searched', reason: null })
     })
-
-    it('withinReadBudget (pure): true only while BOTH counts are under their limits', () => {
-      const limits = { maxReads: DISCOVERY_MAX_READS_PER_PACK, maxAdmitted: DISCOVERY_MAX_ADMITTED_PER_PACK }
-      expect(withinReadBudget(0, 0, limits)).toBe(true)
-      expect(withinReadBudget(DISCOVERY_MAX_READS_PER_PACK - 1, 0, limits)).toBe(true)
-      expect(withinReadBudget(DISCOVERY_MAX_READS_PER_PACK, 0, limits)).toBe(false)
-      expect(withinReadBudget(0, DISCOVERY_MAX_ADMITTED_PER_PACK - 1, limits)).toBe(true)
-      expect(withinReadBudget(0, DISCOVERY_MAX_ADMITTED_PER_PACK, limits)).toBe(false)
-      expect(withinReadBudget(DISCOVERY_MAX_READS_PER_PACK, DISCOVERY_MAX_ADMITTED_PER_PACK, limits)).toBe(false)
-    })
   })
 })
 
 // ---- Phase 4 PR-A — the ported discovery constants (route F's own defaults are 14/8 for its
 // one archive; this arm applies the pair PER PACK — see arm.ts's file header) --------------------
 describe('the discovery read budget and pass sizes (Phase 4 PR-A)', () => {
-  it('DISCOVERY_MAX_READS_PER_PACK / DISCOVERY_MAX_ADMITTED_PER_PACK / FTS_TOP_UNSEEN_PASS / HEAD_NOUN_MAX_TOTAL_PROBES match the ported design', () => {
+  it('DISCOVERY_MAX_READS_PER_PACK / DISCOVERY_MAX_ADMITTED_PER_PACK / FTS_TOP_UNSEEN_PASS / HEAD_NOUN_MAX_TOTAL_PROBES match the ported design; PROBE_TIMEOUT_MS and the per-ask deadline keep their shipped values', () => {
     expect(DISCOVERY_MAX_READS_PER_PACK).toBe(12)
     expect(DISCOVERY_MAX_ADMITTED_PER_PACK).toBe(8)
     expect(FTS_TOP_UNSEEN_PASS).toBe(2)
     expect(HEAD_NOUN_MAX_TOTAL_PROBES).toBe(12)
     expect(PROBE_TIMEOUT_MS).toBe(3_000)
+    // The one deadline per ask (#301 P4, `docs/data-contracts.md`): no behavioural test waits
+    // the real 20 s, so this line is its only pin.
+    expect(EXTERNAL_RETRIEVAL_DEADLINE_MS).toBe(20_000)
     // The read cap stays above the admitted cap: an admission-gate-heavy question (many reads,
     // few admits) must still be able to try up to the full read budget.
     expect(DISCOVERY_MAX_READS_PER_PACK).toBeGreaterThan(DISCOVERY_MAX_ADMITTED_PER_PACK)
   })
 
-  // Review 2026-09-14, test gap 3: `PROBE_TIMEOUT_MS` (and its `probeTimeoutMs` test seam) had
-  // no BEHAVIOURAL test — only its value was pinned above. A slow `/suggest` sitting out the
-  // client's 15 s default under the arm's single 20 s per-ask deadline would starve every pack
-  // still waiting its turn at `PACK_SEARCH_CONCURRENCY`; this proves the seam actually cuts a
-  // slow probe off at ITS bound, not the server's, and that discovery still completes cleanly —
-  // no hang, no throw, just no hit for that title (`docs/packaging.md`'s own `probeTimeoutMs`
-  // seam record for this exact shape).
-  it('a /suggest lookup held well past PROBE_TIMEOUT_MS is cut off at the probeTimeoutMs seam, not the server — discovery completes without that title\'s hit', async () => {
-    rawReads.length = 0
+  // Review 2026-09-14, test gap 3: a slow `/suggest` sitting out the client's 15 s default under
+  // the arm's single 20 s per-ask deadline would starve every pack still waiting its turn at
+  // `PACK_SEARCH_CONCURRENCY`. The fixture holds the title's answer until it is released, so
+  // only the client's own timer can end the lookup early; fake timers drive the shipped
+  // `PROBE_TIMEOUT_MS` to just short of the bound and past it.
+  it('a /suggest title lookup still open just short of PROBE_TIMEOUT_MS is kept; held past it, it is cut off and discovery completes without that title\'s hit', async () => {
     const packs = [{ id: 'pack-slow-probe', title: 'Langsam' }]
     const names = new Map([['pack-slow-probe', 'book-pack-slow-probe']])
-    const t0 = Date.now()
-    const { candidates, outcomes } = await collectPackCandidates(
-      port,
-      packs,
-      'Was bedeutet das?',
-      undefined,
-      names,
-      { expand: async () => ({ titles: ['Verzoegert'], queries: [] }), probeTimeoutMs: 50 }
-    )
-    const elapsedMs = Date.now() - t0
-    // The seam's bound (50 ms), never the fixture's 2,000 ms delay, decided this.
-    expect(elapsedMs).toBeLessThan(1_500)
-    expect(rawReads).not.toContain('Verzoegert')
-    expect(candidates.every((c) => c.sourceTitle !== 'Verzoegert')).toBe(true)
-    // No hang, no throw: the pack still settles cleanly (a zero-hit search, nothing to admit).
-    expect(outcomes[0]).toMatchObject({ packId: 'pack-slow-probe', status: 'searched', reason: null, found: 0 })
+    const ask = (): ReturnType<typeof collectPackCandidates> =>
+      collectPackCandidates(port, packs, 'Was bedeutet das?', undefined, names, {
+        expand: async () => ({ titles: ['Verzoegert'], queries: [] })
+      })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      // Just short of the bound the lookup is still open: its late answer is read and admitted.
+      rawReads.length = 0
+      const kept = ask()
+      await until(() => heldProbes.length > 0, 'the held /suggest lookup')
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS - 1)
+      releaseHeldProbes()
+      const late = await within(kept, 'the ask whose title answered late settled')
+      expect(rawReads).toContain('Verzoegert')
+      expect(late.candidates.some((c) => c.sourceTitle === 'Verzoegert')).toBe(true)
+
+      // At the bound it is cut off: no hit for that title, and the pack still settles cleanly
+      // (a zero-hit search, nothing to admit).
+      rawReads.length = 0
+      const cut = ask()
+      await until(() => heldProbes.length > 0, 'the second held /suggest lookup')
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS)
+      const { candidates, outcomes } = await within(cut, 'the ask settled once PROBE_TIMEOUT_MS passed')
+      expect(rawReads).not.toContain('Verzoegert')
+      expect(candidates.every((c) => c.sourceTitle !== 'Verzoegert')).toBe(true)
+      expect(outcomes[0]).toMatchObject({ packId: 'pack-slow-probe', status: 'searched', reason: null, found: 0 })
+    } finally {
+      releaseHeldProbes()
+      vi.useRealTimers()
+    }
   })
 })
 

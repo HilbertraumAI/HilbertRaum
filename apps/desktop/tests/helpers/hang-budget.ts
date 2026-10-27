@@ -14,10 +14,9 @@
 // generalises the fix instead of waiting for each bound to be bitten in turn.
 //
 // Deliberately NOT for timing PROOFS. If a test asserts that something completed *within* a
-// budget as evidence about the code (the FTS 500 ms bound, #84; the `probeTimeoutMs` seam
-// behavioural test in `zim-arm`, which proves a slow `/suggest` is cut off at the seam's bound
-// rather than sitting out the client's 15 s default), that assertion is the point and must not
-// be silently relaxed here. Use this only where exceeding the bound means "it hung", never "it
+// budget as evidence about the code (the FTS 500 ms bound, #84), that assertion is the point and
+// must not be silently relaxed here. A test about a product timer drives the shipped constant with
+// fake timers instead (CONTRIBUTING "Pin the bound that ships"). Use this only where exceeding the bound means "it hung", never "it
 // was too slow".
 
 /** Multiplier applied on CI. 4x is exactly the ratio `testTimeout` already uses: 15 s -> 60 s. */

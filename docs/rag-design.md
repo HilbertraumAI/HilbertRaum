@@ -3507,7 +3507,7 @@ the figures they support are quoted in the text.
   single pack-rare or misspelled five-plus-character word (`"eigenschaftn"`) still ANDs the
   query to zero, and libzim 9.4.0's Xapian parser has no boolean flag to drop one term
   deliberately (no `OR`, no `-term` exclusion — see the parser facts above). `searchPattern` now
-  reports `terms` / `retryTerms` alongside `pattern` / `retry` — the KEPT TOKENS themselves, not
+  reports `terms` / `retryTerms` (since removed) alongside `pattern` / `retry` — the KEPT TOKENS themselves, not
   the joined string — so the ladder never re-tokenizes a pattern (which would probe raw
   punctuation for a raw-fallback question like "Was ist das?"; `terms` is empty exactly for that
   fallback, which also skips the ladder for free). When stages 1–2 both find nothing and the
@@ -3544,7 +3544,8 @@ the figures they support are quoted in the text.
   (17 ms), the invented word `"qzxvwtrkp"` → 0 (15 ms); the quality fixture still hit 9/9.
   (Removed since: the ladder, `narrowByFrequency` and their tests with the discovery port
   (`24741f60`); `searchPackTotal` / `parseSearchTotal`, their `zim-client` tests and the smoke's
-  search-total legs in the October 2026 ZIM test campaign, as nothing shipped read the total.)
+  search-total legs, and `SearchRewrite`'s `terms` / `retryTerms` / `rewritten`, in the October
+  2026 ZIM test campaign, as nothing shipped read them.)
 
 - **D-Z20 — question → concept expansion (#340 L3-b, owner ruling 2026-09-07, option (a)
   "always") — SUPERSEDED 2026-09-14 by §17 "Discovery port (Phase 4 PR-A)".** The `{concepts,
@@ -3619,7 +3620,8 @@ the figures they support are quoted in the text.
   was raised 96 → 220 while `PLAN_TIMEOUT_MS` stayed 12 s and these two pins were deleted with no
   replacement, so on every CPU decode rate this project has ever measured the planner could no
   longer emit its own cap. F1's fix restores the SAME shape on the new names
-  (`PLAN_TIMEOUT_MS`/`PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`), with the cap set
+  (`PLAN_TIMEOUT_MS`/`PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`, the last since
+  dropped, see F1), with the cap set
   from a fresh measurement (run M, `core200`, 2026-09-14) rather than reused from this one — see
   §17 F1 for the measured p99, the cap and which pin branch applied. NOT claimed: no re-run of the
   list-group fixture was needed for the constant (the lever's
@@ -4493,6 +4495,8 @@ stand-in (6.7 tok/s) — at 6.7 tok/s a 99-token reply needs ~16 s, past `PLAN_T
 twelve-second paragraph carries the measured exposure). `PLAN_MAX_TOKENS`: 220 (provisional) →
 **104**. `PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7` and pin 2 (`cap / 10.7 s < 10 tok/s`) are
 restored verbatim, mirroring master's own `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`/pin shape.
+(The October 2026 ZIM test campaign dropped the constant: nothing read it but its own pin. The
+6.7 tok/s figure stays in the `PLAN_MAX_TOKENS` comment; pins 1 and 2 are unchanged.)
 
 **The cap sits one token below run M's own measured max (review 2, N4).** Run M's `completion_
 tokens` distribution tops out at **105** (`planner-length-core200.json`'s histogram, bin
@@ -4788,7 +4792,8 @@ this step resolves exactly those three.
   identically to the narrowest one — a measurement seam,
   `CollectPackCandidatesOptions.totalCandidateCapOverride` (mirroring the existing
   `articleTimeoutMs`/`probeTimeoutMs` test seams; production never sets it), lets run L2's
-  capture bypass the cap for that one call. (b) `ZimService.runArm` originally reconstructed its
+  capture bypass the cap for that one call. (The October 2026 ZIM test campaign removed it with
+  those seams; a re-measurement re-adds it on its own branch.) (b) `ZimService.runArm` originally reconstructed its
   own return object from `collectPackCandidates`'s output and DROPPED `cappedCandidates` —
   `registerRagIpc.ts`'s only production wiring goes through `runArm`, so the fallback fix above
   was dead code for every real ask until this was found (during this step's own pre-check of the
@@ -4805,11 +4810,13 @@ this step resolves exactly those three.
   chunks-per-article × article-count configurations found 43 breaking cases, the smallest
   reachable being 1 pack × 6 admitted articles × 100 chunks/article (`top96`'s 6th article
   contributes chunks `all`'s 512-item ceiling has already exhausted five articles before reaching
-  — 4 of `top96`'s 96 ids absent from `all`, pinned in `zim-arm.test.ts`). `capped ⊆ top48 ⊆
-  top96` is unaffected — zero breaks across the same sweep. No user-visible consequence follows
-  (the scopes are never compared at run time in production; `top96` is reachable only from the
-  disabled `cpu-hi` profile), and the existing superset pin was retitled to state exactly what it
-  proves rather than implying an unconditional chain.
+  — 4 of `top96`'s 96 ids absent from `all`). `capped ⊆ top48 ⊆ top96` is unaffected — zero
+  breaks across the same sweep. No user-visible consequence follows (the scopes are never
+  compared at run time in production; `top96` is reachable only from the disabled `cpu-hi`
+  profile). The relation stays a recorded measurement: the two tests that pinned it on a
+  test-side copy of the arm loop were retired in the October 2026 ZIM test campaign, and the
+  per-article pick order (each scope's chunks a prefix of the next) is pinned on the real
+  `chunksForScope` in `zim-arm.test.ts`.
 
 **The one further authorised `core200` acceptance read (ruling (f), 2026-09-16):**
 
