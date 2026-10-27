@@ -789,6 +789,35 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     await h2.svc.stop()
   })
 
+  // #715: the latch's third guard. A start the lock already aborted can still fail with an
+  // ordinary error (here: the health probe it was parked in rejects once released); latching
+  // that would make every later ask under the unchanged pack set rethrow it after the unlock.
+  it('a start that fails with an ordinary error after its own abort fired does not latch the revision', async () => {
+    const h = svcHarness()
+    await h.addPack('alpha.zim')
+    const probeGate = serveGate<boolean>()
+    h.hooks.probe = async () => {
+      if (!(await probeGate.wait())) throw new Error('health probe connection reset')
+      return true
+    }
+    const ask = h.svc.ensureServer(h.db)
+    await probeGate.entered
+    const orphan = h.lastServeChild()
+
+    const suspending = h.svc.suspend()
+    h.hooks.probe = async () => true
+    probeGate.release(false) // the parked probe fails only AFTER the lock aborted its start
+    await expect(ask).rejects.toThrow('health probe connection reset')
+    await suspending
+
+    // The same revision starts afresh after the "unlock" instead of rethrowing the old error.
+    const port = await svcPort(h.svc.ensureServer(h.db))
+    expect(h.serveSpawns).toHaveLength(2)
+    expect(h.svc.serverState()).toMatchObject({ port, alive: true })
+    await h.svc.stop()
+    orphan.emit('exit', 0, null) // the rejected probe left its child to the reaper registry
+  })
+
   it('an ignored SIGTERM escalates to SIGKILL; a child that ignores both is reported unconfirmed with its PID and file kept', async () => {
     // (a) The polite signal is ignored but SIGKILL works: an ordinary, CONFIRMED teardown.
     const esc = svcHarness()

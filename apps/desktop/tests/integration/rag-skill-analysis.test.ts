@@ -126,6 +126,8 @@ async function makeHarness(
     routingSkill?: { id: string; tool: string }
     /** More ingested documents in the same chat scope, one text each (#641's multi-document hint case). */
     extraDocs?: string[]
+    /** Knowledge packs ticked in the chat's scope (#715). */
+    packIds?: string[]
   } = {}
 ): Promise<Harness> {
   const w = makeSkillsWorld('ragskill', {
@@ -165,7 +167,7 @@ async function makeHarness(
   registerRagIpc(ctx)
   const conv = createConversation(db, {
     mode: 'documents',
-    scope: { collectionIds: [], documentIds: [docId, ...extraIds] }
+    scope: { collectionIds: [], documentIds: [docId, ...extraIds], ...(opts.packIds ? { packIds: opts.packIds } : {}) }
   })
   return { db, conversationId: conv.id, docId, runtime, audit }
 }
@@ -347,6 +349,25 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
     expect(toolNames).toContain('extract_transactions')
     expect(toolNames).toContain('validate_statement_balances')
     expect(toolNames).not.toContain('export_transactions_csv')
+  })
+
+  // #715 / #301 P4: this path narrates the documents' extract and never queries a pack, so a
+  // ticked pack is told so (`skipped / mode`) rather than left without an outcome.
+  it('grounded-data: a knowledge pack ticked in the chat gets a skipped / mode outcome, persisted with the answer', async () => {
+    const h = await makeHarness({ fullyChunked: true, packIds: ['pack-ticked'] })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'what was my largest transaction?',
+      BANK_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.content).toContain('Model answer.') // the grounded-data answer, not the relevance path
+    expect(msg.coverage?.mode).toBe('extract')
+    const outcome = { packId: 'pack-ticked', title: null, status: 'skipped', reason: 'mode', found: 0, admitted: 0 }
+    expect(msg.packOutcomes).toEqual([outcome])
+    expect(listMessages(h.db, h.conversationId).at(-1)?.packOutcomes).toEqual([outcome])
   })
 
   it('format path: "as JSON" serializes the statement inline (no model)', async () => {

@@ -6,6 +6,7 @@ import {
 } from '../../src/main/services/binary-verifier'
 import { log } from '../../src/main/services/logging'
 import { KiwixServer } from '../../src/main/services/zim/serve'
+import { until } from '../helpers/hang-budget'
 import {
   BIND_RACE,
   ServeFakeChild,
@@ -344,5 +345,56 @@ describe('KiwixServer — per-child records (H3, P3a)', () => {
     expect(third.generation).toBeGreaterThan(second.generation)
     expect(h.spawns).toHaveLength(4)
     await h.server.stop()
+  })
+})
+
+// #715: every suite injects 1–500 ms bounds. This one constructs the server without them and
+// drives the shipped values on fake timers (D-Z10: "SIGTERM, 2 s, SIGKILL, 3 s"; the 20 s health
+// window), each to just short of it and onto it.
+describe('KiwixServer — the shipped bounds (#715)', () => {
+  it('a child that never answers is killed 20 s in, escalated to SIGKILL 2 s later, and given up 3 s after that', async () => {
+    const child = new ServeFakeChild(9900, 'ignore-all')
+    let spawned = false
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      const server = new KiwixServer({
+        binPath: '/bin/kiwix-serve',
+        spawn: () => {
+          spawned = true
+          return child
+        },
+        findPort: async () => 8600,
+        probe: async () => false,
+        allocateGeneration: () => 1
+      })
+      let settled = false
+      const outcome = server.ensureStarted({ libraryXmlPath: '/ws/library.1.xml' }).then(
+        () => null,
+        (err: unknown) => err
+      )
+      void outcome.then(() => (settled = true))
+      // The verifier reads real files before the spawn; the health window opens at the spawn.
+      await until(() => spawned, 'the kiwix-serve spawn after the verifier')
+
+      await vi.advanceTimersByTimeAsync(20_000 - 1)
+      expect(child.killCalls).toEqual([])
+      // The deadline is read after each probe, so the kill lands within one health interval.
+      for (let ms = 0; ms < 250 && child.killCalls.length === 0; ms++) await vi.advanceTimersByTimeAsync(1)
+      expect(child.killCalls).toEqual([undefined])
+      await vi.advanceTimersByTimeAsync(2_000 - 1)
+      expect(child.killCalls).toEqual([undefined])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(child.killCalls).toEqual([undefined, 'SIGKILL'])
+      await vi.advanceTimersByTimeAsync(3_000 - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(settled).toBe(true)
+      expect(String(await outcome)).toMatch(/did not become healthy within 20000ms/)
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+      child.emit('exit', null, 'SIGKILL') // leaves the crash-reap registry
+    }
   })
 })

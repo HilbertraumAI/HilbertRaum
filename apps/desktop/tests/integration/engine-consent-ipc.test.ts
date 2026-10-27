@@ -40,6 +40,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { engineProblemFor, reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { updateSettings } from '../../src/main/services/settings'
+import { log } from '../../src/main/services/logging'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
 import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
@@ -283,6 +284,53 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     await vi.waitFor(() => expect(d.reconcile).toHaveBeenCalledTimes(1))
     expect(modelLoadLatchReason('a')).toBe('unknown model architecture')
     clearModelLoadLatches()
+  })
+
+  // #715: the reconcile after a kiwix_tools install runs only while the workspace admits work.
+  // The install listener runs in the same turn the job turns `done`, so "never called" is final.
+  it('a lock that lands during the kiwix_tools install owns the teardown: the install completes and no pack reconcile follows', async () => {
+    let atExtract!: () => void
+    const reached = new Promise<void>((r) => (atExtract = r))
+    let release!: () => void
+    const parked = new Promise<void>((r) => (release = r))
+    const d = makeDrive({
+      extract: async (archive, destDir) => {
+        atExtract()
+        await parked
+        await extractAll(archive, destDir)
+      }
+    })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
+    await reached
+    // The lock begins (AUD-02: the database is still open, the workspace no longer admits work).
+    ;(d.ctx as { workspace: unknown }).workspace = { isUnlocked: () => true, isLocking: () => true }
+    release()
+    const job = await settle(d, result as EngineDownloadJob)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(kiwixDir(d.root), KIWIX_FILES[0]!))).toBe(true)
+    expect(d.reconcile).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['the lock aborting it (AbortError) is not worth a warning', new DOMException('The knowledge-pack reconcile was cancelled', 'AbortError'), 0],
+    ['any other failure is logged', new Error('kiwix-manage failed'), 1]
+  ] as const)('a pack reconcile after the kiwix_tools install that rejects: %s', async (_name, error, warnings) => {
+    const d = makeDrive()
+    d.reconcile.mockImplementationOnce(async () => {
+      throw error
+    })
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
+      expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+      expect(d.reconcile).toHaveBeenCalledTimes(1)
+      // Attached after the handler's own catch, so this settles once that one has run.
+      await (d.reconcile.mock.results[0]!.value as Promise<void>).catch(() => undefined)
+      const logged = warn.mock.calls.filter((c) => c[0] === 'Knowledge-pack reconcile after the tools install failed')
+      expect(logged).toHaveLength(warnings)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('refuses a malformed payload before any gate or network is touched', async () => {

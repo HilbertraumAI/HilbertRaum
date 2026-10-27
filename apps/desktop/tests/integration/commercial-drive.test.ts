@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -221,49 +222,51 @@ describe('assertCommercialDrive', () => {
   // `optionalRuntimesConsistent` and never touches `runtimeCurrent` / `runtimeHashed`.
   describe('the optional kiwix_tools family (#339 P8-1)', () => {
     const KIWIX_FILES = ['kiwix-serve.exe', 'kiwix-manage.exe', 'kiwix-search.exe', 'icudt74.dll', 'icuuc74.dll']
+    /** The drive's runtime-sources.yaml for these legs, as the object a yaml file parses to. */
+    const kiwixSourcesYaml = (opts: { declare?: boolean } = {}): Record<string, unknown> => ({
+      llama_cpp: {
+        version: 'b1',
+        builds: [{ os: 'win', arch: 'x64', backend: 'cpu', url: 'https://example.test/l.zip', sha256: 'a'.repeat(64), extract_to: 'runtime/llama.cpp/win' }]
+      },
+      kiwix_tools: {
+        version: '3.8.1',
+        optional: true,
+        executables: ['kiwix-serve', 'kiwix-manage', 'kiwix-search'],
+        // #339 P8-4: the corresponding-source bundle rides every fixture — with binaries on
+        // the drive the gate requires it, so a fixture without it is the 'undeclared' leg.
+        ...(opts.declare === false
+          ? {}
+          : {
+              source_bundle: {
+                dir: 'runtime/kiwix-tools/source',
+                recipe_url: 'https://github.com/kiwix/kiwix-build',
+                files: BUNDLE_FILES.map((name) => ({
+                  component: name.replace(/-[0-9].*$/, ''),
+                  version: '1',
+                  license: 'GPL-3.0-or-later',
+                  name,
+                  sha256: sha(`source of ${name}`),
+                  url: `https://example.test/${name}`
+                }))
+              }
+            }),
+        builds: [
+          {
+            os: 'win',
+            arch: 'x64',
+            backend: 'cpu',
+            url: 'https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip',
+            sha256: 'fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45',
+            extract_to: 'runtime/kiwix-tools/win',
+            runtime_files: ['icudt74.dll', 'icuuc74.dll']
+          },
+          { os: 'mac', arch: 'arm64', backend: 'cpu', url: 'https://example.test/m-arm64.tar.gz', sha256: 'b'.repeat(64), extract_to: 'runtime/kiwix-tools/mac' },
+          { os: 'mac', arch: 'x64', backend: 'cpu', url: 'https://example.test/m-x64.tar.gz', sha256: 'c'.repeat(64), extract_to: 'runtime/kiwix-tools/mac' }
+        ]
+      }
+    })
     const kiwixSources = (opts: { declare?: boolean } = {}): RuntimeSources => {
-      const res = validateRuntimeSources({
-        llama_cpp: {
-          version: 'b1',
-          builds: [{ os: 'win', arch: 'x64', backend: 'cpu', url: 'https://example.test/l.zip', sha256: 'a'.repeat(64), extract_to: 'runtime/llama.cpp/win' }]
-        },
-        kiwix_tools: {
-          version: '3.8.1',
-          optional: true,
-          executables: ['kiwix-serve', 'kiwix-manage', 'kiwix-search'],
-          // #339 P8-4: the corresponding-source bundle rides every fixture — with binaries on
-          // the drive the gate requires it, so a fixture without it is the 'undeclared' leg.
-          ...(opts.declare === false
-            ? {}
-            : {
-                source_bundle: {
-                  dir: 'runtime/kiwix-tools/source',
-                  recipe_url: 'https://github.com/kiwix/kiwix-build',
-                  files: BUNDLE_FILES.map((name) => ({
-                    component: name.replace(/-[0-9].*$/, ''),
-                    version: '1',
-                    license: 'GPL-3.0-or-later',
-                    name,
-                    sha256: sha(`source of ${name}`),
-                    url: `https://example.test/${name}`
-                  }))
-                }
-              }),
-          builds: [
-            {
-              os: 'win',
-              arch: 'x64',
-              backend: 'cpu',
-              url: 'https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip',
-              sha256: 'fcd01ed2b93e9a68632c7863c83b9f66bf64406a66357be1df7b8b75596f3e45',
-              extract_to: 'runtime/kiwix-tools/win',
-              runtime_files: ['icudt74.dll', 'icuuc74.dll']
-            },
-            { os: 'mac', arch: 'arm64', backend: 'cpu', url: 'https://example.test/m-arm64.tar.gz', sha256: 'b'.repeat(64), extract_to: 'runtime/kiwix-tools/mac' },
-            { os: 'mac', arch: 'x64', backend: 'cpu', url: 'https://example.test/m-x64.tar.gz', sha256: 'c'.repeat(64), extract_to: 'runtime/kiwix-tools/mac' }
-          ]
-        }
-      })
+      const res = validateRuntimeSources(kiwixSourcesYaml(opts))
       if (!res.families?.kiwix_tools) throw new Error('fixture invalid: ' + res.errors.join(', '))
       return res.families.kiwix_tools
     }
@@ -439,6 +442,28 @@ describe('assertCommercialDrive', () => {
         expect(res.checks.runtimeCurrent).toBe(true)
         expect(res.checks.runtimeHashed).toBe(true)
       }
+    })
+
+    // #715: the WRITER of that bundle, run for real. The legs above hand-write the directory the
+    // reader checks; this one lets scripts/install-kiwix-source-bundle.mjs build it from the same
+    // runtime-sources.yaml the gate reads, so the two cannot drift apart unnoticed.
+    it('install-kiwix-source-bundle.mjs writes exactly the bundle the gate accepts, from the same runtime-sources.yaml', async () => {
+      const { root, chat } = sellable('hilbertraum-commercial-src-script-')
+      provisionKiwix(root, { noBundle: true })
+      const archives = tempDir('hilbertraum-commercial-src-archives-')
+      for (const name of BUNDLE_FILES) writeFileSync(join(archives, name), `source of ${name}`)
+      const manifest = join(tempDir('hilbertraum-commercial-src-yaml-'), 'runtime-sources.yaml')
+      writeFileSync(manifest, JSON.stringify(kiwixSourcesYaml())) // JSON is YAML
+      const script = join(__dirname, '..', '..', '..', '..', 'scripts', 'install-kiwix-source-bundle.mjs')
+
+      const run = spawnSync(process.execPath, [script, '--target', root, '--source-dir', archives, '--manifest', manifest], {
+        encoding: 'utf8'
+      })
+      expect(run.stderr).toBe('')
+      expect(run.status).toBe(0)
+      const res = await gateWithBundle(root, chat)
+      expect(res.problems).toEqual([])
+      expect(res.checks.kiwixSourceBundle).toBe(true)
     })
 
     it('the two macOS kiwix_tools builds are checked once against the single mac install dir, by the marker\'s arch', async () => {

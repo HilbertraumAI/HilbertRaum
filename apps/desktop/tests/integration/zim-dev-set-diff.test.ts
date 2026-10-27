@@ -55,8 +55,10 @@ describe.skipIf(!process.features.typescript)('zim-dev-set-diff.mjs (stage A of 
       )
     const zimDir = join(scratchRepo, 'apps', 'desktop', 'src', 'main', 'services', 'zim')
     mkdirSync(zimDir, { recursive: true })
-    mkdirSync(join(scratchRepo, 'scripts'), { recursive: true })
-    copyFileSync(join(repoRoot, 'scripts', 'zim-dev-set-diff.mjs'), join(scratchRepo, 'scripts', 'zim-dev-set-diff.mjs'))
+    mkdirSync(join(scratchRepo, 'scripts', 'lib'), { recursive: true })
+    for (const script of ['zim-dev-set-diff.mjs', join('lib', 'ts-sibling-imports.mjs')]) {
+      copyFileSync(join(repoRoot, 'scripts', script), join(scratchRepo, 'scripts', script))
+    }
     const pages = join(scratchRepo, 'pages')
     mkdirSync(pages)
     writeFileSync(join(pages, 'a.html'), '<p>x</p>')

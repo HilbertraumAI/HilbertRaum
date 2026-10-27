@@ -96,6 +96,7 @@ import { ZimService, type ServedLibrary, type ZimPacksChangedNotice } from '../.
 import { servingNameFor } from '../../src/main/services/zim/identity'
 import { encodeArticlePath } from '../../src/main/services/zim/client'
 import { packUuid, writeZimFixture } from '../helpers/zim-header'
+import { appendLibraryBook } from '../helpers/zim-library'
 import { zimTransientDir } from '../../src/main/services/zim/transients'
 import { startKnowledgePackSession } from '../../src/main/services/zim/session'
 import { performShutdown } from '../../src/main/shutdown'
@@ -1967,6 +1968,43 @@ describe('packs:add classifies a non-ASCII-path manager refusal as path-unsuppor
       expect(dto.failureReason).toBe('manager')
     } finally {
       await linux.close()
+    }
+  })
+})
+
+// #715: the reason codes the T17 DTO legs never reach — each through the real handler and the real
+// service, with the failure produced where production produces it.
+describe('packs:add failure reason codes (#715)', () => {
+  it('names the other reasons: not-a-zim for a garbage or vanished file, tools-missing without kiwix-tools, manager when kiwix-manage reports another archive (#715)', async () => {
+    const h = await sessionHarness()
+    const add = async (paths: string[]): Promise<KnowledgePackAddResult> => {
+      dialogState.paths = paths
+      dialogState.canceled = false
+      return (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+    }
+    try {
+      h.hooks.manage = async () => undefined
+      // The header read refuses both before any manager runs (ZimHeaderError).
+      const garbage = join(h.zimDir, 'not-really.zim')
+      writeFileSync(garbage, 'this file is not a ZIM archive at all')
+      const vanished = join(h.zimDir, 'gone-before-the-add.zim')
+      expect(await add([garbage, vanished])).toEqual({ outcome: 'failure', added: [], failed: 2, failureReason: 'not-a-zim' })
+      expect(h.metaAdds).toEqual([])
+
+      // kiwix-manage reports a different `<book id>` than the file's own header.
+      h.hooks.manage = async (libraryXmlPath: string, zimPath: string) => {
+        appendLibraryBook(libraryXmlPath, zimPath, { id: packUuid('0000cc03', 'foreign') })
+      }
+      expect(await add([h.addPackFile('identity-mismatch.zim')])).toMatchObject({ outcome: 'failure', failureReason: 'manager' })
+
+      // No kiwix-tools bundle at all: the registration's manager step refuses.
+      h.hooks.manage = async () => undefined
+      const ctx = h.ctx as unknown as { zim: ZimService }
+      ctx.zim = h.newService(undefined, { resolveTools: () => null })
+      expect(await add([h.addPackFile('no-tools.zim')])).toMatchObject({ outcome: 'failure', failureReason: 'tools-missing' })
+      ctx.zim = h.svc
+    } finally {
+      await h.close()
     }
   })
 })
