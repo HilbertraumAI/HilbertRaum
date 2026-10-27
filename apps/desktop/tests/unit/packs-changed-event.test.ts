@@ -38,25 +38,31 @@ import type { KnowledgePacksChangedEvent } from '../../src/shared/types'
 
 /** A window whose `send` reaches the preload's listeners, the way Electron delivers it: the
  *  renderer-side IPC event first, then the arguments. */
-function fakeWindow(destroyed: boolean): { isDestroyed: () => boolean; webContents: { send: ReturnType<typeof vi.fn> } } {
+function fakeWindow(
+  state: 'live' | 'closed' | 'throws'
+): { isDestroyed: () => boolean; webContents: { send: ReturnType<typeof vi.fn> } } {
   const send = vi.fn((channel: string, ...args: unknown[]) => {
+    if (state === 'throws') throw new Error('Render frame was disposed before WebFrameMain could be accessed')
     for (const fn of electron.listeners.get(channel) ?? []) fn({ sender: 'main' }, ...args)
   })
-  return { isDestroyed: () => destroyed, webContents: { send } }
+  return { isDestroyed: () => state === 'closed', webContents: { send } }
 }
 
 describe('packs:changed — main broadcast to renderer subscription (#715)', () => {
-  it('a pack-set change reaches the renderer callback as sent, from every live window, and nothing after unsubscribe', async () => {
+  it('a pack-set change reaches the renderer callback as sent, past a closed window and one whose send throws, and nothing after unsubscribe', async () => {
     await import('../../src/preload/index')
     const api = electron.api as PreloadApi
     const received: KnowledgePacksChangedEvent[] = []
     const unsubscribe = api.onKnowledgePacksChanged((event) => received.push(event))
-    const closed = fakeWindow(true)
-    const live = fakeWindow(false)
-    electron.windows.push(closed, live)
+    const closed = fakeWindow('closed')
+    const throwing = fakeWindow('throws')
+    const live = fakeWindow('live')
+    electron.windows.push(closed, throwing, live)
 
+    // `ZimService` notifies after its database write: a throwing recipient must not surface as a
+    // failed pack change, nor keep the next window from hearing about it.
     const event: KnowledgePacksChangedEvent = { epoch: 3, revision: 7, refreshing: false, reason: 'mutation' }
-    notifyKnowledgePacksChanged(event)
+    expect(() => notifyKnowledgePacksChanged(event)).not.toThrow()
     expect(received).toEqual([event])
     expect(closed.webContents.send).not.toHaveBeenCalled()
 

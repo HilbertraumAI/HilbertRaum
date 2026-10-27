@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import http from 'node:http'
+import { spawnSync } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -1029,6 +1030,13 @@ describe('parseLibraryXml', () => {
     product.forEach((book, i) => {
       for (const field of fields) expect(mirrored[i]?.[field], `${book.id}.${field}`).toBe(book[field])
     })
+  })
+
+  it('scripts/generate-zim-notices.mjs still runs as a command: the export for the mirror test did not switch its main() off', () => {
+    const script = join(__dirname, '..', '..', '..', '..', 'scripts', 'generate-zim-notices.mjs')
+    const cli = spawnSync(process.execPath, [script], { encoding: 'utf8' })
+    expect(cli.status).toBe(2)
+    expect(cli.stderr).toContain('--target is required')
   })
 })
 

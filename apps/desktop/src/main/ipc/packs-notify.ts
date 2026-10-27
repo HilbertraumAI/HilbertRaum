@@ -6,11 +6,19 @@ import type { KnowledgePacksChangedEvent } from '../../shared/types'
 // `notify` seam `ZimService` calls after a reconciliation starts or ends and after every
 // mutation (register / remove / enable), sent as `packs:changed` to every window. Its own module,
 // like `performance-notify.ts`, so the main-to-renderer hop can be tested without the app entry.
+//
+// Every send is isolated, as in `performance-notify.ts`: `ZimService` notifies AFTER its
+// database write, so a recipient that throws must neither block the other windows nor turn a
+// pack change that happened into a failed register / remove / enable.
 
-/** Send one pack-set change to every window — guarded per window, since a change can land
- *  between a window closing and its `BrowserWindow` leaving `getAllWindows()`. */
+/** Send one pack-set change to every live window. Never throws. */
 export function notifyKnowledgePacksChanged(event: KnowledgePacksChangedEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(EVENTS.knowledgePacksChanged, event)
+    try {
+      if (win.isDestroyed()) continue
+      win.webContents.send(EVENTS.knowledgePacksChanged, event)
+    } catch {
+      /* one dead recipient never blocks the next, nor the change that was announced */
+    }
   }
 }
