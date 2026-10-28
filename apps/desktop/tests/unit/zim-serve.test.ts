@@ -219,6 +219,8 @@ interface ServeOnlyHarness {
   spawns: ServeFakeChild[]
   hooks: { probe: () => Promise<boolean>; findPort: () => Promise<number> }
   nextChildMode: ServeChildMode
+  /** Every child the bounded kill could not confirm stopped, as `onUnconfirmedChild` reported it. */
+  unconfirmed: Array<{ libraryXmlPath: string; settled: Promise<void> }>
 }
 
 function serveOnlyHarness(): ServeOnlyHarness {
@@ -233,6 +235,7 @@ function serveOnlyHarness(): ServeOnlyHarness {
     spawns,
     hooks,
     nextChildMode: 'exit-on-sigterm',
+    unconfirmed: [],
     server: null as unknown as KiwixServer
   }
   harness.server = new KiwixServer({
@@ -248,7 +251,8 @@ function serveOnlyHarness(): ServeOnlyHarness {
     healthTimeoutMs: 1_000,
     healthIntervalMs: 1,
     killGraceMs: 5,
-    forceKillWaitMs: 5
+    forceKillWaitMs: 5,
+    onUnconfirmedChild: (libraryXmlPath, settled) => harness.unconfirmed.push({ libraryXmlPath, settled })
   })
   return harness
 }
@@ -273,7 +277,8 @@ describe('KiwixServer — per-child records (H3, P3a)', () => {
     expect(h.server.generation()).toBeNull()
     expect(h.server.current()).toBeNull()
     expect(stale.killCalls).toEqual([undefined, 'SIGKILL']) // bounded escalation, then given up
-    expect(h.server.lastStopUncertain()).toBe(true)
+    // Reported with the build it was given, so the caller keeps that file (#713).
+    expect(h.unconfirmed.map((u) => u.libraryXmlPath)).toEqual(['/ws/library.1.xml'])
 
     // The restart is an independent record with its own generation and its own path.
     h.nextChildMode = 'exit-on-sigterm'
@@ -286,9 +291,14 @@ describe('KiwixServer — per-child records (H3, P3a)', () => {
       libraryXmlPath: '/ws/library.2.xml'
     })
 
-    // The obsolete record's LATE terminal event mutates only itself.
+    // The obsolete record's LATE terminal event mutates only itself — and settles the report.
+    let settled = false
+    void h.unconfirmed[0]!.settled.then(() => (settled = true))
+    await tick()
+    expect(settled).toBe(false)
     stale.emit('exit', 1, null)
     await tick()
+    expect(settled).toBe(true)
     expect(h.server.alive()).toBe(true)
     expect(h.server.generation()).toBe(again.generation)
     expect(h.server.port()).toBe(again.port)
@@ -308,7 +318,7 @@ describe('KiwixServer — per-child records (H3, P3a)', () => {
     await Promise.all([firstStop, secondStop])
     expect(child.killCalls).toEqual([undefined, 'SIGKILL']) // killed once, escalated once
     expect(h.server.alive()).toBe(false)
-    expect(h.server.lastStopUncertain()).toBe(false)
+    expect(h.unconfirmed).toEqual([]) // SIGKILL took: nothing to keep
   })
 
   it('every child of the process takes a distinct generation, and a start aborted by a teardown leaves the next start free to spawn', async () => {

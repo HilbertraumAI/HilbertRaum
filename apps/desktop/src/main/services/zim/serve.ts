@@ -105,6 +105,10 @@ export interface KiwixServerOptions {
   healthIntervalMs?: number
   killGraceMs?: number
   forceKillWaitMs?: number
+  /** Called once for each child the bounded kill could not confirm stopped (plan §9.15 item 6),
+   *  with the build it was given and its own terminal event: `settled` resolves if the child's
+   *  exit is observed later. Until then the caller must not delete that build (#713). */
+  onUnconfirmedChild?: (libraryXmlPath: string, settled: Promise<void>) => void
 }
 
 /** What one start publishes to its callers. */
@@ -131,16 +135,8 @@ export class KiwixServer {
   /** The published child, or null (never started / died on its own / torn down). */
   private activeRecord: ChildRecord | null = null
   private starting: StartEntry | null = null
-  /** Single-flight teardown (the translation `teardownPromise`/`tearingDown` pair). */
+  /** Single-flight teardown (the translation `teardownPromise` shape). */
   private teardownPromise: Promise<void> | null = null
-  private tearingDown = false
-  /** True when the LAST teardown could not confirm a terminal state (plan §9.15 item 6):
-   *  the caller must NOT delete the build that child was given, and must report
-   *  "cleanup not confirmed" rather than "complete". */
-  private uncertainTeardown = false
-  /** How many children of this server could NEVER be confirmed dead (monotonic). Each one
-   *  left a registered PID for the crash reaper and a build file that must not be removed. */
-  private unconfirmed = 0
 
   constructor(opts: KiwixServerOptions) {
     this.opts = opts
@@ -191,18 +187,6 @@ export class KiwixServer {
       generation: record.generation,
       libraryXmlPath: record.libraryXmlPath
     }
-  }
-
-  /** Did the most recent teardown end WITHOUT a confirmed terminal state? Then the PID is
-   *  still registered for the reaper and the build's XML must be kept (plan §9.15 item 6). */
-  lastStopUncertain(): boolean {
-    return this.uncertainTeardown
-  }
-
-  /** Monotonic count of children this server could never confirm dead. Sticky evidence for
-   *  a caller that must not clear a transient directory (plan §9.15 items 6 and 10). */
-  unconfirmedChildren(): number {
-    return this.unconfirmed
   }
 
   private liveRecord(): ChildRecord | null {
@@ -432,15 +416,15 @@ export class KiwixServer {
   /**
    * Bounded, record-level kill (plan §9.15 items 6b–6d). SIGTERM → grace → SIGKILL →
    * bounded wait → the FAILURE POLICY: mark `uncertain`, leave the PID in the reaper
-   * registry, keep the build's XML, warn once (generation + PID only — never a title or a
-   * path, the sentinel rule) and RESOLVE. Worst case `killGraceMs + forceKillWaitMs`.
+   * registry, report the child and its build to `onUnconfirmedChild` (the caller keeps that
+   * file until the child's own exit is observed, #713), warn once (generation + PID only —
+   * never a title or a path, the sentinel rule) and RESOLVE. Worst case
+   * `killGraceMs + forceKillWaitMs`.
    *
    * A failing start calls THIS, never `stop()` — `stop()` awaits `this.starting`, which is
    * the failing start itself (the self-await deadlock of plan §9.15 item 7).
-   *
-   * Returns true when a terminal state was confirmed.
    */
-  private async killRecord(record: ChildRecord): Promise<boolean> {
+  private async killRecord(record: ChildRecord): Promise<void> {
     const child = record.child
     if (!child) {
       // Nothing was ever created (synchronous spawn throw): terminal by construction.
@@ -448,9 +432,9 @@ export class KiwixServer {
         record.settled = true
         unregisterSidecarChild(record.pid)
       }
-      return true
+      return
     }
-    if (record.settled) return true
+    if (record.settled) return
     record.killSent = true
     try {
       child.kill()
@@ -461,7 +445,7 @@ export class KiwixServer {
     await Promise.race([record.terminal, delay(this.killGraceMs)])
     // Gate on the exit listener's flag, NEVER on `child.killed` (it is true the moment a
     // signal is SENT, which would skip the escalation entirely — LlamaServer.stop()'s rule).
-    if (record.settled) return true
+    if (record.settled) return
     record.forceKillSent = true
     try {
       child.kill('SIGKILL')
@@ -469,32 +453,27 @@ export class KiwixServer {
       /* best-effort */
     }
     await Promise.race([record.terminal, delay(this.forceKillWaitMs)])
-    if (record.settled) return true
+    if (record.settled) return
     record.uncertain = true
-    this.unconfirmed++
-    // A child killed by an ABORTED start (the cooperative-cancellation step of a teardown)
-    // counts against THAT teardown too: a stop() whose child ended here reports 'not
-    // confirmed', never 'complete'.
-    if (this.tearingDown) this.uncertainTeardown = true
     log.warn(
       `kiwix-serve generation ${record.generation} (pid ${String(record.pid)}) could not be ` +
         'confirmed stopped within the teardown bound; it stays registered for the crash reaper'
     )
-    return false
+    // Every unconfirmed child is reported, an aborted start's included, so its build is kept
+    // whichever path tore it down.
+    this.opts.onUnconfirmedChild?.(record.libraryXmlPath, record.terminal)
   }
 
   /**
    * Kill the current child and wait, bounded, so no orphan survives — SINGLE-FLIGHT
    * (the translation `teardown()` shape): an overlapping stop SHARES this pass instead of
-   * running a no-op second body whose `finally` would clear the flags while the first is
-   * still inside its SIGTERM→SIGKILL window. Non-latching: a later `ensureStarted()` may
+   * running a no-op second body that would resolve while the first is still inside its
+   * SIGTERM→SIGKILL window. Non-latching: a later `ensureStarted()` may
    * start again (the permanent quit latch lives on `ZimService`).
    */
   stop(): Promise<void> {
     if (this.teardownPromise) return this.teardownPromise
-    this.tearingDown = true
     const run = this.doTeardown().finally(() => {
-      this.tearingDown = false
       this.teardownPromise = null
     })
     this.teardownPromise = run
@@ -502,7 +481,6 @@ export class KiwixServer {
   }
 
   private async doTeardown(): Promise<void> {
-    this.uncertainTeardown = false
     // Abort an in-flight start rather than wait it out (#159 / the translation rule): the
     // child is killed inside its own health wait and the start rejects AbortError.
     const starting = this.starting
@@ -512,10 +490,7 @@ export class KiwixServer {
     }
     const record = this.activeRecord
     this.activeRecord = null
-    if (record) {
-      const confirmed = await this.killRecord(record)
-      if (!confirmed) this.uncertainTeardown = true
-    }
+    if (record) await this.killRecord(record)
   }
 }
 

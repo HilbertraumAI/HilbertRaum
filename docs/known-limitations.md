@@ -3412,8 +3412,8 @@ reports and phase plans were working papers; their full text lives in git histor
   ≈3 s for kiwix-manage) is reported as cleanup NOT CONFIRMED, never "complete": its
   PID stays on the crash-reap list and its `library.<n>.xml` build (or, for
   registration, its throwaway metadata temp directory) is left under
-  `workspace/zim-transient/` until the next app start removes it (a lock or a new session does
-  not, #713). Separately,
+  `workspace/zim-transient/` until the app sees that child exit, and is removed then (#713); a
+  child whose exit never comes leaves the file until the next app start. Separately,
   **kiwix-manage on a legacy hashless install marker runs with a logged warning
   instead of integrity verification** (residual R-1) — retained until the
   provisioning wave above proves both binaries' verification and repair.
@@ -3422,8 +3422,9 @@ reports and phase plans were working papers; their full text lives in git histor
   `meta-<n>/library.xml` — plaintext while present in both workspace modes, and
   removed at lock, at quit and at every session start after a containment check
   (a symlinked or junctioned `zim-transient/` dir is refused outright, never followed).
-  Explicit limits: a file belonging to a child whose death could not be confirmed waits
-  for the next APP start — lock, quit and session start all keep it (#713); a file a stray process still
+  Explicit limits: a file belonging to a child whose death could not be confirmed stays until
+  the app sees that child exit, or until the next APP start if it never does — lock, quit and
+  session start keep it until then (#713); a file a stray process still
   holds open on Windows is left in place and reported, never silently called clean.
 - **The pack server has no password of its own (residual R-9).** While the workspace is
   unlocked and a knowledge pack has been used in a chat, other programs running under

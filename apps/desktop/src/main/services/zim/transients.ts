@@ -23,8 +23,9 @@ import { shredFile } from '../workspace-vault'
 // path — in BOTH workspace modes (an encrypted vault and plaintext_dev alike). Before this
 // they lived in the host's temp directory and survived a lock, which is exactly what M4/L3
 // reported. They are removed at lock, at quit, at every session start and at app start; a
-// file kept for a child whose death could not be confirmed stays until the next APP start
-// (#713).
+// file kept for a child whose death could not be confirmed stays until that child is seen to
+// exit — `ZimService` then removes it through a pass scoped to that one entry — or until the
+// next APP start (#713).
 //
 // This is a DEDICATED entry point, not a case in `shredStalePlaintext`'s documents/images
 // loop: that loop visits only `documents/` and `images/`, its predicate matches neither name,
@@ -64,7 +65,7 @@ export interface ZimCleanupReport {
   unknownEntries: number
   /** Live operations at cleanup time (the caller supplies it; 0 for the standalone sweep). */
   unsettledOps: number
-  /** Children this service could never confirm dead (the caller supplies it). */
+  /** Kiwix children whose stop is not confirmed yet (the caller supplies it, #713). */
   unconfirmedChildren: number
   /** Nothing was refused, kept, unknown, unsettled or left behind by a failed removal. */
   confirmed: boolean
@@ -74,10 +75,17 @@ export interface ZimCleanupOptions {
   /**
    * Paths that must NOT be removed: the library file of a serve child, or the meta dir of a
    * manager child, whose teardown could not be confirmed (plan §9.15 item 6 — a possibly-live
-   * process may still be writing them). A kept entry is reported and removed by the next
-   * session-start pass, when its process is gone or has been reaped.
+   * process may still be writing them). A kept entry is reported, and removed once its child
+   * is seen to exit (#713) or by the next app start's sweep.
    */
   keep?: ReadonlySet<string>
+  /**
+   * When set, the pass considers ONLY these top-level entries and leaves everything else alone
+   * and uncounted — the current build included. `ZimService` passes the one entry whose child
+   * was just seen to exit (#713), so it goes through the same containment, link refusal and
+   * shredding as every other pass.
+   */
+  only?: ReadonlySet<string>
   /** Case-folding rule for the containment compare (#301 P5, finding L9): injected so both
    *  branches are testable on any host; production passes the service's `platform`. */
   platform?: NodeJS.Platform
@@ -182,7 +190,7 @@ interface SweepCounts {
 }
 
 /** Classify and remove the directory's contents. Assumes containment was already established. */
-function sweepEntries(dir: string, keep: ReadonlySet<string>): SweepCounts {
+function sweepEntries(dir: string, keep: ReadonlySet<string>, only: ReadonlySet<string> | undefined): SweepCounts {
   const counts: SweepCounts = { removed: 0, kept: 0, unknownEntries: 0, failed: 0 }
   const entries = readEntries(dir)
   if (entries === null) {
@@ -191,6 +199,7 @@ function sweepEntries(dir: string, keep: ReadonlySet<string>): SweepCounts {
   }
   for (const entry of entries) {
     const path = join(dir, entry.name)
+    if (only !== undefined && !only.has(path)) continue
     // A link INSIDE the directory is removed as the link itself and never followed — its
     // target is not ours to touch.
     if (entry.isSymbolicLink()) {
@@ -246,8 +255,9 @@ function toReport(counts: SweepCounts): ZimCleanupReport {
  * logged and the report is `confirmed: false`.
  *
  * Called at app start with an empty keep set (the crash sweep), and by `ZimService` at lock,
- * quit and session start with the paths of children whose death could not be confirmed. Those
- * kept paths live as long as the process, so only the app-start sweep removes them (#713).
+ * quit and session start with the paths of children whose death could not be confirmed. A
+ * kept path stays until its child is seen to exit, when `ZimService` removes it with a pass
+ * scoped to it (`only`), or until the app-start sweep (#713).
  */
 export function cleanupZimTransients(
   transientDir: string,
@@ -276,7 +286,7 @@ export function cleanupZimTransients(
     log.warn('ZIM transient cleanup refused: the transient directory could not be resolved')
     return emptyReport(false)
   }
-  const counts = sweepEntries(transientDir, keep)
+  const counts = sweepEntries(transientDir, keep, opts.only)
   if (counts.failed > 0) {
     log.warn('ZIM transient cleanup left entries behind', { failed: counts.failed })
   }

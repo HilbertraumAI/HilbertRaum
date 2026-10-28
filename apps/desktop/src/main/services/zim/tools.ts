@@ -98,15 +98,24 @@ export type KiwixManageChildState = 'not-spawned' | 'exited' | 'uncertain'
 
 /** Rejection shape for `kiwixManageAdd` (§9.15 item 8 / M9). `childState` tells a
  *  caller whether it is safe to clean up anything the child might still be writing to:
- *  only `'uncertain'` means "maybe still running". */
+ *  only `'uncertain'` means "maybe still running". An `'uncertain'` error carries `settled`,
+ *  the child's own terminal event: it resolves if the child's exit is observed later, and
+ *  from then on what it was writing may be removed (#713). */
 export class KiwixManageError extends Error {
   readonly kind: 'verify' | 'spawn' | 'exit' | 'timeout' | 'abort'
   readonly childState: KiwixManageChildState
-  constructor(message: string, kind: KiwixManageError['kind'], childState: KiwixManageChildState) {
+  readonly settled: Promise<void> | null
+  constructor(
+    message: string,
+    kind: KiwixManageError['kind'],
+    childState: KiwixManageChildState,
+    settled: Promise<void> | null = null
+  ) {
     super(message)
     this.name = 'KiwixManageError'
     this.kind = kind
     this.childState = childState
+    this.settled = settled
   }
 }
 
@@ -289,7 +298,7 @@ export async function kiwixManageAdd(
           settle(new KiwixManageError(`kiwix-manage ${label}`, kind, 'exited'))
         } else {
           log.warn(`kiwix-manage child did not reach a terminal state after SIGKILL — PID ${String(child.pid)} left registered for the crash reaper (R-7)`)
-          settle(new KiwixManageError(`kiwix-manage ${label} — cleanup not confirmed`, kind, 'uncertain'))
+          settle(new KiwixManageError(`kiwix-manage ${label} — cleanup not confirmed`, kind, 'uncertain', terminalPromise))
         }
       })()
     }

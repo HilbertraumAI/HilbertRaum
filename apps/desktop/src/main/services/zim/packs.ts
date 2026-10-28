@@ -60,10 +60,10 @@ export interface PackDeps {
   metaDir?: () => string
   /**
    * Called with the throwaway directory when the manager child could not be confirmed dead: it
-   * is kept (a possibly-live child may still write into it) and the caller adds it to the set
-   * the transient cleanup must leave alone until the next app start (#713).
+   * is kept (a possibly-live child may still write into it), and the caller keeps it out of the
+   * transient cleanup until `settled`, the child's own terminal event, resolves (#713).
    */
-  onUncertain?: (path: string) => void
+  onUncertain?: (path: string, settled: Promise<void>) => void
   /**
    * The owning operation's admission / cancellation / epoch recheck (#301 P3b, finding H4).
    * Called after the manager work and immediately BEFORE the registry write, so a registration
@@ -877,8 +877,9 @@ export async function writeLibraryXml(
  *
  * It is normally removed in `finally` — EXCEPT when the manager settled `'uncertain'` (the
  * SIGKILLed child may still be writing into it): removing it then would race a child that might
- * still be alive, so the dir is KEPT, reported through `deps.onUncertain` and removed only by the
- * next app-start sweep (R-7, #713).
+ * still be alive, so the dir is KEPT and reported through `deps.onUncertain` with the child's own
+ * terminal event; the caller removes it once that exit is observed, or the next app-start sweep
+ * does (R-7, #713).
  */
 async function readZimMetadata(deps: PackDeps, zimPath: string): Promise<KiwixBook> {
   const dir = deps.metaDir
@@ -898,9 +899,9 @@ async function readZimMetadata(deps: PackDeps, zimPath: string): Promise<KiwixBo
     throw err
   } finally {
     if (manageErr instanceof KiwixManageError && manageErr.childState === 'uncertain') {
-      log.warn('kiwix-manage cleanup not confirmed — leaving the throwaway metadata dir for the startup sweep (R-7)')
-      // The caller keeps this path out of the transient cleanup until the next app start (#713).
-      deps.onUncertain?.(dir)
+      log.warn('kiwix-manage cleanup not confirmed — keeping the throwaway metadata dir until the child is seen to exit (R-7)')
+      // An 'uncertain' error always carries `settled`; without it the dir stays to the app start.
+      deps.onUncertain?.(dir, manageErr.settled ?? new Promise<void>(() => undefined))
     } else {
       try {
         rmSync(dir, { recursive: true, force: true })

@@ -139,7 +139,8 @@ async function settleAndSweepPlaintextOps(ctx: AppContext): Promise<void> {
  * Failure policy (plan §9.17 (b)): the LOCK PROCEEDS. A file still tracked by a live operation
  * at the bound is shredded under it (its child is settled or unconfirmed by then); a file
  * belonging to a child that could NOT be confirmed dead is kept — a possibly-live process may
- * still write it — reported, and removed by the next app start (#713). The log then says "NOT
+ * still write it — reported, and removed once that child is seen to exit, or by the next app
+ * start (#713). The log then says "NOT
  * confirmed", never "complete", and carries counts only: no pack title, no path.
  */
 async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
