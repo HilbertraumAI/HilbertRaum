@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-27 — the closed 2026-10-12 #473 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #711 entry). Its record is unchanged:
+`architecture.md` GPU acceleration record §9 (#473 Phase 0 + 1), whose open hardware legs are carried there. Citations of the form "BUILD_STATE 2026-10-12 #473 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-12 — **#473 — the graphics card shared between chat, translation and the reranker, Phase 0 + 1 (`fix/473-phase0`, PR #631; #629).** Phase 0:
+translation at `-lv 4` (#629; content check beside DR3), rung 1a judges `primaryUsefulDevice`, a GPU translation start suspends a reranker on the card, first
+runs probe before the auto-start, §8.1 premise corrected, §6.6 finding 8. Phase 1 (owner rulings 2026-10-12, posted on #473): no `--fit-target`; translation
+gate `resolveTranslationDevicePosture` (card only on a full fit beside chat, else the processor with a named `cpuCause`); a chat start takes the card first
+(`RuntimeManager` `beforeStart` → `Translator.yieldGpu`, the #605 soft kill); `chatGraphicsShareMib` (measured + 256, else scaled estimate) in both gates;
+translation manifest calibrated (8,892 vs 7,811 MiB); Mac pinned by test. Record: GPU record §9. Open: hardware legs (NVIDIA/Windows two processes, AMD, Mac)._
+
 ## 2026-10-27 — the closed 2026-10-12 #649 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #715 entry). Its record is unchanged:

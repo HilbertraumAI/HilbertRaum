@@ -125,6 +125,18 @@ describe('zimArticleToSegments', () => {
     expect(labelled?.text.startsWith('Fläche in m^2')).toBe(true)
   })
 
+  it('the heading that becomes the title takes no marker, so a citation reads CO2-Steuer; a later heading still does (#711)', () => {
+    const article = zimArticleToSegments(
+      '<h1>CO<sub>2</sub>-Steuer</h1><p>Text.</p><h2>CO<sub>2</sub>-Preis</h2><p>Rumpf.</p>'
+    )
+    expect(article.title).toBe('CO2-Steuer')
+    expect(article.segments.find((s) => s.sectionLabel !== null)?.sectionLabel).toBe('CO_2-Preis')
+    // The pre-#488 spelling, not a fold of the marked one: a sign exponent keeps no `^`, and a
+    // literal underscore in a code archive's title is the archive's own text.
+    expect(zimArticleToSegments('<h1>Na<sup>+</sup>-Kanal</h1><p>Text.</p>').title).toBe('Na+-Kanal')
+    expect(zimArticleToSegments('<h1>snake_case</h1><p>Text.</p>').title).toBe('snake_case')
+  })
+
   // Issue #488, revised after the census (949 core200 + 488 archive articles): a marker is
   // written only where it will sit BETWEEN alphanumerics. The first cut marked every ordinary
   // <sup>/<sub>, and 63 % of the 12,483 insertions it made landed in reference-list back-link
