@@ -1283,6 +1283,23 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       expect(rawReads).toHaveLength(DISCOVERY_MAX_ADMITTED_PER_PACK)
       expect(outcomes[0]).toMatchObject({ packId: 'pack-budget-admit', status: 'searched', reason: null })
     })
+
+    // #715: `totalCandidateCapFor` is pinned per scope above; this pins that a wider scope's
+    // cap actually reaches the pack quota and the final allocation. Eight admitted articles of
+    // four chunks each are 32 candidates: `capped` keeps 24, `top48` must keep all 32.
+    it('a top48 ask keeps more than MAX_EXTERNAL_CANDIDATES when its pack has them; its capped companion keeps exactly that many', async () => {
+      reset()
+      const titles = Array.from({ length: 20 }, (_, i) => `T${i}`)
+      const packs = [{ id: 'pack-budget-admit', title: 'Budget admits' }]
+      const names = new Map([['pack-budget-admit', 'book-pack-budget-admit']])
+      const { candidates, cappedCandidates } = await collectPackCandidates(port, packs, 'wie viel kostet das?', undefined, names, {
+        expand: async () => ({ titles, queries: [] }),
+        candidateScope: 'top48'
+      })
+      expect(candidates.length).toBeGreaterThan(MAX_EXTERNAL_CANDIDATES)
+      expect(candidates.length).toBeLessThanOrEqual(totalCandidateCapFor('top48'))
+      expect(cappedCandidates).toHaveLength(MAX_EXTERNAL_CANDIDATES)
+    })
   })
 })
 
@@ -1337,6 +1354,38 @@ describe('the discovery read budget and pass sizes (Phase 4 PR-A)', () => {
       expect(rawReads).not.toContain('Verzoegert')
       expect(candidates.every((c) => c.sourceTitle !== 'Verzoegert')).toBe(true)
       expect(outcomes[0]).toMatchObject({ packId: 'pack-slow-probe', status: 'searched', reason: null, found: 0 })
+    } finally {
+      releaseHeldProbes()
+      vi.useRealTimers()
+    }
+  })
+
+  // #715: the head-noun rule's own `/suggest` probes (STAGE 1) run under the same bound. No plan
+  // here: "Verzoegerts" strips to the candidate "Verzoegert", the lookup the fixture holds.
+  it('a head-noun /suggest probe still open just short of PROBE_TIMEOUT_MS is kept; held past it, it is cut off and discovery completes without it', async () => {
+    const packs = [{ id: 'pack-slow-probe', title: 'Langsam' }]
+    const names = new Map([['pack-slow-probe', 'book-pack-slow-probe']])
+    const ask = (): ReturnType<typeof collectPackCandidates> =>
+      collectPackCandidates(port, packs, 'Was bedeutet Verzoegerts?', undefined, names)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      rawReads.length = 0
+      const kept = ask()
+      await until(() => heldProbes.length > 0, 'the held head-noun lookup')
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS - 1)
+      releaseHeldProbes()
+      const late = await within(kept, 'the ask whose head-noun lookup answered late settled')
+      expect(rawReads).toContain('Verzoegert')
+      expect(late.candidates.some((c) => c.sourceTitle === 'Verzoegert')).toBe(true)
+
+      rawReads.length = 0
+      const cut = ask()
+      await until(() => heldProbes.length > 0, 'the second held head-noun lookup')
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS)
+      const { candidates, outcomes } = await within(cut, 'the ask settled once PROBE_TIMEOUT_MS passed')
+      expect(rawReads).not.toContain('Verzoegert')
+      expect(candidates.every((c) => c.sourceTitle !== 'Verzoegert')).toBe(true)
+      expect(outcomes[0]).toMatchObject({ packId: 'pack-slow-probe', status: 'searched', reason: null })
     } finally {
       releaseHeldProbes()
       vi.useRealTimers()

@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const USAGE =
   'usage: node scripts/generate-zim-notices.mjs --target <drive root> --tools-dir <dir with kiwix-manage> [--dry-run]'
@@ -86,9 +87,10 @@ function attrValue(attrs, name) {
 /**
  * Parse `<book …/>` elements out of a kiwix-manage library.xml. The outer regex is
  * character-identical to `parseLibraryXml` (apps/desktop/src/main/services/zim/client.ts)
- * — keep in sync with that file if kiwix-manage's output shape ever changes.
+ * — keep in sync with that file if kiwix-manage's output shape ever changes. Exported for the
+ * mirror test in apps/desktop/tests/unit/zim-client.test.ts, which feeds both parsers one library.
  */
-function parseLibraryXml(xml) {
+export function parseLibraryXml(xml) {
   const books = []
   for (const m of xml.matchAll(/<book\s+([^>]*?)\/?>/g)) {
     const attrs = m[1]
@@ -224,4 +226,5 @@ function main() {
   process.exit(failed ? 1 : 0)
 }
 
-main()
+// Only act when run as a script; importing this module (the mirror test) has no side effects.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) main()

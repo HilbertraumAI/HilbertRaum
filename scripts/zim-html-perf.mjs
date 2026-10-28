@@ -45,27 +45,15 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { register } from 'node:module'
 import os from 'node:os'
 import { PerformanceObserver } from 'node:perf_hooks'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { registerTsSiblingImports } from './lib/ts-sibling-imports.mjs'
 
-// html.ts imports its siblings (`./math`, `./supsub`, `./tables`) without an extension, the
-// bundler's convention, which Node's own resolver refuses — so this script stopped loading once
-// the converter grew its first runtime import. A relative specifier with no extension resolves
-// to its `.ts` file instead (#627).
-register(
-  `data:text/javascript,${encodeURIComponent(`
-export async function resolve(specifier, context, next) {
-  try {
-    return await next(specifier, context)
-  } catch (err) {
-    if (err?.code !== 'ERR_MODULE_NOT_FOUND' || !/^\\.\\.?\\//.test(specifier) || /\\.[cm]?[jt]s$/.test(specifier)) throw err
-    return next(specifier + '.ts', context)
-  }
-}`)}`
-)
+// html.ts imports its siblings without an extension; this script stopped loading once it grew the
+// first such import (#627). The resolver is shared with zim-dev-set-diff.mjs.
+registerTsSiblingImports()
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = dirname(__dirname)

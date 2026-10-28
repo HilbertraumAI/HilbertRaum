@@ -219,6 +219,7 @@ describe('knowledge-pack registry', () => {
     addZimFile(zimDir, 'one.zim', U.alpha)
     addZimFile(zimDir, 'two.zim', U.beta)
     addZimFile(zimDir, 'corrupt.zim', U.gamma) // the fake manager refuses this one
+    malformedZimFixture(join(zimDir, 'bad-header.zim'), 'magic') // skipped at the header read (#715)
     await registerPack(db, deps, join(zimDir, 'one.zim')) // already known
     const report = await reconcile(db, deps)
     expect(report.registered).toBe(1) // two.zim only: one known, corrupt skipped

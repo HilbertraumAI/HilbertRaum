@@ -803,6 +803,33 @@ describe('registerDocsIpc', () => {
     expect(reindexed).toEqual([documentIds[0], documentIds[2]]) // the held document was never re-indexed
   })
 
+  // #715: the article save's other two call sites — the per-document guard and the doc-task
+  // admission probe (`ctx.docIngestionActive`, read late-bound the way main/index.ts wires it).
+  it('a knowledge-pack article mid-save holds its document: delete and re-index refuse, and a doc task is not admitted', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let heldId = ''
+    const ctx = ctxWith(db, workspacePath, { articleSaveActive: (id) => id === heldId })
+    registerDocsIpc(ctx)
+    const manager = docTaskManager(
+      { root: workspacePath, db, storeDir: documentsDir(workspacePath) },
+      { getRuntime: () => docTaskRuntime(), isDocumentProcessing: (id) => ctx.docIngestionActive?.(id) ?? false }
+    )
+    const f = join(workspacePath, 'saved-article.txt')
+    writeFileSync(f, 'a knowledge pack article saved as a document alpha beta gamma delta')
+    const { documentIds } = await runImport([f])
+    const id = documentIds[0]
+
+    heldId = id
+    await expect(invoke(handlers, IPC.deleteDocument, id)).rejects.toThrow(/still being processed/)
+    await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/still being processed/)
+    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [id] })).toThrow(TASK_DOCUMENT_BUSY_INGESTING_MESSAGE)
+
+    // The save finished: the document is free again.
+    heldId = ''
+    const re = (await invoke(handlers, IPC.reindexDocument, id)).result as DocumentInfo
+    expect(re.id).toBe(id)
+  })
+
   // ---- M1 crash-resume through the REAL re-index flow (DM-1 / TEST-1) ---------------
 
   it('crash-resume re-index files by the pending destination, not Library (M1/DM-1)', async () => {

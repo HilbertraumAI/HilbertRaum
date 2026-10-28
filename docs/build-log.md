@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-27 — the closed 2026-10-12 #649 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #715 entry). Its record is unchanged:
+`rag-design.md` §14.5 "#649", `design-guidelines.md` §11.24. Citations of the form "BUILD_STATE 2026-10-12 #649 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-12 — **#649 — "how much" is a lookup or a sum; a list asked about and "zählt als" ask for no list (`fix/649-how-much-sum-list-noun`).** "how much" / "wie viel" listed every amount ("How much is the monthly fee?"), a sum got that list with no total, and "auf der
+Liste" / "zählen zu" listed. Now a lookup gets a plain answer; a sum (a sum word, a totalling word with a money word, "how much" with a past pay verb; never with a count, an explain verb, a yes/no or who/when question) takes the aggregation route over amounts; and an aggregation ask over ONE fitting document is read whole instead of listed, a total led by a heads-up that the model does the
+arithmetic. The heads-up was an owner call after the 4B summed a statement's four fees wrong twice; it got the lease's 1.175 EUR right. The other calls were as recommended; two /code-review passes (28 of 30 findings fixed). 86 router rows and 7 IPC rows fail on master; 84/84 mutations go red. Real app (scratch root + D:): master listed for 9/9 asks; the fix
+answered the lookups (5,00 / 45,00 / 6,90 EUR). Record: `rag-design.md` §14.5 "#649", design-guidelines §11.24. Open: a total with no sum word or past pay verb; a stated total takes the sum route; multi-document sums list; whole-read totals are unchecked._
+
 ## 2026-10-27 — the closed 2026-10-12 #644 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #713 entry). Its record is unchanged:

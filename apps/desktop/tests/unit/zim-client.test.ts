@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import http from 'node:http'
+import { spawnSync } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   ARTICLE_READ_ATTEMPTS,
   ARTICLE_READ_IDLE_MS,
@@ -19,7 +21,8 @@ import {
   parseLibraryXml,
   parseSearchXml,
   probeSearchable,
-  searchPack
+  searchPack,
+  suggestTitles
 } from '../../src/main/services/zim/client'
 import { EXTERNAL_RETRIEVAL_DEADLINE_MS } from '../../src/main/services/zim/arm'
 import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
@@ -1004,6 +1007,37 @@ describe('parseLibraryXml', () => {
     // A tag that merely CONTAINS the word is not the tag.
     expect(ftIndexHint('has_ftindex;ftindex:yes')).toBeNull()
   })
+
+  // #715: scripts/generate-zim-notices.mjs keeps its own copy of this parser (plain Node, no TS),
+  // and names each notice `zim/NOTICES/<id>.md` — the id must be the one the app registers the
+  // pack under. Both parsers read one kiwix-manage library here; every field the notice shows
+  // must agree (the counts stay the raw attribute there, a display string, so they are not compared).
+  it('scripts/generate-zim-notices.mjs reads the same books: id, title, description, language, date and tags', async () => {
+    const script = join(__dirname, '..', '..', '..', '..', 'scripts', 'generate-zim-notices.mjs')
+    const notices = (await import(pathToFileURL(script).href)) as {
+      parseLibraryXml(xml: string): Array<Record<string, string | null>>
+    }
+    const xml = `<library version="20110515">
+  <book id="c334200f-6662-3e7b-9d53-dbf334702fa8" path="zim/wikipedia_de_climate-change_nopic_2026-07.zim" title="Klimawandel &amp; Klimaschutz" description="Artikel &quot;rund ums Klima&quot; &lt;Auswahl&gt;" language="deu" creator="Wikipedia" publisher="openZIM" name="wikipedia_de_climate-change" flavour="nopic" tags="wikipedia;_category:wikipedia;_pictures:no;_ftindex:yes" date="2026-07-01" articleCount="8,245" mediaCount="0" size="123456" />
+  <book id="abc" title="K&#228;fer &#x26; Co" language="eng" date="2026-08-02" />
+  <book title="no id, skipped by both" />
+</library>`
+    const product = parseLibraryXml(xml)
+    const mirrored = notices.parseLibraryXml(xml)
+    expect(mirrored).toHaveLength(product.length)
+    expect(product).toHaveLength(2)
+    const fields = ['id', 'title', 'description', 'language', 'date', 'tags'] as const
+    product.forEach((book, i) => {
+      for (const field of fields) expect(mirrored[i]?.[field], `${book.id}.${field}`).toBe(book[field])
+    })
+  })
+
+  it('scripts/generate-zim-notices.mjs still runs as a command: the export for the mirror test did not switch its main() off', () => {
+    const script = join(__dirname, '..', '..', '..', '..', 'scripts', 'generate-zim-notices.mjs')
+    const cli = spawnSync(process.execPath, [script], { encoding: 'utf8' })
+    expect(cli.status).toBe(2)
+    expect(cli.stderr).toContain('--target is required')
+  })
 })
 
 describe('probeSearchable — the /suggest capability probe (#301 P4, finding M7, plan §2.5)', () => {
@@ -1057,6 +1091,37 @@ describe('probeSearchable — the /suggest capability probe (#301 P4, finding M7
     }
     // Nothing listening at all (the sidecar died between publication and probe): also unknown.
     await expect(probeSearchable(closedPort, 'anything')).resolves.toBeNull()
+  })
+})
+
+// #715: the title-index lookup the discovery routes read (plan titles, the head-noun rule).
+describe('suggestTitles — reading a /suggest body', () => {
+  it('keeps path rows with a title, decoding the title’s entities and the path’s escapes; any other JSON body is no hits', async () => {
+    const bodies: Record<string, string> = {
+      rows: JSON.stringify([
+        { value: 'Kohlendioxid &amp; Klima', label: '<b>Kohlendioxid</b> &amp; Klima', kind: 'path', path: 'A/Kohlendioxid_%26_Klima' },
+        { value: '   ', kind: 'path', path: 'A/Blank' }, // a title of whitespace only
+        { value: 'the', label: 'containing "the"...', kind: 'pattern' }, // the capability row
+        { value: 'Kein Pfad', kind: 'path' },
+        { value: 'Permafrost', kind: 'path', path: 'A/Permafrost' }
+      ]),
+      object: JSON.stringify({ value: 'Permafrost', kind: 'path', path: 'A/Permafrost' }),
+      'not-json': '{ this is not json'
+    }
+    suggestHook = (url) => {
+      const name = new URL(url, 'http://127.0.0.1').searchParams.get('content') ?? ''
+      return { status: 200, body: bodies[name] ?? '[]' }
+    }
+    try {
+      expect(await suggestTitles(port, 'rows', 'Kohlendioxid', 4)).toEqual([
+        { title: 'Kohlendioxid & Klima', urlId: 'rows', articlePath: 'A/Kohlendioxid_&_Klima', wordCount: null },
+        { title: 'Permafrost', urlId: 'rows', articlePath: 'A/Permafrost', wordCount: null }
+      ])
+      expect(await suggestTitles(port, 'object', 'Permafrost', 4)).toEqual([])
+      expect(await suggestTitles(port, 'not-json', 'Permafrost', 4)).toEqual([])
+    } finally {
+      suggestHook = null
+    }
   })
 })
 

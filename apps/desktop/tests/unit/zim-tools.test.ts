@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { log } from '../../src/main/services/logging'
 import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import {
   kiwixManageAdd,
@@ -12,6 +13,7 @@ import {
   resolveKiwixServePath
 } from '../../src/main/services/zim/tools'
 import { ServeFakeChild } from '../helpers/zim-fakes'
+import { until } from '../helpers/hang-budget'
 
 function fakeSpawn(): { spawn: SpawnFn; calls: Array<{ command: string; args: string[] }>; child: ServeFakeChild } {
   const calls: Array<{ command: string; args: string[] }> = []
@@ -110,5 +112,46 @@ describe('kiwixManageAdd', () => {
     const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn)
     queueMicrotask(() => child.emit('error', new Error('spawn ENOENT')))
     await expect(done).rejects.toThrow(/ENOENT/)
+  })
+
+  // #715: every other row injects millisecond bounds. These are the shipped ones, driven on fake
+  // timers to just short of each and onto it: 30 s for the whole run, then kill(), 1 s, SIGKILL,
+  // 2 s before the call gives up as `uncertain`.
+  it('runs under the shipped bounds: 30 s, then a polite kill, 1 s, SIGKILL, 2 s', async () => {
+    const child = new ServeFakeChild(778, 'ignore-all')
+    const spawned: string[] = []
+    const spawn: SpawnFn = (command) => {
+      spawned.push(command)
+      return child
+    }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined)
+    try {
+      let settled = false
+      const outcome = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn).then(
+        () => null,
+        (err: unknown) => err
+      )
+      void outcome.then(() => (settled = true))
+      await until(() => spawned.length === 1, 'the manager spawn after the verifier')
+
+      await vi.advanceTimersByTimeAsync(30_000 - 1)
+      expect(child.killCalls).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(child.killCalls).toEqual([undefined])
+      await vi.advanceTimersByTimeAsync(1_000 - 1)
+      expect(child.killCalls).toEqual([undefined])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(child.killCalls).toEqual([undefined, 'SIGKILL'])
+      await vi.advanceTimersByTimeAsync(2_000 - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(settled).toBe(true)
+      expect(await outcome).toMatchObject({ kind: 'timeout', childState: 'uncertain' })
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+      child.emit('exit', null, 'SIGKILL') // leaves the crash-reap registry
+    }
   })
 })

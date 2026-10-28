@@ -34,6 +34,7 @@ import { endWorkOnModelStop } from './ipc/model-stop'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
 import { registerZimIpc } from './ipc/registerZimIpc'
+import { notifyKnowledgePacksChanged } from './ipc/packs-notify'
 import { ZimService } from './services/zim'
 import { cleanupZimTransients, zimTransientDir } from './services/zim/transients'
 import { startKnowledgePackSession } from './services/zim/session'
@@ -90,7 +91,7 @@ import {
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
-import type { AppSettings, KnowledgePacksChangedEvent } from '../shared/types'
+import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
@@ -341,14 +342,6 @@ function initBackend(): void {
       }
     }
   })
-  // #301 P3b, finding L7 (plan §9.17 (e)3): the pack-set update broadcast — the
-  // `notifyRenderer` shape, guarded per-window since a pack change can land between a window
-  // closing and its BrowserWindow instance being dropped from `getAllWindows()`.
-  const notifyKnowledgePacksChanged = (event: KnowledgePacksChangedEvent): void => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send(EVENTS.knowledgePacksChanged, event)
-    }
-  }
   // The crash handler needs the manager and the manager's factory needs the handler —
   // late-bind through a ref.
   let runtimeRef: RuntimeManager | null = null

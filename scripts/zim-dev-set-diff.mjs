@@ -24,24 +24,14 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { register } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { registerTsSiblingImports } from './lib/ts-sibling-imports.mjs'
 
-// html.ts imports its siblings without an extension (the bundler's convention); resolve a
-// relative, extension-less specifier to its `.ts` file so Node's type stripping can load it.
-register(
-  `data:text/javascript,${encodeURIComponent(`
-export async function resolve(specifier, context, next) {
-  try {
-    return await next(specifier, context)
-  } catch (err) {
-    if (err?.code !== 'ERR_MODULE_NOT_FOUND' || !/^\\.\\.?\\//.test(specifier) || /\\.[cm]?[jt]s$/.test(specifier)) throw err
-    return next(specifier + '.ts', context)
-  }
-}`)}`
-)
+// html.ts imports its siblings without an extension (the bundler's convention); the shared
+// resolver maps such a specifier to its `.ts` file so Node's type stripping can load it.
+registerTsSiblingImports()
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const ZIM_DIR = 'apps/desktop/src/main/services/zim'
