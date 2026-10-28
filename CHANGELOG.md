@@ -7,7 +7,7 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 from its first public `1.0.0` release onward.
 
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
-> since that day: **v0.1.50** was the first, **v0.1.63** is current. Versions stay in the
+> since that day: **v0.1.50** was the first, **v0.1.64** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
 > not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
 > page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
@@ -24,6 +24,10 @@ from its first public `1.0.0` release onward.
 > not for a contributor.
 
 ## [Unreleased]
+
+Nothing yet — the next release's entries accumulate here.
+
+## [0.1.64] — 2026-10-28
 
 ### Changed
 
@@ -101,11 +105,51 @@ from its first public `1.0.0` release onward.
   still offered **Install the AI engine again**, because the Kit's CPU fallback build was refused
   right after it. The banner now says, as intended, that the engine's files are probably not the
   cause, and on Windows it points to the Microsoft Visual C++ Redistributable (#670).
+- **Installing the AI engine again also repairs a Kit's CPU fallback build.** On a HilbertRaum AI
+  Kit, when only the CPU fallback build was refused, **Install the AI engine again** downloaded the
+  main engine, left the fallback build as it was, and the same warning and offer came back after
+  every reinstall. It now replaces whichever build the operating system refused. The reinstall is
+  also no longer turned down with "can't be replaced while a model is running" just because
+  document indexing was using the engine, and **Check again** no longer reports the engine as
+  working for a moment before the warning returns (#678).
+- **Imports work again as soon as the AI engine does.** When the AI engine had been unable to
+  start and then started normally, the warning went away, but imports kept failing with "The AI
+  engine can't run on this computer" and the reranker stayed off until the app was restarted. On a
+  Kit, the warning, its simulated-replies note and the failing imports stayed even after the
+  engine was fixed. Everything that uses the engine now starts again with it, and a chat model
+  left giving simulated replies moves back to the real engine (#654, #655).
+- **Dictation says so when Windows blocks the voice engine.** When Windows refused to start the
+  voice engine outright, dictation said only that the recording could not be transcribed, and an
+  audio import failed with a general error. Both now say that the voice engine can't run on this
+  computer, and the AI Model screen says what to do (#658).
 - **The Translate screen no longer says translation runs on the graphics card on a computer
   without one.** On a PC with no usable graphics card it said "runs on the graphics card (GPU,
   49/49 layers)" while translation actually ran on the processor. The Performance screen also no
   longer shows "49 of 49 layers on the card" for translation running on the processor, as it did
   whenever translation did not fit on the graphics card (#671).
+- **A model on the graphics card is no longer shown as running on the processor.** When the check
+  that lists the graphics cards crashed (a graphics-driver fault), the app took that as "no
+  graphics card". For the rest of the session, the chat header, Diagnostics and the Performance
+  screen then said the model ran on the processor although it ran on the card. If the model then
+  crashed, it was restarted on the card and stopped at the next crash, instead of moving to
+  compatibility mode. The app now reads where the model runs from the model's own start, so a
+  computer without a graphics card whose check gives no answer is also no longer shown as using
+  one (#653).
+- **A chat model crash is reported once.** One crash could be reported twice, with two crash
+  notices. With the model on the processor, the second report also stopped the model as if it had
+  crashed again (#656).
+- **Cancel on a Documents row stops that row's task.** When the row's task was waiting behind
+  another one, such as the deep-index build of a document you had just imported or a file
+  translation on the Translate screen, Cancel stopped that other task and the row's own task ran
+  to the end. The chat's **Cancel document task** still stops whichever task is running (#689).
+- **A Cancel on a Documents row is no longer undone.** A Cancel clicked while the screen was
+  updating could be lost, so Cancel was offered again while the first one was still pending, and a
+  task the app had stopped when the workspace locked could reappear after unlocking. A slow update
+  could also leave a running task that the screen no longer followed. If a cancel fails, Cancel is
+  now offered again instead of staying on "Stopping if possible…" (#680).
+- **A running skill no longer gets stuck showing only Cancel.** When the app was slow to report on
+  a skill run, the run's row could stop updating until you reloaded or locked the workspace. It now
+  keeps updating until the run ends (#688).
 
 ### Security
 
@@ -1504,7 +1548,8 @@ For what the product *is*, see the [README](README.md) and
 [`docs/known-limitations.md`](docs/known-limitations.md). Every release since has its own
 section in [`CHANGELOG.md`](CHANGELOG.md).
 
-[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.63...HEAD
+[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.64...HEAD
+[0.1.64]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.63...v0.1.64
 [0.1.63]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.62...v0.1.63
 [0.1.62]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.61...v0.1.62
 [0.1.61]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.60...v0.1.61
