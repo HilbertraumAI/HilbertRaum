@@ -3353,8 +3353,12 @@ reports and phase plans were working papers; their full text lives in git histor
   is treated as unknown and suppresses the substitution for that question) — still plans in
   the question's own language, exactly as before (#486). **What that step costs is set
   by how long the model's answer is, not by how long the app has been running.** Measured on a
-  fast desktop processor (32 threads) with the bundled 4B model and no graphics card: about six
-  and a half to eight seconds. On a graphics card the same questions take about half a second.
+  fast desktop processor (32 threads, of which the app uses 16) with no graphics card: about four
+  to six seconds with Qwen3 4B Instruct, and six to ten with Qwen3.5 4B, the model the app
+  recommends for a computer with up to 12 GB of memory. Writing the plan is nearly all of that
+  time, and Qwen3.5 writes it indented, so a third or more of what it writes is spacing; a
+  processor about a fifth slower than that one runs its longest plans past twelve seconds
+  (#716). On a graphics card the same questions take about half a second.
   On a much more thread-constrained processor (a two-thread stand-in for a slow machine) they
   take seven to twelve seconds, and **1 of 50** measured questions on that configuration (2%)
   ran the full twelve seconds without a usable reply — the plan step is more likely to run out
@@ -3371,7 +3375,12 @@ reports and phase plans were working papers; their full text lives in git histor
   enough that the call runs past twelve seconds, the question falls back to the plain search
   with no title/query step — the answer is still grounded and still cites what it used, it is
   just the plain search's articles. That fallback also costs the question those twelve seconds
-  before any pack is searched, out of the twenty the whole question is allowed. Every ticked pack gets one line in the
+  before any pack is searched, out of the twenty the whole question is allowed. Three ways around it were measured and not
+  taken (#716): keeping the part of a cut-off plan the model had already finished, and having it
+  write its search queries before its titles, each found the same list articles as no plan at
+  all on the climate-change pack (two of six, on a processor emulated two and a half and four
+  times slower), and writing the queries first made the plans longer; forcing the reply onto one
+  line made it a third shorter but garbled a third of the plans. Every ticked pack gets one line in the
   "Knowledge packs:" note under the answer — searched (and how much it contributed) or
   not searched/failed with a short reason — even on an answer that cites nothing at all;
   an older answer, from before this note existed, says "outcome not recorded" instead.
