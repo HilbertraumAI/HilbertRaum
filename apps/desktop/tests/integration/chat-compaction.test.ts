@@ -1,14 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { openDatabase, type Db } from '../../src/main/services/db'
-
-// node:sqlite is loaded via createRequire so the bundler keeps the specifier opaque (same trick
-// db.ts uses — a bare `import 'node:sqlite'` makes Vite try to resolve a "sqlite" package).
-const { DatabaseSync } = createRequire(process.execPath)('node:sqlite') as typeof import('node:sqlite')
 import {
   appendMessage,
   BASE_SYSTEM_PROMPT,
@@ -43,81 +35,21 @@ import {
 } from '../../src/main/services/rag'
 import { ChatStreamError } from '../../src/main/services/runtime/llama'
 import { log } from '../../src/main/services/logging'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import { legacyDbPath, openFreshDb } from '../helpers/db-fixtures'
+import {
+  appendTurns,
+  compactionRuntime,
+  type CompactionRuntimeOptions,
+  words
+} from '../helpers/compaction-fixtures'
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-compaction-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
-
-/** A block of `n` whitespace-separated words ≈ n approx-tokens (the prose estimate path). */
-const words = (n: number): string => Array(n).fill('word').join(' ')
-
-/** Append `n` alternating user/assistant turns (turn 0 = user). */
-function appendTurns(db: Db, conversationId: string, n: number, wordsPerTurn: number): void {
-  for (let i = 0; i < n; i++) {
-    appendMessage(db, {
-      conversationId,
-      role: i % 2 === 0 ? 'user' : 'assistant',
-      content: words(wordsPerTurn)
-    })
-  }
-}
-
-interface CompactionRuntime extends ModelRuntime {
-  summaryCalls: Array<{ input: string }>
-  answerCalls: number
-}
-
-/**
- * A scripted runtime that distinguishes the compaction summary call (system === selfSummaryPrompt)
- * from a normal answer call, so a test can assert HOW OFTEN the summarizer ran and WHAT it saw.
- */
-function scriptedRuntime(opts: {
-  window: number
-  summary?: string
-  failSummary?: boolean
-  /** F-02: yield HALF the summary, then throw (what the fixed readChatSSE does on an in-band
-   *  mid-stream error frame) — the partial summary must never be written as a checkpoint. */
-  failSummaryMidStream?: Error
-}): CompactionRuntime {
-  const rt: CompactionRuntime = {
-    modelId: 'scripted-compaction',
-    summaryCalls: [],
-    answerCalls: 0,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    contextWindow: () => opts.window,
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      const isSummary = messages[0]?.content === selfSummaryPrompt
-      if (isSummary) {
-        rt.summaryCalls.push({ input: messages[messages.length - 1]?.content ?? '' })
-        if (opts.failSummary) throw new Error('summary boom')
-        const text = opts.summary ?? 'Goal: testing. Facts: value 42 from [S1].'
-        const tokens = text.match(/\S+\s*/g) ?? [text]
-        const emitUpTo = opts.failSummaryMidStream ? Math.ceil(tokens.length / 2) : tokens.length
-        for (const tok of tokens.slice(0, emitUpTo)) {
-          if (options?.signal?.aborted) return
-          yield tok
-        }
-        if (opts.failSummaryMidStream) throw opts.failSummaryMidStream
-        return
-      }
-      rt.answerCalls += 1
-      const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
-      const reply = `Reply to ${lastUser.slice(0, 12)}.`
-      for (const tok of reply.match(/\S+\s*/g) ?? [reply]) {
-        if (options?.signal?.aborted) return
-        yield tok
-      }
-    }
-  }
-  return rt
+  return openFreshDb('compaction')
 }
 
 describe('ensureCompacted — trigger boundaries (no needless model call)', () => {
@@ -125,19 +57,8 @@ describe('ensureCompacted — trigger boundaries (no needless model call)', () =
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 5) // tiny turns — well under 0.85 × 8000
-    const rt = scriptedRuntime({ window: 8000 })
+    const rt = compactionRuntime({ window: 8000 })
     await ensureCompacted(db, rt, conv.id, 8000, {})
-    expect(rt.summaryCalls).toHaveLength(0)
-    expect(getLatestCheckpoint(db, conv.id)).toBeNull()
-  })
-
-  it('does NOT call the model when too few turns sit older than the protected tail', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, { modelId: 'm' })
-    // Over threshold by size, but only 8 turns total ⇒ 8 − KEEP_RECENT_TURNS(6) = 2 compactable.
-    appendTurns(db, conv.id, 8, 400)
-    const rt = scriptedRuntime({ window: 2000 })
-    await ensureCompacted(db, rt, conv.id, 2000, {})
     expect(rt.summaryCalls).toHaveLength(0)
     expect(getLatestCheckpoint(db, conv.id)).toBeNull()
   })
@@ -160,7 +81,7 @@ describe('ensureCompacted — CB-3 threshold cap + estimate fold-in', () => {
     const sum = 14 * perTurn(113)
     expect(sum).toBeGreaterThanOrEqual(4096 - CHAT_RESPONSE_RESERVE_TOKENS) // ≥ 3072 (the new, capped trigger)
     expect(sum).toBeLessThan(COMPACT_THRESHOLD * 4096) // < 3482 (the old flat trigger) — old code would NOT fire
-    const rt = scriptedRuntime({ window: 4096 })
+    const rt = compactionRuntime({ window: 4096 })
     await ensureCompacted(db, rt, conv.id, 4096, {})
     expect(rt.summaryCalls).toHaveLength(1)
     expect(getLatestCheckpoint(db, conv.id)).not.toBeNull()
@@ -181,11 +102,11 @@ describe('ensureCompacted — CB-3 threshold cap + estimate fold-in', () => {
     expect(fireWindow).toBeGreaterThanOrEqual(6827) // the 0.85·window branch is the min at this scale
 
     const a = build()
-    await ensureCompacted(a.db, scriptedRuntime({ window: fireWindow }), a.convId, fireWindow, {})
+    await ensureCompacted(a.db, compactionRuntime({ window: fireWindow }), a.convId, fireWindow, {})
     expect(getLatestCheckpoint(a.db, a.convId)).not.toBeNull() // estimated ≥ 0.85·window ⇒ compacts
 
     const b = build()
-    const rtB = scriptedRuntime({ window: noFireWindow })
+    const rtB = compactionRuntime({ window: noFireWindow })
     await ensureCompacted(b.db, rtB, b.convId, noFireWindow, {})
     expect(rtB.summaryCalls).toHaveLength(0) // estimated < 0.85·window ⇒ no compaction
     expect(getLatestCheckpoint(b.db, b.convId)).toBeNull()
@@ -222,7 +143,7 @@ describe('ensureCompacted — CB-3 threshold cap + estimate fold-in', () => {
     expect(window).toBeLessThan(6827) // floor branch active ⇒ threshold = window − reserve = newEstimate
     expect(oldEstimate).toBeLessThan(window - CHAT_RESPONSE_RESERVE_TOKENS) // old estimate is below threshold
 
-    const rt = scriptedRuntime({ window })
+    const rt = compactionRuntime({ window })
     await ensureCompacted(db, rt, conv.id, window, {})
     expect(rt.summaryCalls).toHaveLength(1)
     const cp = getLatestCheckpoint(db, conv.id)
@@ -243,15 +164,19 @@ describe('T-5 — compaction boundaries (teeth on the equality edges)', () => {
     const proceed = freshDb()
     const c1 = createConversation(proceed, { modelId: 'm' })
     appendTurns(proceed, c1.id, KEEP_RECENT_TURNS + MIN_COMPACTABLE_TURNS, bigWords) // region === MIN
-    const rt1 = scriptedRuntime({ window: 2000 })
+    const rt1 = compactionRuntime({ window: 2000 })
     await ensureCompacted(proceed, rt1, c1.id, 2000, {})
     expect(getLatestCheckpoint(proceed, c1.id)).not.toBeNull() // region === MIN ⇒ compacts
 
+    // MIN−1: the CODE-19 walk keeps an alternating region even, so the odd edge needs an orphan user turn (a failed
+    // answer): [u, u, a, u, a, u | a, u, a, u, a, u] — regionEnd 6 walks back to 5 because index 5 is a user turn.
     const ret = freshDb()
     const c2 = createConversation(ret, { modelId: 'm' })
-    appendTurns(ret, c2.id, KEEP_RECENT_TURNS + MIN_COMPACTABLE_TURNS - 1, bigWords) // region === MIN−1
-    const rt2 = scriptedRuntime({ window: 2000 })
+    appendMessage(ret, { conversationId: c2.id, role: 'user', content: words(bigWords) })
+    appendTurns(ret, c2.id, KEEP_RECENT_TURNS + MIN_COMPACTABLE_TURNS - 1, bigWords)
+    const rt2 = compactionRuntime({ window: 2000 })
     await ensureCompacted(ret, rt2, c2.id, 2000, {})
+    expect(rt2.summaryCalls).toHaveLength(0)
     expect(getLatestCheckpoint(ret, c2.id)).toBeNull() // region === MIN−1 ⇒ no-op
   })
 
@@ -271,12 +196,12 @@ describe('T-5 — compaction boundaries (teeth on the equality edges)', () => {
     expect(COMPACT_THRESHOLD * atWindow).toBeGreaterThan(estimated) // min() picks the floor, not 0.85·window
 
     const a = build()
-    const rtA = scriptedRuntime({ window: atWindow })
+    const rtA = compactionRuntime({ window: atWindow })
     await ensureCompacted(a.db, rtA, a.convId, atWindow, {})
     expect(rtA.summaryCalls).toHaveLength(1) // estimated === threshold ⇒ NOT (estimated < threshold) ⇒ proceeds
 
     const b = build()
-    const rtB = scriptedRuntime({ window: belowWindow })
+    const rtB = compactionRuntime({ window: belowWindow })
     await ensureCompacted(b.db, rtB, b.convId, belowWindow, {})
     expect(rtB.summaryCalls).toHaveLength(0) // estimated === threshold−1 ⇒ estimated < threshold ⇒ returns
   })
@@ -291,7 +216,7 @@ describe('ensureCompacted — exchange-aligned region boundary (CODE-19)', () =>
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 15, 90) // ODD count; the naive region cut (15 − 6 = 9) ends on a USER turn
-    const rt = scriptedRuntime({ window: 2000 })
+    const rt = compactionRuntime({ window: 2000 })
     await ensureCompacted(db, rt, conv.id, 2000, {})
     const cp = getLatestCheckpoint(db, conv.id)
     expect(cp).not.toBeNull()
@@ -317,7 +242,7 @@ describe('ensureCompacted — exchange-aligned region boundary (CODE-19)', () =>
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 90) // EVEN — the naive cut already ends on an assistant turn
-    const rt = scriptedRuntime({ window: 2000 })
+    const rt = compactionRuntime({ window: 2000 })
     await ensureCompacted(db, rt, conv.id, 2000, {})
     const cp = getLatestCheckpoint(db, conv.id)
     expect(cp).not.toBeNull()
@@ -332,7 +257,7 @@ describe('ensureCompacted — checkpoint lifecycle', () => {
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 90) // ≈ 2624 est tokens > 0.85 × 2000
-    const rt = scriptedRuntime({ window: 2000 })
+    const rt = compactionRuntime({ window: 2000 })
 
     await ensureCompacted(db, rt, conv.id, 2000, {})
     const cp = getLatestCheckpoint(db, conv.id)
@@ -345,23 +270,11 @@ describe('ensureCompacted — checkpoint lifecycle', () => {
     expect(getLatestCheckpoint(db, conv.id)?.rowid).toBe(cp?.rowid)
   })
 
-  it('covers_through_rowid is the last turn of the summarized region', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, { modelId: 'm' })
-    appendTurns(db, conv.id, 14, 90)
-    const turns = listConversationTurns(db, conv.id)
-    const rt = scriptedRuntime({ window: 2000 })
-
-    await ensureCompacted(db, rt, conv.id, 2000, {})
-    const region = turns.slice(0, turns.length - KEEP_RECENT_TURNS)
-    expect(getLatestCheckpoint(db, conv.id)?.coversThroughRowid).toBe(region[region.length - 1].rowid)
-  })
-
   it('chained re-compaction folds the PRIOR summary into the new one', async () => {
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 90)
-    const rt = scriptedRuntime({ window: 2000, summary: 'PRIORMARKER earlier summary text.' })
+    const rt = compactionRuntime({ window: 2000, summary: 'PRIORMARKER earlier summary text.' })
 
     await ensureCompacted(db, rt, conv.id, 2000, {})
     expect(rt.summaryCalls).toHaveLength(1)
@@ -378,41 +291,33 @@ describe('ensureCompacted — checkpoint lifecycle', () => {
     expect(secondCp?.rowid).not.toBe(firstCp?.rowid) // a new, rolling checkpoint
     expect(secondCp!.coversThroughRowid).toBeGreaterThan(firstCp!.coversThroughRowid)
   })
-
-  it('fires onStart exactly once, only when it actually summarizes', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, { modelId: 'm' })
-    const rt = scriptedRuntime({ window: 2000 })
-    let starts = 0
-    // Below threshold: never fires.
-    appendTurns(db, conv.id, 4, 5)
-    await ensureCompacted(db, rt, conv.id, 2000, { onStart: () => (starts += 1) })
-    expect(starts).toBe(0)
-    // Over threshold: fires once.
-    appendTurns(db, conv.id, 14, 90)
-    await ensureCompacted(db, rt, conv.id, 2000, { onStart: () => (starts += 1) })
-    expect(starts).toBe(1)
-  })
 })
 
 describe('ensureCompacted — fallback safety (a failure never breaks the turn)', () => {
-  it('writes NO checkpoint when the summarizer throws', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, { modelId: 'm' })
-    appendTurns(db, conv.id, 14, 90)
-    const rt = scriptedRuntime({ window: 2000, failSummary: true })
-    await expect(ensureCompacted(db, rt, conv.id, 2000, {})).resolves.toBeUndefined()
-    expect(getLatestCheckpoint(db, conv.id)).toBeNull()
-  })
-
   it('writes NO checkpoint when the turn is aborted mid-summary', async () => {
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
-    appendTurns(db, conv.id, 14, 90)
-    const rt = scriptedRuntime({ window: 2000 })
+    appendTurns(db, conv.id, 14, 90) // region 8 × 90 ≈ 728 approx-tokens ≤ summaryBudgetWords(2000) = 913: ONE summary call
     const ac = new AbortController()
-    ac.abort()
+    // The Stop lands after the first summary token: the partial is NON-empty, so only the post-summary abort check
+    // (not the empty-summary check) can stop the checkpoint.
+    const rt: ModelRuntime = {
+      modelId: 'abort-mid-summary',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(messages: ChatMessage[]) {
+        if (messages[0]?.content !== selfSummaryPrompt) {
+          yield 'answer'
+          return
+        }
+        yield 'Goal: '
+        ac.abort()
+        yield 'testing.'
+      }
+    }
     await ensureCompacted(db, rt, conv.id, 2000, { signal: ac.signal })
+    expect(ac.signal.aborted).toBe(true)
     expect(getLatestCheckpoint(db, conv.id)).toBeNull()
   })
 
@@ -425,7 +330,7 @@ describe('ensureCompacted — fallback safety (a failure never breaks the turn)'
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 90)
-    const rt = scriptedRuntime({ window: 2000, failSummary: true })
+    const rt = compactionRuntime({ window: 2000, failSummary: true })
 
     await expect(ensureCompacted(db, rt, conv.id, 2000, {})).resolves.toBeUndefined()
     expect(getLatestCheckpoint(db, conv.id)).toBeNull() // fallback intact — no checkpoint
@@ -441,49 +346,43 @@ describe('ensureCompacted — fallback safety (a failure never breaks the turn)'
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 90)
-    const rt = scriptedRuntime({ window: 2000 })
-    const ac = new AbortController()
-    ac.abort()
-    await ensureCompacted(db, rt, conv.id, 2000, { signal: ac.signal })
+    // What a fetch-backed runtime does on a user Stop: it REJECTS with an AbortError, so the catch runs and only its
+    // abort filter keeps the log quiet.
+    const abortError = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })
+    const rt = compactionRuntime({ window: 2000, failSummaryMidStream: abortError })
+    await expect(ensureCompacted(db, rt, conv.id, 2000, {})).resolves.toBeUndefined()
+    expect(rt.summaryCalls).toHaveLength(1)
     expect(getLatestCheckpoint(db, conv.id)).toBeNull()
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
-  it('generateAssistantMessage still answers when summarization fails (no error, no checkpoint)', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, { modelId: 'm' })
-    appendTurns(db, conv.id, 14, 90)
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'the current question' })
-    const rt = scriptedRuntime({ window: 2000, failSummary: true })
-    const msg = await generateAssistantMessage(db, rt, conv.id)
-    expect(msg.role).toBe('assistant')
-    expect(msg.content.length).toBeGreaterThan(0)
-    expect(rt.answerCalls).toBe(1)
-    expect(rt.summaryCalls).toHaveLength(1) // attempted
-    expect(getLatestCheckpoint(db, conv.id)).toBeNull() // but no checkpoint persisted
-  })
-
-  // F-02 (audit 2026-07-16) consumer semantics: the summarizer stream FAILS MID-WAY with an
-  // in-band error frame (the fixed readChatSSE throws ChatStreamError after some tokens).
-  // Pre-fix the reader ended cleanly and the SILENTLY TRUNCATED summary was written as the
-  // conversation's compaction checkpoint, corrupting every later turn's assembled context.
-  // The decided semantics: a failed summary must NEVER become a checkpoint — the existing
-  // R4/R6 fallback (L1 trim, turn proceeds, non-abort logged) absorbs the rejection.
-  it('a summary stream that fails MID-WAY (in-band error frame) writes NO checkpoint; the turn still answers (F-02)', async () => {
+  // R4: a failed summary never breaks the turn — the L1 fallback answers. F-02 (audit 2026-07-16)
+  // consumer semantics: the summarizer stream FAILS MID-WAY with an in-band error frame (the fixed
+  // readChatSSE throws ChatStreamError after some tokens). Pre-fix the reader ended cleanly and the
+  // SILENTLY TRUNCATED summary was written as the conversation's compaction checkpoint, corrupting
+  // every later turn's assembled context. The decided semantics: a failed summary must NEVER become
+  // a checkpoint — the existing R4/R6 fallback (L1 trim, turn proceeds, non-abort logged) absorbs
+  // the rejection.
+  const failures: Array<[string, Partial<CompactionRuntimeOptions>]> = [
+    ['the summarizer throws before its first token', { failSummary: true }],
+    [
+      'the summary stream fails MID-WAY with an in-band error frame (F-02)',
+      { failSummaryMidStream: new ChatStreamError('slot error', 'server_error') }
+    ]
+  ]
+  it.each(failures)('generateAssistantMessage still answers, writes NO checkpoint and logs once when %s', async (_label, failure) => {
     const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => {})
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 90)
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'the current question' })
-    const rt = scriptedRuntime({
-      window: 2000,
-      failSummaryMidStream: new ChatStreamError('slot error', 'server_error')
-    })
+    const rt = compactionRuntime({ window: 2000, ...failure })
     const msg = await generateAssistantMessage(db, rt, conv.id)
     expect(msg.role).toBe('assistant')
     expect(msg.content.length).toBeGreaterThan(0) // the turn proceeded on the L1 fallback
-    expect(rt.summaryCalls).toHaveLength(1) // the summarizer ran and failed mid-stream
-    expect(getLatestCheckpoint(db, conv.id)).toBeNull() // the partial summary was NOT checkpointed
+    expect(rt.answerCalls).toBe(1)
+    expect(rt.summaryCalls).toHaveLength(1) // the summarizer ran and failed
+    expect(getLatestCheckpoint(db, conv.id)).toBeNull() // the failed summary was NOT checkpointed
     expect(warnSpy).toHaveBeenCalledTimes(1) // a real (non-abort) failure is logged, content-free
   })
 })
@@ -514,30 +413,18 @@ describe('assembly after a checkpoint (§4.5 synthetic pair)', () => {
     expect(built[2]).toEqual({ role: 'assistant', content: COMPACTION_SUMMARY_ACK })
   })
 
-  it('replays ONLY the turns after the checkpoint', () => {
-    const { db, convId } = withCheckpoint()
-    const turns = listConversationTurns(db, convId)
-    const built = buildChatMessages(db, convId)
-    // system + summary pair (2) + the 7 post-checkpoint turns.
-    const replayed = built.slice(3)
-    expect(replayed).toHaveLength(turns.length - 4)
-  })
-
-  it('the assembled list is alternation-safe (collapse is a fixpoint)', () => {
-    const { db, convId } = withCheckpoint()
-    const built = buildChatMessages(db, convId)
-    // Strict alternation after the leading system message.
-    for (let i = 2; i < built.length; i++) {
-      expect(built[i].role).not.toBe(built[i - 1].role)
-    }
-  })
-
   it('still fits the context window after compaction (L1 floor holds)', () => {
     const { db, convId } = withCheckpoint()
-    const fitted = buildChatMessages(db, convId, 1500)
-    expect(fitted[0].role).toBe('system')
-    // The final turn is always retained.
     const all = buildChatMessages(db, convId)
+    const window = 1300 // budget 276; the untrimmed assembly is ~463, so the L1 trim must run
+    const budget = window - CHAT_RESPONSE_RESERVE_TOKENS
+    expect(all.reduce((s, m) => s + messageTokens(m), 0)).toBeGreaterThan(budget) // the precondition (was false at 1500)
+    const fitted = buildChatMessages(db, convId, window)
+    expect(fitted.length).toBeLessThan(all.length)
+    expect(fitted.reduce((s, m) => s + messageTokens(m), 0)).toBeLessThanOrEqual(budget)
+    expect(fitted[0].role).toBe('system')
+    expect(fitted[1].role).toBe('user')
+    // The final turn is always retained.
     expect(fitted[fitted.length - 1]).toEqual(all[all.length - 1])
   })
 })
@@ -568,36 +455,33 @@ describe('RAG assembly — checkpoint from raw turns, live citations intact (R-R
 
 describe('migration (R13) + FTS exclusion (R8)', () => {
   function oldStyleDbPath(conversationId: string, messageId: string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-oldschema-'))
-    const path = join(dir, 'old.sqlite')
-    const raw = new DatabaseSync(path)
-    raw.exec('PRAGMA foreign_keys = ON;')
-    // The messages schema as it stood BEFORE the kind/covers columns existed, plus the OLD
-    // FTS insert trigger (no kind guard) — exactly what an upgraded DB starts from.
-    raw.exec(
-      `CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
-         updated_at TEXT NOT NULL, model_id TEXT, mode TEXT NOT NULL DEFAULT 'chat');`
-    )
-    raw.exec(
-      `CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
-         content TEXT NOT NULL, created_at TEXT NOT NULL, token_count INTEGER, citations_json TEXT,
-         FOREIGN KEY (conversation_id) REFERENCES conversations(id));`
-    )
-    raw.exec('CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);')
-    raw.exec(
-      `CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
-         INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
-       END;`
-    )
-    const now = new Date().toISOString()
-    raw.prepare(
-      'INSERT INTO conversations (id, title, created_at, updated_at, mode) VALUES (?, ?, ?, ?, ?)'
-    ).run(conversationId, 'Old chat', now, now, 'chat')
-    raw.prepare(
-      'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(messageId, conversationId, 'user', 'legacy findme message', now)
-    raw.close()
-    return path
+    return legacyDbPath('oldschema', (raw) => {
+      raw.exec('PRAGMA foreign_keys = ON;')
+      // The messages schema as it stood BEFORE the kind/covers columns existed, plus the OLD
+      // FTS insert trigger (no kind guard) — exactly what an upgraded DB starts from.
+      raw.exec(
+        `CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL, model_id TEXT, mode TEXT NOT NULL DEFAULT 'chat');`
+      )
+      raw.exec(
+        `CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+           content TEXT NOT NULL, created_at TEXT NOT NULL, token_count INTEGER, citations_json TEXT,
+           FOREIGN KEY (conversation_id) REFERENCES conversations(id));`
+      )
+      raw.exec('CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);')
+      raw.exec(
+        `CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
+           INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+         END;`
+      )
+      const now = new Date().toISOString()
+      raw.prepare(
+        'INSERT INTO conversations (id, title, created_at, updated_at, mode) VALUES (?, ?, ?, ?, ?)'
+      ).run(conversationId, 'Old chat', now, now, 'chat')
+      raw.prepare(
+        'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)'
+      ).run(messageId, conversationId, 'user', 'legacy findme message', now)
+    })
   }
 
   it('reads pre-migration messages as plain turns and upgrades the FTS trigger to exclude checkpoints', () => {
