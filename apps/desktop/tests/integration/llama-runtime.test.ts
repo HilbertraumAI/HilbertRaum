@@ -691,28 +691,22 @@ describe('answer-depth mode → request mapping (D4)', () => {
     args.flatMap((a, i) => (a === '--cache-ram' ? [args[i + 1]] : []))
 
   it('passes a RAM-scaled --cache-ram to every chat model (#512 decision 2)', async () => {
-    for (const [gb, expected] of [
-      [8, '1024'],
-      [16, '2048'],
-      [32, '4096'],
-      [64, '8192'],
-      [128, '8192']
-    ] as const) {
-      const { spawn, calls } = fakeSpawn()
-      const runtime = new LlamaRuntime(startOpts, {
-        binPath: '/bin/llama-server',
-        spawn,
-        fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
-        findPort: async () => 51010,
-        healthIntervalMs: 1,
-        totalRamBytes: gb * GiB
-      })
-      await runtime.start()
-      expect(cacheRamOf(calls[0].args), `${gb} GB`).toEqual([expected])
-      expect(calls[0].args).not.toContain('-cram')
-      for (const a of CHAT_SERVER_ARGS) expect(calls[0].args).toContain(a)
-      await runtime.stop()
-    }
+    // The size table is prompt-cache-rules.test.ts's; this row pins the wiring — the runtime reads its RAM input and
+    // spawns exactly one rule-derived flag. 12 GiB → 1536, a reading no real host is likely to report exactly.
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+      findPort: async () => 51010,
+      healthIntervalMs: 1,
+      totalRamBytes: 12 * GiB
+    })
+    await runtime.start()
+    expect(cacheRamOf(calls[0].args)).toEqual(['1536'])
+    expect(calls[0].args).not.toContain('-cram')
+    for (const a of CHAT_SERVER_ARGS) expect(calls[0].args).toContain(a)
+    await runtime.stop()
   })
 
   it('disable_prompt_cache wins with --cache-ram 0 — still exactly one flag (#512 decision 1)', async () => {
