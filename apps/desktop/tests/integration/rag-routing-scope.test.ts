@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { randomUUID } from 'node:crypto'
 
 // #714 — the three routing helpers in `registerRagIpc.ts` count only what the chat's scope admits:
@@ -36,7 +36,7 @@ import { MEETING_PROTOCOL_INSTALL_ID } from '../../src/main/services/skills/anal
 import { skillInstallId } from '../../src/main/services/skills/registry'
 import { t } from '../../src/shared/i18n'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
-import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { archiveCandidate, testArm } from '../helpers/zim-retrieval-fixtures'
@@ -66,7 +66,6 @@ interface Harness {
   small: string
   /** `gross.txt`: 600 lines, too large to read whole at 4,096 tokens; nothing extracted, no tree. */
   large: string
-  calls: ScriptedCall[]
   armCalls: () => number
 }
 
@@ -109,11 +108,10 @@ async function makeHarness(): Promise<Harness> {
   chunkIds.forEach((id, i) => edge.run('root-714', id, i))
   w.db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(notes)
 
-  const calls: ScriptedCall[] = []
   const runtime = {
     ...scriptedRuntime(
       (call) => (call.options?.responseSchemaName === 'skill_pointer' ? JSON.stringify({ skill: PLAIN_LANGUAGE }) : MODEL_ANSWER),
-      calls,
+      [],
       { tokens: 'whole' }
     ),
     contextWindow: () => 4096
@@ -127,7 +125,7 @@ async function makeHarness(): Promise<Harness> {
   const zim = { makeArm: (_db: Db, packIds: readonly string[] | null | undefined) => (packIds?.length ? arm : null) }
   registerBuiltinSkillAnalysisHandlers()
   registerRagIpc({ ...ctx, zim } as unknown as AppContext)
-  return { db: w.db, notes, small, large, calls, armCalls: () => armCalls }
+  return { db: w.db, notes, small, large, armCalls: () => armCalls }
 }
 
 const PACK_ONLY: DocumentScope = { collectionIds: [], documentIds: [], packIds: ['pack-1'], documentsOff: true }
@@ -152,12 +150,9 @@ async function ask(
 const sourceKinds = (msg: Message): string[] => (msg.citations ?? []).map((c) => c.sourceKind ?? 'document')
 const citedDocuments = (msg: Message): Array<string | null | undefined> => (msg.citations ?? []).map((c) => c.documentId)
 
-beforeAll(async () => {
-  h = await makeHarness()
-})
-
-beforeEach(() => {
+beforeEach(async () => {
   inFlightStreams.clear()
+  h = await makeHarness()
 })
 
 describe('askDocuments — the listing needs extract data IN scope (`extractionsExistInScope`, #714)', () => {
@@ -186,7 +181,9 @@ describe('askDocuments — the listing needs extract data IN scope (`extractions
 describe('askDocuments — the tree route needs a ready deep index IN scope (`readyTreeCountInScope`, #714)', () => {
   // In a documents-off chat the tree is never read either way (`wholeReadDocumentId` needs one routable
   // document). The route still decides whether the #80 classifier runs: a low-confidence route classifies,
-  // `tree-summary` never does. So the offer is the one thing this check changes there.
+  // `tree-summary` never does. So the offer is the one thing this check changes there. The offered skill
+  // has no analysis engine, only a fence that shapes the pack answer, so its offer stays honest with
+  // documents off (unlike a document skill's, whose engine needs a document in scope).
   it('documents off, one pack: a summary-and-list ask carries the classifier offer', async () => {
     const { msg, armCalls, noDocuments } = await ask(PACK_ONLY, SUMMARY_LIST_ASK)
     expect(noDocuments).toBe(true)
