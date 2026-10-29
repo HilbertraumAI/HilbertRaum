@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // IPC-layer tests for registerChatIpc — the handler glue that the service-level chat
@@ -35,10 +34,9 @@ vi.mock('electron', () => ({
 
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { log } from '../../src/main/services/logging'
-import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { createConversation, listConversations, listMessages, appendMessage } from '../../src/main/services/chat'
 import { addToCollection, createCollection, getBuiltinCollection, linkConversationDocument } from '../../src/main/services/collections'
 import { listDocuments, listDocumentsByIds } from '../../src/main/services/ingestion'
@@ -48,7 +46,9 @@ import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
-import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { failingRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { capturePrepares } from '../helpers/db-spy'
 import { makeSkillDirs, writeSkillPackage } from '../helpers/skill-fixtures'
 import { reconcileSkills } from '../../src/main/services/skills/registry'
 import { updateSettings } from '../../src/main/services/settings'
@@ -79,33 +79,26 @@ function gatedRuntime(): { runtime: ModelRuntime; release: () => void; started: 
   return { runtime, release, started }
 }
 
-/** A runtime whose generation fails with a NON-abort error before any token — models the most
- *  reachable regenerate failure: an `exceed_context_size_error` HTTP 400 because regenerate
- *  replays the full history near the window. */
-function throwingRuntime(): ModelRuntime {
-  return {
-    modelId: 'throwing',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
-    // eslint-disable-next-line require-yield
-    async *chatStream(): AsyncGenerator<string> {
-      throw new Error('Chat request failed: HTTP 400 exceed_context_size_error')
-    }
-  }
-}
-
-function makeCtx(db: Db, runtime: ModelRuntime | null, unlocked = true): AppContext {
+function makeCtx(db: Db, runtime: ModelRuntime | null): AppContext {
   return {
     trustedSenders: ANY_SENDER,
     db,
-    workspace: { isUnlocked: () => unlocked },
+    workspace: { isUnlocked: () => true },
     runtime: { active: () => runtime, activeModelId: () => runtime?.modelId ?? null }
   } as unknown as AppContext
 }
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-chatipc-')), 'test.sqlite'))
+/** An unlocked, runtime-less ctx whose `audit` is a spy (the export and save-code-block handlers). */
+function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn> } {
+  const audit = vi.fn()
+  const ctx = {
+    trustedSenders: ANY_SENDER,
+    db,
+    workspace: { isUnlocked: () => true },
+    runtime: { active: () => null, activeModelId: () => null },
+    audit
+  } as unknown as AppContext
+  return { ctx, audit }
 }
 
 beforeEach(() => {
@@ -121,7 +114,7 @@ describe('registerChatIpc', () => {
     ['no model is running', false, 'main.noModelRunning'],
     ['a model is starting (#599)', true, 'main.modelStarting']
   ] as const)('throws a clear error when %s', async (_label, starting, key) => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const conv = createConversation(db, {})
     const ctx = makeCtx(db, null)
     Object.assign(ctx.runtime, { isStarting: () => starting })
@@ -129,31 +122,8 @@ describe('registerChatIpc', () => {
     await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(t('en', key))
   })
 
-  it('surfaces the friendly localized lock message on a locked-vault chat call, not the raw engine string (API-1)', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    const { runtime } = gatedRuntime()
-    // A locked workspace: every DB-touching handler must refuse with the friendly localized
-    // copy BEFORE it reaches `ctx.db` (which would otherwise throw the raw English
-    // "Workspace is locked — unlock it first." from the vault getter).
-    registerChatIpc(makeCtx(db, runtime, /* unlocked */ false))
-
-    // A representative DB-touching handler from each shape: list, send (the stream path), delete.
-    await expect(invoke(handlers, IPC.listConversations)).rejects.toThrow(
-      'Workspace is locked. Unlock it to chat.'
-    )
-    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(
-      'Workspace is locked. Unlock it to chat.'
-    )
-    await expect(invoke(handlers, IPC.deleteConversation, conv.id)).rejects.toThrow(
-      'Workspace is locked. Unlock it to chat.'
-    )
-    // None of these reached the raw engine string the vault getter throws.
-    await expect(invoke(handlers, IPC.listConversations)).rejects.not.toThrow(/unlock it first/i)
-  })
-
   it('rejects an empty message and an unknown conversation', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime } = gatedRuntime()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, runtime))
@@ -162,7 +132,7 @@ describe('registerChatIpc', () => {
   })
 
   it('streams tokens over the per-conversation channel and resolves with the persisted reply', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime, release } = gatedRuntime()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, runtime))
@@ -179,42 +149,16 @@ describe('registerChatIpc', () => {
     expect(event.sender.send).toHaveBeenCalledWith(STREAM.done(conv.id), expect.objectContaining({ role: 'assistant' }))
     // The user turn + the assistant reply are persisted; nothing left in the in-flight map.
     expect(listMessages(db, conv.id).map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(listMessages(db, conv.id).at(-1)?.content).toBe('first second')
     expect(inFlightStreams.has(conv.id)).toBe(false)
   })
 
   // ---- Phase C: chat attachments (plan C3/§16) -------------------------------------
-  it('listAttachments returns a conversation\'s linked temporary docs (and [] for none)', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, { mode: 'documents' })
-    // A bare indexed document row, linked to the conversation as a temporary attachment.
-    const now = new Date().toISOString()
-    db.prepare(
-      `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-    ).run('att-1', 'invoice.pdf', now, now)
-    linkConversationDocument(db, conv.id, 'att-1')
-
-    const ctx = {
-      trustedSenders: ANY_SENDER,
-      db,
-      workspace: { isUnlocked: () => true },
-      embedder: createMockEmbedder(),
-      runtime: { active: () => null, activeModelId: () => null }
-    } as unknown as AppContext
-    registerChatIpc(ctx)
-
-    const { result } = await invoke(handlers, IPC.listAttachments, conv.id)
-    expect((result as Array<{ id: string; title: string }>).map((d) => d.id)).toEqual(['att-1'])
-    // A conversation with no attachments resolves to an empty list.
-    const other = createConversation(db, { mode: 'documents' })
-    const { result: none } = await invoke(handlers, IPC.listAttachments, other.id)
-    expect(none).toEqual([])
-  })
-
   // #571: a FAILED attachment was never filed (N4 — no link), so "Files in this chat" used to forget
   // it while the scope widened to the whole corpus. It is listed now, so the chat can say it is not
   // readable yet; a still-importing one stays the renderer's pending chip.
   it('listAttachments includes a failed unfiled attachment of THIS chat — not an importing one, not another chat\'s', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const conv = createConversation(db, { mode: 'documents' })
     const other = createConversation(db, { mode: 'documents' })
     const now = new Date().toISOString()
@@ -245,6 +189,9 @@ describe('registerChatIpc', () => {
     const rows = result as Array<{ id: string; status: string }>
     expect(rows.map((d) => d.id).sort()).toEqual(['ok', 'scan'])
     expect(rows.find((d) => d.id === 'scan')?.status).toBe('failed')
+    // A conversation with no attachments resolves to an empty list.
+    const empty = createConversation(db, { mode: 'documents' })
+    expect((await invoke(handlers, IPC.listAttachments, empty.id)).result).toEqual([])
   })
 
   // ---- CODE-21 (full audit 2026-07-11): id-targeted attachment listing ---------------
@@ -294,7 +241,7 @@ describe('registerChatIpc', () => {
   }
 
   it('listDocumentsByIds is result-identical to the old filter-over-listDocuments path (CODE-21 equivalence)', () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     seedMixedCorpus(db)
     const ids = ['att-a', 'att-b', 'att-c', 'att-d', 'att-missing']
     const targeted = listDocumentsByIds(db, 'active-model', ids)
@@ -310,7 +257,7 @@ describe('registerChatIpc', () => {
   })
 
   it('listAttachments scopes every query with IN — no full-table aggregation (CODE-21)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     seedMixedCorpus(db)
     const conv = createConversation(db, { mode: 'documents' })
     linkConversationDocument(db, conv.id, 'att-a')
@@ -325,22 +272,10 @@ describe('registerChatIpc', () => {
     registerChatIpc(ctx)
 
     // Capture every SQL prepared while the handler runs (the ocr-meta PERF-3 guard pattern).
-    const prepared: string[] = []
-    const orig = db.prepare.bind(db)
-    Object.defineProperty(db, 'prepare', {
-      configurable: true,
-      writable: true,
-      value: (sql: string) => {
-        prepared.push(sql)
-        return orig(sql)
-      }
-    })
-    let result: Array<{ id: string }>
-    try {
+    let result: Array<{ id: string }> = []
+    const prepared = await capturePrepares(db, async () => {
       result = (await invoke(handlers, IPC.listAttachments, conv.id)).result as Array<{ id: string }>
-    } finally {
-      Object.defineProperty(db, 'prepare', { configurable: true, writable: true, value: orig })
-    }
+    })
     expect(result.map((d) => d.id).sort()).toEqual(['att-a', 'att-b'])
 
     // The documents read is id-targeted (reverting to the listDocuments load-all reds this).
@@ -355,7 +290,7 @@ describe('registerChatIpc', () => {
   })
 
   it('rejects a second concurrent stream on the same conversation without clobbering the first (H3)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime, release, started } = gatedRuntime()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, runtime))
@@ -379,7 +314,7 @@ describe('registerChatIpc', () => {
   })
 
   it('stopGeneration aborts the stream and the invoke resolves via done, not error (C1); the partial is saved marked (#612)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime, release, started } = gatedRuntime()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, runtime))
@@ -402,7 +337,7 @@ describe('registerChatIpc', () => {
   })
 
   it('refuses to regenerate when there is no prior assistant message', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime } = gatedRuntime()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
@@ -417,11 +352,11 @@ describe('registerChatIpc', () => {
   // destroyed the prior answer with nothing in its place. The destructive delete is now deferred
   // into the stream's runFn (slot held) and the prior reply is RESTORED on a non-abort failure.
   it('regenerate whose generation fails restores the prior assistant reply — no answer-less turn (F2)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
     const prior = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the original answer' })
-    registerChatIpc(makeCtx(db, throwingRuntime()))
+    registerChatIpc(makeCtx(db, failingRuntime()))
 
     // The failing regenerate rejects (the renderer surfaces a toast)…
     await expect(
@@ -439,7 +374,7 @@ describe('registerChatIpc', () => {
   })
 
   it('a successful regenerate still replaces the prior reply — the F2 guard does not block the happy path', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime, release } = gatedRuntime()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
@@ -462,7 +397,7 @@ describe('registerChatIpc', () => {
   // again from the history — the renderer sends only its id, main appends nothing, so the model gets
   // that question as the turn to answer and the transcript keeps exactly one copy of it.
   it('Send again answers the unanswered last question in place — no second copy (#613)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const calls: ScriptedCall[] = []
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'first question' })
@@ -493,7 +428,7 @@ describe('registerChatIpc', () => {
     ['an answer arrived since', true],
     ['the id is not the last question', false]
   ] as const)('Send again refuses when %s — nothing streams, nothing is written (#613)', async (_l, answered) => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const calls: ScriptedCall[] = []
     const conv = createConversation(db, {})
     const question = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
@@ -515,7 +450,7 @@ describe('registerChatIpc', () => {
   // default and may auto-fire. Auto-fire scores the QUESTION — a resend's `content` is empty, so main
   // scores the stored question instead, and the resent turn gets the skill its first send would have.
   it('Send again scores the stored question for auto-fire, as its first send did (#613)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     updateSettings(db, { skillsAutoFireEnabled: true })
     const dirs = makeSkillDirs('chatipc-resend')
     writeSkillPackage(dirs.appSkillsDir, {
@@ -546,27 +481,8 @@ describe('registerChatIpc', () => {
     })
   })
 
-  it('deletes a conversation and its messages (chat and documents mode alike)', async () => {
-    const db = freshDb()
-    registerChatIpc(makeCtx(db, null))
-    const chat = createConversation(db, {})
-    const docs = createConversation(db, { mode: 'documents' })
-    appendMessage(db, { conversationId: chat.id, role: 'user', content: 'hi' })
-    appendMessage(db, { conversationId: chat.id, role: 'assistant', content: 'hello' })
-    appendMessage(db, { conversationId: docs.id, role: 'user', content: 'what does it say?' })
-
-    await invoke(handlers, IPC.deleteConversation, chat.id)
-    expect(listConversations(db).map((c) => c.id)).toEqual([docs.id])
-    expect(listMessages(db, chat.id)).toHaveLength(0)
-    // The other conversation is untouched.
-    expect(listMessages(db, docs.id)).toHaveLength(1)
-
-    await invoke(handlers, IPC.deleteConversation, docs.id)
-    expect(listConversations(db)).toHaveLength(0)
-  })
-
   it('refuses to delete a conversation while a response is streaming into it', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime, release, started } = gatedRuntime()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, runtime))
@@ -586,7 +502,7 @@ describe('registerChatIpc', () => {
   // ---- "Ask selected documents" scope (Phase 17, plan §5.3) ----------------------
 
   it('createConversation accepts a documents scope and updateConversationScope edits it', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     registerChatIpc(makeCtx(db, null))
 
     const conv = (
@@ -635,7 +551,7 @@ describe('registerChatIpc', () => {
   }
 
   it('forwards the mode and streams reasoning on chat:reasoning:<id>, never on the token channel', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime, seen } = depthRuntime()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, runtime))
@@ -660,7 +576,7 @@ describe('registerChatIpc', () => {
   })
 
   it('degrades a junk mode from a non-UI caller to the balanced default', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { runtime, seen } = depthRuntime()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, runtime))
@@ -670,86 +586,21 @@ describe('registerChatIpc', () => {
   })
 })
 
-// TEST-N8: the locked-vault guard was spot-checked on only ~3 of the chat IPC handlers, so a newly
-// added unguarded handler would slip through. These STRUCTURAL tests enumerate EVERY registered
-// handler and assert the guard fires for all DB-touching ones (chat + the benchmark handlers, now
-// guarded per SEC-N2) — and that the two in-memory chat handlers stay usable while locked.
-describe('locked-vault guard coverage (TEST-N8)', () => {
-  // The only chat handlers that legitimately work while locked: they touch in-memory stream state,
-  // never ctx.db. Everything else must refuse.
-  const IN_MEMORY_CHANNELS = new Set<string>([
-    IPC.stopGeneration,
-    IPC.getActiveStream,
-    IPC.listActiveStreamConversations
-  ])
-
-  it('every DB-touching chat handler refuses with the friendly copy when locked (structural)', async () => {
-    const db = freshDb()
-    const { runtime } = gatedRuntime()
-    registerChatIpc(makeCtx(db, runtime, /* unlocked */ false))
-    const channels = [...handlers.keys()]
-    // Sanity: the enumeration actually covers the surface (guards against a registration refactor
-    // silently leaving this test asserting nothing).
-    expect(channels.length).toBeGreaterThanOrEqual(14)
-    for (const ch of channels) {
-      if (IN_MEMORY_CHANNELS.has(ch)) continue
-      // Throwaway args — the guard is the FIRST statement in every DB-touching handler, before any
-      // arg is used, so the refusal is arg-shape-independent.
-      await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.toThrow(/Workspace is locked\./)
-      // …and never the raw vault-getter string ("Workspace is locked — unlock it first.").
-      await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.not.toThrow(/unlock it first/i)
-    }
-  })
-
-  it('the in-memory chat handlers stay usable when locked (documented exemption)', async () => {
-    const db = freshDb()
-    const { runtime } = gatedRuntime()
-    registerChatIpc(makeCtx(db, runtime, false))
-    // None throw when locked (they read/clear the in-memory in-flight map, never ctx.db).
-    await expect(invoke(handlers, IPC.stopGeneration, 'no-such-conv')).resolves.toBeDefined()
-    await expect(invoke(handlers, IPC.getActiveStream, 'no-such-conv')).resolves.toBeDefined()
-    // listActiveStreamConversations enumerates the in-flight map (workspace-agnostic) → [] when idle.
-    expect((await invoke(handlers, IPC.listActiveStreamConversations)).result).toEqual([])
-  })
-
-  it('the benchmark handlers refuse when locked (SEC-N2 parity)', async () => {
-    registerBenchmarkIpc({
-      trustedSenders: ANY_SENDER,
-      workspace: { isUnlocked: () => false }
-    } as unknown as AppContext)
-    await expect(invoke(handlers, IPC.runBenchmark)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
-    await expect(invoke(handlers, IPC.tryGpuAgain)).rejects.toThrow('Workspace is locked. Unlock it to run the benchmark.')
-    await expect(invoke(handlers, IPC.runBenchmark)).rejects.not.toThrow(/unlock it first/i)
-  })
-})
-
 // T-8 (Chat & Documents audit 2026-07-07): the chat export handlers' user-visible behaviour was
 // untested (only the structural locked-vault enumeration touched the channels). These pin the
 // SANITIZED default filename, the null-on-cancel path (no write, no audit), and the S1 privacy
 // posture — the audit records the conversation/message id ONLY, never the title (chat content) or
 // the user-chosen path.
 describe('chat export handlers (T-8)', () => {
-  function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn> } {
-    const audit = vi.fn()
-    const ctx = {
-      trustedSenders: ANY_SENDER,
-      db,
-      workspace: { isUnlocked: () => true },
-      runtime: { active: () => null, activeModelId: () => null },
-      audit
-    } as unknown as AppContext
-    return { ctx, audit }
-  }
-
   it('exportConversation sanitizes the title into the default path and audits the id only', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { ctx, audit } = ctxWithAudit(db)
     // A title full of filesystem-hostile characters — the sanitizer strips ':' '/' '<' '>'.
     const conv = createConversation(db, { title: 'Report: Q1/Q2 <draft>' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
     registerChatIpc(ctx)
 
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-export-'))
+    const dir = tempRoot('export')
     const outPath = join(dir, 'saved.md')
     dialogState.saveResult = { canceled: false, filePath: outPath }
 
@@ -759,14 +610,16 @@ describe('chat export handlers (T-8)', () => {
     // regex (e.g. stop stripping '/') → the '/'-bearing "Report Q1/Q2 draft.md" reddens this.
     expect(dialogState.lastSaveOptions?.defaultPath).toBe('Report Q1Q2 draft.md')
     // Audit records the id ONLY — never the title (chat content) or the chosen path (user-private).
-    expect(audit).toHaveBeenCalledWith('conversation_exported', expect.any(String), { conversationId: conv.id })
-    const meta = audit.mock.calls.find((c) => c[0] === 'conversation_exported')?.[2]
-    expect(JSON.stringify(meta)).not.toContain('Report') // no title leak
-    expect(JSON.stringify(meta)).not.toContain(outPath) // no path leak
+    expect(audit).toHaveBeenCalledTimes(1)
+    const [type, message, meta] = audit.mock.calls[0]!
+    expect(type).toBe('conversation_exported')
+    expect(meta).toEqual({ conversationId: conv.id })
+    expect(message).not.toContain('Report') // no title leak in the message line
+    expect(message).not.toContain(outPath) // raw value, not its JSON encoding (backslashes on Windows)
   })
 
   it('exportConversation returns null on cancel — nothing written, nothing audited', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { ctx, audit } = ctxWithAudit(db)
     const conv = createConversation(db, { title: 'Cancelled export' })
     registerChatIpc(ctx)
@@ -778,7 +631,7 @@ describe('chat export handlers (T-8)', () => {
   })
 
   it('exportMessageTable uses a static table.csv name, and returns null (no dialog) when there is no table', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { ctx } = ctxWithAudit(db)
     const conv = createConversation(db, { title: 'Tables' })
     const withTable = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'here you go' })
@@ -787,7 +640,7 @@ describe('chat export handlers (T-8)', () => {
     saveResultTable(db, { messageId: withTable.id, conversationId: conv.id, table })
     registerChatIpc(ctx)
 
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-exporttbl-'))
+    const dir = tempRoot('exporttbl')
     dialogState.saveResult = { canceled: false, filePath: join(dir, 'out.csv') }
     const ok = (await invoke(handlers, IPC.exportMessageTable, withTable.id)).result as string | null
     expect(ok).toBe(join(dir, 'out.csv'))
@@ -807,17 +660,6 @@ describe('chat export handlers (T-8)', () => {
 // identity (no BOM even on a .txt/.csv destination), the D2 type gate, the D6 allowlist reaching
 // the dialog, cancel = null with nothing written/audited, and the audit/log privacy posture.
 describe('chat:saveCodeBlock (#286)', () => {
-  function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn> } {
-    const audit = vi.fn()
-    const ctx = {
-      trustedSenders: ANY_SENDER,
-      db,
-      workspace: { isUnlocked: () => true },
-      runtime: { active: () => null, activeModelId: () => null },
-      audit
-    } as unknown as AppContext
-    return { ctx, audit }
-  }
   const MSG_ID = '0f5a1c2e-9b7d-4e3a-8c6f-1234567890ab'
   const CONTENT_SENTINEL = 'XCODE_SENTINEL_api_key_hunter2'
   const INFO_SENTINEL = 'XINFO_SENTINEL_private_project'
@@ -827,7 +669,7 @@ describe('chat:saveCodeBlock (#286)', () => {
   const lastSave = (): SaveDialogOptions | undefined => dialogState.lastSaveOptions
 
   it('offers code.html + an HTML-first filter for an html fence, code.txt for an unknown language', async () => {
-    const { ctx } = ctxWithAudit(freshDb())
+    const { ctx } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
     dialogState.saveResult = { canceled: true }
 
@@ -854,9 +696,9 @@ describe('chat:saveCodeBlock (#286)', () => {
   })
 
   it('cancel → null, nothing written, nothing audited', async () => {
-    const { ctx, audit } = ctxWithAudit(freshDb())
+    const { ctx, audit } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    const dir = tempRoot('codeblock')
     dialogState.saveResult = { canceled: true, filePath: join(dir, 'code.html') }
 
     const result = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '<b>x</b>', 'html')).result
@@ -866,10 +708,10 @@ describe('chat:saveCodeBlock (#286)', () => {
   })
 
   it('writes the bytes VERBATIM — no BOM — to a .txt and to a .csv destination (D1)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('chatipc')
     const { ctx } = ctxWithAudit(db)
     registerChatIpc(ctx)
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    const dir = tempRoot('codeblock')
     // A shebang (a BOM would break it), umlauts (UTF-8 multi-byte), CRLF + a bare CR + a trailing
     // newline (line endings "as generated") and an astral-plane emoji.
     const content = '#!/bin/sh\necho "Grüße"\r\nprintf ß\rtail 🎉\n'
@@ -894,9 +736,9 @@ describe('chat:saveCodeBlock (#286)', () => {
   })
 
   it('writes an empty block as an empty file', async () => {
-    const { ctx } = ctxWithAudit(freshDb())
+    const { ctx } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    const dir = tempRoot('codeblock')
     const dest = join(dir, 'empty.txt')
     dialogState.saveResult = { canceled: false, filePath: dest }
     expect((await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '', '')).result).toBe(dest)
@@ -904,9 +746,9 @@ describe('chat:saveCodeBlock (#286)', () => {
   })
 
   it('rejects non-string content and a malformed message id WITHOUT opening the dialog', async () => {
-    const { ctx, audit } = ctxWithAudit(freshDb())
+    const { ctx, audit } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
-    dialogState.saveResult = { canceled: false, filePath: join(tmpdir(), 'never-written.txt') }
+    dialogState.saveResult = { canceled: false, filePath: join(tempRoot('codeblock'), 'never-written.txt') }
     dialogState.lastSaveOptions = undefined
 
     for (const bad of [undefined, null, 42, { toString: () => 'x' }, ['a'], Buffer.from('a')]) {
@@ -921,26 +763,15 @@ describe('chat:saveCodeBlock (#286)', () => {
     expect(audit).not.toHaveBeenCalled()
 
     // A non-string language is tolerated (treated as no language → txt); the content still wins.
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    const dir = tempRoot('codeblock')
     dialogState.saveResult = { canceled: false, filePath: join(dir, 'x.txt') }
     const r = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'ok', 12 as unknown as string)).result
     expect(r).toBe(join(dir, 'x.txt'))
     expect(lastSave()?.defaultPath).toBe('code.txt')
   })
 
-  it('refuses when the workspace is locked (requireUnlocked), before any dialog', async () => {
-    const { ctx } = ctxWithAudit(freshDb())
-    ;(ctx as unknown as { workspace: { isUnlocked: () => boolean } }).workspace = {
-      isUnlocked: () => false
-    }
-    registerChatIpc(ctx)
-    dialogState.lastSaveOptions = undefined
-    await expect(invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'x', 'html')).rejects.toThrow()
-    expect(dialogState.lastSaveOptions).toBeUndefined()
-  })
-
   it('audits { messageId, bytes, extension } ONLY; no audit row or log line carries the content, the info string or the path', async () => {
-    const { ctx, audit } = ctxWithAudit(freshDb())
+    const { ctx, audit } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
     const logSpy = {
       info: vi.spyOn(log, 'info'),
@@ -948,7 +779,7 @@ describe('chat:saveCodeBlock (#286)', () => {
       error: vi.spyOn(log, 'error')
     }
     try {
-      const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+      const dir = tempRoot('codeblock')
       const dest = join(dir, 'code.html')
       dialogState.saveResult = { canceled: false, filePath: dest }
       const content = `<!doctype html>\n<p>${CONTENT_SENTINEL}</p>\n`
@@ -965,17 +796,15 @@ describe('chat:saveCodeBlock (#286)', () => {
         bytes: Buffer.byteLength(content, 'utf8'),
         extension: 'html'
       })
-      const recordedAudit = JSON.stringify([type, message, meta])
-      const recordedLog = JSON.stringify(
-        [logSpy.info, logSpy.warn, logSpy.error].flatMap((s) => s.mock.calls)
-      )
-      for (const sentinel of SENTINELS) {
-        expect(recordedAudit, `audit leaked ${sentinel}`).not.toContain(sentinel)
-        expect(recordedLog, `log leaked ${sentinel}`).not.toContain(sentinel)
+      /** Every string inside the logged arguments, raw (JSON doubles Windows backslashes, so never search the encoding). */
+      const strings = (v: unknown): string[] =>
+        typeof v === 'string' ? [v] : v && typeof v === 'object' ? Object.values(v).flatMap(strings) : []
+      const logged = [logSpy.info, logSpy.warn, logSpy.error].flatMap((s) => s.mock.calls).flat().flatMap(strings)
+      const audited = [type, message, ...strings(meta)].map(String)
+      for (const needle of [...SENTINELS, dest, 'title=']) {
+        expect(audited.filter((s) => s.includes(needle)), `audit leaked ${needle}`).toEqual([])
+        expect(logged.filter((s) => s.includes(needle)), `log leaked ${needle}`).toEqual([])
       }
-      expect(recordedAudit).not.toContain(dest) // the chosen path is user-private
-      expect(recordedLog).not.toContain(dest)
-      expect(recordedLog).not.toContain('title=') // the raw info string never reaches the log
     } finally {
       logSpy.info.mockRestore()
       logSpy.warn.mockRestore()

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 // F16 / TEST-N8 generalized (audit-postmerge-2026-06-29).
 //
 // The prior TEST-N8 (chat-ipc.test.ts) enumerated only registerChatIpc + the two benchmark
-// handlers. The audit found four more DB-touching handler GROUPS with no explicit
+// handlers; both now have their MODULES entry here. The audit found four more DB-touching handler GROUPS with no explicit
 // requireUnlocked() preamble — rag (rag:ask), audit, core settings, and model — which were
 // fail-closed (the `ctx.db` getter throws when locked) but surfaced the RAW unlocalized
 // "Workspace is locked — unlock it first." instead of the friendly localized copy, and were
@@ -18,8 +18,8 @@ import { join } from 'node:path'
 // first."). It also asserts the read-only / in-memory channels (getLogTail, getRuntimeStatus)
 // STILL resolve when locked (pre-unlock diagnostics + runtime status must work at the gate).
 //
-// Modules with their own dedicated locked-vault rejection tests (chat's TEST-N8, translate,
-// dictation) and the pre-unlock modules are listed in COVERED_ELSEWHERE below, each with its
+// Modules with their own dedicated locked-vault rejection tests (translate, dictation) and the
+// pre-unlock modules are listed in COVERED_ELSEWHERE below, each with its
 // reason. Together with this file every DB-touching IPC module is enumerated.
 //
 // NOTE: this also SUBSUMES Phase-5 item T3 (rag:ask lock-rejection) — registerRagIpc is
@@ -34,13 +34,17 @@ vi.mock('electron', () => ({
   // registerCoreIpc imports `app`/`clipboard`; only referenced inside handlers we don't drive.
   app: { getVersion: () => '0.0.0-test' },
   clipboard: { writeText: () => {}, readText: () => '', clear: () => {} },
-  // A picker that skips its lock gate, or runs it only after the dialog, reaches the OS dialog: count
-  // it, and answer it (cancelled) so an ungated one reports "resolved instead of rejecting" (#681).
+  // A picker or a save dialog that skips its lock gate, or runs it only after the dialog, reaches the OS
+  // dialog: count it, and answer it (cancelled) so an ungated one reports "resolved instead of rejecting" (#681).
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: {
     showOpenDialog: async () => {
       ipcState.dialogOpens += 1
       return { canceled: true, filePaths: [] }
+    },
+    showSaveDialog: async () => {
+      ipcState.dialogOpens += 1
+      return { canceled: true }
     }
   }
 }))
@@ -48,6 +52,7 @@ vi.mock('electron', () => ({
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { registerAuditIpc } from '../../src/main/ipc/registerAuditIpc'
+import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIpc'
@@ -122,6 +127,15 @@ const MODULES: Array<{
     ])
   },
   { name: 'registerAuditIpc', register: registerAuditIpc, exempt: new Set<string>() },
+  // Chat: 16 of its 19 channels open with requireUnlocked() — conversations, messages, search, the send and the three
+  // save-dialog exports (chat-ipc's TEST-N8 lived in chat-ipc.test.ts until the chat + RAG campaign). Exempt, each read
+  // from its handler: chat:stop only aborts an in-memory controller; chat:activeStream and
+  // chat:activeStreamConversations read the in-memory stream registry, so a screen remounted after a lock still settles.
+  {
+    name: 'registerChatIpc',
+    register: registerChatIpc,
+    exempt: new Set<string>([IPC.stopGeneration, IPC.getActiveStream, IPC.listActiveStreamConversations])
+  },
   { name: 'registerRagIpc', register: registerRagIpc, exempt: new Set<string>() },
   { name: 'registerBenchmarkIpc', register: registerBenchmarkIpc, exempt: new Set<string>() },
   { name: 'registerCollectionsIpc', register: registerCollectionsIpc, exempt: new Set<string>() },
@@ -203,7 +217,6 @@ const MODULES: Array<{
 // union(MODULES, COVERED_ELSEWHERE) == every register*Ipc discovered by glob — so a NEW module that
 // is added uncovered reds this file (the exact drift it exists to catch).
 const COVERED_ELSEWHERE: Record<string, string> = {
-  registerChatIpc: 'chat-ipc.test.ts (TEST-N8 locked-vault rejection)',
   registerTranslateIpc:
     'translate-ipc.test.ts (locked-vault rejection of translateStart — a start lazily respawns the suspended sidecar; cancel/getActive are safe non-DB reads, intentionally ungated)',
   registerWorkspaceIpc:
@@ -249,17 +262,23 @@ describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', (
     })
   }
 
-  it('read-only / in-memory channels still resolve when locked (getLogTail, getRuntimeStatus)', async () => {
+  it('read-only / in-memory channels still resolve when locked (getLogTail, getRuntimeStatus, the chat stream registry)', async () => {
     ipcState.handlers.clear()
     initLogging(tmp) // deterministic buffering state (no key attached → pre-unlock diagnostics)
     registerCoreIpc(lockedCtx(tmp))
     registerModelIpc(lockedCtx(tmp))
+    registerChatIpc(lockedCtx(tmp))
 
     const tail = await invoke(handlers, IPC.getLogTail)
     expect(Array.isArray(tail.result)).toBe(true)
 
     const status = await invoke(handlers, IPC.getRuntimeStatus)
     expect(status.result).toMatchObject({ running: false })
+
+    // The chat stream registry: Stop, the remount read and the in-flight list touch no ctx.db.
+    await expect(invoke(handlers, IPC.stopGeneration, 'no-such-conv')).resolves.toBeDefined()
+    expect((await invoke(handlers, IPC.getActiveStream, 'no-such-conv')).result).toBeNull()
+    expect((await invoke(handlers, IPC.listActiveStreamConversations)).result).toEqual([])
   })
 
   // DX-4: close the enumeration loop. Glob EVERY `register*Ipc` export from the source tree and
