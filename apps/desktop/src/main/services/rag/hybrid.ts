@@ -17,7 +17,7 @@ import { buildScopeFilter } from '../retrieval-scope'
 // its exact trigger semantics.
 
 /** Standard RRF constant (Cormack et al.); rank-based, so scale-free. */
-export const RRF_K = 60
+const RRF_K = 60
 
 // The MATCH sanitizer lives in services/fts.ts (conversation search reuses it);
 // re-exported here so existing call/import sites are unchanged.
