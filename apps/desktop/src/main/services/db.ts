@@ -744,8 +744,9 @@ END;
 `
 
 // The messages twins carry the compaction `kind` guards (R8/DATA-1) IN the canonical set, so
-// the older ensureMessagesFts*KindFilter migrations see `new.kind` present and stay no-ops on
-// every later open. Nuances beyond the chunks set:
+// an older binary reopening a migrated workspace sees `new.kind` and leaves them alone, and the
+// canonical set is the only place an old workspace gets the guards (`ensureFtsRowidSync`).
+// Nuances beyond the chunks set:
 //   - messages_fts_ad_legacy ALSO excludes `old.kind IS 'compaction'`: a compaction row is
 //     guaranteed absent from the index (the AI guard for new rows; ensureMessagesFtsKindFilter
 //     pruned any legacy-indexed ones on the same upgrade open), so its handle is permanently
@@ -829,9 +830,9 @@ function backfillFtsRowids(db: Db, target: 'chunks' | 'messages', ownTransaction
  * sets (see the CHUNKS_FTS_TRIGGERS comment for the why + measurements). Idempotent via the
  * `ensureMessagesFtsKindFilter` sentinel idiom: skips only when the live AD trigger already
  * carries `fts_rowid`, and backfills the handles exactly once (in the same open). Runs AFTER
- * the FTS ensures + kind-filter migrations, so (a) the tables/columns exist, (b) the kind
- * filters' legacy-shaped rewrites on the same upgrade open are superseded here rather than
- * racing us, and (c) their compaction-row prune has already run, so the backfill can never map
+ * the FTS ensures + the kind-filter prune, so (a) the tables/columns exist, (b) a
+ * pre-compaction / pre-DATA-1 workspace's unguarded ai/au are replaced here by the guarded
+ * canonical set, and (c) the compaction-row prune has already run, so the backfill can never map
  * a checkpoint row (its FTS entry is gone by now).
  *
  * Crash-atomicity (CODE-4 review follow-up): the DROPs + CREATEs + backfill run inside ONE
@@ -934,51 +935,19 @@ INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages W
 }
 
 /**
- * R8 (context-compaction-plan §8) — keep compaction checkpoint rows (`kind='compaction'`) out of
- * conversation search and snippets. `ensureMessagesFts` builds the AFTER INSERT trigger with the kind
- * guard for fresh DBs; this upgrades a DB created BEFORE context compaction, whose `messages_fts_ai`
- * indexed every insert. Idempotent: rewrites only when the live trigger lacks the guard, and prunes
- * any checkpoint row that had already been indexed (none exist pre-feature, but the prune is correct
- * and future-proof). Runs after `ensureMessagesFts` so the table + the `kind` column already exist.
+ * R8 (context-compaction-plan §8) — on a workspace whose `messages_fts_ai` predates the compaction
+ * guard, prune any checkpoint row already in the index (defence in depth: no shipped binary can
+ * index one). The guarded trigger itself arrives with `ensureFtsRowidSync` in the same open: every
+ * such workspace's `messages_fts_ad` predates CODE-4, so that upgrade recreates all five message
+ * triggers from `MESSAGES_FTS_TRIGGERS`. Runs after `ensureMessagesFts` so the table + the `kind`
+ * column already exist.
  */
 function ensureMessagesFtsKindFilter(db: Db): void {
   const row = db
     .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_ai'")
     .get() as unknown as { sql: string } | undefined
   if (!row || row.sql.includes('new.kind')) return
-  db.exec(`
-DROP TRIGGER messages_fts_ai;
-CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages WHEN new.kind IS NOT 'compaction' BEGIN
-  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
-END;
-DELETE FROM messages_fts WHERE message_id IN (SELECT id FROM messages WHERE kind = 'compaction');
-`)
-}
-
-/**
- * DATA-1 (full audit 2026-06-28) — the UPDATE-trigger twin of `ensureMessagesFtsKindFilter`.
- * `ensureMessagesFts` builds `messages_fts_au` with the `kind` guard on its INSERT for fresh DBs;
- * this upgrades a DB whose `messages_fts_au` re-indexed updated content UNCONDITIONALLY, so a
- * future in-place edit of a `kind='compaction'` row can never leak its summary text into
- * user-facing conversation search. Idempotent: rewrites only when the live trigger lacks the
- * guard (`new.kind` absent), mirroring the insert-trigger backfill precedent. The DELETE stays
- * unconditional (a kind-transition still purges the stale entry). Any already-indexed compaction
- * row is pruned by `ensureMessagesFtsKindFilter`, which runs on the same open. Runs after
- * `ensureMessagesFts` so the table + `kind` column already exist.
- */
-function ensureMessagesFtsUpdateKindFilter(db: Db): void {
-  const row = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'")
-    .get() as unknown as { sql: string } | undefined
-  if (!row || row.sql.includes('new.kind')) return
-  db.exec(`
-DROP TRIGGER messages_fts_au;
-CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages BEGIN
-  DELETE FROM messages_fts WHERE message_id = old.id;
-  INSERT INTO messages_fts(content, message_id)
-    SELECT new.content, new.id WHERE new.kind IS NOT 'compaction';
-END;
-`)
+  db.exec(`DELETE FROM messages_fts WHERE message_id IN (SELECT id FROM messages WHERE kind = 'compaction');`)
 }
 
 /**
@@ -1422,7 +1391,6 @@ function applyPragmasAndMigrations(db: Db): void {
   ensureChunksFts(db)
   ensureMessagesFts(db)
   ensureMessagesFtsKindFilter(db)
-  ensureMessagesFtsUpdateKindFilter(db)
   ensureFtsRowidSync(db)
   seedCollections(db)
   db.exec(CORPUS_GENERATION)
