@@ -2408,9 +2408,9 @@ else summarize the region older than the protected tail (folding the prior check
   `listMessages` so the renderer/export/fence-sizing auto-skip checkpoints. `writeCheckpoint` deliberately
   does NOT bump `conversations.updated_at` (internal context, not a user action).
 - **R8 — keep checkpoints out of search/export:** the `messages_fts_ai` AFTER INSERT trigger carries
-  `WHEN new.kind IS NOT 'compaction'` (fresh DBs); `ensureMessagesFtsKindFilter` idempotently rewrites the
-  trigger on a pre-feature DB and prunes any already-indexed checkpoint row; the FTS backfill SELECT is
-  also kind-filtered.
+  `WHEN new.kind IS NOT 'compaction'` (fresh DBs); on a pre-feature DB `ensureMessagesFtsKindFilter`
+  prunes any already-indexed checkpoint row and CODE-4's `ensureFtsRowidSync` installs the guarded
+  trigger (the canonical set, same open); the FTS backfill SELECT is also kind-filtered.
 
 ### 15.4 Summary representation + the summarizer call (§4.5/§4.6/§4.8, R3/R4/R6/R11/R-RAG)
 
@@ -2575,8 +2575,7 @@ context size."* All four observations were real seams:
 - **A `max_tokens` cap no longer masquerades as "context limit".** llama-server reports `'length'` for
   BOTH ceilings; a Fast-mode reply that hit `FAST_MAX_TOKENS` (1024) showed "reached the model's context
   limit" at single-digit meter usage — a false "context is full" signal. `generateAssistantMessage` flags
-  truncated only when NO cap was in effect (`runtimeOptions.maxTokens ?? requestParamsForMode(mode).maxTokens`
-  is null); prompt fitting reserves ≥ the Fast cap of answer room, so with a cap set the cap is what fired.
+  truncated only when NO cap was in effect (`requestParamsForMode(mode).maxTokens` is null); prompt fitting reserves ≥ the Fast cap of answer room, so with a cap set the cap is what fired.
   **Amended 2026-09-21 (#498):** that "no longer flagged" rule is PLAIN CHAT only. The grounded paths pin
   their own 1024-token cap per pass and still flag a reply it ended (#491), so the fix there is to stop
   NAMING a cause in the badge: the label is now just "Reply cut off", and the per-message

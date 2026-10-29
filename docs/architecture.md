@@ -167,10 +167,11 @@ batching — no behavior change.
     BEGIN), exactly like `deleteDocument`.
   - **DATA-1 — `messages_fts_au` kind guard + backfill.** The UPDATE trigger now guards its INSERT with
     `WHERE new.kind IS NOT 'compaction'` (the DELETE stays unconditional, so a plain→compaction content
-    edit still purges the stale FTS row), matching the INSERT trigger. `ensureMessagesFtsUpdateKindFilter`
-    drop/recreates the trigger on existing DBs whose `au` trigger re-indexed updates unconditionally
-    (mirrors `ensureMessagesFtsKindFilter`) — so a future in-place edit of a checkpoint row can never leak
-    its summary text into conversation search, on old or new drives.
+    edit still purges the stale FTS row), matching the INSERT trigger. On existing DBs whose `au` trigger
+    re-indexed updates unconditionally, CODE-4's `ensureFtsRowidSync` installs the guarded canonical
+    trigger set in the same open (the separate `ensureMessagesFtsUpdateKindFilter` rewrite it superseded
+    was removed in the 2026-10 chat + RAG test campaign) — so a future in-place edit of a checkpoint row
+    can never leak its summary text into conversation search, on old or new drives.
   - **DATA-2 (invariant, no code change).** `tree_edges.child_id` is a polymorphic FK (chunks.id OR
     tree_nodes.id) with no FK to chunks; the no-dangling-edge invariant holds only because every
     chunk-delete path also tears down the document's `tree_nodes` (cascading the edges via `parent_id`).
@@ -12366,7 +12367,7 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   (!seenSignal) await …` so the abort lands only after the signal was genuinely handed to fetch), and
   `ocr-task.test.ts` "cancel persists nothing" (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the
   gate, polled through hang-budget's `until`, so the cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,
-  per "keep the timeout headroom"):** `chat.test.ts:171` + `image-history.test.ts:111` are timestamp-monotonicity
+  per "keep the timeout headroom"):** `chat.test.ts` "orders conversations by most recently updated" + `image-history.test.ts:111` are timestamp-monotonicity
   gaps (a small real-clock gap so `updated_at` strictly increases — converting needs a timestamp-injection seam
   into `createConversation`/`appendMessage`/`addImageTurn`, out of test-only scope; low flake risk given ISO-ms
   resolution + real elapsed insert work); `core-model-ipc.test.ts:448` is an ABSENCE-settle for a wrongly-fired
