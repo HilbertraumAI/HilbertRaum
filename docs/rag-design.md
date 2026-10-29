@@ -2543,9 +2543,9 @@ independent fixes:
 **Not done here (offered, deferred):** raising the default `contextTokens` above 4096, and a "continue this
 reply" affordance on a truncated turn. **The exact `finish_reason`/`usage` capture** (curl the loopback
 `/v1/chat/completions`) remains the one measurement that would confirm `length`-vs-`stop` on the original
-D:\ transcript; the fix makes the app self-report it going forward. Tests: `llama-runtime.test.ts`
-(onFinish length/stop + null-intermediate) and `chat.test.ts` (truncated persist round-trip; clean-`stop`
-and user-Stop both unflagged).
+D:\ transcript; the fix makes the app self-report it going forward. Tests: `read-chat-sse.test.ts`
+(onFinish `length`), `chat-sse-timings-fixture.test.ts` (the captured `stop` after a null intermediate
+reason) and `chat.test.ts` (truncated persist round-trip; clean-`stop` and user-Stop both unflagged).
 
 ### 15.8 Context truth end-to-end: real-usage meter, grounded truncation parity, one window, user context size (2026-07-04 user report)
 

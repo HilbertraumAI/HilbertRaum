@@ -8678,8 +8678,9 @@ audit read each of these and found them correct and well-tested; they are delibe
   groups touched `ctx.db` with no **explicit** `requireUnlocked()` preamble, so they fail-closed but
   surfaced the raw English vault string. §30 added the localized preamble to those four groups and
   **generalized** the structural test across the core/model/audit/rag/benchmark/collections modules — see
-  `tests/integration/ipc-lock-coverage.test.ts`; images (vision test campaign) and docs/doctasks (documents
-  test campaign) have since joined its `MODULES` loop, and chat keeps its own TEST-N8 test.)*
+  `tests/integration/ipc-lock-coverage.test.ts`; images (vision test campaign), docs/doctasks (documents
+  test campaign) and chat (chat + RAG test campaign, retiring chat-ipc's own TEST-N8 test) have since joined
+  its `MODULES` loop.)*
 - **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
   allow-list, CSP `connect-src 'self'`, OCR window deny-all.
 - **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
@@ -11049,8 +11050,9 @@ not defects):** source-text scan "wiring pins" (`window-security.test.ts`, `pack
 `package.json` compare across hoist locations in `assistant-markdown.test.tsx` (since #698 a check that the app and
 rehype-katex resolve one install, plus a count of `KaTeX parse error` in the build output, a string pin a KaTeX
 that rewords it turns red); `as unknown as`
-private-field injection (`chat-ipc.test.ts:933`; `docs-ipc.test.ts` moved to `ctxWith` overrides in the
-documents test campaign) — whoever touches those files converts the pin to a
+private-field injection (both cited sites are gone: `docs-ipc.test.ts` moved to `ctxWith` overrides in the
+documents test campaign, chat-ipc's locked save-dialog row folded into `ipc-lock-coverage.test.ts` in the
+chat + RAG campaign) — whoever touches those files converts the pin to a
 behavioural assertion where the change is small, else leaves a `// watch-item` comment. Fake timers:
 the 2026-08-22 flake class is fixed; remaining `advanceTimersByTimeAsync(0)` loops drain microtasks
 only; `FullSuiteGuard` converts dropped test FILES into a hard failure but cannot see dropped
