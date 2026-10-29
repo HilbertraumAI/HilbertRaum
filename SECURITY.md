@@ -59,7 +59,8 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 - **The model sidecars authenticate their own requests** — each `llama-server` spawn is given a
   fresh random API key through its **environment** (never argv, so it is not visible in a process
   list), and the key is redacted from captured stderr before that text can reach an error message,
-  the audit trail, the log, or a support export.
+  the audit trail, the log, or a support export. No engine inherits the host's llama.cpp config
+  files or `LLAMA_*` variables (#730).
 - **No model weights or user data in version control.**
 - **Engine binaries re-hashed before every spawn** — each bundled `llama-server` (chat + translation
   sidecars), whisper, GPU-probe, and (when installed) the optional `kiwix-serve`/`kiwix-manage`

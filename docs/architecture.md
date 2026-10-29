@@ -4105,6 +4105,22 @@ still constant (#318). MTP was verified on the RTX 3090 rig with the Linux Vulka
 at 66/66 with `--spec-type draft-mtp`, draft acceptance 0.754 against b9849's 0.760, decode within
 noise; PR #524, `model-benchmarks.md` §6.6 "Rig legs"). The macOS asset is hash-checked only.
 
+**HOST CONFIGURATION (#730, 2026-10-29).** Since b11146 (absent in b9849) llama.cpp applies config
+files before its ~150 environment variables and the command line: `%PROGRAMDATA%\llama.cpp\config.ini`
+and `%APPDATA%\llama.cpp\config.ini` on Windows, `/etc/llama.cpp/config.ini` and
+`${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini` elsewhere. Nothing turns it off. A key is an
+option's env name or its long name, so a host could set anything the app does not pass, `--rpc`
+and the download options included (`--connect` from v0.8.0, which has no negative form). The path is
+only tested with `exists()`, on b11146 and b11960 alike. Every llama.cpp spawn (`LlamaServer`, the
+`--list-devices` probe, the load check) therefore takes `runtime/engine-env.ts`'s environment: no
+inherited `LLAMA_*` / `HF_*` / `MTMD_*`, and the OS's lookup variables (`PROGRAMDATA` + `APPDATA`, or
+`XDG_CONFIG_HOME`) point below the engine binary file, a path that cannot exist. A folder beside the
+engine would have been a fixed place on the drive to plant a config (review of #730). Measured on both
+builds with the app's argv: a host `LLAMA_ARG_*` or config file moved the KV cache to q8_0 and, on
+b11146, the chat model from 36/36 to 0/36 GPU layers; filtered, neither applied. Re-verify on every bump
+with `gpu-smoke`'s #730 leg, which also fails when `--help` lists a variable the filter lets through. The
+fixed `/etc/llama.cpp/config.ini` is a residual (`security-model.md`).
+
 **VISION RE-VERIFIED 2026-07-01 (RUNTIME-5 + RUNTIME-6).** The b9849 vision smoke that §9 owed was
 run live on the provisioned `D:\` drive. Garbage ("multilingual token-salad") image descriptions
 turned out to be **b9849 default drift**, not a model↔runtime incompatibility — the sidecar returns

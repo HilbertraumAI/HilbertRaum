@@ -7,6 +7,7 @@ import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { log } from '../../src/main/services/logging'
 import { until } from '../helpers/hang-budget'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
+import type { SpawnOptions } from 'node:child_process'
 
 // Phase 15 GPU probe (architecture.md GPU record §5.1). Zero GPUs, zero binaries: the
 // probe is driven entirely through the fake-spawn seam.
@@ -101,11 +102,11 @@ class FakeProbeChild extends EventEmitter implements ChildProcessLike {
 
 function probeSpawn(behavior: (child: FakeProbeChild) => void): {
   spawn: SpawnFn
-  calls: Array<{ command: string; args: string[] }>
+  calls: Array<{ command: string; args: string[]; options: SpawnOptions }>
 } {
-  const calls: Array<{ command: string; args: string[] }> = []
-  const spawn: SpawnFn = (command, args) => {
-    calls.push({ command, args })
+  const calls: Array<{ command: string; args: string[]; options: SpawnOptions }> = []
+  const spawn: SpawnFn = (command, args, options) => {
+    calls.push({ command, args, options })
     const child = new FakeProbeChild()
     queueMicrotask(() => behavior(child))
     return child
@@ -125,6 +126,22 @@ describe('probeGpuDevices', () => {
     expect(devices).toHaveLength(1)
     expect(devices![0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
     expect(calls[0].args).toEqual(['--list-devices'])
+  })
+
+  // #730: `--rpc` is registered while the arguments are parsed, so an inherited one reached even this probe.
+  it('keeps the host’s llama.cpp variables and config files out of the probe (#730)', async () => {
+    const configVar = process.platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME'
+    vi.stubEnv('LLAMA_ARG_RPC', 'host:50052')
+    vi.stubEnv(configVar, '/host/config')
+    try {
+      const { spawn, calls } = probeSpawn((child) => child.emit('close', 0, null))
+      await probeGpuDevices('/bin/llama-server', { spawn, verify: async () => 'skip-dev' })
+      const childEnv = calls[0].options.env ?? process.env // what Node hands the child
+      expect(childEnv.LLAMA_ARG_RPC).toBeUndefined()
+      expect(childEnv[configVar]).not.toBe('/host/config')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   // #516 (architecture.md "In-app engine updates" §3): the probe runs the llama-server an engine

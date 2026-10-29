@@ -1,4 +1,5 @@
 import { waitForEngineSpawns } from './runtime/spawn-gate'
+import { engineChildEnv } from './runtime/engine-env'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { EngineProblemFamily } from '../../shared/types'
 import type { AppContext } from './context'
@@ -133,7 +134,13 @@ export async function checkProgramLoads(
     }
     let child: ChildProcessLike
     try {
-      child = spawn(binPath, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+      child = spawn(binPath, args, {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
+        // #730: llama-server reads the host's llama.cpp variables and config files even for
+        // `--version`; whisper-cli has no such loader.
+        ...(family === 'llama_cpp' ? { env: engineChildEnv(binPath) } : {})
+      })
     } catch (err) {
       // A Windows refusal by policy / security software is a refusal; any other spawn error
       // says nothing about the loader.

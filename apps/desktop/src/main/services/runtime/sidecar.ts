@@ -1,4 +1,5 @@
 import { waitForEngineSpawns } from './spawn-gate'
+import { engineChildEnv } from './engine-env'
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -704,7 +705,8 @@ export class LlamaServer {
     // Per-spawn API key, delivered via CHILD-SCOPED env only: argv is banned (visible to
     // any same-user process list, and llama-server echoes resolved params to stderr), and
     // the parent's own `process.env` must stay clean (whisper-cli, tar, and the GPU probe
-    // would inherit it). The spread copies process.env for THIS child only.
+    // would inherit it). `engineChildEnv` copies process.env for THIS child only, without the
+    // llama.cpp variables and config files of the host (#730).
     this.apiKey = randomBytes(32).toString('hex')
     let child: ChildProcessLike
     try {
@@ -713,7 +715,7 @@ export class LlamaServer {
         // REL-7: never flash a console window on Windows for this high-frequency spawn (every
         // model start), matching the tar / transcriber / runtime-download spawns. No-op off Windows.
         windowsHide: true,
-        env: { ...process.env, LLAMA_API_KEY: this.apiKey }
+        env: engineChildEnv(this.opts.binPath, { LLAMA_API_KEY: this.apiKey })
       })
     } catch (err) {
       // #530: Node throws SYNCHRONOUSLY for spawn errors outside its short async list (EPERM,

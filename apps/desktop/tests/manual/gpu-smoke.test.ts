@@ -1,11 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 import {
   createSelectingRuntimeFactory,
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
 import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
+import { engineChildEnv } from '../../src/main/services/runtime/engine-env'
 import { probeGpuDevices, createCachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { latestModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
 import {
@@ -193,5 +196,50 @@ describe.skipIf(!enabled)('GPU smoke (manual, real binaries + real model + real 
     const h = await runtime.health()
     expect(h.healthy).toBe(true)
     await runtime.stop()
+  })
+
+  // #730: llama.cpp reads config files (found through PROGRAMDATA + APPDATA on Windows, XDG_CONFIG_HOME
+  // elsewhere), then the environment, then the command line. The control proves every planted file and
+  // the variable reach an unfiltered start of this binary; the app's own start must apply none of them.
+  // Re-run on every pin bump: it also fails when the build reads a variable the filter would let through.
+  it('the engine ignores the host’s llama.cpp config files and variables (#730)', { timeout: 300_000 }, async () => {
+    const planted = (process.platform === 'win32' ? ['APPDATA', 'PROGRAMDATA'] : ['XDG_CONFIG_HOME']).map((name) => {
+      const dir = mkdtempSync(join(tmpdir(), `hilbertraum-gpu-smoke-${name.toLowerCase()}-`))
+      mkdirSync(join(dir, 'llama.cpp'))
+      writeFileSync(join(dir, 'llama.cpp', 'config.ini'), '[*]\ncache-type-v = q8_0\n')
+      vi.stubEnv(name, dir)
+      return dir
+    })
+    vi.stubEnv('LLAMA_ARG_CACHE_TYPE_K', 'q8_0')
+    try {
+      const control = spawnSync(binPath!, ['--version'], {
+        env: { ...process.env, LLAMA_ARG_CACHE_TYPE_K: 'not-a-type' },
+        encoding: 'utf8',
+        windowsHide: true
+      })
+      for (const dir of planted) expect(control.stderr).toContain(basename(dir))
+      expect(control.status).not.toBe(0) // the variable was read, and refused
+      const help = spawnSync(binPath!, ['--help'], { env: engineChildEnv(binPath!), encoding: 'utf8', windowsHide: true })
+      const read = [...new Set([...`${help.stdout}${help.stderr}`.matchAll(/\(env: (\w+)\)/g)].map((m) => m[1]))]
+      expect(read.length).toBeGreaterThan(100)
+      expect(read.filter((name) => name in engineChildEnv(binPath!, {}, { [name]: 'host' }))).toEqual([])
+      let log = ''
+      const runtime = createLlamaRuntime(opts, {
+        binPath: binPath!,
+        extraArgs: ['--device', 'none'],
+        onStderrData: (text) => (log += text),
+        healthTimeoutMs: PATIENT_MS
+      })
+      await runtime.start()
+      try {
+        expect(log).not.toContain('using config file')
+        expect(log).toMatch(/K \(f16\)[^\n]*V \(f16\)/)
+      } finally {
+        await runtime.stop()
+      }
+    } finally {
+      vi.unstubAllEnvs()
+      for (const dir of planted) rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

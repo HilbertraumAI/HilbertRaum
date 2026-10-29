@@ -17,6 +17,14 @@ password recovery — are documented in
   app-wide risks breaking loopback IPC and the sidecars). Electron's own `net` module would bypass
   it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
   a tripwire, not an enforcement layer.
+- **A system-wide llama.cpp config file on Linux and macOS still reaches the engines (#730).** The
+  engines start without the host's `LLAMA_*` variables and with their config lookup redirected
+  (`security-model.md` "The engines do not inherit the host's llama.cpp settings"), but llama.cpp
+  also reads the fixed path `/etc/llama.cpp/config.ini`, which no variable moves. Only an
+  administrator can write it. Windows has no such fixed path. On Linux the redirect has one side
+  effect: the Vulkan loader reads user-level layers from `$XDG_CONFIG_HOME/vulkan` too, so layers
+  installed under `~/.config/vulkan` (overlays, capture tools) no longer load into the engines.
+  Layers and drivers under `~/.local/share` and `/etc` still do.
 - **In-app spell-checking is off by design (#239, #567).** Chromium's spell checker downloads a
   Hunspell dictionary from a Google-operated CDN for the computer's language, a browser-process
   fetch that neither the CSP nor the offline tripwire above can see, and one the offline hard rule
