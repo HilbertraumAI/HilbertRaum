@@ -1556,14 +1556,9 @@ export interface GroundedAnswerOptions {
    */
   onPromptUsage?: (usage: ContextUsage) => void
   /**
-   * Legacy "ask selected documents" doc-id scope. Null = whole corpus. Kept for existing
-   * callers; ignored when `scope` is provided.
-   */
-  scopeDocumentIds?: string[] | null
-  /**
    * Composite retrieval scope (document-organization plan §10.2): membership + specific
-   * docs + archived flag. When set it takes precedence over `scopeDocumentIds` AND makes
-   * the empty-context re-index check scope-aware (M2). Absent ⇒ legacy whole-corpus check.
+   * docs + archived flag. When set it makes the empty-context re-index check scope-aware
+   * (M2). Absent ⇒ legacy whole-corpus check.
    */
   scope?: RetrievalScope | null
   /** Optional retrieval reranker. Null/absent keeps the fused ordering. */
@@ -1767,9 +1762,8 @@ export async function generateGroundedAnswer(
   settings: RagRetrievalSettings,
   opts: GroundedAnswerOptions = {}
 ): Promise<Message> {
-  // A composite `scope` (plan §10.2) wins over the legacy doc-id scope. Both normalize
-  // inside `retrieve`, so a bare doc-id array still works byte-for-byte.
-  const scopeArg = opts.scope ?? opts.scopeDocumentIds
+  // The composite `scope` (plan §10.2); it normalizes inside `retrieve`.
+  const scopeArg = opts.scope
   // The REAL launched context window the runtime reports (§L0) — needed up-front for the
   // whole-document budget, and reused below for fence sizing + compaction.
   const contextTokens = effectiveContextWindow(runtime, getSettings(db))
@@ -1784,7 +1778,6 @@ export async function generateGroundedAnswer(
   // carries. The relevance path takes them from `retrieve` (the arm classified every selected
   // pack); the whole-document / compare paths fill in `skipped / mode` for the same ids, because
   // "we read the document instead" is an honest answer the user is owed and silence is not.
-  // Only a COMPOSITE scope carries packs — the legacy `scopeDocumentIds` array cannot.
   const scopePackIds = opts.scope?.packIds ?? null
   let packOutcomes: KnowledgePackOutcome[] | undefined
   // When a single whole-document read overflowed the budget (no rescue tree), the grounded prompt
@@ -1988,8 +1981,8 @@ export async function generateGroundedAnswer(
     // Distinguish "nothing relevant" from "the corpus is invisible to the active
     // embedder": the latter needs a re-index, not a rephrase. Either way the model is
     // never called without context (grounding rule). The check uses the SAME scope retrieval
-    // uses (`scopeArg`, normalized) — composite OR legacy doc-id — so the re-index honesty
-    // story holds on both paths (M2/RAG-1): a stale scope reports REINDEX_NEEDED, an empty
+    // uses (`scopeArg`, normalized) — the composite scope — so the re-index honesty
+    // story holds (M2/RAG-1): a stale scope reports REINDEX_NEEDED, an empty
     // scope reports NO_DOCUMENT_CONTEXT, never the whole-corpus answer when retrieval was scoped.
     const answer = corpusNeedsReindex(db, embedder.id, normalizeScope(scopeArg))
       ? REINDEX_NEEDED_ANSWER
