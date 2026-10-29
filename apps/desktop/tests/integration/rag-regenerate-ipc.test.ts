@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 
 // F2 (post-merge audit) — the RAG channel mirror of the chat regenerate data-loss fix.
 // `askDocuments(regenerate:true)` used to DELETE the prior assistant reply (committed,
@@ -23,59 +20,25 @@ vi.mock('electron', () => ({
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { appendMessage, createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import type { ModelRuntime } from '../../src/main/services/runtime'
+import { tempRoot } from '../helpers/db-fixtures'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { failingRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
 import { t } from '../../src/shared/i18n'
 import type { Message } from '../../src/shared/types'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-/** Seed one indexed document with a single chunk + its mock embedding, so retrieval finds
- *  context for `text` and the grounded path reaches the model. */
-async function seedDocument(db: Db, embedder: MockEmbedder, title: string, text: string): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const [vector] = await embedder.embed([text])
-  const chunkId = randomUUID()
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-     VALUES (?, ?, 0, ?, ?, NULL, NULL, ?, ?)`
-  ).run(chunkId, docId, text, title, text.split(/\s+/).length, now)
-  db.prepare(
-    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(chunkId, embedder.id, encodeVector(vector), vector.length, now)
-  return docId
-}
-
-/** A runtime whose grounded generation fails with a NON-abort error before any token — the
- *  context-exceeded 400 that regenerate (a full-history replay near the window) most reaches. */
-function throwingRuntime(): ModelRuntime {
-  return {
-    modelId: 'throwing',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
-    // eslint-disable-next-line require-yield
-    async *chatStream(_messages: ChatMessage[]): AsyncGenerator<string> {
-      throw new Error('Chat request failed: HTTP 400 exceed_context_size_error')
-    }
-  }
-}
-
 function freshDb(): { db: Db; workspacePath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ragregen-'))
+  const root = tempRoot('ragregen')
   const db = openDatabase(join(root, 'test.sqlite'))
   seedSettings(db)
   return { db, workspacePath: join(root, 'workspace') }
@@ -105,37 +68,7 @@ beforeEach(() => {
 })
 
 describe('askDocuments regenerate — F2 data-loss guard', () => {
-  it('a regenerate whose grounded generation fails restores the prior assistant reply', async () => {
-    const { db, workspacePath } = freshDb()
-    const embedder = new MockEmbedder()
-    const question = 'what are the payment terms'
-    const docId = await seedDocument(db, embedder, 'contract.pdf', question)
-    const conv = createConversation(db, {
-      mode: 'documents',
-      scope: { collectionIds: [], documentIds: [docId] }
-    })
-    // The prior document turn: the user question + the assistant answer that regenerate re-runs.
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
-    const prior = appendMessage(db, {
-      conversationId: conv.id,
-      role: 'assistant',
-      content: 'the original grounded answer'
-    })
-
-    registerRagIpc(makeCtx(db, workspacePath, throwingRuntime()))
-
-    await expect(
-      invoke(handlers, IPC.askDocuments, conv.id, question, null, /* regenerate */ true)
-    ).rejects.toThrow(/HTTP 400|too large/i)
-
-    // The prior answer survives — the conversation is not left answer-less; restored byte-faithfully.
-    const history = listMessages(db, conv.id)
-    expect(history.map((m) => m.role)).toEqual(['user', 'assistant'])
-    expect(history.at(-1)?.content).toBe('the original grounded answer')
-    expect(history.at(-1)?.id).toBe(prior.id)
-    expect(inFlightStreams.has(conv.id)).toBe(false)
-  })
-
+  // F2 (post-merge audit): the restore leg itself, on the documents channel.
   // #132/#135 (skills-pipeline audit): the F2 restore must carry the persisted #80 skill OFFER too.
   // The snapshot's explicit column list omitted `skill_offer_json`, so on BOTH restore legs (a
   // non-abort failure here; a Stop before the first token) the reply came back with its offer
@@ -145,7 +78,7 @@ describe('askDocuments regenerate — F2 data-loss guard', () => {
     const { db, workspacePath } = freshDb()
     const embedder = new MockEmbedder()
     const question = 'kategorisiere alle transaktionen'
-    const docId = await seedDocument(db, embedder, 'statement.pdf', question)
+    const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', [question])
     const conv = createConversation(db, {
       mode: 'documents',
       scope: { collectionIds: [], documentIds: [docId] }
@@ -159,18 +92,23 @@ describe('askDocuments regenerate — F2 data-loss guard', () => {
     })
     expect(prior.skillOffer).toBeTruthy()
 
-    registerRagIpc(makeCtx(db, workspacePath, throwingRuntime()))
+    registerRagIpc(makeCtx(db, workspacePath, failingRuntime()))
     await expect(
       invoke(handlers, IPC.askDocuments, conv.id, question, null, /* regenerate */ true)
     ).rejects.toThrow(/HTTP 400|too large/i)
 
-    const restored = listMessages(db, conv.id).at(-1)
+    // F2 + #132: the prior answer is restored byte-faithfully — same id, content and offer — and the slot is released.
+    const history = listMessages(db, conv.id)
+    expect(history.map((m) => m.role)).toEqual(['user', 'assistant'])
+    const restored = history.at(-1)
     expect(restored?.id).toBe(prior.id)
+    expect(restored?.content).toBe('the listing answer')
     expect(restored?.skillOffer).toEqual({
       installId: 'app:bank-statement',
       title: 'Bank Statement Analysis',
       source: 'deterministic'
     })
+    expect(inFlightStreams.has(conv.id)).toBe(false)
   })
 })
 
@@ -180,7 +118,7 @@ describe('askDocuments "Send again" (#613)', () => {
   async function unansweredDocumentQuestion(): Promise<{ db: Db; workspacePath: string; convId: string; questionId: string }> {
     const { db, workspacePath } = freshDb()
     const question = 'what are the payment terms'
-    const docId = await seedDocument(db, new MockEmbedder(), 'contract.pdf', question)
+    const docId = await seedEmbeddedDoc(db, new MockEmbedder(), 'contract.pdf', [question])
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
     const q = appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
     return { db, workspacePath, convId: conv.id, questionId: q.id }
