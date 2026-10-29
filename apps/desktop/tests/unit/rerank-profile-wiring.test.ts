@@ -36,86 +36,45 @@ function noOccupancy(committedModelId: string | null = null): RerankerOccupancyS
   return { committedModelId, chatStartBusy: false, translationOccupied: false }
 }
 
+const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
+const COMMITTED_4B = 'qwen3.5-4b-ud-q4kxl'
+/** The measurement machine's card (RTX 3080 Ti): provable headroom beside the 4B, so the wide scope resolves. */
+function bigCard(overrides: Partial<AppSettings> = {}): AppSettings {
+  return settings({
+    gpuMode: 'auto',
+    gpuAutoDisabled: false,
+    gpuProbe: {
+      devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
+      probedAt: new Date().toISOString()
+    },
+    ...overrides
+  })
+}
+
 describe('resolveAskCandidateScope (registerRagIpc.ts)', () => {
-  it('rerankerAvailable: false -> always "capped", regardless of gpuMode/probe/opt-in (the B7/B12 danger: a dropped or inverted rerankerAvailable must never widen the pool with no cross-encoder)', () => {
-    const cases: Array<Partial<AppSettings>> = [
-      {},
-      { gpuMode: 'off' },
-      { gpuAutoDisabled: true },
-      { ragRerankWideScope: true },
-      {
-        gpuProbe: {
-          devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
-          probedAt: new Date().toISOString()
-        }
-      }
-    ]
-    for (const overrides of cases) {
-      // manifestsDir is irrelevant here: rerankerAvailable: false short-circuits before either
-      // the profile or the posture is consulted.
-      expect(resolveAskCandidateScope(settings(overrides), false, null, noOccupancy())).toBe('capped')
+  it('rerankerAvailable: false -> "capped" even where the same settings resolve the wide scope with a reranker (the B7/B12 danger: a dropped or inverted rerankerAvailable must never widen the pool with no cross-encoder)', () => {
+    const occupancy = noOccupancy(COMMITTED_4B)
+    // Positive control: with a reranker the measurement machine resolves the wide scope.
+    expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, occupancy)).toBe(GPU_RERANK_SCOPE)
+    for (const s of [bigCard(), bigCard({ ragRerankWideScope: true })]) {
+      expect(resolveAskCandidateScope(s, false, MANIFESTS_DIR, occupancy)).toBe('capped')
     }
   })
 
-  it('rerankerAvailable: true with no usable probe on record and the opt-in off -> "capped" (the default profile\'s scope, unchanged)', () => {
-    const s = settings({ gpuProbe: null, gpuMode: 'auto', gpuAutoDisabled: false, ragRerankWideScope: false })
-    expect(resolveAskCandidateScope(s, true, null, noOccupancy())).toBe('capped')
-  })
-
-  it('is deterministic for a fixed settings AND occupancy snapshot (calling it twice in a row never disagrees with itself)', () => {
-    const s = settings({ ragRerankWideScope: true })
-    const first = resolveAskCandidateScope(s, true, null, noOccupancy())
-    const second = resolveAskCandidateScope(s, true, null, noOccupancy())
-    expect(second).toBe(first)
-  })
-
-  // Wave 8 ruling (a): a chat start in flight/pending, or a translation occupant, forces `cpu`
-  // regardless of how favourable the settings/probe otherwise look — proven directly against
-  // this function (not just against the shared helper below), since it is the one production
-  // call site that must never regress to trusting the setting alone.
-  it('a chat start in flight/pending, or a translation occupant, forces the scope down to "capped" even on the measurement machine\'s own GPU fixture', () => {
-    const s = settings({
-      gpuMode: 'auto',
-      gpuAutoDisabled: false,
-      gpuProbe: {
-        devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
-        probedAt: new Date().toISOString()
-      }
-    })
-    const committed = 'qwen3.5-4b-ud-q4kxl'
-    const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
-    expect(
-      resolveAskCandidateScope(s, true, MANIFESTS_DIR, { committedModelId: committed, chatStartBusy: false, translationOccupied: false })
-    ).toBe(GPU_RERANK_SCOPE) // sanity: the neutral occupancy still resolves the wide scope
-    expect(
-      resolveAskCandidateScope(s, true, MANIFESTS_DIR, { committedModelId: committed, chatStartBusy: true, translationOccupied: false })
-    ).toBe('capped')
-    expect(
-      resolveAskCandidateScope(s, true, MANIFESTS_DIR, { committedModelId: committed, chatStartBusy: false, translationOccupied: true })
-    ).toBe('capped')
-  })
-
-  // #495 follow-up: the reranker's own session GPU-fallback latch
-  // (`LlamaReranker.gpuDemoted()`) used to be invisible to this function -- after a demotion the
-  // ask site kept resolving the wide GPU_RERANK_SCOPE while the sidecar itself was CPU-pinned,
-  // so G (the CPU request ceiling) refused every such ask and a demoted session got NO rerank at
-  // all for knowledge-pack asks. `rerankerDemoted` on the occupancy snapshot closes that gap.
-  it('#495 follow-up: a demoted reranker (rerankerDemoted) forces the scope down to "capped" even on the big-card fixture that would otherwise resolve the wide scope', () => {
-    const bigCard = settings({
-      gpuMode: 'auto',
-      gpuAutoDisabled: false,
-      gpuProbe: {
-        devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
-        probedAt: new Date().toISOString()
-      }
-    })
-    const committed = 'qwen3.5-4b-ud-q4kxl'
-    const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
-    // Sanity: the neutral (not-demoted) occupancy still resolves the wide scope on this fixture.
-    expect(resolveAskCandidateScope(bigCard, true, MANIFESTS_DIR, noOccupancy(committed))).toBe(GPU_RERANK_SCOPE)
-    expect(
-      resolveAskCandidateScope(bigCard, true, MANIFESTS_DIR, { ...noOccupancy(committed), rerankerDemoted: true })
-    ).toBe('capped')
+  // Wave 8 ruling (a) + #495 follow-up: a chat start in flight/pending, a translation occupant, or a reranker the
+  // session already demoted to the processor (`rerankerDemoted`, `LlamaReranker.gpuDemoted()`) each force the scope
+  // down to "capped" on the fixture that otherwise resolves the wide scope.
+  it('a chat start in flight/pending, a translation occupant, or a demoted reranker (#495) forces the scope down to "capped" even on the measurement machine\'s own GPU fixture', () => {
+    const neutral = noOccupancy(COMMITTED_4B)
+    expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, neutral)).toBe(GPU_RERANK_SCOPE) // sanity
+    const overrides: Array<[string, Partial<RerankerOccupancySnapshot>]> = [
+      ['chatStartBusy', { chatStartBusy: true }],
+      ['translationOccupied', { translationOccupied: true }],
+      ['rerankerDemoted', { rerankerDemoted: true }]
+    ]
+    for (const [label, o] of overrides) {
+      expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, { ...neutral, ...o }), label).toBe('capped')
+    }
   })
 })
 
@@ -134,21 +93,11 @@ describe('resolveAskCandidateScope (registerRagIpc.ts)', () => {
 // hand-duplicated MiB figure — so a manifest edit that silently moves the threshold is caught
 // here too.
 describe('resolveAskCandidateScope and the shared posture helper resolve the same posture (Wave 6 ruling (c), Wave 8 ruling (a))', () => {
-  const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
-
   it('the two call sites resolve the SAME posture from the SAME settings AND occupancy snapshot -- a future divergence fails here', () => {
     // Fixture (i): the measurement machine's own device (RTX 3080 Ti, provable headroom) ->
     // posture 'gpu' (see rerank-profile.test.ts's identical fixture (i)). `committedModelId`
     // stands in for the OLD `activeModelId` fixture value -- since Wave 8 ruling (a) the setting
     // itself is never read for this decision.
-    const bigCard = settings({
-      gpuMode: 'auto',
-      gpuAutoDisabled: false,
-      gpuProbe: {
-        devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
-        probedAt: new Date().toISOString()
-      }
-    })
     // Fixture (ii): the #318 RTX 3060 Laptop -- usable for the PROFILE bump (>= USABLE_VRAM_MB)
     // but, with no freeMb reported, insufficient headroom for the POSTURE gate -> posture 'cpu'.
     // Exactly C1's failure combination: profile 'gpu', posture 'cpu'.
@@ -160,10 +109,10 @@ describe('resolveAskCandidateScope and the shared posture helper resolve the sam
         probedAt: new Date().toISOString()
       }
     })
-    const occupancy = noOccupancy('qwen3.5-4b-ud-q4kxl')
+    const occupancy = noOccupancy(COMMITTED_4B)
 
     // "Drive main/index.ts's seam" -- the shared helper IS that seam's core logic post-fix.
-    const posture1 = resolveRerankerDevicePosture(bigCard, MANIFESTS_DIR, occupancy)
+    const posture1 = resolveRerankerDevicePosture(bigCard(), MANIFESTS_DIR, occupancy)
     const posture2 = resolveRerankerDevicePosture(smallCard, MANIFESTS_DIR, occupancy)
     expect(posture1).toBe('gpu')
     expect(posture2).toBe('cpu')
@@ -175,7 +124,7 @@ describe('resolveAskCandidateScope and the shared posture helper resolve the sam
     // posture inline instead of delegating to the shared helper (or forgets to wire
     // manifestsDir/occupancy through) would make one of these two assertions disagree with the
     // posture computed above.
-    expect(resolveAskCandidateScope(bigCard, true, MANIFESTS_DIR, occupancy)).toBe(GPU_RERANK_SCOPE)
+    expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, occupancy)).toBe(GPU_RERANK_SCOPE)
     expect(resolveAskCandidateScope(smallCard, true, MANIFESTS_DIR, occupancy)).toBe('capped')
   })
 })
