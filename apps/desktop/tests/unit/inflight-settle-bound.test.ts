@@ -29,7 +29,7 @@ describe('awaitInFlightStreamsSettled ceiling (full-audit 2026-07-12 REL-4)', ()
     await vi.advanceTimersByTimeAsync(4_999)
     expect(done).toBe(false)
     await vi.advanceTimersByTimeAsync(1) // 5 000 ms, the literal REL-4 bound
-    await p
+    await within(p, 'the ceiling ending the race at 5 000 ms')
     expect(done).toBe(true)
   })
 
