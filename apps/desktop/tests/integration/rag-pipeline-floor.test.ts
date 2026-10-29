@@ -1,8 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import {
   generateGroundedAnswer,
@@ -12,8 +8,9 @@ import {
 } from '../../src/main/services/rag'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
-import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { docTaskWorld, importText } from '../helpers/doctask-fixtures'
+import { recordingRuntime } from '../helpers/scripted-runtime'
 
 // TEST-3 (full-audit-2026-06-29 follow-up, Phase 7): a MODEL-FREE, deterministic CI FLOOR on
 // end-to-end RAG RETRIEVAL quality — the one material coverage gap the audit found.
@@ -42,36 +39,6 @@ import { DEFAULT_SETTINGS } from '../../src/shared/types'
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-ragfloor-')), 'test.sqlite'))
-}
-
-/** A real document store dir (the `documents/` subdir of a throwaway workspace). */
-function freshStore(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-ragfloor-ws-')))
-}
-
-/**
- * Import ONE document through the REAL ingestion pipeline (write file → queue → chunk → embed →
- * store + FTS-index), so retrieval exercises the genuine chunker + FTS rows, not a hand-seeded
- * `chunks` insert. Returns the document id; the chunk's `source_label`/citation `sourceTitle` is
- * the file basename (ingestion/index.ts).
- */
-async function importDoc(
-  db: Db,
-  storeDir: string,
-  embedder: MockEmbedder,
-  name: string,
-  text: string
-): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-ragfloor-src-'))
-  const src = join(dir, name)
-  writeFileSync(src, text)
-  const queued = createQueuedDocument(db, src)
-  await processDocument(db, storeDir, queued.id, { embedder })
-  return queued.id
-}
-
 // A fixed synthetic corpus: ONE answer document, ONE partially-relevant document, and one
 // unrelated distractor. The question shares a large, distinctive token set with the answer
 // (photosynthesis / sunlight / water / carbon dioxide / glucose / chloroplasts / green / plant);
@@ -93,14 +60,13 @@ const QUESTION =
 
 describe('RAG pipeline floor (TEST-3, model-free)', () => {
   it('returns the known-correct chunk first, with its citation assembled (chunk→embed→fuse→rank→cite)', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('ragfloor')
     const embedder = new MockEmbedder()
-    await importDoc(db, store, embedder, ANSWER_DOC, ANSWER_TEXT)
-    await importDoc(db, store, embedder, PARTIAL_DOC, PARTIAL_TEXT)
-    await importDoc(db, store, embedder, DISTRACTOR_RECIPE, DISTRACTOR_TEXT)
+    await importText(w, ANSWER_TEXT, { name: ANSWER_DOC, deps: { embedder } })
+    await importText(w, PARTIAL_TEXT, { name: PARTIAL_DOC, deps: { embedder } })
+    await importText(w, DISTRACTOR_TEXT, { name: DISTRACTOR_RECIPE, deps: { embedder } })
 
-    const { chunks, citations } = await retrieve(db, embedder, QUESTION, SETTINGS)
+    const { chunks, citations } = await retrieve(w.db, embedder, QUESTION, SETTINGS)
 
     // The known-correct passage ranks FIRST (this is the assertion the fusion-order teeth-check
     // breaks) — by id/content, not just by topic.
@@ -116,24 +82,21 @@ describe('RAG pipeline floor (TEST-3, model-free)', () => {
   })
 
   it('caps the result at topKFinal even when more candidates rank above the similarity floor (top-k trim)', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('ragfloor')
     const embedder = new MockEmbedder()
     // Five documents that ALL share the query's distinctive phrase → all clear the (default 0)
     // similarity floor and all enter fusion. With topKFinal=3 the pipeline must return exactly 3.
     for (let i = 0; i < 5; i++) {
-      await importDoc(
-        db,
-        store,
-        embedder,
-        `photosynthesis-${i}.txt`,
-        `Photosynthesis in green plants converts sunlight into chemical energy. Field note number ${i}.`
+      await importText(
+        w,
+        `Photosynthesis in green plants converts sunlight into chemical energy. Field note number ${i}.`,
+        { name: `photosynthesis-${i}.txt`, deps: { embedder } }
       )
     }
     // A generous context budget so topKFinal — not maxContextTokens — is the binding cap.
     const capped: RagRetrievalSettings = { ...SETTINGS, topKFinal: 3, maxContextTokens: 1_000_000 }
     const { chunks } = await retrieve(
-      db,
+      w.db,
       embedder,
       'photosynthesis green plants convert sunlight into chemical energy',
       capped
@@ -146,17 +109,16 @@ describe('RAG pipeline floor (TEST-3, model-free)', () => {
   })
 
   it('assembles a cited grounded answer end-to-end whose first citation is the answer document', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('ragfloor')
     const embedder = new MockEmbedder()
-    await importDoc(db, store, embedder, ANSWER_DOC, ANSWER_TEXT)
-    await importDoc(db, store, embedder, PARTIAL_DOC, PARTIAL_TEXT)
+    await importText(w, ANSWER_TEXT, { name: ANSWER_DOC, deps: { embedder } })
+    await importText(w, PARTIAL_TEXT, { name: PARTIAL_DOC, deps: { embedder } })
 
-    const conv = createConversation(db, { mode: 'documents' })
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: QUESTION })
+    const conv = createConversation(w.db, { mode: 'documents' })
+    appendMessage(w.db, { conversationId: conv.id, role: 'user', content: QUESTION })
     const runtime = createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 2048 })
 
-    const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, QUESTION, SETTINGS)
+    const msg = await generateGroundedAnswer(w.db, runtime, embedder, conv.id, QUESTION, SETTINGS)
 
     expect(msg.role).toBe('assistant')
     expect(msg.citations?.length).toBeGreaterThan(0)
@@ -167,34 +129,27 @@ describe('RAG pipeline floor (TEST-3, model-free)', () => {
   // the REAL launched window, not just the fixed ragMaxContextTokens setting — otherwise a small-window
   // model's grounded turn overflows n_ctx and llama-server returns HTTP 400 "exceeds the context size".
   it('clamps the excerpt budget to a small launched window so fewer excerpts pack than a large window', async () => {
-    const db = freshDb()
-    const store = freshStore()
+    const w = docTaskWorld('ragfloor')
     const embedder = new MockEmbedder()
     // Six strongly-matching documents, each a sizable single chunk. With a large window they all pack
     // into the 2500-token excerpt budget; a small launched window must clamp to fewer so the grounded
     // turn fits. Removing the clamp (in generateGroundedAnswer) makes BOTH return the same count → reds.
     const filler = 'photosynthesis sunlight water carbon dioxide glucose oxygen chloroplasts green plant cells '.repeat(20)
     for (let i = 0; i < 6; i++) {
-      await importDoc(db, store, embedder, `photosynthesis-${i}.txt`, `Document ${i}. ${filler}`)
+      await importText(w, `Document ${i}. ${filler}`, { name: `photosynthesis-${i}.txt`, deps: { embedder } })
     }
     const settings: RagRetrievalSettings = { ...SETTINGS, topKFinal: 6 }
     // A runtime that reports a given window but returns a trivial reply instantly — the mock's
     // default echoes the (large) grounded prompt token-by-token, which is irrelevant here and slow.
-    const windowRuntime = (contextTokens: number): ReturnType<typeof createMockRuntime> => {
-      const rt = createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens })
-      ;(rt as { chatStream: unknown }).chatStream = async function* () {
-        yield 'ok'
-      }
-      return rt
-    }
+    const windowRuntime = (contextTokens: number) => recordingRuntime('ok', { contextWindow: contextTokens })
 
-    const bigConv = createConversation(db, { mode: 'documents' })
-    appendMessage(db, { conversationId: bigConv.id, role: 'user', content: QUESTION })
-    const big = await generateGroundedAnswer(db, windowRuntime(100_000), embedder, bigConv.id, QUESTION, settings)
+    const bigConv = createConversation(w.db, { mode: 'documents' })
+    appendMessage(w.db, { conversationId: bigConv.id, role: 'user', content: QUESTION })
+    const big = await generateGroundedAnswer(w.db, windowRuntime(100_000), embedder, bigConv.id, QUESTION, settings)
 
-    const smallConv = createConversation(db, { mode: 'documents' })
-    appendMessage(db, { conversationId: smallConv.id, role: 'user', content: QUESTION })
-    const small = await generateGroundedAnswer(db, windowRuntime(2048), embedder, smallConv.id, QUESTION, settings)
+    const smallConv = createConversation(w.db, { mode: 'documents' })
+    appendMessage(w.db, { conversationId: smallConv.id, role: 'user', content: QUESTION })
+    const small = await generateGroundedAnswer(w.db, windowRuntime(2048), embedder, smallConv.id, QUESTION, settings)
 
     // Large window packs more excerpts; the small window is clamped to fewer — but always ≥1 (the
     // grounding rule keeps the top chunk).
