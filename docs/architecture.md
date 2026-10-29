@@ -7797,8 +7797,9 @@ the stored `chunks`, so an indexed-but-unchunked document is not answerable here
 run re-extracts faithfully from the stored copy; the suggestion is keyword/MIME signal only). The helper
 logs nothing and stays main-side — a `title` is content-adjacent and never crosses IPC from it — and its
 deterministic `ORDER BY created_at, id` keeps `resolveInScopeDocumentIds[0]` the stable default run
-target (U-1/U-2). *(The RAG router keeps its own `registerRagIpc.documentsInScope` — same predicate, a
-deliberate sibling in a different layer, outside the skills subsystem this helper unifies.)*
+target (U-1/U-2). *(The RAG router reads this same helper since R4; its own scope-filtered counts —
+`extractionsExistInScope`, `readyTreeCountInScope`, `allInScopeDocsFullyChunked` — are pinned through `rag:ask` by
+`rag-routing-scope.test.ts`, #714.)*
 
 **Tests.** `skills-analysis-bank.test.ts` + `skills-analysis-invoice.test.ts` (handler-level:
 `applies()` pre-flight, exhaustive math from rows, flagged check surfaced before the headline, figures
