@@ -1145,7 +1145,7 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     expect(aggregated.items).toEqual([])
     expect(aggregated.scannedChunks).toBe(0)
     expect(aggregated.totalChunks).toBe(0)
-    // The three `registerRagIpc.ts` routing helpers have no deny-all proof here (#714).
+    // The three `registerRagIpc.ts` routing helpers are driven through `rag:ask` in `rag-routing-scope.test.ts` (#714).
 
     // ---- (D) THE RESIDENT-VECTOR BYPASS, with REAL embeddings and no archived documents —
     // the state in which `canIterateResident()` is true and the SQL builder is never consulted.

@@ -3324,7 +3324,10 @@ the figures they support are quoted in the text.
   (`VectorIndexOptions.noDocuments`) is guarded — `canIterateResident()` returns false and
   `search()` returns `[]` before either scan; and `retrieve()` skips both document arms
   BEFORE the question is embedded (no query embed, no resident-cache load, no FTS query)
-  rather than merely filtering their output afterwards. The popover's explicit
+  rather than merely filtering their output afterwards. The router's three scope counts in
+  `registerRagIpc.ts` (extract data, a ready tree, every document fully chunked) read the same
+  builder; `rag-routing-scope.test.ts` drives them through `rag:ask` in documents-off and
+  ordinary scopes (#714). The popover's explicit
   **Documents** toggle ("Search my documents") sits above the packs list whenever packs
   are registered; unticking emits the flag with the document sources cleared, ticking any
   collection or adding a document clears it again (an emit never carries the flag together
