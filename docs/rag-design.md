@@ -589,9 +589,9 @@ This paragraph is the rider's record (the retired plan file used to carry a copy
   `Conversation.scopeDocumentIds` round-trips it; `createConversation` accepts it;
   `updateConversationScope` (IPC `chat:updateScope`) replaces/clears it. Malformed stored
   JSON reads back as null (unscoped), never throws.
-- **Threading:** `retrieve(db, embedder, question, settings, scopeDocumentIds?)`;
-  `generateGroundedAnswer` takes `opts.scopeDocumentIds`; `askDocuments` reads the
-  conversation's persisted scope — callers pass nothing per-request.
+- **Threading:** `retrieve(db, embedder, question, settings, scope?)`;
+  `generateGroundedAnswer` takes `opts.scope` (§13.3); `askDocuments` resolves the
+  conversation's scope — callers pass nothing per-request.
 - **Renderer:** Documents screen gets per-row checkboxes (indexed docs only) + **Ask these
   documents (N)** → Chat opens in documents mode with the selection as the next
   conversation's scope. **(Superseded affordance — #151 RD-1:** the Phase-17 "removable scope
@@ -880,8 +880,8 @@ load-bearing relevance separator — recorded here so future work invests in the
 
 `tests/integration/reranker.test.ts` (spawn args incl. no-chat-args, index mapping,
 truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
-(migration + backfill + trigger sync, MATCH sanitization, visibility + scope, RRF,
-retrieve() e2e with a fake reranker, both grounding-guard variants),
+(the Phase-21 migration backfill, MATCH sanitization, visibility + scope, RRF,
+retrieve() e2e with a fake reranker, the grounding guard); trigger sync: `fts-rowid-sync.test.ts`,
 `e5-embedder.test.ts` (suspend), `drive.test.ts` (`models/reranker`). Manual:
 `tests/manual/rerank-smoke.test.ts` behind `HILBERTRAUM_RERANK_SMOKE` — **run 2026-06-10** on the
 real F16 GGUF + b9585: loads clean, ranks the relevant doc first (+8.82 vs −11.01), and the
@@ -1376,11 +1376,9 @@ project) ⇒ `NO_DOCUMENT_CONTEXT_ANSWER` (re-indexing wouldn't help); a scope w
 visible to the active embedder** ⇒ `REINDEX_NEEDED_ANSWER`. Collection filtering can only shrink the
 candidate set, so the empty-context ⇒ no-model-call guarantee strengthens, never weakens.
 `generateGroundedAnswer` passes the **same scope retrieval used** to this check —
-`corpusNeedsReindex(db, embedder.id, normalizeScope(opts.scope ?? opts.scopeDocumentIds))` — so the
-honesty story holds on the **legacy doc-id path too**, not only the composite-`scope` path (RAG-1). A
-bare `null`/`undefined` still normalizes to the whole-corpus check (the archived exclusion only),
-byte-identical to before; only the legacy `scopeDocumentIds` array path changes — from a wrong
-whole-corpus diagnosis to the correct scoped one.
+`corpusNeedsReindex(db, embedder.id, normalizeScope(opts.scope))` (RAG-1). A bare `null`/`undefined` still
+normalizes to the whole-corpus check (the archived exclusion only). (The legacy `opts.scopeDocumentIds`
+option this once also covered had no caller and was removed in the chat + RAG test campaign.)
 
 **`includeArchived` parity now regression-tested (RAG-N6, full audit 2026-06-28).** Because both
 `corpusNeedsReindex` and retrieval route through the shared `buildScopeFilter` (which adds the
@@ -2572,8 +2570,8 @@ context size."* All four observations were real seams:
   `rag.test.ts` (grounded usage strictly exceeds the resting read).
 - **Grounded answers now wear the truncation badge too.** §15.7 scoped the honest `'length'` signal to
   plain chat, but a budget-filling document turn is exactly where the ceiling hits. Both grounded
-  generators now pass `onFinish` and stamp `messages.truncated` (rag.test.ts: cut-off flagged, clean run
-  unflagged).
+  generators now pass `onFinish` and stamp `messages.truncated` (rag.test.ts: an answer still cut after the
+  bounded continuations stays flagged; a clean run is unflagged).
 - **A `max_tokens` cap no longer masquerades as "context limit".** llama-server reports `'length'` for
   BOTH ceilings; a Fast-mode reply that hit `FAST_MAX_TOKENS` (1024) showed "reached the model's context
   limit" at single-digit meter usage — a false "context is full" signal. `generateAssistantMessage` flags
