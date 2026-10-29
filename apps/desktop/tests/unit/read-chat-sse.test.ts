@@ -9,8 +9,9 @@ import {
 
 // CB-5 — the completion stream had no inactivity timeout: a sidecar that HANGS (GPU stall, deadlocked
 // slot) left `readChatSSE` awaiting the next SSE read forever, wedging the conversation in
-// `inFlightStreams`. A two-phase idle watchdog now races each `reader.read()` against an injectable
-// budget (prefill, then a tighter inter-chunk budget) and rejects with `RuntimeUnresponsiveError`.
+// `inFlightStreams`. A two-phase idle watchdog now races each `reader.read()` against the shipped budgets
+// (`DEFAULT_IDLE` in llama.ts: prefill, then a tighter inter-chunk budget) and rejects with
+// `RuntimeUnresponsiveError`; the rows drive those budgets with fake timers.
 
 const enc = new TextEncoder()
 // Fixture provenance (CODE-9/TQ-6, full-audit 2026-07-11): these SSE frames are hand-authored to the
@@ -38,73 +39,103 @@ function pacedStream(frames: string[], gapMs: number): ReadableStream<Uint8Array
   })
 }
 
+/** A body the test writes into, like the sidecar's socket. */
+function sidecarBody(): { body: ReadableStream<Uint8Array>; write: (frame: string) => void } {
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c
+    }
+  })
+  return { body, write: (frame) => controller.enqueue(enc.encode(frame)) }
+}
+
+// The b11146 progress event's shape (chat-sse-progress-b11146.txt): a role-only delta plus a
+// top-level `prompt_progress`.
+const progress = (processed: number): string =>
+  `data: ${JSON.stringify({
+    choices: [{ finish_reason: null, index: 0, delta: { role: 'assistant', content: null } }],
+    object: 'chat.completion.chunk',
+    prompt_progress: { total: 6144, cache: 0, processed, time_ms: 0 }
+  })}\n\n`
+const PING = ':\n\n'
+
+/** Replays `events` (absolute ms) into a reader on the production budgets, then waits `tailMs`. */
+async function replay(events: Array<[number, string]>, tailMs: number) {
+  vi.useFakeTimers()
+  const { body, write } = sidecarBody()
+  const out: string[] = []
+  const reasoning: string[] = []
+  let outcome: unknown = 'pending'
+  let endedAt = -1
+  const t0 = performance.now()
+  void (async () => {
+    for await (const t of readChatSSE(body, undefined, (d) => reasoning.push(d))) out.push(t)
+  })().then(
+    () => {
+      outcome = 'ended'
+      endedAt = performance.now() - t0
+    },
+    (e: unknown) => {
+      outcome = e
+      endedAt = performance.now() - t0
+    }
+  )
+  let now = 0
+  for (const [at, frame] of events) {
+    await vi.advanceTimersByTimeAsync(at - now)
+    now = at
+    write(frame)
+  }
+  await vi.advanceTimersByTimeAsync(tailMs)
+  return { out, reasoning, outcome: () => outcome, endedAt: () => endedAt }
+}
+
+/** A ping every 30 s from `from` (exclusive) up to `to` (inclusive), as llama-server sends them. */
+const pings = (from: number, to: number): Array<[number, string]> => {
+  const out: Array<[number, string]> = []
+  for (let t = from + 30_000; t <= to; t += 30_000) out.push([t, PING])
+  return out
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('readChatSSE — CB-5 idle watchdog', () => {
   it('rejects RuntimeUnresponsiveError when no chunk arrives within the prefill budget', async () => {
-    const stream = new ReadableStream<Uint8Array>({ start() { /* never enqueues, never closes */ } })
-    const idle = { prefillMs: 20, progressMs: 600_000, streamMs: 10 }
-    const iterate = (async () => {
-      for await (const _t of readChatSSE(stream, undefined, undefined, undefined, idle)) {
-        /* the stream never produces a token */
-      }
-    })()
-    const err = await iterate.then(
-      () => null,
-      (e: unknown) => e
-    )
-    expect(isRuntimeUnresponsiveError(err)).toBe(true)
-    expect(err).toBeInstanceOf(RuntimeUnresponsiveError)
-  })
-
-  it('rejects only AFTER the first chunk lands and the tighter STREAM budget then elapses', async () => {
-    // First chunk arrives fast (well within prefill), then the sidecar goes silent past streamMs.
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        controller.enqueue(enc.encode(chatChunk('hello')))
-        // never enqueues again, never closes ⇒ the inter-chunk (stream) budget must fire.
-      }
-    })
-    const idle = { prefillMs: 1000, progressMs: 600_000, streamMs: 20 }
-    const out: string[] = []
-    const err = await (async () => {
-      for await (const t of readChatSSE(stream, undefined, undefined, undefined, idle)) out.push(t)
-      return null
-    })().catch((e: unknown) => e)
-    expect(out).toEqual(['hello']) // the first chunk streamed through
-    expect(isRuntimeUnresponsiveError(err)).toBe(true) // the tighter stream budget tripped, not prefill
-  })
-
-  it('iterates a steady stream clean — the idle timer RESETS per chunk (total time exceeds one budget)', async () => {
-    // Each 15 ms gap is < streamMs (30), but three of them (45 ms) exceed a single budget: a clean
-    // run proves the timer is re-armed every read rather than counting from the start.
-    const stream = pacedStream([chatChunk('a'), chatChunk('b'), chatChunk('c'), 'data: [DONE]\n\n'], 15)
-    const idle = { prefillMs: 50, progressMs: 600_000, streamMs: 30 }
-    const out: string[] = []
-    for await (const t of readChatSSE(stream, undefined, undefined, undefined, idle)) out.push(t)
-    expect(out.join('')).toBe('abc')
+    // No byte at all — not even the 0 % progress event: the process clock alone, as before #598.
+    const r = await replay([], 119_999)
+    expect(r.outcome()).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(isRuntimeUnresponsiveError(r.outcome())).toBe(true)
+    expect(r.endedAt()).toBe(120_000)
+    expect((r.outcome() as Error).message).toContain('no data at all (pings included) for 120000ms')
   })
 
   it('a long reasoning ("thinking") phase counts as chunks and does NOT trip the watchdog', async () => {
-    // Reasoning deltas (no answer token) keep resetting the timer, then the answer arrives.
-    const stream = pacedStream(
-      [reasoningChunk('think 1'), reasoningChunk('think 2'), reasoningChunk('think 3'), chatChunk('done')],
-      15
-    )
-    const idle = { prefillMs: 50, progressMs: 600_000, streamMs: 30 }
-    const reasoning: string[] = []
-    const out: string[] = []
-    for await (const t of readChatSSE(stream, undefined, (d) => reasoning.push(d), undefined, idle)) {
-      out.push(t)
-    }
-    expect(reasoning).toEqual(['think 1', 'think 2', 'think 3'])
-    expect(out.join('')).toBe('done')
+    // A 0 % progress event, then a reasoning delta every 20 s for 700 s — past the 600 s compute clock — then the answer.
+    const events: Array<[number, string]> = [[0, progress(0)]]
+    for (let t = 20_000; t <= 700_000; t += 20_000) events.push([t, reasoningChunk(`think ${t / 20_000}`)])
+    events.push([710_000, chatChunk('done') + 'data: [DONE]\n\n'])
+    const long = await replay(events, 0)
+    expect(long.outcome()).toBe('ended')
+    expect(long.reasoning).toHaveLength(35)
+    expect(long.out).toEqual(['done']) // reasoning is never yielded
+    // The first reasoning delta switches the reader to the stream budget: silence after it ends at 30 s, not at
+    // the 120 s process clock a reader still in prefill would use.
+    vi.useRealTimers()
+    const quiet = await replay([[0, progress(0)], [1_000, reasoningChunk('think')]], 31_000)
+    expect(isRuntimeUnresponsiveError(quiet.outcome())).toBe(true)
+    expect(quiet.endedAt()).toBe(31_000)
+    expect((quiet.outcome() as Error).message).toContain('no output for 30000ms')
   })
 
   it('a user Stop (signal abort) rejects with AbortError first — a hang is NEVER converted to it', async () => {
     const controller = new AbortController()
     const stream = new ReadableStream<Uint8Array>({ start() { /* never enqueues */ } })
-    const idle = { prefillMs: 1000, progressMs: 600_000, streamMs: 1000 }
     const iterate = (async () => {
-      for await (const _t of readChatSSE(stream, controller.signal, undefined, undefined, idle)) {
+      for await (const _t of readChatSSE(stream, controller.signal)) {
         /* none */
       }
     })()
@@ -122,33 +153,15 @@ describe('readChatSSE — CB-5 idle watchdog', () => {
 // (`--sse-ping-interval`, default 30; b9849 too, measured in #598). Captured 2026-10-05 on the b11146
 // CPU build (scratch capture, not committed): `:` at 30.26 / 60.54 / 90.79 s … through a 320.9 s
 // prefill. A ping is the server's HTTP thread, not the model, so once tokens flow it must not re-arm
-// the stream budget — it did, because the timer was re-armed per READ. Fake timers: no real pacing.
-/** The production budgets (`DEFAULT_IDLE` in llama.ts). */
-const PINNED = { prefillMs: 120_000, progressMs: 600_000, streamMs: 30_000 }
-
-/** A body the test writes into, like the sidecar's socket. */
-function sidecarBody(): { body: ReadableStream<Uint8Array>; write: (frame: string) => void } {
-  let controller!: ReadableStreamDefaultController<Uint8Array>
-  const body = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c
-    }
-  })
-  return { body, write: (frame) => controller.enqueue(enc.encode(frame)) }
-}
-
+// the stream budget — it did, because the timer was re-armed per READ.
 describe('readChatSSE — SSE comment pings in the stream phase (#594)', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it('a ping after the first token does not reset the stream budget', async () => {
     vi.useFakeTimers()
     const { body, write } = sidecarBody()
     const out: string[] = []
     let outcome: unknown = 'pending'
     void (async () => {
-      for await (const t of readChatSSE(body, undefined, undefined, undefined, PINNED)) out.push(t)
+      for await (const t of readChatSSE(body)) out.push(t)
     })().then(
       () => (outcome = 'ended'),
       (e: unknown) => (outcome = e)
@@ -167,7 +180,7 @@ describe('readChatSSE — SSE comment pings in the stream phase (#594)', () => {
   it('a model event split across reads counts as output from its first bytes', async () => {
     vi.useFakeTimers()
     const { body, write } = sidecarBody()
-    const gen = readChatSSE(body, undefined, undefined, undefined, PINNED)
+    const gen = readChatSSE(body)
     write(chatChunk('hello'))
     expect((await gen.next()).value).toBe('hello')
     const next = gen.next()
@@ -184,7 +197,7 @@ describe('readChatSSE — SSE comment pings in the stream phase (#594)', () => {
   it('a wall-clock step (NTP, a manual change) does not eat the stream budget', async () => {
     vi.useFakeTimers()
     const { body, write } = sidecarBody()
-    const gen = readChatSSE(body, undefined, undefined, undefined, PINNED)
+    const gen = readChatSSE(body)
     write(chatChunk('hello'))
     expect((await gen.next()).value).toBe('hello')
     const next = gen.next()
@@ -201,7 +214,7 @@ describe('readChatSSE — SSE comment pings in the stream phase (#594)', () => {
     // The local API waits up to 15 s on a slow client's drain between pulls; that is not the model.
     vi.useFakeTimers()
     const { body, write } = sidecarBody()
-    const gen = readChatSSE(body, undefined, undefined, undefined, PINNED)
+    const gen = readChatSSE(body)
     write(chatChunk('a'))
     expect((await gen.next()).value).toBe('a')
     await vi.advanceTimersByTimeAsync(45_000) // the consumer holds the generator, not pulling
@@ -219,57 +232,6 @@ describe('readChatSSE — SSE comment pings in the stream phase (#594)', () => {
 // output re-arms the 10 min compute clock. The real wedge, replayed from a b11146 capture, is pinned
 // in chat-sse-progress-fixture.test.ts; these rows pin the clock rules the capture cannot reach.
 describe('readChatSSE — prefill liveness: the process and compute clocks (#598)', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  // The b11146 progress event's shape (chat-sse-progress-b11146.txt): a role-only delta plus a
-  // top-level `prompt_progress`.
-  const progress = (processed: number): string =>
-    `data: ${JSON.stringify({
-      choices: [{ finish_reason: null, index: 0, delta: { role: 'assistant', content: null } }],
-      object: 'chat.completion.chunk',
-      prompt_progress: { total: 6144, cache: 0, processed, time_ms: 0 }
-    })}\n\n`
-  const PING = ':\n\n'
-
-  /** Replays `events` (absolute ms) into a reader on the production budgets, then waits `tailMs`. */
-  async function replay(events: Array<[number, string]>, tailMs: number) {
-    vi.useFakeTimers()
-    const { body, write } = sidecarBody()
-    const out: string[] = []
-    let outcome: unknown = 'pending'
-    let endedAt = -1
-    const t0 = performance.now()
-    void (async () => {
-      for await (const t of readChatSSE(body, undefined, undefined, undefined, PINNED)) out.push(t)
-    })().then(
-      () => {
-        outcome = 'ended'
-        endedAt = performance.now() - t0
-      },
-      (e: unknown) => {
-        outcome = e
-        endedAt = performance.now() - t0
-      }
-    )
-    let now = 0
-    for (const [at, frame] of events) {
-      await vi.advanceTimersByTimeAsync(at - now)
-      now = at
-      write(frame)
-    }
-    await vi.advanceTimersByTimeAsync(tailMs)
-    return { out, outcome: () => outcome, endedAt: () => endedAt }
-  }
-
-  /** A ping every 30 s from `from` (exclusive) up to `to` (inclusive), as llama-server sends them. */
-  const pings = (from: number, to: number): Array<[number, string]> => {
-    const out: Array<[number, string]> = []
-    for (let t = from + 30_000; t <= to; t += 30_000) out.push([t, PING])
-    return out
-  }
-
   it('the compute clock is per batch: 20 minutes of prefill, a progress event every 400 s, answer', async () => {
     const events: Array<[number, string]> = [[0, progress(0)]]
     for (let batch = 1; batch <= 3; batch++) {
@@ -300,6 +262,53 @@ describe('readChatSSE — prefill liveness: the process and compute clocks (#598
     const r = await replay([...pings(0, 690_000), [700_000, chatChunk('Answer') + 'data: [DONE]\n\n']], 0)
     expect(r.outcome()).toBe('ended')
     expect(r.out).toEqual(['Answer'])
+  })
+})
+
+describe('readChatSSE — SSE framing and the finish reason (moved from llama-runtime.test.ts)', () => {
+  it('yields each delta, splits across reads, and stops on [DONE]', async () => {
+    const stream = pacedStream(
+      [
+        chatChunk('Hello'),
+        'data: {"choices":[{"delta":{"content":" wor', // a partial JSON frame split mid-line
+        'ld"}}]}\n\n',
+        ': keep-alive comment\n\n',
+        chatChunk('!'),
+        'data: [DONE]\n\n',
+        chatChunk('IGNORED AFTER DONE')
+      ],
+      1
+    )
+    const out: string[] = []
+    for await (const t of readChatSSE(stream)) out.push(t)
+    expect(out.join('')).toBe('Hello world!')
+  })
+
+  it('flushes a final data: line that has no trailing newline before close', async () => {
+    // Server closes the stream right after the last delta with no terminating "\n".
+    const stream = pacedStream([chatChunk('Hello'), 'data: {"choices":[{"delta":{"content":" end"}}]}'], 1)
+    const out: string[] = []
+    for await (const t of readChatSSE(stream)) out.push(t)
+    expect(out.join('')).toBe('Hello end')
+  })
+
+  it('reports finish_reason "length" via onFinish when the reply is cut off at the ceiling', async () => {
+    // The final chunk carries an empty delta + finish_reason (the llama-server shape), then [DONE].
+    const stream = pacedStream(
+      [
+        chatChunk('cut off here'),
+        'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+        'data: [DONE]\n\n'
+      ],
+      1
+    )
+    const finishes: string[] = []
+    const out: string[] = []
+    for await (const t of readChatSSE(stream, undefined, undefined, (r) => finishes.push(r))) {
+      out.push(t)
+    }
+    expect(out.join('')).toBe('cut off here')
+    expect(finishes).toEqual(['length'])
   })
 })
 
@@ -387,16 +396,6 @@ describe('readChatSSE — in-band error frames reject the stream (F-02)', () => 
     for await (const t of readChatSSE(stream)) out.push(t)
     expect(out.join('')).toBe('error: this is answer text more')
   })
-
-  it('regression: a well-formed stream (tokens → finish_reason → [DONE]) is byte-identical — no error, finish surfaced', async () => {
-    const finishChunk = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`
-    const stream = pacedStream([chatChunk('a'), chatChunk('b'), finishChunk, 'data: [DONE]\n\n'], 1)
-    const out: string[] = []
-    let finish: string | null = null
-    for await (const t of readChatSSE(stream, undefined, undefined, (r) => (finish = r))) out.push(t)
-    expect(out.join('')).toBe('ab')
-    expect(finish).toBe('stop')
-  })
 })
 
 // #290/#291 — llama-server's per-request `timings` block rides the streamed completion. The REAL
@@ -427,12 +426,6 @@ describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', (
     }
     return { out: out.join(''), finishes }
   }
-
-  it('surfaces a timings object carried on the final (finish_reason) chunk', async () => {
-    const { out, finishes } = await collect([chatChunk('a'), chatChunk('b'), finishWithTimings(), 'data: [DONE]\n\n'])
-    expect(out).toBe('ab')
-    expect(finishes).toEqual([{ reason: 'stop', timings: TIMINGS }])
-  })
 
   it('hands up undefined timings when no chunk carried them (the mock / an older server)', async () => {
     const finishChunk = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`
@@ -477,11 +470,15 @@ describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', (
     const controller = new AbortController()
     const finishes: Finish[] = []
     const out: string[] = []
-    for await (const t of readChatSSE(
-      pacedStream([chatChunk('a'), chatChunk('b'), finishWithTimings(), 'data: [DONE]\n\n'], 1),
-      controller.signal,
-      undefined,
-      (reason, timings) => finishes.push({ reason, timings })
+    // The answer token and the finish chunk arrive in ONE read, so the finish is parsed before the loop-top abort
+    // check; [DONE] never arrives.
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode(chatChunk('a') + finishWithTimings()))
+      }
+    })
+    for await (const t of readChatSSE(stream, controller.signal, undefined, (reason, timings) =>
+      finishes.push({ reason, timings })
     )) {
       out.push(t)
       controller.abort()
@@ -494,8 +491,11 @@ describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', (
     const finishes: Finish[] = []
     const errorFrame = `data: ${JSON.stringify({ error: { message: 'slot failed', type: 'server_error' } })}\n\n`
     await expect(async () => {
-      for await (const _t of readChatSSE(pacedStream([chatChunk('a'), errorFrame], 1), undefined, undefined, (reason, timings) =>
-        finishes.push({ reason, timings })
+      for await (const _t of readChatSSE(
+        pacedStream([chatChunk('a'), finishWithTimings(), errorFrame], 1),
+        undefined,
+        undefined,
+        (reason, timings) => finishes.push({ reason, timings })
       )) {
         void _t
       }
@@ -504,22 +504,19 @@ describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', (
   })
 
   it('never reports timings when the idle watchdog trips (CB-5 unchanged)', async () => {
+    vi.useFakeTimers()
     const finishes: Finish[] = []
-    const idle = { prefillMs: 500, progressMs: 600_000, streamMs: 40 }
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        controller.enqueue(enc.encode(chatChunk('a')))
-        // Then silence beyond the stream budget; the watchdog fires before anything else arrives.
-        await delay(400)
-        controller.close()
-      }
-    })
-    await expect(async () => {
-      for await (const _t of readChatSSE(stream, undefined, undefined, (reason, timings) =>
-        finishes.push({ reason, timings }), idle)) {
-        void _t
-      }
-    }).rejects.toBeInstanceOf(RuntimeUnresponsiveError)
+    const { body, write } = sidecarBody()
+    let outcome: unknown = 'pending'
+    void (async () => {
+      for await (const _t of readChatSSE(body, undefined, undefined, (reason, timings) => finishes.push({ reason, timings }))) void _t
+    })().then(
+      () => (outcome = 'ended'),
+      (e: unknown) => (outcome = e)
+    )
+    write(chatChunk('a') + finishWithTimings()) // the finish is parsed; [DONE] never comes
+    await vi.advanceTimersByTimeAsync(30_000) // the shipped stream budget
+    expect(outcome).toBeInstanceOf(RuntimeUnresponsiveError)
     expect(finishes).toEqual([])
   })
 
