@@ -58,7 +58,7 @@ export const STREAM_SETTLE_TIMEOUT_MS = 5_000
  * CONTRACT — the caller MUST `controller.abort()` every in-flight stream FIRST so they are
  * actually unwinding when this is awaited; otherwise a long generation would stall teardown.
  *
- * full-audit 2026-07-12 REL-4 — BOUNDED by `timeoutMs` (the doc-task settle treatment): the
+ * full-audit 2026-07-12 REL-4 — BOUNDED by `STREAM_SETTLE_TIMEOUT_MS` (the doc-task settle treatment): the
  * settle promises never reject (resolved in the wrapper's `finally`), but one wedged for any
  * other reason used to stall quit/lock forever → user hard-kills → mid-session wal state →
  * next-launch shred. After the ceiling the teardown proceeds; the only thing forfeited is the
@@ -66,15 +66,12 @@ export const STREAM_SETTLE_TIMEOUT_MS = 5_000
  * accepts. Bounding here covers BOTH callers (`performShutdown` and the interactive-lock
  * handler) in one place.
  */
-export async function awaitInFlightStreamsSettled(
-  settled: Map<string, Promise<void>> = streamSettled,
-  timeoutMs: number = STREAM_SETTLE_TIMEOUT_MS
-): Promise<void> {
+export async function awaitInFlightStreamsSettled(settled: Map<string, Promise<void>> = streamSettled): Promise<void> {
   const pending = [...settled.values()]
   if (pending.length === 0) return // fast path: no timer armed on an idle teardown
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, timeoutMs)
+    timer = setTimeout(resolve, STREAM_SETTLE_TIMEOUT_MS)
     timer.unref()
   })
   try {
