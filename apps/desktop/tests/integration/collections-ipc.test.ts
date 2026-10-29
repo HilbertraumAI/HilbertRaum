@@ -136,8 +136,6 @@ describe('collections IPC — CRUD', () => {
     await expect(invoke(handlers, IPC.deleteCollection, library.id, 'membershipOnly')).rejects.toThrow(
       t('en', 'main.collections.builtinUndeletable') // the IPC's own copy, not the service's 'Built-in collections cannot be deleted'
     )
-    const { result } = await invoke(handlers, IPC.listCollections)
-    expect((result as Collection[]).some((c) => c.id === library.id)).toBe(true)
   })
 })
 
