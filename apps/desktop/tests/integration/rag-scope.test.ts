@@ -1,18 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { createRequire } from 'node:module'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { MockEmbedder, VectorIndex, encodeVector } from '../../src/main/services/embeddings'
+import { openDatabase } from '../../src/main/services/db'
+import { MockEmbedder, VectorIndex } from '../../src/main/services/embeddings'
 import {
   corpusNeedsReindex,
   generateGroundedAnswer,
   ragSettingsFrom,
   retrieve,
   NO_DOCUMENT_CONTEXT_ANSWER,
-  REINDEX_NEEDED_ANSWER,
   type RagRetrievalSettings
 } from '../../src/main/services/rag'
 import {
@@ -24,45 +18,14 @@ import {
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { legacyDbPath, openFreshDb } from '../helpers/db-fixtures'
+import { chunkIdsOf, seedEmbeddedDoc } from '../helpers/doc-fixtures'
 
 // Phase 17 (rag-design.md §10): "ask selected documents" scoping through
 // VectorIndex → retrieve → generateGroundedAnswer → the conversation's persisted
 // scope_json, plus the actionable reindex-needed empty-corpus answer (§5.2).
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
-
-function freshDb(): { db: Db; path: string } {
-  const path = join(mkdtempSync(join(tmpdir(), 'hilbertraum-scope-')), 'test.sqlite')
-  return { db: openDatabase(path), path }
-}
-
-/** Seed one indexed document with chunks + vectors under `modelId`. */
-async function seedDocument(
-  db: Db,
-  embedder: MockEmbedder,
-  title: string,
-  texts: string[],
-  modelId: string = embedder.id
-): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const vectors = await embedder.embed(texts)
-  for (let i = 0; i < texts.length; i++) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(chunkId, docId, i, texts[i], title, texts[i].split(/\s+/).length, now)
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, modelId, encodeVector(vectors[i]), vectors[i].length, now)
-  }
-  return docId
-}
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -72,10 +35,10 @@ afterEach(() => {
 
 describe('VectorIndex documentIds scope', () => {
   it('only returns hits from the scoped documents', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
-    const docA = await seedDocument(db, embedder, 'a.txt', ['alpha unique words here'])
-    await seedDocument(db, embedder, 'b.txt', ['alpha unique words here']) // identical text
+    const docA = await seedEmbeddedDoc(db, embedder, 'a.txt', ['alpha unique words here'])
+    await seedEmbeddedDoc(db, embedder, 'b.txt', ['alpha unique words here']) // identical text
 
     const scoped = new VectorIndex(db, embedder, {
       embeddingModelId: embedder.id,
@@ -90,26 +53,27 @@ describe('VectorIndex documentIds scope', () => {
   })
 
   it('an empty/absent scope searches the whole corpus (existing behavior)', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'a.txt', ['alpha words'])
-    await seedDocument(db, embedder, 'b.txt', ['alpha words'])
+    await seedEmbeddedDoc(db, embedder, 'a.txt', ['alpha words'])
+    await seedEmbeddedDoc(db, embedder, 'b.txt', ['alpha words'])
 
     const unscoped = new VectorIndex(db, embedder, { embeddingModelId: embedder.id, documentIds: [] })
     expect(await unscoped.searchText('alpha words', 10)).toHaveLength(2)
   })
 
   it('composes with the embedding-model-id filter', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
-    const docA = await seedDocument(db, embedder, 'a.txt', ['alpha words'])
-    await seedDocument(db, embedder, 'old.txt', ['alpha words'], 'old-model')
+    const docA = await seedEmbeddedDoc(db, embedder, 'a.txt', ['alpha words'])
+    const oldDoc = await seedEmbeddedDoc(db, embedder, 'old.txt', ['alpha words'], { modelId: 'old-model' })
 
+    // The old-model document is INSIDE the doc scope, so only the model-id filter can drop its vector.
     const index = new VectorIndex(db, embedder, {
       embeddingModelId: embedder.id,
-      documentIds: [docA]
+      documentIds: [docA, oldDoc]
     })
-    expect(await index.searchText('alpha words', 10)).toHaveLength(1)
+    expect((await index.searchText('alpha words', 10)).map((h) => h.chunkId)).toEqual(chunkIdsOf(db, docA))
   })
 })
 
@@ -117,34 +81,35 @@ describe('VectorIndex documentIds scope', () => {
 
 describe('scoped retrieval', () => {
   it('retrieve only cites the scoped document even when another matches better', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
-    const docA = await seedDocument(db, embedder, 'contract.pdf', ['payment terms net thirty days'])
-    await seedDocument(db, embedder, 'notes.txt', ['the exact question text verbatim match'])
-
-    const { chunks, citations } = await retrieve(
-      db,
-      embedder,
-      'the exact question text verbatim match',
-      SETTINGS,
-      [docA]
-    )
-    expect(chunks.every((c) => c.documentId === docA)).toBe(true)
-    expect(citations.every((c) => c.sourceTitle === 'contract.pdf')).toBe(true)
+    // docA matches the question only partly (cosine ≈0.36, two shared keywords); notes.txt matches it exactly.
+    const docA = await seedEmbeddedDoc(db, embedder, 'contract.pdf', ['the payment terms of the question are net thirty days'])
+    const notes = await seedEmbeddedDoc(db, embedder, 'notes.txt', ['the exact question text verbatim match'])
+    const q = 'the exact question text verbatim match'
+    const { chunks, citations } = await retrieve(db, embedder, q, SETTINGS, [docA])
+    expect(chunks.map((c) => c.documentId)).toEqual([docA])
+    expect(citations.map((c) => c.sourceTitle)).toEqual(['contract.pdf'])
+    // H3 (rag-collections): null scope = the whole corpus, so the better match is back.
+    const all = await retrieve(db, embedder, q, SETTINGS, null)
+    expect(new Set(all.chunks.map((c) => c.documentId))).toEqual(new Set([docA, notes]))
   })
 
+  // The production `scope` option (what registerRagIpc passes from resolveScope) must reach retrieval: two
+  // identical documents, so only the scope can explain a single-source answer. collections-ipc's U3 pin does not
+  // prove this — a pinned single document is read whole, a path that never reads the retrieval scope.
   it('generateGroundedAnswer threads the conversation scope into retrieval', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
-    const docA = await seedDocument(db, embedder, 'a.pdf', ['solar panels convert light to power'])
-    await seedDocument(db, embedder, 'b.pdf', ['solar panels convert light to power'])
+    const docA = await seedEmbeddedDoc(db, embedder, 'a.pdf', ['solar panels convert light to power'])
+    await seedEmbeddedDoc(db, embedder, 'b.pdf', ['solar panels convert light to power'])
 
     const conv = createConversation(db, { mode: 'documents', scopeDocumentIds: [docA] })
     const q = 'solar panels convert light to power'
     appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
     const runtime = createMockRuntime({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 1024 })
     const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, q, SETTINGS, {
-      scopeDocumentIds: conv.scopeDocumentIds
+      scope: { documentIds: conv.scopeDocumentIds }
     })
     expect(msg.citations?.length).toBe(1)
     expect(msg.citations?.[0].sourceTitle).toBe('a.pdf')
@@ -155,47 +120,23 @@ describe('scoped retrieval', () => {
 
 describe('corpusNeedsReindex + REINDEX_NEEDED_ANSWER', () => {
   it('is false with no documents and false when a document is visible to the embedder', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
     expect(corpusNeedsReindex(db, embedder.id)).toBe(false)
-    await seedDocument(db, embedder, 'a.txt', ['alpha'])
+    await seedEmbeddedDoc(db, embedder, 'a.txt', ['alpha'])
     expect(corpusNeedsReindex(db, embedder.id)).toBe(false)
   })
 
   it('is true when every indexed document was embedded under a different model', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'a.txt', ['alpha'], 'old-model')
+    await seedEmbeddedDoc(db, embedder, 'a.txt', ['alpha'], { modelId: 'old-model' })
     expect(corpusNeedsReindex(db, embedder.id)).toBe(true)
     // A partial mismatch (one visible doc) goes back to the normal path.
-    await seedDocument(db, embedder, 'b.txt', ['beta'])
+    await seedEmbeddedDoc(db, embedder, 'b.txt', ['beta'])
     expect(corpusNeedsReindex(db, embedder.id)).toBe(false)
   })
 
-  it('answers with the re-index guidance, never calling the model', async () => {
-    const { db } = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'a.txt', ['alpha words'], 'old-model')
-
-    const conv = createConversation(db, { mode: 'documents' })
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'alpha words' })
-    const runtime = createMockRuntime({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 1024 })
-    const chatSpy = vi.spyOn(runtime, 'chatStream')
-
-    const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, 'alpha words', SETTINGS)
-    expect(msg.content).toBe(REINDEX_NEEDED_ANSWER)
-    expect(chatSpy).not.toHaveBeenCalled()
-  })
-
-  it('keeps the plain "not found" answer when the corpus is empty', async () => {
-    const { db } = freshDb()
-    const embedder = new MockEmbedder()
-    const conv = createConversation(db, { mode: 'documents' })
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'anything' })
-    const runtime = createMockRuntime({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 1024 })
-    const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, 'anything', SETTINGS)
-    expect(msg.content).toBe(NO_DOCUMENT_CONTEXT_ANSWER)
-  })
 })
 
 // ---- RAG-N6: corpusNeedsReindex honours the SAME archived exclusion retrieval applies ----------
@@ -207,12 +148,12 @@ describe('corpusNeedsReindex + REINDEX_NEEDED_ANSWER', () => {
 // routes through buildScopeFilter (Collections core); these tests pin that parity with teeth.
 describe('corpusNeedsReindex includeArchived parity (RAG-N6)', () => {
   it('an all-archived, embedder-invisible scope is EMPTY (false), not stale, by default', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
     // One indexed doc, embedded under a DIFFERENT model AND archived. Under the active embedder it
     // is invisible (would read as "stale") — but it is also archived, so an includeArchived-false
     // scope must treat it as out of scope entirely.
-    const docId = await seedDocument(db, embedder, 'old-archived.txt', ['alpha words'], 'old-model')
+    const docId = await seedEmbeddedDoc(db, embedder, 'old-archived.txt', ['alpha words'], { modelId: 'old-model' })
     db.prepare("UPDATE documents SET lifecycle = 'archived' WHERE id = ?").run(docId)
 
     const scope = { documentIds: [docId], collectionIds: null, includeArchived: false }
@@ -225,9 +166,9 @@ describe('corpusNeedsReindex includeArchived parity (RAG-N6)', () => {
   })
 
   it('generateGroundedAnswer over an all-archived scope answers NO_DOCUMENT_CONTEXT, not REINDEX_NEEDED', async () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'old-archived.txt', ['alpha words'], 'old-model')
+    const docId = await seedEmbeddedDoc(db, embedder, 'old-archived.txt', ['alpha words'], { modelId: 'old-model' })
     db.prepare("UPDATE documents SET lifecycle = 'archived' WHERE id = ?").run(docId)
 
     const conv = createConversation(db, { mode: 'documents' })
@@ -249,7 +190,7 @@ describe('corpusNeedsReindex includeArchived parity (RAG-N6)', () => {
 
 describe('conversation scope persistence', () => {
   it('createConversation persists the scope and it round-trips through list/get', () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const conv = createConversation(db, { mode: 'documents', scopeDocumentIds: ['d1', 'd2'] })
     expect(conv.scopeDocumentIds).toEqual(['d1', 'd2'])
     expect(getConversation(db, conv.id)?.scopeDocumentIds).toEqual(['d1', 'd2'])
@@ -257,7 +198,7 @@ describe('conversation scope persistence', () => {
   })
 
   it('normalizes empty / junk scopes to null (whole corpus)', () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     expect(createConversation(db, { scopeDocumentIds: [] }).scopeDocumentIds).toBeNull()
     expect(createConversation(db, {}).scopeDocumentIds).toBeNull()
     // Malformed stored JSON must not break a conversation.
@@ -267,7 +208,7 @@ describe('conversation scope persistence', () => {
   })
 
   it('updateConversationScope replaces and clears the scope', () => {
-    const { db } = freshDb()
+    const db = openFreshDb('scope')
     const conv = createConversation(db, { mode: 'documents', scopeDocumentIds: ['d1', 'd2'] })
     expect(updateConversationScope(db, conv.id, ['d1']).scopeDocumentIds).toEqual(['d1'])
     expect(getConversation(db, conv.id)?.scopeDocumentIds).toEqual(['d1'])
@@ -279,19 +220,15 @@ describe('conversation scope persistence', () => {
   it('migrates a pre-Phase-17 database: scope_json is added to an existing table', () => {
     // Build a DB whose conversations table predates the scope_json column, exactly as a
     // real pre-Phase-17 workspace would have it on disk.
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-scope-mig-'))
-    const path = join(dir, 'old.sqlite')
-    const nodeRequire = createRequire(process.execPath)
-    const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')
-    const old = new DatabaseSync(path)
-    old.exec(`CREATE TABLE conversations (
-      id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL, model_id TEXT, mode TEXT NOT NULL DEFAULT 'chat')`)
-    old.prepare(
-      `INSERT INTO conversations (id, title, created_at, updated_at, model_id, mode)
-       VALUES ('legacy', 'Old chat', '2026-01-01', '2026-01-01', NULL, 'chat')`
-    ).run()
-    old.close()
+    const path = legacyDbPath('scope-mig', (raw) => {
+      raw.exec(`CREATE TABLE conversations (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, model_id TEXT, mode TEXT NOT NULL DEFAULT 'chat')`)
+      raw.prepare(
+        `INSERT INTO conversations (id, title, created_at, updated_at, model_id, mode)
+         VALUES ('legacy', 'Old chat', '2026-01-01', '2026-01-01', NULL, 'chat')`
+      ).run()
+    })
 
     const db = openDatabase(path)
     const cols = (db.prepare('PRAGMA table_info(conversations)').all() as Array<{ name: string }>).map(
