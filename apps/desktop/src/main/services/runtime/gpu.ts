@@ -1,4 +1,5 @@
 import { waitForEngineSpawns } from './spawn-gate'
+import { engineChildEnv } from './engine-env'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
@@ -158,7 +159,10 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
       child = spawn(binPath, ['--list-devices'], {
         // #530: stderr piped (it was ignored) — the loader's refusal is only ever written there.
         stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true
+        windowsHide: true,
+        // #730: the host's llama.cpp variables and config files stay out; an inherited `--rpc`
+        // would otherwise be registered, and listed, by this very probe.
+        env: engineChildEnv(binPath)
       })
     } catch (err) {
       // #530: a Windows refusal by policy / security software is the engine verdict, not "no GPU".

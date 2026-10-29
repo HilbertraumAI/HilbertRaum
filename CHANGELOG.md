@@ -25,7 +25,14 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- **Your own llama.cpp settings on a computer no longer change how HilbertRaum runs.** If you use
+  llama.cpp yourself and keep a `config.ini` for it, or have set `LLAMA_ARG_…` environment
+  variables, HilbertRaum's AI engines picked those up too. Such a setting could, for example, move
+  the chat model off the graphics card, or tell the engine to reach other computers. The engines
+  now start with HilbertRaum's own settings only. On Linux and macOS a system-wide
+  `/etc/llama.cpp/config.ini` still applies (#730).
 
 ## [0.1.64] — 2026-10-28
 

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { SpawnOptions } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -212,15 +213,21 @@ class FakeChild extends EventEmitter implements ChildProcessLike {
 }
 
 /** A spawn whose child runs `behavior` on the next microtask (never, when `behavior` is omitted). */
-function fakeSpawn(behavior?: (child: FakeChild) => void): { spawn: SpawnFn; children: FakeChild[] } {
+function fakeSpawn(behavior?: (child: FakeChild) => void): {
+  spawn: SpawnFn
+  children: FakeChild[]
+  options: SpawnOptions[]
+} {
   const children: FakeChild[] = []
-  const spawn: SpawnFn = () => {
+  const options: SpawnOptions[] = []
+  const spawn: SpawnFn = (_command, _args, spawnOptions) => {
     const child = new FakeChild()
     children.push(child)
+    options.push(spawnOptions)
     if (behavior) queueMicrotask(() => behavior(child))
     return child
   }
-  return { spawn, children }
+  return { spawn, children, options }
 }
 const emitStderr = (child: FakeChild, text: string): void => {
   ;(child.stderr as unknown as EventEmitter).emit('data', Buffer.from(text))
@@ -256,6 +263,22 @@ describe('checkProgramLoads (#530)', () => {
     const out = await checkProgramLoads('llama_cpp', '/x/llama-server', ['--version'], { spawn, verify: verified, ...LINUX })
     expect(out).toBe('loads')
     expect(engineProblems()).toEqual([])
+  })
+
+  // #730: llama-server applies the host's llama.cpp variables and config files even for `--version`.
+  it('starts llama-server without the host’s llama.cpp variables and config files (#730)', async () => {
+    const configVar = process.platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME'
+    vi.stubEnv('LLAMA_ARG_RPC', 'host:50052')
+    vi.stubEnv(configVar, '/host/config')
+    try {
+      const { spawn, options } = fakeSpawn((c) => c.emit('close', 0, null))
+      await checkProgramLoads('llama_cpp', '/x/llama-server', ['--version'], { spawn, verify: verified, ...LINUX })
+      const childEnv = options[0].env ?? process.env // what Node hands the child
+      expect(childEnv.LLAMA_ARG_RPC).toBeUndefined()
+      expect(childEnv[configVar]).not.toBe('/host/config')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   // #516 (architecture.md "In-app engine updates" §3): "Check again" never launches a program an

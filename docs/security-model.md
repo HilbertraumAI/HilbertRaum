@@ -466,6 +466,20 @@ file path (metadata only, never content).
 Residual (recorded, accepted): an env-delivered key defends against cross-user and log/stderr
 exposure, not against a same-user debugger reading the child's environment.
 
+**The engines do not inherit the host's llama.cpp settings (#730).** llama.cpp reads config files,
+then about 150 environment variables, then the command line. The files are
+`%PROGRAMDATA%`/`%APPDATA%\llama.cpp\config.ini` on Windows and `/etc` or `~/.config/llama.cpp/config.ini`
+elsewhere. Any option the app does not pass could therefore come from the computer the drive is
+plugged into: a llama.cpp user's own settings moved the chat model off the GPU (measured), and the
+same route reaches `--rpc` (remote compute), the download options, the server tools and, from
+v0.8.0, `--connect` (a peer-to-peer tunnel). Every llama.cpp spawn now gets the parent's environment
+without `LLAMA_*` / `HF_*` / `MTMD_*` variables, with the config lookup pointed below the engine
+binary file. That path cannot exist, so neither the host nor the drive offers a place to plant a
+config (`runtime/engine-env.ts`; architecture.md GPU record §3 "HOST CONFIGURATION"). Like the
+fuses, this is defence in depth against a local attacker and a correctness fix for the accidental
+case. Residual: `/etc/llama.cpp/config.ini` on Linux and macOS is a fixed path no variable redirects.
+Writing it takes root.
+
 #### The fifth threat: same-machine processes (local-api wave)
 
 _User-facing counterpart: [`local-api.md`](local-api.md) — the same controls written for someone

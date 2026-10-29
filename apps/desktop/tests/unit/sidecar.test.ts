@@ -759,6 +759,23 @@ describe('LlamaServer sidecar API key (D9)', () => {
     await server.stop()
   })
 
+  it('keeps the host’s llama.cpp variables and config files out of the child (#730)', async () => {
+    const configVar = process.platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME'
+    vi.stubEnv('LLAMA_ARG_RPC', 'host:50052')
+    vi.stubEnv(configVar, '/host/config')
+    try {
+      const { server, calls } = makeServer()
+      await server.start()
+      const env = calls[0].options.env!
+      expect(env.LLAMA_ARG_RPC).toBeUndefined()
+      expect(env[configVar]).not.toBe('/host/config')
+      expect(env.LLAMA_API_KEY).toMatch(/^[0-9a-f]{64}$/)
+      await server.stop()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('generates a FRESH key on every spawn (stop/start rotates it)', async () => {
     const { server, calls } = makeServer()
     await server.start()
