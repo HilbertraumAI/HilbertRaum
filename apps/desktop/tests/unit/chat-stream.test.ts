@@ -12,6 +12,7 @@ import { EmbedderError } from '../../src/main/services/embeddings/errors'
 import { inFlightStreams, streamBuffers, streamSettled } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
 import { type Message } from '../../src/shared/types'
+import { within } from '../helpers/hang-budget'
 
 // `assertChatStreamReady`'s guard preamble (unknown conversation, no runtime, doc-task
 // busy, stream-in-flight) reads a real DB + ctx and is exercised end-to-end by the
@@ -134,29 +135,11 @@ describe('withChatStream (M-A2)', () => {
       expect(sent.map((s) => s.channel)).toEqual(['chat:token:c1', 'chat:done:c1'])
     })
 
-    it('emits nothing for an empty (unpersisted) reply even if timings arrived', async () => {
-      const { event, sent } = fakeEvent()
-      await withChatStream(event, 'c1', 'label', async (_s, _t, _r, _c, _u, sendTimings) => {
-        sendTimings?.(timings)
-        return msg('')
-      })
-      expect(sent.map((s) => s.channel)).toEqual(['chat:done:c1'])
-    })
-
-    it('emits nothing when the timings carry no usable rate or count', async () => {
-      const { event, sent } = fakeEvent()
-      await withChatStream(event, 'c1', 'label', async (_s, sendToken, _r, _c, _u, sendTimings) => {
-        sendToken('x')
-        sendTimings?.({ prompt_n: 3 })
-        return msg('x')
-      })
-      expect(sent.map((s) => s.channel)).toEqual(['chat:token:c1', 'chat:done:c1'])
-    })
-
     it('answerSpeedFrom is the single rule: null without timings, TTFT, content or positive figures', () => {
       expect(answerSpeedFrom(msg('x'), null, 5)).toBeNull()
       expect(answerSpeedFrom(msg('x'), timings, null)).toBeNull()
       expect(answerSpeedFrom(msg(''), timings, 5)).toBeNull()
+      expect(answerSpeedFrom(msg('x'), { prompt_n: 3 }, 5)).toBeNull()
       expect(answerSpeedFrom(msg('x'), { predicted_per_second: 0, predicted_n: 5 }, 5)).toBeNull()
       expect(answerSpeedFrom(msg('x'), { predicted_per_second: 12, predicted_n: 0 }, 5)).toBeNull()
       expect(answerSpeedFrom(msg('x'), { predicted_per_second: 12.4, predicted_n: 7.6 }, 1800)).toEqual({
@@ -178,6 +161,8 @@ describe('withChatStream (M-A2)', () => {
 
     expect(sent).toEqual([{ channel: 'chat:error:c1', args: ['boom'] }])
     expect(inFlightStreams.has('c1')).toBe(false)
+    expect(streamBuffers.has('c1')).toBe(false)
+    expect(streamSettled.has('c1')).toBe(false)
   })
 
   it('maps a context-overflow HTTP 400 to the friendly copy on BOTH the error event and the rejection', async () => {
@@ -370,33 +355,28 @@ describe('withChatStream (M-A2)', () => {
     expect(streamBuffers.has('c1')).toBe(false)
   })
 
-  it('clears the buffer when the run throws', async () => {
-    const { event } = fakeEvent()
-    await expect(
-      withChatStream(event, 'c1', 'label', async () => {
-        throw new Error('boom')
-      })
-    ).rejects.toThrow('boom')
-    expect(streamBuffers.has('c1')).toBe(false)
-  })
-
   // R1 (full-audit-2026-06-30, Phase C): the wrapper publishes a per-stream "settled" promise the
   // lock/quit teardown can await so a partial reply persists BEFORE the DB closes. It is registered
   // alongside the controller and resolved (in the finally) only AFTER the run — and thus its
   // abort-driven appendMessage — has fully unwound.
   it('registers a per-stream settled promise and resolves it after the run unwinds (R1)', async () => {
     const { event } = fakeEvent()
-    let settledResolved = false
+    let settled: Promise<void> | undefined
+    let midRun = ''
     await withChatStream(event, 'c1', 'label', async () => {
-      const settled = streamSettled.get('c1')
+      settled = streamSettled.get('c1')
       expect(settled).toBeInstanceOf(Promise) // registered for the duration of the run
-      void settled!.then(() => (settledResolved = true))
-      expect(settledResolved).toBe(false) // not resolved while the run is still in flight
+      // One macrotask hop (justified: it lets an already-resolved settle's .then run first), so 'pending' wins
+      // only if the settle is really still open.
+      midRun = await Promise.race([
+        settled!.then(() => 'settled'),
+        new Promise<string>((r) => setImmediate(() => r('pending')))
+      ])
       return msg('done')
     })
-    await new Promise((r) => setImmediate(r))
+    expect(midRun).toBe('pending') // not resolved while the run was in flight
+    await within(settled!, 'the settle resolving after the run unwound')
     expect(streamSettled.has('c1')).toBe(false) // cleared in lockstep with the controller
-    expect(settledResolved).toBe(true) // resolved after the run unwound (the teardown await-point)
   })
 
   it('resolves the settled promise even when the run throws (teardown never hangs) (R1)', async () => {
