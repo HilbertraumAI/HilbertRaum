@@ -6180,7 +6180,8 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   importing one stays the renderer's pending chip). Parsed with `parsePendingDestination`, never SQL
   `json_extract` (it throws on a malformed row); the partial index `idx_documents_pending_dest`
   (post-migration block, the column is migrated in late) keeps the per-ask read to the unfiled rows —
-  checked with `EXPLAIN QUERY PLAN` in `collections.test.ts`. No new column, no migration: every
+  checked with `EXPLAIN QUERY PLAN` on the statement production prepares in `collections.test.ts`.
+  No new column, no migration: every
   existing failed attachment is covered as it stands. **The rejoin after OCR is pinned:** "Make
   searchable (OCR)" re-indexes the same row, `reindexDocument` files it by the intent into Temporary +
   the chat's link and clears it (`docs-ipc.test.ts`, #570 — the chat pointer's copy rests on it).
