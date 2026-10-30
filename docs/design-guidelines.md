@@ -1065,7 +1065,7 @@ change; nothing here touches the model recommender. Code comments cite this sect
 2. **DV-2 — "can this computer run it" outranks alphabetical.** The chat picker fell back to
    catalog (alphabetical) order once the installed/not-installed key tied, so on a 16 GB machine
    three of the first four cards carried a "Needs at least 20/24 GB RAM" warning while the usable
-   models sat below the fold. `orderPickerModels` (`ModelsScreen.tsx`) adds **runnable-first as
+   models sat below the fold. `orderPickerModels` (`lib/modelAvailability.ts`) adds **runnable-first as
    an unconditional second key**, with installed-first still PRIMARY (the installed/needs-download
    boundary is a labelled subheading, so runnability may only reorder cards *within* a group).
    [**Superseded 2026-09-05 by §15:** the full-card picker's labelled subheading is gone — "On
