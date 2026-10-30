@@ -16,7 +16,7 @@ import {
 import {
   getVisionSession,
   loadSession,
-  resetVisionSessionForTests
+  clearVisionSession
 } from '../../src/renderer/lib/visionSession'
 import {
   DEFAULT_SETTINGS,
@@ -62,7 +62,7 @@ afterEach(() => {
   cleanup()
   clearTranslateSession()
   clearFileTranslate()
-  resetVisionSessionForTests()
+  clearVisionSession()
   vi.restoreAllMocks()
 })
 
