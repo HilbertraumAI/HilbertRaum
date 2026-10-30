@@ -355,7 +355,7 @@ store** as `AppSettings.lastBenchmark` (a JSON `BenchmarkResult`, default `null`
 falling back to **`UNKNOWN`** until the user runs the benchmark for the first time:
 
 - `getAppStatus().hardwareProfile` (Home screen).
-- `buildModelList({ profile, … })` (AI Model screen `recommended` flag).
+- `listModels` still passes it to `buildModelList`, which no longer reads it: the AI Model screen's `recommended` flag goes by RAM and the card.
 
 The Diagnostics screen surfaces a **Run benchmark** button and renders RAM / CPU / OS-arch /
 measured read speed (`effectiveRead`, with its source + GB context, or "not measured yet") /
