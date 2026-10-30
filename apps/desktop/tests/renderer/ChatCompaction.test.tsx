@@ -1,231 +1,152 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
+import type { ContextUsage, Conversation, Message } from '../../src/shared/types'
 import type { CompactionNotice } from '../../src/shared/ipc'
-import { t } from '../../src/shared/i18n'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, conversationRow, deferred, fakeChatStream, renderChatScreen } from '../helpers/chat-screen'
+import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
 
-// Phase 2 UX (context-compaction plan §5.1–§5.3): the composer context-usage meter, the transcript
-// summary marker, and the one-shot "summarizing…" notice that clears on the first answer token.
-
-function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'Compaction chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
-function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
-}
-
-function msg(id: string, role: 'user' | 'assistant', content: string): Message {
-  return { id, conversationId: 'c1', role, content, createdAt: '2026-01-01T00:00:01Z', tokenCount: null }
-}
+// Phase 2 UX (context-compaction plan §5.1–§5.3), the screen wiring: the selected conversation's usage
+// read reaches the composer's memory meter (its copy is ContextMeter.test.tsx's), the transcript summary
+// marker sits before the first turn the checkpoint does not subsume, and the one-shot "working on it"
+// notice shows by kind and clears on the first answer token.
 
 afterEach(() => {
+  assertNoUnexpectedApiCalls()
   cleanup()
   vi.restoreAllMocks()
   window.localStorage.clear()
 })
 
-describe('ChatScreen — context-usage meter (§5.1)', () => {
-  it('renders the meter from getConversationContextUsage with the amber will-summarize tooltip', async () => {
-    const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      listMessages: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status()),
-      // 6.4k / 8k = 80% ⇒ amber band ⇒ the heads-up line is appended.
-      getConversationContextUsage: vi.fn(async () => ({ usedTokens: 6400, window: 8000 }))
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByText('Compaction chat'))
+/** Wait for the conversation list, then select `title`. */
+async function selectConversation(user: ReturnType<typeof userEvent.setup>, title: string): Promise<void> {
+  await screen.findByText(title)
+  await user.click(conversationRow(title))
+}
 
-    // #25/D69: a conversation-MEMORY gauge (role="meter" + a visible "Memory" label), not a
-    // progress bar. The tooltip teaches the fill (pct) with the approximate token figures and,
-    // at the amber band, the auto-summarize heads-up.
-    const meter = await screen.findByRole('meter')
-    expect(meter).toHaveAttribute('aria-valuenow', '80')
-    expect(meter.querySelector('.context-meter-label')?.textContent).toBe(
-      t('en', 'chat.context.label')
+describe('ChatScreen — context-usage meter (§5.1)', () => {
+  it("shows the selected conversation's usage read on the memory meter", async () => {
+    const user = userEvent.setup()
+    // 6.4k / 8k = 80%.
+    const getConversationContextUsage = vi.fn(
+      async (): Promise<ContextUsage | null> => ({ usedTokens: 6400, window: 8000 })
     )
-    const tip = meter.getAttribute('title') ?? ''
-    expect(tip).toMatch(/80% full/)
-    expect(tip).toMatch(/about 6\.4k of 8k tokens/)
-    expect(tip).toMatch(/summarized automatically/i)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Compaction chat' })]),
+        getConversationContextUsage
+      })
+    )
+    renderChatScreen()
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument() // no conversation, no reading
+    await selectConversation(user, 'Compaction chat')
+
+    // #25/D69: a conversation-MEMORY gauge (role="meter"), not a progress bar. Its label and tooltip
+    // copy (the token figures, the amber will-summarize heads-up) are ContextMeter.test.tsx's.
+    expect(await screen.findByRole('meter')).toHaveAttribute('aria-valuenow', '80')
+    expect(getConversationContextUsage).toHaveBeenCalledWith('c1')
   })
 })
 
 describe('ChatScreen — transcript summary marker (§5.3, D-b)', () => {
   it('renders the marker before the boundary message and expands to the summary text', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      listMessages: vi.fn(async () => [msg('m1', 'user', 'question one'), msg('m2', 'assistant', 'answer one')]),
-      getRuntimeStatus: vi.fn(async () => status()),
-      getConversationSummary: vi.fn(async () => ({ summary: 'SUMMARYBODY goal and facts', beforeMessageId: 'm2' }))
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByText('Compaction chat'))
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Compaction chat' })]),
+        listMessages: vi.fn(async () => [userMsg('m1', 'question one'), assistantMsg('m2', 'answer one')]),
+        getConversationSummary: vi.fn(async () => ({
+          summary: 'SUMMARYBODY goal and facts',
+          beforeMessageId: 'm2'
+        }))
+      })
+    )
+    renderChatScreen()
+    await selectConversation(user, 'Compaction chat')
 
     const toggle = await screen.findByRole('button', { name: /earlier messages summarized/i })
+    // §5.3: the divider sits just before the first turn the checkpoint does NOT subsume (m2) — after m1,
+    // before m2.
+    expect(screen.getByText('question one').compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy()
+    expect(toggle.compareDocumentPosition(screen.getByText('answer one')) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy()
     expect(screen.queryByText(/SUMMARYBODY/)).not.toBeInTheDocument()
     await user.click(toggle)
     expect(screen.getByText(/SUMMARYBODY/)).toBeInTheDocument()
   })
 })
 
-describe('ChatScreen — "summarizing…" notice (§5.2)', () => {
-  it('shows on the compaction notice and clears on the first answer token', async () => {
-    const user = userEvent.setup()
-    let tokenCb: ((t: string) => void) | undefined
-    let compactionCb: ((notice: CompactionNotice) => void) | undefined
-    let resolveSend: (() => void) | undefined
-    const sendChatMessage = vi.fn(
-      () =>
-        new Promise<Message>((resolve) => {
-          resolveSend = () => resolve(msg('a9', 'assistant', 'done'))
-        })
-    )
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      listMessages: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status()),
-      sendChatMessage,
-      onToken: vi.fn((_id: string, cb: (t: string) => void) => {
-        tokenCb = cb
-        return () => {}
-      }),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {}),
-      onCompaction: vi.fn((_id: string, cb: (notice: CompactionNotice) => void) => {
-        compactionCb = cb
-        return () => {}
-      })
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByText('Compaction chat'))
-    await user.type(screen.getByPlaceholderText('Message…'), 'hi')
-    await user.click(screen.getByRole('button', { name: 'Send' }))
+/** One row of the notice table: the conversation's mode picks the send channel main emits the kind on. */
+interface NoticeRow {
+  mode: Conversation['mode']
+  notice: CompactionNotice
+  placeholder: string | RegExp
+  sendLabel: string
+  shows: RegExp
+  never: RegExp
+}
 
-    // The stream is in flight (sendChatMessage pending) and the subscriptions are registered.
-    await waitFor(() => expect(compactionCb).toBeTypeOf('function'))
-    act(() => compactionCb!({ phase: 'start' }))
-    expect(await screen.findByText(/summarizing earlier messages/i)).toBeInTheDocument()
+describe('ChatScreen — the "working on it" notice (§5.2, U5)', () => {
+  // U5 (audit §3.6): the SAME ephemeral channel carries an 'analysis' notice when a long, silent
+  // whole-document read starts — shown with honest "reading the document…" copy (NOT the compaction
+  // "summarizing…" line), and cleared on the first answer token exactly the same way. Main sends each kind
+  // only on its own path: a bare compaction start from registerChatIpc (plain chat), 'analysis' from
+  // registerRagIpc / whole-doc-tree.ts (a documents ask).
+  // [title, row] tuples titled with `%s`: vitest quotes an object row's `$label` and cuts it at 40 characters.
+  it.each<[string, NoticeRow]>([
+    [
+      'the summarizing notice on a compaction start (plain chat)',
+      {
+        mode: 'chat',
+        notice: { phase: 'start' },
+        placeholder: 'Message…',
+        sendLabel: 'Send',
+        shows: /summarizing earlier messages/i,
+        never: /reading the whole document/i
+      }
+    ],
+    [
+      'the reading-the-document notice on an analysis start (documents chat)',
+      {
+        mode: 'documents',
+        notice: { phase: 'start', kind: 'analysis' },
+        placeholder: /ask about your documents/i,
+        sendLabel: 'Ask',
+        shows: /reading the whole document/i,
+        never: /summarizing earlier messages/i
+      }
+    ]
+  ])('shows %s and clears it on the first answer token', async (_label, row) => {
+    const { mode, notice, placeholder, sendLabel, shows, never } = row
+    const user = userEvent.setup()
+    const stream = fakeChatStream()
+    const reply = deferred<Message>()
+    stubApi(
+      chatScreenStubs({
+        ...stream.stubs,
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Compaction chat', mode })]),
+        sendChatMessage: vi.fn(() => reply.promise),
+        askDocuments: vi.fn(() => reply.promise)
+      })
+    )
+    renderChatScreen()
+    await selectConversation(user, 'Compaction chat')
+    await user.type(screen.getByPlaceholderText(placeholder), 'hi')
+    await user.click(screen.getByRole('button', { name: sendLabel }))
+
+    // The stream is in flight (the send is pending) and its subscriptions are registered.
+    await waitFor(() => expect(stream.subscribed()).toBe(true))
+    stream.compaction(notice)
+    expect(await screen.findByText(shows)).toBeInTheDocument()
+    expect(screen.queryByText(never)).not.toBeInTheDocument()
 
     // The first answer token clears the notice.
-    act(() => tokenCb!('hello'))
-    await waitFor(() =>
-      expect(screen.queryByText(/summarizing earlier messages/i)).not.toBeInTheDocument()
-    )
+    stream.token('hello')
+    await waitFor(() => expect(screen.queryByText(shows)).not.toBeInTheDocument())
 
-    act(() => resolveSend!())
-  })
-
-  // U5 (audit §3.6): the SAME ephemeral channel carries an 'analysis' notice when an exhaustive skill
-  // handler starts a long, silent extraction — shown with honest "reading the document…" copy (NOT the
-  // compaction "summarizing…" line), and cleared on the first answer token exactly the same way.
-  it("shows the 'analysis' notice (reading the document…) and clears it on the first token", async () => {
-    const user = userEvent.setup()
-    let tokenCb: ((t: string) => void) | undefined
-    let compactionCb: ((notice: CompactionNotice) => void) | undefined
-    let resolveSend: (() => void) | undefined
-    const sendChatMessage = vi.fn(
-      () =>
-        new Promise<Message>((resolve) => {
-          resolveSend = () => resolve(msg('a9', 'assistant', 'done'))
-        })
-    )
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      listMessages: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status()),
-      sendChatMessage,
-      onToken: vi.fn((_id: string, cb: (t: string) => void) => {
-        tokenCb = cb
-        return () => {}
-      }),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {}),
-      onCompaction: vi.fn((_id: string, cb: (notice: CompactionNotice) => void) => {
-        compactionCb = cb
-        return () => {}
-      })
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByText('Compaction chat'))
-    await user.type(screen.getByPlaceholderText('Message…'), 'summarize my statement')
-    await user.click(screen.getByRole('button', { name: 'Send' }))
-
-    await waitFor(() => expect(compactionCb).toBeTypeOf('function'))
-    act(() => compactionCb!({ phase: 'start', kind: 'analysis' }))
-    // The analysis copy shows — NOT the compaction "summarizing…" line.
-    expect(await screen.findByText(/reading the whole document/i)).toBeInTheDocument()
-    expect(screen.queryByText(/summarizing earlier messages/i)).not.toBeInTheDocument()
-
-    // The first answer token clears it.
-    act(() => tokenCb!('hello'))
-    await waitFor(() => expect(screen.queryByText(/reading the whole document/i)).not.toBeInTheDocument())
-
-    act(() => resolveSend!())
-  })
-
-  // Phase 3 (wholedoc-truncation-fix-plan §5): the whole-doc map-reduce path fires the SAME ephemeral
-  // 'analysis' notice before its silent map calls. The renderer can't tell which main-side path fired it —
-  // this pins that a whole-doc analysis turn shows the progress affordance and clears it on the first token.
-  it('shows the whole-doc analysis progress notice and clears it on the first reduce token', async () => {
-    const user = userEvent.setup()
-    let tokenCb: ((t: string) => void) | undefined
-    let compactionCb: ((notice: CompactionNotice) => void) | undefined
-    let resolveSend: (() => void) | undefined
-    const sendChatMessage = vi.fn(
-      () =>
-        new Promise<Message>((resolve) => {
-          resolveSend = () => resolve(msg('a9', 'assistant', 'done'))
-        })
-    )
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      listMessages: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status()),
-      sendChatMessage,
-      onToken: vi.fn((_id: string, cb: (t: string) => void) => {
-        tokenCb = cb
-        return () => {}
-      }),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {}),
-      onCompaction: vi.fn((_id: string, cb: (notice: CompactionNotice) => void) => {
-        compactionCb = cb
-        return () => {}
-      })
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByText('Compaction chat'))
-    await user.type(screen.getByPlaceholderText('Message…'), 'write a contract brief for this document')
-    await user.click(screen.getByRole('button', { name: 'Send' }))
-
-    // The whole-doc map-reduce core fires the 'analysis' notice before its silent map calls.
-    await waitFor(() => expect(compactionCb).toBeTypeOf('function'))
-    act(() => compactionCb!({ phase: 'start', kind: 'analysis' }))
-    expect(await screen.findByText(/reading the whole document/i)).toBeInTheDocument()
-
-    // The first streamed reduce token clears the progress notice.
-    act(() => tokenCb!('The brief begins'))
-    await waitFor(() => expect(screen.queryByText(/reading the whole document/i)).not.toBeInTheDocument())
-
-    act(() => resolveSend!())
+    await act(async () => reply.resolve(assistantMsg('a9', 'done')))
   })
 })
