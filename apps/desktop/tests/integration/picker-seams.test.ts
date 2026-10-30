@@ -43,7 +43,7 @@ import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { IPC } from '../../src/shared/ipc'
 import type { AppContext } from '../../src/main/services/context'
 import type { ModelRuntime } from '../../src/main/services/runtime'
-import type { AppSettings, EngineDownloadJob,GpuDevice, ModelInfo, SpeedSampleIdentity } from '../../src/shared/types'
+import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, SpeedSampleIdentity } from '../../src/shared/types'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
@@ -529,6 +529,9 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     const pushes = performanceChangedSpy()
     const job = await installRuntime(f, engineManifests())
     expect(job.status).toBe('done')
+    // The premise of the "refreshes nothing" rows below: the refresh reaches the probe before the
+    // job settles. A refresh that moves later fails here, not silently there.
+    expect(f.probe).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8]), { timeout: hangBudgetMs(5000) })
     const probe = getSettings(f.ctx.db).gpuProbe
     expect(probe?.machineKey).toBe(hereKey())
@@ -557,8 +560,8 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     // current"). Explicit since #516: the argument-less install fetches MISSING engines only.
     const job = await installRuntime(f, engineManifests(), dropBinary, { families: ['llama_cpp'] })
     expect(job.status).toBe('done')
-    // The install listener runs the refresh up to `ctx.probeGpu` before the job settles: a refresh
-    // that was going to run has already called the probe here.
+    // The install listener runs the refresh up to `ctx.probeGpu` before the job settles (pinned by
+    // the row above): a refresh that was going to run has already called the probe here.
     expect(f.probe).not.toHaveBeenCalled()
     expect(f.ctx.probeGpu?.invalidate).not.toHaveBeenCalled()
     expect(getSettings(f.ctx.db).gpuProbe).toEqual(before)

@@ -571,8 +571,21 @@ describe('PerformanceScreen: models on this computer', () => {
 
   // #495 follow-up: the reverted `anyOnCard` predicate (chat/translation only, never the
   // reranker) needs its own pin: the case above has its reranker on the processor too, so it
-  // cannot tell the predicate from the wider one it replaced. The not-loaded half of the card
-  // line is the #495 row above.
+  // cannot tell the predicate from the wider one it replaced. The #495 row above leaves chat on
+  // the card, so it cannot see the pair line either.
+  it('chat and translation on the processor, reranker resident on the card but not yet loaded: neither card line renders', async () => {
+    const rows = placement().models.map((r) => {
+      if (r.role === 'chat' || r.role === 'translation') return { ...r, device: 'cpu' as const }
+      if (r.role === 'reranker') return { ...r, device: 'gpu' as const, loaded: false }
+      return r
+    })
+    install(snapshot({ placement: placement({ models: rows }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
+  })
+
   it('chat and translation on the processor, reranker resident and loaded on the card: only the reranker card line renders', async () => {
     const rows = placement().models.map((r) => {
       if (r.role === 'chat' || r.role === 'translation') return { ...r, device: 'cpu' as const }

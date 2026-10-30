@@ -405,7 +405,7 @@ async function runBenchmarkAndPersist(
 // (the plaintext open at startup, or unlock/create). Strictly local; never blocks anything.
 //
 // WHY TWO HALVES (PR #303 audit L1 / SD2, owner decision G5). The three post-unlock seams used
-// to fire `maybeRunFirstBenchmark` and `maybeAutoStartActiveModel` back to back. A model start
+// to fire the first benchmark and `maybeAutoStartActiveModel` back to back. A model start
 // is not an occupancy lane, so the benchmark's 8 MiB write/fsync probe contended with the
 // start's multi-GB weight hash + load on the same drive; and `runtime.active()` was captured
 // before the drive probe, so a start that reached ready seconds later never got its speed leg.

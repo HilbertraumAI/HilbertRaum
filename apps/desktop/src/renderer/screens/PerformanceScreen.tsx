@@ -418,7 +418,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
    *  lookup, mount-only. Fire-and-forget under the read's stamp, so a slow reply neither stalls
    *  the snapshot nor overwrites a newer one. The graphics figure is NOT read here: the raw
    *  `settings.gpuProbe` could belong to another computer, so the snapshot's eligible
-   *  `currentGpu` is the only probe source this screen has (PR #303 audit M8.3); the settings
+   *  `graphicsDevice` is the only probe source this screen has (PR #303 audit M8.3); the settings
    *  read below takes ONLY the two GPU flags, for the tile's "acceleration is off" sub-line. */
   const refreshMeta = useCallback((gen: number): void => {
     const fresh = (): boolean => mountedRef.current && gen === genRef.current
