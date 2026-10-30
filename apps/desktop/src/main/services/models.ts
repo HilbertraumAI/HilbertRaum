@@ -1427,7 +1427,7 @@ function toModelInfo(
 export interface BuildModelListOptions {
   manifestsDir: string
   rootPath: string
-  /** Nothing reads this since `machineRamGb` became required. It goes when committed-catalog's calls and registerModelIpc:573 do (part 2). */
+  /** Nothing reads this since `machineRamGb` became required. It goes with its last callers, registerModelIpc and committed-catalog. */
   profile: HardwareProfile
   developerMode: boolean
   /** Model id currently loaded in a running runtime, if any. */

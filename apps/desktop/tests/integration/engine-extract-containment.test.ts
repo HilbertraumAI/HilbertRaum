@@ -226,7 +226,7 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     expect(job.status).toBe('failed')
     expect(job.error).toBe(tMain('main.engine.extractFailed'))
     expect(existsSync(runtimeMarkerPath(extractTo))).toBe(false)
-    // The extracted binary itself stays behind: not a clean state, see the SEC-2 follow-up.
+    // The extracted binary itself stays behind with no marker, so this row does not claim a clean install dir.
     expect(existsSync(join(extractTo, 'evil'))).toBe(false) // the sweep removed the offender…
     expect(existsSync(join(outside, 'keep.txt'))).toBe(true) // …without following the link
   })

@@ -61,8 +61,7 @@ export function discovered(m: ModelManifest, sourceFile?: string): DiscoveredMan
 
 /**
  * Writes `obj` as YAML at `<dir>/<name>`, for a discovery row whose file name or extension is the point, or whose content
- * is deliberately invalid. Replaces models.test's `writeManifest`. Not in the campaign's first API: `manifestsDirWith`
- * cannot name a file.
+ * is deliberately invalid. Replaces models.test's `writeManifest`; `manifestsDirWith` cannot name a file.
  */
 export function writeManifest(dir: string, name: string, obj: unknown): void {
   writeFileSync(join(dir, name), stringify(obj))

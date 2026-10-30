@@ -48,7 +48,7 @@ import { manifestsDirWith, rawManifest, sha256, validManifest, writeDriveFile, w
 /** What every `buildModelList` call passes for the machine's RAM, as production always does. Never the host's. */
 const PINNED_RAM_GB = 16
 
-/** impl-H: not shared, a static settings import in db-fixtures would change what its other importers load. */
+/** Not shared: a static settings import in db-fixtures would change what its other importers load. */
 function seededFreshDb(label: string): Db {
   const db = openFreshDb(label)
   seedSettings(db)

@@ -341,6 +341,8 @@ describe('offline self-check', () => {
     expect(isLoopbackHost('127.255.255.255')).toBe(true)
   })
 
+  // The argument forms the guard parses, driven at `Socket.prototype.connect`. `net.connect`, `http.request` and plain-http
+  // `fetch` reach it with Node's normalized array instead, which the guard does not read: this table says nothing about them.
   it.each<[string, unknown[], string | null]>([
     ['positional, remote host', [443, 'example.com'], 'example.com'],
     ['positional, remote IP literal', [443, '93.184.216.34'], '93.184.216.34'],
