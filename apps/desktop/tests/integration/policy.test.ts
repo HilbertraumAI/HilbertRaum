@@ -1,11 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   DEFAULT_POLICY,
@@ -15,26 +13,21 @@ import {
   resolveNetwork,
   buildPolicyStatus,
   isCommercialPolicy,
-  __policyMaterializations,
-  __resetPolicyCache
+  type EffectiveNetwork
 } from '../../src/main/services/policy'
 import {
   isLoopbackHost,
-  checkOutboundHost,
   installOfflineNetworkGuard,
   assertOfflinePosture
 } from '../../src/main/services/offlineGuard'
+import type { PrivacyPolicy } from '../../src/shared/types'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 
 // ---- helpers --------------------------------------------------------------------
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-policy-')), 'test.sqlite'))
-}
-
 /** Make a temp config dir, optionally seeded with policy.json / drive.json contents. */
 function configDir(files: { policy?: string; drive?: string } = {}): string {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-cfg-'))
-  const cfg = join(dir, 'config')
+  const cfg = join(tempRoot('policy-cfg'), 'config')
   mkdirSync(cfg, { recursive: true })
   if (files.policy !== undefined) writeFileSync(join(cfg, 'policy.json'), files.policy)
   if (files.drive !== undefined) writeFileSync(join(cfg, 'drive.json'), files.drive)
@@ -85,6 +78,16 @@ describe('parsePolicy', () => {
   })
 })
 
+// F-30 rows: the signature is (mtimeMs, size), so pin the mtime and let each row move only what it names.
+const PINNED_MTIME = new Date('2026-01-01T00:00:00Z')
+const LATER_MTIME = new Date('2026-01-01T00:01:00Z')
+const DOWNLOADS_ON = '{"network":{"allow_model_downloads":true }}'
+const DOWNLOADS_OFF = '{"network":{"allow_model_downloads":false}}' // same byte length as DOWNLOADS_ON
+function writePinned(path: string, body: string, mtime: Date = PINNED_MTIME): void {
+  writeFileSync(path, body)
+  utimesSync(path, mtime, mtime)
+}
+
 describe('loadPolicy', () => {
   it('returns DEFAULT_POLICY when no config files exist (developer fallback)', () => {
     const loaded = loadPolicy(configDir())
@@ -95,36 +98,52 @@ describe('loadPolicy', () => {
 
   it('loads policy.json + drive.json when present', () => {
     const cfg = configDir({
-      policy: PERMISSIVE_POLICY,
-      drive: JSON.stringify({ allow_network_by_default: false })
+      policy: JSON.stringify({ network: { allow_model_downloads: false } }),
+      drive: JSON.stringify({ allow_network_by_default: true })
     })
     const loaded = loadPolicy(cfg)
     expect(loaded.policyFilePresent).toBe(true)
     expect(loaded.driveFilePresent).toBe(true)
-    expect(loaded.policy.network.allowModelDownloads).toBe(true)
-    expect(loaded.allowNetworkByDefault).toBe(false)
+    expect(loaded.policy.network.allowModelDownloads).toBe(false)
+    expect(loaded.allowNetworkByDefault).toBe(true)
   })
 
   // F-30 (audit 2026-07-16): getAppStatus/getPolicy re-read+re-parse policy.json+drive.json on every
   // call (TranslateScreen polls every 4 s for a whole run). Cache the parsed result keyed by each
   // file's mtime/size; re-read ONLY when a signature changes so a live edit is still honoured.
-  it('caches the parsed policy across repeated calls; re-reads only when a file changes (F-30)', () => {
-    __resetPolicyCache()
-    const cfg = configDir({ policy: PERMISSIVE_POLICY })
-    const a = loadPolicy(cfg)
-    const b = loadPolicy(cfg)
-    const c = loadPolicy(cfg)
-    expect(a.policy.network.allowModelDownloads).toBe(true)
-    expect(b).toEqual(a)
-    expect(c).toEqual(a)
-    // Polled three times → parsed exactly once (the other two are stat-only cache hits).
-    expect(__policyMaterializations()).toBe(1)
+  it('caches the parsed policy across repeated calls: a same-size, same-mtime swap behind the cache is not read (F-30)', () => {
+    expect(DOWNLOADS_ON.length).toBe(DOWNLOADS_OFF.length) // the premise of "same size"
+    const cfg = configDir()
+    const file = join(cfg, 'policy.json')
+    writePinned(file, DOWNLOADS_ON)
+    expect(loadPolicy(cfg).policy.network.allowModelDownloads).toBe(true)
+    writePinned(file, DOWNLOADS_OFF)
+    // Still the old value: only a cache hit can return it, the file on disk says false. architecture.md F-30.
+    expect(loadPolicy(cfg).policy.network.allowModelDownloads).toBe(true)
+    expect(loadPolicy(cfg).policy.network.allowModelDownloads).toBe(true)
+  })
 
-    // Rewrite policy.json to a different content+size → the mtime/size signature changes → re-read.
-    writeFileSync(join(cfg, 'policy.json'), COMMERCIAL_POLICY)
-    const d = loadPolicy(cfg)
-    expect(d.policy.network.allowModelDownloads).toBe(false) // the live edit is reflected
-    expect(__policyMaterializations()).toBe(2)
+  it.each<[string, (cfg: string) => void, { downloads: boolean; policyFile: boolean; driveFile: boolean }]>([
+    ['policy.json changes size, same mtime', (cfg) => writePinned(join(cfg, 'policy.json'), `${DOWNLOADS_OFF} `), { downloads: false, policyFile: true, driveFile: false }],
+    ['policy.json changes mtime, same size', (cfg) => writePinned(join(cfg, 'policy.json'), DOWNLOADS_OFF, LATER_MTIME), { downloads: false, policyFile: true, driveFile: false }],
+    ['drive.json appears', (cfg) => writeFileSync(join(cfg, 'drive.json'), '{}'), { downloads: true, policyFile: true, driveFile: true }],
+    ['policy.json is deleted', (cfg) => rmSync(join(cfg, 'policy.json')), { downloads: true, policyFile: false, driveFile: false }]
+  ])('a changed file signature IS re-read, so a live edit is honoured (F-30): %s', (_label, change, want) => {
+    const cfg = configDir()
+    writePinned(join(cfg, 'policy.json'), DOWNLOADS_ON)
+    loadPolicy(cfg) // primes the cache
+    change(cfg)
+    const after = loadPolicy(cfg)
+    expect(after.policy.network.allowModelDownloads).toBe(want.downloads)
+    expect(after.policyFilePresent).toBe(want.policyFile)
+    expect(after.driveFilePresent).toBe(want.driveFile)
+  })
+
+  it('a flip of isDev on the same files never serves the other build its cached policy (F-30)', () => {
+    const cfg = configDir({ drive: '{}' })
+    expect(loadPolicy(cfg).policy).toEqual(DEFAULT_POLICY)
+    expect(loadPolicy(cfg, undefined, { isDev: false }).policy).toEqual(STRICT_POLICY)
+    expect(loadPolicy(cfg).policy).toEqual(DEFAULT_POLICY)
   })
 
   it('degrades to defaults + warning on a malformed drive.json (no throw)', () => {
@@ -155,6 +174,12 @@ describe('loadPolicy', () => {
       expect(loaded.policy.models.requireSha256Match).toBe(true)
       expect(loaded.policy.workspace.encryptionRequired).toBe(true)
       expect(loaded.policy.network.allowModelDownloads).toBe(false)
+    })
+
+    it('a malformed drive.json alone still counts as provisioned: a packaged build stays STRICT', () => {
+      const loaded = loadPolicy(configDir({ drive: 'nonsense{' }), undefined, { isDev: false })
+      expect(loaded.policy).toEqual(STRICT_POLICY)
+      expect(loaded.driveFilePresent).toBe(false)
     })
 
     // Issue #93: the portable GitHub-release exe run standalone lands on the app-data
@@ -192,27 +217,20 @@ describe('loadPolicy', () => {
           false
         )
       })
-
-      it('a malformed policy.json still fails closed even without drive.json (provisioned intent)', () => {
-        const warn = vi.fn()
-        const loaded = loadPolicy(configDir({ policy: '{ nope' }), warn, { isDev: false })
-        expect(loaded.policy).toEqual(STRICT_POLICY)
-        expect(warn).toHaveBeenCalled()
-      })
     })
 
     it('keeps the dev-friendly default when isDev', () => {
       expect(loadPolicy(configDir(), undefined, { isDev: true }).policy).toEqual(DEFAULT_POLICY)
-      // No opts ⇒ dev default (canonical reference / unit callers).
-      expect(loadPolicy(configDir()).policy).toEqual(DEFAULT_POLICY)
     })
 
-    it('falls back to STRICT on malformed JSON in a packaged build', () => {
+    it('falls back to STRICT on malformed JSON in a packaged build, even without drive.json', () => {
       const warn = vi.fn()
+      // No drive.json: the malformed file alone is provisioning intent (#93).
       const loaded = loadPolicy(configDir({ policy: '{ not json' }), warn, { isDev: false })
       expect(loaded.policy).toEqual(STRICT_POLICY)
       // policyFilePresent is true (the file exists) but its content was rejected.
       expect(loaded.policyFilePresent).toBe(true)
+      expect(loaded.driveFilePresent).toBe(false)
       expect(warn).toHaveBeenCalled()
     })
 
@@ -229,11 +247,17 @@ describe('loadPolicy', () => {
       expect(loaded.policy.models.allowUnverifiedModels).toBe(false)
     })
 
-    it('honours an explicit commercial policy.json regardless of build type', () => {
-      const loaded = loadPolicy(configDir({ policy: COMMERCIAL_POLICY }), undefined, { isDev: false })
-      expect(loaded.policy.workspace.encryptionRequired).toBe(true)
-      expect(loaded.policy.models.requireSha256Match).toBe(true)
-    })
+    it.each<[string, boolean]>([['a dev build', true], ['a packaged build', false]])(
+      'honours an explicit commercial policy.json regardless of build type: %s',
+      (_label, isDev) => {
+        const { policy } = loadPolicy(configDir({ policy: COMMERCIAL_POLICY }), undefined, { isDev })
+        expect(policy.network.allowModelDownloads).toBe(false)
+        expect(policy.workspace.encryptionRequired).toBe(true)
+        expect(policy.workspace.allowPlaintextDevMode).toBe(false)
+        expect(policy.models.allowUnverifiedModels).toBe(false)
+        expect(policy.models.requireSha256Match).toBe(true)
+      }
+    )
   })
 })
 
@@ -248,6 +272,7 @@ describe('resolveNetwork (effective = policy ∧ setting)', () => {
     expect(DEFAULT_POLICY.network.allowUpdateChecks).toBe(false)
     expect(DEFAULT_POLICY.network.allowTelemetry).toBe(false)
     const off = resolveNetwork(DEFAULT_POLICY, false) // toggle off
+    expect(off.networkAllowedByPolicy).toBe(true)
     expect(off.networkAllowed).toBe(false)
     expect(off.offlineMode).toBe(true)
     const on = resolveNetwork(DEFAULT_POLICY, true) // explicit user opt-in
@@ -263,20 +288,12 @@ describe('resolveNetwork (effective = policy ∧ setting)', () => {
     expect(net.offlineMode).toBe(true)
   })
 
-  it('policy permits + setting on ⇒ on', () => {
-    const policy = parsePolicy(PERMISSIVE_POLICY)
-    const net = resolveNetwork(policy, true)
-    expect(net.networkAllowedByPolicy).toBe(true)
-    expect(net.networkAllowed).toBe(true)
-    expect(net.offlineMode).toBe(false)
-  })
-
-  it('policy permits + setting off ⇒ off (off by choice)', () => {
-    const policy = parsePolicy(PERMISSIVE_POLICY)
-    const net = resolveNetwork(policy, false)
-    expect(net.networkAllowedByPolicy).toBe(true)
-    expect(net.networkAllowed).toBe(false)
-    expect(net.offlineMode).toBe(true)
+  it.each<[string, PrivacyPolicy, boolean, EffectiveNetwork]>([
+    ['downloads key, setting on', parsePolicy(PERMISSIVE_POLICY), true, { networkAllowedByPolicy: true, networkAllowed: true, offlineMode: false }],
+    ['downloads key, setting off', parsePolicy(PERMISSIVE_POLICY), false, { networkAllowedByPolicy: true, networkAllowed: false, offlineMode: true }],
+    ['update checks only, setting on', { ...STRICT_POLICY, network: { ...STRICT_POLICY.network, allowUpdateChecks: true } }, true, { networkAllowedByPolicy: true, networkAllowed: true, offlineMode: false }]
+  ])('policy permits: the setting is the gate, whichever key permits: %s', (_label, policy, setting, want) => {
+    expect(resolveNetwork(policy, setting)).toEqual(want)
   })
 })
 
@@ -293,7 +310,7 @@ describe('buildPolicyStatus', () => {
     expect(status.telemetryAllowed).toBe(false)
   })
 
-  it('reports offline by default with no files + the setting off', () => {
+  it('reports offline with no files when the user turned the setting off', () => {
     const status = buildPolicyStatus(configDir(), false)
     expect(status.networkAllowed).toBe(false)
     expect(status.offlineMode).toBe(true)
@@ -324,35 +341,38 @@ describe('offline self-check', () => {
     expect(isLoopbackHost('127.255.255.255')).toBe(true)
   })
 
-  it('treats remote hosts as a violation only while offline', () => {
-    expect(checkOutboundHost('93.184.216.34', true).violation).toBe(true)
-    expect(checkOutboundHost('api.openai.com', true).violation).toBe(true)
-    // Loopback is never a violation, even offline.
-    expect(checkOutboundHost('127.0.0.1', true).violation).toBe(false)
-    // When network is allowed (not offline), nothing is flagged.
-    expect(checkOutboundHost('api.openai.com', false).violation).toBe(false)
-  })
-
-  it('installOfflineNetworkGuard flags a remote connect attempt but allows loopback', () => {
+  it.each<[string, unknown[], string | null]>([
+    ['positional, remote host', [443, 'example.com'], 'example.com'],
+    ['positional, remote IP literal', [443, '93.184.216.34'], '93.184.216.34'],
+    ['positional, hosted-AI host', [443, 'api.openai.com'], 'api.openai.com'],
+    ['options object, remote host (the TLS route)', [{ host: 'example.com', port: 443 }], 'example.com'],
+    ['positional, loopback', [8080, '127.0.0.1'], null],
+    ['options object, loopback', [{ host: '127.0.0.1', port: 1 }], null],
+    ['options object, a unix socket path wins over host', [{ path: '/tmp/s', host: 'example.com' }], null],
+    ['port only (defaults to localhost)', [8080], null]
+  ])('installOfflineNetworkGuard flags a remote connect attempt but allows loopback: %s', (_label, args, flagged) => {
     const onViolation = vi.fn()
-    // Replace the real connect with a stub BEFORE installing, so the guard wraps the
-    // stub and the test never opens a real socket.
-    const stub = vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (
-      this: net.Socket
-    ) {
+    // Replace the real connect BEFORE installing, so the guard wraps the stub and no real socket opens.
+    const stub = vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) {
       return this
     })
+    const base = net.Socket.prototype.connect
     const uninstall = installOfflineNetworkGuard({ offline: true, onViolation })
     try {
-      const sock = new net.Socket()
-      sock.connect(443, 'example.com')
-      sock.connect(8080, '127.0.0.1')
+      Reflect.apply(net.Socket.prototype.connect, new net.Socket(), args)
+      // Detection only (security-model.md): the original connect runs whatever the verdict.
+      expect(stub).toHaveBeenCalledOnce()
+      expect(stub).toHaveBeenCalledWith(...args)
     } finally {
       uninstall()
-      stub.mockRestore()
     }
-    expect(onViolation).toHaveBeenCalledTimes(1)
-    expect(onViolation).toHaveBeenCalledWith('example.com')
+    expect(net.Socket.prototype.connect).toBe(base) // the uninstaller put back what it wrapped
+    if (flagged === null) {
+      expect(onViolation).not.toHaveBeenCalled()
+    } else {
+      expect(onViolation).toHaveBeenCalledOnce()
+      expect(onViolation).toHaveBeenCalledWith(flagged)
+    }
   })
 
   it('is a no-op when not offline (no patch installed)', () => {
@@ -362,17 +382,38 @@ describe('offline self-check', () => {
     uninstall()
   })
 
-  it('assertOfflinePosture logs and returns an uninstaller without throwing', () => {
+  it('assertOfflinePosture, offline: logs the posture, reports a remote connect through warn + onViolation, and its uninstaller restores connect', () => {
     const log = vi.fn()
     const warn = vi.fn()
-    const uninstall = assertOfflinePosture({
-      posture: { offline: true, networkAllowed: false },
-      installGuard: false,
-      log,
-      warn
+    const onViolation = vi.fn()
+    const stub = vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) {
+      return this
     })
-    expect(log).toHaveBeenCalled()
-    expect(() => uninstall()).not.toThrow()
+    const base = net.Socket.prototype.connect
+    const uninstall = assertOfflinePosture({ posture: { offline: true, networkAllowed: false }, log, warn, onViolation })
+    try {
+      new net.Socket().connect(443, 'example.com')
+      new net.Socket().connect(8080, '127.0.0.1')
+      expect(stub).toHaveBeenCalledTimes(2) // logged, not blocked
+    } finally {
+      uninstall()
+    }
+    expect(net.Socket.prototype.connect).toBe(base)
+    expect(log).toHaveBeenCalledWith('Offline posture', expect.objectContaining({ offlineMode: true, networkAllowed: false }))
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('remote connection attempt'), { host: 'example.com' })
+    expect(onViolation).toHaveBeenCalledOnce()
+    expect(onViolation).toHaveBeenCalledWith('example.com')
+  })
+
+  it('assertOfflinePosture, online: logs the posture and leaves connect unpatched', () => {
+    const log = vi.fn()
+    const before = net.Socket.prototype.connect
+    const uninstall = assertOfflinePosture({ posture: { offline: false, networkAllowed: true }, log, warn: vi.fn() })
+    expect(net.Socket.prototype.connect).toBe(before)
+    expect(log).toHaveBeenCalledWith('Offline posture', expect.objectContaining({ offlineMode: false, networkAllowed: true }))
+    uninstall()
+    expect(net.Socket.prototype.connect).toBe(before)
   })
 })
 
@@ -386,7 +427,7 @@ describe('offline guarantee (core path: settings + status + policy)', () => {
     const socketConnectSpy = vi.spyOn(net.Socket.prototype, 'connect')
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-    const db = freshDb()
+    const db = openFreshDb('policy')
     seedSettings(db)
     updateSettings(db, { allowNetwork: true })
     const cfg = configDir({ policy: PERMISSIVE_POLICY, drive: JSON.stringify({ allow_network_by_default: true }) })
@@ -404,13 +445,6 @@ describe('offline guarantee (core path: settings + status + policy)', () => {
 // ---- Local API policy ceiling (local-api wave P2 item 4; O3/O4 owner-ratified) ----------
 
 describe('local API policy ceiling (local-api P2)', () => {
-  it('postures: DEFAULT permits, STRICT denies, STANDALONE permits (O3)', async () => {
-    const { STANDALONE_POLICY } = await import('../../src/main/services/policy')
-    expect(DEFAULT_POLICY.network.allowLocalApi).toBe(true)
-    expect(STRICT_POLICY.network.allowLocalApi).toBe(false)
-    expect(STANDALONE_POLICY.network.allowLocalApi).toBe(true)
-  })
-
   it('policy.json allow_local_api merges (restrict-only over DEFAULT); junk keeps the base', () => {
     const off = parsePolicy('{"network":{"allow_local_api":false}}')
     expect(off.network.allowLocalApi).toBe(false)
@@ -431,11 +465,9 @@ describe('local API policy ceiling (local-api P2)', () => {
 
   it('buildPolicyStatus carries the ceiling via policy.network.allowLocalApi (the card input)', () => {
     // No 1:1 copy field on PolicyStatus (review 2026-08-18): consumers read the policy.
-    __resetPolicyCache()
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi-'))
-    writeFileSync(join(dir, 'policy.json'), '{"network":{"allow_local_api":false}}')
+    const dir = configDir({ policy: '{"network":{"allow_local_api":false}}' })
     expect(buildPolicyStatus(dir, true).policy.network.allowLocalApi).toBe(false)
-    const dir2 = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi2-'))
+    const dir2 = configDir()
     expect(buildPolicyStatus(dir2, true).policy.network.allowLocalApi).toBe(true) // dev default
   })
 
@@ -445,21 +477,19 @@ describe('local API policy ceiling (local-api P2)', () => {
     // inheriting a packaged build's STRICT base silently denied the feature on all of them.
     // An ABSENT key now means "not yet decided" and inherits DEFAULT (permitted) — the setting
     // is still default-off behind the consent dialog, so this permits, it does not enable.
-    __resetPolicyCache()
-    const legacy = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-legacy-'))
-    writeFileSync(join(legacy, 'drive.json'), '{"edition":"lite"}')
-    // Byte-for-byte the shape a pre-wave prepare-drive wrote: every other key present.
-    writeFileSync(
-      join(legacy, 'policy.json'),
-      JSON.stringify({
+    const legacy = configDir({
+      drive: '{"edition":"lite"}',
+      // Byte-for-byte the shape a pre-wave prepare-drive wrote: every other key present.
+      policy: JSON.stringify({
         network: { allow_model_downloads: true, allow_update_checks: false },
         workspace: { encryption_required: true, allow_plaintext_dev_mode: false },
         models: { allow_unverified_models: false, require_manifest: true, require_sha256_match: true }
       })
-    )
+    })
     const packaged = loadPolicy(legacy, undefined, { isDev: false }).policy
     expect(packaged.network.allowLocalApi).toBe(true)
     // …while every OTHER key the file does state is still honored, strictly.
+    expect(packaged.network.allowModelDownloads).toBe(true) // differs from STRICT, so the file was read
     expect(packaged.workspace.encryptionRequired).toBe(true)
     expect(packaged.workspace.allowPlaintextDevMode).toBe(false)
     expect(packaged.models.requireSha256Match).toBe(true)
@@ -472,20 +502,16 @@ describe('local API policy ceiling (local-api P2)', () => {
     // network field stays STRICT. That asymmetry is inherent to the owner's decision (absence
     // means undecided) and is the documented footgun: a drive that wants the feature off must
     // say so EXPLICITLY. Pinned here so nobody flips it silently in either direction.
-    for (const [label, body] of [
-      ['empty object', '{}'],
-      ['no network block', '{"workspace":{"encryption_required":true}}'],
-      ['non-object network', '{"network":"nope"}'],
-      ['null value', '{"network":{"allow_local_api":null}}']
-    ] as Array<[string, string]>) {
-      __resetPolicyCache()
-      const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-shape-'))
-      writeFileSync(join(dir, 'drive.json'), '{}')
-      writeFileSync(join(dir, 'policy.json'), body)
-      const net = loadPolicy(dir, undefined, { isDev: false }).policy.network
+    for (const [label, body, allowed] of [
+      ['empty object', '{}', true],
+      ['no network block', '{"workspace":{"encryption_required":true}}', true],
+      ['non-object network', '{"network":"nope"}', true],
       // `null` is present-but-not-a-boolean, so it fails CLOSED like any other junk value;
       // the three genuinely ABSENT shapes are permitted.
-      expect(net.allowLocalApi, label).toBe(label !== 'null value')
+      ['null value', '{"network":{"allow_local_api":null}}', false]
+    ] as Array<[string, string, boolean]>) {
+      const net = loadPolicy(configDir({ drive: '{}', policy: body }), undefined, { isDev: false }).policy.network
+      expect(net.allowLocalApi, label).toBe(allowed)
       // …and the rest of the network block still comes from STRICT in every shape.
       expect(net.allowModelDownloads, label).toBe(false)
       expect(net.allowUpdateChecks, label).toBe(false)
@@ -495,37 +521,24 @@ describe('local API policy ceiling (local-api P2)', () => {
   it('an EXPLICIT allow_local_api: false still denies, and junk fails CLOSED (not open)', () => {
     // The permissive default applies ONLY to an absent key. O4 — commercial drives write an
     // explicit false — must be unaffected, and a garbage value must never fail open.
-    __resetPolicyCache()
-    const denied = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-explicit-'))
-    writeFileSync(join(denied, 'drive.json'), '{}')
-    writeFileSync(join(denied, 'policy.json'), '{"network":{"allow_local_api":false}}')
+    const denied = configDir({ drive: '{}', policy: '{"network":{"allow_local_api":false}}' })
     expect(loadPolicy(denied, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
 
-    __resetPolicyCache()
-    const junk = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-junk-'))
-    writeFileSync(join(junk, 'drive.json'), '{}')
-    writeFileSync(join(junk, 'policy.json'), '{"network":{"allow_local_api":"no"}}')
+    const junk = configDir({ drive: '{}', policy: '{"network":{"allow_local_api":"no"}}' })
     // Present-but-not-a-boolean falls back to the STRICT base for a packaged build.
     expect(loadPolicy(junk, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
 
     // A MALFORMED file is a different path (parsePolicy returns the base) — still closed.
-    __resetPolicyCache()
-    const broken = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-broken-'))
-    writeFileSync(join(broken, 'drive.json'), '{}')
-    writeFileSync(join(broken, 'policy.json'), '{ this is not json')
+    const broken = configDir({ drive: '{}', policy: '{ this is not json' })
     expect(loadPolicy(broken, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
-    // And the STRICT constant itself is untouched — it is what a malformed file falls back to.
-    expect(STRICT_POLICY.network.allowLocalApi).toBe(false)
   })
 
   it('a packaged build fails CLOSED on a provisioned dir; standalone keeps the O3 posture', () => {
-    __resetPolicyCache()
     // Provisioned (drive.json marker) + missing policy.json => STRICT => local API denied.
-    const provisioned = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi3-'))
-    writeFileSync(join(provisioned, 'drive.json'), '{}')
+    const provisioned = configDir({ drive: '{}' })
     expect(loadPolicy(provisioned, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(false)
     // Unprovisioned app-data root => STANDALONE => permitted (setting still default-off).
-    const standalone = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-lapi4-'))
+    const standalone = configDir()
     expect(loadPolicy(standalone, undefined, { isDev: false }).policy.network.allowLocalApi).toBe(true)
   })
 })
