@@ -35,8 +35,9 @@ const mdPlugins = { math }
 // ponytail: regex-over-segments, not a markdown AST walk — revisit only if a real transcript
 // shows a false positive (e.g. prose containing a literal backslash-bracket pair).
 // Capturing split: even indices are prose, odd indices are code (fences first, then spans).
-// An UNCLOSED trailing fence swallows to end-of-text as a code part, so a streaming buffer
-// that currently ends inside a fence lands on an odd index and is left alone.
+// With one capture group split always returns an odd number of parts, so the LAST part is always
+// prose — '' when an UNCLOSED trailing fence swallows to end-of-text as a code part; the
+// completions below find nothing in that ''.
 const CODE_SPLIT_RE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/
 
 function normalizeMathDelimiters(text: string): string {
@@ -59,8 +60,7 @@ function normalizeMathDelimiters(text: string): string {
         .replace(/(?<!\\)\\\(([\s\S]+?)(?<!\\)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
     )
   }
-  const last = parts.length - 1
-  if (last % 2 === 0) parts[last] = openDanglingDisplayDollar(parts)
+  parts[parts.length - 1] = openDanglingDisplayDollar(parts)
   return parts.join('')
 }
 
@@ -103,12 +103,12 @@ const DISPLAY_DOLLAR_RE = /(?<![\\$])\$\$(?!\$)/g
 /**
  * The `$$` left without a partner, when it is the trailing prose segment's own last one: its
  * index there, and the indentation its display fence keeps (null mid-line, or where a fence may
- * not keep it). Null when every `$$` has its partner, when the buffer ends inside code, or when
- * the unpaired one lies before a code span: which `$$` that is cannot be told from here.
+ * not keep it). Null when every `$$` has its partner, when the buffer ends inside code (the
+ * trailing prose part is then ''), or when the unpaired one lies before a code span: which `$$`
+ * that is cannot be told from here.
  */
 function danglingDisplayDollar(parts: string[]): { open: number; fence: string | null } | null {
   const last = parts.length - 1
-  if (last % 2 === 1) return null
   const inTail = [...parts[last]!.matchAll(DISPLAY_DOLLAR_RE)]
   let before = 0
   for (let i = 0; i < last; i += 2) before += parts[i]!.match(DISPLAY_DOLLAR_RE)?.length ?? 0
@@ -275,7 +275,6 @@ function completeTrailingBracketMath(text: string): string {
   if (!text.includes('\\[') && !text.includes('\\(')) return text
   const parts = text.split(CODE_SPLIT_RE)
   const last = parts.length - 1
-  if (last % 2 === 1) return text // the buffer currently ends inside code — leave it alone
   const tail = parts[last]!
   // The LAST opener in the trailing prose segment; a closed pair was already converted to $$
   // by normalizeMathDelimiters, so anything still bracket-form here is the dangling tail.
@@ -337,7 +336,6 @@ function completeTrailingDollarMath(text: string): string {
   if (!text.includes('$')) return text
   const parts = text.split(CODE_SPLIT_RE)
   const last = parts.length - 1
-  if (last % 2 === 1) return text // the buffer currently ends inside code — leave it alone
   const tail = parts[last]!
   const { tailOpen } = scanDollarMath(tail)
   // A newline after the opener means the buffer moved on: it was a literal `$`, not math.
