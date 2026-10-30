@@ -70,6 +70,26 @@ describe('judgeDictationLevel — the #497 floors', () => {
     expect(DICTATION_MIN_DURATION_MS).toBe(300)
   })
 
+  // Every other "silent" clip here already fails the peak arm, so nothing reached the RMS arm.
+  it('refuses a sparse pop the peak floor lets through (the RMS arm)', () => {
+    const pop = new Float32Array(RATE * 3)
+    pop[RATE] = 0.01 // peak −40 dBFS, RMS ≈ −86.8 dBFS
+    const level = measureDictationLevel(pop, RATE)
+    expect(level.peakDbfs).toBeGreaterThan(DICTATION_SILENCE_PEAK_DBFS) // the peak arm alone would pass it
+    expect(judgeDictationLevel(level)).toBe('silent')
+  })
+
+  // The bounds where the judge uses them: 4,784 / 4,800 samples are 299 / 300 ms, and the sampled
+  // 440 Hz peaks land exactly on −50.5 / −49.5 dBFS.
+  it.each([
+    ['299 ms of speech-level audio', 'too-short', 0.299, 0.1],
+    ['300 ms of speech-level audio', 'ok', 0.3, 0.1],
+    ['a −50.5 dBFS peak', 'silent', 1, 10 ** (-50.5 / 20)],
+    ['a −49.5 dBFS peak', 'ok', 1, 10 ** (-49.5 / 20)]
+  ] as const)('at the shipped bounds: %s → %s', (_what, verdict, seconds, amplitude) => {
+    expect(judgeDictationLevel(measureDictationLevel(sine(seconds, amplitude), RATE))).toBe(verdict)
+  })
+
   it('refuses digital silence (the reported "you" case)', () => {
     expect(judgeDictationLevel(measureDictationLevel(new Float32Array(RATE * 3), RATE))).toBe('silent')
   })
