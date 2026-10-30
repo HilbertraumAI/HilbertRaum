@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen, __reviewItemRowRenderCounts } from '../../src/renderer/screens/ReviewScreen'
@@ -11,10 +11,6 @@ import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 // recipe). Every note keystroke rebuilds `detail.items` with identity preserved for the
 // untouched items — pre-fix the unmemoized rows all re-rendered (and re-localized their
 // immutable snapshots) per keystroke; the probe map pins that only the edited row re-renders.
-
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 beforeEach(() => {
   resetReviewSessionForTests()

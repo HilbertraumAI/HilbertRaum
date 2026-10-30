@@ -130,14 +130,14 @@ export function advanceWordTally(tally: LiveWordTally, text: string): number {
 }
 
 /** localStorage key for the conversation-list collapse (a UI preference, not user data). */
-export const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
+const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
 /** Below this viewport width the history column auto-collapses (responsive; the
  *  persisted desktop preference is untouched — widening restores the user's choice). */
 export const LIST_AUTO_COLLAPSE_PX = 1150
 
 /** Streamed tokens are batched and flushed on this cadence instead of per-token.
- *  Exported so the FE-1 unmount test can identify (and assert teardown of) the flush timer. */
+ *  Exported so the renderer buffering test (ChatStreamBuffering) advances the shipped window. */
 export const STREAM_FLUSH_MS = 40
 
 /** #39: how long a turn must stay chunk-less (no answer token, no reasoning delta) before the

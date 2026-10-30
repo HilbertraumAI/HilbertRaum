@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
-import { Transcript } from '../../src/renderer/chat/Transcript'
-import { I18nProvider } from '../../src/renderer/i18n'
+import { describe, it, expect, afterEach } from 'vitest'
+import { screen, cleanup, fireEvent } from '@testing-library/react'
 import { t, tCount } from '../../src/shared/i18n'
-import type { Citation, CoverageInfo, CoverageMode, Message } from '../../src/shared/types'
+import type { Citation, CoverageInfo, CoverageMode } from '../../src/shared/types'
+import { makeCitations, makeMessage } from '../helpers/chat-fixtures'
+import { renderTranscript } from '../helpers/transcript'
 
 // Phase 5 (full-audit-2026-06-29 follow-up) — FE-B / F11 renderer half + FE-D a11y.
 //
@@ -19,55 +19,14 @@ import type { Citation, CoverageInfo, CoverageMode, Message } from '../../src/sh
 
 afterEach(cleanup)
 
-// jsdom does not implement Element.scrollTo (Transcript scrolls to newest content).
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
-
-function cites(n: number): Citation[] {
-  return Array.from({ length: n }, (_, i) => ({
-    label: `S${i + 1}`,
-    sourceTitle: `section ${i + 1}`,
-    pageNumber: i + 1,
-    snippet: `body of section ${i + 1}`
-  }))
-}
-
-function message(citations: Citation[], coverage?: CoverageInfo): Message {
-  return {
-    id: 'm1',
-    conversationId: 'c1',
-    role: 'assistant',
-    content: 'An answer.',
-    createdAt: '2026-01-01T00:00:00Z',
-    citations,
-    ...(coverage ? { coverage } : {})
-  }
-}
-
 function treeCoverage(covered: number): CoverageInfo {
   return { mode: 'tree', treeStatus: 'ready', chunksCovered: covered, chunksTotal: covered, tier: 1 }
 }
 
-function renderTranscript(m: Message): HTMLElement {
-  const { container } = render(
-    <I18nProvider>
-      <Transcript
-        messages={[m]}
-        streamingHere={false}
-        streamText=""
-        streamThinking=""
-        thinkingOpen={false}
-        onThinkingOpenChange={() => {}}
-        emptyState={null}
-        onCopy={() => {}}
-        onSave={() => {}}
-        actionsDisabled={false}
-      />
-    </I18nProvider>
-  )
-  return container
-}
+// A persisted answer carrying `citations`, and `coverage` only when given (no key at all is the
+// pre-migration NULL-coverage row).
+const show = (citations: Citation[], coverage?: CoverageInfo): HTMLElement =>
+  renderTranscript({ messages: [makeMessage({ citations, ...(coverage ? { coverage } : {}) })] }).container
 
 const PROVENANCE_MODES: CoverageMode[] = ['tree', 'capped', 'extract']
 
@@ -75,7 +34,7 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
   for (const mode of PROVENANCE_MODES) {
     it(`a ${mode}-mode answer relabels to whole-document provenance, NOT "Sources (N)"`, () => {
       const n = 1000
-      renderTranscript(message(cites(n), { ...treeCoverage(n), mode }))
+      show(makeCitations(n), { ...treeCoverage(n), mode })
       // The provenance label is shown; the literal "Sources (1000)" inline-citation label is NOT.
       expect(
         screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', n) })
@@ -88,7 +47,7 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
 
   it('caps the rendered provenance cards (~24) and offers an "and N more" reveal', () => {
     const n = 1000
-    const container = renderTranscript(message(cites(n), treeCoverage(n)))
+    const container = show(makeCitations(n), treeCoverage(n))
     fireEvent.click(
       screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', n) })
     )
@@ -106,12 +65,12 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
   // full-audit 2026-07-11 CODE-8: both provenance labels ride tCount — a one-section document
   // used to read "— 1 sections", a one-section reveal tail "and 1 more sections".
   it('CODE-8: the provenance label is singular at 1 section and plural at 2', () => {
-    renderTranscript(message(cites(1), treeCoverage(1)))
+    show(makeCitations(1), treeCoverage(1))
     expect(
       screen.getByRole('button', { name: 'Drawn from the document — 1 section' })
     ).toBeInTheDocument()
     cleanup()
-    renderTranscript(message(cites(2), treeCoverage(2)))
+    show(makeCitations(2), treeCoverage(2))
     expect(
       screen.getByRole('button', { name: 'Drawn from the document — 2 sections' })
     ).toBeInTheDocument()
@@ -119,31 +78,29 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
 
   it('CODE-8: the reveal tail is singular at exactly one held-back section and plural at two', () => {
     // 25 sections = 24 rendered + 1 held back; 26 = 24 + 2.
-    renderTranscript(message(cites(25), treeCoverage(25)))
+    show(makeCitations(25), treeCoverage(25))
     fireEvent.click(screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 25) }))
     expect(screen.getByRole('button', { name: 'and 1 more section' })).toBeInTheDocument()
     cleanup()
-    renderTranscript(message(cites(26), treeCoverage(26)))
+    show(makeCitations(26), treeCoverage(26))
     fireEvent.click(screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 26) }))
     expect(screen.getByRole('button', { name: 'and 2 more sections' })).toBeInTheDocument()
   })
 
   it('does not cap a small provenance list (under the cap renders every section)', () => {
-    const container = renderTranscript(message(cites(5), treeCoverage(5)))
+    const container = show(makeCitations(5), treeCoverage(5))
     fireEvent.click(
       screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 5) })
     )
     expect(container.querySelectorAll('.source-card').length).toBe(5)
     expect(
-      screen.queryByRole('button', { name: /more sections/i })
+      screen.queryByRole('button', { name: /more section/i })
     ).not.toBeInTheDocument()
   })
 
   it('a RELEVANCE answer is unchanged: "Sources (N)", every card 1:1, with [Sn] labels', () => {
     const n = 30
-    const container = renderTranscript(
-      message(cites(n), { mode: 'relevance', chunksCovered: 0, chunksTotal: 0 })
-    )
+    const container = show(makeCitations(n), { mode: 'relevance', chunksCovered: 0, chunksTotal: 0 })
     fireEvent.click(screen.getByRole('button', { name: t('en', 'chat.sources.toggle', { count: n }) }))
     expect(container.querySelectorAll('.source-card').length).toBe(n) // 1:1, NOT capped
     expect(container.querySelector('.cite-label')?.textContent).toBe('[S1]')
@@ -158,7 +115,7 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
   it('#643: a labelled whole read keeps "Sources (N)" and [Sn] on every card, capped at 24', () => {
     const n = 30
     const labelled: CoverageInfo = { mode: 'capped', chunksCovered: n, chunksTotal: n, truncated: false, labelledExcerpts: true }
-    const container = renderTranscript(message(cites(n), labelled))
+    const container = show(makeCitations(n), labelled)
     fireEvent.click(screen.getByRole('button', { name: t('en', 'chat.sources.toggle', { count: n }) }))
     expect(container.querySelectorAll('.source-card').length).toBe(24)
     expect(container.querySelectorAll('.cite-label').length).toBe(24)
@@ -167,13 +124,13 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
     fireEvent.click(screen.getByRole('button', { name: tCount('en', 'chat.sources.more', n - 24) }))
     expect(container.querySelectorAll('.cite-label').length).toBe(n)
     cleanup()
-    renderTranscript(message(cites(3), { ...treeCoverage(3), labelledExcerpts: true }))
+    show(makeCitations(3), { ...treeCoverage(3), labelledExcerpts: true })
     expect(screen.getByRole('button', { name: tCount('en', 'chat.sources.wholeDoc', 3) })).toBeInTheDocument()
   })
 
   it('a NULL-coverage citation-bearing answer (pre-migration) stays "Sources (N)" 1:1', () => {
     const n = 40
-    const container = renderTranscript(message(cites(n))) // no coverage at all → undefined mode
+    const container = show(makeCitations(n)) // no coverage at all → undefined mode
     fireEvent.click(screen.getByRole('button', { name: t('en', 'chat.sources.toggle', { count: n }) }))
     expect(container.querySelectorAll('.source-card').length).toBe(n)
     expect(container.querySelector('.cite-label')).not.toBeNull()
@@ -181,11 +138,17 @@ describe('SourcesDisclosure — whole-document provenance vs inline citations (F
 })
 
 describe('SourcesDisclosure a11y — toggle aria-controls names the region (FE-D)', () => {
-  it('aria-controls resolves to the rendered region id when expanded (provenance)', () => {
-    renderTranscript(message(cites(3), treeCoverage(3)))
-    const toggle = screen.getByRole('button', {
-      name: tCount('en', 'chat.sources.wholeDoc', 3)
-    })
+  // One toggle and one region element serve both framings (no mode branch in the ids or the role).
+  it.each([
+    ['provenance', treeCoverage(3), () => tCount('en', 'chat.sources.wholeDoc', 3)],
+    [
+      'relevance',
+      { mode: 'relevance', chunksCovered: 0, chunksTotal: 0 } as CoverageInfo,
+      () => t('en', 'chat.sources.toggle', { count: 3 })
+    ]
+  ] as const)('aria-controls resolves to the rendered region id when expanded (%s)', (_kind, coverage, name) => {
+    show(makeCitations(3), coverage)
+    const toggle = screen.getByRole('button', { name: name() })
     const controls = toggle.getAttribute('aria-controls')
     expect(controls).toBeTruthy()
     // The sources region is named by the toggle and only present once expanded. (CH-12/#148
@@ -194,19 +157,8 @@ describe('SourcesDisclosure a11y — toggle aria-controls names the region (FE-D
     expect(document.getElementById(controls!)).toBeNull()
     fireEvent.click(toggle)
     const region = document.getElementById(controls!)
-    expect(region).not.toBeNull()
-    expect(region!.getAttribute('role')).toBe('region')
-    expect(within(region!).getByText(t('en', 'chat.sources.wholeDocCaption'))).toBeInTheDocument()
-  })
-
-  it('aria-controls resolves on a relevance disclosure too', () => {
-    renderTranscript(message(cites(2), { mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }))
-    const toggle = screen.getByRole('button', { name: t('en', 'chat.sources.toggle', { count: 2 }) })
-    const controls = toggle.getAttribute('aria-controls')
-    expect(controls).toBeTruthy()
-    fireEvent.click(toggle)
-    const region = document.getElementById(controls!)
-    expect(region).not.toBeNull()
-    expect(region!.getAttribute('role')).toBe('region')
+    expect(region?.getAttribute('role')).toBe('region')
+    expect(region?.getAttribute('aria-labelledby')).toBe(toggle.id)
+    expect(region?.querySelectorAll('.source-card')).toHaveLength(3) // the region IS the cards panel
   })
 })

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
@@ -84,14 +84,6 @@ const unsub = (): (() => void) => () => {}
 // The run-bar offer button for a read-only tool (SkillRunBar labels it from the tool name).
 const RUN_BUTTON = { name: 'Extract transactions' }
 const RUNNABLE = { name: 'extract_transactions', requiresConfirmation: false }
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

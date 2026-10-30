@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { EvidencePane } from '../../src/renderer/review/EvidencePane'
@@ -29,10 +29,6 @@ import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceRev
 //
 // The three sit together because they share one shape: state that describes the UI is left
 // behind when the condition that produced it goes away.
-
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 beforeEach(() => {
   resetReviewSessionForTests()

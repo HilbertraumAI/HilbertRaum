@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type { RuntimeStatus } from '../../src/shared/types'
@@ -34,15 +34,6 @@ function setup(status: RuntimeStatus): void {
   })
   render(<ChatScreen onNavigate={() => {}} />)
 }
-
-beforeAll(() => {
-  // jsdom has no scrollTo; the transcript autoscroll calls it on mount.
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

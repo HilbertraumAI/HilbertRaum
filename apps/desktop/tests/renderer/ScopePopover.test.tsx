@@ -1,27 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { screen, cleanup, type RenderResult } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ComponentProps } from 'react'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import { t } from '../../src/shared/i18n'
-import type { Collection, DocumentInfo } from '../../src/shared/types'
-
-function indexedDoc(over: Partial<DocumentInfo> = {}): DocumentInfo {
-  return {
-    id: 'd1',
-    title: 'contract.pdf',
-    originalPath: null,
-    mimeType: 'application/pdf',
-    sizeBytes: 1,
-    status: 'indexed',
-    errorMessage: null,
-    chunkCount: 1,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    ...over
-  } as DocumentInfo
-}
+import { t, type UiLanguage } from '../../src/shared/i18n'
+import type { Collection } from '../../src/shared/types'
+import { makeDocumentInfo } from '../helpers/chat-fixtures'
+import { renderInLanguage } from '../helpers/render-language'
 
 // Audit FE-6 — the pending-attachment chips are keyed by name+index so each chip's key is unique
 // (two cross-folder files can share a base name) AND content-aware. The teeth test below pins the
@@ -39,8 +25,18 @@ function libraryCollection(): Collection {
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     archivedAt: null
-  } as Collection
+  }
 }
+
+/** The popover over an empty library and the legacy (null) scope; override per row. */
+const renderPopover = (
+  props: Partial<ComponentProps<typeof ScopePopover>> = {},
+  lang: UiLanguage = 'en'
+): RenderResult =>
+  renderInLanguage(
+    <ScopePopover docs={[]} collections={[]} scope={null} onChangeScope={() => {}} {...props} />,
+    lang
+  )
 
 afterEach(() => {
   cleanup()
@@ -50,17 +46,7 @@ afterEach(() => {
 describe('ScopePopover — pending attachment chips (FE-6)', () => {
   it('renders a chip per pending attachment', async () => {
     const user = userEvent.setup()
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[]}
-          collections={[]}
-          scope={null}
-          onChangeScope={() => {}}
-          pendingAttachmentNames={['a.pdf', 'b.pdf']}
-        />
-      </I18nProvider>
-    )
+    renderPopover({ pendingAttachmentNames: ['a.pdf', 'b.pdf'] })
     // The chips live in the popover's portal content — open it first.
     await user.click(screen.getByRole('button'))
     expect(await screen.findByText('Processing a.pdf…')).toBeInTheDocument()
@@ -72,17 +58,7 @@ describe('ScopePopover — pending attachment chips (FE-6)', () => {
     // name-only key would emit "Encountered two children with the same key, `pending-report.pdf`".
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const user = userEvent.setup()
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[]}
-          collections={[]}
-          scope={null}
-          onChangeScope={() => {}}
-          pendingAttachmentNames={['report.pdf', 'report.pdf']}
-        />
-      </I18nProvider>
-    )
+    renderPopover({ pendingAttachmentNames: ['report.pdf', 'report.pdf'] })
     await user.click(screen.getByRole('button'))
     expect(await screen.findAllByText('Processing report.pdf…')).toHaveLength(2)
     const sawKeyWarning = errSpy.mock.calls.some((c) =>
@@ -100,17 +76,13 @@ describe('ScopePopover — attach-chat reset label (CODE-31)', () => {
   it('labels the reset truthfully in an attach-chat and still emits the empty explicit scope', async () => {
     const user = userEvent.setup()
     const onChangeScope = vi.fn()
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'a' })]}
-          collections={[libraryCollection()]}
-          scope={{ collectionIds: ['lib'], documentIds: [] }}
-          onChangeScope={onChangeScope}
-          attachments={[indexedDoc({ id: 'att1', title: 'statement.pdf' })]}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      docs: [makeDocumentInfo({ id: 'a' })],
+      collections: [libraryCollection()],
+      scope: { collectionIds: ['lib'], documentIds: [] },
+      onChangeScope,
+      attachments: [makeDocumentInfo({ id: 'att1', title: 'statement.pdf' })]
+    })
     await user.click(screen.getByRole('button')) // open the picker
     // TEETH: pre-fix the reset read "All documents" while emitting the attachments-only scope.
     const reset = await screen.findByRole('button', {
@@ -127,16 +99,11 @@ describe('ScopePopover — attach-chat reset label (CODE-31)', () => {
 
   it('keeps the "All documents" label when the chat has no attachments', async () => {
     const user = userEvent.setup()
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'a' })]}
-          collections={[libraryCollection()]}
-          scope={{ collectionIds: ['lib'], documentIds: [] }}
-          onChangeScope={() => {}}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      docs: [makeDocumentInfo({ id: 'a' })],
+      collections: [libraryCollection()],
+      scope: { collectionIds: ['lib'], documentIds: [] }
+    })
     await user.click(screen.getByRole('button'))
     expect(
       await screen.findByRole('button', { name: t('en', 'chat.scope.allTap') })
@@ -149,51 +116,30 @@ describe('ScopePopover — attach-chat reset label (CODE-31)', () => {
 
 describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
   // The always-visible chip near the composer reframes the scope popover's trigger so the active
-  // retrieval scope is legible BEFORE asking. It IS the popover trigger — one click opens the picker.
+  // retrieval scope is legible BEFORE asking. It IS the popover trigger — one click opens the picker
+  // (every row above that opens the picker proves the click).
   it('names the single attached file when the composed scope is empty (scoped to that file, NOT the whole corpus)', () => {
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: [] }}
-          onChangeScope={() => {}}
-          pendingAttachmentNames={['statement.pdf']}
-        />
-      </I18nProvider>
-    )
+    renderPopover({ scope: { collectionIds: [], documentIds: [] }, pendingAttachmentNames: ['statement.pdf'] })
     const trigger = screen.getByRole('button')
     expect(trigger.textContent).toContain(t('en', 'chat.scope.answeringFrom', { source: 'statement.pdf' }))
-    expect(trigger.textContent).not.toMatch(/using all documents/i)
+    expect(trigger.textContent).not.toContain(t('en', 'chat.scope.wholeLibrary.other', { count: 0 }))
   })
 
   it('shows the doc name for a single-document scope (the #26 "ask exactly this one document" case)', () => {
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'd1', title: 'contract.pdf' })]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: ['d1'] }}
-          onChangeScope={() => {}}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      docs: [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })],
+      scope: { collectionIds: [], documentIds: ['d1'] }
+    })
     expect(screen.getByRole('button').textContent).toContain(
       t('en', 'chat.scope.answeringFrom', { source: 'contract.pdf' })
     )
   })
 
   it('shows "your whole library — N documents" for an empty scope with no attachments', () => {
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'a' }), indexedDoc({ id: 'b' })]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: [] }}
-          onChangeScope={() => {}}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      docs: [makeDocumentInfo({ id: 'a' }), makeDocumentInfo({ id: 'b' })],
+      scope: { collectionIds: [], documentIds: [] }
+    })
     const source = t('en', 'chat.scope.wholeLibrary.other', { count: 2 })
     expect(screen.getByRole('button').textContent).toContain(
       t('en', 'chat.scope.answeringFrom', { source })
@@ -201,49 +147,24 @@ describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
   })
 
   it('treats a Library-only scope as the whole library, naming the corpus size (not the bare word "Library")', () => {
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'a' })]}
-          collections={[libraryCollection()]}
-          scope={{ collectionIds: ['lib'], documentIds: [] }}
-          onChangeScope={() => {}}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      docs: [makeDocumentInfo({ id: 'a' })],
+      collections: [libraryCollection()],
+      scope: { collectionIds: ['lib'], documentIds: [] }
+    })
     const source = t('en', 'chat.scope.wholeLibrary.one', { count: 1 })
     expect(screen.getByRole('button').textContent).toContain(
       t('en', 'chat.scope.answeringFrom', { source })
     )
   })
 
-  it('one click on the chip opens the source picker', async () => {
-    const user = userEvent.setup()
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'd1', title: 'contract.pdf' })]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: ['d1'] }}
-          onChangeScope={() => {}}
-        />
-      </I18nProvider>
-    )
-    await user.click(screen.getByRole('button'))
-    expect(await screen.findByText(t('en', 'chat.scope.sourcesTitle'))).toBeInTheDocument()
-  })
-
   it('renders the German chip label (forced via the localStorage mirror, D-L8)', () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'd1', title: 'Vollmacht.docx' })]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: ['d1'] }}
-          onChangeScope={() => {}}
-        />
-      </I18nProvider>
+    renderPopover(
+      {
+        docs: [makeDocumentInfo({ id: 'd1', title: 'Vollmacht.docx' })],
+        scope: { collectionIds: [], documentIds: ['d1'] }
+      },
+      'de'
     )
     expect(screen.getByRole('button').textContent).toContain(
       t('de', 'chat.scope.answeringFrom', { source: 'Vollmacht.docx' })
@@ -255,20 +176,14 @@ describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
 // unfiled file — so the chip must name it as NOT READABLE YET, never bare (as if it were in use)
 // and never "your whole library" (what the chat used to fall back to).
 describe('ScopePopover — a failed attachment (#571)', () => {
-  const failed = indexedDoc({ id: 'scan', title: 'scan.pdf', status: 'failed', chunkCount: 0 })
+  const failed = makeDocumentInfo({ id: 'scan', title: 'scan.pdf', status: 'failed', chunkCount: 0 })
 
   it('the chip names the file as not readable yet — not bare, not the whole library', () => {
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[indexedDoc({ id: 'a' }), indexedDoc({ id: 'b' })]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: [] }}
-          onChangeScope={() => {}}
-          attachments={[failed]}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      docs: [makeDocumentInfo({ id: 'a' }), makeDocumentInfo({ id: 'b' })],
+      scope: { collectionIds: [], documentIds: [] },
+      attachments: [failed]
+    })
     const source = t('en', 'chat.scope.attachmentNotReadable', { name: 'scan.pdf' })
     const trigger = screen.getByRole('button')
     expect(trigger.textContent).toContain(t('en', 'chat.scope.answeringFrom', { source }))
@@ -276,17 +191,10 @@ describe('ScopePopover — a failed attachment (#571)', () => {
   })
 
   it('"Files in this chat" marks it and says it adds nothing yet; a readable file stays bare', async () => {
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: [] }}
-          onChangeScope={() => {}}
-          attachments={[failed, indexedDoc({ id: 'ok', title: 'invoice.pdf' })]}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      scope: { collectionIds: [], documentIds: [] },
+      attachments: [failed, makeDocumentInfo({ id: 'ok', title: 'invoice.pdf' })]
+    })
     await userEvent.click(screen.getByRole('button'))
     const chip = (await screen.findAllByText(t('en', 'chat.scope.attachmentNotReadable', { name: 'scan.pdf' }))).find(
       (el) => el.classList.contains('scope-attachment')
@@ -297,18 +205,7 @@ describe('ScopePopover — a failed attachment (#571)', () => {
   })
 
   it('renders the marker and the hint from the German catalog', async () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: [] }}
-          onChangeScope={() => {}}
-          attachments={[failed]}
-        />
-      </I18nProvider>
-    )
+    renderPopover({ scope: { collectionIds: [], documentIds: [] }, attachments: [failed] }, 'de')
     const source = t('de', 'chat.scope.attachmentNotReadable', { name: 'scan.pdf' })
     expect(screen.getByRole('button').textContent).toContain(t('de', 'chat.scope.answeringFrom', { source }))
     await userEvent.click(screen.getByRole('button'))
@@ -316,17 +213,10 @@ describe('ScopePopover — a failed attachment (#571)', () => {
   })
 
   it('no hint while every attachment is readable', async () => {
-    render(
-      <I18nProvider>
-        <ScopePopover
-          docs={[]}
-          collections={[]}
-          scope={{ collectionIds: [], documentIds: [] }}
-          onChangeScope={() => {}}
-          attachments={[indexedDoc({ id: 'ok', title: 'invoice.pdf' })]}
-        />
-      </I18nProvider>
-    )
+    renderPopover({
+      scope: { collectionIds: [], documentIds: [] },
+      attachments: [makeDocumentInfo({ id: 'ok', title: 'invoice.pdf' })]
+    })
     await userEvent.click(screen.getByRole('button'))
     await screen.findByText(t('en', 'chat.scope.filesInChatLine'))
     expect(screen.queryByText(t('en', 'chat.scope.attachmentFailedHint'))).not.toBeInTheDocument()

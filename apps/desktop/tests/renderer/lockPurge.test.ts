@@ -14,7 +14,7 @@ import {
 import {
   getVisionSession,
   loadSession,
-  resetVisionSessionForTests,
+  clearVisionSession,
   type SelectedImage
 } from '../../src/renderer/lib/visionSession'
 import type { ImageTurn } from '../../src/renderer/images'
@@ -56,7 +56,7 @@ const HIST_TURN: ImageTurn = { id: 't1', question: 'what is this?', answer: 'a s
 afterEach(() => {
   clearTranslateSession()
   clearFileTranslate()
-  resetVisionSessionForTests()
+  clearVisionSession()
   resetReviewSessionForTests()
   vi.restoreAllMocks()
 })

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, fireEvent } from '@testing-library/react'
 import { App } from '../../src/renderer/App'
 import { t } from '../../src/shared/i18n'
@@ -27,16 +27,6 @@ import { makeDetail } from '../helpers/evidenceReview'
 afterEach(() => {
   cleanup()
   resetReviewSessionForTests()
-})
-
-// jsdom implements neither element scrolling nor scrollTo; the chat transcript's
-// autoscroll effect would otherwise crash when the review-handoff test mounts it.
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
 })
 
 const unlockedWorkspace: WorkspaceStateInfo = {

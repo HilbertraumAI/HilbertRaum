@@ -1,16 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SkillPicker, Transcript } from '../../src/renderer/chat'
 import { I18nProvider } from '../../src/renderer/i18n'
 import type { Message, SkillInfo } from '../../src/shared/types'
 import { makeSkillInfo } from '../helpers/chat-fixtures'
-
-// jsdom does not implement Element.scrollTo (Transcript scrolls to newest content).
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 // Skills plan S6 (UI) — the composer skill picker + the per-message glyph. The picker is a pure
 // component; the glyph rides the assistant message in the Transcript. Heavier send/stamp wiring is
@@ -275,5 +270,19 @@ describe('per-message "answer without it" undo — extended to picked turns (U3)
     expect(screen.getByText('Answered with (removed skill)')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Answer without it' }))
     expect(onAnswerWithoutSkill).toHaveBeenCalled()
+  })
+
+  // Moved from TranscriptA11y (S13c/D3): the glyph copy tells an auto-fire from a pick; both carry a
+  // working undo (U3 — this was "NO undo on a picked turn" before the per-turn-apply change).
+  it.each([
+    ['an auto-fired', true, 'Answered with Bank statement helper'],
+    ['an explicitly-picked (U3, §4.3)', false, 'Skill: Bank statement helper']
+  ] as const)('shows the glyph and a working undo on %s last turn', async (_kind, autoFired, glyph) => {
+    const undo = vi.fn()
+    const user = userEvent.setup()
+    renderT([msg({ skillId: 'app:bank', skillTitle: 'Bank statement helper', autoFired })], undo)
+    expect(screen.getByText(glyph)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Answer without it' }))
+    expect(undo).toHaveBeenCalledTimes(1)
   })
 })

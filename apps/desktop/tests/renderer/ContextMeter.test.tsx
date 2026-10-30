@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { cleanup } from '@testing-library/react'
 import { ContextMeter } from '../../src/renderer/chat/ContextMeter'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t, type UiLanguage } from '../../src/shared/i18n'
 import type { ContextUsage } from '../../src/shared/types'
+import { renderInLanguage } from '../helpers/render-language'
 
 // Beta-feedback plan Phase 2 (#25, D69) — the composer-footer indicator is a conversation-MEMORY
 // gauge, not a progress bar. It must (a) expose role="meter" (a current level), never
@@ -21,15 +21,8 @@ function usage(usedTokens: number, window = 100): ContextUsage {
   return { usedTokens, window }
 }
 
-function renderMeter(lang: UiLanguage, u: ContextUsage): HTMLElement {
-  window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, lang)
-  const { container } = render(
-    <I18nProvider>
-      <ContextMeter usage={u} />
-    </I18nProvider>
-  )
-  return container
-}
+const renderMeter = (lang: UiLanguage, u: ContextUsage): HTMLElement =>
+  renderInLanguage(<ContextMeter usage={u} />, lang).container
 
 describe('ContextMeter — memory gauge, not a progress bar (#25, D69)', () => {
   it('exposes role="meter", never role="progressbar"', () => {
@@ -86,29 +79,36 @@ describe('ContextMeter — memory gauge, not a progress bar (#25, D69)', () => {
   })
 
   it('below the amber band the tooltip omits the will-summarize heads-up', () => {
-    const container = renderMeter('en', usage(50)) // 50% — calm
+    const container = renderMeter('en', usage(74)) // 74% — the last calm percent
     const meter = container.querySelector('.context-meter')
     expect(meter?.className).toContain('context-meter-calm')
     expect(meter?.getAttribute('title')).not.toContain(t('en', 'chat.context.willSummarize'))
     // The mental-model tooltip still teaches the fill (via the {pct} rewrite, approximate tokens).
     expect(meter?.getAttribute('title')).toBe(
-      t('en', 'chat.context.usageTooltip', { pct: '50', used: '50', window: '100' })
+      t('en', 'chat.context.usageTooltip', { pct: '74', used: '74', window: '100' })
     )
   })
 
   it('at/above 75% (amber) the tooltip adds the will-summarize copy', () => {
-    const container = renderMeter('en', usage(80)) // 80% — amber
+    const container = renderMeter('en', usage(6000, 8000)) // exactly 75% — the amber boundary
     const meter = container.querySelector('.context-meter')
     expect(meter?.className).toContain('context-meter-amber')
-    expect(meter?.getAttribute('title')).toContain(t('en', 'chat.context.willSummarize'))
-    expect(meter?.getAttribute('aria-valuetext')).toContain(t('en', 'chat.context.willSummarize'))
+    // The exact tooltip: whole thousands read '6k' / '8k' (no '.0'), then the heads-up line.
+    const expected = `${t('en', 'chat.context.usageTooltip', { pct: '75', used: '6k', window: '8k' })} ${t('en', 'chat.context.willSummarize')}`
+    expect(meter?.getAttribute('title')).toBe(expected)
+    expect(meter?.getAttribute('aria-valuetext')).toBe(expected)
   })
 
   it('at/above 90% carries the near-full tone class', () => {
-    const container = renderMeter('en', usage(95))
+    const container = renderMeter('en', usage(90)) // exactly 90% — the near-full boundary
     const meter = container.querySelector('.context-meter')
     expect(meter?.className).toContain('context-meter-near-full')
-    expect(meter?.getAttribute('aria-valuenow')).toBe('95')
+    expect(meter?.getAttribute('aria-valuenow')).toBe('90')
+    // One percent below stays amber.
+    cleanup()
+    const below = renderMeter('en', usage(89)).querySelector('.context-meter')
+    expect(below?.className).toContain('context-meter-amber')
+    expect(below?.className).not.toContain('context-meter-near-full')
   })
 
   it('renders nothing when the window is unknown (<= 0)', () => {

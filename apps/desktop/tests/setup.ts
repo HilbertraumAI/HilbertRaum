@@ -15,11 +15,17 @@ if (typeof window !== 'undefined') {
   }
   const el = window.Element.prototype as Element & {
     scrollIntoView?: () => void
+    scrollTo?: () => void
     hasPointerCapture?: () => boolean
     setPointerCapture?: () => void
     releasePointerCapture?: () => void
   }
   el.scrollIntoView ??= () => {}
+  // The chat Transcript pins itself to the newest message with `element.scrollTo`, which jsdom
+  // lacks. This no-op replaced the local `beforeAll` stubs ~50 renderer suites carried (chat-ui
+  // campaign). A test that ASSERTS scrolling installs its own spy over it, e.g.
+  // `vi.spyOn(Element.prototype, 'scrollTo')` or an `HTMLElement.prototype` override.
+  el.scrollTo ??= () => {}
   el.hasPointerCapture ??= () => false
   el.setPointerCapture ??= () => {}
   el.releasePointerCapture ??= () => {}

@@ -1,92 +1,38 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen, LIST_COLLAPSED_KEY } from '../../src/renderer/screens/ChatScreen'
-import { groupConversations } from '../../src/renderer/chat'
 import { t } from '../../src/shared/i18n'
-import { ToastProvider } from '../../src/renderer/components'
-import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import type { PreloadApi } from '../../src/preload'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { runtimeStatus } from '../helpers/status'
+import { assistantMsg, makeConversation, makeDocumentInfo, userMsg } from '../helpers/chat-fixtures'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
 
 // Phase 25 (guidelines §3) structural tests: the teaching empty state, the header
 // mode segmented control, conversation-list collapse persistence (localStorage),
 // per-message hover actions (Try again / Copy / Save → toasts), the header "⋯"
-// overflow ("Save this conversation"), and date grouping of the conversation list.
+// overflow ("Save this conversation"), and the no-model empty state.
 
-function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'My first chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-function msg(over: Partial<Message>): Message {
-  return {
-    id: 'm1',
-    conversationId: 'c1',
-    role: 'assistant',
-    content: 'answer',
-    createdAt: '2026-01-01T00:00:00Z',
-    tokenCount: null,
-    ...over
-  }
-}
-
-function indexedDoc(id: string, title: string) {
-  return {
-    id,
-    title,
-    originalPath: null,
-    mimeType: 'text/plain',
-    sizeBytes: 10,
-    status: 'indexed' as const,
-    errorMessage: null,
-    chunkCount: 1,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z'
-  }
-}
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
+// The persisted key itself, not the export: a rename would silently reset every user's choice.
+const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 describe('ChatScreen — teaching empty state (guidelines §3)', () => {
   it('shows example prompt chips that fill the composer', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(chatScreenStubs({ listDocuments: vi.fn(async () => [makeDocumentInfo({ title: 'contract.pdf' })]) }))
+    renderChatScreen()
 
     expect(
       await screen.findByText('Ask a question, or ask about your documents.')
@@ -99,13 +45,8 @@ describe('ChatScreen — teaching empty state (guidelines §3)', () => {
 
   it('nudges toward Documents when nothing is imported yet', async () => {
     const user = userEvent.setup()
-    const onNavigate = vi.fn()
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [])
-    })
-    render(<ChatScreen onNavigate={onNavigate} />)
+    stubApi(chatScreenStubs())
+    const { onNavigate } = renderChatScreen()
 
     await user.click(
       await screen.findByRole('button', { name: /add documents to ask about them/i })
@@ -114,12 +55,8 @@ describe('ChatScreen — teaching empty state (guidelines §3)', () => {
   })
 
   it('hides the nudge once indexed documents exist', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(chatScreenStubs({ listDocuments: vi.fn(async () => [makeDocumentInfo({ title: 'contract.pdf' })]) }))
+    renderChatScreen()
     await screen.findByText('Ask a question, or ask about your documents.')
     expect(
       screen.queryByRole('button', { name: /add documents to ask about them/i })
@@ -130,11 +67,8 @@ describe('ChatScreen — teaching empty state (guidelines §3)', () => {
 describe('ChatScreen — header mode segmented control', () => {
   it('is a radiogroup and switches the composer mode', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus)
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(chatScreenStubs())
+    renderChatScreen()
 
     const group = await screen.findByRole('radiogroup', { name: 'Chat mode' })
     expect(group).toBeInTheDocument()
@@ -152,11 +86,8 @@ describe('ChatScreen — header mode segmented control', () => {
 describe('ChatScreen — conversation-list collapse persistence', () => {
   it('collapses, remembers the choice in localStorage, and restores on remount', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => runningStatus)
-    })
-    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(chatScreenStubs({ listConversations: vi.fn(async () => [makeConversation({ title: 'My first chat' })]) }))
+    const { unmount } = renderChatScreen()
 
     await screen.findByText('My first chat')
     await user.click(screen.getByRole('button', { name: 'Hide conversation list' }))
@@ -165,11 +96,8 @@ describe('ChatScreen — conversation-list collapse persistence', () => {
     unmount()
 
     // A fresh mount starts collapsed; expanding persists the new preference.
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => runningStatus)
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(chatScreenStubs({ listConversations: vi.fn(async () => [makeConversation({ title: 'My first chat' })]) }))
+    renderChatScreen()
     expect(await screen.findByRole('button', { name: 'Show conversation list' })).toBeInTheDocument()
     expect(screen.queryByText('My first chat')).not.toBeInTheDocument()
 
@@ -180,50 +108,43 @@ describe('ChatScreen — conversation-list collapse persistence', () => {
 })
 
 describe('ChatScreen — per-message actions (Try again · Copy · Save)', () => {
-  // The Copy action goes through Electron's native clipboard bridge
-  // (window.api.copyToClipboard), not navigator.clipboard — capture what it receives.
-  let chatCopied: string | null = null
-
-  function renderWithMessages() {
-    chatCopied = null
-    const sendChatMessage = vi.fn(async () => msg({ content: 'regenerated' }))
+  function renderWithMessages(overrides: Partial<PreloadApi> = {}) {
+    const sendChatMessage = vi.fn(async () => assistantMsg('a3', 'regenerated'))
     const exportConversation = vi.fn(async () => 'D:\\out\\chat.md')
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => [
-        msg({ id: 'u1', role: 'user', content: 'question' }),
-        msg({ id: 'a1', content: 'first answer' }),
-        msg({ id: 'u2', role: 'user', content: 'follow-up' }),
-        msg({ id: 'a2', content: 'second answer' })
-      ]),
-      sendChatMessage,
-      exportConversation,
-      copyToClipboard: vi.fn(async (text: string) => {
-        chatCopied = text
-        return true
-      }),
-      onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {})
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'My first chat' })]),
+        listMessages: vi.fn(async () => [
+          userMsg('u1', 'question'),
+          assistantMsg('a1', 'first answer'),
+          userMsg('u2', 'follow-up'),
+          assistantMsg('a2', 'second answer')
+        ]),
+        sendChatMessage,
+        exportConversation,
+        ...overrides
+      })
     )
+    renderChatScreen()
     return { sendChatMessage, exportConversation }
   }
 
-  it('copies an answer and confirms with a toast', async () => {
+  // The Copy action goes through Electron's native clipboard bridge (window.api.copyToClipboard),
+  // not navigator.clipboard. CH-5 (#148): a refused write gives feedback instead of silence.
+  it.each([
+    ['copies an answer and confirms with a toast', true, 'chat.copied', 'chat.copyFailed'],
+    ['a refused clipboard write toasts the failure instead of staying silent (CH-5, #148)', false, 'chat.copyFailed', 'chat.copied']
+  ] as const)('%s', async (_title, ok, shown, absent) => {
     const user = userEvent.setup()
-    renderWithMessages()
+    const copyToClipboard = vi.fn(async (_text: string) => ok)
+    renderWithMessages({ copyToClipboard })
     await user.click(await screen.findByText('My first chat'))
     await screen.findByText('second answer')
 
     await user.click(screen.getAllByRole('button', { name: 'Copy' })[0])
-    expect(await screen.findByText('Copied')).toBeInTheDocument()
-    expect(chatCopied).toBe('first answer')
+    expect(copyToClipboard).toHaveBeenCalledWith('first answer')
+    expect(await screen.findByText(t('en', shown))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', absent))).not.toBeInTheDocument()
   })
 
   it('offers Try again only on the last assistant answer and regenerates', async () => {
@@ -270,77 +191,24 @@ describe('ChatScreen — per-message actions (Try again · Copy · Save)', () =>
   })
 })
 
-describe('ChatScreen — Stop confirmation (M-U2)', () => {
-  it('toasts a "Stopped" confirmation when the user stops a live stream', async () => {
-    const user = userEvent.setup()
-    // Hold the send open so the Stop button is visible; we resolve it after Stop is
-    // pressed, mirroring the backend ending the (now-stopped) stream.
-    let resolveSend!: () => void
-    const sendChatMessage = vi.fn(
-      () => new Promise<Message>((res) => { resolveSend = () => res(msg({ content: 'partial' })) })
-    )
-    const stopGeneration = vi.fn(async () => {})
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      sendChatMessage,
-      stopGeneration,
-      onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {})
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
-    )
-
-    await user.click(await screen.findByText('My first chat'))
-    const box = screen.getByRole('textbox')
-    await user.type(box, 'hello')
-    await user.keyboard('{Enter}')
-
-    // Streaming: the composer now shows Stop. Pressing it requests a stop…
-    const stop = await screen.findByRole('button', { name: 'Stop' })
-    await user.click(stop)
-    expect(stopGeneration).toHaveBeenCalledWith('c1')
-
-    // …and once the (stopped) stream resolves, the interruption is confirmed.
-    resolveSend()
-    expect(await screen.findByText(/Stopped — the reply may be incomplete/)).toBeInTheDocument()
-  })
-})
-
 describe('ChatScreen — no-model empty state (M-U3)', () => {
-  it('renders the no-model state through the shared EmptyState (not a hand-rolled card)', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: false,
-        modelId: null,
-        port: null,
-        healthy: false,
-        message: 'no model'
-      })),
-      listMessages: vi.fn(async () => []),
-      onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {})
-    })
-    const { container } = render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+  it('renders the no-model empty state: its heading, and "Go to AI Model" opens AI Model (#527)', async () => {
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'My first chat' })]),
+        getRuntimeStatus: vi.fn(async () =>
+          runtimeStatus({ running: false, modelId: null, port: null, healthy: false, message: 'no model' })
+        )
+      })
     )
+    const { onNavigate } = renderChatScreen()
 
-    // The shared EmptyState markup is used; the old `.card` wrapper is gone.
-    expect(await screen.findByText('No model is running')).toBeInTheDocument()
-    expect(container.querySelector('.empty-state')).not.toBeNull()
-    expect(container.querySelector('.card')).toBeNull()
-    // #527: "Open AI Model" read as "OpenAI model" — the button names where it goes instead.
-    expect(screen.getByRole('button', { name: 'Go to AI Model' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Re-check' })).toBeInTheDocument()
+    // The shared EmptyState renders the title as a heading.
+    expect(await screen.findByRole('heading', { name: t('en', 'chat.noModel.title') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('en', 'chat.noModel.recheck') })).toBeInTheDocument()
+    // #527: "Open AI Model" read as "OpenAI model" — the button names where it goes, and goes there.
+    await userEvent.click(screen.getByRole('button', { name: t('en', 'chat.noModel.open') }))
+    expect(onNavigate).toHaveBeenCalledWith('models')
   })
 })
 
@@ -348,26 +216,3 @@ describe('ChatScreen — no-model empty state (M-U3)', () => {
 // rail-foot instance (§12.1 #2); the chat-header indicator + its `offline` prop are gone.
 // Coverage now lives in InformationArchitecture.test.tsx (the single rail-foot indicator)
 // and LocalIndicator.test.tsx (the short label + honest states).
-
-describe('groupConversations — date grouping', () => {
-  it('buckets by recency relative to "now" and drops empty groups', () => {
-    const now = new Date('2026-06-10T12:00:00')
-    const c = (id: string, updatedAt: string) => conv({ id, title: id, updatedAt })
-    const groups = groupConversations(
-      [
-        c('today', '2026-06-10T08:00:00'),
-        c('yesterday', '2026-06-09T23:00:00'),
-        c('thisweek', '2026-06-05T10:00:00'),
-        c('old', '2026-01-01T00:00:00'),
-        c('junk', 'not-a-date')
-      ],
-      now
-    )
-    expect(groups.map((g) => [t('en', g.labelKey), g.conversations.map((x) => x.id)])).toEqual([
-      ['Today', ['today']],
-      ['Yesterday', ['yesterday']],
-      ['Last 7 days', ['thisweek']],
-      ['Earlier', ['old', 'junk']]
-    ])
-  })
-})

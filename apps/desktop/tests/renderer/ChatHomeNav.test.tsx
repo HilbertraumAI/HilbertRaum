@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
@@ -38,16 +38,6 @@ const runningStatus: RuntimeStatus = {
   healthy: true,
   message: 'ok'
 }
-
-// jsdom implements neither element scrolling nor scrollTo; the transcript autoscroll
-// effect would crash every ChatScreen render without this stub.
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

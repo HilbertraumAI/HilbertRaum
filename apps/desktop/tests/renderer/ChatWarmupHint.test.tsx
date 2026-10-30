@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
-import { ChatScreen, WARMUP_HINT_DELAY_MS } from '../../src/renderer/screens/ChatScreen'
-import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { WARMUP_HINT_DELAY_MS } from '../../src/renderer/screens/ChatScreen'
+import type { Message, RuntimeStatus } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import {
+  chatScreenStubs,
+  conversationRow,
+  fakeChatStream,
+  flushFakeTimers,
+  renderChatScreen,
+  type ChatStreamFake
+} from '../helpers/chat-screen'
+import { makeConversation } from '../helpers/chat-fixtures'
+import { runtimeStatus } from '../helpers/status'
 
 // Issue #39: the calm one-time "the first answer takes a little longer — the model is
 // warming up" line under the pending answer. Honesty gates, all of which must hold:
@@ -23,160 +33,121 @@ import { stubApi } from '../helpers/renderer'
 
 const HINT = t('en', 'chat.warmup.hint')
 
-function conv(): Conversation {
-  return {
-    id: 'c1',
-    title: 'Warmup chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null
-  }
-}
-
-function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
-}
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
-
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
-async function flush(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
-/** Render the screen and park a send so the stream stays in flight with no tokens yet. */
-function setup(statusOver: Partial<RuntimeStatus> = {}): {
-  tokenCb: () => (tok: string) => void
-  reasoningCb: () => (delta: string) => void
-} {
-  let tokenCb: ((tok: string) => void) | undefined
-  let reasoningCb: ((delta: string) => void) | undefined
-  stubApi({
-    listConversations: vi.fn(async () => [conv()]),
-    listMessages: vi.fn(async () => []),
-    listActiveStreamConversations: vi.fn(async () => []),
-    getActiveStream: vi.fn(async () => null),
-    getRuntimeStatus: vi.fn(async () => status(statusOver)),
-    // Parks forever — the turn stays pending, exactly the silent-prefill window under test.
-    sendChatMessage: vi.fn(() => new Promise<Message>(() => {})),
-    onToken: vi.fn((_id: string, cb: (tok: string) => void) => {
-      tokenCb = cb
-      return () => {}
-    }),
-    onReasoning: vi.fn((_id: string, cb: (delta: string) => void) => {
-      reasoningCb = cb
-      return () => {}
-    }),
-    onScopeNotice: vi.fn(() => () => {})
-  })
-  render(<ChatScreen onNavigate={() => {}} />)
-  return { tokenCb: () => tokenCb!, reasoningCb: () => reasoningCb! }
+/** Render the screen with `status` as every runtime read; a send parks so the stream stays in flight with
+ *  no tokens yet. Returns the fake stream to emit into. */
+function setup(status: RuntimeStatus): ChatStreamFake {
+  const stream = fakeChatStream()
+  stubApi(
+    chatScreenStubs({
+      ...stream.stubs,
+      listConversations: vi.fn(async () => [makeConversation({ title: 'Warmup chat' })]),
+      getRuntimeStatus: vi.fn(async () => status),
+      // Parks forever — the turn stays pending, exactly the silent-prefill window under test.
+      sendChatMessage: vi.fn(() => new Promise<Message>(() => {}))
+    })
+  )
+  renderChatScreen()
+  return stream
 }
 
 async function sendParkedTurn(): Promise<void> {
-  await flush()
-  fireEvent.click(screen.getByText('Warmup chat'))
-  await flush()
+  await flushFakeTimers()
+  fireEvent.click(conversationRow('Warmup chat'))
+  await flushFakeTimers()
   fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hi' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-  await flush()
+  await flushFakeTimers()
 }
 
 describe('ChatScreen — first-answer warm-up hint (#39)', () => {
   it('shows the hint only after the delay on a cold runtime, and the first token retires it', async () => {
     vi.useFakeTimers()
-    const h = setup({ warmedUp: false })
+    const stream = setup(runtimeStatus({ warmedUp: false }))
     await sendParkedTurn()
 
-    // Before the delay: streaming, but no hint yet — a fast first turn must never flash it.
+    // Just short of the shipped delay: streaming, but no hint yet — a fast first turn must never flash it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WARMUP_HINT_DELAY_MS - 1)
+    })
+    await flushFakeTimers()
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(WARMUP_HINT_DELAY_MS)
+      await vi.advanceTimersByTimeAsync(1)
     })
-    await flush()
-    const hint = screen.getByText(HINT)
+    await flushFakeTimers()
     // A quiet status line inside the live bubble — announced once, never an alert.
-    expect(hint).toHaveAttribute('role', 'status')
-    expect(hint.className).toContain('chat-warmup-hint')
+    expect(screen.getByText(HINT)).toHaveAttribute('role', 'status')
 
     // The first answer token drops it for good — tokens flowing IS the "warm-up over" signal.
-    act(() => h.tokenCb()('Hello'))
-    await flush()
+    stream.token('Hello')
+    await flushFakeTimers()
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
   })
 
-  it('never shows on a warmed runtime (warmedUp: true), however long the wait', async () => {
+  // The status gate reads `warmedUp === false`: a warmed runtime never sees the hint, and neither does one
+  // whose status has no `warmedUp` key at all — the absent field fails safe, which is what tells
+  // `=== false` from `!warmedUp`.
+  const { warmedUp: _absent, ...withoutWarmedUp } = runtimeStatus()
+  it.each([
+    ['a warmed runtime (warmedUp: true)', runtimeStatus({ warmedUp: true })],
+    ['a runtime that cannot report warm-up state (warmedUp absent — fails safe)', withoutWarmedUp]
+  ])('never shows on %s, however long the wait', async (_label, status) => {
     vi.useFakeTimers()
-    setup({ warmedUp: true })
+    setup(status)
     await sendParkedTurn()
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(WARMUP_HINT_DELAY_MS * 3)
     })
-    await flush()
+    await flushFakeTimers()
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
   })
 
-  it('never shows when the runtime cannot report warm-up state (warmedUp absent)', async () => {
+  // A Deep-mode reasoning delta precedes any answer token and equally proves the prefill is done.
+  it.each([
+    ['an answer token', (s: ChatStreamFake) => s.token('fast')],
+    ['a Deep-mode reasoning delta', (s: ChatStreamFake) => s.reasoning('pondering…')]
+  ])('%s before the delay suppresses the hint entirely (no flash)', async (_label, emit) => {
     vi.useFakeTimers()
-    setup({}) // no warmedUp field — the older/bare-runtime status shape
+    const stream = setup(runtimeStatus({ warmedUp: false }))
     await sendParkedTurn()
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(WARMUP_HINT_DELAY_MS * 3)
-    })
-    await flush()
-    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
-  })
-
-  it('a token that arrives before the delay suppresses the hint entirely (no flash)', async () => {
-    vi.useFakeTimers()
-    const h = setup({ warmedUp: false })
-    await sendParkedTurn()
-
-    act(() => h.tokenCb()('fast'))
+    emit(stream)
     await act(async () => {
       await vi.advanceTimersByTimeAsync(WARMUP_HINT_DELAY_MS * 2)
     })
-    await flush()
+    await flushFakeTimers()
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
   })
 
-  it('a Deep-mode reasoning delta counts as streaming too — it suppresses and retires the hint', async () => {
+  it('a Deep-mode reasoning delta retires a hint that is already showing', async () => {
     vi.useFakeTimers()
-    const h = setup({ warmedUp: false })
+    const stream = setup(runtimeStatus({ warmedUp: false }))
     await sendParkedTurn()
 
     // Hint shows first (cold + silent past the delay)…
     await act(async () => {
       await vi.advanceTimersByTimeAsync(WARMUP_HINT_DELAY_MS)
     })
-    await flush()
+    await flushFakeTimers()
     expect(screen.getByText(HINT)).toBeInTheDocument()
 
     // …then the first reasoning delta (which precedes any answer token in Deep mode) drops it:
     // the model is visibly thinking, so "warming up" would be false.
-    act(() => h.reasoningCb()('pondering…'))
-    await flush()
+    stream.reasoning('pondering…')
+    await flushFakeTimers()
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
   })
 })

@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { ToastProvider } from '../../src/renderer/components'
-import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message, type RuntimeStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message } from '../../src/shared/types'
+import type { PreloadApi } from '../../src/preload'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, conversationRow, deferred, flushFakeTimers, renderChatScreen } from '../helpers/chat-screen'
+import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
+import { runtimeStatus } from '../helpers/status'
 import { t } from '../../src/shared/i18n'
 import { RUNTIME_POLL_MS } from '../../src/renderer/lib/polling'
 import { clearDocTaskSession, startTask } from '../../src/renderer/lib/doctasks'
@@ -13,110 +16,108 @@ import { clearDocTaskSession, startTask } from '../../src/renderer/lib/doctasks'
 // busy, no model, a slot held by another window) used to lose both the composer text and the
 // optimistic bubble — precisely when the banner invites a retry. The fix keeps the responsive early
 // setInput('') but restores the draft into a still-empty composer when the turn did not persist.
-// CR-2 (same file cluster): keying the Transcript on the conversation resets scroll/bottom-pin on a
-// switch. Both are exercised here with teeth.
-
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-function chatConv(id: string, title: string): Conversation {
-  return {
-    id,
-    title,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null
-  }
-}
-
-function userMsg(id: string, convId: string, content: string): Message {
-  return { id, conversationId: convId, role: 'user', content, createdAt: '2026-01-01T00:01:00Z' }
-}
-
-function assistantMsg(id: string, convId: string, content: string): Message {
-  return { id, conversationId: convId, role: 'assistant', content, createdAt: '2026-01-01T00:02:00Z' }
-}
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
+// (CR-2, the transcript re-pin on a conversation switch, lives in ChatSwitchStop.test.tsx.)
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
-async function flush(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
-function renderChat(): void {
-  render(
-    <ToastProvider>
-      <ChatScreen onNavigate={() => {}} />
-    </ToastProvider>
+/** Common stub for a working chat screen with one conversation ('Chat 1'); the send is the test's. */
+function baseStub(over: Partial<PreloadApi> = {}): void {
+  stubApi(
+    chatScreenStubs({ listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]), ...over })
   )
 }
 
-/** Common stub for a working chat screen with one conversation and a controllable send. */
-function baseStub(overrides: Partial<Parameters<typeof stubApi>[0]>): void {
-  stubApi({
-    listConversations: vi.fn(async () => [chatConv('c1', 'Chat 1')]),
-    getRuntimeStatus: vi.fn(async () => runningStatus),
-    listDocuments: vi.fn(async () => []),
-    listCollections: vi.fn(async () => []),
-    listAttachments: vi.fn(async () => []),
-    listActiveStreamConversations: vi.fn(async () => []),
-    getActiveStream: vi.fn(async () => null),
-    onToken: vi.fn(() => () => {}),
-    onReasoning: vi.fn(() => () => {}),
-    onScopeNotice: vi.fn(() => () => {}),
-    ...overrides
-  })
+/** One CR-1 row: what the failed send throws, the history the failure refresh reads, and what follows. */
+interface DraftRestoreRow {
+  error: string
+  history: Message[]
+  typed: string
+  /** The composer's value after the failure. */
+  composer: string
+  /** The banner's copy (every failed send shows one). */
+  banner: RegExp
+  /** How often the typed question shows in the transcript: 0 when nothing persisted (the optimistic bubble is
+   *  gone), 1 when it persisted or an earlier identical turn exists (never an optimistic copy beside it). */
+  shownTimes: number
 }
 
 describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () => {
-  it('refills the composer and shows the banner when a send fails before the user turn persists', async () => {
+  // Whether the draft comes back is decided by the persisted TAIL the failure refresh reads:
+  //  - a guard reject before the turn is written (empty history) refills the composer and shows the
+  //    banner (teeth: delete `restoreDraft` → the composer stays '');
+  //  - a failed send that still persisted the user turn keeps the composer empty, so a restore cannot
+  //    invite a duplicate re-send (teeth: drop the tail compare → it refills);
+  //  - full-audit 2026-07-11 CODE-40: the check used to be `persisted.some(content ===)`, so a REPEATED
+  //    question matched the OLD turn and a busy-rejected re-ask was silently lost (no restore, no bubble).
+  //    It now compares against the TAIL: a send that persisted its user turn leaves the conversation
+  //    ENDING in that turn when the catch runs (teeth: revert to `some(content ===)` → row 3 reads '').
+  // [title, row] tuples titled with `%s`: vitest quotes an object row's `$label` and cuts it at 40 characters.
+  it.each<[string, DraftRestoreRow]>([
+    [
+      'refills the composer and shows the banner when a send fails before the user turn persists',
+      {
+        error: DOC_TASK_BUSY_MESSAGE,
+        history: [],
+        typed: 'a long typed question',
+        composer: 'a long typed question',
+        banner: /document task/i,
+        shownTimes: 0
+      }
+    ],
+    [
+      'does NOT restore when the failed send still persisted the user turn (no duplicate)',
+      // E.g. a socket drop mid-stream: the user turn WAS written, so the failure refresh lists it.
+      {
+        error: 'stream failed',
+        history: [userMsg('u1', 'persisted question')],
+        typed: 'persisted question',
+        composer: '',
+        banner: /stream failed/,
+        shownTimes: 1
+      }
+    ],
+    [
+      'restores the draft when a REPEATED question is busy-rejected before it persists (CODE-40)',
+      // The SAME question was asked and answered earlier; the refresh returns that history (tail = assistant).
+      {
+        error: DOC_TASK_BUSY_MESSAGE,
+        history: [userMsg('u1', 'x'), assistantMsg('a1', 'answer to x')],
+        typed: 'x',
+        composer: 'x',
+        banner: /document task/i,
+        shownTimes: 1
+      }
+    ]
+  ])('%s', async (_label, { error, history, typed, composer, banner, shownTimes }) => {
     vi.useFakeTimers()
     try {
-      // Guard rejects before writing the user turn; the failure refresh returns an EMPTY history.
-      const sendChatMessage = vi.fn(async () => {
-        throw new Error(DOC_TASK_BUSY_MESSAGE)
+      const sendChatMessage = vi.fn(async (): Promise<Message> => {
+        throw new Error(error)
       })
-      baseStub({ listMessages: vi.fn(async () => []), sendChatMessage })
+      baseStub({ listMessages: vi.fn(async () => history), sendChatMessage })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
-
-      const box = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
-      fireEvent.change(box, { target: { value: 'a long typed question' } })
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: typed } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
 
-      // Teeth: without the restore the composer stays empty (the draft is lost). The banner is shown.
-      expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe(
-        'a long typed question'
-      )
-      expect(screen.getByRole('alert').textContent ?? '').toMatch(/document task/i)
+      expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe(composer)
+      expect(screen.getByRole('alert').textContent ?? '').toMatch(banner)
+      // The transcript (not the composer, whose text content mirrors its value) holds the question
+      // shownTimes times: no optimistic copy survives the failure refresh.
+      expect(screen.queryAllByText(typed, { ignore: 'textarea, script, style' })).toHaveLength(shownTimes)
     } finally {
       vi.useRealTimers()
     }
@@ -126,99 +127,27 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
     vi.useFakeTimers()
     try {
       // The send parks until we release it as a rejection, so we can type again mid-flight.
-      let rejectSend: ((e: Error) => void) | null = null
-      const sendChatMessage = vi.fn(
-        () =>
-          new Promise<Message>((_res, rej) => {
-            rejectSend = (e) => rej(e)
-          })
-      )
+      const send = deferred<Message>()
+      const sendChatMessage = vi.fn(() => send.promise)
       baseStub({ listMessages: vi.fn(async () => []), sendChatMessage })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
 
       const box = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
       fireEvent.change(box, { target: { value: 'hello' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
       // The early setInput('') cleared it; the user types a NEW draft while the send is in flight.
       fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'world' } })
 
       // Now the send fails pre-persist — the restore must NOT overwrite the newer 'world'.
-      await act(async () => {
-        rejectSend!(new Error('no model running'))
-      })
-      await flush()
+      await act(async () => send.reject(new Error('no model running')))
+      await flushFakeTimers()
 
       expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('world')
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('does NOT restore when the failed send still persisted the user turn (no duplicate)', async () => {
-    vi.useFakeTimers()
-    try {
-      // The send errors (e.g. a socket drop mid-stream) but the user turn WAS written — the failure
-      // refresh returns a history that already contains it.
-      const sendChatMessage = vi.fn(async () => {
-        throw new Error('stream failed')
-      })
-      baseStub({
-        listMessages: vi.fn(async () => [userMsg('u1', 'c1', 'persisted question')]),
-        sendChatMessage
-      })
-
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
-
-      const box = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
-      fireEvent.change(box, { target: { value: 'persisted question' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
-
-      // Teeth: the persisted-check keeps the composer empty (the question already shows in the
-      // transcript — restoring it would invite a duplicate re-send). Drop the check → it refills.
-      expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('')
-      expect(screen.getByText('persisted question')).toBeInTheDocument()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  // full-audit 2026-07-11 CODE-40: the persisted-check used to be `persisted.some(content ===)` —
-  // a REPEATED question matched the OLD turn, so a busy-rejected re-ask was silently lost (no
-  // restore, no bubble). The check now compares against the TAIL: a send that persisted its user
-  // turn leaves the conversation ENDING in that turn when the catch runs.
-  it('restores the draft when a REPEATED question is busy-rejected before it persists (CODE-40)', async () => {
-    vi.useFakeTimers()
-    try {
-      // History: the SAME question was asked and answered earlier; the new send is guard-rejected
-      // pre-persist, so the failure refresh returns that unchanged history (tail = assistant).
-      const history = [userMsg('u1', 'c1', 'x'), assistantMsg('a1', 'c1', 'answer to x')]
-      const sendChatMessage = vi.fn(async () => {
-        throw new Error(DOC_TASK_BUSY_MESSAGE)
-      })
-      baseStub({ listMessages: vi.fn(async () => history), sendChatMessage })
-
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
-
-      const box = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
-      fireEvent.change(box, { target: { value: 'x' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
-
-      // TEETH: with `some(content ===)` the OLD 'x' matches → no restore → this reads ''.
-      expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('x')
-      expect(screen.getByRole('alert').textContent ?? '').toMatch(/document task/i)
     } finally {
       vi.useRealTimers()
     }
@@ -233,31 +162,28 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
     vi.useFakeTimers()
     try {
       // The send itself SUCCEEDS, resolving the persisted assistant reply.
-      const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'c1', 'the answer'))
+      const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'the answer'))
       const listConversations = vi
         .fn<() => Promise<Conversation[]>>()
-        .mockResolvedValueOnce([chatConv('c1', 'Chat 1')]) // mount refresh
+        .mockResolvedValueOnce([makeConversation({ title: 'Chat 1' })]) // mount refresh
         .mockRejectedValue(new Error('list failed after send')) // the post-send refresh throws
       baseStub({
         listConversations,
         // The persisted truth after the successful send: question + fresh answer (tail = assistant).
-        listMessages: vi.fn(async () => [
-          userMsg('u1', 'c1', 'quantum question'),
-          assistantMsg('a1', 'c1', 'the answer')
-        ]),
+        listMessages: vi.fn(async () => [userMsg('u1', 'quantum question'), assistantMsg('a1', 'the answer')]),
         sendChatMessage
       })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
 
       fireEvent.change(screen.getByPlaceholderText('Message…'), {
         target: { value: 'quantum question' }
       })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
 
       // TEETH: without the latch the assistant tail reads as "not persisted" → the composer
       // refills with the ALREADY-ANSWERED question (one Enter away from a duplicate turn).
@@ -279,16 +205,16 @@ describe('ChatScreen — the document-task busy banner and its cancel (D26)', ()
 
   /** Send into a busy refusal, then click the banner's cancel. */
   async function sendRefusedThenCancel(): Promise<void> {
-    renderChat()
-    await flush()
-    fireEvent.click(screen.getByText('Chat 1'))
-    await flush()
+    renderChatScreen()
+    await flushFakeTimers()
+    fireEvent.click(conversationRow('Chat 1'))
+    await flushFakeTimers()
     fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'q' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    await flush()
+    await flushFakeTimers()
     expect(screen.getByRole('alert').textContent ?? '').toMatch(/document task/i)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel document task' }))
-    await flush()
+    await flushFakeTimers()
   }
 
   const busySend = (): (() => Promise<never>) =>
@@ -354,23 +280,20 @@ describe('ChatScreen — first send keeps the optimistic bubble (RD-1)', () => {
       // The exact production interleave, made deterministic: the history read parks until the
       // send IPC has been invoked, then answers [] — so without the guard the [] always lands
       // after the optimistic append. The send itself stays in flight (a streaming first answer).
-      let openHistoryGate: (() => void) | null = null
-      const historyGate = new Promise<void>((res) => {
-        openHistoryGate = res
-      })
+      const history = deferred<void>()
       const listMessages = vi.fn(async (): Promise<Message[]> => {
-        await historyGate
+        await history.promise
         return []
       })
       const sendChatMessage = vi.fn(() => {
-        openHistoryGate?.()
+        history.resolve()
         return new Promise<Message>(() => {})
       })
       const created: Conversation[] = []
       baseStub({
         listConversations: vi.fn(async () => created),
         createConversation: vi.fn(async () => {
-          const conv = chatConv('c-new', 'New chat')
+          const conv = makeConversation({ id: 'c-new', title: 'New chat' })
           created.push(conv)
           return conv
         }),
@@ -378,69 +301,19 @@ describe('ChatScreen — first send keeps the optimistic bubble (RD-1)', () => {
         sendChatMessage
       })
 
-      renderChat()
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
 
       // No conversation selected — the send goes through ensureConversation (the racy path).
       const box = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
       fireEvent.change(box, { target: { value: 'first question' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
 
       // Teeth: the send is in flight and every parked microtask has settled — without the guard
       // the gated [] has already replaced the transcript and the bubble is gone.
       expect(sendChatMessage).toHaveBeenCalled()
       expect(screen.getByText('first question')).toBeInTheDocument()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-})
-
-describe('ChatScreen — transcript scroll resets on conversation switch (CR-2)', () => {
-  it('re-pins to the bottom of the newly selected conversation even after the user scrolled up in the previous one', async () => {
-    vi.useFakeTimers()
-    try {
-      const scrollTo = vi.fn()
-      Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-        configurable: true,
-        writable: true,
-        value: scrollTo
-      })
-      // Per-conversation histories so switching changes the content the transcript scrolls.
-      const byConv: Record<string, Message[]> = {
-        c1: [userMsg('a1', 'c1', 'A first'), userMsg('a2', 'c1', 'A second')],
-        c2: [userMsg('b1', 'c2', 'B only')]
-      }
-      baseStub({
-        listConversations: vi.fn(async () => [chatConv('c1', 'Chat 1'), chatConv('c2', 'Chat 2')]),
-        listMessages: vi.fn(async (id: string) => byConv[id] ?? [])
-      })
-
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
-      expect(screen.getByText('A second')).toBeInTheDocument()
-
-      // The user scrolls UP in A: the transcript's onScroll flips atBottomRef to false, so a plain
-      // messages-change would no longer auto-scroll (this is the state the old shared-instance bug got
-      // stuck in across a switch).
-      const transcript = document.querySelector('.chat-transcript') as HTMLElement
-      Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 1000 })
-      Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 200 })
-      transcript.scrollTop = 0 // 1000 - 0 - 200 = 800px from bottom → not pinned
-      fireEvent.scroll(transcript)
-
-      const afterScrollUp = scrollTo.mock.calls.length
-
-      // Switch to B: keying the Transcript on activeId REMOUNTS it, resetting atBottomRef to true so the
-      // fresh mount scroll effect pins B to the bottom. Teeth: remove the key → the reused instance keeps
-      // A's atBottomRef=false, so the scroll effect does NOT re-pin and B opens at A's stale offset.
-      fireEvent.click(screen.getByText('Chat 2'))
-      await flush()
-      expect(screen.getByText('B only')).toBeInTheDocument()
-      expect(scrollTo.mock.calls.length).toBeGreaterThan(afterScrollUp)
     } finally {
       vi.useRealTimers()
     }
@@ -462,24 +335,31 @@ describe('ChatScreen — a "model is starting" refusal clears once the model is 
     vi.useFakeTimers()
     try {
       let starting = 0
-      const getRuntimeStatus = vi.fn(async (): Promise<RuntimeStatus> => {
-        if (starting === 0) return { ...runningStatus } // IPC hands back a fresh copy per read
+      const getRuntimeStatus = vi.fn(async () => {
+        if (starting === 0) return runtimeStatus() // IPC hands back a fresh copy per read
         starting-- // the following read finds the model back
-        return { running: false, modelId: null, port: null, healthy: false, message: 'Stopped', startRequested: true }
+        return runtimeStatus({
+          running: false,
+          modelId: null,
+          port: null,
+          healthy: false,
+          message: 'Stopped',
+          startRequested: true
+        })
       })
-      const sendChatMessage = vi.fn(async () => {
+      const sendChatMessage = vi.fn(async (): Promise<Message> => {
         starting = startingReads // a CPU crash restart is under way
         throw new Error(refusal)
       })
       baseStub({ listMessages: vi.fn(async () => []), sendChatMessage, getRuntimeStatus })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
       fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
 
       if (startingReads > 0) {
         // The post-failure re-read finds the model starting: the waiting screen says so.
@@ -488,7 +368,7 @@ describe('ChatScreen — a "model is starting" refusal clears once the model is 
         await act(async () => {
           await vi.advanceTimersByTimeAsync(RUNTIME_POLL_MS)
         })
-        await flush()
+        await flushFakeTimers()
       }
       expect(screen.getByPlaceholderText('Message…')).toBeInTheDocument() // the model is back
       const alerts = screen.queryAllByRole('alert').map((el) => el.textContent ?? '').join(' ')
@@ -511,45 +391,40 @@ describe('ChatScreen — "Send again" on a question that got no answer (#613)', 
     vi.useFakeTimers()
     try {
       let history: Message[] = []
-      let finishResend!: () => void
+      const resend = deferred<Message>()
       const sendChatMessage = vi
-        .fn()
+        .fn<PreloadApi['sendChatMessage']>()
         // The first send persists the question, then the model crashes under it.
         .mockImplementationOnce(async () => {
-          history = [userMsg('u1', 'c1', 'the question')]
+          history = [userMsg('u1', 'the question')]
           throw new Error(t('en', 'main.chat.connectionLost'))
         })
         // The resend parks mid-answer, so the screen can be read while it streams.
-        .mockImplementationOnce(
-          () =>
-            new Promise<Message>((resolve) => {
-              finishResend = () => {
-                history = [...history, assistantMsg('a1', 'c1', 'the answer')]
-                resolve(history[1])
-              }
-            })
-        )
+        .mockImplementationOnce(() => resend.promise)
       baseStub({ listMessages: vi.fn(async () => history), sendChatMessage })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
       fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'the question' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
       expect(screen.getByRole('alert').textContent).toContain(t('en', 'main.chat.connectionLost'))
 
       fireEvent.click(sendAgain()!)
-      await flush()
+      await flushFakeTimers()
       expect(sendChatMessage).toHaveBeenLastCalledWith('c1', '', { mode: 'balanced', resendMessageId: 'u1' })
       // Mid-answer: the question is on screen once, its button gone, the crash banner cleared.
       expect(screen.getAllByText('the question')).toHaveLength(1)
       expect(sendAgain()).toBeNull()
       expect(screen.getByRole('alert').textContent).not.toContain(t('en', 'main.chat.connectionLost'))
 
-      finishResend()
-      await flush()
+      await act(async () => {
+        history = [...history, assistantMsg('a1', 'the answer')]
+        resend.resolve(history[1])
+      })
+      await flushFakeTimers()
       expect(screen.getAllByText('the question')).toHaveLength(1)
       expect(sendAgain()).toBeNull() // an answer follows the question now
     } finally {
@@ -561,23 +436,23 @@ describe('ChatScreen — "Send again" on a question that got no answer (#613)', 
     vi.useFakeTimers()
     try {
       let refreshFails = false
-      const sendChatMessage = vi.fn(async () => {
+      const sendChatMessage = vi.fn(async (): Promise<Message> => {
         refreshFails = true // the failure refresh below rejects too, so the optimistic bubble stays
         throw new Error(DOC_TASK_BUSY_MESSAGE)
       })
-      const listMessages = vi.fn(async () => {
+      const listMessages = vi.fn(async (): Promise<Message[]> => {
         if (refreshFails) throw new Error('Workspace is locked. Unlock it to chat.')
         return []
       })
       baseStub({ listMessages, sendChatMessage })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
       fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'never stored' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
 
       expect(screen.getByText('never stored')).toBeInTheDocument() // the optimistic bubble stays
       expect(sendAgain()).toBeNull() // main would refuse its id: it has no such question
@@ -591,20 +466,20 @@ describe('ChatScreen — "Send again" on a question that got no answer (#613)', 
     try {
       // E.g. reopened after a reload: the question is there, its error banner long gone.
       const askDocuments = vi.fn(() => new Promise<Message>(() => {}))
-      const sendChatMessage = vi.fn()
+      const sendChatMessage = vi.fn<PreloadApi['sendChatMessage']>()
       baseStub({
-        listConversations: vi.fn(async () => [{ ...chatConv('c1', 'Doc chat 1'), mode: 'documents' as const }]),
-        listMessages: vi.fn(async () => [userMsg('u1', 'c1', 'what are the payment terms')]),
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Doc chat 1', mode: 'documents' })]),
+        listMessages: vi.fn(async () => [userMsg('u1', 'what are the payment terms')]),
         askDocuments,
         sendChatMessage
       })
 
-      renderChat()
-      await flush()
-      fireEvent.click(screen.getByText('Doc chat 1'))
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Doc chat 1'))
+      await flushFakeTimers()
       fireEvent.click(sendAgain()!)
-      await flush()
+      await flushFakeTimers()
 
       expect(askDocuments).toHaveBeenCalledWith('c1', '', undefined, false, undefined, 'u1')
       expect(sendChatMessage).not.toHaveBeenCalled()
@@ -612,5 +487,29 @@ describe('ChatScreen — "Send again" on a question that got no answer (#613)', 
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// CH-14 (frontend audit 2026-08-09, #148; moved here from ChatLowsBundle by the chat-ui test campaign):
+// `busyStreaming` flips only after ensureConversation's round trips resolve, so a second submit in that
+// window used to mint a DUPLICATE conversation. The synchronous `sendInFlightRef` refuses the re-entry.
+describe('ChatScreen — double-submit guard (CH-14, #148)', () => {
+  it('a second Send click during ensureConversation creates NO duplicate conversation', async () => {
+    const created = deferred<Conversation>()
+    const createConversation = vi.fn(() => created.promise)
+    const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'ok'))
+    stubApi(chatScreenStubs({ createConversation, sendChatMessage })) // listConversations → [] (none yet)
+    const user = userEvent.setup()
+    renderChatScreen()
+    await user.type(await screen.findByRole('textbox'), 'hello')
+    const send = screen.getByRole('button', { name: /^send$/i })
+    // Both submits land while createConversation is still in flight — before busyStreaming can flip.
+    await act(async () => {
+      fireEvent.click(send)
+      fireEvent.click(send)
+    })
+    await act(async () => created.resolve(makeConversation({ title: 'New chat' })))
+    await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(1))
+    expect(createConversation).toHaveBeenCalledTimes(1)
   })
 })

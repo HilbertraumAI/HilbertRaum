@@ -1,170 +1,78 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { ToastProvider } from '../../src/renderer/components'
-import type {
-  Conversation,
-  DocumentInfo,
-  ImportJob,
-  ImportJobStatus,
-  Message,
-  RuntimeStatus,
-  SkillInfo
-} from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { DEFAULT_SETTINGS, type DocumentInfo, type ImportJob, type ImportJobStatus } from '../../src/shared/types'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { makeConversation, makeDocumentInfo, makeSkillInfo, userMsg } from '../helpers/chat-fixtures'
+import {
+  chatDropBridge,
+  chatScreenStubs,
+  conversationRow,
+  renderChatScreen,
+  type ChatDropBridge
+} from '../helpers/chat-screen'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import { en, t } from '../../src/shared/i18n'
 
 // Phase C renderer tests: the net-new chat attach / drag-drop intake (plan §11.2 H1),
 // plain-chat drop routing (§13.5 H2), the in-flight pending chip → live attachment
 // transition (N4), and the read-only "Files in this chat" affordance (§13.1).
 
-function conv(over: Partial<Conversation>): Conversation {
-  return {
-    id: 'c1',
-    title: 'My first chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-function docInfo(id: string, title: string): DocumentInfo {
-  return {
-    id,
-    title,
-    originalPath: null,
-    mimeType: 'application/pdf',
-    sizeBytes: 10,
-    status: 'indexed',
-    errorMessage: null,
-    chunkCount: 1,
-    lifecycle: 'temporary',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z'
-  }
-}
-
 const job: ImportJob = { jobId: 'j1', documentIds: ['d1'] }
 const jobDone: ImportJobStatus = { jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }
-
-/** A minimal enabled, available skill so the composer footer renders the skill picker. */
-function skill(over: Partial<SkillInfo> = {}): SkillInfo {
-  return {
-    installId: 'app:bank-statement',
-    id: 'bank-statement',
-    title: 'Bank statement helper',
-    description: 'Explains a bank statement in plain language.',
-    version: '1.0.0',
-    kind: 'instruction',
-    author: 'You',
-    language: 'en',
-    source: 'app',
-    trustedLevel: 'app',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-    permissionSummary: 'can read the documents you pick for a turn.',
-    duplicateId: false,
-    installedAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...over
-  }
-}
 
 // FE-A (full-audit-2026-06-29 follow-up, Phase 2): Electron removed the non-standard
 // `File.path` in v32 (installed: 37.x). A dropped File carries NO `.path`; the renderer must
 // resolve the on-disk path through the preload bridge (`window.api.getDroppedFilePath`, which
-// wraps `webUtils.getPathForFile` — only callable in the preload). These tests therefore drive
-// the *real* bridge shape: the dropped File is a bare `{ name }` with no `.path`, and a WeakMap
-// stands in for webUtils' File→path resolution (registered via `dropFile`). This is the lesson
-// of FE-A — never fabricate a platform property the renderer could read directly, or the test
-// goes green while production (where `.path` is undefined) silently fails.
-const droppedPaths = new WeakMap<object, string>()
+// wraps `webUtils.getPathForFile` — only callable in the preload). Every drop below therefore
+// drives the *real* bridge shape: `chatDropBridge` drops a path-less `File` and stands in for
+// webUtils' File→path resolution. This is the lesson of FE-A — never fabricate a platform
+// property the renderer could read directly, or the test goes green while production (where
+// `.path` is undefined) silently fails.
+let bridge: ChatDropBridge
 
-/** The preload resolver as the renderer sees it: maps a dropped File to its real path the way
- *  `webUtils.getPathForFile` does in main. Wired into every stub by `stubChatApi` below. */
-const getDroppedFilePath = vi.fn((file: object): string => droppedPaths.get(file) ?? '')
-
-/** `stubApi` + the drag-drop path resolver every drop test needs (the bridge that replaced the
- *  removed `File.path` — without it `pathsFromDrop` resolves nothing and no import fires). */
-function stubChatApi(overrides: Parameters<typeof stubApi>[0]): void {
-  stubApi({ getDroppedFilePath: getDroppedFilePath as never, ...overrides })
-}
-
-/** Fire a native-style file drop on the chat surface. The File has NO `.path` (Electron 37);
- *  its real path is registered for the bridge resolver, exactly as webUtils would resolve it. */
-function dropFile(name: string, path: string): void {
-  const target = document.querySelector('.chat-main')
-  if (!target) throw new Error('no .chat-main drop target')
-  const file = { name } // deliberately NO `.path` — Electron 37 doesn't expose it (FE-A)
-  droppedPaths.set(file, path)
-  fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
-}
-
-/** Fire a Files-bearing drop whose File resolves to NO path (a browser-origin drag, or any
- *  drop with no on-disk file) — the FE-C "unusable drop" case. */
-function dropUnresolvableFile(name: string): void {
-  const target = document.querySelector('.chat-main')
-  if (!target) throw new Error('no .chat-main drop target')
-  // Not registered in `droppedPaths` → the bridge resolver returns '' for it.
-  fireEvent.drop(target, { dataTransfer: { files: [{ name }], types: ['Files'] } })
-}
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
+beforeEach(() => {
+  bridge = chatDropBridge()
 })
 
+/** The chat surface the drop handler sits on (rendered while the mount reads are still in flight). */
+const chatMain = (): Element => {
+  const el = document.querySelector('.chat-main')
+  if (!el) throw new Error('no .chat-main drop target')
+  return el
+}
+
+/** The created documents conversation every empty-composer drop lands in. */
+const createdDocsChat = () => makeConversation({ id: 'c2', title: 'New chat', mode: 'documents' })
+
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  getDroppedFilePath.mockClear() // a plain vi.fn() isn't reset by restoreAllMocks
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)', () => {
   it('dropping onto an empty composer attaches to a NEW documents conversation (no toast) + a pending chip', async () => {
-    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
-    const createConversation = vi.fn(async () => created)
+    const createConversation = vi.fn(async () => createdDocsChat())
     const importDocuments = vi.fn(async () => job)
-    stubChatApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => []),
-      createConversation,
-      importDocuments,
-      // Never completes → the pending chip persists deterministically for the assertion (N4).
-      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        createConversation,
+        importDocuments,
+        // Never completes → the pending chip persists deterministically for the assertion (N4).
+        getImportJob: vi.fn(async () => ({ ...jobDone, done: false }))
+      })
     )
-    await screen.findByText(/start chatting/i).catch(() => undefined)
+    renderChatScreen()
 
-    dropFile('invoice.pdf', '/tmp/invoice.pdf')
+    bridge.drop(chatMain(), 'invoice.pdf', '/tmp/invoice.pdf')
 
     // A documents conversation is created and committed BEFORE the import references it (N3).
     // D71 (#26): with no pending narrowing the attach path now persists an EMPTY EXPLICIT scope so
@@ -181,6 +89,8 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
         destination: { kind: 'conversation', conversationId: 'c2' }
       })
     )
+    // FE-A: the dropped File carries no `.path` (Electron 37); its path came from the preload bridge.
+    expect(bridge.stubs.getDroppedFilePath).toHaveBeenCalledWith(expect.objectContaining({ name: 'invoice.pdf' }))
     // No "started a new document chat" toast — there was nothing to preserve.
     expect(screen.queryByText(/started a new document chat/i)).not.toBeInTheDocument()
 
@@ -199,30 +109,22 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     // per-turn by default — the pick carries as a SESSION override (the picker still shows it) but is
     // NOT silently persisted as the sticky default (persistence is now the explicit "keep" opt-in).
     const user = userEvent.setup()
-    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
-    const createConversation = vi.fn(async () => created)
     const importDocuments = vi.fn(async () => job)
     const setConversationDefaultSkill = vi.fn(async () => {})
-    stubChatApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => []),
-      listSkills: vi.fn(async () => [skill()]),
-      suggestSkills: vi.fn(async () => []),
-      listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
-      createConversation,
-      importDocuments,
-      setConversationDefaultSkill,
-      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        // The skill's #46 info card was already seen, so the first pick opens no card (and writes
+        // no settings): this row is about the carry, not the card.
+        getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: ['bank-statement'] })),
+        listSkills: vi.fn(async () => [makeSkillInfo()]),
+        createConversation: vi.fn(async () => createdDocsChat()),
+        importDocuments,
+        setConversationDefaultSkill,
+        getImportJob: vi.fn(async () => ({ ...jobDone, done: false }))
+      })
     )
-    await screen.findByText(/start chatting/i).catch(() => undefined)
+    renderChatScreen()
 
     // Pick the skill on the still-"new" composer (no conversation yet → not persisted, only staged).
     await user.click(await screen.findByRole('button', { name: /^skill:/i }))
@@ -230,7 +132,7 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     expect(screen.getByRole('button', { name: /^skill:/i })).toHaveTextContent('Bank statement helper')
     expect(setConversationDefaultSkill).not.toHaveBeenCalled() // nothing to persist onto yet
 
-    dropFile('invoice.pdf', '/tmp/invoice.pdf')
+    bridge.drop(chatMain(), 'invoice.pdf', '/tmp/invoice.pdf')
 
     // The created documents conversation received the import…
     await waitFor(() =>
@@ -245,69 +147,59 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
   })
 
   it('converts a pending attachment to a live "Files in this chat" entry once indexed (N4)', async () => {
-    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
-    // The link exists once the job completes; the import finishes immediately here.
-    stubChatApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'invoice.pdf')]),
-      createConversation: vi.fn(async () => created),
-      importDocuments: vi.fn(async () => job),
-      getImportJob: vi.fn(async () => jobDone),
-      listAttachments: vi.fn(async () => [docInfo('d1', 'invoice.pdf')])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+    let jobFinished = false
+    const live = makeDocumentInfo({ id: 'd1', title: 'invoice.pdf', lifecycle: 'temporary' })
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        listDocuments: vi.fn(async () => [live]),
+        createConversation: vi.fn(async () => createdDocsChat()),
+        importDocuments: vi.fn(async () => job),
+        getImportJob: vi.fn(async () => (jobFinished ? jobDone : { ...jobDone, completed: 0, done: false })),
+        // The live entry exists only once the job has finished: only watchAttachJob's refresh can reveal it.
+        listAttachments: vi.fn(async () => (jobFinished ? [live] : []))
+      })
     )
-    await screen.findByText(/start chatting/i).catch(() => undefined)
+    renderChatScreen()
 
-    dropFile('invoice.pdf', '/tmp/invoice.pdf')
+    bridge.drop(chatMain(), 'invoice.pdf', '/tmp/invoice.pdf')
 
-    // The live attachment shows in the footer popover, no longer "processing…".
-    await waitFor(() => expect(screen.getByRole('button', { name: /files? in this chat/i })).toBeInTheDocument())
-    await userEvent.click(screen.getByRole('button', { name: /files? in this chat/i }))
-    expect(await screen.findByText('Files in this chat')).toBeInTheDocument()
+    // While processing, the file is only the pending chip (the chip names it: one file in this chat).
+    await userEvent.click(await screen.findByRole('button', { name: /answering from: invoice\.pdf/i }))
+    expect(await screen.findByText(t('en', 'chat.scope.filesInChatLine'))).toBeInTheDocument()
+    expect(
+      (await screen.findAllByText(t('en', 'chat.attach.processing', { name: 'invoice.pdf' }))).length
+    ).toBeGreaterThanOrEqual(2)
+    expect(screen.queryByText('invoice.pdf')).not.toBeInTheDocument() // no live entry yet
+
+    // The job finishes: the live attachment shows in the open popover, no longer "processing…".
+    jobFinished = true
     await waitFor(() => expect(screen.getByText('invoice.pdf')).toBeInTheDocument())
-    // The pending chip clears once the job completes (it overlaps briefly before the poll).
-    await waitFor(() => expect(screen.queryByText(/processing invoice\.pdf/i)).not.toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.queryByText(t('en', 'chat.attach.processing', { name: 'invoice.pdf' }))).not.toBeInTheDocument()
+    )
   })
 
   it('dropping onto an in-progress PLAIN chat starts a new documents chat (never mutates it)', async () => {
     const user = userEvent.setup()
-    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
-    const createConversation = vi.fn(async () => created)
+    const createConversation = vi.fn(async () => createdDocsChat())
     const importDocuments = vi.fn(async () => job)
-    const msg: Message = {
-      id: 'm1',
-      conversationId: 'c1',
-      role: 'user',
-      content: 'an in-progress plain chat',
-      createdAt: '2026-01-01T00:00:00Z',
-      tokenCount: null
-    }
-    stubChatApi({
-      listConversations: vi.fn(async () => [conv({})]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => [msg]),
-      listDocuments: vi.fn(async () => []),
-      createConversation,
-      importDocuments,
-      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        listConversations: vi.fn(async () => [makeConversation({ title: 'My first chat' })]),
+        listMessages: vi.fn(async () => [userMsg('m1', 'an in-progress plain chat')]),
+        createConversation,
+        importDocuments,
+        getImportJob: vi.fn(async () => ({ ...jobDone, done: false }))
+      })
     )
+    renderChatScreen()
     // Select the plain chat so it has messages (the "in progress" condition).
     await user.click(await screen.findByText('My first chat'))
     await screen.findByText('an in-progress plain chat')
 
-    dropFile('invoice.pdf', '/tmp/invoice.pdf')
+    bridge.drop(chatMain(), 'invoice.pdf', '/tmp/invoice.pdf')
 
     await waitFor(() =>
       expect(createConversation).toHaveBeenCalledWith({
@@ -330,30 +222,22 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     // unchecking Library to ask just the file). Dropping a NEW file must NOT silently reset to the
     // Library default; the new conversation must own the user's narrowing so a single-doc skill
     // (whole-doc engine) can fire. Regression for the attach-flow scope handoff bug.
-    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
-    const createConversation = vi.fn(async () => created)
+    const createConversation = vi.fn(async () => createdDocsChat())
     const importDocuments = vi.fn(async () => job)
-    stubChatApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d0', 'lease.pdf')]),
-      createConversation,
-      importDocuments,
-      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen
-          onNavigate={() => {}}
-          initialMode="documents"
-          initialScopeDocumentIds={['d0']}
-        />
-      </ToastProvider>
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        listDocuments: vi.fn(async () => [
+          makeDocumentInfo({ id: 'd0', title: 'lease.pdf', lifecycle: 'temporary' })
+        ]),
+        createConversation,
+        importDocuments,
+        getImportJob: vi.fn(async () => ({ ...jobDone, done: false }))
+      })
     )
+    renderChatScreen({ initialMode: 'documents', initialScopeDocumentIds: ['d0'] })
 
-    dropFile('invoice.pdf', '/tmp/invoice.pdf')
+    bridge.drop(chatMain(), 'invoice.pdf', '/tmp/invoice.pdf')
 
     // The pending narrowing ({ask only d0}) rides onto the created conversation — NOT dropped.
     await waitFor(() =>
@@ -372,15 +256,15 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
 
   it('shows linked attachments as a read-only "Files in this chat" line', async () => {
     const user = userEvent.setup()
-    const docConv = conv({ id: 'c9', title: 'Doc Q&A', mode: 'documents' })
-    stubChatApi({
-      listConversations: vi.fn(async () => [docConv]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'invoice.pdf')]),
-      listAttachments: vi.fn(async () => [docInfo('d1', 'invoice.pdf')])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    const invoice = makeDocumentInfo({ id: 'd1', title: 'invoice.pdf', lifecycle: 'temporary' })
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ id: 'c9', title: 'Doc Q&A', mode: 'documents' })]),
+        listDocuments: vi.fn(async () => [invoice]),
+        listAttachments: vi.fn(async () => [invoice])
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Doc Q&A'))
 
     // The "Answering from:" chip names the chat's file (D71); opening it reveals the read-only attachment.
@@ -389,63 +273,14 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     expect(screen.getAllByText('invoice.pdf').length).toBeGreaterThan(0)
   })
 
-  // FE-A (full-audit-2026-06-29 follow-up, Phase 2): the drop path must resolve the on-disk
-  // path through the preload bridge, NOT a `.path` Electron 37 no longer puts on a File.
-  it('resolves a dropped File without `.path` through the preload bridge (Electron 37 — FE-A)', async () => {
-    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
-    const importDocuments = vi.fn(async () => job)
-    stubChatApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => []),
-      createConversation: vi.fn(async () => created),
-      importDocuments,
-      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
-    )
-    await screen.findByText(/start chatting/i).catch(() => undefined)
-
-    dropFile('statement.pdf', '/tmp/statement.pdf')
-
-    // The renderer asked the bridge for the path (the dropped File carries no `.path`)…
-    await waitFor(() =>
-      expect(getDroppedFilePath).toHaveBeenCalledWith(expect.objectContaining({ name: 'statement.pdf' }))
-    )
-    // …and imported the path the bridge returned. On the old `File.path` code this stays []
-    // (the File has no `.path`) → importDocuments is never called → this test reds (teeth).
-    await waitFor(() =>
-      expect(importDocuments).toHaveBeenCalledWith(['/tmp/statement.pdf'], {
-        destination: { kind: 'conversation', conversationId: 'c2' }
-      })
-    )
-  })
-
   // FE-C: a Files-bearing drop that resolves to ZERO importable paths (a browser-origin drag,
   // or any drop with no on-disk file) must not fail silently — it surfaces a friendly banner.
   it('shows a friendly error when a Files-bearing drop resolves to no usable path (FE-C)', async () => {
     const importDocuments = vi.fn(async () => job)
-    stubChatApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => []),
-      importDocuments,
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
-    )
-    await screen.findByText(/start chatting/i).catch(() => undefined)
+    stubApi(chatScreenStubs({ ...bridge.stubs, importDocuments }))
+    renderChatScreen()
 
-    dropUnresolvableFile('clipping.png')
+    bridge.dropUnresolvable(chatMain(), 'clipping.png')
 
     // The error banner explains the drop couldn't be used (en copy of chat.attach.dropUnsupported).
     expect(await screen.findByText(/couldn't add that/i)).toBeInTheDocument()
@@ -461,14 +296,16 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
 describe('ChatScreen — a failed attachment points to Documents (#570)', () => {
   const SCAN_MESSAGE = en['main.ingest.pdfScanDetected']
   function failedDoc(id: string, title: string, kind: 'scan' | 'photo' | 'other'): DocumentInfo {
-    return {
-      ...docInfo(id, title),
+    return makeDocumentInfo({
+      id,
+      title,
+      lifecycle: 'temporary',
       status: 'failed',
       chunkCount: 0,
       errorMessage:
         kind === 'scan' ? SCAN_MESSAGE : kind === 'photo' ? en['main.ingest.imageNeedsOcr'] : 'EIO: i/o error, read',
       ...(kind === 'scan' ? { scanDetected: true } : {})
-    }
+    })
   }
   const failedJob = (failed: number, documentIds = ['d1']): ImportJobStatus => ({
     jobId: 'j1',
@@ -478,35 +315,23 @@ describe('ChatScreen — a failed attachment points to Documents (#570)', () => 
     done: true
   })
 
-  function renderAttachBorn(opts: {
-    docs: DocumentInfo[]
-    documentIds?: string[]
-    onNavigate?: (target: string) => void
-    onOpenDocumentsFrom?: (id: string) => void
-  }): void {
+  function renderAttachBorn(opts: { docs: DocumentInfo[]; documentIds?: string[] }) {
     const ids = opts.documentIds ?? ['d1']
-    stubChatApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => opts.docs),
-      createConversation: vi.fn(async () => conv({ id: 'c2', title: 'New chat', mode: 'documents' })),
-      importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ids })),
-      getImportJob: vi.fn(async () => failedJob(opts.docs.filter((d) => d.status === 'failed').length, ids)),
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={opts.onNavigate ?? (() => {})} onOpenDocumentsFrom={opts.onOpenDocumentsFrom} />
-      </ToastProvider>
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        listDocuments: vi.fn(async () => opts.docs),
+        createConversation: vi.fn(async () => createdDocsChat()),
+        importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ids })),
+        getImportJob: vi.fn(async () => failedJob(opts.docs.filter((d) => d.status === 'failed').length, ids))
+      })
     )
+    return renderChatScreen()
   }
 
   it('a scan: says what to do in Documents, and "Go to Documents" goes there', async () => {
-    const onNavigate = vi.fn()
-    renderAttachBorn({ docs: [failedDoc('d1', 'contract-scan.pdf', 'scan')], onNavigate })
-    await screen.findByText(/start chatting/i).catch(() => undefined)
-    dropFile('contract-scan.pdf', '/tmp/contract-scan.pdf')
+    const { onNavigate } = renderAttachBorn({ docs: [failedDoc('d1', 'contract-scan.pdf', 'scan')] })
+    bridge.drop(chatMain(), 'contract-scan.pdf', '/tmp/contract-scan.pdf')
 
     expect(await screen.findByText(t('en', 'chat.attach.scanned', { name: 'contract-scan.pdf' }))).toBeInTheDocument()
     expect(screen.queryByText(SCAN_MESSAGE)).not.toBeInTheDocument()
@@ -514,29 +339,16 @@ describe('ChatScreen — a failed attachment points to Documents (#570)', () => 
     expect(onNavigate).toHaveBeenCalledWith('documents')
   })
 
-  it('with the return slot wired, the button hands over the conversation it came from (#573)', async () => {
-    const onNavigate = vi.fn()
-    const onOpenDocumentsFrom = vi.fn()
-    renderAttachBorn({ docs: [failedDoc('d1', 'scan.pdf', 'scan')], onNavigate, onOpenDocumentsFrom })
-    await screen.findByText(/start chatting/i).catch(() => undefined)
-    dropFile('scan.pdf', '/tmp/scan.pdf')
-    await userEvent.click(await screen.findByRole('button', { name: 'Go to Documents' }))
-    expect(onOpenDocumentsFrom).toHaveBeenCalledWith('c2')
-    expect(onNavigate).not.toHaveBeenCalled()
-  })
-
   it('a photo without the OCR files gets its own copy and the same button', async () => {
     renderAttachBorn({ docs: [failedDoc('d1', 'page.jpg', 'photo')] })
-    await screen.findByText(/start chatting/i).catch(() => undefined)
-    dropFile('page.jpg', '/tmp/page.jpg')
+    bridge.drop(chatMain(), 'page.jpg', '/tmp/page.jpg')
     expect(await screen.findByText(t('en', 'chat.attach.photoNeedsOcr', { name: 'page.jpg' }))).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Go to Documents' })).toBeInTheDocument()
   })
 
   it('any other failure keeps its own message, with no button', async () => {
     renderAttachBorn({ docs: [failedDoc('d1', 'broken.pdf', 'other')] })
-    await screen.findByText(/start chatting/i).catch(() => undefined)
-    dropFile('broken.pdf', '/tmp/broken.pdf')
+    bridge.drop(chatMain(), 'broken.pdf', '/tmp/broken.pdf')
     expect(await screen.findByText('EIO: i/o error, read')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
   })
@@ -550,15 +362,13 @@ describe('ChatScreen — a failed attachment points to Documents (#570)', () => 
       ],
       documentIds: ['d1', 'd2', 'd3']
     })
-    await screen.findByText(/start chatting/i).catch(() => undefined)
-    dropFile('scan.pdf', '/tmp/scan.pdf')
+    bridge.drop(chatMain(), 'scan.pdf', '/tmp/scan.pdf')
     expect(await screen.findByText(t('en', 'chat.attach.scanned', { name: 'scan.pdf' }))).toBeInTheDocument()
   })
 
   it('dismissing the banner takes the button with it', async () => {
     renderAttachBorn({ docs: [failedDoc('d1', 'scan.pdf', 'scan')] })
-    await screen.findByText(/start chatting/i).catch(() => undefined)
-    dropFile('scan.pdf', '/tmp/scan.pdf')
+    bridge.drop(chatMain(), 'scan.pdf', '/tmp/scan.pdf')
     await screen.findByText(t('en', 'chat.attach.scanned', { name: 'scan.pdf' }))
     await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByText(t('en', 'chat.attach.scanned', { name: 'scan.pdf' }))).not.toBeInTheDocument()
@@ -568,45 +378,47 @@ describe('ChatScreen — a failed attachment points to Documents (#570)', () => 
   it('never shows over another chat: held while the user is elsewhere, shown on return, cleared on leaving', async () => {
     const user = userEvent.setup()
     // An attach-born chat (D71's empty explicit scope), so the drop raises no narrow/widen prompt.
-    const a = conv({ id: 'ca', title: 'Chat A', mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
-    const b = conv({ id: 'cb', title: 'Chat B', mode: 'documents' })
+    const a = makeConversation({ id: 'ca', title: 'Chat A', mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
+    const b = makeConversation({ id: 'cb', title: 'Chat B', mode: 'documents' })
     let finished = false
     const listDocuments = vi.fn(async () => [failedDoc('d1', 'scan.pdf', 'scan')])
     const importDocuments = vi.fn(async () => job)
-    stubChatApi({
-      listConversations: vi.fn(async () => [a, b]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments,
-      importDocuments,
-      getImportJob: vi.fn(async () => (finished ? failedJob(1) : { ...failedJob(1), failed: 0, done: false })),
-      listAttachments: vi.fn(async () => [])
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        listConversations: vi.fn(async () => [a, b]),
+        listDocuments,
+        importDocuments,
+        getImportJob: vi.fn(async () => (finished ? failedJob(1) : { ...failedJob(1), failed: 0, done: false }))
+      })
     )
+    renderChatScreen()
     await user.click(await screen.findByText('Chat A'))
-    dropFile('scan.pdf', '/tmp/scan.pdf')
+    bridge.drop(chatMain(), 'scan.pdf', '/tmp/scan.pdf')
     await waitFor(() => expect(importDocuments).toHaveBeenCalled())
     const docsReadsBefore = listDocuments.mock.calls.length
-    await user.click(screen.getByText('Chat B'))
+    await user.click(conversationRow('Chat B'))
     finished = true
     const scanCopy = t('en', 'chat.attach.scanned', { name: 'scan.pdf' })
-    // The job settles while B is open (the poll reads the document list once more): nothing shows over B.
-    await waitFor(() => expect(listDocuments.mock.calls.length).toBeGreaterThan(docsReadsBefore), { timeout: 3000 })
-    await new Promise((r) => setTimeout(r, 50))
+    // The job settles while B is open; its done-tick reads the document list once more…
+    await waitFor(() => expect(listDocuments.mock.calls.length).toBeGreaterThan(docsReadsBefore), {
+      timeout: hangBudgetMs(3000)
+    })
+    // …and holds the failure synchronously after that read resolves (no wall-clock wait).
+    await act(async () => {
+      await listDocuments.mock.results.at(-1)!.value
+    })
+    await act(async () => {})
     expect(screen.queryByText(scanCopy)).not.toBeInTheDocument()
     expect(screen.queryByText(SCAN_MESSAGE)).not.toBeInTheDocument()
     // Back in A, the user learns what happened to the file they attached there.
-    await user.click(screen.getByText('Chat A'))
+    await user.click(conversationRow('Chat A'))
     expect(await screen.findByText(scanCopy)).toBeInTheDocument()
     // Leaving clears it (CR-6), and it does not come back a second time.
-    await user.click(screen.getByText('Chat B'))
+    await user.click(conversationRow('Chat B'))
     await waitFor(() => expect(screen.queryByText(scanCopy)).not.toBeInTheDocument())
-    await user.click(screen.getByText('Chat A'))
-    await new Promise((r) => setTimeout(r, 50))
+    await user.click(conversationRow('Chat A'))
+    await waitFor(() => expect(conversationRow('Chat A')).toHaveAttribute('aria-current', 'true'))
     expect(screen.queryByText(scanCopy)).not.toBeInTheDocument()
   })
 })

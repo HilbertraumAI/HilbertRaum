@@ -48,15 +48,15 @@ describe('advanceWordTally ≡ split-based word count (PF-2)', () => {
 
   it('matches on leading/trailing whitespace and whitespace-only streams', () => {
     assertStreamEquivalence(['   ', ' lead', 'ing', ' and trailing ', '  '])
-    assertStreamEquivalence([' ', '\t', '\n', '   ']) // never a word — stays 0
+    assertStreamEquivalence([' ', '\t', '\n', ' \u00a0 ']) // never a word — stays 0
     expect(advanceWordTally(freshWordTally(), '')).toBe(0)
-    expect(oracleCount('')).toBe(0)
+    expect(advanceWordTally(freshWordTally(), '\u00a0')).toBe(0) // NBSP is \s in JS: never a word
   })
 
   it('matches per flush over long pseudo-random chunk streams (deterministic LCG)', () => {
     // Character pool biased toward the nasty cases: multi-space runs, newlines, tabs,
-    // punctuation-only "words", unicode whitespace (  is \s in JS).
-    const pool = 'abc de  f\n\tg. h! … i- j'
+    // punctuation-only "words", unicode whitespace (U+00A0 is \s in JS).
+    const pool = 'abc de  f\n\tg. h! …\u00a0i- j'
     let seed = 0x51f15e
     const next = (mod: number): number => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff

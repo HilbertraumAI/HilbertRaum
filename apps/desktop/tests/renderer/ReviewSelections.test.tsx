@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
@@ -19,10 +19,6 @@ import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 // the ready-guard refuses selection creation — the UI must hide the affordance).
 //
 // Structural no-call tripwire (P2 convention): stubReviewApi + file-wide afterEach.
-
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 beforeEach(() => {
   resetReviewSessionForTests()

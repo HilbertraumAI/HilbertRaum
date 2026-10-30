@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Composer } from '../../src/renderer/chat/Composer'
 import { DictationButton } from '../../src/renderer/chat/DictationButton'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
+import { DEFAULT_NO_SIGNAL_TIMING } from '../../src/renderer/chat/useNoSignalHint'
 import { t } from '../../src/shared/i18n'
 import type { DictationCapture, DictationCaptureStart } from '../../src/renderer/lib/dictation'
 import {
@@ -13,36 +13,31 @@ import {
   DICTATION_TOO_SHORT_MESSAGE,
   MIC_BLOCKED_MESSAGE
 } from '../../src/renderer/lib/dictation'
-import type { AppStatus, RuntimeStatus, TranscriberMissing } from '../../src/shared/types'
+import type { TranscriberMissing } from '../../src/shared/types'
 import type { MessageKey } from '../../src/shared/i18n'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { appStatus } from '../helpers/status'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { renderInLanguage } from '../helpers/render-language'
 
 // Voice dictation in the composer (Phase 37, D30): availability gating (the mic exists
 // only when a transcriber is selected), the record → transcribe → insert-at-cursor flow
-// (with the capture pipeline faked behind the DictationButton seam and the preload
-// stubbed), friendly failure copy, and the hard rule that dictation NEVER sends.
+// (with the capture module's `captureDictation` mocked below and the preload stubbed),
+// friendly failure copy, and the hard rule that dictation NEVER sends.
 
-function appStatus(over: Partial<AppStatus> = {}): AppStatus {
+// The capture pipeline (getUserMedia → MediaRecorder → Web Audio) needs a browser: `captureDictation` is
+// replaced, and each row puts the capture its mic click should get in `captureSlot.next`. The message
+// constants stay real.
+const captureSlot = vi.hoisted(() => ({ next: null as DictationCaptureStart | null }))
+vi.mock('../../src/renderer/lib/dictation', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../src/renderer/lib/dictation')>()
   return {
-    appName: 'x',
-    appVersion: '0',
-    offlineMode: true,
-    networkAllowed: false,
-    activeModelId: 'm1',
-    hardwareProfile: 'UNKNOWN',
-    workspaceMode: 'plaintext_dev',
-    workspaceReady: true,
-    machineRamGb: 16,
-    dictationAvailable: false,
-    ocrAvailable: false,
-    translationAvailable: false,
-    ...over
+    ...m,
+    captureDictation: vi.fn(() =>
+      captureSlot.next ? captureSlot.next() : Promise.reject(new Error('no fake capture set for this row'))
+    )
   }
-}
-
-function runtimeStatus(): RuntimeStatus {
-  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok' }
-}
+})
 
 /** A capture whose stop() resolves with fixed bytes — the renderer-side fake mic. */
 function fakeCapture(
@@ -55,7 +50,7 @@ function fakeCapture(
   const cancel = vi.fn()
   // analyser: null by default — jsdom has no Web Audio. The Composer's waveform overlay must
   // no-op (render nothing) on a null analyser; the record flow stays unaffected. The no-signal
-  // tests pass a fake tap instead.
+  // and waveform tests pass a fake tap instead.
   const capture: DictationCapture = { stop: async () => bytes, cancel, analyser }
   return { start: async () => capture, cancel }
 }
@@ -71,13 +66,11 @@ function fakeAnalyser(level: { value: number }): AnalyserNode {
 /** Stateful Composer harness (the real Composer is controlled by ChatScreen). */
 function Harness(props: {
   initial?: string
-  capture?: DictationCaptureStart
   onError?: (m: string) => void
   onSend?: () => void
   available?: boolean
   missing?: TranscriberMissing | null
   onOpenModels?: () => void
-  noSignalTiming?: { afterMs: number; pollMs: number }
 }): JSX.Element {
   const [value, setValue] = useState(props.initial ?? '')
   return (
@@ -92,9 +85,7 @@ function Harness(props: {
       dictationAvailable={props.available ?? true}
       dictationMissing={props.missing}
       onDictationError={props.onError}
-      dictationCaptureImpl={props.capture}
       onOpenModels={props.onOpenModels}
-      noSignalTiming={props.noSignalTiming}
     />
   )
 }
@@ -103,39 +94,35 @@ function micButton(): HTMLElement {
   return screen.getByRole('button', { name: /dictate a message/i })
 }
 
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
-
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+    captureSlot.next = null
+  }
 })
 
 describe('availability gating (D14 precedent)', () => {
   it('ChatScreen shows the mic only when the app reports a transcriber', async () => {
-    stubApi({
-      getAppStatus: vi.fn(async () => appStatus({ dictationAvailable: true })),
-      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
-      listConversations: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [])
-    })
-    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', dictationAvailable: true }))
+      })
+    )
+    const { unmount } = renderChatScreen()
     expect(await screen.findByRole('button', { name: /dictate a message/i })).toBeInTheDocument()
     unmount()
+    assertNoUnexpectedApiCalls() // the next stubApi starts a fresh record
 
-    stubApi({
-      getAppStatus: vi.fn(async () => appStatus({ dictationAvailable: false })),
-      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
-      listConversations: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', dictationAvailable: false }))
+      })
+    )
+    renderChatScreen()
     await screen.findByPlaceholderText('Message…')
     // #497: unavailable is no longer invisible — the "not installed" mic stands in for it.
     expect(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') })).toBeInTheDocument()
@@ -143,27 +130,24 @@ describe('availability gating (D14 precedent)', () => {
   })
 
   it('ChatScreen re-reads availability on window focus — a download that finished while the user stayed in chat (#497)', async () => {
-    const getAppStatus = vi.fn(async () => appStatus({ dictationAvailable: false }))
-    stubApi({
-      getAppStatus,
-      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
-      listConversations: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    const getAppStatus = vi.fn(async () => appStatus({ activeModelId: 'm1', dictationAvailable: false }))
+    stubApi(chatScreenStubs({ getAppStatus }))
+    renderChatScreen()
     await screen.findByPlaceholderText('Message…')
+    // Wait for the status read (the "not installed" mic), so the negative is not just an unread status.
+    expect(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /dictate a message/i })).not.toBeInTheDocument()
 
     // Main re-selected the transcriber when the speech model landed (the #497 hook); the open
     // chat screen learns of it on the next focus, exactly like the Translate screen does.
-    getAppStatus.mockImplementation(async () => appStatus({ dictationAvailable: true }))
+    getAppStatus.mockImplementation(async () => appStatus({ activeModelId: 'm1', dictationAvailable: true }))
     act(() => {
       window.dispatchEvent(new Event('focus'))
     })
     expect(await screen.findByRole('button', { name: /dictate a message/i })).toBeInTheDocument()
   })
 
-  it('the Composer hides the mic when dictation is unavailable (default)', () => {
+  it('renders no mic at all while the status is unread — no flash on mount (#497)', () => {
     render(
       <Composer
         value=""
@@ -175,7 +159,11 @@ describe('availability gating (D14 precedent)', () => {
         sendLabel="Send"
       />
     )
-    expect(screen.queryByRole('button', { name: /dictate/i })).not.toBeInTheDocument()
+    // Neither the live mic nor either "not installed" mic: Send is the only button.
+    expect(screen.queryByRole('button', { name: /dictate a message/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'chat.dictation.unavailable') })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'chat.dictation.unavailableSystem') })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Send'])
   })
 })
 
@@ -195,6 +183,7 @@ describe('the "not installed" mic (#497 — discoverable, never hidden)', () => 
   it('one click explains what is missing; one more opens the AI Model screen', async () => {
     const user = userEvent.setup()
     const onOpenModels = vi.fn()
+    // No 'missing' prop: an older main without AppStatus.transcriberMissing falls back to the speech-model copy (#527).
     render(<Harness available={false} onOpenModels={onOpenModels} />)
     await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
     expect(screen.getByText(t('en', 'chat.dictation.needsModel'))).toBeInTheDocument()
@@ -207,14 +196,12 @@ describe('the "not installed" mic (#497 — discoverable, never hidden)', () => 
 
   it('ChatScreen threads the deep link: the hint navigates to the AI Model screen', async () => {
     const user = userEvent.setup()
-    const onNavigate = vi.fn()
-    stubApi({
-      getAppStatus: vi.fn(async () => appStatus({ dictationAvailable: false })),
-      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
-      listConversations: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [])
-    })
-    render(<ChatScreen onNavigate={onNavigate} />)
+    stubApi(
+      chatScreenStubs({
+        getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', dictationAvailable: false }))
+      })
+    )
+    const { onNavigate } = renderChatScreen()
     await user.click(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
     const composer = document.querySelector('.composer') as HTMLElement
     await user.click(within(composer).getByRole('button', { name: t('en', 'chat.dictation.getModel') }))
@@ -235,12 +222,14 @@ describe('the "not installed" hint names the missing piece (#527)', () => {
   ]
 
   for (const c of CASES) {
-    it(`${c.missing}: names it and offers its own action`, async () => {
+    // No button reads "Open AI …": next to "AI" the verb parses as the company name.
+    it(`${c.missing}: names it and offers its own action, never "Open AI …"`, async () => {
       const user = userEvent.setup()
       const onOpenModels = vi.fn()
       render(<Harness available={false} missing={c.missing} onOpenModels={onOpenModels} />)
       await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
       expect(screen.getByText(t('en', c.text))).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /open ai/i })).not.toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: t('en', c.action) }))
       expect(onOpenModels).toHaveBeenCalledTimes(1)
     })
@@ -257,31 +246,19 @@ describe('the "not installed" hint names the missing piece (#527)', () => {
     expect(screen.queryByText(t('en', 'chat.dictation.needsModel'))).not.toBeInTheDocument()
   })
 
-  it('no button reads "Open AI …" (next to "AI" the verb parses as the company name)', async () => {
-    const user = userEvent.setup()
-    render(<Harness available={false} missing="model" onOpenModels={vi.fn()} />)
-    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
-    expect(screen.queryByRole('button', { name: /open ai/i })).not.toBeInTheDocument()
-  })
-
   it('ChatScreen reads the cause from the app status and re-reads it on focus', async () => {
     const user = userEvent.setup()
     const getAppStatus = vi.fn(async () =>
-      appStatus({ dictationAvailable: false, transcriberMissing: 'model-and-engine' })
+      appStatus({ activeModelId: 'm1', dictationAvailable: false, transcriberMissing: 'model-and-engine' })
     )
-    stubApi({
-      getAppStatus,
-      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
-      listConversations: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(chatScreenStubs({ getAppStatus }))
+    renderChatScreen()
     await user.click(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
     expect(screen.getByText(t('en', 'chat.dictation.needsModelAndEngine'))).toBeInTheDocument()
 
     // The voice engine landed while the user stayed in chat; only the model is missing now.
     getAppStatus.mockImplementation(async () =>
-      appStatus({ dictationAvailable: false, transcriberMissing: 'model' })
+      appStatus({ activeModelId: 'm1', dictationAvailable: false, transcriberMissing: 'model' })
     )
     act(() => {
       window.dispatchEvent(new Event('focus'))
@@ -289,64 +266,81 @@ describe('the "not installed" hint names the missing piece (#527)', () => {
     expect(await screen.findByText(t('en', 'chat.dictation.needsModel'))).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'chat.dictation.needsModelAndEngine'))).not.toBeInTheDocument()
   })
-
-  it('a status without the field (an older main) falls back to the speech-model copy', async () => {
-    const user = userEvent.setup()
-    render(<Harness available={false} onOpenModels={vi.fn()} />)
-    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
-    expect(screen.getByText(t('en', 'chat.dictation.needsModel'))).toBeInTheDocument()
-  })
 })
 
 // #497 follow-up (owner request): while recording, the composer says at once when nothing is
 // reaching the microphone — sampled from the waveform's Web Audio tap against the same −50 dBFS
-// floor the post-stop gate applies. Timing is injected small here; the product default is 2 s.
+// floor the post-stop gate applies. The rows run the SHIPPED timing (2 s, sampled every 250 ms)
+// on a fake clock that fakes only the hook's own: its interval and `Date.now()`. userEvent and
+// RTL keep real time.
 describe('the live "no signal" hint while recording', () => {
-  const FAST = { afterMs: 80, pollMs: 10 }
   const noSignalText = (): string => t('en', 'chat.dictation.noSignal')
+  // The first tick that may show the hint: the first silent sample starts the clock (at one poll),
+  // and the window runs from there.
+  const EDGE = DEFAULT_NO_SIGNAL_TIMING.afterMs + DEFAULT_NO_SIGNAL_TIMING.pollMs
+  const advance = async (ms: number): Promise<void> => {
+    await act(() => vi.advanceTimersByTimeAsync(ms))
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Click the mic and wait until recording, with the hook's interval started at the current fake time. */
+  async function startRecording(user: ReturnType<typeof userEvent.setup>, capture: DictationCaptureStart): Promise<void> {
+    captureSlot.next = capture
+    await user.click(micButton())
+    await screen.findByRole('button', { name: /stop dictation/i })
+    await act(async () => {}) // flush the recording effects: the hook arms its interval here
+  }
 
   it('appears once the tap has stayed silent for the window, and clears the moment sound comes in', async () => {
+    // The values architecture.md and known-limitations.md state ("for 2 s", "four times a second").
+    expect(DEFAULT_NO_SIGNAL_TIMING).toEqual({ afterMs: 2000, pollMs: 250 })
     const user = userEvent.setup()
     stubApi({ transcribeDictation: vi.fn(async () => 'text') })
     const level = { value: 0 } // digital silence — a muted or blocked device
-    const { start } = fakeCapture(new Uint8Array([1]), fakeAnalyser(level))
-    render(<Harness capture={start} noSignalTiming={FAST} />)
+    render(<Harness />)
+    await startRecording(user, fakeCapture(new Uint8Array([1]), fakeAnalyser(level)).start)
 
-    await user.click(micButton())
-    await screen.findByRole('button', { name: /stop dictation/i })
-    expect(await screen.findByText(noSignalText())).toBeInTheDocument()
+    await advance(EDGE - 1)
+    expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
+    await advance(1)
+    expect(screen.getByText(noSignalText())).toBeInTheDocument()
 
     level.value = 0.2 // −14 dBFS: the user started talking
-    await waitFor(() => expect(screen.queryByText(noSignalText())).not.toBeInTheDocument())
+    await advance(DEFAULT_NO_SIGNAL_TIMING.pollMs)
+    expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
   })
 
   it('never appears while there is signal, and is gone once recording stops', async () => {
     const user = userEvent.setup()
     stubApi({ transcribeDictation: vi.fn(async () => 'text') })
     const level = { value: 0.2 }
-    const { start } = fakeCapture(new Uint8Array([1]), fakeAnalyser(level))
-    render(<Harness capture={start} noSignalTiming={FAST} />)
+    render(<Harness />)
+    await startRecording(user, fakeCapture(new Uint8Array([1]), fakeAnalyser(level)).start)
 
-    await user.click(micButton())
-    await screen.findByRole('button', { name: /stop dictation/i })
-    await new Promise((r) => setTimeout(r, FAST.afterMs * 3))
+    await advance(EDGE + DEFAULT_NO_SIGNAL_TIMING.pollMs)
     expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
 
-    level.value = 0
-    expect(await screen.findByText(noSignalText())).toBeInTheDocument()
+    level.value = 0 // positive control: the same tap gone silent shows it
+    await advance(EDGE)
+    expect(screen.getByText(noSignalText())).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /stop dictation/i }))
-    await waitFor(() => expect(screen.queryByText(noSignalText())).not.toBeInTheDocument())
+    await act(async () => {})
+    expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
   })
 
   it('stays silent without a Web Audio tap (analyser null) — the post-stop gate still covers that', async () => {
     const user = userEvent.setup()
     stubApi({ transcribeDictation: vi.fn(async () => 'text') })
-    const { start } = fakeCapture()
-    render(<Harness capture={start} noSignalTiming={FAST} />)
+    render(<Harness />)
+    await startRecording(user, fakeCapture().start)
 
-    await user.click(micButton())
-    await screen.findByRole('button', { name: /stop dictation/i })
-    await new Promise((r) => setTimeout(r, FAST.afterMs * 3))
+    await advance(EDGE * 2)
     expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
   })
 })
@@ -357,8 +351,8 @@ describe('record → transcribe → insert at the cursor', () => {
     const transcribe = vi.fn(async (_bytes: Uint8Array) => ' hello world ')
     stubApi({ transcribeDictation: transcribe })
     const onSend = vi.fn()
-    const { start } = fakeCapture(new Uint8Array([7, 7]))
-    render(<Harness initial="foo bar" capture={start} onSend={onSend} />)
+    captureSlot.next = fakeCapture(new Uint8Array([7, 7])).start
+    render(<Harness initial="foo bar" onSend={onSend} />)
 
     // Caret after "foo" — dictation must land mid-text, not append.
     const input = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
@@ -382,26 +376,29 @@ describe('record → transcribe → insert at the cursor', () => {
   it('engages the recording affordance (dim + waveform overlay) only while recording', async () => {
     const user = userEvent.setup()
     stubApi({ transcribeDictation: vi.fn(async () => 'x') })
-    const { start } = fakeCapture()
-    const { container } = render(<Harness capture={start} />)
+    captureSlot.next = fakeCapture(new Uint8Array([1]), fakeAnalyser({ value: 0.2 })).start
+    const { container } = render(<Harness />)
     const row = container.querySelector('.composer-row') as HTMLElement
+    const waveform = (): Element | null => container.querySelector('canvas.dictation-waveform')
 
     expect(row).not.toHaveClass('composer-recording')
+    expect(waveform()).toBeNull()
     await user.click(micButton())
     await screen.findByRole('button', { name: /stop dictation/i })
-    // recording → row carries the dim/overlay class (works even with a null analyser:
-    // Web Audio is absent in jsdom, so the canvas no-ops but the affordance still shows).
+    // recording → the row carries the dim class, and the waveform canvas draws the live tap over the input.
     expect(row).toHaveClass('composer-recording')
+    expect(waveform()).not.toBeNull()
 
     await user.click(screen.getByRole('button', { name: /stop dictation/i }))
     await waitFor(() => expect(row).not.toHaveClass('composer-recording'))
+    await waitFor(() => expect(waveform()).toBeNull())
   })
 
   it('appends without doubling whitespace when the input is empty', async () => {
     const user = userEvent.setup()
     stubApi({ transcribeDictation: vi.fn(async () => 'dictated text') })
-    const { start } = fakeCapture()
-    render(<Harness capture={start} />)
+    captureSlot.next = fakeCapture().start
+    render(<Harness />)
 
     await user.click(micButton())
     await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
@@ -414,8 +411,8 @@ describe('record → transcribe → insert at the cursor', () => {
     const user = userEvent.setup()
     stubApi({ transcribeDictation: vi.fn(async () => '   ') })
     const onError = vi.fn()
-    const { start } = fakeCapture()
-    render(<Harness initial="keep me" capture={start} onError={onError} />)
+    captureSlot.next = fakeCapture().start
+    render(<Harness initial="keep me" onError={onError} />)
 
     await user.click(micButton())
     await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
@@ -436,8 +433,8 @@ describe('friendly failures (§11.4)', () => {
       })
     })
     const onError = vi.fn()
-    const { start } = fakeCapture()
-    render(<Harness capture={start} onError={onError} />)
+    captureSlot.next = fakeCapture().start
+    render(<Harness onError={onError} />)
 
     await user.click(micButton())
     await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
@@ -447,19 +444,23 @@ describe('friendly failures (§11.4)', () => {
     expect(micButton()).toBeEnabled()
   })
 
+  // lib/dictation throws canonical English and DictationButton localizes it at display. The English
+  // catalog value equals the constant byte for byte, so the rows below run in German: only there does
+  // a dropped mapping show (the English constant would pass straight through).
   it('surfaces the mic-blocked copy when the capture cannot start, and recovers', async () => {
     const user = userEvent.setup()
     stubApi({})
     const onError = vi.fn()
-    const start: DictationCaptureStart = async () => {
+    captureSlot.next = async () => {
       throw new Error(MIC_BLOCKED_MESSAGE)
     }
-    render(<Harness capture={start} onError={onError} />)
+    renderInLanguage(<Harness onError={onError} />, 'de')
+    const mic = (): HTMLElement => screen.getByRole('button', { name: t('de', 'chat.dictation.start') })
 
-    await user.click(micButton())
-    await waitFor(() => expect(onError).toHaveBeenCalledWith(MIC_BLOCKED_MESSAGE))
-    expect(micButton()).toBeEnabled()
-    expect(micButton()).toHaveAttribute('aria-pressed', 'false')
+    await user.click(mic())
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(t('de', 'chat.dictation.micBlocked')))
+    expect(mic()).toBeEnabled()
+    expect(mic()).toHaveAttribute('aria-pressed', 'false')
   })
 
   // #497: the renderer gate refuses a recording with no usable signal BEFORE the IPC — nothing
@@ -477,15 +478,17 @@ describe('friendly failures (§11.4)', () => {
       cancel: vi.fn(),
       analyser: null
     }
-    render(<Harness initial="keep me" capture={async () => capture} onError={onError} />)
+    captureSlot.next = async () => capture
+    renderInLanguage(<Harness initial="keep me" onError={onError} />, 'de')
+    const mic = (): HTMLElement => screen.getByRole('button', { name: t('de', 'chat.dictation.start') })
 
-    await user.click(micButton())
-    await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
+    await user.click(mic())
+    await user.click(await screen.findByRole('button', { name: t('de', 'chat.dictation.stop') }))
 
-    await waitFor(() => expect(onError).toHaveBeenCalledWith(t('en', 'chat.dictation.silent')))
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(t('de', 'chat.dictation.silent')))
     expect(transcribe).not.toHaveBeenCalled()
     expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('keep me')
-    expect(micButton()).toBeEnabled()
+    expect(mic()).toBeEnabled()
   })
 
   it('maps a too-short recording to the no-speech copy, not the microphone copy (#497)', async () => {
@@ -499,7 +502,8 @@ describe('friendly failures (§11.4)', () => {
       cancel: vi.fn(),
       analyser: null
     }
-    render(<Harness capture={async () => capture} onError={onError} />)
+    captureSlot.next = async () => capture
+    render(<Harness onError={onError} />)
 
     await user.click(micButton())
     await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
@@ -510,7 +514,8 @@ describe('friendly failures (§11.4)', () => {
     const user = userEvent.setup()
     stubApi({})
     const { start, cancel } = fakeCapture()
-    const { unmount } = render(<Harness capture={start} />)
+    captureSlot.next = start
+    const { unmount } = render(<Harness />)
 
     await user.click(micButton())
     await screen.findByRole('button', { name: /stop dictation/i })
@@ -530,14 +535,12 @@ describe('friendly failures (§11.4)', () => {
     const cancel = vi.fn()
     const capture: DictationCapture = { stop: async () => new Uint8Array(), cancel, analyser: null }
     let resolveCapture!: (c: DictationCapture) => void
-    const captureImpl: DictationCaptureStart = () =>
+    captureSlot.next = () =>
       new Promise<DictationCapture>((res) => {
         resolveCapture = res
       })
     const onRecording = vi.fn()
-    const { unmount } = render(
-      <DictationButton onText={() => {}} onRecording={onRecording} captureImpl={captureImpl} />
-    )
+    const { unmount } = render(<DictationButton onText={() => {}} onRecording={onRecording} />)
 
     // Click to record → start() awaits the (parked) getUserMedia. Then navigate away.
     await user.click(micButton())
@@ -573,12 +576,10 @@ describe('friendly failures (§11.4)', () => {
           })
       )
     })
-    const { start } = fakeCapture()
+    captureSlot.next = fakeCapture().start
     const onText = vi.fn()
     const onError = vi.fn()
-    const { unmount } = render(
-      <DictationButton onText={onText} onError={onError} captureImpl={start} />
-    )
+    const { unmount } = render(<DictationButton onText={onText} onError={onError} />)
 
     await user.click(micButton()) // start recording
     await user.click(await screen.findByRole('button', { name: /stop dictation/i })) // stop → transcribe (parked)

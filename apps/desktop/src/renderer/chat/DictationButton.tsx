@@ -5,8 +5,7 @@ import {
   DICTATION_SILENT_MESSAGE,
   DICTATION_TOO_SHORT_MESSAGE,
   MIC_BLOCKED_MESSAGE,
-  type DictationCapture,
-  type DictationCaptureStart
+  type DictationCapture
 } from '../lib/dictation'
 import { friendlyIpcError } from '../lib/errors'
 import { useT } from '../i18n'
@@ -31,16 +30,13 @@ interface DictationButtonProps {
   /** Fires on enter/exit of the recording state with the live mic tap (null when not
    *  recording, or when Web Audio is unavailable) — drives the in-input waveform + dim. */
   onRecording?: (analyser: AnalyserNode | null, recording: boolean) => void
-  /** Test seam: replaces the real getUserMedia/MediaRecorder capture pipeline. */
-  captureImpl?: DictationCaptureStart
 }
 
 export function DictationButton({
   disabled,
   onText,
   onError,
-  onRecording,
-  captureImpl
+  onRecording
 }: DictationButtonProps): JSX.Element {
   const { t } = useT()
   const [state, setState] = useState<DictationState>('idle')
@@ -85,7 +81,7 @@ export function DictationButton({
   async function start(): Promise<void> {
     setState('starting')
     try {
-      const capture = await (captureImpl ?? captureDictation)()
+      const capture = await captureDictation()
       // Unmounted while the mic prompt was open (F21): the cleanup already ran and found no
       // capture to release, so release THIS just-acquired live stream now and touch nothing on
       // the dead component — otherwise the OS recording indicator stays lit until GC.

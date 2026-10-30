@@ -1,89 +1,34 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { ToastProvider } from '../../src/renderer/components'
-import type {
-  ActiveStreamSnapshot,
-  Conversation,
-  Message,
-  RuntimeStatus
-} from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { screen, cleanup, fireEvent, act } from '@testing-library/react'
+import type { ActiveStreamSnapshot, Conversation, Message } from '../../src/shared/types'
+import { STREAM_RECOVER_FAILURE_BUDGET, STREAM_RECOVER_POLL_MS } from '../../src/renderer/lib/polling'
+import { t } from '../../src/shared/i18n'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, conversationRow, deferred, flushFakeTimers, renderChatScreen } from '../helpers/chat-screen'
+import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
 
 // T-1 (audit chat-docs-2026-07-07): the renderer STREAM-RECOVERY flow — the user sent a message,
 // navigated away (unmounting the screen + its token listeners), and came back while the model is
 // still responding — was completely untested on the renderer side. It is the most intricate effect
 // in ChatScreen. These tests drive it end-to-end (jsdom + fake timers) and fold in the CR-4
-// recovered-stop toast and the CR-5 conversation-mode-authoritative send branch, each with teeth.
+// recovered-stop toast, the CR-5 conversation-mode-authoritative send branch and the CH-4 failure
+// budget, each with teeth.
 
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-function chatConv(id: string, title: string): Conversation {
-  return {
-    id,
-    title,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null
-  }
-}
-
-function docConv(id: string, title: string): Conversation {
-  return {
-    ...chatConv(id, title),
-    mode: 'documents',
-    // An explicit (docs-only) scope so nothing raises the D71 narrow/widen dialog.
-    scope: { collectionIds: [], documentIds: [] }
-  }
-}
-
-function userMsg(id: string, convId: string, content: string): Message {
-  return { id, conversationId: convId, role: 'user', content, createdAt: '2026-01-01T00:01:00Z' }
-}
-function assistantMsg(id: string, convId: string, content: string): Message {
-  return { id, conversationId: convId, role: 'assistant', content, createdAt: '2026-01-01T00:02:00Z' }
-}
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
+// Differs from makeConversation: documents mode + an explicit docs-only scope, so nothing raises the D71 dialog.
+const docConv = (title: string): Conversation =>
+  makeConversation({ title, mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
-
-/** Flush microtasks (awaited IPC) + zero-delay timers under fake timers. */
-async function flush(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
-function renderChat(): void {
-  render(
-    <ToastProvider>
-      <ChatScreen onNavigate={() => {}} />
-    </ToastProvider>
-  )
-}
 
 describe('ChatScreen — stream recovery (T-1)', () => {
   it('shows the live recovered bubble + locked composer, then refreshes on completion; a recovered Stop confirms (CR-4)', async () => {
@@ -96,24 +41,21 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       const listMessages = vi.fn(async (_id: string) => history)
       const stopGeneration = vi.fn(async () => {})
 
-      stubApi({
-        listConversations: vi.fn(async () => [chatConv('c1', 'Chat 1')]),
-        getRuntimeStatus: vi.fn(async () => runningStatus),
-        listMessages,
-        listDocuments: vi.fn(async () => []),
-        listCollections: vi.fn(async () => []),
-        listAttachments: vi.fn(async () => []),
-        listActiveStreamConversations: vi.fn(async () => []),
-        getActiveStream,
-        stopGeneration
-      })
+      stubApi(
+        chatScreenStubs({
+          listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
+          listMessages,
+          getActiveStream,
+          stopGeneration
+        })
+      )
 
-      renderChat()
-      await flush() // mount: runtime + conversation list
+      renderChatScreen()
+      await flushFakeTimers() // mount: runtime + conversation list
 
       // Select c1 → the recovery effect polls getActiveStream and finds the in-flight reply.
-      fireEvent.click(screen.getByText('Chat 1'))
-      await flush()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
 
       // Live recovered bubble + locked composer (Stop replaces Send; Enter is inert while streaming).
       expect(screen.getByText('partial answer')).toBeInTheDocument()
@@ -126,12 +68,12 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       expect(stopGeneration).toHaveBeenCalledWith('c1')
 
       // The generation finishes: the snapshot goes null and the persisted final reply is available.
-      history = [userMsg('u1', 'c1', 'hello'), assistantMsg('a1', 'c1', 'the final answer')]
+      history = [userMsg('u1', 'hello'), assistantMsg('a1', 'the final answer')]
       liveSnap = null
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(300) // one recovery poll
+        await vi.advanceTimersByTimeAsync(STREAM_RECOVER_POLL_MS) // one recovery poll
       })
-      await flush()
+      await flushFakeTimers()
 
       // Completion: the persisted reply replaced the live bubble and Stop→Send.
       expect(screen.getByText('the final answer')).toBeInTheDocument()
@@ -139,7 +81,7 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument()
       // CR-4 teeth: without the recovered-stop branch this toast never appears (a recovered stop
       // would look like a normal complete turn — the M-U2 gap).
-      expect(screen.getByText(/Stopped/)).toBeInTheDocument()
+      expect(screen.getByText(t('en', 'chat.stopped'))).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }
@@ -149,20 +91,17 @@ describe('ChatScreen — stream recovery (T-1)', () => {
     vi.useFakeTimers()
     try {
       const getActiveStream = vi.fn(async (_id: string) => ({ content: 'partial answer', reasoning: '' }))
-      stubApi({
-        listConversations: vi.fn(async () => [docConv('c1', 'Doc chat 1')]),
-        getRuntimeStatus: vi.fn(async () => runningStatus),
-        listMessages: vi.fn(async () => []),
-        listDocuments: vi.fn(async () => []),
-        listCollections: vi.fn(async () => []),
-        listAttachments: vi.fn(async () => []),
-        // A generation is in flight for c1 even though the fresh mount forgot which conversation it was.
-        listActiveStreamConversations: vi.fn(async () => ['c1']),
-        getActiveStream
-      })
+      stubApi(
+        chatScreenStubs({
+          listConversations: vi.fn(async () => [docConv('Doc chat 1')]),
+          // A generation is in flight for c1 even though the fresh mount forgot which conversation it was.
+          listActiveStreamConversations: vi.fn(async () => ['c1']),
+          getActiveStream
+        })
+      )
 
-      renderChat()
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
 
       // Auto-selected c1 (the recovery effect polled it) and mirrored its documents mode (the composer
       // now shows the documents placeholder + the live recovered bubble).
@@ -184,38 +123,31 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       const listConversations = vi.fn(async () => {
         const i = convCall++
         if (i === 1) throw new Error('list fetch failed')
-        return [docConv('c1', 'Doc chat 1')]
+        return [docConv('Doc chat 1')]
       })
-      // Nothing actually in flight → no recovery lock, so the composer is free to send.
-      const getActiveStream = vi.fn(async (_id: string) => null)
-      const askDocuments = vi.fn(async () => undefined as unknown as Message)
-      const sendChatMessage = vi.fn(async () => undefined as unknown as Message)
+      // Nothing actually in flight (getActiveStream → null, the stub default) → no recovery lock, so the
+      // composer is free to send.
+      const askDocuments = vi.fn(async () => assistantMsg('a1', 'the answer'))
+      const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'the answer'))
 
-      stubApi({
-        listConversations,
-        getRuntimeStatus: vi.fn(async () => runningStatus),
-        listMessages: vi.fn(async () => []),
-        listDocuments: vi.fn(async () => []),
-        listCollections: vi.fn(async () => []),
-        listAttachments: vi.fn(async () => []),
-        listActiveStreamConversations: vi.fn(async () => ['c1']),
-        getActiveStream,
-        askDocuments,
-        sendChatMessage,
-        onToken: vi.fn(() => () => {}),
-        onReasoning: vi.fn(() => () => {}),
-        onScopeNotice: vi.fn(() => () => {})
-      })
+      stubApi(
+        chatScreenStubs({
+          listConversations,
+          listActiveStreamConversations: vi.fn(async () => ['c1']),
+          askDocuments,
+          sendChatMessage
+        })
+      )
 
-      renderChat()
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
 
       // The screen mode stayed 'chat' (the re-select fetch failed to mirror it) — the CHAT placeholder,
       // not the documents one — proving the divergence the CR-5 branch must survive.
       const box = screen.getByPlaceholderText('Message…')
       fireEvent.change(box, { target: { value: 'the question' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await flush()
+      await flushFakeTimers()
 
       // CR-5 teeth: the send branches on the CONVERSATION's own (documents) mode, not the screen mode.
       // Revert `stream` to the `mode`-state branch → sendChatMessage fires here instead.
@@ -230,39 +162,32 @@ describe('ChatScreen — stream recovery (T-1)', () => {
     vi.useFakeTimers()
     try {
       // Park the active-stream lookup so the user can click a different conversation mid-flight.
-      let releaseList: ((ids: string[]) => void) | null = null
-      const listActiveStreamConversations = vi.fn(
-        () =>
-          new Promise<string[]>((res) => {
-            releaseList = res
-          })
-      )
+      const ids = deferred<string[]>()
+      const listActiveStreamConversations = vi.fn(() => ids.promise)
       const getActiveStream = vi.fn(async (_id: string) => null)
 
-      stubApi({
-        listConversations: vi.fn(async () => [chatConv('c1', 'Chat 1'), chatConv('c2', 'Chat 2')]),
-        getRuntimeStatus: vi.fn(async () => runningStatus),
-        listMessages: vi.fn(async () => []),
-        listDocuments: vi.fn(async () => []),
-        listCollections: vi.fn(async () => []),
-        listAttachments: vi.fn(async () => []),
-        listActiveStreamConversations,
-        getActiveStream
-      })
+      stubApi(
+        chatScreenStubs({
+          listConversations: vi.fn(async () => [
+            makeConversation({ title: 'Chat 1' }),
+            makeConversation({ id: 'c2', title: 'Chat 2' })
+          ]),
+          listActiveStreamConversations,
+          getActiveStream
+        })
+      )
 
-      renderChat()
-      await flush()
-      expect(releaseList).not.toBeNull()
+      renderChatScreen()
+      await flushFakeTimers()
+      expect(listActiveStreamConversations).toHaveBeenCalledTimes(1)
 
       // The user hand-picks c2 before the re-select (which would land on c1) resolves.
-      fireEvent.click(screen.getByText('Chat 2'))
-      await flush()
+      fireEvent.click(conversationRow('Chat 2'))
+      await flushFakeTimers()
 
       // Now the parked lookup resolves, naming c1 as the streaming conversation.
-      await act(async () => {
-        releaseList!(['c1'])
-      })
-      await flush()
+      await act(async () => ids.resolve(['c1']))
+      await flushFakeTimers()
 
       // Teeth: the `activeIdRef.current != null` guards keep the user on c2 — the recovery effect only
       // ever polls c2. Remove the guard and the re-select stamps activeId back to c1 (→ getActiveStream('c1')).
@@ -281,28 +206,78 @@ describe('ChatScreen — "Send again" waits for the in-flight check (#613)', () 
   it('shows nothing under the question until the check says no reply is being written', async () => {
     vi.useFakeTimers()
     try {
-      let answerCheck!: (snap: ActiveStreamSnapshot | null) => void
-      const getActiveStream = vi.fn(() => new Promise<ActiveStreamSnapshot | null>((r) => (answerCheck = r)))
-      stubApi({
-        listConversations: vi.fn(async () => [chatConv('c1', 'Chat 1')]),
-        getRuntimeStatus: vi.fn(async () => runningStatus),
-        listMessages: vi.fn(async () => [userMsg('u1', 'c1', 'the question')]),
-        listDocuments: vi.fn(async () => []),
-        listCollections: vi.fn(async () => []),
-        listAttachments: vi.fn(async () => []),
-        listActiveStreamConversations: vi.fn(async () => ['c1']),
-        getActiveStream
-      })
+      const check = deferred<ActiveStreamSnapshot | null>()
+      const getActiveStream = vi.fn(() => check.promise)
+      stubApi(
+        chatScreenStubs({
+          listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
+          listMessages: vi.fn(async () => [userMsg('u1', 'the question')]),
+          listActiveStreamConversations: vi.fn(async () => ['c1']),
+          getActiveStream
+        })
+      )
       const sendAgain = (): HTMLElement | null => screen.queryByRole('button', { name: /Send again/ })
 
-      renderChat()
-      await flush()
+      renderChatScreen()
+      await flushFakeTimers()
       expect(screen.getByText('the question')).toBeInTheDocument()
       expect(sendAgain()).toBeNull() // the check is still out: main may be writing this answer
 
-      await act(async () => answerCheck(null))
-      await flush()
+      await act(async () => check.resolve(null))
+      await flushFakeTimers()
       expect(sendAgain()).toBeInTheDocument() // nothing in flight: the question really has no answer
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// CH-4 (frontend audit 2026-08-09, #148; moved here from ChatLowsBundle by the chat-ui test campaign): a
+// getActiveStream REJECTION is not "stream finished". One transient IPC failure used to clear the live
+// bubble, unlock the composer and permanently detach the poll. The poll now tolerates a bounded burst of
+// consecutive failures (the shipped STREAM_RECOVER_FAILURE_BUDGET), resets the count on a good read, and
+// only a sustained failure falls through to the best-effort finish.
+describe('ChatScreen — recovery poll failure budget (CH-4, #148)', () => {
+  it('keeps the recovered bubble through BUDGET − 1 consecutive IPC failures; the BUDGET-th finishes it', async () => {
+    vi.useFakeTimers()
+    try {
+      let mode: 'live' | 'reject' = 'live'
+      const getActiveStream = vi.fn(async (_id: string): Promise<ActiveStreamSnapshot | null> => {
+        if (mode === 'reject') throw new Error('ipc hiccup')
+        return { content: 'partial answer', reasoning: '' }
+      })
+      stubApi(
+        chatScreenStubs({
+          listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
+          getActiveStream
+        })
+      )
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
+      expect(screen.getByText('partial answer')).toBeInTheDocument()
+      const tick = async (): Promise<void> => {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(STREAM_RECOVER_POLL_MS)
+        })
+      }
+
+      // A transient burst one short of the budget: the bubble and Stop survive.
+      mode = 'reject'
+      for (let i = 0; i < STREAM_RECOVER_FAILURE_BUDGET - 1; i++) await tick()
+      expect(screen.getByText('partial answer')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+      // One good read resets the count, so another short burst still keeps the bubble…
+      mode = 'live'
+      await tick()
+      mode = 'reject'
+      for (let i = 0; i < STREAM_RECOVER_FAILURE_BUDGET - 1; i++) await tick()
+      expect(screen.getByText('partial answer')).toBeInTheDocument()
+      // …and the BUDGET-th consecutive failure falls back to the best-effort finish: never a wedged composer.
+      await tick()
+      expect(screen.queryByText('partial answer')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }

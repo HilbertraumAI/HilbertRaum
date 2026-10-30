@@ -6,6 +6,7 @@ import type {
   PerformanceSnapshot,
   PolicyStatus,
   PrivacyPolicy,
+  RuntimeStatus,
   WorkspacePolicy
 } from '../../src/shared/types'
 
@@ -30,6 +31,19 @@ export function appStatus(over: Partial<AppStatus> = {}): AppStatus {
     translationAvailable: false,
     ...over
   } as AppStatus
+}
+
+/**
+ * A running, healthy chat runtime on model `m1`: the `runningStatus` / `status(over)` literal the
+ * renderer suites each declared (chat-ui campaign: 35 suites carry a local RuntimeStatus literal or
+ * factory, most of them this exact shape), plus `warmedUp: true`: the runtime has already answered
+ * once, so the #39 warm-up hint never shows. The other optional fields stay ABSENT (`backend`,
+ * `supportsThinkingMode`, `starting`, …). A row about a runtime that cannot report warm-up state
+ * passes `{ warmedUp: undefined }` and says so; a first-generation row passes `{ warmedUp: false }`.
+ * A stopped or starting runtime is `runtimeStatus({ running: false, modelId: null, … })`.
+ */
+export function runtimeStatus(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
+  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', warmedUp: true, ...over }
 }
 
 /** A complete DriveStatus for a plain dev checkout; override per test. */

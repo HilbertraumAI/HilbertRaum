@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CoverageMeter } from '../../src/renderer/components'
@@ -20,14 +20,6 @@ import { stubApi } from '../helpers/renderer'
 // Whole-document-analysis Phase 2 renderer tests: the coverage meter's HONESTY (breadth ≠
 // fidelity, never "100%" unless a deep index is ready), the "Build deep index" / "Re-index
 // first" row action (C4 gate), and the relevance label on a grounded chat answer.
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

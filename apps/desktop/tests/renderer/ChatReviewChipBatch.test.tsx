@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { act, render, waitFor, cleanup } from '@testing-library/react'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type {
@@ -107,14 +107,6 @@ function baseStubs(messages: Message[]) {
     onRuntimeNotice: vi.fn(() => () => {})
   }
 }
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

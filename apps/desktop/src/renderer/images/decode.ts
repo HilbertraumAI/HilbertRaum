@@ -49,9 +49,6 @@ export class ImageDecodeError extends Error {
   }
 }
 
-/** Test seam / injection point — the screen takes this so jsdom tests inject a fake decode. */
-export type DecodeImage = (blob: Blob, mimeType: ImageInputMime) => Promise<DecodedImage>
-
 /** Client byte cap — mirrors the main-side `VISION_MAX_IMAGE_BYTES` default (~20 MiB). The
  *  fast client reject (here) + the authoritative main-side re-check are deliberate (SEC-3). */
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024

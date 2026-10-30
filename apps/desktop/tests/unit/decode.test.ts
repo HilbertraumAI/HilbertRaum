@@ -1,11 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import {
-  decodeImage,
-  imageMimeFromName,
-  imageMimeOfFile,
-  ImageDecodeError
-} from '../../src/renderer/images/decode'
+import { decodeImage, ImageDecodeError } from '../../src/renderer/images/decode'
+import { pngHeader } from '../helpers/image-fixtures'
 
 // TEST-4 / plan §17 rows 2 & 3: the CLIENT-side guards (the fast reject before the authoritative
 // main-side re-check, SEC-3). #118 REPLACED the old post-decode `MAX_DIMENSION = 4096` hard
@@ -15,6 +11,8 @@ import {
 // is refused BEFORE createImageBitmap is ever called. jsdom has no createImageBitmap, so it is
 // stubbed; jsdom's canvas has no 2d context, so `rasterize` fails and decodeImage takes its
 // best-effort original-bytes fallback (which #124 disables for WEBP — also pinned here).
+// This suite is the only one that runs the real `decodeImage` (ImagesScreen mocks the module);
+// the pure helpers it calls (the MIME guard, the prescreen bound) are image-intake.test.ts's.
 
 const origCreateImageBitmap = (globalThis as { createImageBitmap?: unknown }).createImageBitmap
 
@@ -27,37 +25,6 @@ function stubCreateImageBitmap(width: number, height: number): ReturnType<typeof
   ;(globalThis as { createImageBitmap?: unknown }).createImageBitmap = stub
   return stub
 }
-
-/** A 24-byte PNG header (signature + IHDR width/height) — what the prescreen parses.
- *  (Inferred return type: `Uint8Array<ArrayBuffer>` — the annotation-free form keeps it a
- *  valid `BlobPart` under TS 5.7's generic TypedArrays.) */
-function pngHeader(w: number, h: number) {
-  const b = new Uint8Array(24)
-  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
-  const dv = new DataView(b.buffer)
-  dv.setUint32(16, w)
-  dv.setUint32(20, h)
-  return b
-}
-
-describe('client image MIME guard (unsupportedType source)', () => {
-  it('returns null for an unsupported extension (→ the screen shows unsupportedType)', () => {
-    expect(imageMimeFromName('photo.gif')).toBeNull()
-    expect(imageMimeFromName('scan.tiff')).toBeNull()
-    expect(imageMimeFromName('notes.pdf')).toBeNull()
-  })
-
-  it('maps supported PNG/JPEG/WEBP names + falls back to the name when a File has no type', () => {
-    expect(imageMimeFromName('a.png')).toBe('image/png')
-    expect(imageMimeFromName('a.JPG')).toBe('image/jpeg')
-    expect(imageMimeFromName('a.webp')).toBe('image/webp') // #124
-    // A File whose OS-supplied type is '' must fall back to the name (some OSes leave type blank).
-    const gif = { type: '', name: 'animation.gif' } as unknown as File
-    expect(imageMimeOfFile(gif)).toBeNull()
-    const png = { type: '', name: 'shot.png' } as unknown as File
-    expect(imageMimeOfFile(png)).toBe('image/png')
-  })
-})
 
 describe('decode pipeline size guards (#118: prescreen replaced the 4096 px reject)', () => {
   it('a >4096 px bitmap is NO LONGER rejected — it proceeds into the pipeline', async () => {

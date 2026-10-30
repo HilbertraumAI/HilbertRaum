@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 
 // Step 4-5 (ruling (c), B1 — scoped Opus review of step 4-4): the `ragRerankWideScope` switch on
 // Settings → General → Performance must render ONLY while the `cpu-hi` profile it controls is
@@ -26,9 +26,13 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
 }
 
 afterEach(() => {
-  cleanup()
-  vi.doUnmock('@shared/rerank-rules')
-  vi.resetModules()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.doUnmock('@shared/rerank-rules')
+    vi.resetModules()
+  }
 })
 
 describe('Settings → General — "Rerank more knowledge-pack passages" switch (step 4-5, ruling (c), B1)', () => {

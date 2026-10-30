@@ -274,6 +274,30 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **A positive row must reach the branch its title names.** chat-compaction's "still fits the context window after
   compaction" used a 1,500-token window the compacted history never exceeded, so the trim it claimed never ran.
   Size the input past the branch's threshold and break the branch once to watch the row go red.
+- **ChatScreen suites start from `tests/helpers/chat-screen.tsx`** and call `assertNoUnexpectedApiCalls()` in
+  `afterEach`. `chatScreenStubs` gives every call an idle chat screen makes a typed answer; `renderChatScreen`,
+  `fakeChatStream`, `deferred`, `chatDropBridge` and `flushFakeTimers` replace the per-suite copies. Before it each
+  suite stubbed its own subset, the chat structure suites printed 495 unmocked-call warnings per run, and an unmocked
+  read resolving `undefined` quietly decided which branch a row reached. The renderer factories sit beside it:
+  `chat-fixtures` (conversations, messages, citations, documents), `status` (`runtimeStatus`), `render-language`,
+  `drop`, `transcript` and `vision-fixtures`. The jsdom `scrollTo` shim lives in `tests/setup.ts`.
+- **A renderer fake sends what main sends.** ImagesScreen fired a `done` with an empty answer and an
+  `imageAnalyze` reply of `{ state: 'starting' }`; main routes an empty answer to `error: 'emptyResponse'` and answers
+  `'queued'`. ChatCompaction fed the documents-only 'analysis' notice to a plain-chat send. Such a row proves a branch
+  no user reaches; build the event from the main-side shape and name the line it comes from.
+- **Never swallow a `findBy*` rejection.** `findByText(/start chatting/i).catch(() => undefined)` waited for copy
+  ChatScreen never renders, so each of ChatAttach's eleven calls burned the full timeout and proved nothing. To check
+  that something is absent, settle on a state that proves the effect ran, then use `queryBy*`.
+- **React 18 has no setState-after-unmount warning.** ChatUnmount asserted that `console.error` stayed silent after
+  unmount, which cannot fail on React 18. Assert an effect the guard prevents instead: no `listDocuments` refresh from
+  an attach-poll tick that resolves after unmount.
+- **Assert translated copy in a second language when the English text equals its source.** Dictation's mic-blocked
+  row matched the English constant DictationButton translates from, so deleting the translation lookup stayed green.
+  The row now renders German.
+- **Fake only the clock the code reads.** Testing Library's waits drain through Jest-only hooks, so `userEvent` and
+  `findBy*` hang under vitest's full fake timers. Dictation's no-signal rows fake `setInterval`, `clearInterval` and
+  `Date` only and drive the shipped 2 s default, where a test-only 80 ms prop used to stand in for it. The
+  conversation-search debounce row types with `fireEvent.change`.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

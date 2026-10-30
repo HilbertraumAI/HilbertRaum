@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
@@ -35,15 +35,6 @@ import { testBudgetMs } from '../helpers/hang-budget'
 
 const pack = (o: Partial<KnowledgePack> = {}): KnowledgePack =>
   knowledgePack({ description: 'Offline-Auszug', ...o })
-
-beforeAll(() => {
-  // T18-a leg (f) mounts the real ChatScreen, whose transcript scrolls on mount.
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

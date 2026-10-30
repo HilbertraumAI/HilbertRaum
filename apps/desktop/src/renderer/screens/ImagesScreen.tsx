@@ -18,7 +18,6 @@ import {
   MAX_IMAGE_BYTES,
   type ComposerChip,
   type DecodedImage,
-  type DecodeImage,
   type ImageInputMime,
   type ImageMime
 } from '../images'
@@ -95,14 +94,7 @@ function unsupportedCode(name: string, mimeType?: string): ClientImageError {
   return 'unsupportedType'
 }
 
-export function ImagesScreen({
-  onNavigate,
-  /** Test seam: inject a fake decode (jsdom has no createImageBitmap/OffscreenCanvas). */
-  decodeImpl = decodeImage
-}: {
-  onNavigate: (target: string) => void
-  decodeImpl?: DecodeImage
-}): JSX.Element {
+export function ImagesScreen({ onNavigate }: { onNavigate: (target: string) => void }): JSX.Element {
   const { t } = useT()
   const showToast = useToast()
   const [status, setStatus] = useState<VisionStatus | null>(null)
@@ -230,7 +222,7 @@ export function ImagesScreen({
           height: detail.height
         }
       } else {
-        decoded = await decodeImpl(blob, mime)
+        decoded = await decodeImage(blob, mime)
       }
       setComposer('')
       loadVisionSession(
@@ -345,7 +337,7 @@ export function ImagesScreen({
     try {
       const bytes = await window.api.imageReadBytes(chosen.token)
       const blob = new Blob([bytes as unknown as BlobPart], { type: mime })
-      const decoded = await decodeImpl(blob, mime)
+      const decoded = await decodeImage(blob, mime)
       selectImage({ decoded, name: chosen.name, sizeBytes: chosen.sizeBytes })
     } catch (e) {
       setScreenError(e instanceof ImageDecodeError ? e.code : 'decodeFailed')
@@ -362,7 +354,7 @@ export function ImagesScreen({
   ): Promise<void> {
     setDecoding(true)
     try {
-      const decoded = await decodeImpl(blob, mime)
+      const decoded = await decodeImage(blob, mime)
       selectImage({ decoded, name, sizeBytes })
     } catch (e) {
       setScreenError(e instanceof ImageDecodeError ? e.code : 'decodeFailed')

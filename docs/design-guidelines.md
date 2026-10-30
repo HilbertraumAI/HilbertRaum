@@ -1029,7 +1029,8 @@ UTF-16 offsets incl. astral chars; refusal hint; delete; READY hides the compose
 disables Remove; D-7 exemption; back-nav callback), `ReviewEvidencePane.test.tsx`
 (cap/stepped reveal/reveal-reset-on-filter-change/filter facets incl. DE `Q3` + section +
 page/empty state/`aria-describedby` tie + no-dangling case),
-`ChatBackToConversation.test.tsx` (handoff select, deleted-id degrade, baseline, and the
+`ChatBackToConversation.test.tsx` (handoff select incl. the mirrored mode; the deleted-id
+degrade and the no-handoff baseline as one table; and the
 App-LEVEL one-shot-slot test: review → back → Documents → "Ask these documents" wins —
 the FIX-1 blocker repro, mutation-verified), `reviewSession.test.ts` selection token-race
 legs (post-purge create/delete + post-switch create), `evidence-review-open-perf.test.ts`
@@ -1538,9 +1539,10 @@ back to Chat opened a new chat instead of the one the file was attached in (#573
   `translate.file.err.scannedAction` (en + de).
 - **Tests:**
   - `ChatAttach.test.tsx` (scan, photo, other failure, scan-first, dismiss, held across a
-    conversation switch, the return hand-over);
+    conversation switch);
   - `ScopePopover.test.tsx` (EN + DE);
-  - `ChatBackToConversation.test.tsx` (App-level Back to chat + the rail);
+  - `ChatBackToConversation.test.tsx` (App-level Back to chat — incl. the chat's hand-over of
+    its conversation — + the rail);
   - `DocumentsScreen.test.tsx` / `OcrInstall.test.tsx` (no Try again on scan rows, Retry all);
   - `TranslateScreen.test.tsx`;
   - main side: `collections.test.ts`, `chat-ipc.test.ts`, `rag-collections.test.ts`,
