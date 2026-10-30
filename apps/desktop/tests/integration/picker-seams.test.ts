@@ -462,7 +462,7 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
   const ARCHIVE_SHA = createHash('sha256').update(ARCHIVE).digest('hex')
   const okFetch = (async () =>
     new Response(ARCHIVE, { status: 200, headers: { 'content-length': String(ARCHIVE.length) } })) as unknown as FetchFn
-  /** Drops the family-correct binary (the platform is pinned to win32 by `beforeAll`). */
+  /** Drops the family-correct binary (the platform is pinned to win32 by `pinPlatform`). */
   const dropBinary: ExtractFn = async (_archive, destDir) => {
     const name = destDir.includes('whisper.cpp') ? 'whisper-cli.exe' : llamaServerBinaryName()
     writeFileSync(join(destDir, name), 'binary')
