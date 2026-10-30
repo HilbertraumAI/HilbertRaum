@@ -23,19 +23,16 @@ import {
   writeDriveFile
 } from '../helpers/manifest-fixtures'
 
-// Three seams over the REAL assets module, so no production injection seam is needed; every row
+// Two seams over the REAL assets module, so no production injection seam is needed; every row
 // without a hook runs the real functions unchanged:
 // - F17 (#687): `downloadCaps` records the `maxBytes` the manager hands `downloadToFile`. The role
 //   defaults are ≥ 4 GiB, so a real body-size bracket around the cap is out of reach here.
-// - `inFlight` counts the running `downloadToFile` calls. A cancelled job reads terminal at once, so
-//   `runUnwound` waits on this instead (the manager has no run-settled latch, defect A1).
 // - `verifyHook` holds or faults a verify, the #687 way (BE-4, F-13), calling through to the real one.
 type VerifyFn = typeof import('../../src/main/services/assets').verifyDownloadedFile
 type VerifyHook = (real: VerifyFn, ...args: Parameters<VerifyFn>) => ReturnType<VerifyFn>
 
 const seams = vi.hoisted(() => ({
   downloadCaps: [] as Array<number | undefined>,
-  inFlight: 0,
   verifyHook: null as VerifyHook | null
 }))
 vi.mock('../../src/main/services/assets', async (importOriginal) => {
@@ -44,10 +41,7 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
     ...orig,
     downloadToFile: (...args: Parameters<typeof orig.downloadToFile>) => {
       seams.downloadCaps.push(args[2]?.maxBytes)
-      seams.inFlight++
-      return orig.downloadToFile(...args).finally(() => {
-        seams.inFlight--
-      })
+      return orig.downloadToFile(...args)
     },
     verifyDownloadedFile: (...args: Parameters<typeof orig.verifyDownloadedFile>) =>
       seams.verifyHook ? seams.verifyHook(orig.verifyDownloadedFile, ...args) : orig.verifyDownloadedFile(...args)
@@ -65,19 +59,18 @@ afterEach(() => {
 /** The suffix is an on-disk contract (a kept .part resumes across versions), so it is spelled here, not imported. */
 const partOf = (dest: string): string => `${dest}.part`
 
-/** One macrotask: run()'s continuation after an awaited step runs in microtasks. Justified hop, no observable. */
-const hop = (): Promise<void> => new Promise((r) => setImmediate(r))
-
-/** For a job the row cancelled: its status flips at once, so wait for the stream instead. Hop first: a run going on to its next file starts it in microtasks. */
-async function runUnwound(): Promise<void> {
-  await hop()
-  await until(() => seams.inFlight === 0, 'download stream unwound')
-  await hop()
+/**
+ * For a job the row cancelled: its status flips at once and `activeJob()` reads null with it, so neither says the run has
+ * ended. `start()` clears `active` in the run's `finally`, past every await of the run: an awaited delete of the `.part`
+ * lands before this returns. Narrow private read: the manager has no public run-settled signal (defect A1).
+ */
+async function runUnwound(mgr: DownloadManager): Promise<void> {
+  await until(() => (mgr as unknown as { active: unknown }).active === null, 'the cancelled run settling')
 }
 
 async function cancelAndUnwind(mgr: DownloadManager, jobId: string): Promise<DownloadJob> {
   mgr.cancel(jobId)
-  await runUnwound()
+  await runUnwound(mgr)
   return mgr.get(jobId)
 }
 
@@ -91,19 +84,16 @@ async function waitForTerminal(mgr: DownloadManager, jobId: string): Promise<Dow
 }
 
 /** Holds the NEXT verify (one shot; a later file verifies unhooked). */
-function gateNextVerify(): { entered: Promise<void>; returned: Promise<void>; release: () => void } {
+function gateNextVerify(): { entered: Promise<void>; release: () => void } {
   const entered = deferred()
   const gate = deferred()
-  const returned = deferred()
   seams.verifyHook = async (real, ...args) => {
     seams.verifyHook = null
     entered.resolve()
     await gate.promise
-    const result = await real(...args)
-    returned.resolve()
-    return result
+    return real(...args)
   }
-  return { entered: entered.promise, returned: returned.promise, release: () => gate.resolve() }
+  return { entered: entered.promise, release: () => gate.resolve() }
 }
 
 // ---- gates (the offline guarantee: a closed gate never reaches the network seam) ----
@@ -388,7 +378,7 @@ describe('DownloadManager multi-file weight (#310)', () => {
     }
     const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES, hashStore })
     await within(cancelLanded.promise, 'the first shard finishing')
-    await runUnwound()
+    await runUnwound(mgr)
     expect(mgr.get(job.jobId).status).toBe('cancelled')
     expect(urls).toEqual([shardUrl(1)]) // shards 2 and 3 were never requested
     expect(readFileSync(abs(root, 1), 'utf8')).toBe(BODIES[0])
@@ -782,8 +772,7 @@ describe('DownloadManager jobs', () => {
       expect(mgr.get(job.jobId).status).toBe('verifying')
       expect(mgr.cancel(job.jobId).status).toBe('cancelled') // previously a silent no-op in this state
       gate.release()
-      await within(gate.returned, 'the held verify returning')
-      await hop() // runOne's continuation after the verify
+      await runUnwound(mgr)
       expect(mgr.get(job.jobId).status).toBe('cancelled')
       // The mid-download-cancel contract holds here too: nothing renamed into place, the
       // fully-downloaded .part KEPT for the next attempt…
@@ -923,8 +912,7 @@ describe('DownloadManager jobs', () => {
       await within(gate.entered, 'the complete .part verify starting')
       expect(mgr.cancel(job.jobId).status).toBe('cancelled')
       gate.release()
-      await within(gate.returned, 'the held verify returning')
-      await hop()
+      await runUnwound(mgr)
       expect(mgr.get(job.jobId).status).toBe('cancelled')
       expect(existsSync(dest)).toBe(false)
       expect(readFileSync(partOf(dest), 'utf8')).toBe(body)
