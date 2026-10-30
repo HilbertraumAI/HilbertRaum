@@ -65,6 +65,7 @@ import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
 import { registerDocTasksIpc } from '../../src/main/ipc/registerDocTasksIpc'
 import { VisionService } from '../../src/main/services/vision'
 import { IPC } from '../../src/shared/ipc'
+import { t } from '../../src/shared/i18n'
 import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -95,6 +96,9 @@ const MODULES: Array<{
   name: string
   register: (ctx: AppContext) => void
   exempt: Set<string>
+  /** The module's own locked sentence, where it has one. The shared "Workspace is locked." prefix alone cannot tell
+   *  chat's copy from the benchmark's: chat throwing `main.benchmark.locked` stayed green. */
+  lockedCopy?: string
 }> = [
   {
     name: 'registerCoreIpc',
@@ -134,10 +138,16 @@ const MODULES: Array<{
   {
     name: 'registerChatIpc',
     register: registerChatIpc,
-    exempt: new Set<string>([IPC.stopGeneration, IPC.getActiveStream, IPC.listActiveStreamConversations])
+    exempt: new Set<string>([IPC.stopGeneration, IPC.getActiveStream, IPC.listActiveStreamConversations]),
+    lockedCopy: t('en', 'main.chat.locked')
   },
   { name: 'registerRagIpc', register: registerRagIpc, exempt: new Set<string>() },
-  { name: 'registerBenchmarkIpc', register: registerBenchmarkIpc, exempt: new Set<string>() },
+  {
+    name: 'registerBenchmarkIpc',
+    register: registerBenchmarkIpc,
+    exempt: new Set<string>(),
+    lockedCopy: t('en', 'main.benchmark.locked')
+  },
   { name: 'registerCollectionsIpc', register: registerCollectionsIpc, exempt: new Set<string>() },
   // Knowledge packs (ZIM wave): every registration/read/mutation channel is DB-backed; only the
   // tools-installed + refreshing status probe is workspace-agnostic (in-memory service state).
@@ -249,7 +259,7 @@ describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', (
         if (mod.exempt.has(ch)) continue
         // Throwaway args — requireUnlocked() is the FIRST statement of every DB-touching
         // handler, so the refusal is arg-shape-independent.
-        await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.toThrow(/Workspace is locked\./)
+        await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.toThrow(mod.lockedCopy ?? /Workspace is locked\./)
         // …and never the raw vault-getter string ("Workspace is locked — unlock it first.").
         await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.not.toThrow(/unlock it first/i)
         checked++
