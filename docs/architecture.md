@@ -355,8 +355,9 @@ force-quit. The contract now:
   poll/flush setStates) and clears the pending flush timer on unmount. **Hard constraint:** the
   main-side stream is *not* torn down — it is intentionally recovered on remount via `getActiveStream`
   (see "Stream recovery across navigation" below); the fix is guard-only. Teeth: `ChatUnmount.test.tsx`
-  unmounts with a poll tick AND a flush timer in flight, then asserts `listDocuments` is not re-fetched
-  and the flush timer was `clearTimeout`'d.
+  unmounts with an attach-poll tick in flight and asserts `listDocuments` is not re-fetched when it
+  resolves. The flush-timer guard has no test: React 18 makes a post-unmount setState a silent no-op, so
+  nothing observable can show it (the chat-ui test campaign removed a warning check that could not fail).
   **Reconciled (full audit 2026-06-29 postmerge, F22 — the "applied uniformly" claim was overstated):**
   two hold-outs remained when this record was written. `ModelsScreen`'s download/engine poll callbacks
   (`setJob` + a transitional `void refresh()`) had **no** guard, and the `DiagnosticsTab`
@@ -2068,8 +2069,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     `activeIdRef.current === convId` stale-response guard to the three switch-time loads. **CR-8** drops
     `depths['new']` in `ensureConversation` (SKA-18 parity — a 'new'-composer depth pick must not become
     every later new chat's default). Tests with teeth: `ChatStreamRecovery.test.tsx` (T-1: recovery
-    bubble + CR-4 stop + CR-5 routing + re-select guards), `ChatSendFailure.test.tsx` (CR-1 + CR-2),
-    `ChatSwitchStop.test.tsx` (T-2). **CR-10** (transcript windowing) stays the accepted PERF-2 chat
+    bubble + CR-4 stop + CR-5 routing + re-select guards), `ChatSendFailure.test.tsx` (CR-1),
+    `ChatSwitchStop.test.tsx` (T-2 + CR-2). **CR-10** (transcript windowing) stays the accepted PERF-2 chat
     half; **CB-\*/DB-\*** findings are other sessions of the same wave.
 - **FE audit 2026-07-07 — Documents renderer polish (DR-1…DR-9).** The Documents half of the same
   sweep (`DocumentsScreen.tsx` + `screens/documents/{DocRow,SectionRail,format}.tsx`; ledger +
@@ -9939,7 +9940,7 @@ Per-finding disposition (fixed → session@commit / deferred·declined·accepted
 | **T-3** | MED | S7 (this) | **tests** — docs-IPC guard preconditions (`docs-ipc.test.ts`): a gated embedder parks a doc in `processing` → delete/reindex/preview/original export all reject `/still being processed/`; the task-busy half lives in `doctasks-ipc.test.ts` 'busy-document guard' over a REAL DocTaskManager — delete/reindex of every source of a running summary or compare reject `/task is running/i`, with a **negative control** that preview resolves (pins the asymmetry). |
 | **T-4** | MED | S7 (this) | **tests** — import-loop lock-mid-job break (`docs-ipc.test.ts`): a custom ctx whose `isUnlocked` flips false inside the first file's embed → job `done`, `completed===1`, f1 non-terminal (raw SELECT), lease balanced; then backdate + unlock → `listDocuments` reconciles f1 → `failed`. **Teeth revert-confirmed** (drop the drain's `processing.delete` → f1 stays `embedding`). |
 | **T-5** | LOW | S5 `b38f819` | **tests** — compaction boundaries (`chat-compaction.test.ts`): region `=== MIN_COMPACTABLE_TURNS` proceeds vs `MIN−1` returns; size `=== threshold` proceeds vs `threshold−1` against the CB-3 `min(0.85·window, window−reserve)`. |
-| **T-6** | LOW | S7 (this) | **tests (de-mock)** — `ChatUnmount.test.tsx` drops the `clearTimeout(<exact id>)` spy for a behavioral assertion (advance past `STREAM_FLUSH_MS`, no setState-after-unmount warning) — refactor-robust across a `clearTimeout`→`mountedRef` change; keeps the (b) `listDocuments`-count assertion. |
+| **T-6** | LOW | S7 (this) | **tests (de-mock)** — `ChatUnmount.test.tsx` drops the `clearTimeout(<exact id>)` spy for a behavioral assertion (advance past `STREAM_FLUSH_MS`, no setState-after-unmount warning) — refactor-robust across a `clearTimeout`→`mountedRef` change; keeps the (b) `listDocuments`-count assertion. **Superseded (chat-ui test campaign):** React 18 has no unmounted-update warning, so that check could not fail; it was removed and only the `listDocuments` assertion remains. |
 | **T-7** | LOW | S7 (this) | **tests (de-flake)** — the `cancelReindexAll` test now gates the embedder per file (park the first re-embed, cancel in flight, release) for a deterministic `completed === 1` instead of racing the clock; non-racy poll ceilings bumped (`runImport` 200→400). |
 | **T-8** | LOW | S7 (this) | **tests** — chat export handlers (`chat-ipc.test.ts`, electron mock extended with `dialog`+`BrowserWindow`): `exportConversation` sanitizes the defaultPath (`Report: Q1/Q2 <draft>` → `Report Q1Q2 draft.md`), returns null-on-cancel (no audit), audits `{conversationId}` only (no title/path leak); `exportMessageTable` static `table.csv` + null-on-no-table. **Teeth revert-confirmed** (weaken `safeName` → the `/`-bearing path reddens). |
 
