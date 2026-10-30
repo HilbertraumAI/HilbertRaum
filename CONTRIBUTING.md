@@ -154,8 +154,8 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   statement production prepares), `scripted-runtime` (incl. `failingRuntime`), `compaction-fixtures`
   (`compactionRuntime`, `appendTurns`), `skills-world` (the skills-IPC and RAG-ask contexts; the importing file
   must `vi.mock('electron', …)`) and `chat-fixtures`. Extend them rather than copying setup into a new suite; keep
-  a local copy only where it deliberately differs. Six RAG suites carried their own `seedDocument`, three chat
-  suites their own compaction runtime.
+  a local copy only where it deliberately differs. The chat and RAG suites carried six copies of `seedDocument`
+  and three of the compaction runtime.
 - **Pin the bound that ships, not a shorter test-only one.** `RuntimeManager` once took timing
   options only tests passed: they proved a 50 ms teardown bound and a 0 or 60,000 ms probe TTL while
   5 s and 10 s shipped, and a probe test passed with the start's probe time never recorded. Drive

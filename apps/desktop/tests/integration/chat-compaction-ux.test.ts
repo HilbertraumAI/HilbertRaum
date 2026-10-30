@@ -110,6 +110,12 @@ describe('chatCompactionEnabled toggle (§5.4) — false reproduces L1-only beha
     // summary pair (2) + the 6 post-checkpoint turns = 8 (vs 10 raw turns).
     expect(enabledTurns.length).toBe(2 + (turns.length - 4))
 
+    // CB-6: an explicit `compactionOn` wins over the stored setting (still on here), so the prompt follows the turn's
+    // one settings read even if the toggle flips mid-turn.
+    const threadedOff = buildChatMessages(db, conv.id, undefined, undefined, false)
+    expect(threadedOff.some((m) => m.content.includes('CHECKPOINTMARKER'))).toBe(false)
+    expect(threadedOff.filter((m) => m.role !== 'system').length).toBe(turns.length)
+
     // Disabled: no summary pair, FULL history replays — byte-identical to the pre-feature app.
     updateSettings(db, { chatCompactionEnabled: false })
     const disabled = buildChatMessages(db, conv.id)
@@ -129,8 +135,8 @@ describe('chatCompactionEnabled toggle (§5.4) — false reproduces L1-only beha
     expect(rt.summaryCalls).toHaveLength(0)
     expect(getLatestCheckpoint(db, conv.id)).toBeNull()
 
-    // CB-6 / §5.4: the turn threads its ONE settings read into assembly, so a checkpoint cut while compaction was on is
-    // ignored by the prompt too.
+    // §5.4: with compaction off, a checkpoint cut while it was on is ignored by the prompt too. (That the turn passes
+    // its one settings read rather than a second read is the toggle row's explicit `compactionOn` leg, above.)
     const conv2 = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv2.id, 10, 20)
     writeCheckpoint(db, {

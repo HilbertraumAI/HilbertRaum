@@ -14,8 +14,8 @@ import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 // chunks; `chunksTotal` = Σ documentChunkCount over the DISTINCT documents the retrieved chunks
 // came from (single-doc = that doc's total; multi-doc SUMS across the cited docs — honest by
 // wording, never "whole document"); `fullyChunked` reflects those docs. An empty retrieval
-// (NO_DOCUMENT_CONTEXT / REINDEX_NEEDED) still persists NO coverage (pinned by rag.test.ts's
-// empty-corpus row). The whole-document/capped stamps are unchanged.
+// (NO_DOCUMENT_CONTEXT / REINDEX_NEEDED) still persists NO coverage (the no-context case is pinned
+// by rag.test.ts's empty-corpus row). The whole-document/capped stamps are unchanged.
 
 // A high cosine floor so only the exact-match chunk(s) survive retrieval — filler/decoy chunks
 // (disjoint tokens ⇒ near-zero cosine, no keyword hit) are dropped, making the cited set exact.

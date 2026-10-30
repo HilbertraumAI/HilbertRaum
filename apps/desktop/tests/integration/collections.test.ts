@@ -514,10 +514,8 @@ describe('resolveScope — unfiled conversation attachments (#571)', () => {
   it('the unfiled read is served by the partial index, not a scan of the library', async () => {
     const db = freshDb()
     // The statement production prepares (prepareCached prepares it once per handle), never a retyped copy.
-    const [sql] = await capturePrepares(
-      db,
-      () => unfiledConversationDocuments(db, 'any-conversation'),
-      /SELECT id, status, pending_destination_json FROM documents/
+    const [sql] = await capturePrepares(db, /SELECT id, status, pending_destination_json FROM documents/, () =>
+      unfiledConversationDocuments(db, 'any-conversation')
     )
     expect(sql).toBeDefined()
     const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>

@@ -273,7 +273,7 @@ describe('registerChatIpc', () => {
 
     // Capture every SQL prepared while the handler runs (the ocr-meta PERF-3 guard pattern).
     let result: Array<{ id: string }> = []
-    const prepared = await capturePrepares(db, async () => {
+    const prepared = await capturePrepares(db, /[\s\S]/, async () => {
       result = (await invoke(handlers, IPC.listAttachments, conv.id)).result as Array<{ id: string }>
     })
     expect(result.map((d) => d.id).sort()).toEqual(['att-a', 'att-b'])
@@ -796,9 +796,16 @@ describe('chat:saveCodeBlock (#286)', () => {
         bytes: Buffer.byteLength(content, 'utf8'),
         extension: 'html'
       })
-      /** Every string inside the logged arguments, raw (JSON doubles Windows backslashes, so never search the encoding). */
+      /** Every string inside the logged arguments, raw (JSON doubles Windows backslashes, so never search the encoding).
+       *  An Error's message and stack are not enumerable, so they are read by name. */
       const strings = (v: unknown): string[] =>
-        typeof v === 'string' ? [v] : v && typeof v === 'object' ? Object.values(v).flatMap(strings) : []
+        typeof v === 'string'
+          ? [v]
+          : v instanceof Error
+            ? [v.message, v.stack ?? '', ...Object.values(v).flatMap(strings)]
+            : v && typeof v === 'object'
+              ? Object.values(v).flatMap(strings)
+              : []
       const logged = [logSpy.info, logSpy.warn, logSpy.error].flatMap((s) => s.mock.calls).flat().flatMap(strings)
       const audited = [type, message, ...strings(meta)].map(String)
       for (const needle of [...SENTINELS, dest, 'title=']) {
