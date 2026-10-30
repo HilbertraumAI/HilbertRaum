@@ -1000,8 +1000,8 @@ head's own weights + KV.
 ✅ **`services/offlineGuard.ts`** — `isLoopbackHost(host)` (127.0.0.0/8, ::1, localhost exempt),
   `checkOutboundHost(host, offline)` → `{ host, violation }`, `installOfflineNetworkGuard({ offline,
   onViolation })` (wraps `net.Socket.prototype.connect`, logs remote attempts, **never blocks**,
-  returns an uninstaller; no-op when not offline), `assertOfflinePosture({ posture, installGuard,
-  log, warn })` (startup self-check; logs posture, installs the guard in ALL builds when offline).
+  returns an uninstaller; no-op when not offline), `assertOfflinePosture({ posture,
+  log, warn, onViolation? })` (startup self-check; logs posture, installs the guard in ALL builds when offline).
 ✅ **IPC** `registerCoreIpc.ts`: `getPolicy` (`policy:get`) returns `buildPolicyStatus(...)`;
   `getAppStatus.offlineMode`/`networkAllowed` now come from the policy resolution. Preload exposes
   `api.getPolicy` + `PreloadApi`. `main/index.ts` calls `assertOfflinePosture()` in `initBackend()`
@@ -1126,7 +1126,7 @@ head's own weights + KV.
   mismatch|missing|unsupported`, reusing `models.ts` `verifyChecksum`/`isRealSha256`);
   `buildChecksumsJson(root, manifests) → ChecksumsJson` (generate-mode capture of present-weight hashes).
 - `planPrepareDrive(root, manifests, opts) → PreparePlan` (dirs + config files + manifest copies +
-  weight destinations + `configWouldOverwrite`) + `formatPlan` (the dry-run report).
+  weight destinations + `configWouldOverwrite`).
 ✅ **`scripts/`** (repo root, self-contained; no Node/npm needed to prep a drive):
 - `prepare-drive.{ps1,sh}` — `-Target`/`--target` (required), `-DryRun`/`--dry-run`, `-Force`/`--force`,
   `-Dev`/`--dev`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
