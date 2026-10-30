@@ -347,7 +347,7 @@ describe('picker seams: a probe that cannot run or that threw persists an EMPTY 
     expect(bench.gpu).toBe(RTX5060.name)
   })
 
-  it('the session refresh (maybeRunFirstBenchmark) clears a stale card the same way when the binary is gone', async () => {
+  it('the session refresh (prepare + schedule) clears a stale card the same way when the binary is gone', async () => {
     const f = staleCard({ binary: false })
     await expect(firstBenchmarkNow(f.ctx)).resolves.toBe('not-needed')
     await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([]), { timeout: hangBudgetMs(5000) })

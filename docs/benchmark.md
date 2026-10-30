@@ -404,7 +404,7 @@ re-keyed; every other warning is a benchmark-time fact.
 **Schemas and legacy records (PR #303 audit, H1/L8, owner decision G7).** `lastBenchmark`,
 `benchmarkHistory` and `modelPlacements` are JSON rows: they used to be parsed straight over the
 defaults, and the write gate checked only the TOP-LEVEL shape, so `{}` was an accepted history
-entry — it reached the startup fingerprinting, `maybeRunFirstBenchmark`, the #107 start-estimate
+entry — it reached the startup fingerprinting, the first-benchmark decision, the #107 start-estimate
 memo, Diagnostics and the Performance screen, where the number formatter threw and blanked the
 screen. The pure validators now live in `shared/benchmark-schema.ts` (importable by main AND
 renderer, so both agree on what a trustworthy record is) and run on WRITE (`updateSettings`) and
@@ -594,9 +594,7 @@ persisted-sample memo in `registerModelIpc`) records the attempt when a scheduli
 `'skipped-attempted'`; a lock + unlock (a new `Db`, a new epoch) re-checks; and a successful
 **manual** run persists a same-machine `lastBenchmark`, so the next `prepare` owes nothing and
 the re-check ends. The moved-drive re-check therefore repeats **once per unlock** until a
-same-machine result persists (`known-limitations.md`). `resetFirstBenchmarkForTests()` clears the
-memo; `maybeRunFirstBenchmark(ctx)` survives as the pre-split shape for tests (prepare, then
-schedule against an already-settled promise) and resolves to the outcome.
+same-machine result persists (`known-limitations.md`).
 
 **The late-write guard.** `runAndPersistBenchmark` captures the session epoch before its first
 await and, after the drive and speed legs, re-checks admission and the epoch **before** the one

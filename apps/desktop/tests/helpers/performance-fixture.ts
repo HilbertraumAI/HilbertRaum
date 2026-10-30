@@ -392,8 +392,8 @@ export function sessionWorkspace(): {
 
 /**
  * The first benchmark with nothing to wait for: prepare, then schedule against a settled promise, so
- * the measurement runs at once. Resolves to the outcome; never rejects. Replaces every test's call of
- * `maybeRunFirstBenchmark`. It passes no scheduler deps: a row about the wait calls the two halves.
+ * the measurement runs at once. Resolves to the outcome; never rejects. A row about the wait calls the
+ * two halves itself.
  */
 export function firstBenchmarkNow(ctx: AppContext): Promise<FirstBenchmarkOutcome> {
   return scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())

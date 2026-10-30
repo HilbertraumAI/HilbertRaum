@@ -566,12 +566,6 @@ function settleMovedDriveNotice(ctx: AppContext, decision: FirstBenchmarkDecisio
   setMovedDriveNotice(db, decision.epoch, done ? null : { kind: 'owed' })
 }
 
-/** Test seam: forget the session's attempt (the fixtures call it in `beforeEach`). */
-export function resetFirstBenchmarkForTests(): void {
-  attemptMemo = null
-  movedDriveMemo = null
-}
-
 /**
  * The notice for THIS unlock session, or null when there is nothing to say — a same-machine
  * launch, a fresh workspace, a lock since the decision, or a completed measurement. Never throws.
@@ -852,16 +846,6 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
     log.warn('First-run benchmark skipped or failed (re-run from the Performance screen)', String(err))
     return 'failed'
   }
-}
-
-/**
- * The pre-P7 shape for callers that only have `ctx` — tests, and the audit probes; no production
- * seam calls it since P7 (the three post-unlock seams run the split so the measurement waits for
- * the auto-start). Prepares, then schedules against an already-settled promise, so the
- * measurement runs at once. Resolves to the scheduling outcome; never rejects.
- */
-export function maybeRunFirstBenchmark(ctx: AppContext): Promise<FirstBenchmarkOutcome> {
-  return scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())
 }
 
 /**
