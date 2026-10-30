@@ -221,4 +221,13 @@ describe('commercial posture: hashless markers (#234)', () => {
     setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
     expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-dev')
   })
+
+  // Five suites call this reset in afterEach, so a posture it left set would leak into them.
+  it('the test reset clears the posture (a later case is not silently commercial)', async () => {
+    initBinaryVerification(false)
+    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
+    _resetBinaryVerificationForTests()
+    initBinaryVerification(false)
+    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-legacy')
+  })
 })

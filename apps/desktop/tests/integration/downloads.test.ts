@@ -78,8 +78,8 @@ async function cancelAndUnwind(mgr: DownloadManager, jobId: string): Promise<Dow
 async function waitForTerminal(mgr: DownloadManager, jobId: string): Promise<DownloadJob> {
   await until(() => {
     const s = mgr.get(jobId).status
-    return s === 'done' || s === 'failed' || s === 'cancelled'
-  }, 'download job reaching a terminal state')
+    return s === 'done' || s === 'failed'
+  }, 'download job finishing')
   return mgr.get(jobId)
 }
 
@@ -569,8 +569,9 @@ describe('DownloadManager jobs', () => {
     const dest = weightPath(root, m)
     const mgr = new DownloadManager({ fetchImpl: hangingFetch('hello-') })
     const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
-    // The on-disk size, not `receivedBytes`: that counts the chunk before the buffered write lands.
-    await until(() => existsSync(partOf(dest)) && statSync(partOf(dest)).size > 0, 'the first chunk reaching the .part')
+    // `receivedBytes`, not the on-disk size: the chunk may still be buffered here, and the resume prefix
+    // survives only because the failed stream flushes it (`end()`). A `destroy()` would drop it.
+    await until(() => mgr.get(job.jobId).receivedBytes > 0, 'the first chunk arriving')
 
     const finished = await cancelAndUnwind(mgr, job.jobId)
     expect(finished.status).toBe('cancelled')

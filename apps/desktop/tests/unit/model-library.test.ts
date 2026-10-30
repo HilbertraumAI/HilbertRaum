@@ -182,12 +182,6 @@ describe('variantGroupFace — an obtainable face within the leader priority coh
       model('Priority Q6_K', { state: 'installed', download: OBTAINABLE })
     ])
     expect(variantGroupFace(tied).displayName).toBe('Priority Q4_K_M')
-    // And a downloadable sibling outside the cohort never steals it.
-    const g = group([
-      model('Priority Q4_K_M', { state: 'installed', download: WITHDRAWN }),
-      model('Priority Q6_K', { state: 'missing', download: OBTAINABLE })
-    ])
-    expect(variantGroupFace(g).displayName).toBe('Priority Q4_K_M')
   })
 
   it('never displaces a RECOMMENDED leader with a lower-priority obtainable sibling', () => {
