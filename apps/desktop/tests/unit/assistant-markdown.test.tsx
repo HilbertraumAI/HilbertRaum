@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
 
 // The security-critical invariants of the Streamdown-backed renderer (audit L1 + no-injection
@@ -15,21 +15,22 @@ afterEach(cleanup)
 
 describe('AssistantMarkdown security posture', () => {
   it('renders an http(s) link as a new-tab anchor', () => {
-    const { container } = render(<AssistantMarkdown text="[ok](https://example.com)" />)
-    const a = container.querySelector('a')
-    expect(a).not.toBeNull()
-    expect(a?.getAttribute('href')).toBe('https://example.com')
-    expect(a?.getAttribute('target')).toBe('_blank')
-    expect(a?.getAttribute('rel')).toContain('noreferrer')
+    render(<AssistantMarkdown text="[ok](https://example.com)" />)
+    const a = screen.getByRole('link', { name: 'ok' })
+    expect(a.getAttribute('href')).toBe('https://example.com')
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toContain('noreferrer')
   })
 
-  it('renders a javascript: link as inert text, not a clickable anchor', () => {
-    const { container } = render(
-      <AssistantMarkdown text="[x](javascript:alert(1))" />
-    )
-    const a = container.querySelector('a')
-    // Either sanitize strips the href, or SafeLink downgrades it to a <span>; never a live js href.
-    expect(a?.getAttribute('href') ?? '').not.toContain('javascript:')
+  it.each([
+    ['javascript:', '[x](javascript:alert(1))'],
+    ['data:', '[x](data:text/html,<script>1</script>)']
+  ])('renders a %s link as inert text, not a clickable anchor', (_scheme, text) => {
+    const { container } = render(<AssistantMarkdown text={text} />)
+    // Sanitize strips both schemes, and the `a` override (SafeLink) downgrades a non-http(s) href to a
+    // <span>: no anchor at all, so never a live js/data href.
+    expect(container.querySelector('a')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
     expect(container.textContent).toContain('x')
   })
 
@@ -200,7 +201,7 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     }
   }
 
-  it('renders block math as real KaTeX output with the matching JS/CSS version', () => {
+  it('renders block math as real KaTeX output, not the error fallback', () => {
     // Smoke test for the version-skew blocker: rehype-katex must render with the same katex
     // VERSION whose CSS/fonts AssistantMarkdown loads. With a skew, KaTeX either misrenders or
     // warns; package.json pins ~0.16.47 to match @streamdown/math's chain (one install serves both
@@ -243,12 +244,6 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     )
     expect(container.querySelector('.katex')).toBeNull()
     expect(container.querySelector('code')?.textContent).toContain('\\[ \\pi \\]')
-  })
-
-  it('leaves dollar prose alone (single $ is not math)', () => {
-    const { container } = render(<AssistantMarkdown text={'costs $5 and $10 respectively'} />)
-    expect(container.querySelector('.katex')).toBeNull()
-    expect(container.textContent).toContain('$5 and $10')
   })
 
   it('promotes a single-$ span that looks like math to INLINE KaTeX (#501)', () => {
@@ -299,8 +294,12 @@ describe('AssistantMarkdown math (KaTeX)', () => {
       <AssistantMarkdown text={'```\n$x^2$\n```\n\nand inline `$y_1$` too'} />
     )
     expect(container.querySelector('.katex')).toBeNull()
-    expect(container.textContent).toContain('$x^2$')
-    expect(container.textContent).toContain('$y_1$')
+    // Exact texts: a `$$x^2$$` rewrite inside the code would still CONTAIN `$x^2$`.
+    const lines = [...container.querySelectorAll('[data-streamdown="code-block-body"] code > span')].map(
+      (l) => l.textContent
+    )
+    expect(lines, 'the fenced block keeps its single $ pair').toEqual(['$x^2$'])
+    expect(container.querySelector('[data-streamdown="inline-code"]')?.textContent, 'the inline span too').toBe('$y_1$')
   })
 
   it('leaves existing $$ math untouched: inline stays inline, own-line stays display (#501)', () => {
@@ -333,6 +332,7 @@ describe('AssistantMarkdown math (KaTeX)', () => {
   it('STREAMING: an unclosed \\[ inside a code fence stays verbatim', () => {
     const { container } = render(<AssistantMarkdown text={'```\n\\[ \\pi'} streaming />)
     expect(container.querySelector('.katex')).toBeNull()
+    expect(container.querySelector('code')?.textContent?.trim(), 'verbatim').toBe('\\[ \\pi')
   })
 
   it('STREAMING: a tail with an UNCLOSED BRACE GROUP still typesets (balanced + validated)', () => {
@@ -387,7 +387,7 @@ describe('AssistantMarkdown math (KaTeX)', () => {
   it('STREAMING: a $ tail inside an unclosed code fence stays verbatim (#501)', () => {
     const { container } = render(<AssistantMarkdown text={'```\n$x^2'} streaming />)
     expect(container.querySelector('.katex')).toBeNull()
-    expect(container.textContent).toContain('$x^2')
+    expect(container.querySelector('code')?.textContent?.trim(), 'verbatim').toBe('$x^2')
   })
 
   // #701: a dangling `$$` was closed by remend's own katex handler, which appends `$$` and

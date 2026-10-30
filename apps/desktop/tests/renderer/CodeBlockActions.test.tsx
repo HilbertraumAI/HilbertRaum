@@ -1,18 +1,20 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
-import { Transcript } from '../../src/renderer/chat/Transcript'
-import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
-import { I18nProvider } from '../../src/renderer/i18n'
-import { stubApi } from '../helpers/renderer'
-import type { Message } from '../../src/shared/types'
+import { screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { t } from '../../src/shared/i18n'
+import { assistantMsg, makeConversation } from '../helpers/chat-fixtures'
+import { chatScreenStubs, conversationRow, renderChatScreen } from '../helpers/chat-screen'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { renderTranscript } from '../helpers/transcript'
 
 // #286 renderer half — the per-code-block Copy/Save toolbar on PERSISTED assistant turns.
 //
 // The invariants worth pinning:
 //  • D3 scope: transcript, persisted turns only. Never the live streaming bubble; never any other
 //    AssistantMarkdown consumer (images AnswerThread, ReviewScreen, TranslateScreen, documents
-//    PreviewModal) — those render with no CodeBlockActions context and must be unchanged.
+//    PreviewModal) — those render with no CodeBlockActions context and must be unchanged (pinned in
+//    assistant-markdown.test.tsx 'a fenced code block ships NO Streamdown download control
+//    (controls={false} stays off)').
 //  • D1 verbatim: what reaches Save/Copy is the code value AS PARSED — mdast-util-to-hast appends
 //    one '\n' to every code node, and shipping that would add a byte the markdown never had.
 //  • Distinct accessible names per block (the ext comes from the shared allowlist), so a keyboard
@@ -20,58 +22,19 @@ import type { Message } from '../../src/shared/types'
 
 afterEach(cleanup)
 
-function noop(): void {}
-
 const HTML_BLOCK = '<b>hi</b>'
 const PY_BLOCK = 'print("hi")'
 const TWO_BLOCKS = `Here you go:\n\n\`\`\`html\n${HTML_BLOCK}\n\`\`\`\n\nand in python:\n\n\`\`\`python\n${PY_BLOCK}\n\`\`\`\n`
 
-function msg(over: Partial<Message> = {}): Message {
-  return {
-    id: 'a1',
-    conversationId: 'c1',
-    role: 'assistant',
-    content: TWO_BLOCKS,
-    createdAt: '2026-09-06T10:00:00.000Z',
-    ...over
-  }
-}
-
-function renderTranscript(props: {
-  messages?: Message[]
-  streamingHere?: boolean
-  streamText?: string
-  onCopy?: (content: string) => void
-  onSaveCodeBlock?: (messageId: string, content: string, language: string) => void
-}): void {
-  render(
-    <I18nProvider>
-      <Transcript
-        messages={props.messages ?? [msg()]}
-        streamingHere={props.streamingHere ?? false}
-        streamText={props.streamText ?? ''}
-        streamThinking=""
-        thinkingOpen={false}
-        onThinkingOpenChange={noop}
-        emptyState={null}
-        onCopy={props.onCopy ?? noop}
-        onSave={noop}
-        onSaveCodeBlock={props.onSaveCodeBlock}
-        actionsDisabled={false}
-      />
-    </I18nProvider>
-  )
-}
-
-// Transcript renders AssistantMarkdown through the LAZY (Suspense) wrapper — every assertion
-// about markdown output has to wait for that chunk to resolve.
+// vitest.config.ts resolves ./AssistantMarkdownLazy to the synchronous component, so the
+// markdown renders in the first pass; the findBy* / waitFor below are positive gates.
 const SAVE_HTML = 'Save this code block as a .html file (stays local)'
 const SAVE_PY = 'Save this code block as a .py file (stays local)'
 const COPY_TITLE = 'Copy this code block to the clipboard'
 
 describe('#286 per-code-block toolbar in the transcript', () => {
   it('renders a Copy + Save pair per block, with DISTINCT per-language Save names', async () => {
-    renderTranscript({ onSaveCodeBlock: vi.fn() })
+    renderTranscript({ messages: [assistantMsg('a1', TWO_BLOCKS)], onSaveCodeBlock: vi.fn() })
     const copies = await screen.findAllByRole('button', { name: COPY_TITLE })
     expect(copies).toHaveLength(2)
     // Two Save buttons, and the accessible names differ by the ALLOWLIST extension.
@@ -84,7 +47,7 @@ describe('#286 per-code-block toolbar in the transcript', () => {
 
   it('saves the block VERBATIM — the code value with no trailing newline — plus its language', async () => {
     const onSaveCodeBlock = vi.fn()
-    renderTranscript({ messages: [msg({ id: 'answer-7' })], onSaveCodeBlock })
+    renderTranscript({ messages: [assistantMsg('answer-7', TWO_BLOCKS)], onSaveCodeBlock })
     fireEvent.click(await screen.findByRole('button', { name: SAVE_HTML }))
     expect(onSaveCodeBlock).toHaveBeenCalledTimes(1)
     expect(onSaveCodeBlock).toHaveBeenCalledWith('answer-7', HTML_BLOCK, 'html')
@@ -94,33 +57,15 @@ describe('#286 per-code-block toolbar in the transcript', () => {
 
   it('copies the same verbatim content through the transcript copy path', async () => {
     const onCopy = vi.fn()
-    renderTranscript({ onCopy, onSaveCodeBlock: vi.fn() })
+    renderTranscript({ messages: [assistantMsg('a1', TWO_BLOCKS)], onCopy, onSaveCodeBlock: vi.fn() })
     const copies = await screen.findAllByRole('button', { name: COPY_TITLE })
     fireEvent.click(copies[0])
     expect(onCopy).toHaveBeenCalledWith(HTML_BLOCK)
   })
 
-  it('reaches window.api.saveCodeBlock end-to-end when the handler forwards to the bridge', async () => {
-    // The ChatScreen wiring in miniature: the Transcript prop forwards to the preload bridge,
-    // which is the ONLY write path (Streamdown's own blob download control stays disabled).
-    const saveCodeBlock = vi.fn().mockResolvedValue('C:/x/code.html')
-    stubApi({ saveCodeBlock })
-    renderTranscript({
-      messages: [msg({ id: 'answer-9' })],
-      onSaveCodeBlock: (id, content, language) => void window.api.saveCodeBlock(id, content, language)
-    })
-    fireEvent.click(await screen.findByRole('button', { name: SAVE_HTML }))
-    await waitFor(() => expect(saveCodeBlock).toHaveBeenCalledWith('answer-9', HTML_BLOCK, 'html'))
-  })
-
   it('renders NO toolbar on the live streaming bubble (D3 — persisted turns only)', async () => {
-    renderTranscript({
-      messages: [],
-      streamingHere: true,
-      streamText: TWO_BLOCKS,
-      onSaveCodeBlock: vi.fn()
-    })
-    // Wait for the lazy markdown chunk to actually paint the block before asserting absence.
+    renderTranscript({ streamingHere: true, streamText: TWO_BLOCKS, onSaveCodeBlock: vi.fn() })
+    // Positive gate: the block painted, so the absences below are about the toolbar, not a missing render.
     await waitFor(() => expect(document.querySelector('code')).not.toBeNull())
     expect(screen.queryByRole('button', { name: SAVE_HTML })).toBeNull()
     expect(screen.queryByRole('button', { name: COPY_TITLE })).toBeNull()
@@ -128,17 +73,14 @@ describe('#286 per-code-block toolbar in the transcript', () => {
   })
 
   it('renders no toolbar for INLINE code', async () => {
-    renderTranscript({
-      messages: [msg({ content: 'some `inline` text' })],
-      onSaveCodeBlock: vi.fn()
-    })
+    renderTranscript({ messages: [assistantMsg('a1', 'some `inline` text')], onSaveCodeBlock: vi.fn() })
     await waitFor(() => expect(document.querySelector('code')).not.toBeNull())
     expect(document.querySelector('.code-block-actions')).toBeNull()
     expect(screen.queryByRole('button', { name: COPY_TITLE })).toBeNull()
   })
 
   it('renders no toolbar when the onSaveCodeBlock prop is absent', async () => {
-    renderTranscript({})
+    renderTranscript({ messages: [assistantMsg('a1', TWO_BLOCKS)] })
     await waitFor(() => expect(document.querySelector('code')).not.toBeNull())
     expect(document.querySelector('.code-block-actions')).toBeNull()
     expect(screen.queryByRole('button', { name: COPY_TITLE })).toBeNull()
@@ -146,14 +88,27 @@ describe('#286 per-code-block toolbar in the transcript', () => {
   })
 })
 
-describe('#286 AssistantMarkdown outside the transcript', () => {
-  it('renders a fenced block with NO buttons and still a <code> element', () => {
-    // The other consumers (images AnswerThread, ReviewScreen, TranslateScreen, documents
-    // PreviewModal) render AssistantMarkdown with neither the actions context NOR an
-    // I18nProvider — the `pre` override must stay a hook-free passthrough there.
-    const { container } = render(<AssistantMarkdown text={'```js\nx\n```'} />)
-    expect(container.querySelector('button')).toBeNull()
-    expect(container.querySelector('.code-block-actions')).toBeNull()
-    expect(container.querySelector('code')?.textContent).toContain('x')
+// The ChatScreen hop: its `onSaveCodeBlock` is the ONLY write path (Streamdown's own blob download
+// control stays disabled) — it forwards to window.api.saveCodeBlock and toasts where the file went.
+describe('#286 ChatScreen → the save bridge', () => {
+  // Runs before the file-level cleanup (after-hooks run innermost first).
+  afterEach(() => assertNoUnexpectedApiCalls())
+
+  it('a code block Save from a persisted answer reaches window.api.saveCodeBlock and toasts where the file went', async () => {
+    const saveCodeBlock = vi.fn(
+      async (_id: string, _content: string, _language: string): Promise<string | null> => 'C:/x/code.html'
+    )
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation()]),
+        listMessages: vi.fn(async () => [assistantMsg('answer-9', TWO_BLOCKS)]),
+        saveCodeBlock
+      })
+    )
+    renderChatScreen()
+    fireEvent.click(await waitFor(() => conversationRow('My chat')))
+    fireEvent.click(await screen.findByRole('button', { name: SAVE_HTML }))
+    await waitFor(() => expect(saveCodeBlock).toHaveBeenCalledWith('answer-9', HTML_BLOCK, 'html'))
+    expect(await screen.findByText(t('en', 'chat.savedTo', { path: 'C:/x/code.html' }))).toBeInTheDocument()
   })
 })
