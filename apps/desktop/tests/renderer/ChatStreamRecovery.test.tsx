@@ -20,11 +20,14 @@ const docConv = (title: string): Conversation =>
   makeConversation({ title, mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
 
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 describe('ChatScreen — stream recovery (T-1)', () => {

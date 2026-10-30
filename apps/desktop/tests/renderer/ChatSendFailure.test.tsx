@@ -19,11 +19,14 @@ import { clearDocTaskSession, startTask } from '../../src/renderer/lib/doctasks'
 // (CR-2, the transcript re-pin on a conversation switch, lives in ChatSwitchStop.test.tsx.)
 
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 /** Common stub for a working chat screen with one conversation ('Chat 1'); the send is the test's. */
@@ -40,10 +43,11 @@ interface DraftRestoreRow {
   typed: string
   /** The composer's value after the failure. */
   composer: string
-  /** The banner's copy, when one shows. */
-  banner: RegExp | null
-  /** A persisted question the transcript shows exactly once. */
-  shownOnce: string | null
+  /** The banner's copy (every failed send shows one). */
+  banner: RegExp
+  /** How often the typed question shows in the transcript: 0 when nothing persisted (the optimistic bubble is
+   *  gone), 1 when it persisted or an earlier identical turn exists (never an optimistic copy beside it). */
+  shownTimes: number
 }
 
 describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () => {
@@ -66,7 +70,7 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
         typed: 'a long typed question',
         composer: 'a long typed question',
         banner: /document task/i,
-        shownOnce: null
+        shownTimes: 0
       }
     ],
     [
@@ -77,8 +81,8 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
         history: [userMsg('u1', 'persisted question')],
         typed: 'persisted question',
         composer: '',
-        banner: null,
-        shownOnce: 'persisted question'
+        banner: /stream failed/,
+        shownTimes: 1
       }
     ],
     [
@@ -90,10 +94,10 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
         typed: 'x',
         composer: 'x',
         banner: /document task/i,
-        shownOnce: null
+        shownTimes: 1
       }
     ]
-  ])('%s', async (_label, { error, history, typed, composer, banner, shownOnce }) => {
+  ])('%s', async (_label, { error, history, typed, composer, banner, shownTimes }) => {
     vi.useFakeTimers()
     try {
       const sendChatMessage = vi.fn(async (): Promise<Message> => {
@@ -110,9 +114,10 @@ describe('ChatScreen — draft restore on pre-persist send failure (CR-1)', () =
       await flushFakeTimers()
 
       expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe(composer)
-      if (banner) expect(screen.getByRole('alert').textContent ?? '').toMatch(banner)
-      // The persisted question shows exactly once, in the transcript (no optimistic copy beside it).
-      if (shownOnce) expect(screen.getAllByText(shownOnce)).toHaveLength(1)
+      expect(screen.getByRole('alert').textContent ?? '').toMatch(banner)
+      // The transcript (not the composer, whose text content mirrors its value) holds the question
+      // shownTimes times: no optimistic copy survives the failure refresh.
+      expect(screen.queryAllByText(typed, { ignore: 'textarea, script, style' })).toHaveLength(shownTimes)
     } finally {
       vi.useRealTimers()
     }

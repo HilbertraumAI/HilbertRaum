@@ -34,11 +34,14 @@ import { runtimeStatus } from '../helpers/status'
 const HINT = t('en', 'chat.warmup.hint')
 
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 /** Render the screen with `status` as every runtime read; a send parks so the stream stays in flight with
@@ -94,14 +97,12 @@ describe('ChatScreen — first-answer warm-up hint (#39)', () => {
   })
 
   // The status gate reads `warmedUp === false`: a warmed runtime never sees the hint, and neither does one
-  // whose status has no `warmedUp` at all (an undefined-valued key reads as absent) — the absent field fails
-  // safe, which is what tells `=== false` from `!warmedUp`.
+  // whose status has no `warmedUp` key at all — the absent field fails safe, which is what tells
+  // `=== false` from `!warmedUp`.
+  const { warmedUp: _absent, ...withoutWarmedUp } = runtimeStatus()
   it.each([
     ['a warmed runtime (warmedUp: true)', runtimeStatus({ warmedUp: true })],
-    [
-      'a runtime that cannot report warm-up state (warmedUp absent — fails safe)',
-      runtimeStatus({ warmedUp: undefined })
-    ]
+    ['a runtime that cannot report warm-up state (warmedUp absent — fails safe)', withoutWarmedUp]
   ])('never shows on %s, however long the wait', async (_label, status) => {
     vi.useFakeTimers()
     setup(status)

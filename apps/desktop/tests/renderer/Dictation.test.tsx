@@ -95,11 +95,14 @@ function micButton(): HTMLElement {
 }
 
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
-  captureSlot.next = null
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+    captureSlot.next = null
+  }
 })
 
 describe('availability gating (D14 precedent)', () => {

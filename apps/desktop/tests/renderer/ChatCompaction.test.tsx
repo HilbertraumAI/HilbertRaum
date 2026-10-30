@@ -14,10 +14,13 @@ import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixture
 // notice shows by kind and clears on the first answer token.
 
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 /** Wait for the conversation list, then select `title`. */
@@ -124,12 +127,14 @@ describe('ChatScreen — the "working on it" notice (§5.2, U5)', () => {
     const user = userEvent.setup()
     const stream = fakeChatStream()
     const reply = deferred<Message>()
+    const sendChatMessage = vi.fn(() => reply.promise)
+    const askDocuments = vi.fn(() => reply.promise)
     stubApi(
       chatScreenStubs({
         ...stream.stubs,
         listConversations: vi.fn(async () => [makeConversation({ title: 'Compaction chat', mode })]),
-        sendChatMessage: vi.fn(() => reply.promise),
-        askDocuments: vi.fn(() => reply.promise)
+        sendChatMessage,
+        askDocuments
       })
     )
     renderChatScreen()
@@ -139,6 +144,9 @@ describe('ChatScreen — the "working on it" notice (§5.2, U5)', () => {
 
     // The stream is in flight (the send is pending) and its subscriptions are registered.
     await waitFor(() => expect(stream.subscribed()).toBe(true))
+    // The notice rides the path main sends it on: plain chat's send, or the documents ask.
+    expect(sendChatMessage).toHaveBeenCalledTimes(mode === 'chat' ? 1 : 0)
+    expect(askDocuments).toHaveBeenCalledTimes(mode === 'documents' ? 1 : 0)
     stream.compaction(notice)
     expect(await screen.findByText(shows)).toBeInTheDocument()
     expect(screen.queryByText(never)).not.toBeInTheDocument()

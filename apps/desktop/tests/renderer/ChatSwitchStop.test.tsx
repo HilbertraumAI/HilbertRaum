@@ -19,11 +19,14 @@ import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixture
 // conversation) and M-U2 (a local Stop is confirmed with a toast).
 
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 /** Two plain chats, 'Chat 1' (c1) and 'Chat 2' (c2). */

@@ -52,9 +52,12 @@ beforeEach(() => {
 // The active analysis lives in a module-level store (so it survives navigation); drop it after each
 // test with the production purge `clearVisionSession()`, after RTL `cleanup()`.
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  clearVisionSession()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    clearVisionSession()
+  }
 })
 
 const unavailable = (reason: VisionUnavailableReason): VisionStatus => ({ available: false, reason })

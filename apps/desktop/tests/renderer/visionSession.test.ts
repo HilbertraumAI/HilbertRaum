@@ -23,9 +23,12 @@ import { selectedImage, visionStream } from '../helpers/vision-fixtures'
 
 // The store is module-level: drop it after each test with the production purge `clearVisionSession()`.
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  clearVisionSession()
-  vi.restoreAllMocks()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    clearVisionSession()
+    vi.restoreAllMocks()
+  }
 })
 
 describe('visionSession — F8 superseded-analyze teardown', () => {

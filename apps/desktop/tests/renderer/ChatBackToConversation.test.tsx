@@ -105,15 +105,13 @@ const appShellStubs = () => ({
   getWorkspaceState: vi.fn(async () => unlockedWorkspace),
   getPolicy: vi.fn(async () => offlinePolicy),
   runPreflight: vi.fn(
-    async () =>
-      ({
-        ok: true,
-        rootPath: '/drive',
-        writable: true,
-        freeBytes: 1024 * 1024 * 1024,
-        slowDriveWarning: null,
-        problems: []
-      }) as unknown as PreflightResult
+    async (): Promise<PreflightResult> => ({
+      rootPath: '/drive',
+      writable: true,
+      freeBytes: 1024 * 1024 * 1024,
+      slowDriveWarning: null,
+      problems: []
+    })
   )
 })
 

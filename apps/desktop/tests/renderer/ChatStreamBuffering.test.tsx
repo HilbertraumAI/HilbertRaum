@@ -25,11 +25,14 @@ import { makeConversation, userMsg } from '../helpers/chat-fixtures'
 // Both rows run on fake timers and advance the shipped STREAM_FLUSH_MS window.
 
 afterEach(() => {
-  assertNoUnexpectedApiCalls()
-  cleanup()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 /** Select 'Chat 1', send 'the question' and park the reply, with a live fake stream. `onSend` runs when the
