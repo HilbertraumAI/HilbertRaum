@@ -160,9 +160,9 @@ export function createTranslationHeadroom(
 
 /**
  * Wave 8 ruling (a) — the occupancy inputs `resolveRerankerDevicePosture` reads instead of
- * `settings.activeModelId`. Every field is REQUIRED: an omitted field is a compile error, not a
+ * `settings.activeModelId`. Three fields are REQUIRED: an omitted one is a compile error, not a
  * silent "no occupancy" default — the analysis's own finding (F16) is that an optional wire is
- * how a posture input silently goes missing.
+ * how a posture input silently goes missing. The optional fields below say why each is optional.
  */
 export interface RerankerOccupancySnapshot {
   /**
