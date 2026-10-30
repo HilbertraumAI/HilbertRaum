@@ -189,9 +189,8 @@ type GraphicsFigure =
 function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot | null, gpuOff: boolean): GraphicsFigure {
   if (!bench) return { kind: 'pending' }
   // The display device is a superset of the budget device (`currentGpu`): equal when a usable
-  // card exists, the small or integrated one otherwise, null in the same off/no-probe cases. The
-  // `??` only covers a snapshot from a stub or bridge that predates the field.
-  const live = snap?.currentMachine ? (snap.graphicsDevice ?? snap.currentGpu) : null
+  // card exists, the small or integrated one otherwise, null in the same off/no-probe cases.
+  const live = snap?.currentMachine ? snap.graphicsDevice : null
   // With the GPU switched off or auto-disabled the snapshot names no device for the next start,
   // and a card the RESULT recorded while the GPU was on must not fill the tile in its place: the
   // verdict, the ★ and the "Your model" row already say RAM for that start (issue #325 (1)).
@@ -206,7 +205,7 @@ function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot
     // it, so it claims nothing either way (N1). An explicit null IS a recorded "nothing".
     return snap && !snap.currentMachine && !('gpuVramMb' in bench) ? { kind: 'notRecorded' } : { kind: 'none' }
   }
-  const useful = typeof live?.useful === 'boolean' ? live.useful : isUsefulDevice({ name: name ?? '', totalMb: mb })
+  const useful = live ? live.useful : isUsefulDevice({ name: name ?? '', totalMb: mb })
   return { kind: 'device', mb, name, useful, integrated: !useful && name != null && looksIntegrated(name) }
 }
 
