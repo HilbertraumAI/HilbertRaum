@@ -22,6 +22,7 @@ import {
   type GpuProbeResult,
   type ModelPlacement
 } from '../../src/shared/types'
+import { completeBenchmarkResult, modelPlacement } from '../helpers/benchmark-records'
 
 // The structural validators for the persisted benchmark records (PR #303 audit H1 / L8, owner
 // decision G7). These pin the two rules everything else rests on:
@@ -37,49 +38,9 @@ import {
 // than half a key — B-G1 requires os, arch, cpuModel and ramGb together), and the optional
 // legacy fields keep their ABSENCE, which the screens read as "not recorded".
 
-/** A complete, healthy result — the shape a real run persists. */
-function complete(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
-  return {
-    os: 'win32',
-    arch: 'x64',
-    cpuModel: 'Intel Core i7-1260P',
-    cpuCores: 12,
-    ramGb: 15.7,
-    gpu: 'NVIDIA GeForce RTX 3090',
-    gpuVramMb: 24576,
-    driveReadMbps: 1200,
-    driveWriteMbps: 900,
-    tokensPerSecond: 41,
-    speedBasis: { basis: 'timings', tokens: 64 },
-    speedIdentity: { memoryClass: 'discrete', deviceName: 'NVIDIA GeForce RTX 3090', contextTokens: 8192, backend: 'gpu' },
-    measuredModelId: 'qwen3.5-9b-ud-q4kxl',
-    effectiveRead: { mbps: 430, bytes: 5_800_000_000, ms: 13_500, source: 'model_load', modelId: 'qwen', at: '2026-09-04T12:00:00Z' },
-    profile: 'PRO',
-    recommendedModelId: 'qwen3.5-9b-ud-q4kxl',
-    warnings: ['something happened'],
-    ranAt: '2026-09-05T00:00:00Z',
-    ...over
-  }
-}
-
-/** A complete, healthy placement record. */
-function placement(over: Partial<ModelPlacement> = {}): ModelPlacement {
-  return {
-    modelId: 'qwen',
-    contextTokens: 8192,
-    backend: 'gpu',
-    gpuLayers: 41,
-    totalLayers: 41,
-    gpuModelMb: 5500,
-    cpuModelMb: 400,
-    gpuKvMb: 640,
-    cpuKvMb: null,
-    metalMaxWorkingSetMb: null,
-    machineKey: 'win32|x64|CPU|8|16',
-    at: '2026-09-05T14:00:00Z',
-    ...over
-  }
-}
+const complete = completeBenchmarkResult
+const placement = (over: Partial<ModelPlacement> = {}): ModelPlacement =>
+  modelPlacement({ modelId: 'qwen', machineKey: 'win32|x64|CPU|8|16', ...over })
 
 describe('normalizeBenchmarkResult — minimum validity', () => {
   it('rejects everything that is not an object, and the empty object itself', () => {
@@ -228,10 +189,17 @@ describe('normalizeBenchmarkResult — the optional legacy fields keep their abs
   })
 
   it('keeps a present-but-unusable optional field as null (it WAS recorded, as nothing)', () => {
-    const r = normalizeBenchmarkResult({ ...complete(), speedBasis: { basis: 'guess', tokens: 5 }, effectiveRead: {} })!
+    const r = normalizeBenchmarkResult({
+      ...complete(),
+      speedBasis: { basis: 'guess', tokens: 5 },
+      effectiveRead: {},
+      speedIdentity: { memoryClass: 'nope' }
+    })!
     expect(r.speedBasis).toBeNull()
     expect(r.effectiveRead).toBeNull()
+    expect(r.speedIdentity).toBeNull()
     expect('speedBasis' in r).toBe(true)
+    expect('speedIdentity' in r).toBe(true)
   })
 })
 
@@ -257,15 +225,6 @@ describe('normalizeSpeedIdentity (issue #322)', () => {
     for (const raw of [null, undefined, 'discrete', {}, { memoryClass: 'gpu' }, { deviceName: 'x' }]) {
       expect(normalizeSpeedIdentity(raw)).toBeNull()
     }
-  })
-
-  it('a present-but-unusable identity on a result is kept as null, an absent one stays absent', () => {
-    const present = normalizeBenchmarkResult({ ...complete(), speedIdentity: { memoryClass: 'nope' } })!
-    expect(present.speedIdentity).toBeNull()
-    expect('speedIdentity' in present).toBe(true)
-    const legacy = complete()
-    delete legacy.speedIdentity
-    expect('speedIdentity' in normalizeBenchmarkResult(legacy)!).toBe(false)
   })
 })
 
