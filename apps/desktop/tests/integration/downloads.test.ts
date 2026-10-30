@@ -62,7 +62,7 @@ const partOf = (dest: string): string => `${dest}.part`
 /**
  * For a job the row cancelled: its status flips at once and `activeJob()` reads null with it, so neither says the run has
  * ended. `start()` clears `active` in the run's `finally`, past every await of the run: an awaited delete of the `.part`
- * lands before this returns. Narrow private read: the manager has no public run-settled signal (defect A1).
+ * lands before this returns. Narrow private read: the manager has no public run-settled signal.
  */
 async function runUnwound(mgr: DownloadManager): Promise<void> {
   await until(() => (mgr as unknown as { active: unknown }).active === null, 'the cancelled run settling')
@@ -894,7 +894,7 @@ describe('DownloadManager jobs', () => {
       const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId) // pre-fix: stuck at 'verifying' → timeout
       expect(finished.status).toBe('failed')
-      // The copy carries the raw rename error today (defect A2), so this row does not claim it is friendly.
+      // The copy carries the raw rename error today, so this row does not claim it is friendly.
       expect(finished.error).toMatch(/was interrupted/)
       expect(existsSync(dest)).toBe(false) // nothing half-renamed into place
     })

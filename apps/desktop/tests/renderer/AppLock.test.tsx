@@ -35,7 +35,7 @@ import { makePolicyStatus } from '../helpers/status'
 // contract (no blanket `} as never)` erasure) — a rename of any mocked method now reddens
 // typecheck. Payloads that are DELIBERATELY partial (a "keep the shell calm" AppStatus/
 // PreflightResult, or a preview-only DecodedImage without `bytes`) carry a narrow, named
-// `as unknown as <Type>` at exactly that value (the HomeScreenPoll pattern), not a blanket cast.
+// `as unknown as <Type>` at exactly that value, not a blanket cast.
 
 // TA-2 / H3: the renderer session-store purge must fire at the REAL lock seam. A screen-effect
 // purge was dead code (lock unmounts the screen before the effect could observe `locked`); the
