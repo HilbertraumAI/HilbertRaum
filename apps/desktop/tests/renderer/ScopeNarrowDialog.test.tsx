@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ScopeNarrowDialog } from '../../src/renderer/chat/ScopeNarrowDialog'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
+import { renderInLanguage } from '../helpers/render-language'
 
 // Beta-feedback Phase 4 (#26, D71) — attaching a file to an existing whole-library documents chat
 // offers a one-time narrow/widen choice. "Just this file" narrows; "Whole library" keeps the corpus
@@ -17,10 +17,9 @@ afterEach(() => {
 
 describe('ScopeNarrowDialog — attach narrow/widen choice (#26, D71)', () => {
   it('names the attached file and offers both choices', () => {
-    render(
-      <I18nProvider>
-        <ScopeNarrowDialog open fileName="Vollmacht.docx" onNarrow={vi.fn()} onWhole={vi.fn()} onDismiss={vi.fn()} />
-      </I18nProvider>
+    renderInLanguage(
+      <ScopeNarrowDialog open fileName="Vollmacht.docx" onNarrow={vi.fn()} onWhole={vi.fn()} onDismiss={vi.fn()} />,
+      'en'
     )
     expect(screen.getByText(t('en', 'chat.scope.narrowTitle'))).toBeInTheDocument()
     expect(
@@ -34,10 +33,9 @@ describe('ScopeNarrowDialog — attach narrow/widen choice (#26, D71)', () => {
     const onNarrow = vi.fn()
     const onWhole = vi.fn()
     const user = userEvent.setup()
-    render(
-      <I18nProvider>
-        <ScopeNarrowDialog open fileName="a.pdf" onNarrow={onNarrow} onWhole={onWhole} onDismiss={vi.fn()} />
-      </I18nProvider>
+    renderInLanguage(
+      <ScopeNarrowDialog open fileName="a.pdf" onNarrow={onNarrow} onWhole={onWhole} onDismiss={vi.fn()} />,
+      'en'
     )
     await user.click(screen.getByRole('button', { name: t('en', 'chat.scope.narrowJust') }))
     expect(onNarrow).toHaveBeenCalledTimes(1)
@@ -48,10 +46,9 @@ describe('ScopeNarrowDialog — attach narrow/widen choice (#26, D71)', () => {
     const onNarrow = vi.fn()
     const onWhole = vi.fn()
     const user = userEvent.setup()
-    render(
-      <I18nProvider>
-        <ScopeNarrowDialog open fileName="a.pdf" onNarrow={onNarrow} onWhole={onWhole} onDismiss={vi.fn()} />
-      </I18nProvider>
+    renderInLanguage(
+      <ScopeNarrowDialog open fileName="a.pdf" onNarrow={onNarrow} onWhole={onWhole} onDismiss={vi.fn()} />,
+      'en'
     )
     await user.click(screen.getByRole('button', { name: t('en', 'chat.scope.narrowWhole') }))
     expect(onWhole).toHaveBeenCalledTimes(1)
@@ -59,11 +56,9 @@ describe('ScopeNarrowDialog — attach narrow/widen choice (#26, D71)', () => {
   })
 
   it('renders the German copy (forced via the localStorage mirror, D-L8)', () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    render(
-      <I18nProvider>
-        <ScopeNarrowDialog open fileName="Vollmacht.docx" onNarrow={vi.fn()} onWhole={vi.fn()} onDismiss={vi.fn()} />
-      </I18nProvider>
+    renderInLanguage(
+      <ScopeNarrowDialog open fileName="Vollmacht.docx" onNarrow={vi.fn()} onWhole={vi.fn()} onDismiss={vi.fn()} />,
+      'de'
     )
     expect(screen.getByText(t('de', 'chat.scope.narrowTitle'))).toBeInTheDocument()
     expect(
@@ -81,10 +76,9 @@ describe('ScopeNarrowDialog — Esc/overlay dismissal is not a decision (CH-13)'
     const onWhole = vi.fn()
     const onDismiss = vi.fn()
     const user = userEvent.setup()
-    render(
-      <I18nProvider>
-        <ScopeNarrowDialog open fileName="a.pdf" onNarrow={onNarrow} onWhole={onWhole} onDismiss={onDismiss} />
-      </I18nProvider>
+    renderInLanguage(
+      <ScopeNarrowDialog open fileName="a.pdf" onNarrow={onNarrow} onWhole={onWhole} onDismiss={onDismiss} />,
+      'en'
     )
     await user.keyboard('{Escape}')
     expect(onDismiss).toHaveBeenCalledTimes(1)
