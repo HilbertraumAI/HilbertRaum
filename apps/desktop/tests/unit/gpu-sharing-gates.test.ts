@@ -34,7 +34,7 @@ const RTX_3080_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 T
 const UHD_770: GpuDevice = { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
 const RTX_3090: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 23575 }
 /** The #318 GTX 1070 Ti: 7,504 MiB free, under the translation model's 8,892 alone. */
-const GTX_1070_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8192, freeMb: 7504 }
+const GTX_1070_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7504 }
 
 function withProbe(...devices: GpuDevice[]): AppSettings {
   return { ...DEFAULT_SETTINGS, gpuMode: 'auto', gpuAutoDisabled: false, gpuProbe: { devices, probedAt: new Date().toISOString() } }
@@ -84,8 +84,8 @@ describe('chatGraphicsShareMib — the running chat model on the card (#473 ruli
   it('falls back to the estimate when the measurement is for another window, and scales the cache term UP to the launched one', () => {
     const atDefault = chatGraphicsShareMib(manifest, 8192, null)
     const atFourTimes = chatGraphicsShareMib(manifest, 32768, measured9b())
-    // 0.3 GiB of cache at 8,192 tokens grows by three more of the same at 32,768.
-    expect(atFourTimes - atDefault).toBeCloseTo(0.3 * 1024 * 3, 6)
+    // The manifest's cache term at 8,192 tokens grows by three more of the same at 32,768.
+    expect(atFourTimes - atDefault).toBeCloseTo(manifest.estimatedContextCacheGib! * 1024 * 3, 6)
     // Never scaled DOWN: a sliding-window cache does not shrink with the window.
     expect(chatGraphicsShareMib(manifest, 2048, null)).toBe(atDefault)
   })
@@ -93,18 +93,18 @@ describe('chatGraphicsShareMib — the running chat model on the card (#473 ruli
 
 describe('resolveTranslationDevicePosture — card only if translation fully fits, else the reason (#473 ruling 1)', () => {
   it.each([
-    ['a 12 GB card with nothing else on it', withProbe(RTX_3080_TI), chat({ committedModelId: null }), 'auto'],
-    ['a 12 GB card beside the 9B chat model', withProbe(RTX_3080_TI), chat(), 'beside-chat'],
-    ['a 24 GB card beside the 9B chat model', withProbe(RTX_3090), chat(), 'auto'],
-    ['a chat start in flight (ruling 2: chat takes the card first)', withProbe(RTX_3090), chat({ chatStartBusy: true }), 'chat-starting'],
-    ['an 8 GB card, too small even alone', withProbe(GTX_1070_TI), chat({ committedModelId: null }), 'too-large'],
-    ['a chat start requested, still in its weight check (#599)', withProbe(RTX_3090), chat({ chatStartRequested: true }), 'chat-starting'],
-    ['the chat model running on the processor', withProbe(RTX_3080_TI), chat({ committedBackend: 'cpu' }), 'auto'],
-    ['the hybrid box: the iGPU\'s 48 GB never counts', withProbe(UHD_770, RTX_3080_TI), chat(), 'beside-chat'],
-    ['no stored probe for this machine (nothing to judge)', { ...DEFAULT_SETTINGS }, chat(), 'auto'],
-    ['an integrated-only machine (out of scope)', withProbe(UHD_770), chat(), 'auto'],
-    ['a locked workspace', null, chat(), 'auto']
-  ] as const)('%s → %s', (_label, settings, occupancy, expected) => {
+    ['a 12 GB card with nothing else on it', 'auto', withProbe(RTX_3080_TI), chat({ committedModelId: null })],
+    ['a 12 GB card beside the 9B chat model', 'beside-chat', withProbe(RTX_3080_TI), chat()],
+    ['a 24 GB card beside the 9B chat model', 'auto', withProbe(RTX_3090), chat()],
+    ['a chat start in flight (ruling 2: chat takes the card first)', 'chat-starting', withProbe(RTX_3090), chat({ chatStartBusy: true })],
+    ['an 8 GB card, too small even alone', 'too-large', withProbe(GTX_1070_TI), chat({ committedModelId: null })],
+    ['a chat start requested, still in its weight check (#599)', 'chat-starting', withProbe(RTX_3090), chat({ chatStartRequested: true })],
+    ['the chat model running on the processor', 'auto', withProbe(RTX_3080_TI), chat({ committedBackend: 'cpu' })],
+    ['the hybrid box: the iGPU\'s 48 GB never counts', 'beside-chat', withProbe(UHD_770, RTX_3080_TI), chat()],
+    ['no stored probe for this machine (nothing to judge)', 'auto', { ...DEFAULT_SETTINGS }, chat()],
+    ['an integrated-only machine (out of scope)', 'auto', withProbe(UHD_770), chat()],
+    ['a locked workspace', 'auto', null, chat()]
+  ] as const)('%s → %s', (_label, expected, settings, occupancy) => {
     expect(resolveTranslationDevicePosture(settings, MANIFESTS_DIR, occupancy, TRANSLATION)).toBe(expected)
   })
 
@@ -151,34 +151,45 @@ describe('createTranslationHeadroom — the composed callback', () => {
   it('reads the runtime\'s committed model, window and backend, and a pending switch, live', () => {
     const pending = createPendingModelSwitchCounter()
     let backend: 'gpu' | 'cpu' = 'gpu'
+    let launched = 8192
+    let startRequested = false
     const runtimeManager = {
       activeModelId: () => CHAT,
-      status: () => ({ startingModelId: null }) as unknown as RuntimeStatus,
-      active: () => ({ modelId: CHAT, contextWindow: () => 8192, backend }) as unknown as ModelRuntime
+      status: () => ({ startingModelId: null, startRequested }) as unknown as RuntimeStatus,
+      active: () => ({ modelId: CHAT, contextWindow: () => launched, backend }) as unknown as ModelRuntime
     }
-    const gate = createTranslationHeadroom({
-      runtimeManager,
-      pendingModelSwitches: pending,
-      getSettings: () => withProbe(RTX_3080_TI),
-      manifestsDir: MANIFESTS_DIR
-    })
+    const deps = { runtimeManager, pendingModelSwitches: pending, manifestsDir: MANIFESTS_DIR }
+    const gate = createTranslationHeadroom({ ...deps, getSettings: () => withProbe(RTX_3080_TI) })
     expect(gate(TRANSLATION)).toBe('beside-chat') // the 9B is on the 12 GB card
     backend = 'cpu'
     expect(gate(TRANSLATION)).toBe('auto') // the 9B moved to the processor
+    backend = 'gpu'
     pending.increment()
     expect(gate(TRANSLATION)).toBe('chat-starting') // a switch is pending
+    pending.decrement()
+    startRequested = true
+    expect(gate(TRANSLATION)).toBe('chat-starting') // still in its weight check (#599)
+    startRequested = false
+    // 16,300 − 7,284 = 9,016 holds the 8,892 at the default window; the raised window adds 922 and it no longer does.
+    const roomy = createTranslationHeadroom({
+      ...deps,
+      getSettings: () => withProbe({ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 4080', totalMb: 16376, freeMb: 16300 })
+    })
+    expect(roomy(TRANSLATION)).toBe('auto')
+    launched = 32768
+    expect(roomy(TRANSLATION)).toBe('beside-chat')
   })
 })
 
 describe('cardIsShared — where the chat-first hook yields (#473 ruling 2)', () => {
-  it.each([
-    ['a discrete card on record', withProbe(RTX_3080_TI), true],
-    ['Apple\x27s Metal pool', withProbe({ id: 'MTL0', name: 'Apple M2 Pro', totalMb: 21845, freeMb: 21845 }), true],
-    ['an integrated GPU only (nothing on a card to give back)', withProbe(UHD_770), false],
-    ['no stored probe', { ...DEFAULT_SETTINGS, gpuMode: 'auto' as const }, false],
-    ['the GPU switched off', { ...withProbe(RTX_3080_TI), gpuMode: 'off' as const }, false],
-    ['a locked workspace', null, false]
-  ])('%s → %s', (_label, settings, expected) => {
+  it.each<[string, boolean, AppSettings | null]>([
+    ['a discrete card on record', true, withProbe(RTX_3080_TI)],
+    ['Apple\x27s Metal pool', true, withProbe({ id: 'MTL0', name: 'Apple M2 Pro', totalMb: 21845, freeMb: 21845 })],
+    ['an integrated GPU only (nothing on a card to give back)', false, withProbe(UHD_770)],
+    ['no stored probe', false, { ...DEFAULT_SETTINGS, gpuMode: 'auto' }],
+    ['the GPU switched off', false, { ...withProbe(RTX_3080_TI), gpuMode: 'off' }],
+    ['a locked workspace', false, null]
+  ])('%s → %s', (_label, expected, settings) => {
     expect(cardIsShared(settings)).toBe(expected)
   })
 })
