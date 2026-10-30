@@ -14,7 +14,6 @@ import {
 } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/renderer/lib/format'
-import { FIT_TARGET_MARGIN_MB } from '../../src/shared/performance-rules'
 import { deferred } from '../helpers/deferred'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import {
@@ -26,12 +25,14 @@ import {
   OBSERVED_FULL,
   office,
   oldLaptop,
+  otherRow,
   placement,
   pushChanged,
   renderPerformanceScreen,
   RUNNING_STATUS,
   startOwnRun,
-  STOPPED_STATUS
+  STOPPED_STATUS,
+  tile
 } from '../helpers/performance-screen'
 
 // The Performance screen (design-guidelines §2, benchmark.md "Performance screen"): the
@@ -65,12 +66,12 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(await screen.findByText(/Runs Qwen3\.5 9B \(UD-Q4_K_XL\) at about 12 tokens per second\./)).toBeInTheDocument()
     expect(screen.getByText(/Model starts from this drive are fast\./)).toBeInTheDocument()
     // Tiles: value + rating word (never color alone).
-    expect(screen.getByText('Speed')).toBeInTheDocument()
-    expect(screen.getAllByText('Good').length).toBeGreaterThanOrEqual(1)
+    expect(within(tile('Speed')).getByText('Good')).toBeInTheDocument()
+    expect(within(tile('Speed')).getByText('12')).toBeInTheDocument()
     expect(screen.getByText('Memory')).toBeInTheDocument()
     expect(screen.getByText('Lite')).toBeInTheDocument()
-    expect(screen.getByText('Drive')).toBeInTheDocument()
-    expect(screen.getAllByText('Fast').length).toBeGreaterThanOrEqual(1)
+    expect(within(tile('Drive')).getByText('Fast')).toBeInTheDocument()
+    expect(within(tile('Drive')).getByText('430')).toBeInTheDocument()
     // The fit question is answered in its own row, never under RAM or VRAM.
     expect(screen.getByText('Your model')).toBeInTheDocument()
     expect(screen.getByText(/Qwen3\.5 9B \(UD-Q4_K_XL\) · 5\.8 GB on disk · 8,192-token context/)).toBeInTheDocument()
@@ -121,7 +122,9 @@ describe('PerformanceScreen: the check as an answer', () => {
     // the tile — a small DISCRETE card is "Small", with its size as the reason.
     const legacy = result()
     delete (legacy as Partial<BenchmarkResult>).gpuVramMb
-    install(snapshot({ current: legacy, currentGpu: { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false } }))
+    // Main names a sub-gate card as the display device, never as the budget one (registerBenchmarkIpc.ts:1280-1281).
+    const smallCard = { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false }
+    install(snapshot({ current: legacy, currentGpu: null, graphicsDevice: smallCard }))
     renderPerformanceScreen()
     expect(await screen.findByText('4.0')).toBeInTheDocument()
     expect(screen.getByText('Small')).toBeInTheDocument()
@@ -129,7 +132,7 @@ describe('PerformanceScreen: the check as an answer', () => {
     cleanup()
     // …but never for a result from ANOTHER computer: that check never recorded the field, so
     // the tile claims nothing either way (N1) — not "no usable graphics card".
-    install(snapshot({ current: legacy, currentMachine: false, currentGpu: { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false } }))
+    install(snapshot({ current: legacy, currentMachine: false, currentGpu: null, graphicsDevice: smallCard }))
     renderPerformanceScreen()
     expect(await screen.findByText('That check did not record the graphics card.')).toBeInTheDocument()
     expect(screen.getByText('Not recorded')).toBeInTheDocument()
@@ -189,17 +192,16 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.queryByText('Usable')).not.toBeInTheDocument()
   })
 
-  it('a 6 GB laptop card (5,994 MiB) now reads "Usable" and is the card the next start uses (#321)', async () => {
-    // The visible half of lowering the gate to 5,120. The same tile that read
-    // "5.9 GB VRAM · Under 6 GB: models run on the processor" now rates the card usable, and the
-    // next start is a card start — measured on this very card at #318 leg 4, where llama.cpp's
-    // fit put the RAM pick fully on it (36/36 layers, 86 tok/s) even while the app said "cpu".
+  it('a 6 GB laptop card (5,994 MiB) a result recorded reads "Usable": the shared rule rates it, not a flag (#321)', async () => {
+    // The visible half of lowering the gate to 5,120. No live device here, so the tile's own
+    // `isUsefulDevice` call decides: at the old 6,144 this read "Small". That the next start USES
+    // the card is performance-gpu.test.ts's (`snap.currentGpu`, useful, at 5,994).
     install(
       snapshot({
         current: result({ gpu: 'NVIDIA GeForce RTX 3060 Laptop GPU', gpuVramMb: 5994 }),
-        currentGpu: { name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, useful: true },
-        graphicsDevice: { name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, useful: true },
-        placement: placement({ memoryClass: 'discrete', vramMb: 5994 })
+        currentGpu: null,
+        graphicsDevice: null,
+        placement: placement({ memoryClass: 'cpu', vramMb: null })
       })
     )
     renderPerformanceScreen()
@@ -210,41 +212,26 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
   })
 
-  it('with the GPU switched off (or auto-disabled) and no card for the next start, the tile says so instead of "no card"', async () => {
-    // The result names no card (`gpu` / `gpuVramMb` null: the next start runs from RAM) although
-    // the probe still lists one — the copy names the cause, not a missing card.
-    for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
-      install(snapshot({ current: result({ gpu: null, gpuVramMb: null }), currentGpu: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }), {
-        getSettings: vi.fn(async () => ({
-          ...DEFAULT_SETTINGS,
-          ...flags,
-          gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }], probedAt: '2026-09-05T00:00:00Z' }
-        }))
+  // What main sends for an integrated-only machine: a display device, no budget device
+  // (registerBenchmarkIpc.ts:1280-1281, gpu-rules.ts:194).
+  const IRIS = { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, useful: false }
+  const integratedOnly = (): PerformanceSnapshot =>
+    snapshot({
+      current: result({ gpu: IRIS.name, gpuVramMb: IRIS.totalMb }),
+      currentGpu: null,
+      graphicsDevice: IRIS,
+      placement: placement({
+        memoryClass: 'cpu',
+        vramMb: null,
+        ramMb: 16_077,
+        verdict: { kind: 'cpu', needMb: 5939, estimated: true, budgetMb: 16_077, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
       })
-      renderPerformanceScreen()
-      expect(await screen.findByText('Graphics acceleration is off. Models run on the processor.')).toBeInTheDocument()
-      expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
-      expect(screen.getByText('None')).toBeInTheDocument()
-      cleanup()
-    }
-  })
+    })
 
   it('T12: an integrated device reporting 16 GB of shared memory is "Integrated", never "Usable", beside "On processor" (M8.1)', async () => {
     // The old tile rated `mb >= USABLE_VRAM_MB` alone and printed "16.0 GB VRAM · Usable" while the row
     // below said the model runs on the processor.
-    const iris = result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 })
-    install(
-      snapshot({
-        current: iris,
-        currentGpu: { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, useful: false },
-        placement: placement({
-          memoryClass: 'cpu',
-          vramMb: null,
-          ramMb: 16_077,
-          verdict: { kind: 'cpu', needMb: 5939, estimated: true, budgetMb: 16_077, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
-        })
-      })
-    )
+    install(integratedOnly())
     renderPerformanceScreen()
     expect(await screen.findByText('On processor')).toBeInTheDocument()
     expect(screen.getByText('16.0')).toBeInTheDocument()
@@ -262,13 +249,6 @@ describe('PerformanceScreen: the check as an answer', () => {
     // A foreign result (no live device applies) naming an integrated device: the same rule,
     // from the recorded name + memory.
     install(snapshot({ current: result({ gpu: 'AMD Radeon(TM) Graphics', gpuVramMb: 16_000 }), currentMachine: false, currentGpu: null }))
-    renderPerformanceScreen()
-    expect(await screen.findByText('Integrated')).toBeInTheDocument()
-    expect(screen.queryByText('Usable')).not.toBeInTheDocument()
-    cleanup()
-    // An older main process without the flag on `currentGpu`: still never "Usable" for an iGPU.
-    const oldShape = { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384 } as PerformanceSnapshot['currentGpu']
-    install(snapshot({ current: result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 }), currentGpu: oldShape }))
     renderPerformanceScreen()
     expect(await screen.findByText('Integrated')).toBeInTheDocument()
     expect(screen.queryByText('Usable')).not.toBeInTheDocument()
@@ -292,12 +272,7 @@ describe('PerformanceScreen: the check as an answer', () => {
   })
 
   it('the integrated tile in German (asserted from the catalog, D-L8)', async () => {
-    install(
-      snapshot({
-        current: result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 }),
-        currentGpu: { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, useful: false }
-      })
-    )
+    install(integratedOnly())
     renderPerformanceScreen({ lang: 'de' })
     expect(await screen.findByText(t('de', 'perf.rating.integrated'))).toBeInTheDocument()
     expect(screen.getByText(`Intel(R) Iris(R) Xe Graphics · ${t('de', 'perf.tile.graphics.integrated')}`)).toBeInTheDocument()
@@ -371,6 +346,8 @@ describe('PerformanceScreen: the Your-model row', () => {
     renderPerformanceScreen()
     expect(await screen.findByText(/Measured earlier with a 32,768-token context on/)).toBeInTheDocument()
     expect(screen.queryByText(/one record per model/)).not.toBeInTheDocument()
+    // The verdict beside it is still the estimate for the CURRENT settings.
+    expect(screen.getByText(/Needs at least 5\.8 GB for the weights/)).toBeInTheDocument()
   })
 
   it('a "gpu" verdict with no layer count uses the wording that needs none, never "all  layers"', async () => {
@@ -421,37 +398,21 @@ describe('PerformanceScreen: the Your-model row', () => {
   })
 
   it('DR4: all three partial copies state the runtime margin from the shared constant, never a literal', async () => {
-    // `FIT_TARGET_MARGIN_MB` is llama.cpp's `--fit-target` default, which the app does not
-    // override. The expected figure is DERIVED from it, so raising the constant fails this
-    // test instead of silently leaving three sentences claiming the old number.
-    const margin = String(FIT_TARGET_MARGIN_MB / 1024)
-    const spilled = {
+    // Rows above pin the rendered "1 GB" on the free and margin copies; this is the third branch.
+    install(snapshot({ placement: placement({
       model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
-      observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66 }
-    }
-    // (1) the card was NOT free at start.
-    install(snapshot({ placement: placement({
-      ...spilled,
-      verdict: { kind: 'partial', needMb: 19_862, estimated: false, budgetMb: 24_822, freeAtStartMb: 20_300, workingMb: 2860, spillMb: 1750, gpuLayers: 62, totalLayers: 66 }
-    }) }))
-    renderPerformanceScreen()
-    expect(await screen.findByText(new RegExp(`the runtime keeps a ${margin} GB safety margin`))).toBeInTheDocument()
-    cleanup()
-    // (2) the card WAS free and the working buffers are known.
-    install(snapshot({ placement: placement({
-      ...spilled,
-      verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: 2860, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
-    }) }))
-    renderPerformanceScreen()
-    expect(await screen.findByText(new RegExp(`2\\.8 GB of working buffers and a ${margin} GB safety margin`))).toBeInTheDocument()
-    cleanup()
-    // (3) the card WAS free and the working buffers were never printed.
-    install(snapshot({ placement: placement({
-      ...spilled,
+      observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66 },
       verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: null, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
     }) }))
     renderPerformanceScreen()
-    expect(await screen.findByText(new RegExp(`sets aside working buffers and a ${margin} GB safety margin`))).toBeInTheDocument()
+    expect(await screen.findByText(/sets aside working buffers and a 1 GB safety margin/)).toBeInTheDocument()
+    // At the shipped 1,024 a catalog literal "1 GB" reads the same as the interpolation; only a sentinel tells them apart.
+    const sentinel = '①'
+    for (const lang of ['en', 'de'] as const) {
+      for (const key of ['perf.model.partialFree', 'perf.model.partialMargin', 'perf.model.partialMarginNoWorking'] as const) {
+        expect(t(lang, key, { margin: sentinel })).toContain(`${sentinel} GB`)
+      }
+    }
   })
 
   it('on Apple Silicon shows one Unified memory tile, no graphics tile, and the unified budget', async () => {
@@ -609,24 +570,9 @@ describe('PerformanceScreen: models on this computer', () => {
   })
 
   // #495 follow-up: the reverted `anyOnCard` predicate (chat/translation only, never the
-  // reranker) needs its own pin. The case above already puts chat and translation on the
-  // processor, but its fixture's reranker row is ALSO `device: 'cpu'`, so it cannot tell the
-  // reverted predicate apart from the wider one it replaced — re-widening `anyOnCard` to include
-  // the reranker again would leave that case green. These two siblings keep chat and translation
-  // on the processor but move the reranker row onto the card, not loaded and then loaded.
-  it('chat and translation on the processor, reranker resident on the card but not yet loaded: neither card line renders', async () => {
-    const rows = placement().models.map((r) => {
-      if (r.role === 'chat' || r.role === 'translation') return { ...r, device: 'cpu' as const }
-      if (r.role === 'reranker') return { ...r, device: 'gpu' as const, loaded: false }
-      return r
-    })
-    install(snapshot({ placement: placement({ models: rows }) }))
-    renderPerformanceScreen()
-    await screen.findByText('Models on this computer')
-    expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
-  })
-
+  // reranker) needs its own pin: the case above has its reranker on the processor too, so it
+  // cannot tell the predicate from the wider one it replaced. The not-loaded half of the card
+  // line is the #495 row above.
   it('chat and translation on the processor, reranker resident and loaded on the card: only the reranker card line renders', async () => {
     const rows = placement().models.map((r) => {
       if (r.role === 'chat' || r.role === 'translation') return { ...r, device: 'cpu' as const }
@@ -673,7 +619,7 @@ describe('PerformanceScreen: actions', () => {
     expect(screen.getByText(/Generation speed with Qwen3\.5 9B \(UD-Q4_K_XL\)$/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
     act(() => progress.forEach((cb) => cb('system')))
-    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
+    expect(screen.getByText('Hardware detected: done')).toBeInTheDocument()
     await run.finish()
     await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(2))
     expect(await screen.findByRole('button', { name: 'Check again' })).toBeInTheDocument()
@@ -821,7 +767,6 @@ describe('PerformanceScreen: focus survives the run', () => {
     await pushChanged(pushes)
     await screen.findByRole('button', { name: 'Check again' })
     expect(document.activeElement).toBe(elsewhere)
-    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Check again' }))
   })
 })
 
@@ -878,7 +823,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
     renderPerformanceScreen()
     const run = await startOwnRun()
     act(() => progress.forEach((cb) => cb('system')))
-    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
+    expect(screen.getByText('Hardware detected: done')).toBeInTheDocument()
     await run.finish()
     await screen.findByRole('button', { name: 'Check again' })
     // Someone else takes the lane. Main addresses progress to the window that invoked the run, so
@@ -915,7 +860,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
     await pushChanged(pushes)
     await run.finish()
     expect(screen.queryByText('Checking this computer in the background.')).not.toBeInTheDocument()
-    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
+    expect(screen.getByText('Hardware detected: done')).toBeInTheDocument()
   })
 
   it('the push announcing our OWN run does not un-tick the steps it already reported', async () => {
@@ -926,7 +871,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
     // Main pushes when the run takes its span — that snapshot is about OUR run.
     api.getPerformance.mockResolvedValue(snapshot({ running: true }))
     await pushChanged(pushes)
-    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
+    expect(screen.getByText('Hardware detected: done')).toBeInTheDocument()
     await run.finish()
   })
 
@@ -936,12 +881,12 @@ describe('PerformanceScreen: the pushed refresh', () => {
     const run = await startOwnRun()
     act(() => progress.forEach((cb) => cb('system')))
     act(() => progress.forEach((cb) => cb('drive')))
-    expect(screen.getByText('Drive speed').closest('li')?.className).toContain('perf-step-done')
+    expect(screen.getByText('Drive speed: done')).toBeInTheDocument()
     await run.finish()
     const second = await startOwnRun()
     // The second run starts from nothing — never from what the first one reported.
-    expect(screen.getByText('Hardware detected').closest('li')?.className).not.toContain('perf-step-done')
-    expect(screen.getByText('Drive speed').closest('li')?.className).not.toContain('perf-step-done')
+    expect(screen.getByText('Hardware detected: in progress')).toBeInTheDocument()
+    expect(screen.getByText('Drive speed: waiting')).toBeInTheDocument()
     await second.finish()
   })
 
@@ -1041,22 +986,16 @@ describe('PerformanceScreen: the pushed refresh', () => {
   it('a read that lands after unmount applies nothing', async () => {
     const pending = deferred<PerformanceSnapshot>()
     const { api } = install(snapshot(), { getPerformance: vi.fn(() => pending.promise) })
-    const errors: unknown[][] = []
-    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
-      errors.push(args)
+    const view = renderPerformanceScreen()
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
+    view.unmount()
+    await act(async () => {
+      pending.resolve(snapshot())
     })
-    try {
-      const view = renderPerformanceScreen()
-      await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
-      view.unmount()
-      await act(async () => {
-        pending.resolve(snapshot())
-      })
-      // No "update on an unmounted component" / "not wrapped in act" noise.
-      expect(errors).toEqual([])
-    } finally {
-      spy.mockRestore()
-    }
+    // React 18 dropped its warning for an update on an unmounted tree, so a state write is silent.
+    // What outlives the tree: an applied reply goes on to re-read the runtime and settings metadata.
+    expect(api.getRuntimeStatus).not.toHaveBeenCalled()
+    expect(api.getSettings).not.toHaveBeenCalled()
   })
 
   it('the done step re-reads instead of declaring the run over', async () => {
@@ -1149,11 +1088,12 @@ describe('PerformanceScreen: the pushed refresh', () => {
     // screen sits on its empty state until the next push (the P3 launch smoke showed exactly
     // that: a completed first-run benchmark and a screen saying "Not checked yet").
     const first = deferred<PerformanceSnapshot>()
+    const second = deferred<PerformanceSnapshot>()
     let reads = 0
     const { api } = install(snapshot(), {
       getPerformance: vi.fn(() => {
         reads += 1
-        return reads === 1 ? first.promise : Promise.resolve(snapshot())
+        return reads === 1 ? first.promise : second.promise
       })
     })
     render(
@@ -1167,7 +1107,13 @@ describe('PerformanceScreen: the pushed refresh', () => {
     await act(async () => {
       first.resolve(snapshot())
     })
-    // The models card renders only from an APPLIED snapshot: the second read must have landed.
+    await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(2))
+    // The models card renders only from an APPLIED snapshot: the first reply was discarded…
+    expect(screen.queryByText('Models on this computer')).not.toBeInTheDocument()
+    await act(async () => {
+      second.resolve(snapshot())
+    })
+    // …and the re-read lands.
     expect(await screen.findByText('Models on this computer')).toBeInTheDocument()
     expect(api.getPerformance).toHaveBeenCalledTimes(2)
   })
@@ -1181,7 +1127,8 @@ describe('PerformanceScreen: the pushed refresh', () => {
 describe('PerformanceScreen: malformed records and the resolved context', () => {
   it('H1: a structurally invalid other-computer row costs its own figures, never the screen', async () => {
     // The exact shape the old settings gate accepted and the snapshot exposed. `fmt1(undefined)`
-    // threw here, and there is no error boundary above this screen: the whole page went blank.
+    // threw here and took the whole page down; the app-level ErrorBoundary (App.tsx:513) would now
+    // catch that, at the cost of the screen.
     install(snapshot({ otherMachines: [{} as BenchmarkResult, office] }))
     renderPerformanceScreen()
     // The screen is up, the healthy row beside the blob is complete…
@@ -1223,26 +1170,12 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
   })
 
   it('M5 residual: with nothing recommended the report states no context at all', async () => {
-    const { api } = install(snapshot({ placement: placement({ recommendedContextTokens: null }) }))
+    // The no-match shape: `contextFor(null)` is null (registerBenchmarkIpc.ts:1018-1019), and a live object still reaches the inner guard.
+    install(snapshot({ recommendation: { modelId: null, basis: 'cpu' }, placement: placement({ recommendedContextTokens: null }) }))
     renderPerformanceScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    expect(api.copyToClipboard.mock.calls[0][0] as string).not.toContain('Context size')
-  })
-
-  it('an earlier measurement under another configuration is dated, not presented as the fit', async () => {
-    install(
-      snapshot({
-        placement: placement({
-          observed: null,
-          observedMismatch: { contextTokens: 32_768, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
-        })
-      })
-    )
-    renderPerformanceScreen()
-    expect(await screen.findByText(/Measured earlier with a 32,768-token context on/)).toBeInTheDocument()
-    // The verdict beside it is still the estimate for the CURRENT settings.
-    expect(screen.getByText(/Needs at least 5\.8 GB for the weights/)).toBeInTheDocument()
+    const text = await copiedReport()
+    expect(text).toContain(`Recommended for the next start: ${t('en', 'diag.bench.noMatch')}`)
+    expect(text).not.toContain('Context size')
   })
 
   it('the same line in German (D-L8: asserted from the catalog, never a retyped literal)', async () => {
@@ -1282,7 +1215,6 @@ describe('PerformanceScreen: where a speed figure came from', () => {
     install(snapshot({ current: result({ speedBasis: { basis: 'chunks', tokens: 10 } }) }))
     renderPerformanceScreen()
     const text = await copiedReport()
-    expect(text).toMatch(/approximate|chunks/i)
     expect(text).toContain('Approximate: counted chunks, not runtime timings; 10 chunks')
     expect(text).not.toContain('over 10 tokens')
   })
@@ -1315,7 +1247,8 @@ describe('PerformanceScreen: where a speed figure came from', () => {
       otherMachines: [result({ cpuModel: 'Old CPU', ramGb: 8, tokensPerSecond: 24, speedBasis: { basis: 'chunks', tokens: 10 } })]
     }))
     renderPerformanceScreen()
-    const row = (await screen.findByText(/Old CPU/)).closest('.perf-row') as HTMLElement
+    await screen.findByText(/Old CPU/)
+    const row = otherRow(/Old CPU/)
     expect(within(row).getByText('Approximate')).toBeInTheDocument()
     // The qualifier travels with the row, in the same words the tile uses.
     expect(
@@ -1343,9 +1276,10 @@ describe('PerformanceScreen: where a speed figure came from', () => {
     renderPerformanceScreen()
     await screen.findByText(/41 tokens \/ s with Qwen3\.8 27B UD-Q4_K_M/)
     expect(screen.queryByText('Approximate')).not.toBeInTheDocument()
-    // office (41 t/s) is Good, oldLaptop (2 t/s) is Slow — plus the current result's own Good.
-    expect(screen.getAllByText('Good').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getAllByText('Slow').length).toBeGreaterThanOrEqual(1)
+    // office (41 t/s) is Good, oldLaptop (2 t/s) is Slow. Scoped: the Speed tile and the observed
+    // answer row supply two more "Good"s elsewhere on the screen.
+    expect(within(otherRow(/Intel Core i9-13900K/)).getByText('Good')).toBeInTheDocument()
+    expect(within(otherRow(/Intel Core i5-8250U/)).getByText('Slow')).toBeInTheDocument()
     expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM · .* · over 64 tokens/)).toBeInTheDocument()
   })
 
@@ -1376,9 +1310,12 @@ describe('PerformanceScreen: where a speed figure came from', () => {
       expect(screen.queryByText(/model start/)).not.toBeInTheDocument()
     })
 
-    it('a row persisted before the field existed shows NOTHING — no placeholder, no zero', async () => {
-      const legacy = result({ cpuModel: 'Legacy Box' })
-      delete (legacy as Partial<BenchmarkResult>).effectiveRead
+    const absent = result({ cpuModel: 'Legacy Box' })
+    delete (absent as Partial<BenchmarkResult>).effectiveRead
+    it.each([
+      ['field absent', absent],
+      ['explicit null', result({ cpuModel: 'Legacy Box', effectiveRead: null })]
+    ])('a row persisted before the field existed shows NOTHING — no placeholder, no zero (%s)', async (_why, legacy) => {
       install(snapshot({ otherMachines: [legacy] }))
       renderPerformanceScreen()
       await screen.findByText(/Legacy Box/)
@@ -1388,14 +1325,6 @@ describe('PerformanceScreen: where a speed figure came from', () => {
       expect(screen.queryByText(/0\.0 s/)).not.toBeInTheDocument()
       // The rest of the sub line is unaffected.
       expect(screen.getByText(/Legacy Box, 15\.7 GB RAM · .* · over 64 tokens$/)).toBeInTheDocument()
-    })
-
-    it('an explicit null effectiveRead behaves like an absent one', async () => {
-      install(snapshot({ otherMachines: [result({ cpuModel: 'Null Box', effectiveRead: null })] }))
-      renderPerformanceScreen()
-      await screen.findByText(/Null Box/)
-      expect(screen.queryByText(/model start/)).not.toBeInTheDocument()
-      expect(screen.queryByText(/file check/)).not.toBeInTheDocument()
     })
   })
 })
@@ -1428,15 +1357,26 @@ describe('PerformanceScreen: labels that match what is measured', () => {
 describe('PerformanceScreen: #325 residuals', () => {
   const recordedCard = result({ gpu: 'NVIDIA GeForce RTX 3070', gpuVramMb: 8192 })
 
-  it('#325 (1): with the GPU switched off, a saved result that recorded a card no longer fills the tile — the off state wins', async () => {
+  const noCard = result({ gpu: null, gpuVramMb: null })
+
+  it.each([
+    ['a card the saved result recorded', recordedCard],
+    ['a saved result with no card', noCard]
+  ])('#325 (1): with the GPU switched off the off state wins over %s', async (_why, current) => {
     for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
-      install(snapshot({ current: recordedCard, currentGpu: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }), {
-        getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, ...flags }))
+      install(snapshot({ current, currentGpu: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }), {
+        // The probe still lists the card: the copy names the cause, not a missing card.
+        getSettings: vi.fn(async () => ({
+          ...DEFAULT_SETTINGS,
+          ...flags,
+          gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }], probedAt: '2026-09-05T00:00:00Z' }
+        }))
       })
       renderPerformanceScreen()
       expect(await screen.findByText('Graphics acceleration is off. Models run on the processor.')).toBeInTheDocument()
       expect(screen.queryByText('Usable')).not.toBeInTheDocument()
       expect(screen.queryByText('NVIDIA GeForce RTX 3070')).not.toBeInTheDocument()
+      expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
       expect(screen.getByText('None')).toBeInTheDocument()
       // The report follows the tile: the off copy, never the recorded card.
       const text = await copiedReport()
@@ -1531,22 +1471,28 @@ describe('PerformanceScreen: #325 residuals', () => {
     expect(await screen.findByText('Running on the graphics card right now.')).toBeInTheDocument()
   })
 
-  it.each([
-    ['the runtime is on the processor', { ...RUNNING_STATUS, backend: 'cpu' } as RuntimeStatus, mismatchOnCard],
-    ['nothing runs', STOPPED_STATUS as RuntimeStatus, mismatchOnCard],
-    ['another model runs on the card', { ...onCard, modelId: 'qwen3.5-4b-ud-q4kxl' } as RuntimeStatus, mismatchOnCard],
-    ['the runtime reports no backend', RUNNING_STATUS as RuntimeStatus, mismatchOnCard],
+  const noLineRows: Array<[string, RuntimeStatus, PerformanceSnapshot['placement']]> = [
+    ['the runtime is on the processor', { ...RUNNING_STATUS, backend: 'cpu' }, mismatchOnCard],
+    ['nothing runs', STOPPED_STATUS, mismatchOnCard],
+    ['another model runs on the card', { ...onCard, modelId: 'qwen3.5-4b-ud-q4kxl' }, mismatchOnCard],
+    ['the runtime reports no backend', RUNNING_STATUS, mismatchOnCard],
     [
       'the placement evidence says the processor',
       onCard,
       placement({ memoryClass: 'cpu', vramMb: null, observed: null, observedMismatch: { contextTokens: 32_768, backend: 'cpu', at: '2026-09-01T00:00:00Z' } })
     ],
     ['there is no placement evidence at all', onCard, placement({ observed: null, observedMismatch: null })]
-  ])('#325 (3): no line when %s', async (_why, status, p) => {
-    install(snapshot({ currentGpu: null, placement: p }), { getRuntimeStatus: vi.fn(async () => status) })
+  ]
+
+  it.each(noLineRows)('#325 (3): no line when %s', async (_why, status, p) => {
+    const reply = deferred<RuntimeStatus>()
+    install(snapshot({ currentGpu: null, placement: p }), { getRuntimeStatus: vi.fn(() => reply.promise) })
     renderPerformanceScreen()
     expect(await screen.findByText('Your model')).toBeInTheDocument()
-    await waitFor(() => expect(window.api.getRuntimeStatus).toHaveBeenCalled())
+    // The status is what the line reads: apply it, then look.
+    await act(async () => {
+      reply.resolve(status)
+    })
     expect(screen.queryByText('Running on the graphics card right now.')).not.toBeInTheDocument()
   })
 
@@ -1640,10 +1586,13 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
   it('cause 1: the steps arrive INSIDE the same region node, not with a fresh one', async () => {
     install(snapshot())
     renderPerformanceScreen()
+    await screen.findByRole('button', { name: 'Check again' })
+    const idle = stepList()
+    expect(idle).not.toBeNull()
     const run = await startOwnRun()
     const during = stepList()
-    // Same element instance as the idle one would be — identity is what makes it announceable.
-    expect(during).not.toBeNull()
+    // The same element instance as the idle one: identity is what makes it announceable.
+    expect(during).toBe(idle)
     expect(during?.querySelectorAll('li')).toHaveLength(3)
     await run.finish()
     await screen.findByRole('button', { name: 'Check again' })
