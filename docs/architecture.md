@@ -409,8 +409,9 @@ never fabricate a platform property the renderer could read directly).
   from "nothing happened." It now surfaces a friendly banner (`chat.attach.dropUnsupported`, EN+DE)
   when a drop carried Files but yielded no path, matching the Images screen's drop feedback.
 - **Tests / verification.** `ChatAttach.test.tsx` now drives the **real bridge shape** — the dropped
-  `File` carries no `.path` and a WeakMap stands in for webUtils' File→path resolution — plus an
-  explicit FE-A drop-without-`.path` test and the FE-C empty-drop banner test; `ChatUnmount.test.tsx`
+  `File` carries no `.path` and a WeakMap stands in for webUtils' File→path resolution — every drop
+  row drops a path-less `File` (the empty-composer row also asserts the `getDroppedFilePath` call,
+  FE-A), plus the FE-C empty-drop banner test; `ChatUnmount.test.tsx`
   updated to the same shape; `preload-attach.test.ts` is the preload-surface contract (resolver
   exposed + forwards to `webUtils.getPathForFile`). All are teeth-checked (revert the bridge wiring →
   red, verified). jsdom can't exercise `webUtils`, so the unit tests prove the **wiring**; the
