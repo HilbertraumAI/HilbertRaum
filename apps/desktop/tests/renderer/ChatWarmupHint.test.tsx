@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { ChatScreen, WARMUP_HINT_DELAY_MS } from '../../src/renderer/screens/ChatScreen'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
@@ -40,14 +40,6 @@ function conv(): Conversation {
 function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
   return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
 }
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, act, waitFor } from '@testing-library/react'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type { RuntimeStatus } from '../../src/shared/types'
@@ -22,14 +22,6 @@ function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
     ...over
   }
 }
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

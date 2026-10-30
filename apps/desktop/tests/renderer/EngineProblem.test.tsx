@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll, type Mock } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach, type Mock } from 'vitest'
 import { act, render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { EngineProblemNotice, ToastProvider } from '../../src/renderer/components'
@@ -547,13 +547,6 @@ describe('HomeScreen — engine problem and demo runtime (#530)', () => {
 // ---- 7: the App notice -----------------------------------------------------------------------
 
 describe('App — runtime notice target (#530)', () => {
-  beforeAll(() => {
-    Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-      configurable: true,
-      writable: true,
-      value: () => {}
-    })
-  })
   beforeEach(() => {
     __resetModelsScreenMemoryForTests()
   })

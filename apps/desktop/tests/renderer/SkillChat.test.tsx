@@ -1,16 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SkillPicker, Transcript } from '../../src/renderer/chat'
 import { I18nProvider } from '../../src/renderer/i18n'
 import type { Message, SkillInfo } from '../../src/shared/types'
 import { makeSkillInfo } from '../helpers/chat-fixtures'
-
-// jsdom does not implement Element.scrollTo (Transcript scrolls to newest content).
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 // Skills plan S6 (UI) — the composer skill picker + the per-message glyph. The picker is a pure
 // component; the glyph rides the assistant message in the Transcript. Heavier send/stamp wiring is

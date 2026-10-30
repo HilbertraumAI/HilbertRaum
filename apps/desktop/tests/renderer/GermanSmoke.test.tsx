@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react'
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
@@ -112,14 +112,6 @@ function german(node: ReactNode): JSX.Element {
   window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
   return <I18nProvider>{node}</I18nProvider>
 }
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

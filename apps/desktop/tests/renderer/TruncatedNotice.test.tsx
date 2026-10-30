@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import type { ComponentProps } from 'react'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
@@ -58,13 +58,6 @@ function renderTranscript(
 
 const notice = (): HTMLElement | null => document.querySelector('.msg-truncated')
 
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 beforeEach(() => window.localStorage.clear())
 afterEach(() => cleanup())
 

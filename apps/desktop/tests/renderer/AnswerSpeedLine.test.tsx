@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { formatAnswerSpeed } from '../../src/renderer/chat/answerSpeed'
@@ -45,13 +45,6 @@ function renderTranscript(lang: UiLanguage, messages: Message[], answerSpeeds?: 
   )
 }
 
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 beforeEach(() => window.localStorage.clear())
 afterEach(() => cleanup())
 

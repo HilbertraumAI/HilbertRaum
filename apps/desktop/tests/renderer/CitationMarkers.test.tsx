@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
@@ -18,11 +18,6 @@ import type { Citation, Message } from '../../src/shared/types'
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
-})
-
-// jsdom does not implement Element.scrollTo (Transcript scrolls to newest content).
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
 })
 
 function cites(n: number): Citation[] {

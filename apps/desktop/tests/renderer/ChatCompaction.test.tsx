@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
@@ -33,14 +33,6 @@ function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
 function msg(id: string, role: 'user' | 'assistant', content: string): Message {
   return { id, conversationId: 'c1', role, content, createdAt: '2026-01-01T00:00:01Z', tokenCount: null }
 }
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

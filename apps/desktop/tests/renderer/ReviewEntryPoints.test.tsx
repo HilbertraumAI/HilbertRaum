@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { ConversationList } from '../../src/renderer/chat/ConversationList'
@@ -25,10 +25,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   assertNoUnexpectedApiCalls()
-})
-
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
 })
 
 function noop(): void {}

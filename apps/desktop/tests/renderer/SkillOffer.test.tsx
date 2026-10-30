@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { t } from '../../src/shared/i18n'
@@ -23,10 +23,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   assertNoUnexpectedApiCalls()
-})
-
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
 })
 
 const RUN_LABEL = t('en', 'chat.skill.offer.run', { title: 'Bank Statement Analysis' })

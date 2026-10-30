@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
@@ -17,10 +17,6 @@ import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/e
 // rows, status shows Last exported), cancel/failure semantics, flush-before-export, and
 // export on a READY review. Same structural no-call tripwire as the other renderer files:
 // `exportEvidencePack` is in the stub sets, and the afterEach fails on anything unmocked.
-
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 beforeEach(() => {
   resetReviewSessionForTests()

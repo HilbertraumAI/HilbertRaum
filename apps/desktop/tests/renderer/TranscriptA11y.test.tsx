@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
-import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
@@ -14,11 +14,6 @@ import type { Message } from '../../src/shared/types'
 //       driven by preventDefault, so the implicit expanded state cannot desync.
 
 afterEach(cleanup)
-
-// jsdom does not implement Element.scrollTo (Transcript scrolls to newest content).
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 function noop(): void {}
 

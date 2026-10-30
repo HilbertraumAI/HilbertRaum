@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
@@ -15,16 +15,6 @@ import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '.
 // virtual targets, including every legacy alias older entry points still use.
 
 afterEach(cleanup)
-
-// jsdom implements neither element scrolling nor scrollTo; the chat transcript's
-// autoscroll effect would otherwise crash when the chat-header route test mounts it.
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
   it('maps the eight real screens to themselves', () => {

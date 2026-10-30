@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { ChatScreen, STREAM_FLUSH_MS } from '../../src/renderer/screens/ChatScreen'
 import { ToastProvider } from '../../src/renderer/components'
@@ -53,14 +53,6 @@ function dropFile(name: string, path: string): void {
   droppedPaths.set(file, path)
   fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
 }
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

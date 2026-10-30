@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
@@ -19,11 +19,6 @@ import type { Message } from '../../src/shared/types'
 //    user picking from a list of "Save" buttons can tell the html one from the python one.
 
 afterEach(cleanup)
-
-// jsdom does not implement Element.scrollTo (Transcript scrolls to newest content).
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 function noop(): void {}
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterEach, type Mock } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
 import { Streamdown } from 'streamdown'
 import { Transcript } from '../../src/renderer/chat/Transcript'
@@ -28,14 +28,6 @@ function assistantMsg(content: string): Message {
 // Stable callbacks so MessageBlock's React.memo can hold across rerenders.
 const noop = (): void => {}
 const onCopy = (_c: string): void => {}
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
-})
 
 afterEach(() => {
   cleanup()

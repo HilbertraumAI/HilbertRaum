@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
@@ -64,14 +64,6 @@ afterEach(() => {
   clearFileTranslate()
   resetVisionSessionForTests()
   vi.restoreAllMocks()
-})
-
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
-    configurable: true,
-    writable: true,
-    value: () => {}
-  })
 })
 
 describe('App.lockNow — purges the session stores at the real lock seam (TA-2)', () => {

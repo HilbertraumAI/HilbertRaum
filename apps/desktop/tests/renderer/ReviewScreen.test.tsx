@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
@@ -25,10 +25,6 @@ import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/e
 // `packs:getArticle` — a local offline-archive read on the main process, still zero model and
 // zero network. The tests that need it stub it EXPLICITLY (last describe in this file), so the
 // structural teeth keep biting on every other surface.
-
-beforeAll(() => {
-  Element.prototype.scrollTo = (() => undefined) as Element['scrollTo']
-})
 
 beforeEach(() => {
   resetReviewSessionForTests()
