@@ -338,13 +338,3 @@ export async function analyze(question: string): Promise<AnalyzeOutcome> {
   )
   return 'started'
 }
-
-/** Test-only: drop module-level state between renderer tests. */
-export function resetVisionSessionForTests(): void {
-  teardownStream()
-  snapshot = EMPTY
-  turnCounter = 0
-  analyzeGen = 0
-  listeners.clear()
-  persistListeners.clear()
-}
