@@ -105,12 +105,6 @@ export function invalidateBinaryVerification(binPath: string): void {
   cache.delete(binPath)
 }
 
-/** Injectable I/O for `computeBinaryVerification` (real fs by default). */
-export interface BinaryVerificationIo {
-  readMarkerAt?: (dir: string) => RuntimeInstallMarker | null
-  hashFile?: (path: string) => Promise<string>
-}
-
 /**
  * The raw verification, distinguishing a transient `unreadable` from a definitive verdict.
  * Walks UP from the binary's directory to the nearest install marker (so the `cpu/`
@@ -119,13 +113,7 @@ export interface BinaryVerificationIo {
  * can't be hashed right now resolves `unreadable` (the caller still fails safe, but the
  * cache layer won't persist it).
  */
-async function computeRawVerification(
-  binPath: string,
-  io: BinaryVerificationIo = {}
-): Promise<RawVerifyResult> {
-  const readMarkerAt = io.readMarkerAt ?? readRuntimeMarker
-  const hashFile = io.hashFile ?? sha256File
-
+async function computeRawVerification(binPath: string): Promise<RawVerifyResult> {
   const dir = dirname(binPath)
   // The marker lives at the family/extract-dir root. The main binary sits there; the
   // cpu safety-net sits one level down (and may carry its own marker). Check the binary's
@@ -133,7 +121,7 @@ async function computeRawVerification(
   let markerDir: string | null = null
   let marker: RuntimeInstallMarker | null = null
   for (const candidate of [dir, dirname(dir)]) {
-    const found = readMarkerAt(candidate)
+    const found = readRuntimeMarker(candidate)
     if (found) {
       markerDir = candidate
       marker = found
@@ -151,7 +139,7 @@ async function computeRawVerification(
 
   let actual: string
   try {
-    actual = await hashFile(binPath)
+    actual = await sha256File(binPath)
   } catch {
     // Couldn't read the binary to hash it (e.g. a transient Windows AV/indexer lock).
     // Fail safe for THIS spawn, but signal `unreadable` so the verdict is not cached and
@@ -167,34 +155,17 @@ async function computeRawVerification(
 }
 
 /**
- * Pure verification of one binary against its install marker — no enforcement gate, no
- * cache. An unreadable binary fails SAFE as `mismatch` (the transient `unreadable` case is
- * an internal-only distinction the cache layer uses). Exposed for unit testing; production
- * code calls `verifyBinaryBeforeSpawn`.
- */
-export async function computeBinaryVerification(
-  binPath: string,
-  io: BinaryVerificationIo = {}
-): Promise<BinaryVerifyResult> {
-  const raw = await computeRawVerification(binPath, io)
-  return raw === 'unreadable' ? 'mismatch' : raw
-}
-
-/**
  * Production entry point used at every spawn seam. Honours the enforcement gate and the
  * per-path session cache. In dev / before init it resolves `skip-dev` without touching the
  * filesystem. Never rejects. A transient `unreadable` result is mapped to `mismatch` for
  * the caller but EVICTED from the cache, so the next spawn re-hashes (a self-healing AV /
- * indexer lock won't strand the session on MockRuntime). The `io` param is a test seam.
+ * indexer lock won't strand the session on MockRuntime).
  */
-export function verifyBinaryBeforeSpawn(
-  binPath: string,
-  io?: BinaryVerificationIo
-): Promise<BinaryVerifyResult> {
+export function verifyBinaryBeforeSpawn(binPath: string): Promise<BinaryVerifyResult> {
   if (!enforced) return Promise.resolve('skip-dev')
   const cached = cache.get(binPath)
   if (cached) return cached
-  const pending: Promise<BinaryVerifyResult> = computeRawVerification(binPath, io).then((raw) => {
+  const pending: Promise<BinaryVerifyResult> = computeRawVerification(binPath).then((raw) => {
     if (raw === 'unreadable') {
       // Don't let a transient read failure stick for the whole session — drop it so the
       // next spawn re-hashes. Identity-guard the delete so we never evict a newer entry.
