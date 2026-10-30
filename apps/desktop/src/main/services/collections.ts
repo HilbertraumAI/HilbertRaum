@@ -471,23 +471,14 @@ export function unfiledConversationDocuments(
 }
 
 /**
- * The collection ids a document currently belongs to (the reverse of
- * `documentIdsInCollection`). Used to snapshot a generated output's source
- * memberships into its provenance at creation time (plan §15.1/§15.2).
+ * The collection ids a document currently belongs to. Used to snapshot a generated output's
+ * source memberships into its provenance at creation time (plan §15.1/§15.2).
  */
 export function collectionIdsForDocument(db: Db, documentId: string): string[] {
   const rows = db
     .prepare('SELECT collection_id FROM document_collections WHERE document_id = ?')
     .all(documentId) as unknown as Array<{ collection_id: string }>
   return rows.map((r) => r.collection_id)
-}
-
-/** Document ids that belong to a collection (membership listing). */
-export function documentIdsInCollection(db: Db, collectionId: string): string[] {
-  const rows = db
-    .prepare('SELECT document_id FROM document_collections WHERE collection_id = ?')
-    .all(collectionId) as unknown as Array<{ document_id: string }>
-  return rows.map((r) => r.document_id)
 }
 
 // ---- Scope resolution (plan §10.1) -------------------------------------------------

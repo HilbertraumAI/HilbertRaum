@@ -8,7 +8,6 @@ import {
   createCollection,
   deleteCollection,
   docLifecycle,
-  documentIdsInCollection,
   fileDocumentByDestination,
   fileFromPendingDestination,
   getBuiltinCollection,
@@ -29,6 +28,7 @@ import {
   setScope
 } from '../../src/main/services/chat'
 import { legacyDbPath, openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { documentIdsInCollection } from '../helpers/doc-fixtures'
 import { capturePrepares } from '../helpers/db-spy'
 
 // Document-organization plan, Phase A: collection CRUD + membership, the built-in

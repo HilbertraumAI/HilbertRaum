@@ -148,6 +148,15 @@ export async function seedEmbeddedDoc(
   return docId
 }
 
+/** The document ids filed in a collection (`document_collections`), in no particular order. */
+export function documentIdsInCollection(db: Db, collectionId: string): string[] {
+  return (
+    db.prepare('SELECT document_id FROM document_collections WHERE collection_id = ?').all(collectionId) as Array<{
+      document_id: string
+    }>
+  ).map((r) => r.document_id)
+}
+
 /** A document's chunk ids in `chunk_index` order. */
 export function chunkIdsOf(db: Db, docId: string): string[] {
   return (

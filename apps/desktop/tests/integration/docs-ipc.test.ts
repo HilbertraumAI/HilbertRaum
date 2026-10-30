@@ -123,7 +123,6 @@ import {
   conversationAttachmentIds,
   createCollection,
   deleteCollection,
-  documentIdsInCollection,
   getBuiltinCollection,
   resolveScope
 } from '../../src/main/services/collections'
@@ -150,6 +149,7 @@ import { fakeOcrEngine, fakeRasterizer } from '../helpers/ocr-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
+import { documentIdsInCollection } from '../helpers/doc-fixtures'
 import { testCipher } from '../helpers/test-cipher'
 import { docTaskManager, docTaskRuntime, waitTerminal } from '../helpers/doctask-fixtures'
 

@@ -15,7 +15,7 @@ import { createRequire } from 'node:module'
 // removes the roots. Same box, same tree, full suite: deferred roots 1,515 → 1, no test newly failing.
 //
 // Why the MODULE and not `openDatabase`: `db.ts` — and every test that opens a raw handle (e.g.
-// `chat-compaction.test.ts`) — reads `DatabaseSync` off the CommonJS module object
+// through `db-fixtures.ts`' `openRawDb` / `legacyDbPath`) — reads `DatabaseSync` off the CommonJS module object
 // (`createRequire(process.execPath)('node:sqlite')`; a bare `import 'node:sqlite'` does not resolve
 // under Vite), and does so after the setup file has run. Replacing that one property therefore
 // catches every handle, including the ones no test file opens itself, which a wrapper around

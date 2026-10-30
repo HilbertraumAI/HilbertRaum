@@ -20,7 +20,7 @@ import {
   expandPathsWithSource,
   documentsDir
 } from '../../src/main/services/ingestion'
-import { documentIdsInCollection, getBuiltinCollection } from '../../src/main/services/collections'
+import { getBuiltinCollection } from '../../src/main/services/collections'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { isImagePath, isPdfPath, selectParser, supportedExtensions } from '../../src/main/services/ingestion/parsers'
 import { TxtParser } from '../../src/main/services/ingestion/parsers/txt'
@@ -31,6 +31,7 @@ import { DocxParser } from '../../src/main/services/ingestion/parsers/docx'
 import type { DocumentInfo, DocumentOrigin, GeneratedProvenance } from '../../src/shared/types'
 import { makePdf, makeDocx, makeDocxFromBody } from '../helpers/fixtures'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { documentIdsInCollection } from '../helpers/doc-fixtures'
 import { countPrepares } from '../helpers/db-spy'
 
 // `save-export.ts` (the export side of the F-22/F-10 round-trip tests below) imports electron at module

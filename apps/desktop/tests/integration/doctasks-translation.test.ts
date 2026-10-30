@@ -28,7 +28,6 @@ import { listAuditEvents } from '../../src/main/services/audit'
 import {
   addToCollection,
   createCollection,
-  documentIdsInCollection,
   fileDocumentByDestination,
   getBuiltinCollection
 } from '../../src/main/services/collections'
@@ -59,6 +58,7 @@ import {
   type ScriptedTranslatorOptions
 } from '../helpers/doctask-fixtures'
 import { testCipher } from '../helpers/test-cipher'
+import { documentIdsInCollection } from '../helpers/doc-fixtures'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
 // TG-3 (translategemma plan §2 D3/D9): translation runs on the TranslateGemma SIDECAR (a
