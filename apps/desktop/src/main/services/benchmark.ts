@@ -57,7 +57,7 @@ export const SLOW_DRIVE_MBPS = 30
  */
 export const SLOW_EFFECTIVE_READ_MBPS = SLOW_READ_MBPS
 /** Size of the temp file written to probe drive speed. Small + bounded so the UI never hangs. */
-export const DRIVE_PROBE_BYTES = 8 * 1024 * 1024 // 8 MB
+const DRIVE_PROBE_BYTES = 8 * 1024 * 1024 // 8 MB
 /** Bytes per gigabyte (GiB) used to convert total memory for classification + display. */
 const BYTES_PER_GB = 1024 ** 3
 
@@ -550,8 +550,6 @@ export interface RunBenchmarkDeps {
    * busy warning; the caller then persists nothing (`runBenchmarkAndPersist`). Absent ⇒ unabortable.
    */
   signal?: AbortSignal
-  /** Injectable clock for deterministic `ranAt` in tests. */
-  now?: () => Date
   /**
    * Called as each step COMPLETES SUCCESSFULLY: 'system' always; 'drive' only when the
    * write/fsync probe produced figures (a failed probe reports nothing for the step, and the
@@ -685,6 +683,6 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     profile,
     recommendedModelId,
     warnings,
-    ranAt: (deps.now?.() ?? new Date()).toISOString()
+    ranAt: new Date().toISOString()
   }
 }

@@ -828,8 +828,8 @@ head's own weights + KV.
   (`GpuBenchmarkInput.memoryClass` / `.name`), the running model's launched window
   (`ModelRuntime.contextWindow`) and its rung (`ModelRuntime.backend`) — each of the last three
   null when unknown; normalised by `normalizeSpeedIdentity` (an unknown class nulls the record;
-  absence stays absent; `null` = nothing measured). `speedSignalFor(s, hereKey?)` →
-  `sampleCountsForNextStart(identity, nextStartMemoryFor(s, hereKey))` hands the picker a sample
+  absence stays absent; `null` = nothing measured). `speedSignalFor(s)` →
+  `sampleCountsForNextStart(identity, nextStartMemoryFor(s, machineKey(detectSystem())))` hands the picker a sample
   that carries an identity only when the next start runs on a path NO FASTER than the measured
   one (§6.5 "Sample identity"): a card measurement counts for the same card and for a processor
   start; a processor measurement counts for a processor start only; a different card and the

@@ -9,42 +9,14 @@ import {
 } from '../../src/main/services/benchmark-persistence'
 import { machineKey } from '../../src/main/services/performance'
 import { t } from '../../src/shared/i18n'
-import { MAX_BENCHMARK_HISTORY, type BenchmarkResult, type EffectiveReadSample } from '../../src/shared/types'
+import { MAX_BENCHMARK_HISTORY, type BenchmarkResult } from '../../src/shared/types'
+import { benchmarkResult as result, effectiveReadSample as sample } from '../helpers/benchmark-records'
 
 // The pure persistence rules for a travelling drive (benchmark.md "Persistence" / "History
 // per machine"; PR #303 audit M2/M4/M6/L2): identity before ranking (G3 for unknown keys),
 // the upgrade backfill with its cap/eviction rules, the sample merge, and the per-destination
 // patch the read-speed observer writes.
 
-function result(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
-  return {
-    os: 'linux',
-    arch: 'x64',
-    cpuModel: 'Intel Core i7-1260P',
-    cpuCores: 12,
-    ramGb: 16,
-    gpu: null,
-    driveReadMbps: null,
-    driveWriteMbps: 300,
-    tokensPerSecond: 12,
-    measuredModelId: 'm',
-    effectiveRead: null,
-    profile: 'LITE',
-    recommendedModelId: 'm',
-    warnings: [],
-    ranAt: '2026-09-04T14:02:00Z',
-    ...over
-  }
-}
-const sample = (over: Partial<EffectiveReadSample> = {}): EffectiveReadSample => ({
-  mbps: 300,
-  bytes: 3_000_000_000,
-  ms: 10_000,
-  source: 'model_load',
-  modelId: 'm',
-  at: '2026-09-01T00:00:00Z',
-  ...over
-})
 const HERE = machineKey(result())!
 const other = (n: number, over: Partial<BenchmarkResult> = {}): BenchmarkResult =>
   result({ cpuModel: `other-${n}`, ranAt: `2026-0${n}-01T00:00:00Z`, ...over })

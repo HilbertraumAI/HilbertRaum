@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   attributedGpuFigures,
   findMachine,
@@ -121,11 +121,15 @@ describe('findMachine / otherMachines', () => {
 
 describe('answer-speed latch', () => {
   beforeEach(() => resetPerformanceForTests())
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('is empty until the first finished answer, then holds the latest with model + time', () => {
     expect(latestAnswerSpeed()).toBeNull()
-    const now = () => new Date('2026-09-05T09:00:00Z')
-    recordAnswerSpeed({ messageId: 'a1', tokensPerSecond: 11.8, ttftMs: 900, tokens: 312 }, 'qwen', now)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-05T09:00:00Z'))
+    recordAnswerSpeed({ messageId: 'a1', tokensPerSecond: 11.8, ttftMs: 900, tokens: 312 }, 'qwen')
     expect(latestAnswerSpeed()).toEqual({
       tokensPerSecond: 11.8,
       ttftMs: 900,
@@ -133,7 +137,7 @@ describe('answer-speed latch', () => {
       modelId: 'qwen',
       at: '2026-09-05T09:00:00.000Z'
     })
-    recordAnswerSpeed({ messageId: 'a2', tokensPerSecond: 3, ttftMs: 2000, tokens: 10 }, null, now)
+    recordAnswerSpeed({ messageId: 'a2', tokensPerSecond: 3, ttftMs: 2000, tokens: 10 }, null)
     expect(latestAnswerSpeed()?.tokensPerSecond).toBe(3)
   })
 })
@@ -233,18 +237,6 @@ describe('placementVerdict', () => {
     expect(withRs).toMatchObject({ kind: 'partial', needMb: 5986, spillMb: 2403 })
   })
 
-  it('a GPU start whose log carried no offload line is unknown, never "all on the GPU"', () => {
-    const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null }) })
-    expect(v.kind).toBe('unknown')
-    expect(v.needMb).toBeNull()
-    // Measured, not guessed: the record exists, it just never said where the layers went.
-    expect(v.estimated).toBe(false)
-    expect(v.spillMb).toBeNull()
-    // Half a reading (only one of the two counts printed) is unknown too, never a split.
-    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ totalLayers: null }) }).kind).toBe('unknown')
-    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ gpuLayers: null }) }).kind).toBe('unknown')
-  })
-
   it('an EMPTY reading is unknown on a gpu backend and cpu on a cpu backend, never a measured "On GPU"', () => {
     // Every figure null (a build logging below verbosity 4, or stderr the parser never saw):
     // the record proves a start happened, not that the model reached the card.
@@ -255,6 +247,9 @@ describe('placementVerdict', () => {
     const gpu = placementVerdict({ memoryClass: 'discrete', ramMb: 16_384, vramMb: 24_576, sizeOnDiskGb: 5.8, ...noCard, observed: empty })
     expect(gpu.kind).not.toBe('gpu')
     expect(gpu).toMatchObject({ kind: 'unknown', estimated: false, needMb: null, spillMb: null, gpuLayers: null, totalLayers: null })
+    // Half a reading (only one of the two counts printed) is unknown too, never a split.
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ totalLayers: null }) }).kind).toBe('unknown')
+    expect(placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ gpuLayers: null }) }).kind).toBe('unknown')
     // The same empty reading on a CPU backend IS the answer: the backend alone settles it.
     const cpu = placementVerdict({ memoryClass: 'cpu', ramMb: 16_384, vramMb: null, sizeOnDiskGb: 5.8, ...noCard, observed: { ...empty, backend: 'cpu' } })
     expect(cpu).toMatchObject({ kind: 'cpu', estimated: false, needMb: null, spillMb: null })
@@ -443,43 +438,42 @@ describe('loadedAtOnceMb', () => {
   ]
   const estimate: PlacementVerdict = { kind: 'gpu', needMb: 5530, estimated: true, budgetMb: 24_576, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
   const withTranslation = (over: Partial<ResidentModelRow>): ResidentModelRow[] => rows.map((r) => (r.role === 'translation' ? { ...r, ...over } : r))
-  const pinnedMb = (3.0 + 1.1 + 0.2 + 0.5) * 1024
-  const translationSpillMb = 6.8 * 1024 * (1 - 20 / 49)
-  const everythingMb = Math.round((5.4 + 6.8 + 3.0 + 1.1 + 0.2 + 0.5) * 1024)
+  // The figures below, as literals: every row 17.0 GiB = 17,408 MiB; the pinned rows 3.0 + 1.1 + 0.2 + 0.5 GiB
+  // = 4,915.2 MiB; the chat 5.4 GiB = 5,529.6 MiB; the translation spill 6.8 GiB × 29/49 = 4,121.1 MiB.
 
   it('cpu class: every row runs from RAM — the plain sum', () => {
     const cpuRows = rows.map((r) => ({ ...r, device: 'cpu' as const }))
-    expect(loadedAtOnceMb({ memoryClass: 'cpu', rows: cpuRows, verdict: { ...estimate, kind: 'cpu', budgetMb: 16_384 } })).toBe(everythingMb)
+    expect(loadedAtOnceMb({ memoryClass: 'cpu', rows: cpuRows, verdict: { ...estimate, kind: 'cpu', budgetMb: 16_384 } })).toBe(17408)
   })
 
   it('discrete: the processor rows plus the live translation spill from its split; the card-resident weights are not counted', () => {
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows, verdict: estimate })).toBe(Math.round(pinnedMb + translationSpillMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows, verdict: estimate })).toBe(9036)
   })
 
   it('discrete: a not-live or all-on-card translation contributes 0, and so does one without a reported split', () => {
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ loaded: false, gpuLayers: null, totalLayers: null }), verdict: estimate })).toBe(Math.round(pinnedMb))
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ gpuLayers: 49, totalLayers: 49 }), verdict: estimate })).toBe(Math.round(pinnedMb))
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ gpuLayers: null, totalLayers: null }), verdict: estimate })).toBe(Math.round(pinnedMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ loaded: false, gpuLayers: null, totalLayers: null }), verdict: estimate })).toBe(4915)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ gpuLayers: 49, totalLayers: 49 }), verdict: estimate })).toBe(4915)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withTranslation({ gpuLayers: null, totalLayers: null }), verdict: estimate })).toBe(4915)
   })
 
   it('discrete: the chat adds its OBSERVED partial-offload spill; an estimate, a full offload or an unknown split add 0', () => {
     const quiet = withTranslation({ loaded: false, gpuLayers: null, totalLayers: null })
     const observedPartial: PlacementVerdict = { ...estimate, kind: 'partial', estimated: false, needMb: 19_862, spillMb: 2100, gpuLayers: 62, totalLayers: 66 }
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: observedPartial })).toBe(Math.round(pinnedMb + 2100))
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...observedPartial, estimated: true } })).toBe(Math.round(pinnedMb))
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...estimate, estimated: false, kind: 'gpu' } })).toBe(Math.round(pinnedMb))
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...estimate, estimated: false, kind: 'unknown' } })).toBe(Math.round(pinnedMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: observedPartial })).toBe(7015)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...observedPartial, estimated: true } })).toBe(4915)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...estimate, estimated: false, kind: 'gpu' } })).toBe(4915)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: quiet, verdict: { ...estimate, estimated: false, kind: 'unknown' } })).toBe(4915)
   })
 
   it('discrete: a chat or translation row that says cpu (by configuration or observation) counts in full', () => {
     const chatOnCpu = rows.map((r) => (r.role === 'chat' ? { ...r, device: 'cpu' as const } : r))
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(Math.round(pinnedMb + 5.4 * 1024 + translationSpillMb))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(14566)
     const bothOnCpu = rows.map((r) => ({ ...r, device: 'cpu' as const }))
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: bothOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(everythingMb)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: bothOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(17408)
   })
 
   it('unified: one pool — the full sum, whatever the rows say', () => {
-    expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(everythingMb)
+    expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(17408)
   })
 
   // Wave 8 ruling (d)/NF-3 (step 4-8): a `'gpu'`-posture reranker row is no longer counted
@@ -489,11 +483,8 @@ describe('loadedAtOnceMb', () => {
   // row with no measured spill), never its full size.
   it('discrete: a gpu-posture reranker row contributes 0, not its full size', () => {
     const rerankerOnGpu = rows.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const } : r))
-    // pinnedMb no longer includes the reranker's 1.1 GB.
-    const pinnedWithoutReranker = (3.0 + 0.2 + 0.5) * 1024
-    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: rerankerOnGpu, verdict: estimate })).toBe(
-      Math.round(pinnedWithoutReranker + translationSpillMb)
-    )
+    // The pinned rows without the reranker's 1.1 GiB: 3.0 + 0.2 + 0.5 GiB = 3,788.8 MiB, plus the spill.
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: rerankerOnGpu, verdict: estimate })).toBe(7910)
   })
 
   it('null when no row has a size', () => {

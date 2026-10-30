@@ -94,7 +94,7 @@ describe('readChatSSE on the captured b9849 timings transcript (#298)', () => {
     // The server counts TOKENS (predicted_n 25; the capture drafted 20 and accepted 15 with MTP) — why the old chunk count under-read (#291).
     expect(speed).toEqual({ messageId: 'a1', tokensPerSecond: tm.predicted_per_second, ttftMs: 1_800, tokens: 25 })
     expect(formatAnswerSpeed(speed, (key, params) => t('en', key, params), 'en')).toBe('29 tok/s · 1.8 s to first token · 25 tokens')
-    expect(fmt1(speed.tokensPerSecond, 'en')).toBe('29.5') // PerformanceScreen.tsx:1149
+    expect(fmt1(speed.tokensPerSecond, 'en')).toBe('29.5') // PerformanceScreen's speed tile
   })
 })
 

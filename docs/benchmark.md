@@ -404,7 +404,7 @@ re-keyed; every other warning is a benchmark-time fact.
 **Schemas and legacy records (PR #303 audit, H1/L8, owner decision G7).** `lastBenchmark`,
 `benchmarkHistory` and `modelPlacements` are JSON rows: they used to be parsed straight over the
 defaults, and the write gate checked only the TOP-LEVEL shape, so `{}` was an accepted history
-entry — it reached the startup fingerprinting, `maybeRunFirstBenchmark`, the #107 start-estimate
+entry — it reached the startup fingerprinting, the first-benchmark decision, the #107 start-estimate
 memo, Diagnostics and the Performance screen, where the number formatter threw and blanked the
 screen. The pure validators now live in `shared/benchmark-schema.ts` (importable by main AND
 renderer, so both agree on what a trustworthy record is) and run on WRITE (`updateSettings`) and
@@ -577,8 +577,8 @@ permission to overlap the load**: at the ceiling the scheduler resolves `'deferr
 exactly **one continuation** on the same settlement, which runs the settlement re-checks and then
 the measurement once the start actually settles; a session or process that ends first runs
 nothing (the next launch re-checks), and a start that never settles leaves it to the next launch
-too. Nothing cancels the user's model start, and no new occupancy lane exists. The timer is
-injectable (`deps.timer`) so the timeout is testable without real time; production passes no deps.
+too. Nothing cancels the user's model start, and no new occupancy lane exists. The suite drives the
+shipped timer with fake timers (`first-benchmark-scheduler.test.ts`, describe "the deferral boundary").
 Measured 2026-09-08 (#334, `eval/results/hardware/334-slow-usb-20260908/`): a healthy 9B start on
 an 87 MB/s stick path with 15.8 GB RAM took 68 s to hash and 91 s to load, so the bound fired and
 the continuation ran 10 s after settlement — the deferral is the ordinary outcome on such media,
@@ -594,9 +594,7 @@ persisted-sample memo in `registerModelIpc`) records the attempt when a scheduli
 `'skipped-attempted'`; a lock + unlock (a new `Db`, a new epoch) re-checks; and a successful
 **manual** run persists a same-machine `lastBenchmark`, so the next `prepare` owes nothing and
 the re-check ends. The moved-drive re-check therefore repeats **once per unlock** until a
-same-machine result persists (`known-limitations.md`). `resetFirstBenchmarkForTests()` clears the
-memo; `maybeRunFirstBenchmark(ctx)` survives as the pre-split shape for tests (prepare, then
-schedule against an already-settled promise) and resolves to the outcome.
+same-machine result persists (`known-limitations.md`).
 
 **The late-write guard.** `runAndPersistBenchmark` captures the session epoch before its first
 await and, after the drive and speed legs, re-checks admission and the epoch **before** the one
@@ -1325,7 +1323,7 @@ guess.
 | M8 | fixed P5 `be177a34` | One shared `isUsefulDevice`/`gpuUsefulForProfile`/`primaryUsefulDevice`/`displayDevice` rule (`shared/gpu-rules.ts`); `GpuProbeResult.machineKey` stamped and checked before any fold-in. | `performance-gpu.test.ts` "a hybrid [iGPU, dGPU] probe: currentGpu, the VRAM budget, the class and the fold-in all describe the dGPU"; "a probe stamped with ANOTHER machine supplies nothing…" |
 | L1 | fixed P7 `566a1043` | `prepareFirstBenchmark` (cheap restore/backfill) runs before `maybeAutoStartActiveModel`; the scheduler awaits the start before any drive/speed probe. | `first-benchmark-scheduler.test.ts` "no benchmark I/O while the start is pending; once it resolves the run measures the started runtime" |
 | L2 | fixed P2 `86fa8e10` | `persistEffectiveRead` (via `effectiveReadPatch`) writes a qualifying sample to `lastBenchmark` AND the matching history entry. | `performance-persistence.test.ts` "updates both lastBenchmark and the matching history entry"; "repairs a stale history entry beside a headline that already carries the sample" |
-| L3 | fixed P3 `3fbc51d0` | `benchmark.ts` reports the `'drive'`/`'speed'` steps only when they produced a figure; a busy or failed leg is silently omitted, never ticked. | `performance-ipc.test.ts` "a runtime that was busy elsewhere (the leg skipped, #185): no speed step"; "a drive probe that failed (unwritable workspace): no drive step, and no later step implies it" |
+| L3 | fixed P3 `3fbc51d0` | `benchmark.ts` reports the `'drive'`/`'speed'` steps only when they produced a figure; a busy or failed leg is silently omitted, never ticked. | `benchmark.test.ts` "a runtime that was busy elsewhere (the leg skipped, #185): no speed step"; "a drive probe that failed (unwritable workspace): no drive step, and no later step implies it" |
 | L4 | documented limitation (this phase) | Retained-hardware-records inventory, in user words and in the security/privacy inventories. | `security-model.md` SEC-N2; `PRIVACY.md` "What data is stored, and where"; `user-guide.md` §10 |
 | L5 | documented limitation (this phase) | Fingerprint-collision, RAM-rounding and OS/arch-split limitations. | `known-limitations.md` "Performance screen and per-computer history (PR #303 audit)" |
 | L6 | fixed P6 `9f703b87` | `speedIsApprox`/`speedBasisNote`/`buildReport` are the single provenance source for the Copy report and the Other-computers rows. | `PerformanceScreen.test.tsx` "L6: the report preserves the approximation qualifier and the chunk window"; "L6: an other-computer row measured from chunks reads \"Approximate\", never Good or Slow" |
@@ -1341,7 +1339,7 @@ guess.
 | T2 | fixed P2 `86fa8e10` | Covered by M2's fix and evidence. | see M2 |
 | T3 | fixed P3 `3fbc51d0` | Covered by M3's fix and evidence. | see M3 |
 | T4 | fixed P3 `3fbc51d0` | Covered by L3's fix and evidence. | see L3 |
-| T5 | fixed P3 `3fbc51d0` | Handler-level progress forwarding, destroyed-sender isolation and an end-to-end `performance:get` read, tested directly. | `performance-notify.test.ts` (22 cases) |
+| T5 | fixed P3 `3fbc51d0` | Handler-level progress forwarding, destroyed-sender isolation and an end-to-end `performance:get` read, tested directly. | `performance-notify.test.ts` |
 | T6 | fixed P6 `9f703b87` | German component smoke added for the Performance screen; rail-label coverage itself was already fixed pre-wave. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)" |
 | T7 | fixed P8 `4baec2be` | The history-replace test now uses a distinct `tokensPerSecond` per machine and asserts identity and order, not just a resolved value. | `performance.test.ts` "replaces the entry for the same machine, newest first, keeps other machines" |
 | T8 | fixed P8 `4baec2be` | Pins that `initBackend` wires `setAnswerSpeedObserver` through `observeAnswerSpeed`, never `recordAnswerSpeed` directly. | `answer-speed-wiring.test.ts` "setAnswerSpeedObserver, inside initBackend, is given a callback that calls observeAnswerSpeed" |
@@ -1360,7 +1358,7 @@ guess.
 | DX2 | fixed P9 (this phase) | This file's "Performance screen" section is a clean four-item list; "Your model" and "Models on this computer" no longer sit between numbered items. | `benchmark.md` "Performance screen" (this file) |
 | SD1 | fixed P3 `3fbc51d0` (defined) | "Session" = main-process lifetime, documented; the latch has no reset path besides an app restart or the test-only `resetPerformanceForTests()`. | `benchmark.md` "Observed while you worked." (this file) |
 | SD2 | fixed P7 `566a1043` | A module-level memo keyed on the DB handle and the unlock epoch allows exactly one scheduled attempt per unlock. | `first-benchmark-scheduler.test.ts` "a failed new-computer run is not retried in the session; the next session re-checks and runs"; "a successful MANUAL run ends the re-check…" |
-| TH1 | fixed P8 `4baec2be` | The legacy-blob test's fixed 300 ms sleep replaced by an awaited scheduler outcome. | `performance-ipc.test.ts` (legacy-blob case) |
+| TH1 | fixed P8 `4baec2be` | The legacy-blob test's fixed 300 ms sleep replaced by an awaited scheduler outcome. | `performance-schema.test.ts` "the `{ profile }` blob stays the current record, with safe defaults and no history entry" |
 | TH2 | fixed P8 `4baec2be` | `closePerformanceFixture()` tears down every DB/root/observer the performance test helper registered; a leak check showed zero growth across a targeted run. The other suites' ~2,500 leaked roots per full run (#335, 2026-09-06) are now recorded and removed by the harness itself — `tests/setup-temp-roots.ts` per file, `tests/global-temp-roots.ts` after the forks exit; design in `tests/helpers/temp-roots.ts`, rule in CONTRIBUTING.md. | `tests/helpers/performance-fixture.ts`; `tests/unit/temp-roots.test.ts` |
 | HW1 | verified 2026-09-07 (issue #330) | Physical encrypted-drive A→B→A move on two real computers (i9-14900K / RTX 3080 Ti and i7-8700 / GTX 1070 Ti, one exFAT SSD) for a fresh workspace AND an upgraded one created by 0.1.57 (keyed `lastBenchmark`, no history): new-computer background run on B, instant restore on A, the outgoing result backfilled, later samples update the headline and the matching entry only. Side findings are not persistence defects (§4). | `eval/results/hardware/330-round-trip-20260907/` (`00-protocol.md` + every report and log) |
 | HW2 | CLOSED 2026-09-08 (#329) | Same gap as T9, closed by the same capture: real partial-offload load logs from the pinned build now exist (20/33 and 18/33 on a hybrid laptop, 62/66 on an RTX 3090) and are committed as fixtures. | `apps/desktop/tests/fixtures/placement-b9849-*.txt`; `eval/results/hardware/` |
@@ -1376,7 +1374,7 @@ guess.
 | DR8 | fixed P1 `5121af46` | `skills.title` (EN/DE), orphaned once `SkillsScreen.tsx` was deleted, removed ahead of the master merge that added the unused-i18n-key guard. | `shared/i18n/en.ts`, `de.ts` (no `skills.title` key) |
 | DR9 | verify-only, no action | `navigation.ts`/`App.tsx`/`InformationArchitecture.test.tsx`/`rail-labels.test.ts`/`design-guidelines.md` §2/`user-guide.md` §4 were already consistent at `ce741533`; reconfirmed this phase. | `apps/desktop/src/renderer/navigation.ts`; `apps/desktop/src/renderer/App.tsx` |
 | DR10 | verify-only, no action | The optional `isLoaded()` interface members compile safely for every mock/fake implementation; no Electron import added to a service module. | `apps/desktop/src/main/services/*` (interface definitions) |
-| DR11 | fixed P9 (the docs commit) | Planned for P8 but missed there, caught by the P9 doc review: the resident-rows test asserted `bothOnCard` against `memoryClass !== 'cpu'` — host-conditional by construction, and wrong on an Apple Silicon host (probe-less class `unified`) where it would have demanded `true` for a model the stub runtime never marks resident. Now a fixed `false`. | `performance-ipc.test.ts` "lists every model the app can hold, with liveness from each service and the totals" |
+| DR11 | fixed P9 (the docs commit) | Planned for P8 but missed there, caught by the P9 doc review: the resident-rows test asserted `bothOnCard` against `memoryClass !== 'cpu'` — host-conditional by construction, and wrong on an Apple Silicon host (probe-less class `unified`) where it would have demanded `true` for a model the stub runtime never marks resident. Now a fixed `false`. | `performance-gpu.test.ts` "GPU on: chat and translation say gpu; bothOnCard needs chat resident on the GPU with layers and the translation live with layers" (platform pinned). The fixed `false` this row recorded was later found to hold only off Apple Silicon, and was removed in the perf test campaign. |
 | R1–R15 | superseded | Corrections to the fix-plan's own first draft, folded into the phase briefs before P1–P8 executed. Each correction's actual resolution is verifiable from the finding row it corrects: R1→M3, R2→M1, R3→M8, R4→H1, R5→M2/M6, R6→L1, R7→L8, R8→the DR1–DR11 rows, R9/R10/R14→procedural (phase sequencing, no doc-visible artifact), R11/R12→§4 (P10, not yet run), R13→this record, R15→M7's doc sentence and SD2's row. | see the cross-referenced rows |
 
 #### Repair rounds after the P10 cross-review

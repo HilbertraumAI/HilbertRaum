@@ -19,7 +19,7 @@ import {
 // stored as JSON rows and were `JSON.parse`d straight over the defaults with NO element
 // validation, while `updateSettings` gated only the TOP-LEVEL shape ("a non-null non-array
 // object", "an array of those"). So `{}` was a valid history entry: it reached the startup
-// fingerprinting, `maybeRunFirstBenchmark`, the #107 start-estimate memo, Diagnostics and the
+// fingerprinting, the first-benchmark decision, the #107 start-estimate memo, Diagnostics and the
 // Performance screen, where `fmt1(undefined)` threw and took the whole screen down (H1). A
 // `{ m: {} }` placement map was stored the same way and a `{}` record reached
 // `placementVerdict` (L8). Validation now runs on WRITE (garbage is never persisted) and on

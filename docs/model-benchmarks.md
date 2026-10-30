@@ -974,7 +974,7 @@ which is exactly the model a 6 GB laptop lands on, so "Your model" would have ca
 than it is the moment those laptops started reaching the card path.
 
 Consequences, all pinned: the boundary tests flip to 5,119 out / 5,120 in and the three real cards
-in (`performance.test.ts`, `gpu-rules.test.ts`); the RTX 4050 Laptop now reaches the card path and
+in (`gpu-rules.test.ts`); the RTX 4050 Laptop now reaches the card path and
 stars the 4B, while a 4 GB GTX 1650 takes its place as the sub-gate case (`picker-seams.test.ts`);
 the hybrid [iGPU, RTX 3060 Laptop] probe now describes the CARD on every consumer, in either driver
 order (`performance-gpu.test.ts`); the tile reads "Usable" at 5,994 MiB and its "Under {min} GB"
@@ -1328,7 +1328,7 @@ moving its need 4,410 → **3,838**, which 3,900 clears — so on that figure th
 be the star, and "the smallest ranked model at every RAM size" would hold only for the no-free-figure
 budget form. Both readings rest on a number that was never a measurement. **3,900 is a fixture
 value**, invented alongside the gate change itself (`freeMb: 3900` in `picker-seams.test.ts`,
-`performance.test.ts` and `performance-gpu.test.ts`, commit `c3247fe5`); no 4 GB card has ever been
+`performance-gpu.test.ts`, commit `c3247fe5`); no 4 GB card has ever been
 probed. What the probed cards do show is an idle reserve set by the DESKTOP, not by the size of the
 card:
 
@@ -1384,7 +1384,7 @@ for driver variance.
 *Blast radius, accepted.* The profile bump moves such a laptop one step up (a label, plus the
 RAM-unknown fallback picker); the tile reads "Usable" for these cards, which matches what the fit
 does with them; the boundary pins at 5,921 out / 6,144 in flip to 5,119 out / 5,120 in
-(`picker-seams.test.ts`, `performance.test.ts`). The tile has named the real card and its memory
+(`gpu-rules.test.ts`). The tile has named the real card and its memory
 regardless of the gate since #375, so "my card is invisible" was already fixed and is not part of
 this. The 6 GB row's CONTENT is unchanged — 4B at RAM 8, E2B at RAM 12, 4B from RAM 16 up — but it
 is now a row about real hardware rather than about an RTX 2060.

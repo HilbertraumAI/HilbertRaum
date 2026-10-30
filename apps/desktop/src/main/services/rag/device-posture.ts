@@ -160,9 +160,9 @@ export function createTranslationHeadroom(
 
 /**
  * Wave 8 ruling (a) — the occupancy inputs `resolveRerankerDevicePosture` reads instead of
- * `settings.activeModelId`. Every field is REQUIRED: an omitted field is a compile error, not a
+ * `settings.activeModelId`. Three fields are REQUIRED: an omitted one is a compile error, not a
  * silent "no occupancy" default — the analysis's own finding (F16) is that an optional wire is
- * how a posture input silently goes missing.
+ * how a posture input silently goes missing. The optional fields below say why each is optional.
  */
 export interface RerankerOccupancySnapshot {
   /**
@@ -187,7 +187,7 @@ export interface RerankerOccupancySnapshot {
    * #495 follow-up: true once the reranker's own session
    * GPU-fallback latch is armed (`Reranker.gpuDemoted()` — a pure field read, never
    * `devicePosture()`, which would recurse for the sidecar's own posture callback below).
-   * OPTIONAL, unlike the other two fields: `snapshotRerankerOccupancy`'s existing 3-argument
+   * OPTIONAL, unlike the three above: `snapshotRerankerOccupancy`'s existing 3-argument
    * call sites (predating this field, several inside frozen test fixtures) must keep resolving
    * an omitted field to "not known to be demoted" rather than a compile error. The one
    * production reader that can actually see the latch is `registerRagIpc.ts`'s ask site, which

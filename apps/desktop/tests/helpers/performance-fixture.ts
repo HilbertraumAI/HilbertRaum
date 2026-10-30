@@ -1,28 +1,49 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { vi } from 'vitest'
+import { afterAll, beforeAll, vi, type Mock } from 'vitest'
+import { stringify } from 'yaml'
 import { detectSystem } from '../../src/main/services/benchmark'
 import { setAnswerSpeedObserver } from '../../src/main/ipc/chat-stream'
-import { resetFirstBenchmarkForTests } from '../../src/main/ipc/registerBenchmarkIpc'
+import {
+  prepareFirstBenchmark,
+  scheduleFirstBenchmark,
+  type FirstBenchmarkOutcome
+} from '../../src/main/ipc/registerBenchmarkIpc'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { resetPerformanceForTests } from '../../src/main/services/performance'
-import { resetEffectiveReadForTests, setEffectiveReadObserver } from '../../src/main/services/read-speed'
+import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
+import { recordModelLoadRead, resetEffectiveReadForTests, setEffectiveReadObserver } from '../../src/main/services/read-speed'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { resetModelPlacementForTests, setModelPlacementObserver } from '../../src/main/services/runtime/placement'
+import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import { seedSettings } from '../../src/main/services/settings'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
-import type { BenchmarkResult, RuntimeStatus } from '../../src/shared/types'
+import type {
+  ChatMessage,
+  ModelRuntime,
+  RuntimeChatOptions,
+  RuntimeManager,
+  RuntimeStartOptions,
+  RuntimeTimings
+} from '../../src/main/services/runtime'
+import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
+import type { BenchmarkResult, GpuDevice, RuntimeStatus } from '../../src/shared/types'
+import { benchmarkResult } from './benchmark-records'
+import { stoppedStatus } from './chat-runtime-stub'
 import { ANY_SENDER } from './ipc'
+
+export { stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
 
 // Shared fixture for the Performance-screen main-side tests (performance-ipc,
 // performance-persistence, performance-notify, performance-gpu, performance-schema,
 // first-benchmark-scheduler): a throwaway root + workspace dir, a seeded settings DB, a
 // minimal AppContext, a `performance:changed` sink spy, and two typed BenchmarkResult
 // builders — one for an arbitrary OTHER computer, one carrying THIS test host's machine
-// fingerprint.
+// fingerprint. Below those, the stand-ins the benchmark, picker and posture suites each kept
+// a copy of: the speed leg's runtime, the GPU probe, the placeholder binary, the measured cards.
+// This module loads main-process code, so a jsdom suite takes its records from `benchmark-records.ts`.
 //
 // TH2 (PR #303 audit remediation, P8): every root `freshRoot()` mints and every DB
 // `seededDb()` opens is registered below so `closePerformanceFixture()` can close the DBs
@@ -49,13 +70,17 @@ export function seededDb(root: string): Db {
 }
 
 /**
- * TH2 teardown: reset every module-level latch/memo/observer the sharing files touch, close
+ * TH2 teardown: reset every session latch and observer the sharing files touch, close
  * every DB `seededDb()` opened (a double close — e.g. a test whose own `WorkspaceController`
  * already closed it via `ctrl.lock()` — is swallowed), then remove every root `freshRoot()`
  * minted. `resetEffectiveReadForTests` / `resetModelPlacementForTests` already null their own
  * observers; `setEffectiveReadObserver` / `setModelPlacementObserver` are still called
  * explicitly here (belt and suspenders — this teardown must not silently stop covering them if
  * that internal detail ever changes), and `setAnswerSpeedObserver` has no reset of its own.
+ *
+ * The first-benchmark attempt memo and moved-drive latch are NOT reset: both are keyed on the DB
+ * handle + the unlock epoch, so a test's new `seededDb()` is already a new session. A row that needs
+ * a second session on ONE handle says so with an epoch bump (`sessionWorkspace().completeUnlock()`).
  *
  * Root removal closes DBs FIRST: on Windows a still-open sqlite file makes `rmSync` fail. If it
  * still fails (a close that is asynchronously settling), retry ONCE after a real macrotask
@@ -66,7 +91,6 @@ export async function closePerformanceFixture(): Promise<void> {
   resetPerformanceForTests()
   resetEffectiveReadForTests()
   resetModelPlacementForTests()
-  resetFirstBenchmarkForTests()
   setPerformanceChangedSink(null)
   setEffectiveReadObserver(null)
   setModelPlacementObserver(null)
@@ -92,11 +116,6 @@ export async function closePerformanceFixture(): Promise<void> {
   }
 }
 
-/** A stopped chat runtime's status (the fixture's default `runtime.status()`). */
-export function stoppedStatus(): RuntimeStatus {
-  return { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
-}
-
 export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}): AppContext {
   return {
     paths: { rootPath: root, workspacePath: join(root, 'workspace') },
@@ -120,7 +139,7 @@ export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}
  * Install a spy as the `performance:changed` sink (replacing the window broadcast) and
  * return it. `probe`, when given, runs on every push and its return value is recorded as
  * that call's result — so a test can assert the ORDER of a push against the persist/release
- * it must follow. Reset with `setPerformanceChangedSink(null)` in `beforeEach`.
+ * it must follow. `closePerformanceFixture` clears the sink after each test.
  */
 export function performanceChangedSpy<T = void>(probe?: () => T): ReturnType<typeof vi.fn<() => T>> {
   const spy = vi.fn<() => T>(() => (probe ? probe() : (undefined as T)))
@@ -131,31 +150,12 @@ export function performanceChangedSpy<T = void>(probe?: () => T): ReturnType<typ
 }
 
 /** A result from some OTHER computer (a fingerprint no test host carries). */
-export function result(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
-  return {
-    os: 'win32',
-    arch: 'x64',
-    cpuModel: 'Some Other CPU',
-    cpuCores: 32,
-    ramGb: 64,
-    gpu: 'NVIDIA GeForce RTX 3090',
-    driveReadMbps: null,
-    driveWriteMbps: 900,
-    tokensPerSecond: 41,
-    measuredModelId: 'qwen3.8-27b-ud-q4km',
-    effectiveRead: null,
-    profile: 'PRO',
-    recommendedModelId: 'qwen3.8-27b-ud-q4km',
-    warnings: [],
-    ranAt: '2026-09-02T10:00:00Z',
-    ...over
-  }
-}
+export { benchmarkResult as result } from './benchmark-records'
 
 /** A result carrying THIS machine's fingerprint (whatever the test host is). */
 export function hereResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
   const sys = detectSystem()
-  return result({
+  return benchmarkResult({
     os: sys.os,
     arch: sys.arch,
     cpuModel: sys.cpuModel,
@@ -169,4 +169,190 @@ export function hereResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult
     ranAt: '2026-08-20T10:00:00Z',
     ...over
   })
+}
+
+/** The repo's committed `model-manifests/`, absolute. */
+export const CATALOG_MANIFESTS: string = join(__dirname, '..', '..', '..', '..', 'model-manifests')
+
+/** THIS host's `machineKey` (null when detection fails). */
+export function hereKey(): string | null {
+  return machineKey(detectSystem())
+}
+
+/**
+ * 3 GB in 10 s: a 300 MB/s model-load sample (above the #110 gate), fed to `read-speed`'s observer.
+ * The path matters since #392: a weight hashed anywhere in the session records no load sample at
+ * all. It only records: a test
+ * still resets through `closePerformanceFixture`, and a stored record is `effectiveReadSample`.
+ */
+export function loadSample(modelId: string, ms = 10_000, path = 'unused'): void {
+  recordModelLoadRead(path, ms, modelId, 3_000_000_000)
+}
+
+/**
+ * Pin `process.platform` and `process.arch` for the enclosing suite: registers `beforeAll` and
+ * `afterAll`, which restores what the `beforeAll` found, so a pin inside a pinned describe hands
+ * back the outer one. It does not pin RAM or
+ * anything else `node:os` answers: that mock is hoisted, so it stays in the test file.
+ */
+export function pinPlatform(platform: NodeJS.Platform, arch: string): void {
+  let platformDescriptor: PropertyDescriptor | undefined
+  let archDescriptor: PropertyDescriptor | undefined
+  beforeAll(() => {
+    platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch')
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    Object.defineProperty(process, 'arch', { value: arch, configurable: true })
+  })
+  afterAll(() => {
+    if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
+    if (archDescriptor) Object.defineProperty(process, 'arch', archDescriptor)
+  })
+}
+
+/**
+ * A placeholder `llama-server` under `root`, so `probeAndPersistGpu` resolves a binary. Named for the platform at the CALL (under `pinPlatform`, call it from a
+ * test or hook, not at collection). It mints no root, and the file cannot run: the probe is
+ * `fakeGpuProbe`'s.
+ */
+export function withLlamaBinary(root: string): void {
+  const dir = llamaServerDir(root)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, llamaServerBinaryName()), 'fake-binary')
+}
+
+type GpuProbeCall = (binPath: string) => Promise<GpuDevice[] | null>
+
+/**
+ * The session-cached probe seam: never spawns anything, and takes the devices, `null` (the probe's
+ * UNKNOWN answer, #380) or a function for a parked or scripted answer. The probe IS its own mock, so both
+ * `expect(probe).toHaveBeenCalledTimes(1)` and `expect(probe.calls)…` read the same record, and
+ * `probe.calls.mockImplementation(…)` re-scripts it. `invalidate` only records: it drops no cached answer.
+ */
+export function fakeGpuProbe(
+  impl: GpuDevice[] | null | (() => Promise<GpuDevice[] | null>)
+): CachedGpuProbe & { calls: Mock<GpuProbeCall>; invalidate: Mock<() => void> } {
+  const calls = vi.fn<GpuProbeCall>(typeof impl === 'function' ? impl : async () => impl)
+  return Object.assign(calls, { calls, invalidate: vi.fn<() => void>() })
+}
+
+/**
+ * The runtime manager's commit surface for `startModelRuntime`: `start` commits the model it was
+ * given, and `activeModelId()` follows.
+ * `commit(id)` sets the model by hand, for an `over.start` that commits on its own terms. `status()`
+ * says no start is in flight; a row about one passes `over.status`. `over` wins over every member.
+ * There is no gate, queue or `active()`: a suite that parks a start keeps its own fake.
+ */
+export function committingRuntime(
+  initial: string | null = null,
+  over: Partial<RuntimeManager> = {}
+): Pick<RuntimeManager, 'activeModelId' | 'status' | 'start'> & { commit(id: string): void } {
+  let committed = initial
+  return {
+    activeModelId: () => committed,
+    status: () => ({
+      running: committed !== null,
+      modelId: committed,
+      port: null,
+      healthy: committed !== null,
+      message: 'ok',
+      startingModelId: null
+    }),
+    start: async (opts: RuntimeStartOptions) => {
+      committed = opts.modelId
+      return { running: true, modelId: committed, port: null, healthy: true, message: 'ok' }
+    },
+    commit: (id: string) => {
+      committed = id
+    },
+    ...over
+  }
+}
+
+/**
+ * A session-aware workspace stand-in (the core-model-ipc shape): flags plus the epoch counter.
+ * No `requireDb`: a context whose `db` follows the session
+ * keeps its own getter.
+ */
+export function sessionWorkspace(): {
+  isUnlocked: () => boolean
+  isLocking: () => boolean
+  unlockEpoch: () => number
+  beginLock: () => void
+  completeLock: () => void
+  completeUnlock: () => void
+} {
+  let unlocked = true
+  let locking = false
+  let epoch = 1
+  return {
+    isUnlocked: () => unlocked,
+    isLocking: () => locking,
+    unlockEpoch: () => epoch,
+    beginLock: () => {
+      locking = true
+    },
+    completeLock: () => {
+      locking = true
+      unlocked = false
+    },
+    completeUnlock: () => {
+      locking = false
+      unlocked = true
+      epoch += 1
+    }
+  }
+}
+
+/**
+ * The first benchmark with nothing to wait for: prepare, then schedule against a settled promise, so
+ * the measurement runs at once. Resolves to the outcome; never rejects. A row about the wait calls the
+ * two halves itself.
+ */
+export function firstBenchmarkNow(ctx: AppContext): Promise<FirstBenchmarkOutcome> {
+  return scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())
+}
+
+/**
+ * The four measured cards, as the probe lists them (MiB). Figures only: a row whose outcome turns on
+ * a figure these do not hold keeps its own literal, and says so. Spread to vary one:
+ * `{ ...CARDS.RTX_3090, freeMb: 4096 }`.
+ */
+export const CARDS: Record<'RTX_3080_TI' | 'RTX_3090' | 'GTX_1070_TI' | 'RTX_3060_LAPTOP', GpuDevice> = {
+  // tests/fixtures/list-devices-b11146-vulkan-rtx3080ti.txt; model-benchmarks.md, the hardware table, leg 3.
+  RTX_3080_TI: { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 },
+  // tests/fixtures/placement-b9849-partial-62of66-mtp.txt; model-benchmarks.md, the hardware table, leg 7.
+  RTX_3090: { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 23575 },
+  // model-benchmarks.md, the hardware table, leg 2. The b11146 captures of this card read 7,484-7,490 free.
+  GTX_1070_TI: { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7504 },
+  // tests/fixtures/placement-b9849-partial-18of33-np4.txt; leg 4. Vulkan1: that laptop lists its iGPU first.
+  RTX_3060_LAPTOP: { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
+}
+
+/**
+ * A chat-model manifest under `dir` (created if missing), named `<id>.yaml`. The defaults are
+ * posture-writers' RAM-gate fixture (`huge-model`, 9999 GB RAM: no real machine passes). It writes
+ * the manifest only: the weight file at `local_path`, which makes the model installed, stays the test's.
+ */
+export function writeChatManifest(dir: string, over: Record<string, unknown> = {}): void {
+  const manifest = {
+    id: 'huge-model',
+    display_name: 'Huge Model',
+    family: 'qwen3',
+    role: 'chat',
+    format: 'gguf',
+    runtime: 'llama_cpp',
+    license: 'apache-2.0',
+    size_on_disk_gb: 999,
+    recommended_min_ram_gb: 9999,
+    recommended_ram_gb: 9999,
+    recommended_context_tokens: 4096,
+    local_path: 'models/chat/huge.gguf',
+    sha256: 'REPLACE_WITH_REAL_HASH',
+    recommended_profiles: ['PRO'],
+    license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' },
+    ...over
+  }
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `${manifest.id}.yaml`), stringify(manifest))
 }

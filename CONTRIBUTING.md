@@ -228,6 +228,28 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **Count memo re-renders on the test side.** `tests/helpers/render-counter.ts` wraps the
   production `memo(...)` component (keeping its compare function) inside a `vi.mock`, so no
   production module needs a DEV-only counter. Keep a positive control that shows the counter moves.
+- **A row that reads the host pins it.** No CI leg runs tests on macOS, and RAM differs per host.
+  Two performance rows would fail on Apple Silicon while docs/benchmark.md said they held "on every
+  host", and a recommended-context row would fail under 8 GB. Pin with `pinPlatform`
+  (`tests/helpers/performance-fixture.ts`) and a hoisted `vi.mock('node:os')` for RAM, and expect a
+  literal, not a value derived from the host.
+- **Taking a sleep out of a negative moves its proof.** picker-seams' "refreshes nothing" rows slept 50 ms,
+  then checked the probe. Without the sleep they only hold while the refresh reaches the probe before the
+  job settles, so the positive row now asserts exactly that. Otherwise a refresh that moves later turns
+  every negative vacuous without a failure.
+- **An `expect` inside a callback production catches cannot fail.** A read-speed row asserted inside its
+  observer, and `record()` swallows an observer's throw. Capture the value in the callback and assert after.
+- **A spread of `Record<string, unknown>` is an untyped stub.** The Performance screen's `install` took its
+  overrides that way, so a renamed bridge method still compiled. `installPerformance` takes
+  `Partial<PreloadApi>`. The same suite's mounts called two unstubbed methods in all 107 tests.
+- **The benchmark and Performance fixtures** are `tests/helpers/performance-fixture.ts` (main side:
+  `fakeGpuProbe`, `withLlamaBinary`, `committingRuntime`, `firstBenchmarkNow`, `CARDS`), `chat-runtime-stub.ts`
+  (`stubChatRuntime`, no IPC registrars, so a service suite needs no `electron` mock), `benchmark-records.ts`
+  (pure record builders, safe in jsdom) and `performance-screen.tsx` (the screen's `installPerformance`,
+  `startOwnRun`, `copiedReport`). `deferred` is `tests/helpers/deferred.ts`.
+- **`seededDb` opens the root's one file.** Two `seededDb(root)` calls on one root are two handles on the
+  same data, so first-benchmark-scheduler's "legacy blob" cases ran against the earlier case's history.
+  Give a case that needs its own workspace its own `freshRoot()`.
 - **The OCR fakes live in `tests/helpers/ocr-fixtures.ts`**: `fakeOcrEngine` (text per page, confidence,
   languages, call count), `fakeRasterizer` (honours the page list a re-run asks for, #575), `importScan`
   (a scan through the real pipeline, asserting it fails as a detected scan) and `ocrDrive` (a temp drive

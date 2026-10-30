@@ -73,15 +73,11 @@ import { isChatStreaming } from './inflight'
  * ELIGIBLE persisted probe (`eligibleGpuProbe`, PR #303 audit M8.3: a probe stamped with
  * another machine's key supplies nothing, an unstamped legacy one stays eligible) and the two
  * GPU flags — the same call `probeAndPersistGpu` and the Performance screen make, so the
- * Models ★ and the benchmark can never name different cards. `hereKey` defaults to this
- * machine's identity; the seam tests pass it to pin the foreign-probe case. Exported so the
- * seam test can pin what the `listModels` handler feeds `buildModelList`.
+ * Models ★ and the benchmark can never name different cards. Exported for the seam test,
+ * which pins what the `listModels` handler feeds `buildModelList`.
  */
-export function pickerMemoryFor(
-  s: AppSettings,
-  hereKey: string | null = machineKey(detectSystem())
-): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
-  const next = nextStartMemoryFor(s, hereKey)
+export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
+  const next = nextStartMemoryFor(s, machineKey(detectSystem()))
   // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
   // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
   return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }
@@ -109,14 +105,11 @@ export function pickerMemoryFor(
  * on a decode figure, and the context is a setting users change often. A legacy sample without
  * the field keeps steering exactly as before.
  */
-export function speedSignalFor(
-  s: AppSettings,
-  hereKey: string | null = machineKey(detectSystem())
-): PickerSpeedSignal | null {
+function speedSignalFor(s: AppSettings): PickerSpeedSignal | null {
   const last = s.lastBenchmark
   if (!last) return null
   const identity = last.speedIdentity
-  if (identity && !sampleCountsForNextStart(identity, nextStartMemoryFor(s, hereKey))) return null
+  if (identity && !sampleCountsForNextStart(identity, nextStartMemoryFor(s, machineKey(detectSystem())))) return null
   return {
     tokensPerSecond: last.tokensPerSecond,
     measuredModelId: last.measuredModelId ?? null
@@ -124,7 +117,7 @@ export function speedSignalFor(
 }
 
 /** The one-directional rule above, pure: does a sample measured under `identity` describe `next`? */
-export function sampleCountsForNextStart(identity: SpeedSampleIdentity, next: NextStartMemory): boolean {
+function sampleCountsForNextStart(identity: SpeedSampleIdentity, next: NextStartMemory): boolean {
   if (identity.backend === 'mock') return false
   // The path the sample was measured on: the card only when the ladder actually landed there
   // under a card class; a CPU rung (or an unknown backend) under any class is the processor.

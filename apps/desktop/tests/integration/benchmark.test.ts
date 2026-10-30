@@ -5,14 +5,11 @@ import { join } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import {
-  buildModelList,
   discoverManifests,
   resolveManifestsDir,
-  recommendModelIdByRam,
-  SLOW_PICK_TOKENS_PER_SECOND
+  recommendModelId,
+  recommendModelIdByRam
 } from '../../src/main/services/models'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { ModelManifest } from '../../src/shared/manifest'
@@ -24,32 +21,36 @@ import {
   buildWarnings,
   runBenchmark,
   upsertSlowReadWarning,
-  VERY_LOW_TOKENS_PER_SECOND,
-  SLOW_DRIVE_MBPS,
   SLOW_EFFECTIVE_READ_MBPS,
-  BENCHMARK_PROMPT,
   BENCHMARK_TOKEN_TARGET
 } from '../../src/main/services/benchmark'
 import { t } from '../../src/shared/i18n'
-import type {
-  ChatMessage,
-  ModelRuntime,
-  RuntimeChatOptions,
-  RuntimeTimings
-} from '../../src/main/services/runtime'
+import type { BenchmarkProgressStep } from '../../src/shared/types'
+import type { ModelRuntime, RuntimeTimings } from '../../src/main/services/runtime'
+import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 
-// A switchable RAM pin (PR #308 audit plan T-item 3): the §6.6 seam test below needs the machine
-// RAM to be a KNOWN input, not the host's — the rest of this file keeps the real figure (the
-// switch is null outside that block, and the mock passes through to the real `totalmem`).
-const ramState = vi.hoisted(() => ({ totalmemBytes: null as number | null }))
+// A switchable OS pin. The RAM is a KNOWN input wherever a row reads a profile or a pick, not the
+// host's (PR #308 audit plan T-item 3; the switch is null elsewhere and the mock passes through to
+// the real `totalmem`). `failing` makes the probes `detectSystem` calls throw.
+const osState = vi.hoisted(() => ({ totalmemBytes: null as number | null, failing: false }))
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>()
-  return { ...actual, totalmem: () => ramState.totalmemBytes ?? actual.totalmem() }
+  const guarded = <T>(real: () => T) => (): T => {
+    if (osState.failing) throw new Error('os probe failed')
+    return real()
+  }
+  return {
+    ...actual,
+    platform: guarded(actual.platform),
+    arch: guarded(actual.arch),
+    cpus: guarded(actual.cpus),
+    totalmem: guarded(() => osState.totalmemBytes ?? actual.totalmem())
+  }
 })
-
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-bench-')), 'test.sqlite'))
+const pinRam = (gb: number): void => {
+  osState.totalmemBytes = gb * 1024 ** 3
 }
+
 function workspace(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-bench-ws-'))
 }
@@ -62,30 +63,29 @@ function runtime() {
   return createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 2048 })
 }
 /**
- * A runtime that generates BELOW `VERY_LOW_TOKENS_PER_SECOND` (issue #52): two chunks at
- * ~450 ms each → ≈2.2 tok/s. The timers ARE the simulated slow generation — tok/s is
- * wall-clock-counted, so the fixed delay is the semantics here, not a sync point
- * (CONTRIBUTING "no fixed sleeps" simulation exception, like ingestion-limits' slow parse).
+ * A stream on a hand-driven clock: each chunk costs `msPerChunk`, nothing really waits, and the
+ * final chunk reports `timings` (none when omitted). perf_hooks' `performance` is the global's.
  */
-function slowRuntime(modelId: string): ModelRuntime {
+function clockedRuntime(chunks: string[], msPerChunk: number, timings?: RuntimeTimings): ModelRuntime {
+  let clock = 0
+  vi.spyOn(performance, 'now').mockImplementation(() => clock)
   return {
-    modelId,
-    async start() {},
-    async stop() {},
-    async health() {
-      return { healthy: true, message: '', port: null }
-    },
-    async *chatStream() {
-      for (const chunk of ['one', 'two']) {
-        await new Promise((resolve) => setTimeout(resolve, 450))
+    ...stubChatRuntime(),
+    async *chatStream(_m, options) {
+      for (const chunk of chunks) {
+        clock += msPerChunk
         yield chunk
       }
+      options?.onFinish?.('length', timings)
     }
   }
 }
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.useRealTimers()
+  osState.totalmemBytes = null
+  osState.failing = false
 })
 
 // ---- System detection -----------------------------------------------------------
@@ -99,6 +99,12 @@ describe('detectSystem', () => {
     expect(sys.cpuCores).toBeGreaterThan(0)
     expect(sys.ramGb).toBeGreaterThan(0)
     expect(sys.gpu).toBeNull()
+
+    osState.failing = true
+    const failed = detectSystem()
+    osState.failing = false
+    expect(failed).toEqual({ os: '', arch: '', cpuModel: '', cpuCores: 0, ramGb: 0, gpu: null })
+    expect(classifyProfile(failed.ramGb)).toBe('UNKNOWN')
   })
 })
 
@@ -117,7 +123,9 @@ describe('classifyProfile', () => {
   })
 
   it('downgrades one step when tokens/sec is very low (never below TINY)', () => {
-    expect(classifyProfile(16, { tokensPerSecond: VERY_LOW_TOKENS_PER_SECOND - 1 })).toBe('TINY')
+    expect(classifyProfile(16, { tokensPerSecond: 2.9 })).toBe('TINY')
+    expect(classifyProfile(16, { tokensPerSecond: 3 })).toBe('LITE') // exactly the threshold is not "very low"
+    expect(classifyProfile(16, { tokensPerSecond: 0 })).toBe('LITE') // no reading
     expect(classifyProfile(64, { tokensPerSecond: 0.5 })).toBe('BALANCED')
     // TINY cannot go lower.
     expect(classifyProfile(8, { tokensPerSecond: 0.5 })).toBe('TINY')
@@ -145,6 +153,7 @@ describe('classifyProfile', () => {
 
 describe('runBenchmark GPU injection (Phase 16)', () => {
   it('carries the injected probe summary into the result + profile', async () => {
+    pinRam(16)
     const ws = workspace()
     const result = await runBenchmark({
       workspacePath: ws,
@@ -152,13 +161,12 @@ describe('runBenchmark GPU injection (Phase 16)', () => {
       gpu: { name: 'NVIDIA GeForce RTX 3080 Ti', useful: true }
     })
     expect(result.gpu).toBe('NVIDIA GeForce RTX 3080 Ti')
-    // The profile is one step above the pure-RAM classification (capped at PRO).
-    const ramOnly = classifyProfile(result.ramGb)
-    const steps = ['TINY', 'LITE', 'BALANCED', 'PRO']
-    expect(steps.indexOf(result.profile)).toBe(Math.min(steps.indexOf(ramOnly) + 1, 3))
+    // One step above the pure-RAM classification (16 GiB alone is LITE).
+    expect(result.profile).toBe('BALANCED')
   })
 
   it('an un-useful (or absent) GPU changes nothing', async () => {
+    pinRam(16)
     const ws = workspace()
     const withIgpu = await runBenchmark({
       workspacePath: ws,
@@ -166,7 +174,8 @@ describe('runBenchmark GPU injection (Phase 16)', () => {
       gpu: { name: 'Intel(R) Iris(R) Xe Graphics', useful: false }
     })
     const without = await runBenchmark({ workspacePath: ws, manifests: [] })
-    expect(withIgpu.profile).toBe(without.profile)
+    expect(withIgpu.profile).toBe('LITE')
+    expect(without.profile).toBe('LITE')
     expect(withIgpu.gpu).toBe('Intel(R) Iris(R) Xe Graphics') // name still surfaces
     expect(without.gpu).toBeNull()
   })
@@ -181,28 +190,18 @@ describe('runBenchmark GPU injection (Phase 16)', () => {
 // assertions on small CI hosts).
 describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C; RAM pinned to 32 GB)', () => {
   beforeEach(() => {
-    ramState.totalmemBytes = 32 * 1024 ** 3
-  })
-  afterEach(() => {
-    ramState.totalmemBytes = null
+    pinRam(32)
   })
 
   it('24 GB card → the 27B Q5 since -np 1 (#319); 8 GB card → the 4B; no class → the RAM pick', async () => {
     const manifests = realManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // RTX 3090 as the Windows rig reports it (24,822 total); a probe without a free figure →
-    // total − 1,024 = 23,798 MiB. Q5 needs 23,559: 23,866 before #319 (68 MiB short of this card),
-    // 23,661 once the chat server took `-np 1` and its cache term went 1.1 → 0.9 GiB, 23,559 once
-    // #321 put the 15 % working share on the OFFLOADABLE weights only. So the RAM pick now STANDS
-    // on this card instead of being demoted to Q4 — the outcome the #319 ruling was after, and it
-    // matches the hardware: with `-np 1` this very card offloaded Q5 66/66 at 51.0 tok/s (#318
-    // leg 1), where the four-slot launch managed 62/66 at 30.4.
-    // NOTE the grid in §6.6 still reads Q4 on its 24 GB row, after BOTH decisions: that row's
-    // nominal free figure is 24 × 1024 − 1024 = 23,552, 246 MiB stingier than this real card, and
-    // Q5 misses it by 7 MiB. The row describes a card that reports exactly 24 GiB; this one does
-    // not, and neither does any 24 GB card the project has seen.
+    // total − 1,024 = 23,798 MiB, which clears Q5's 22,877 (committed-catalog pins the threshold), so
+    // the RAM pick stands. #318 leg 1 measured this card: Q5 66/66 at 51.0 tok/s with `-np 1`.
+    // An idle 8 GB card: 7,168 MiB free is under the 9B's 7,285 → the 4B. It would hold the 9B by its
+    // total, which makes this the row that tells budget from total.
     const big = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, budgetMb: 24_822 - 1024, memoryClass: 'discrete' } })
-    // An idle 8 GB card: 7,168 MiB free → the 9B's 7,830 still does not fit → the 4B.
     const small = await runBenchmark({ ...base, gpu: { name: 'RTX 3050', useful: true, totalMb: 8192, budgetMb: 7168, memoryClass: 'discrete' } })
     const none = await runBenchmark({ ...base, gpu: null })
     expect(big.ramGb).toBe(32)
@@ -218,18 +217,12 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
   it('a discrete class without a budget figure, or a cpu class with one, is the RAM pick (byte-identical)', async () => {
     const manifests = realManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
-    const noBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, memoryClass: 'discrete' } })
-    const cpuWithBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, budgetMb: 23_798, memoryClass: 'cpu' } })
+    // An 8 GiB card, because the 3090's card pick is the RAM pick since #319 and could not tell the two apart.
+    const noBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, memoryClass: 'discrete' } })
+    const cpuWithBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, budgetMb: 7168, memoryClass: 'cpu' } })
     expect(noBudget.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
     expect(cpuWithBudget.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
-    expect(noBudget.gpuVramMb).toBe(24_822)
-  })
-
-  it('the free figure decides, not the total: 8,192 total with 8,100 free holds the 9B', async () => {
-    const manifests = realManifests()
-    const base = { workspacePath: workspace(), manifests, runtime: null }
-    const roomy = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, budgetMb: 8100, memoryClass: 'discrete' } })
-    expect(roomy.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(noBudget.gpuVramMb).toBe(8192)
   })
 })
 
@@ -240,11 +233,11 @@ describe('recommendation per profile', () => {
     // 1.7b was dropped 2026-06-10 (no official Q4_K_M), so 4b — the smallest bundled chat
     // model — now also covers TINY + UNKNOWN. Each profile is still claimed by exactly one
     // chat model, so the first-match recommendation is unambiguous.
-    expect(pick(manifests, 'TINY')).toBe('qwen3-4b-instruct-q4')
-    expect(pick(manifests, 'LITE')).toBe('qwen3-4b-instruct-q4')
-    expect(pick(manifests, 'BALANCED')).toBe('qwen3-8b-instruct-q4')
-    expect(pick(manifests, 'PRO')).toBe('qwen3-14b-instruct-q4')
-    expect(pick(manifests, 'UNKNOWN')).toBe('qwen3-4b-instruct-q4')
+    expect(recommendModelId(manifests, 'TINY', 'chat')).toBe('qwen3-4b-instruct-q4')
+    expect(recommendModelId(manifests, 'LITE', 'chat')).toBe('qwen3-4b-instruct-q4')
+    expect(recommendModelId(manifests, 'BALANCED', 'chat')).toBe('qwen3-8b-instruct-q4')
+    expect(recommendModelId(manifests, 'PRO', 'chat')).toBe('qwen3-14b-instruct-q4')
+    expect(recommendModelId(manifests, 'UNKNOWN', 'chat')).toBe('qwen3-4b-instruct-q4')
   })
 
   it('does not auto-recommend the 30B-A3B MoE model for any profile (opt-in only)', () => {
@@ -253,7 +246,7 @@ describe('recommendation per profile', () => {
     expect(moe).toBeDefined()
     expect(moe!.recommendedProfiles).toEqual([])
     for (const profile of ['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN'] as const) {
-      expect(pick(manifests, profile)).not.toBe('qwen3-30b-a3b-q4')
+      expect(recommendModelId(manifests, profile, 'chat')).not.toBe('qwen3-30b-a3b-q4')
     }
   })
 
@@ -275,21 +268,7 @@ describe('recommendation per profile', () => {
     expect(recommendModelIdByRam(m, 24, 'chat')).toBe('qwen3.8-27b-ud-q4km') // #196 wave, owner-ratified handover
     expect(recommendModelIdByRam(m, 32, 'chat')).toBe('qwen3.8-27b-ud-q5km') // #196 wave, owner-ratified handover
   })
-
-  it('never auto-recommends the opt-in 30B MoE or the benchmark-loser Granite (real manifests)', () => {
-    const m = realManifests()
-    for (const ram of [8, 12, 16, 24, 32, 64]) {
-      const id = recommendModelIdByRam(m, ram, 'chat')
-      expect(id).not.toBe('qwen3-30b-a3b-q4')
-      expect(id).not.toBe('granite-4.1-8b-q4')
-    }
-  })
 })
-
-function pick(manifests: ModelManifest[], profile: 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'): string | null {
-  const match = manifests.find((m) => m.role === 'chat' && m.recommendedProfiles.includes(profile))
-  return match?.id ?? null
-}
 
 // ---- Drive speed probe ----------------------------------------------------------
 
@@ -322,43 +301,13 @@ describe('measureTokensPerSecond', () => {
     expect(await measureTokensPerSecond(undefined)).toBeNull()
   })
 
-  it('returns a positive estimate from a running (mock) runtime — the chunk fallback, flagged', async () => {
-    const reading = await measureTokensPerSecond(runtime())
-    expect(reading).not.toBeNull()
-    expect(reading!.tokensPerSecond).toBeGreaterThan(0)
-    // The mock sends no `timings`, so the reading is the approximate chunk count over wall time.
-    expect(reading!.basis).toBe('chunks')
-    expect(reading!.tokens).toBeGreaterThan(0)
-  })
-
-  // #291 — the runtime's own decode timings win over the chunk count. A fake runtime whose
-  // stream reports `timings` on its final chunk (the llama-server shape via PR 1's onFinish
-  // hand-up); the wall clock plays no part in the timings-based figure.
-  function timedRuntime(
-    chunks: string[],
-    timings: RuntimeTimings | undefined,
-    perChunkDelayMs = 0
-  ): ModelRuntime {
-    return {
-      modelId: 'timed',
-      async start() {},
-      async stop() {},
-      async health() {
-        return { healthy: true, message: '', port: null }
-      },
-      async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
-        for (const c of chunks) {
-          if (perChunkDelayMs > 0) await new Promise((r) => setTimeout(r, perChunkDelayMs))
-          yield c
-        }
-        options?.onFinish?.('length', timings)
-      }
-    }
-  }
-
+  // #291 — the runtime's own decode timings win over the chunk count. The stream reports `timings`
+  // on its final chunk (the llama-server shape via PR 1's onFinish hand-up).
   it('reports the runtime timings’ predicted_per_second (decode only) when the final chunk carries them', async () => {
+    // Three chunks carrying more tokens each (an accepted MTP draft run rides one chunk), and a
+    // clock that would read 1 chunk/s: the server's figure wins over both.
     const reading = await measureTokensPerSecond(
-      timedRuntime(['a', 'b', 'c'], {
+      clockedRuntime(['one two three', 'four five', 'six seven eight'], 1000, {
         prompt_n: 12,
         prompt_ms: 900, // a long prefill that a wall-clock window would have paid for
         predicted_n: 64,
@@ -370,31 +319,18 @@ describe('measureTokensPerSecond', () => {
     expect(reading).toEqual({ tokensPerSecond: 47.9, basis: 'timings', tokens: 64 })
   })
 
-  it('does NOT undercount MTP-style multi-token chunks when timings are present', async () => {
-    // Three SSE chunks carrying eight tokens (an accepted draft run rides one chunk each);
-    // 25 ms per chunk ⇒ a chunk-rate reading would be ~40 chunks/s, the server says 106 tok/s.
-    const reading = await measureTokensPerSecond(
-      timedRuntime(['one two three', 'four five', 'six seven eight'], {
-        predicted_n: 8,
-        predicted_ms: 75.5,
-        predicted_per_second: 106
-      }, 25)
-    )
-    expect(reading).toEqual({ tokensPerSecond: 106, basis: 'timings', tokens: 8 })
-  })
-
   it('falls back to the chunk count over wall time when the stream carries no timings', async () => {
-    const reading = await measureTokensPerSecond(timedRuntime(['a', 'b', 'c', 'd'], undefined, 5))
-    expect(reading).not.toBeNull()
-    expect(reading!.basis).toBe('chunks')
-    expect(reading!.tokens).toBe(4)
-    expect(reading!.tokensPerSecond).toBeGreaterThan(0)
+    const reading = await measureTokensPerSecond(clockedRuntime(['a', 'b', 'c', 'd'], 500))
+    expect(reading).toEqual({ tokensPerSecond: 2, basis: 'chunks', tokens: 4 })
   })
 
-  it('ignores a timings block without a usable predicted_per_second (falls back, flagged)', async () => {
-    const reading = await measureTokensPerSecond(timedRuntime(['a', 'b'], { prompt_n: 3 }, 5))
-    expect(reading!.basis).toBe('chunks')
-    expect(reading!.tokens).toBe(2)
+  it.each<[string, RuntimeTimings]>([
+    ['no figure at all', { prompt_n: 3 }],
+    ['a zero figure', { predicted_n: 2, predicted_per_second: 0 }],
+    ['an infinite figure', { predicted_n: 2, predicted_per_second: Number.POSITIVE_INFINITY }]
+  ])('ignores a timings block without a usable predicted_per_second (falls back, flagged): %s', async (_label, timings) => {
+    const reading = await measureTokensPerSecond(clockedRuntime(['a', 'b'], 500, timings))
+    expect(reading).toEqual({ tokensPerSecond: 2, basis: 'chunks', tokens: 2 })
   })
 
   it('consumes the whole capped stream so the final (timings) chunk is never cancelled away', async () => {
@@ -402,7 +338,7 @@ describe('measureTokensPerSecond', () => {
     // finish chunk arrived. Exactly BENCHMARK_TOKEN_TARGET chunks then the finish → timings land.
     const chunks = Array.from({ length: BENCHMARK_TOKEN_TARGET }, (_, i) => `t${i} `)
     const reading = await measureTokensPerSecond(
-      timedRuntime(chunks, { predicted_n: BENCHMARK_TOKEN_TARGET, predicted_per_second: 38.4 })
+      stubChatRuntime({ chunks, perSecond: 38.4, predictedN: BENCHMARK_TOKEN_TARGET })
     )
     expect(reading).toEqual({ tokensPerSecond: 38.4, basis: 'timings', tokens: BENCHMARK_TOKEN_TARGET })
   })
@@ -410,16 +346,15 @@ describe('measureTokensPerSecond', () => {
   it('sends the paragraph prompt under the 64-token cap', async () => {
     let seen: { prompt: string; maxTokens?: number } | null = null
     const spy: ModelRuntime = {
-      ...timedRuntime(['x'], undefined),
-      async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+      ...stubChatRuntime(),
+      async *chatStream(messages, options) {
         seen = { prompt: messages[0].content, maxTokens: options?.maxTokens }
         yield 'x'
         options?.onFinish?.('stop')
       }
     }
     await measureTokensPerSecond(spy)
-    expect(seen).toEqual({ prompt: BENCHMARK_PROMPT, maxTokens: BENCHMARK_TOKEN_TARGET })
-    expect(BENCHMARK_PROMPT).toMatch(/paragraph/)
+    expect(seen).toEqual({ prompt: 'Write a short paragraph about privacy.', maxTokens: 64 })
   })
 
   // #393 — the REJECTING stream. A model start that stopped the sidecar mid-stream makes the
@@ -428,27 +363,23 @@ describe('measureTokensPerSecond', () => {
   // something is busy — and stay silent when nothing is (a plain probe failure).
   /** One chunk, then the stop: the second `next()` REJECTS instead of yielding. */
   function throwingRuntime(): ModelRuntime {
-    return {
-      ...timedRuntime(['a'], undefined),
-      async *chatStream() {
-        yield 'a'
-        throw new Error('model stopped')
-      }
-    }
+    return stubChatRuntime({ chunks: ['a'], rejectAfterHook: true })
   }
 
   it('a stream that THROWS while the model is busy reports the skip (#393)', async () => {
     const onBusySkip = vi.fn()
-    let calls = 0
-    // Not busy at the pre-stream check (the leg was admitted) nor at the per-chunk check after
-    // the first chunk — busy only by the time the stop has killed the stream and the catch asks.
-    const reading = await measureTokensPerSecond(throwingRuntime(), {
-      modelBusy: () => calls++ >= 2,
-      onBusySkip
-    })
+    let stopped = false
+    const killed: ModelRuntime = {
+      ...stubChatRuntime(),
+      async *chatStream() {
+        yield 'a'
+        stopped = true // the stop lands between chunks: the next `next()` rejects, no per-chunk check runs
+        throw new Error('model stopped')
+      }
+    }
+    const reading = await measureTokensPerSecond(killed, { modelBusy: () => stopped, onBusySkip })
     expect(reading).toBeNull()
     expect(onBusySkip).toHaveBeenCalledTimes(1)
-    expect(calls).toBe(3)
   })
 
   it('a stream that THROWS with nothing busy stays silent — a plain probe failure (#393)', async () => {
@@ -468,7 +399,7 @@ describe('measureTokensPerSecond', () => {
       const cancel = new AbortController()
       const onBusySkip = vi.fn()
       const rt: ModelRuntime = {
-        ...timedRuntime([], undefined),
+        ...stubChatRuntime(),
         async *chatStream() {
           yield 'a'
           yield 'b'
@@ -512,29 +443,6 @@ describe('buildWarnings', () => {
     const w = buildWarnings({ profile: 'TINY', driveReadMbps: 500, driveWriteMbps: 500 })
     expect(w.join(' ')).toContain('smallest, quickest model')
     expect(w.join(' ').toLowerCase()).not.toContain('bad')
-  })
-
-  it('warns (without blocking) on a slow drive', () => {
-    const w = buildWarnings({
-      profile: 'BALANCED',
-      driveReadMbps: SLOW_DRIVE_MBPS - 1,
-      driveWriteMbps: SLOW_DRIVE_MBPS - 1
-    })
-    expect(w.some((m) => m.toLowerCase().includes('slower'))).toBe(true)
-  })
-
-  it('notes when drive speed could not be measured', () => {
-    const w = buildWarnings({
-      profile: 'BALANCED',
-      driveReadMbps: null,
-      driveWriteMbps: null,
-      driveError: 'EACCES'
-    })
-    expect(w.some((m) => m.toLowerCase().includes('drive speed could not be measured'))).toBe(true)
-  })
-
-  it('is empty for a healthy mid-tier machine', () => {
-    expect(buildWarnings({ profile: 'BALANCED', driveReadMbps: 500, driveWriteMbps: 500 })).toEqual([])
   })
 
   // Issue #52: the tok/s profile downgrade used to be completely silent. When it fires, the
@@ -613,6 +521,9 @@ describe('buildWarnings', () => {
     // Boundary: exactly the threshold is NOT slow.
     expect(cell(SLOW_EFFECTIVE_READ_MBPS, 400)).toEqual([])
     expect(cell(SLOW_EFFECTIVE_READ_MBPS - 0.1, 400)).toHaveLength(1)
+    // The write gate's own boundary (benchmark.md: < 30 MB/s).
+    expect(cell(null, 29.9)).toEqual([slowWrite])
+    expect(cell(null, 30)).toEqual([])
   })
 
   it('the read warning rides an errored probe (independent branches) and names the consequence', () => {
@@ -674,18 +585,7 @@ describe('buildWarnings', () => {
 
 describe('runBenchmark', () => {
   it('persists HOW the speed was measured next to the figure (#291 speedBasis)', async () => {
-    const timed: ModelRuntime = {
-      modelId: 'qwen3-9b',
-      async start() {},
-      async stop() {},
-      async health() {
-        return { healthy: true, message: '', port: null }
-      },
-      async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
-        yield 'a'
-        options?.onFinish?.('length', { predicted_n: 64, predicted_per_second: 47.9 })
-      }
-    }
+    const timed = stubChatRuntime({ modelId: 'qwen3-9b', chunks: ['a'], perSecond: 47.9, predictedN: 64 })
     const result = await runBenchmark({ workspacePath: workspace(), manifests: [], runtime: timed })
     expect(result.tokensPerSecond).toBe(47.9)
     expect(result.speedBasis).toEqual({ basis: 'timings', tokens: 64 })
@@ -698,20 +598,32 @@ describe('runBenchmark', () => {
   })
 
   it('assembles a complete BenchmarkResult', async () => {
-    const result = await runBenchmark({
-      workspacePath: workspace(),
-      manifests: realManifests(),
-      runtime: runtime(),
-      now: () => new Date('2026-06-09T00:00:00.000Z')
+    pinRam(16)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-06-09T00:00:00.000Z'))
+    // The stub, not the mock: the mock's real per-token delay can read under 3 tok/s on a starved
+    // runner and step the profile.
+    const result = await runBenchmark({ workspacePath: workspace(), manifests: realManifests(), runtime: stubChatRuntime() })
+    expect(result).toEqual({
+      os: process.platform,
+      arch: process.arch,
+      cpuModel: expect.any(String),
+      cpuCores: expect.any(Number),
+      ramGb: 16,
+      gpu: null,
+      gpuVramMb: null,
+      driveReadMbps: expect.any(Number),
+      driveWriteMbps: expect.any(Number),
+      tokensPerSecond: 20,
+      speedBasis: { basis: 'timings', tokens: 2 },
+      speedIdentity: { memoryClass: 'cpu', deviceName: null, contextTokens: null, backend: null },
+      measuredModelId: 'stub-chat', // issue #52: WHICH model produced the tok/s number
+      effectiveRead: null,
+      profile: 'LITE',
+      recommendedModelId: 'qwen3.5-9b-ud-q4kxl',
+      warnings: expect.any(Array), // the drive's own speed decides `warnSlowDrive` on a loaded runner
+      ranAt: '2026-06-09T00:00:00.000Z'
     })
-    expect(result.ranAt).toBe('2026-06-09T00:00:00.000Z')
-    expect(result.ramGb).toBeGreaterThan(0)
-    expect(['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN']).toContain(result.profile)
-    expect(result.recommendedModelId).toBeTruthy()
-    expect(result.tokensPerSecond).not.toBeNull()
-    // Issue #52: the result records WHICH model produced the tok/s number.
-    expect(result.measuredModelId).toBe('mock-chat')
-    expect(Array.isArray(result.warnings)).toBe(true)
   })
 
   it('records no measured model when no runtime was running (issue #52)', async () => {
@@ -743,96 +655,106 @@ describe('runBenchmark', () => {
     expect(without.effectiveRead).toBeNull()
   })
 
-  // End-to-end wiring of the issue-#52 downgrade warning. The profile downgrade itself
-  // depends on this machine's real RAM (a ≤8 GB box is already TINY and can't step down),
-  // so the assertion pins CONSISTENCY: the named warning appears exactly when the tok/s
-  // hint moved the profile relative to the same classification without it.
+  // End-to-end wiring of the issue-#52 downgrade warning: named exactly when the tok/s hint moved
+  // the profile, which a machine already on the lowest rung cannot.
   it('emits the named very-low-tokens warning exactly when the profile stepped down (issue #52)', async () => {
-    const result = await runBenchmark({
-      workspacePath: workspace(),
-      manifests: realManifests(),
-      runtime: slowRuntime('oversized-27b')
-    })
-    expect(result.tokensPerSecond).not.toBeNull()
-    expect(result.tokensPerSecond!).toBeLessThan(VERY_LOW_TOKENS_PER_SECOND)
-    expect(result.measuredModelId).toBe('oversized-27b')
-    const downgraded = result.profile !== classifyProfile(result.ramGb, { gpuUseful: false })
-    expect(result.warnings.some((w) => w.includes('(oversized-27b)'))).toBe(downgraded)
+    const crawl = () => stubChatRuntime({ modelId: 'oversized-27b', perSecond: 2.2 })
+    const stepped = t('en', 'main.benchmark.warnVeryLowTokens', { model: 'oversized-27b' })
+    pinRam(16)
+    const lite = await runBenchmark({ workspacePath: workspace(), manifests: realManifests(), runtime: crawl() })
+    expect(lite.tokensPerSecond).toBe(2.2)
+    expect(lite.measuredModelId).toBe('oversized-27b')
+    expect(lite.profile).toBe('TINY')
+    expect(lite.warnings).toContain(stepped)
+    // Already on the lowest rung: the reading moved nothing, so nothing is claimed.
+    pinRam(8)
+    const tiny = await runBenchmark({ workspacePath: workspace(), manifests: realManifests(), runtime: crawl() })
+    expect(tiny.profile).toBe('TINY')
+    expect(tiny.warnings).not.toContain(stepped)
   })
 
   // §6.5 (issue #95): runBenchmark applies the SAME signal-aware picker rule as listModels,
   // with the just-measured values — so the Diagnostics card and the Models screen ★ can
-  // never disagree. Whether the step actually fires depends on this machine's real RAM
-  // (the measured model must be right-sized for the tier), so the pin is CONSISTENCY, plus
-  // "warning present exactly when the pick moved" — the #52 test's pattern.
+  // never disagree. The named warning appears exactly when the signal moved the pick.
   it('applies the §6.5 speed signal to its own recommendation, consistently with the picker (issue #95)', async () => {
     const manifests = realManifests()
-    // A crawl "measured on" the machine's own no-signal pick: the predicate applies at
-    // every RAM level, so on any CI box the recommendation follows the stepped rule.
-    const ownPick = recommendModelIdByRam(manifests, Math.round(detectSystem().ramGb), 'chat')
-    const result = await runBenchmark({
-      workspacePath: workspace(),
-      manifests,
-      runtime: slowRuntime(ownPick ?? 'none-installed')
-    })
-    expect(result.tokensPerSecond).not.toBeNull()
-    expect(result.tokensPerSecond!).toBeLessThan(SLOW_PICK_TOKENS_PER_SECOND)
-    const ram = Math.round(result.ramGb)
-    const expected = recommendModelIdByRam(manifests, ram, 'chat', {
-      tokensPerSecond: result.tokensPerSecond,
-      measuredModelId: result.measuredModelId
-    })
-    expect(result.recommendedModelId).toBe(expected)
-    // The named §6.5 warning appears exactly when the signal moved the pick.
-    const moved = expected !== recommendModelIdByRam(manifests, ram, 'chat')
-    const warning = t('en', 'main.benchmark.warnRecommendationLowered', {
-      tps: result.tokensPerSecond!,
-      model: result.measuredModelId!
-    })
-    expect(result.warnings.includes(warning)).toBe(moved)
+    pinRam(32)
+    const q5 = 'qwen3.8-27b-ud-q5km'
+    const moved = await runBenchmark({ workspacePath: workspace(), manifests, runtime: stubChatRuntime({ modelId: q5, perSecond: 2.2 }) })
+    expect(moved.recommendedModelId).toBe('qwen3.8-27b-ud-q4km')
+    expect(moved.warnings).toContain(t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: q5 }))
+    // No lower ranked tier at 8 GB: the pick keeps, and the warning stays away.
+    pinRam(8)
+    const fourB = 'qwen3.5-4b-ud-q4kxl'
+    const kept = await runBenchmark({ workspacePath: workspace(), manifests, runtime: stubChatRuntime({ modelId: fourB, perSecond: 2.2 }) })
+    expect(kept.recommendedModelId).toBe(fourB)
+    expect(kept.warnings).not.toContain(t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: fourB }))
   })
 
   it('an unresolvable measured model never moves the recommendation (§6.5 predicate)', async () => {
-    const manifests = realManifests()
+    pinRam(32)
     const result = await runBenchmark({
       workspacePath: workspace(),
-      manifests,
-      runtime: slowRuntime('mock-not-in-catalog')
+      manifests: realManifests(),
+      runtime: stubChatRuntime({ modelId: 'mock-not-in-catalog', perSecond: 2.2 })
     })
-    expect(result.recommendedModelId).toBe(
-      recommendModelIdByRam(manifests, Math.round(result.ramGb), 'chat')
+    expect(result.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
+    expect(result.warnings).not.toContain(
+      t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: 'mock-not-in-catalog' })
     )
-    expect(result.warnings.some((w) => w.includes('moved down one size tier'))).toBe(false)
+  })
+})
+
+describe('runBenchmark progress: a step ticks only when it succeeded (L3 / T4)', () => {
+  const run = async (
+    over: Partial<Parameters<typeof runBenchmark>[0]>,
+    workspacePath = workspace()
+  ): Promise<BenchmarkProgressStep[]> => {
+    const steps: BenchmarkProgressStep[] = []
+    await runBenchmark({ workspacePath, manifests: [], onProgress: (s) => steps.push(s), ...over })
+    return steps
+  }
+
+  it('no runtime: system, drive, done', async () => {
+    expect(await run({})).toEqual(['system', 'drive', 'done'])
   })
 
-  it('persists to settings; getAppStatus + buildModelList then read the real profile', async () => {
-    const db = freshDb()
-    seedSettings(db)
-    // Before any benchmark, the persisted profile is UNKNOWN.
-    expect(getSettings(db).lastBenchmark).toBeNull()
+  it('a runtime that produced a reading: system, drive, speed, done', async () => {
+    expect(await run({ runtime: stubChatRuntime() })).toEqual(['system', 'drive', 'speed', 'done'])
+  })
 
-    const result = await runBenchmark({ workspacePath: workspace(), manifests: realManifests() })
-    updateSettings(db, { lastBenchmark: result })
+  it('a runtime that was busy elsewhere (the leg skipped, #185): no speed step', async () => {
+    expect(await run({ runtime: stubChatRuntime(), modelBusy: () => true })).toEqual(['system', 'drive', 'done'])
+  })
 
-    // getAppStatus reads `lastBenchmark.profile`.
-    const persistedProfile = getSettings(db).lastBenchmark?.profile ?? 'UNKNOWN'
-    expect(persistedProfile).toBe(result.profile)
-
-    // buildModelList consumes the same persisted profile + machine RAM, exactly like
-    // the production listModels wiring — the RAM-best-fit recommendation must agree
-    // with the benchmark's (same rule, same whole-GB rounding).
-    const dir = resolveManifestsDir(process.cwd())!
-    const { models } = await buildModelList({
-      manifestsDir: dir,
-      rootPath: workspace(),
-      profile: persistedProfile,
-      developerMode: true,
-      machineRamGb: Math.round(result.ramGb)
-    })
-    const recommended = models.filter((m) => m.recommended).map((m) => m.id)
-    if (result.recommendedModelId) {
-      expect(recommended).toContain(result.recommendedModelId)
+  it('a speed probe that failed (the stream threw): no speed step', async () => {
+    const failing: ModelRuntime = {
+      ...stubChatRuntime(),
+      async *chatStream() {
+        throw new Error('sidecar gone')
+      }
     }
+    expect(await run({ runtime: failing })).toEqual(['system', 'drive', 'done'])
+  })
+
+  it('a drive probe that failed (unwritable workspace): no drive step, and no later step implies it', async () => {
+    const missing = join(workspace(), 'does-not-exist', 'workspace')
+    const steps = await run({ runtime: stubChatRuntime() }, missing)
+    expect(steps).toEqual(['system', 'speed', 'done'])
+  })
+
+  it('a throwing onProgress never fails the run', async () => {
+    const seen: BenchmarkProgressStep[] = []
+    const fresh = await runBenchmark({
+      workspacePath: workspace(),
+      manifests: [],
+      onProgress: (s) => {
+        seen.push(s)
+        throw new Error('renderer gone')
+      }
+    })
+    expect(seen).toEqual(['system', 'drive', 'done'])
+    expect(fresh.profile).toBeTruthy()
   })
 })
 

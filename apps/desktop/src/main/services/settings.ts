@@ -75,7 +75,7 @@ export function getSettings(db: Db): AppSettings {
   // Validate the benchmark records BEFORE the merge (PR #303 audit H1/L8, owner decision G7).
   // The rows above are parsed verbatim, so anything a `updateSettings` gate never saw — a row
   // written by an older build, a hand-edited DB, a half-written blob — used to reach the
-  // startup fingerprinting, `maybeRunFirstBenchmark`, the #107 memo, Diagnostics and the
+  // startup fingerprinting, the first-benchmark decision, the #107 memo, Diagnostics and the
   // Performance screen unchecked (a `{}` history entry crashed the screen in `fmt1`). The
   // normalizers live in `shared/benchmark-schema.ts`, so main and renderer agree on what a
   // trustworthy record is. This is an IN-MEMORY repair: a read never rewrites the DB (the

@@ -64,13 +64,13 @@ export function otherMachines(history: readonly BenchmarkResult[], key: string |
 let lastAnswer: ObservedAnswerSpeed | null = null
 
 /** Record a finished answer's speed (called by the chat-stream observer in index.ts). */
-export function recordAnswerSpeed(speed: AnswerSpeed, modelId: string | null, now: () => Date = () => new Date()): void {
+export function recordAnswerSpeed(speed: AnswerSpeed, modelId: string | null): void {
   lastAnswer = {
     tokensPerSecond: speed.tokensPerSecond,
     ttftMs: speed.ttftMs,
     tokens: speed.tokens,
     modelId,
-    at: now().toISOString()
+    at: new Date().toISOString()
   }
 }
 
@@ -87,13 +87,13 @@ export function resetPerformanceForTests(): void {
 // ---- "Your model": memory class, budget, and the fit verdict (benchmark.md) ----
 
 /** Share of RAM Metal lets the GPU take when the load log has not said (Apple's default working-set cap). */
-export const UNIFIED_BUDGET_SHARE = 0.75
+const UNIFIED_BUDGET_SHARE = 0.75
 /**
  * Headroom kept back from RAM (cpu) and the unified budget before a weights-only estimate is
  * called a fit (drivers, compute buffers), and from RAM + VRAM before a discrete spill is called
  * 'too_large'. The discrete card fit itself is the picker's (`estimateGraphicsNeedMib`), not this.
  */
-export const ESTIMATE_HEADROOM = 0.92
+const ESTIMATE_HEADROOM = 0.92
 
 /**
  * The BUDGET device (PR #308 audit, decision 9): the one card whose memory the chat pick,
@@ -107,7 +107,7 @@ export const ESTIMATE_HEADROOM = 0.92
  * `primaryUsefulDevice` (the #303 P5 name; the two rules were unified at the #303/#308 merge),
  * kept under this name because the #308 records cite it.
  */
-export function selectBudgetDevice(devices: readonly GpuDevice[]): GpuDevice | null {
+function selectBudgetDevice(devices: readonly GpuDevice[]): GpuDevice | null {
   return primaryUsefulDevice(devices)
 }
 
@@ -187,8 +187,8 @@ export function eligibleDevicesFor(settings: AppSettings, hereKey: string | null
 /**
  * `nextStartMemory` for the app's settings: the ELIGIBLE probe's devices, the platform the app
  * runs on and the two GPU flags. The ONE call `pickerMemoryFor` (the Models ★ and the live
- * recommendation), `buildPerformanceSnapshot` (the tile, `currentGpu`, the placement budget)
- * and the picker seam tests make, so a probe stamped elsewhere supplies nothing to any of them.
+ * recommendation) and `buildPerformanceSnapshot` (the tile, `currentGpu`, the placement budget)
+ * make, so a probe stamped elsewhere supplies nothing to any of them.
  */
 export function nextStartMemoryFor(settings: AppSettings, hereKey: string | null): NextStartMemory {
   return nextStartMemory({

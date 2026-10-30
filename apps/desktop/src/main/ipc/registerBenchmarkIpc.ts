@@ -303,8 +303,8 @@ async function runBenchmarkAndPersist(
   // never loses an observation.
   const effectiveRead = effectiveReadOrPersisted(ctx)
 
-  // The ONE runtime this run measures. Captured here, before the GPU + drive probes, so the
-  // busy predicate below can tell it apart from whatever the manager holds later (#393).
+  // The ONE runtime this run measures. Captured here, after the GPU probe and before the drive
+  // probe, so the busy predicate below can tell it apart from whatever the manager holds later (#393).
   const runtime = ctx.runtime.active()
 
   const measured = await runBenchmark({
@@ -405,7 +405,7 @@ async function runBenchmarkAndPersist(
 // (the plaintext open at startup, or unlock/create). Strictly local; never blocks anything.
 //
 // WHY TWO HALVES (PR #303 audit L1 / SD2, owner decision G5). The three post-unlock seams used
-// to fire `maybeRunFirstBenchmark` and `maybeAutoStartActiveModel` back to back. A model start
+// to fire the first benchmark and `maybeAutoStartActiveModel` back to back. A model start
 // is not an occupancy lane, so the benchmark's 8 MiB write/fsync probe contended with the
 // start's multi-GB weight hash + load on the same drive; and `runtime.active()` was captured
 // before the drive probe, so a start that reached ready seconds later never got its speed leg.
@@ -489,17 +489,6 @@ export type FirstBenchmarkOutcome =
   /** The run threw (a refused late persist included) — logged; the Performance screen can run it on demand. */
   | 'failed'
 
-/** The scheduler's injectable seams — production passes none. */
-export interface FirstBenchmarkSchedulerDeps {
-  /** Arm `fn` after `ms` and return its cancel: the deferral clock, injectable so the timeout is
-   *  testable without real time (the ONLY thing a test may drive with a fake timer). */
-  timer?: (fn: () => void, ms: number) => () => void
-  /** The deferral boundary; defaults to `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS`. */
-  timeoutMs?: number
-  /** Test seam: receives the deferred continuation's outcome when the wait timed out. */
-  onContinuation?: (outcome: Promise<FirstBenchmarkOutcome>) => void
-}
-
 /**
  * How long the scheduler waits for the auto-start before it reports `'deferred'`. Sized to the
  * common slow case, not the worst: a ~5 GB GGUF on the ~70 MB/s USB stick #108 measured is hashed
@@ -512,9 +501,9 @@ export interface FirstBenchmarkSchedulerDeps {
  * whether the benchmark may overlap the load — it may not; it only decides when the caller's
  * outcome stops waiting.
  */
-export const FIRST_BENCHMARK_SETTLE_TIMEOUT_MS = 120_000
+const FIRST_BENCHMARK_SETTLE_TIMEOUT_MS = 120_000
 
-const defaultTimer: NonNullable<FirstBenchmarkSchedulerDeps['timer']> = (fn, ms) => {
+function armTimer(fn: () => void, ms: number): () => void {
   const handle = setTimeout(fn, ms)
   // A pending deferral must never keep the process alive on its own: at the ceiling the wait is
   // released and nothing runs unless the start settles.
@@ -575,12 +564,6 @@ function settleMovedDriveNotice(ctx: AppContext, decision: FirstBenchmarkDecisio
   if (!movedDriveMemo || movedDriveMemo.db !== db || movedDriveMemo.epoch !== decision.epoch) return
   const done = outcome === 'ran' || outcome === 'skipped-already-current'
   setMovedDriveNotice(db, decision.epoch, done ? null : { kind: 'owed' })
-}
-
-/** Test seam: forget the session's attempt (the fixtures call it in `beforeEach`). */
-export function resetFirstBenchmarkForTests(): void {
-  attemptMemo = null
-  movedDriveMemo = null
 }
 
 /**
@@ -746,8 +729,7 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
 export function scheduleFirstBenchmark(
   ctx: AppContext,
   decision: FirstBenchmarkDecision,
-  settled: Promise<unknown>,
-  deps: FirstBenchmarkSchedulerDeps = {}
+  settled: Promise<unknown>
 ): Promise<FirstBenchmarkOutcome> {
   if (decision.run === null) return Promise.resolve(decision.attempted ? 'skipped-attempted' : 'not-needed')
   let db: Db
@@ -763,25 +745,22 @@ export function scheduleFirstBenchmark(
     return Promise.resolve('skipped-attempted')
   }
   attemptMemo = { db, epoch: decision.epoch }
-  return runAfterSettled(ctx, decision, settled, deps)
+  return runAfterSettled(ctx, decision, settled)
 }
 
 async function runAfterSettled(
   ctx: AppContext,
   decision: FirstBenchmarkDecision,
-  settled: Promise<unknown>,
-  deps: FirstBenchmarkSchedulerDeps
+  settled: Promise<unknown>
 ): Promise<FirstBenchmarkOutcome> {
   // A FAILED start settles the wait too: the benchmark still runs, just without the speed leg.
   const quiet = settled.then(
     () => undefined,
     () => undefined
   )
-  const timeoutMs = deps.timeoutMs ?? FIRST_BENCHMARK_SETTLE_TIMEOUT_MS
-  const arm = deps.timer ?? defaultTimer
   let cancel: () => void = () => undefined
   const expired = new Promise<'expired'>((resolve) => {
-    cancel = arm(() => resolve('expired'), timeoutMs)
+    cancel = armTimer(() => resolve('expired'), FIRST_BENCHMARK_SETTLE_TIMEOUT_MS)
   })
   const first = await Promise.race([quiet.then(() => 'settled' as const), expired])
   // The start settled first: the timer is cleared; it fired first: clearing a fired timer is a no-op.
@@ -792,10 +771,9 @@ async function runAfterSettled(
   // ended meanwhile runs nothing, and a start that never settles leaves the next launch to
   // re-check. NEVER a run into the unfinished load.
   log.info('First-run benchmark deferred: the model start has not settled within the wait bound', {
-    waitedMs: timeoutMs
+    waitedMs: FIRST_BENCHMARK_SETTLE_TIMEOUT_MS
   })
-  const continuation = quiet.then(() => runOnceSettled(ctx, decision))
-  deps.onContinuation?.(continuation)
+  void quiet.then(() => runOnceSettled(ctx, decision))
   return 'deferred'
 }
 
@@ -868,16 +846,6 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
     log.warn('First-run benchmark skipped or failed (re-run from the Performance screen)', String(err))
     return 'failed'
   }
-}
-
-/**
- * The pre-P7 shape for callers that only have `ctx` — tests, and the audit probes; no production
- * seam calls it since P7 (the three post-unlock seams run the split so the measurement waits for
- * the auto-start). Prepares, then schedules against an already-settled promise, so the
- * measurement runs at once. Resolves to the scheduling outcome; never rejects.
- */
-export function maybeRunFirstBenchmark(ctx: AppContext): Promise<FirstBenchmarkOutcome> {
-  return scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())
 }
 
 /**
@@ -955,12 +923,11 @@ export async function refreshGpuProbeAfterRuntimeInstall(ctx: AppContext): Promi
  * `status().running` stays false for that whole window — so a loading model reads "not
  * loaded" until it is actually ready. A start in flight (a first start or a switch) reads
  * the same way, and a runtime running some OTHER model than the active one does not count
- * for this row. Optional-chained like the sibling service probes: partial test contexts
- * build a `runtime` with only the members they need.
+ * for this row.
  */
 function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
-  const status = ctx.runtime?.status?.()
-  if (!status || !status.running || !status.healthy || status.startingModelId) return false
+  const status = ctx.runtime.status()
+  if (!status.running || !status.healthy || status.startingModelId) return false
   return activeId == null || status.modelId === activeId
 }
 
@@ -969,13 +936,9 @@ function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
  * `occupancy.ts`, `model-busy.ts` and the refusal copy of the chat / doc-task / skill lanes for a
  * harm the measurement bounded (issue #393). Read straight off the manager's status, the field
  * `chatModelResident` and the engine-install guard (`registerEngineIpc.ts`) already read.
- * Optional-chained like every sibling probe: partial test contexts build a `runtime` with only the
- * members they need (`performance-persistence.test.ts` builds one with no `status` at all), and an
- * unwired probe means "no start in flight".
  */
 function modelStartInFlight(ctx: AppContext): boolean {
-  const status = ctx.runtime?.status?.()
-  return status != null && isModelStarting(status) // #599: the weight check counts too
+  return isModelStarting(ctx.runtime.status()) // #599: the weight check counts too
 }
 
 /**
