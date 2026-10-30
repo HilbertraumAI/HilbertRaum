@@ -614,9 +614,9 @@ naming a file as "use only that file", so other files showing up as sources read
   generic words (`document`, `file`, `pdf`, …) never trigger on their own; a question that
   would match the **entire** corpus narrows nothing and is treated as no match.
 - **Applied only when there is no explicit scope** — `askDocuments` runs the detector over
-  the indexed documents *just* for a conversation whose `scopeDocumentIds` is null/empty, and
-  uses the result as the per-request `scopeDocumentIds`. It can only ever **narrow**, never
-  widen; an explicit "ask selected documents" scope always wins and is left untouched.
+  the indexed documents in the resolved scope unless the user hand-picked documents
+  (`hasExplicitDocSelection`, N2, §13.5), and narrows that scope to the match. It can only ever
+  **narrow**, never widen; an explicit "ask selected documents" scope always wins and is left untouched.
 - **Visible + honest:** when it fires, the main process emits a one-shot, non-persisted
   `STREAM.scope` notice (`api.onScopeNotice`) and Chat shows an *"Answering from contract.pdf
   only"* toast, so a wrong guess is obvious and the user can rephrase or set scope manually.

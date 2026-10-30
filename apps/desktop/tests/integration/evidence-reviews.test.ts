@@ -768,7 +768,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
     text: string
   }
 
-  /** The rag.test.ts seeding idiom: one document + chunks + mock embeddings; returns ids. */
+  /** One document + chunks + mock embeddings (the shape of doc-fixtures' `seedEmbeddedDoc`); returns ids. */
   async function seedDocument(
     db: Db,
     embedder: MockEmbedder,
