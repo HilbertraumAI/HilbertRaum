@@ -450,6 +450,15 @@ describe('message truncation cause persistence (#498)', () => {
 // different app versions (success criterion #10), so the read is tolerant and the marker survives
 // the regenerate snapshot like every other column.
 describe('message "ended early" persistence (#600)', () => {
+  it('a reply that ended early reads back with its marker and is not a truncation', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a', endedEarly: 'model' })
+    const read = listMessages(db, conv.id).at(-1)
+    expect(read?.endedEarly).toBe('model')
+    expect(read?.truncated).toBeUndefined()
+  })
+
   it('an unknown stored value (a newer app wrote it) reads as no marker', () => {
     const db = freshDb()
     const conv = createConversation(db, {})
@@ -488,6 +497,18 @@ describe('system prompt + message assembly', () => {
 })
 
 describe('generateAssistantMessage (streaming)', () => {
+  // The IPC forwards each onToken 1:1 to the live bubble (chat-stream.ts), and chat-ipc pins one payload: this row is
+  // what fails if the service forwards only some tokens while persisting the whole reply.
+  it('hands every streamed token to onToken, and the reply is exactly what streamed', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+    const tokens: string[] = []
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, { onToken: (t) => tokens.push(t) })
+    expect(tokens.length).toBeGreaterThan(1)
+    expect(msg.content).toBe(tokens.join(''))
+  })
+
   it.each([
     ['the runtime reports finish_reason "stop"', undefined],
     ['a user Stop leaves no finish_reason (an aborted stream reports none)', 2]

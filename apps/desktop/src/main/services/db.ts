@@ -939,8 +939,10 @@ INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages W
  * guard, prune any checkpoint row already in the index (defence in depth: no shipped binary can
  * index one). The guarded trigger itself arrives with `ensureFtsRowidSync` in the same open: every
  * such workspace's `messages_fts_ad` predates CODE-4, so that upgrade recreates all five message
- * triggers from `MESSAGES_FTS_TRIGGERS`. Runs after `ensureMessagesFts` so the table + the `kind`
- * column already exist.
+ * triggers from `MESSAGES_FTS_TRIGGERS`. That rests on one invariant of the file: the canonical set
+ * writes the guarded `ai` before `ad` (one `exec` on a fresh create, one transaction on the
+ * upgrade), so an `ad` that carries `fts_rowid` implies a guarded `ai`. Runs after
+ * `ensureMessagesFts` so the table + the `kind` column already exist.
  */
 function ensureMessagesFtsKindFilter(db: Db): void {
   const row = db
