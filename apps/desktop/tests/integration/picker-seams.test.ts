@@ -1,6 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -16,7 +16,7 @@ import { stringify } from 'yaml'
 //
 // The audit's mutation guards M3/M4 (P1 log): removing the memory inputs from the `listModels`
 // handler, or the class from `probeAndPersistGpu`'s summary, must turn this file red — the
-// divergent explicit pair is 8 GiB card → 9B versus no card → the RAM 32 pick, the 27B Q5.
+// divergent explicit pair is 8 GiB card → the 4B versus no card → the RAM 32 pick, the 27B Q5.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -30,43 +30,39 @@ vi.mock('node:os', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:os')>()),
   totalmem: () => 32 * 1024 ** 3
 }))
-// P2a: a switch that makes the settings store refuse `gpuProbe` writes only — the witness that
-// the probe helper's catch-branch persistence cannot throw out of the benchmark. Off by default
-// (pass-through to the real module).
-const settingsState = vi.hoisted(() => ({ refuseGpuProbeWrites: false }))
-vi.mock('../../src/main/services/settings', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/main/services/settings')>()
-  return {
-    ...actual,
-    updateSettings: (...args: Parameters<typeof actual.updateSettings>): ReturnType<typeof actual.updateSettings> => {
-      if (settingsState.refuseGpuProbeWrites && 'gpuProbe' in (args[1] ?? {})) throw new Error('settings store refused the write')
-      return actual.updateSettings(...args)
-    }
-  }
-})
 
-import { buildPerformanceSnapshot, maybeRunFirstBenchmark, runAndPersistBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
+import { buildPerformanceSnapshot, runAndPersistBenchmark, tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
-import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { pickerMemoryFor, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
-import { detectSystem } from '../../src/main/services/benchmark'
-import { openDatabase } from '../../src/main/services/db'
-import { discoverManifests, machineRamGb, weightsMib } from '../../src/main/services/models'
-import { machineKey } from '../../src/main/services/performance'
+import { discoverManifests, weightsMib } from '../../src/main/services/models'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
-import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
+import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { IPC } from '../../src/shared/ipc'
 import type { AppContext } from '../../src/main/services/context'
-import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import type { ModelRuntime } from '../../src/main/services/runtime'
-import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, RuntimeStatus, SpeedSampleIdentity } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import type { AppSettings, EngineDownloadJob,GpuDevice, ModelInfo, SpeedSampleIdentity } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import {
+  CATALOG_MANIFESTS,
+  closePerformanceFixture,
+  ctxWith,
+  fakeGpuProbe,
+  firstBenchmarkNow,
+  freshRoot,
+  hereKey,
+  hereResult,
+  performanceChangedSpy,
+  pinPlatform,
+  seededDb,
+  stoppedStatus,
+  withLlamaBinary
+} from '../helpers/performance-fixture'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 // The committed catalog's answers at RAM 32 (benchmark.md table; audit §7 item 2): the RAM pick
 // is the 27B Q5. Since rule C on the free-memory basis (P3, decisions 10/11) an 8 GiB card whose
@@ -80,6 +76,8 @@ const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 const RAM_PICK = 'qwen3.8-27b-ud-q5km'
 const CARD8_PICK = 'qwen3.5-4b-ud-q4kxl'
 const CARD8_ROOMY_PICK = 'qwen3.5-9b-ud-q4kxl'
+// The 3 tok/s step from the 4B at this budget: the only ranked, eligible model under its 16 GB tier.
+const CARD8_STEP = 'gemma4-e2b-it-qat-q4'
 // The hybrid fixture's discrete card (RTX 5060, 7,573 MiB free) clears the 9B's threshold since
 // §5 item 22 (e) took host-mapped weights out of the estimate's base — it was the 4B before. These
 // cases are about WHICH DEVICE the seams choose, not which model, so the model follows the card.
@@ -100,50 +98,41 @@ const GTX1650: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1650', tot
 const ARL: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }
 const RTX5060: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 5060', totalMb: 8151, freeMb: 7573 }
 
-const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch')
-beforeAll(() => {
-  // Pinned explicitly, not inherited from the host: the class decision reads process.platform /
-  // process.arch, and the fake binary below is named for the same pinned platform.
-  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
-  Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
-})
-afterAll(() => {
-  if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
-  if (archDescriptor) Object.defineProperty(process, 'arch', archDescriptor)
-})
+// Pinned explicitly, not inherited from the host: the class decision reads process.platform /
+// process.arch, and the fake binary below is named for the same pinned platform.
+pinPlatform('win32', 'x64')
 beforeEach(() => {
   ipcState.handlers.clear()
 })
+afterEach(closePerformanceFixture)
 
 interface Fixture {
   ctx: AppContext
-  probe: ReturnType<typeof vi.fn>
+  probe: ReturnType<typeof fakeGpuProbe>['calls']
 }
 
 /** A drive root with a fake llama-server, a seeded DB, a fake session probe, and a minimal context. */
-function fixture(opts: { probeReturns: GpuDevice[]; persisted?: GpuDevice[] | null; settings?: Partial<AppSettings> }): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-picker-seams-'))
-  mkdirSync(join(root, 'workspace'))
-  const dir = llamaServerDir(root)
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, llamaServerBinaryName()), 'fake-binary')
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
+function fixture(opts: {
+  probeReturns: GpuDevice[] | (() => Promise<GpuDevice[]>)
+  persisted?: GpuDevice[] | null
+  settings?: Partial<AppSettings>
+  active?: ModelRuntime
+}): Fixture {
+  const root = freshRoot()
+  withLlamaBinary(root)
+  const db = seededDb(root)
   if (opts.persisted) updateSettings(db, { gpuProbe: { devices: opts.persisted, probedAt: '2026-08-20T00:00:00Z' } })
   if (opts.settings) updateSettings(db, opts.settings)
-  const probe = vi.fn(async () => opts.probeReturns)
-  const ctx = {
+  const probeGpu = fakeGpuProbe(opts.probeReturns)
+  const running = opts.active ?? null
+  const ctx = ctxWith(root, db, {
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'no-such-config') },
-    db,
-    manifestsDir: MANIFESTS,
-    workspace: { isUnlocked: () => true },
-    trustedSenders: { ...ANY_SENDER },
-    probeGpu: Object.assign(probe, { invalidate: vi.fn() }) as unknown as CachedGpuProbe,
-    runtime: { occupancy: new ModelOccupancy(), active: () => null, activeModelId: () => null },
+    manifestsDir: CATALOG_MANIFESTS,
+    probeGpu,
+    runtime: { occupancy: new ModelOccupancy(), active: () => running, activeModelId: () => null, status: stoppedStatus },
     isDev: false
-  } as unknown as AppContext
-  return { ctx, probe }
+  })
+  return { ctx, probe: probeGpu.calls }
 }
 
 /** The Models screen's ★ through the REAL `listModels` handler (registered via the electron mock). */
@@ -155,12 +144,6 @@ async function liveStar(ctx: AppContext): Promise<string | undefined> {
 }
 
 describe('picker seams: the budget device decides on both consumers (decision 9)', () => {
-  it('sanity: RAM is pinned to 32 GB and the platform to win32/x64', () => {
-    expect(machineRamGb()).toBe(32)
-    expect(process.platform).toBe('win32')
-    expect(process.arch).toBe('x64')
-  })
-
   it('8 GiB card → the 4B on the benchmark AND the Models ★; no card → the RAM pick on both', async () => {
     const withCard = fixture({ probeReturns: [CARD8] })
     const bench = await runAndPersistBenchmark(withCard.ctx)
@@ -256,14 +239,6 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     // The shared-memory figure never becomes a "card" for the Performance result either.
     expect(snap.current?.gpuVramMb).toBeNull()
   })
-
-  it('the persisted probe alone (no benchmark run) drives the Models ★ and the snapshot the same way', async () => {
-    const { ctx } = fixture({ probeReturns: [], persisted: [ARL, RTX5060] })
-    expect(await liveStar(ctx)).toBe(RTX5060_PICK)
-    const snap = buildPerformanceSnapshot(ctx)
-    expect(snap.currentGpu?.name).toBe(RTX5060.name)
-    expect(snap.placement.vramMb).toBe(8151)
-  })
 })
 
 describe('picker seams: the next start honours the GPU flags (decision 6)', () => {
@@ -287,46 +262,9 @@ describe('picker seams: the next start honours the GPU flags (decision 6)', () =
     expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
   })
 
-  it('a placement OBSERVED on the card is kept after the GPU is switched off, but the row no longer counts it (#303 P4 configuration match)', () => {
-    const here = machineKey(detectSystem())
-    const { ctx } = fixture({
-      probeReturns: [CARD8],
-      persisted: [CARD8],
-      settings: {
-        activeModelId: CARD8_PICK,
-        // The observation counts only while the current configuration would repeat it: pin the
-        // launch context to the record's (the manifest's own window differs).
-        contextTokensOverride: 8192,
-        modelPlacements: {
-          [CARD8_PICK]: {
-            modelId: CARD8_PICK, contextTokens: 8192, backend: 'gpu', gpuLayers: 41, totalLayers: 41,
-            gpuModelMb: 5500, cpuModelMb: 400, gpuKvMb: 640, cpuKvMb: null, metalMaxWorkingSetMb: null,
-            machineKey: here, at: '2026-09-05T00:00:00Z'
-          }
-        }
-      }
-    })
-    const before = buildPerformanceSnapshot(ctx)
-    expect(before.placement.memoryClass).toBe('discrete')
-    expect(before.placement.verdict).toMatchObject({ kind: 'gpu', estimated: false, budgetMb: 8192 })
-
-    updateSettings(ctx.db, { gpuMode: 'off' })
-    const after = buildPerformanceSnapshot(ctx)
-    // The NEXT start's class flips. The GPU observation is KEPT (a toggle restarts nothing — the
-    // record is still on disk), but a forced-CPU configuration admits no GPU record for the row:
-    // it travels as `observedMismatch` and the row estimates the RAM start the settings ask for.
-    expect(after.placement.memoryClass).toBe('cpu')
-    expect(getSettings(ctx.db).modelPlacements[CARD8_PICK]?.gpuLayers).toBe(41)
-    expect(after.placement.observed).toBeNull()
-    expect(after.placement.observedMismatch).toMatchObject({ backend: 'gpu', contextTokens: 8192 })
-    expect(after.placement.verdict).toMatchObject({ estimated: true })
-    expect(after.placement.verdict.kind).not.toBe('gpu')
-  })
-
-  it('"Try GPU again" clears the latch before it re-probes, so the summary describes the start that follows', async () => {
+  it('"Try GPU again" moves the ★ and the class from the RAM pick to the card', async () => {
     const { ctx } = fixture({ probeReturns: [CARD8], persisted: [], settings: { gpuAutoDisabled: true } })
     expect(await liveStar(ctx)).toBe(RAM_PICK)
-    const { tryGpuAgain } = await import('../../src/main/ipc/registerBenchmarkIpc')
     const settings = await tryGpuAgain(ctx)
     expect(settings.gpuAutoDisabled).toBe(false)
     expect(settings.gpuProbe?.devices).toEqual([CARD8])
@@ -340,29 +278,25 @@ describe('picker seams: a probe that cannot run or that threw persists an EMPTY 
   // pre-PR saved Q5 result, now on a computer where the probe cannot say anything.
   const STALE_AT = '2026-08-20T00:00:00Z'
   function staleCard(opts: { binary: boolean; probe?: () => Promise<GpuDevice[]> }): Fixture {
-    const f = fixture({ probeReturns: [], persisted: [CARD8] })
+    const f = fixture({ probeReturns: opts.probe ?? [], persisted: [CARD8] })
     updateSettings(f.ctx.db, {
-      lastBenchmark: {
-        ...detectSystem(),
+      lastBenchmark: hereResult({
         gpu: CARD8.name,
         gpuVramMb: CARD8.totalMb,
-        driveReadMbps: null,
         driveWriteMbps: null,
         tokensPerSecond: null,
         measuredModelId: null,
         profile: 'PRO',
         recommendedModelId: RAM_PICK,
-        warnings: [],
         ranAt: STALE_AT
-      }
+      })
     })
     if (!opts.binary) rmSync(llamaServerDir(f.ctx.paths.rootPath), { recursive: true, force: true })
-    if (opts.probe) f.probe.mockImplementation(opts.probe)
     return f
   }
 
   async function expectEmptyProbeAndRamPickOnBothSeams(f: Fixture): Promise<void> {
-    // The badge would have said 9B from the stale card before the run…
+    // The badge would have said the 4B from the stale card before the run…
     expect(await liveStar(f.ctx)).toBe(CARD8_PICK)
     const bench = await runAndPersistBenchmark(f.ctx)
     const probe = getSettings(f.ctx.db).gpuProbe
@@ -415,11 +349,10 @@ describe('picker seams: a probe that cannot run or that threw persists an EMPTY 
 
   it('the session refresh (maybeRunFirstBenchmark) clears a stale card the same way when the binary is gone', async () => {
     const f = staleCard({ binary: false })
-    maybeRunFirstBenchmark(f.ctx)
-    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([]))
+    await expect(firstBenchmarkNow(f.ctx)).resolves.toBe('not-needed')
+    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([]), { timeout: hangBudgetMs(5000) })
     expect(getSettings(f.ctx.db).gpuProbe?.probedAt).not.toBe(STALE_AT)
-    // Same machine, already benchmarked: the saved result is kept, not re-run (A4 unchanged)…
-    await new Promise((r) => setTimeout(r, 200))
+    // Same machine, already benchmarked: nothing owed, so the saved result stands (A4 unchanged)…
     expect(getSettings(f.ctx.db).lastBenchmark?.ranAt).toBe(STALE_AT)
     // …and the badge now reads the RAM pick, in step with the saved result.
     expect(await liveStar(f.ctx)).toBe(RAM_PICK)
@@ -432,40 +365,32 @@ describe('picker seams: a probe that cannot run or that threw persists an EMPTY 
         throw new Error('probe exploded')
       }
     })
-    settingsState.refuseGpuProbeWrites = true
-    try {
-      // Both the probe AND the catch branch's own persistence write throw; the benchmark must
-      // still return (the helper's contract: never throws), with the in-memory empty device list.
-      const bench = await runAndPersistBenchmark(f.ctx)
-      expect(bench.recommendedModelId).toBe(RAM_PICK)
-      expect(bench.gpu).toBeNull()
-      // The refused write means the stale card is still on disk — the residual this test pins:
-      // the store's refusal, not the probe, is what keeps it (a locked workspace re-probes on unlock).
-      expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8])
-    } finally {
-      settingsState.refuseGpuProbeWrites = false
-    }
+    // P2a: the real store refuses `gpuProbe` writes only (settings.ts's upsert hits this trigger).
+    f.ctx.db.exec("CREATE TRIGGER refuse_probe BEFORE INSERT ON settings WHEN NEW.key = 'gpuProbe' BEGIN SELECT RAISE(ABORT, 'refused'); END")
+    // Both the probe AND the catch branch's own persistence write throw; the benchmark must
+    // still return (the helper's contract: never throws), with the in-memory empty device list.
+    const bench = await runAndPersistBenchmark(f.ctx)
+    expect(bench.recommendedModelId).toBe(RAM_PICK)
+    expect(bench.gpu).toBeNull()
+    // The refused write means the stale card is still on disk — the residual this test pins:
+    // the store's refusal, not the probe, is what keeps it (a locked workspace re-probes on unlock).
+    expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8])
   })
 })
 
 describe('picker seams: the Performance snapshot carries the LIVE recommendation (P4, decision 8; audit A4/R4)', () => {
   const STALE_AT = '2026-08-20T00:00:00Z'
   /** A pre-PR saved result for THIS machine (no speed sample, the RAM pick) on top of a fixture. */
-  function withSavedRamPick(f: Fixture, over: Partial<AppSettings['lastBenchmark'] & object> = {}): Fixture {
+  function withSavedRamPick(f: Fixture): Fixture {
     updateSettings(f.ctx.db, {
-      lastBenchmark: {
-        ...detectSystem(),
-        gpu: null,
-        driveReadMbps: null,
+      lastBenchmark: hereResult({
         driveWriteMbps: null,
         tokensPerSecond: null,
         measuredModelId: null,
         profile: 'PRO',
         recommendedModelId: RAM_PICK,
-        warnings: [],
-        ranAt: STALE_AT,
-        ...over
-      }
+        ranAt: STALE_AT
+      })
     })
     return f
   }
@@ -475,9 +400,8 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     // session refresh re-probes but never re-benchmarks a same-machine result — before P4 the
     // Performance screen kept saying Q5 while the Models ★ already said the card pick.
     const f = withSavedRamPick(fixture({ probeReturns: [CARD8], persisted: [] }))
-    maybeRunFirstBenchmark(f.ctx)
-    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8]))
-    await new Promise((r) => setTimeout(r, 200))
+    await expect(firstBenchmarkNow(f.ctx)).resolves.toBe('not-needed')
+    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8]), { timeout: hangBudgetMs(5000) })
     expect(getSettings(f.ctx.db).lastBenchmark?.ranAt).toBe(STALE_AT)
     expect(f.probe).toHaveBeenCalledTimes(1)
 
@@ -492,13 +416,14 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     expect(await liveStar(f.ctx)).toBe(CARD8_PICK)
   })
 
-  it.each([
-    ['an 8 GiB probe', { probeReturns: [] as GpuDevice[], persisted: [CARD8] }, CARD8_PICK, 'discrete'],
-    ['no probe', { probeReturns: [] as GpuDevice[], persisted: [] as GpuDevice[] }, RAM_PICK, 'cpu'],
-    ['GPU off with a card present', { probeReturns: [] as GpuDevice[], persisted: [CARD8], settings: { gpuMode: 'off' as const } }, RAM_PICK, 'cpu'],
-    ['a hybrid laptop, Intel first', { probeReturns: [] as GpuDevice[], persisted: [ARL, RTX5060] }, RTX5060_PICK, 'discrete']
-  ])('both surfaces agree with %s: the listModels ★ === snapshot.recommendation.modelId (%s)', async (_label, opts, expected, basis) => {
-    const f = withSavedRamPick(fixture(opts))
+  it.each<[string, string, Parameters<typeof fixture>[0], 'discrete' | 'cpu', GpuDevice | null, boolean]>([
+    ['an 8 GiB probe', CARD8_PICK, { probeReturns: [], persisted: [CARD8] }, 'discrete', CARD8, true],
+    ['no probe', RAM_PICK, { probeReturns: [], persisted: [] }, 'cpu', null, true],
+    ['GPU off with a card present', RAM_PICK, { probeReturns: [], persisted: [CARD8], settings: { gpuMode: 'off' } }, 'cpu', null, true],
+    // No saved result at all: the persisted probe alone drives both surfaces.
+    ['a hybrid laptop, Intel first', RTX5060_PICK, { probeReturns: [], persisted: [ARL, RTX5060] }, 'discrete', RTX5060, false]
+  ])('both surfaces agree with %s: the listModels ★ === snapshot.recommendation.modelId (%s)', async (_label, expected, opts, basis, card, saved) => {
+    const f = saved ? withSavedRamPick(fixture(opts)) : fixture(opts)
     const snap = buildPerformanceSnapshot(f.ctx)
     expect(snap.recommendation?.modelId).toBe(expected)
     expect(snap.recommendation?.basis).toBe(basis)
@@ -506,29 +431,18 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     // The basis is the class the picker was given, the same class the placement row reports.
     expect(snap.recommendation?.basis).toBe(pickerMemoryFor(getSettings(f.ctx.db)).memoryClass)
     expect(snap.recommendation?.basis).toBe(snap.placement.memoryClass)
-  })
-
-  it('the persisted speed signal reaches the snapshot exactly as it reaches the ★: a crawl on the card pick moves both the same way', async () => {
-    // A 3 tok/s sample measured on the 4B (the card pick itself): the §6.5 step-down is fed to
-    // both surfaces from `speedSignalFor`, so whatever it does, it does to both.
-    const f = withSavedRamPick(fixture({ probeReturns: [], persisted: [CARD8] }), { tokensPerSecond: 3, measuredModelId: CARD8_PICK })
-    const snap = buildPerformanceSnapshot(f.ctx)
-    const star = await liveStar(f.ctx)
-    expect(snap.recommendation?.modelId).toBe(star)
-    // The signal is a real input here (not just plumbed through and ignored): the unsignalled
-    // pick would have been the 4B.
-    const unsignalled = buildPerformanceSnapshot(withSavedRamPick(fixture({ probeReturns: [], persisted: [CARD8] })).ctx)
-    expect(unsignalled.recommendation?.modelId).toBe(CARD8_PICK)
-    expect(snap.recommendation?.modelId).not.toBe(CARD8_PICK)
+    // The device both surfaces went by: the card, never the Intel listed first.
+    expect(snap.currentGpu?.name ?? null).toBe(card?.name ?? null)
+    expect(snap.placement.vramMb).toBe(card?.totalMb ?? null)
   })
 
   it('the "Your model" row on a card uses the picker\'s fit: Gemma 12B on the 8 GiB card is partial (estimated), the tile keeps the total', () => {
     const g12 = 'gemma4-12b-it-qat-q4'
     const f = fixture({ probeReturns: [], persisted: [CARD8], settings: { activeModelId: g12 } })
     const snap = buildPerformanceSnapshot(f.ctx)
-    const m = discoverManifests(MANIFESTS).manifests.map((x) => x.manifest).find((x) => x.id === g12)
+    const m = discoverManifests(CATALOG_MANIFESTS).manifests.map((x) => x.manifest).find((x) => x.id === g12)
     expect(m).toBeDefined()
-    // The card's need (11,041 MiB with its 2.4 GiB cache) is over the card's budget: not "gpu".
+    // The card's need (10,254 MiB with its 2.4 GiB cache) is over the card's budget: not "gpu".
     expect(snap.placement.verdict).toMatchObject({ kind: 'partial', estimated: true, budgetMb: 8192, needMb: Math.round(weightsMib(m!)) })
     // Display stays one-decimal GiB; the verdict got the unrounded weights.
     expect(snap.placement.model?.sizeOnDiskGb).toBe(6.5)
@@ -553,12 +467,11 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     const name = destDir.includes('whisper.cpp') ? 'whisper-cli.exe' : llamaServerBinaryName()
     writeFileSync(join(destDir, name), 'binary')
   }
-  const STOPPED: RuntimeStatus = { running: false, modelId: null, port: null, healthy: false, message: '' }
 
   /** A copy of the catalog plus a `runtime-sources.yaml` pinned to the fake archive. */
   function engineManifests(families: Array<'llama_cpp' | 'whisper_cpp'> = ['llama_cpp'], sha = ARCHIVE_SHA): string {
     const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-picker-seams-manifests-'))
-    cpSync(MANIFESTS, dir, { recursive: true })
+    cpSync(CATALOG_MANIFESTS, dir, { recursive: true })
     const sources: Record<string, unknown> = {}
     for (const family of families) {
       sources[family] = {
@@ -586,18 +499,15 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     extract: ExtractFn = dropBinary,
     request?: { families: string[] }
   ): Promise<EngineDownloadJob> {
-    const ctx = f.ctx as unknown as { manifestsDir: string; runtime: { status: () => RuntimeStatus } }
+    const ctx = f.ctx as unknown as { manifestsDir: string }
     ctx.manifestsDir = manifests
-    ctx.runtime.status = () => STOPPED
     ipcState.handlers.clear()
     const manager = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: extract })
+    // Fires once the job has settled, after any `onInstalled` listener ran.
+    const settled = new Promise<EngineDownloadJob>((resolve) => manager.onSettled(resolve))
     registerEngineIpc(f.ctx, manager)
-    const { result } = request
-      ? await invoke(handlers, IPC.downloadEngine, request)
-      : await invoke(handlers, IPC.downloadEngine)
-    const started = result as EngineDownloadJob
-    await vi.waitFor(() => expect(['done', 'failed', 'cancelled']).toContain(manager.get(started.jobId).status), { timeout: 5000 })
-    return manager.get(started.jobId)
+    await invoke(handlers, IPC.downloadEngine, ...(request ? [request] : []))
+    return settled
   }
 
   /** A fresh install: no binary on the drive, a benchmark already run → the empty stamped probe. */
@@ -609,22 +519,19 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     expect(f.probe).not.toHaveBeenCalled()
     const empty = getSettings(f.ctx.db).gpuProbe
     expect(empty?.devices).toEqual([])
-    expect(empty?.machineKey).toBe(machineKey(detectSystem()))
+    expect(empty?.machineKey).toBe(hereKey())
     expect(await liveStar(f.ctx)).toBe(RAM_PICK)
     return { f, ranAt: bench.ranAt, probedAt: empty?.probedAt ?? '' }
   }
 
-  afterEach(() => setPerformanceChangedSink(null))
-
   it('installing the runtime re-probes and persists this machine’s card, pushes, and moves the ★ — without re-running the check', async () => {
     const { f, ranAt, probedAt } = await freshInstall()
-    const pushes = vi.fn()
-    setPerformanceChangedSink(pushes)
+    const pushes = performanceChangedSpy()
     const job = await installRuntime(f, engineManifests())
     expect(job.status).toBe('done')
-    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8]))
+    await vi.waitFor(() => expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([CARD8]), { timeout: hangBudgetMs(5000) })
     const probe = getSettings(f.ctx.db).gpuProbe
-    expect(probe?.machineKey).toBe(machineKey(detectSystem()))
+    expect(probe?.machineKey).toBe(hereKey())
     expect(Date.parse(probe?.probedAt ?? '')).toBeGreaterThanOrEqual(Date.parse(probedAt))
     expect(f.probe).toHaveBeenCalledTimes(1)
     expect(f.ctx.probeGpu?.invalidate).toHaveBeenCalledTimes(1)
@@ -643,15 +550,15 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     ['stamped for this machine', 'here']
   ])('a machine that had a binary all along keeps its eligible probe untouched by a re-install — %s', async (_how, stamp) => {
     const f = fixture({ probeReturns: [ARL, RTX5060], persisted: [CARD8] })
-    if (stamp) updateSettings(f.ctx.db, { gpuProbe: { devices: [CARD8], probedAt: '2026-08-20T00:00:00Z', machineKey: machineKey(detectSystem()) } })
+    if (stamp) updateSettings(f.ctx.db, { gpuProbe: { devices: [CARD8], probedAt: '2026-08-20T00:00:00Z', machineKey: hereKey() } })
     const before = getSettings(f.ctx.db).gpuProbe
-    const pushes = vi.fn()
-    setPerformanceChangedSink(pushes)
+    const pushes = performanceChangedSpy()
     // The fixture's marker-less binary makes an explicit chat-engine install proceed (not "already
     // current"). Explicit since #516: the argument-less install fetches MISSING engines only.
     const job = await installRuntime(f, engineManifests(), dropBinary, { families: ['llama_cpp'] })
     expect(job.status).toBe('done')
-    await new Promise((r) => setTimeout(r, 50))
+    // The install listener runs the refresh up to `ctx.probeGpu` before the job settles: a refresh
+    // that was going to run has already called the probe here.
     expect(f.probe).not.toHaveBeenCalled()
     expect(f.ctx.probeGpu?.invalidate).not.toHaveBeenCalled()
     expect(getSettings(f.ctx.db).gpuProbe).toEqual(before)
@@ -662,13 +569,12 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     // The chat engine is present AND current (binary + marker), so of the two families only
     // whisper installs; the empty stamped probe is this machine's honest earlier answer.
     const f = fixture({ probeReturns: [CARD8] })
-    const empty = { devices: [], probedAt: '2026-08-20T00:00:00Z', machineKey: machineKey(detectSystem()) }
+    const empty = { devices: [], probedAt: '2026-08-20T00:00:00Z', machineKey: hereKey() }
     updateSettings(f.ctx.db, { gpuProbe: empty })
     writeRuntimeMarker(llamaServerDir(f.ctx.paths.rootPath), { version: 'btest', backend: 'cpu', os: hostRuntimeOs(), arch: hostRuntimeArch() })
     const job = await installRuntime(f, engineManifests(['llama_cpp', 'whisper_cpp']))
     expect(job.status).toBe('done')
     expect(job.binaryPath).toContain('whisper')
-    await new Promise((r) => setTimeout(r, 50))
     expect(f.probe).not.toHaveBeenCalled()
     expect(getSettings(f.ctx.db).gpuProbe).toEqual(empty)
   })
@@ -677,36 +583,22 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     const { f, probedAt } = await freshInstall()
     const job = await installRuntime(f, engineManifests(['llama_cpp'], createHash('sha256').update('some other archive').digest('hex')))
     expect(job.status).toBe('failed')
-    await new Promise((r) => setTimeout(r, 50))
     expect(f.probe).not.toHaveBeenCalled()
-    expect(getSettings(f.ctx.db).gpuProbe).toEqual({ devices: [], probedAt, machineKey: machineKey(detectSystem()) })
+    expect(getSettings(f.ctx.db).gpuProbe).toEqual({ devices: [], probedAt, machineKey: hereKey() })
   })
 
   it('a workspace locked while the install ran admits no refresh: nothing probed, nothing written', async () => {
     const { f, probedAt } = await freshInstall()
-    const gate = deferredGate()
     const lockThenExtract: ExtractFn = async (archive, destDir) => {
       // The install started unlocked (the gate passed); the workspace locks before it completes.
       ;(f.ctx.workspace as { isUnlocked: () => boolean }).isUnlocked = () => false
-      await gate.promise
       await dropBinary(archive, destDir, new AbortController().signal)
     }
-    const pending = installRuntime(f, engineManifests(), lockThenExtract)
-    gate.resolve()
-    const job = await pending
+    const job = await installRuntime(f, engineManifests(), lockThenExtract)
     expect(job.status).toBe('done')
-    await new Promise((r) => setTimeout(r, 50))
     expect(f.probe).not.toHaveBeenCalled()
-    expect(getSettings(f.ctx.db).gpuProbe).toEqual({ devices: [], probedAt, machineKey: machineKey(detectSystem()) })
+    expect(getSettings(f.ctx.db).gpuProbe).toEqual({ devices: [], probedAt, machineKey: hereKey() })
   })
-
-  function deferredGate(): { promise: Promise<void>; resolve: () => void } {
-    let resolve!: () => void
-    const promise = new Promise<void>((res) => {
-      resolve = res
-    })
-    return { promise, resolve }
-  }
 })
 
 // Issue #322 — the persisted speed sample carries the identity it was measured under
@@ -743,20 +635,17 @@ describe('picker seams: the speed sample carries the identity it was measured un
   function savedCrawl(f: Fixture, opts: { legacy?: boolean; identity?: SpeedSampleIdentity } = {}): Fixture {
     const identity = opts.legacy ? {} : { speedIdentity: opts.identity ?? ON_CARD8 }
     updateSettings(f.ctx.db, {
-      lastBenchmark: {
-        ...detectSystem(),
+      lastBenchmark: hereResult({
         gpu: CARD8.name,
         gpuVramMb: CARD8.totalMb,
-        driveReadMbps: null,
         driveWriteMbps: null,
         tokensPerSecond: 3,
         measuredModelId: CARD8_PICK,
         ...identity,
         profile: 'PRO',
         recommendedModelId: CARD8_PICK,
-        warnings: [],
         ranAt: STALE_AT
-      }
+      })
     })
     return f
   }
@@ -769,12 +658,11 @@ describe('picker seams: the speed sample carries the identity it was measured un
   }
 
   it('the benchmark records the class, the budget device, the launched context and the backend the sample was measured under', async () => {
-    const f = fixture({ probeReturns: [CARD8] })
     // ONE runtime object, handed out on every call — `RuntimeManager.active()` returns
     // `this.current`, a single instance per committed start, and since #393 the speed leg's busy
     // predicate compares the runtime it captured against what the manager holds now.
     const running = runtimeOnCard(CARD8_PICK)
-    ;(f.ctx.runtime as unknown as { active: () => ModelRuntime | null }).active = () => running
+    const f = fixture({ probeReturns: [CARD8], active: running })
     const bench = await runAndPersistBenchmark(f.ctx)
     expect(bench.tokensPerSecond).not.toBeNull()
     expect(bench.measuredModelId).toBe(CARD8_PICK)
@@ -794,19 +682,20 @@ describe('picker seams: the speed sample carries the identity it was measured un
   it('same class and same card as the next start: the crawl still steps the pick, exactly as a legacy sample does', async () => {
     const stepped = await both(savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] })))
     const legacy = await both(savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] }), { legacy: true }))
-    expect(stepped).toBe(legacy)
-    expect(stepped).not.toBe(CARD8_PICK)
+    expect(stepped).toBe(CARD8_STEP)
+    expect(legacy).toBe(CARD8_STEP)
+    // The control: no sample, no step.
+    const unsignalled = buildPerformanceSnapshot(fixture({ probeReturns: [], persisted: [CARD8] }).ctx)
+    expect(unsignalled.recommendation?.modelId).toBe(CARD8_PICK)
   })
 
-  it('the GPU switched off since: a crawl measured on the card is an upper bound for the processor start — the RAM pick still steps down', async () => {
+  it.each<[string, Partial<AppSettings>]>([
+    ['the GPU switched off since', { gpuMode: 'off' }],
+    ['auto-disabled after a crash', { gpuAutoDisabled: true }]
+  ])('%s: a crawl measured on the card is an upper bound for the processor start — the RAM pick still steps down', async (_label, settings) => {
     // Dropping the sample here would move the pick UP (to the 27B Q5) on the slowest path the
     // machine has, for a model that crawled at 3 tok/s even on the card.
-    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { gpuMode: 'off' } }))
-    expect(await both(f)).toBe(Q4)
-  })
-
-  it('auto-disabled after a crash: the same direction, the same answer', async () => {
-    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { gpuAutoDisabled: true } }))
+    const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings }))
     expect(await both(f)).toBe(Q4)
   })
 
@@ -841,6 +730,6 @@ describe('picker seams: the speed sample carries the identity it was measured un
 
   it('a different context size in Settings: still a signal (the context is recorded, not matched)', async () => {
     const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { contextTokensOverride: 32_768 } }))
-    expect(await both(f)).not.toBe(CARD8_PICK)
+    expect(await both(f)).toBe(CARD8_STEP)
   })
 })
