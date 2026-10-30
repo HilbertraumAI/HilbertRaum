@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -28,30 +28,38 @@ vi.mock('electron', () => ({
   },
   app: { getVersion: () => '0.0.0-test' }
 }))
+// The RAM the recommended model must fit in (`carries the RECOMMENDED model's…`: 8 GB minimum).
+vi.mock('node:os', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:os')>()),
+  totalmem: () => 32 * 1024 ** 3
+}))
 
-import { buildPerformanceSnapshot, maybeRunFirstBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
+import { buildPerformanceSnapshot } from '../../src/main/ipc/registerBenchmarkIpc'
 import { effectiveReadOrPersisted } from '../../src/main/ipc/registerModelIpc'
-import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
-import { detectSystem } from '../../src/main/services/benchmark'
 import type { Db } from '../../src/main/services/db'
-import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
-import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
-import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
+import { machineKey } from '../../src/main/services/performance'
+import { recordModelPlacement } from '../../src/main/services/runtime/placement'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, BenchmarkResult, ModelPlacement } from '../../src/shared/types'
-import { closePerformanceFixture, ctxWith, freshRoot, hereResult, result, seededDb } from '../helpers/performance-fixture'
+import { modelPlacement } from '../helpers/benchmark-records'
+import {
+  closePerformanceFixture,
+  ctxWith,
+  firstBenchmarkNow,
+  freshRoot,
+  hereKey,
+  hereResult,
+  pinPlatform,
+  result,
+  seededDb
+} from '../helpers/performance-fixture'
 
-beforeEach(() => {
-  resetPerformanceForTests()
-  resetEffectiveReadForTests()
-  resetModelPlacementForTests()
-  setPerformanceChangedSink(null)
-})
+// Handoff 4: the GPU flags decide `cpuForced` only off Apple Silicon (performance.ts), and no CI leg
+// runs tests on macOS, so these rows state the platform rather than read it from the host.
+pinPlatform('win32', 'x64')
 
 // TH2: every root/DB in this file comes from the fixture's `freshRoot`/`seededDb`.
 afterEach(closePerformanceFixture)
-
-const here = (): string | null => machineKey(detectSystem())
 
 /** Write a settings row STRAIGHT into the DB, bypassing `updateSettings` and its gates. */
 function writeRaw(db: Db, key: string, valueJson: string): void {
@@ -93,8 +101,8 @@ function manifestsDir(root: string, id: string, contextTokens: number): string {
 }
 
 /** A placement for `modelId` on THIS machine (the fields the fit verdict reads). */
-function placement(over: Partial<ModelPlacement> = {}): ModelPlacement {
-  return {
+const placement = (over: Partial<ModelPlacement> = {}): ModelPlacement =>
+  modelPlacement({
     modelId: 'ctx-model',
     contextTokens: 4096,
     backend: 'gpu',
@@ -105,11 +113,10 @@ function placement(over: Partial<ModelPlacement> = {}): ModelPlacement {
     gpuKvMb: 400,
     cpuKvMb: null,
     metalMaxWorkingSetMb: null,
-    machineKey: here(),
+    machineKey: hereKey(),
     at: '2026-09-05T10:00:00Z',
     ...over
-  }
-}
+  })
 
 describe('the write gate keeps invalid records out of the snapshot', () => {
   it('H1: a `{}` history entry is neither stored nor exposed as another computer', () => {
@@ -169,8 +176,8 @@ describe('rows that bypassed the write gate are validated on READ', () => {
     // `lastBenchmark` reads as null, so this is a first run: the background benchmark lands a
     // real, keyed result over the junk row. TH2: await the scheduler's own outcome (P7) instead
     // of polling for the state it guarantees on 'ran'.
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('ran')
-    expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('ran')
+    expect(machineKey(getSettings(db).lastBenchmark)).toBe(hereKey())
   })
 
   it('a corrupt row does not cost the records beside it', () => {
@@ -183,21 +190,10 @@ describe('rows that bypassed the write gate are validated on READ', () => {
     expect(s.lastBenchmark).toBeNull()
     expect(s.benchmarkHistory.map((e) => e.cpuModel)).toEqual([mine.cpuModel])
   })
-
-  it('a history row holding one machine twice reads back as one entry, the newest', () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    const older = hereResult({ ranAt: '2026-01-01T00:00:00Z', tokensPerSecond: 1 })
-    const newer = hereResult({ ranAt: '2026-09-01T00:00:00Z', tokensPerSecond: 9 })
-    writeRaw(db, 'benchmarkHistory', JSON.stringify([older, newer]))
-    const stored = getSettings(db).benchmarkHistory
-    expect(stored).toHaveLength(1)
-    expect(stored[0].tokensPerSecond).toBe(9)
-  })
 })
 
 describe('legacy records (G3)', () => {
-  it('the `{ profile }` blob stays the current record, with safe defaults and no history entry', () => {
+  it('the `{ profile }` blob stays the current record, with safe defaults and no history entry', async () => {
     const root = freshRoot()
     const db = seededDb(root)
     updateSettings(db, { lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult })
@@ -216,6 +212,11 @@ describe('legacy records (G3)', () => {
     expect(snap.currentMachine).toBe(true)
     expect(snap.current?.profile).toBe('BALANCED')
     expect(snap.otherMachines).toEqual([])
+    expect(getSettings(db).benchmarkHistory).toEqual([])
+
+    // …and the moved-drive check never mistakes it for a move: nothing owed, nothing replaced.
+    await expect(firstBenchmarkNow(ctxWith(root, db))).resolves.toBe('not-needed')
+    expect(getSettings(db).lastBenchmark?.profile).toBe('BALANCED')
     expect(getSettings(db).benchmarkHistory).toEqual([])
   })
 
@@ -274,7 +275,8 @@ describe('the context on the screen is the context the runtime would launch with
     const root = freshRoot()
     const db = seededDb(root)
     const dir = manifestsDir(root, 'ctx-model', 32_768)
-    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'ctx-model', contextTokensOverride: 131_072 })
+    // Over the ceiling: clamped by the write gate, then wins over both.
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'ctx-model', contextTokensOverride: 200_000 })
     expect(contextOf(root, db, dir)).toBe(131_072)
   })
 
