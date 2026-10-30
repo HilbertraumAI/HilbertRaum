@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // The first-run benchmark behind the model auto-start (PR #303 audit L1 / SD2, owner decision
@@ -18,8 +18,8 @@ import { join } from 'node:path'
 //    after the #530 heal of a GPU flag that an engine load refusal had set.
 //
 // Every wait here is on a real completion seam (the fake runtime's start gate, the scheduler's
-// outcome promise, a `vi.waitFor` on persisted state); the only clock is the injected deferral
-// timer, driven by hand for the timeout case alone.
+// outcome promise, an `until` on persisted state); the only clock is fake `setTimeout` for the
+// deferral rows, driven to the shipped 120 s.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -28,6 +28,12 @@ vi.mock('electron', () => ({
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   app: { getVersion: () => '0.0.0-test' }
+}))
+
+// The RAM is a KNOWN input: the #393 rows compare profiles, which on a host at or under 8 GB could not differ.
+vi.mock('node:os', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:os')>()),
+  totalmem: () => 16 * 1024 ** 3
 }))
 
 // The measurement itself, wrapped (calling through) so a test can prove it was NOT invoked
@@ -42,53 +48,73 @@ vi.mock('../../src/main/services/benchmark', async (importOriginal) => {
   return { ...actual, runBenchmark: runBenchmarkSpy }
 })
 
+// The auto-start, wrapped the same way: the seams call it from the probe's `then`, so "not called yet"
+// is a synchronous read that does not depend on how long its install check's real fs work takes.
+const { autoStartSpy } = vi.hoisted(() => ({ autoStartSpy: vi.fn<(ctx: AppContext) => Promise<void>>() }))
+vi.mock('../../src/main/ipc/registerModelIpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/ipc/registerModelIpc')>()
+  autoStartSpy.mockImplementation(actual.maybeAutoStartActiveModel)
+  return { ...actual, maybeAutoStartActiveModel: autoStartSpy }
+})
+
 import {
   BenchmarkBusyError,
-  FIRST_BENCHMARK_SETTLE_TIMEOUT_MS,
-  maybeRunFirstBenchmark,
   movedDriveNotice,
   prepareFirstBenchmark,
-  resetFirstBenchmarkForTests,
   runAndPersistBenchmark,
-  scheduleFirstBenchmark,
-  type FirstBenchmarkOutcome,
-  type FirstBenchmarkSchedulerDeps
+  scheduleFirstBenchmark
 } from '../../src/main/ipc/registerBenchmarkIpc'
+import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel } from '../../src/main/ipc/registerModelIpc'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { t } from '../../src/shared/i18n'
-import { classifyProfile, detectSystem, type RunBenchmarkDeps } from '../../src/main/services/benchmark'
+import type { RunBenchmarkDeps } from '../../src/main/services/benchmark'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
-import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
+import { machineKey } from '../../src/main/services/performance'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeStartOptions } from '../../src/main/services/runtime'
+import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
-import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { WorkspaceController, createEncryptedVaultOnDisk, vaultPathsFrom } from '../../src/main/services/workspace-vault'
 import { IPC } from '../../src/shared/ipc'
-import type { AppSettings, BenchmarkResult, GpuDevice, HardwareProfile, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
+import type {
+  AppSettings,
+  AppStatus,
+  BenchmarkResult,
+  GpuDevice,
+  MovedDriveNotice,
+  PrivacyPolicy,
+  RuntimeStatus,
+  WorkspaceStateInfo
+} from '../../src/shared/types'
+import { deferred } from '../helpers/deferred'
+import { until, within } from '../helpers/hang-budget'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import {
+  CATALOG_MANIFESTS,
   closePerformanceFixture,
   ctxWith,
+  fakeGpuProbe,
+  firstBenchmarkNow,
   freshRoot,
+  hereKey,
   hereResult,
   performanceChangedSpy,
   result,
   seededDb,
-  stoppedStatus
+  sessionWorkspace,
+  stoppedStatus,
+  stubChatRuntime,
+  withLlamaBinary
 } from '../helpers/performance-fixture'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-const REPO_MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 /** A catalog chat model with no weights under the test roots: developer leniency lets the
  *  auto-start reach `runtime.start` through the mock-fallback path (the core-model-ipc idiom). */
 const CHAT_MODEL = 'qwen3-4b-instruct-q4'
@@ -99,52 +125,13 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
   workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
 }
 
-const here = (): string | null => machineKey(detectSystem())
+const here = hereKey
 /** The card of the #330 round trip — the one the probe was too slow to enumerate. */
 const RTX_DEVICE: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** One macrotask hop — room for a wrong implementation to (wrongly) start I/O before an assert. */
 const hop = (): Promise<void> => new Promise((r) => setImmediate(r))
 async function hops(n: number): Promise<void> {
   for (let i = 0; i < n; i++) await hop()
-}
-
-function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: Error) => void } {
-  let resolve!: (v: T) => void
-  let reject!: (e: Error) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-  return { promise, resolve, reject }
-}
-
-/**
- * A chat runtime stub whose stream yields a couple of chunks with timings — enough for the
- * speed leg. `onChunk` runs BETWEEN the two yields: the window in which a manual "Use model"
- * lands beside a running benchmark (#393). With `rejectAfterHook` the generator then THROWS
- * instead of yielding the second chunk — the killed sidecar, whose iterator rejects rather
- * than delivering another chunk (the realistic #334 leg S5 timing: chunks are ~125 ms apart at
- * 8 tok/s, the `startingModelId` flip → the stop is one microtask).
- */
-function stubRuntime(
-  onChunk?: () => void,
-  opts?: { rejectAfterHook?: boolean; modelId?: string; perSecond?: number }
-): ModelRuntime {
-  return {
-    modelId: opts?.modelId ?? 'stub-chat',
-    async start() {},
-    async stop() {},
-    async health() {
-      return { healthy: true, message: '', port: null }
-    },
-    async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
-      yield 'a'
-      onChunk?.()
-      if (opts?.rejectAfterHook) throw new Error('model stopped')
-      yield 'b'
-      options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: opts?.perSecond ?? 20 })
-    }
-  }
 }
 
 /**
@@ -167,14 +154,14 @@ interface FakeRuntime {
   failStart: (err: Error) => void
   /**
    * A manual "Use model" enqueued beside a run (#393): sets `startingModelId` and resolves
-   * NOTHING, modelling `RuntimeManager.start()`'s synchronous flip (index.ts:519), which
-   * precedes the queued `doStart`'s stop of the running model (index.ts:608).
+   * NOTHING, modelling `RuntimeManager.start()`'s synchronous flip, which precedes the queued
+   * `doStart`'s stop of the running model.
    */
   enqueueManualStart: (modelId: string) => void
   /**
    * That start COMPLETING beside the run (#393): the flag goes back to null and the manager
-   * commits a NEW runtime object (`this.current = this.decorateWithGenerationGate(next)`,
-   * index.ts:640) — the one the leg captured is dead and is no longer what `active()` hands out.
+   * commits a NEW runtime object (`this.current = this.decorateWithGenerationGate(next)`)
+   * — the one the leg captured is dead and is no longer what `active()` hands out.
    */
   completeManualStart: (modelId: string) => void
   /** Install the running runtime, once, the way a committed start does (identity is stable). */
@@ -183,7 +170,7 @@ interface FakeRuntime {
 }
 
 function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): FakeRuntime {
-  let current: ModelRuntime | null = opts.ready ? stubRuntime() : null
+  let current: ModelRuntime | null = opts.ready ? stubChatRuntime() : null
   let starting: string | null = null
   let shutdown = false
   const reached = deferred<RuntimeStartOptions>()
@@ -196,7 +183,7 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
     status: () =>
       current
         ? // A start in flight while some model runs is the manager's `switchingId`
-          // (`RuntimeManager.status()`, index.ts:706) — null while the SAME model is starting.
+          // (`RuntimeManager.status()`) — null while the SAME model is starting.
           {
             running: true,
             modelId: current.modelId,
@@ -219,7 +206,7 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
       } finally {
         starting = null
       }
-      current = stubRuntime()
+      current = stubChatRuntime()
       return rt.status()
     },
     stop: async () => {
@@ -233,7 +220,7 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
     },
     completeManualStart: (modelId) => {
       starting = null
-      current = stubRuntime(undefined, { modelId })
+      current = stubChatRuntime({ modelId })
     },
     setCurrent: (next) => {
       current = next
@@ -245,73 +232,14 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
   return rt
 }
 
-/** The injected deferral clock: arms one callback, fired by hand; a cancel disarms it. */
-function fakeTimer(): {
-  timer: NonNullable<FirstBenchmarkSchedulerDeps['timer']>
-  armed: number[]
-  cancelled: number
-  fire: () => void
-} {
-  let pending: (() => void) | null = null
-  const state = {
-    armed: [] as number[],
-    cancelled: 0,
-    fire: (): void => {
-      const fn = pending
-      pending = null
-      fn?.()
-    },
-    timer: (fn: () => void, ms: number): (() => void) => {
-      state.armed.push(ms)
-      pending = fn
-      return () => {
-        state.cancelled += 1
-        pending = null
-      }
-    }
-  }
-  return state
-}
-
 /** A context the REAL `maybeAutoStartActiveModel` can drive against the fake runtime. */
 function autoStartCtx(root: string, db: Db, runtime: FakeRuntime, over: Record<string, unknown> = {}): AppContext {
   return ctxWith(root, db, {
-    manifestsDir: REPO_MANIFESTS,
+    manifestsDir: CATALOG_MANIFESTS,
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'no-such-config') },
     runtime,
     ...over
   })
-}
-
-/** A session-aware workspace stand-in (the core-model-ipc shape): flags plus the epoch counter. */
-function sessionWorkspace(): {
-  isUnlocked: () => boolean
-  isLocking: () => boolean
-  unlockEpoch: () => number
-  beginLock: () => void
-  completeLock: () => void
-  completeUnlock: () => void
-} {
-  let unlocked = true
-  let locking = false
-  let epoch = 1
-  return {
-    isUnlocked: () => unlocked,
-    isLocking: () => locking,
-    unlockEpoch: () => epoch,
-    beginLock: () => {
-      locking = true
-    },
-    completeLock: () => {
-      locking = true
-      unlocked = false
-    },
-    completeUnlock: () => {
-      locking = false
-      unlocked = true
-      epoch += 1
-    }
-  }
 }
 
 /** A context wired like production for the workspace IPC seams: `db` resolves through the controller. */
@@ -324,7 +252,7 @@ function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime, 
     },
     workspace: ctrl,
     runtime,
-    manifestsDir: REPO_MANIFESTS,
+    manifestsDir: CATALOG_MANIFESTS,
     probeGpu,
     isDev: true,
     // #477: pendingModelSwitches is required — maybeAutoStartActiveModel/startModelRuntime's
@@ -333,22 +261,6 @@ function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime, 
   } as unknown as AppContext
   registerWorkspaceIpc(ctx)
   return ctx
-}
-
-/** The session-cached probe seam, driven by hand — the injected fn never spawns anything. */
-function fakeProbe(impl: () => Promise<GpuDevice[] | null>): CachedGpuProbe & { calls: () => number } {
-  let calls = 0
-  const probe = (_bin: string): Promise<GpuDevice[] | null> => {
-    calls += 1
-    return impl()
-  }
-  return Object.assign(probe, { invalidate: () => undefined, calls: () => calls })
-}
-
-/** A drive root with a placeholder `llama-server`, so `probeAndPersistGpu` resolves a binary. */
-function withBinary(root: string): void {
-  mkdirSync(llamaServerDir(root), { recursive: true })
-  writeFileSync(join(llamaServerDir(root), llamaServerBinaryName()), 'fake-binary')
 }
 
 /** An encrypted vault whose settings hold `seed`, LOCKED, so the unlock handler opens it. */
@@ -379,10 +291,7 @@ function movedToNewMachine(db: Db): BenchmarkResult {
 beforeEach(() => {
   ipcState.handlers.clear()
   runBenchmarkSpy.mockClear()
-  resetFirstBenchmarkForTests()
-  resetPerformanceForTests()
-  resetEffectiveReadForTests()
-  setPerformanceChangedSink(null)
+  autoStartSpy.mockClear()
   inFlightStreams.clear()
 })
 
@@ -549,16 +458,39 @@ describe('movedDriveNotice: what the moved-drive check did (§5 item 22 (a))', (
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
   })
 
-  it('a manual check clears the notice, whichever state was standing', async () => {
+  const STANDING: Array<[MovedDriveNotice['kind'], (ctx: AppContext, db: Db) => Promise<void>]> = [
+    [
+      'restored',
+      async (ctx, db) => {
+        const foreign = result()
+        updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, hereResult()] })
+        prepareFirstBenchmark(ctx)
+      }
+    ],
+    [
+      'measuring',
+      async (ctx, db) => {
+        movedToNewMachine(db)
+        prepareFirstBenchmark(ctx)
+      }
+    ],
+    [
+      'owed',
+      async (ctx, db) => {
+        movedToNewMachine(db)
+        const decision = prepareFirstBenchmark(ctx)
+        const release = ctx.runtime.occupancy.begin('skill-run')
+        await scheduleFirstBenchmark(ctx, decision, Promise.resolve())
+        release()
+      }
+    ]
+  ]
+  it.each(STANDING)('a manual check clears the notice, whichever state was standing: %s', async (kind, stand) => {
     const root = freshRoot()
     const db = seededDb(root)
-    const foreign = result()
-    const known = hereResult()
-    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
     const ctx = ctxWith(root, db)
-
-    prepareFirstBenchmark(ctx)
-    expect(movedDriveNotice(ctx)).toMatchObject({ kind: 'restored' })
+    await stand(ctx, db)
+    expect(movedDriveNotice(ctx)).toMatchObject({ kind })
 
     // This is what the notice's "Check this computer" leads to on the Performance screen.
     await runAndPersistBenchmark(ctx)
@@ -597,20 +529,6 @@ describe('scheduleFirstBenchmark: runs at once when nothing is starting', () => 
     expect(getSettings(db).lastBenchmark?.tokensPerSecond).toBeNull()
   })
 
-  it('auto-start disabled: the run lands at once, nothing is started', async () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    updateSettings(db, { activeModelId: CHAT_MODEL, autoStartActiveModel: false })
-    const rt = fakeRuntime()
-    const ctx = autoStartCtx(root, db, rt)
-
-    const started = maybeAutoStartActiveModel(ctx)
-    await expect(scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), started)).resolves.toBe('ran')
-
-    expect(rt.startCalls).toBe(0)
-    expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
-  })
-
   it('an already-ready runtime: the run lands at once and the speed leg sees it', async () => {
     const root = freshRoot()
     const db = seededDb(root)
@@ -624,6 +542,7 @@ describe('scheduleFirstBenchmark: runs at once when nothing is starting', () => 
     expect(rt.startCalls).toBe(0)
     expect(runBenchmarkSpy.mock.calls[0][0].runtime).not.toBeNull()
     expect(getSettings(db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
+    expect(getSettings(db).lastBenchmark?.warnings).not.toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
   })
 })
 
@@ -641,7 +560,7 @@ describe('a model start in flight beside the speed leg (#393)', () => {
    *
    * The runtime is installed ONCE, so `active()` hands out the same object on every call —
    * `RuntimeManager.active()` returns `this.current`, a single decorator instance per committed
-   * start (runtime/index.ts:640/677), and the leg's identity check reads exactly that.
+   * start, and the leg's identity check reads exactly that.
    */
   async function runOnce(build: (rt: FakeRuntime) => ModelRuntime): Promise<BenchmarkResult> {
     const root = freshRoot()
@@ -658,61 +577,66 @@ describe('a model start in flight beside the speed leg (#393)', () => {
     return saved as BenchmarkResult
   }
 
-  /** The two classifications a run on THIS host can land on: with no speed input, and with a crawl. */
-  const profiles = (): { noSpeed: HardwareProfile; stepped: HardwareProfile } => {
-    const ramGb = detectSystem().ramGb
-    // The same inputs `runBenchmark` classifies with here: no usable GPU (these roots carry no
-    // probe binary, so the probe reports no devices).
-    return {
-      noSpeed: classifyProfile(ramGb, { tokensPerSecond: null, gpuUseful: false }),
-      stepped: classifyProfile(ramGb, { tokensPerSecond: CRAWL_TPS, gpuUseful: false })
-    }
-  }
-
   it('a manual start enqueued during the run skips the speed leg with the warning, profile untouched (#393)', async () => {
-    const { noSpeed, stepped } = profiles()
-    // The sibling run measures a CRAWL, so its profile is stepped DOWN. Unless this host is
-    // already on the lowest rung (RAM ≤ 8 GB and no useful GPU, where `Math.max(idx - 1, 0)` is
-    // a no-op), the two classifications differ and the comparison below can genuinely fail.
-    const slow = await runOnce(() => stubRuntime(undefined, { perSecond: CRAWL_TPS }))
+    // 16 GiB: LITE from RAM alone, TINY once a measured crawl steps it.
+    const slow = await runOnce(() => stubChatRuntime({ perSecond: CRAWL_TPS }))
     expect(slow.tokensPerSecond).toBe(CRAWL_TPS)
-    expect(slow.profile).toBe(stepped)
+    expect(slow.profile).toBe('TINY')
 
     // "Use model" on ANOTHER model, pressed between two streamed chunks: `startingModelId` is
     // set synchronously, strictly before the queued `doStart` stops the model we stream on.
-    const saved = await runOnce((rt) => stubRuntime(() => rt.enqueueManualStart('some-other-model')))
+    const saved = await runOnce((rt) => stubChatRuntime({ onChunk: () => rt.enqueueManualStart('some-other-model') }))
 
     expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
     expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
     // The rest of the result is untouched: the profile is the no-speed classification from RAM
     // and GPU alone — a skipped leg never steps it down, the way a measured crawl would.
-    expect(saved.profile).toBe(noSpeed)
-    if (stepped !== noSpeed) expect(saved.profile).not.toBe(slow.profile)
+    expect(saved.profile).toBe('LITE')
   })
 
   it('a start that stops the model between two chunks still yields the skipped warning, not a silent null (#393)', async () => {
-    const { noSpeed } = profiles()
-
-    // The realistic S5 timing: the stop lands BETWEEN chunks, so the iterator rejects instead
-    // of delivering one and the per-chunk check never fires — the catch must warn all the same.
+    // The realistic S5 timing (chunks ~125 ms apart at 8 tok/s, the `startingModelId` flip → the
+    // stop is one microtask): the stop lands BETWEEN chunks, so the iterator rejects instead of
+    // delivering one and the per-chunk check never fires — the catch must warn all the same.
     const saved = await runOnce((rt) =>
-      stubRuntime(() => rt.enqueueManualStart('some-other-model'), { rejectAfterHook: true })
+      stubChatRuntime({ onChunk: () => rt.enqueueManualStart('some-other-model'), rejectAfterHook: true })
     )
 
     // `tokensPerSecond` is already null on the unfixed code (the catch returned null silently) —
     // the WARNING is what discriminates here: without it the missing figure has no explanation.
     expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
     expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
-    expect(saved.profile).toBe(noSpeed)
+    expect(saved.profile).toBe('LITE')
   })
 
   it('a start that COMPLETED between the runtime capture and the leg skips it too (#393)', async () => {
     // The gap the review found: `runBenchmarkAndPersist` captures `ctx.runtime.active()` before
-    // the GPU + drive probes. A start that COMPLETES in that window puts `startingModelId` back
-    // to null and commits a NEW runtime — the captured one is dead, so neither the lane check nor
-    // the start-in-flight check sees anything. The manager no longer holding the captured object
-    // is the signal.
-    const saved = await runOnce((rt) => stubRuntime(() => rt.completeManualStart('some-other-model')))
+    // the drive probe. A start that COMPLETES in that window puts `startingModelId` back to null
+    // and commits a NEW runtime — the captured one is dead, so neither the lane check nor the
+    // start-in-flight check sees anything. The manager no longer holding the captured object is
+    // the signal.
+    const root = freshRoot()
+    const db = seededDb(root)
+    const rt = fakeRuntime({ ready: true })
+    let opened = false
+    rt.setCurrent({
+      ...stubChatRuntime(),
+      async *chatStream() {
+        opened = true
+        yield 'a'
+      }
+    })
+    const saved = await runAndPersistBenchmark(autoStartCtx(root, db, rt), (step) => {
+      // 'drive' is reported after the capture and before the leg.
+      if (step === 'drive') rt.completeManualStart('some-other-model')
+    })
+    expect(opened).toBe(false)
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+  })
+
+  it('a start that COMPLETED while the leg streams skips it too (#393)', async () => {
+    const saved = await runOnce((rt) => stubChatRuntime({ onChunk: () => rt.completeManualStart('some-other-model') }))
 
     expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
     expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
@@ -720,22 +644,20 @@ describe('a model start in flight beside the speed leg (#393)', () => {
 
   it('a completed start whose stop also killed the captured stream warns rather than going silent (#393)', async () => {
     const saved = await runOnce((rt) =>
-      stubRuntime(() => rt.completeManualStart('some-other-model'), { rejectAfterHook: true })
+      stubChatRuntime({ onChunk: () => rt.completeManualStart('some-other-model'), rejectAfterHook: true })
     )
 
     expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
     expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
   })
-
-  it('nothing starting: the speed leg measures as before', async () => {
-    const saved = await runOnce(() => stubRuntime())
-
-    expect(saved).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
-    expect(saved.warnings).not.toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
-  })
 })
 
 describe('behind a pending model start', () => {
+  // The inner `afterEach` runs before the file's `closePerformanceFixture`, whose retry uses a real `setTimeout`.
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('no benchmark I/O while the start is pending; once it resolves the run measures the started runtime', async () => {
     const root = freshRoot()
     const db = seededDb(root)
@@ -794,71 +716,76 @@ describe('behind a pending model start', () => {
     const db = seededDb(root)
     const ctx = ctxWith(root, db)
     const settled = deferred()
-    const clock = fakeTimer()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
-    const outcome = scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), settled.promise, { timer: clock.timer })
+    const outcome = scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), settled.promise)
 
-    expect(clock.armed).toEqual([FIRST_BENCHMARK_SETTLE_TIMEOUT_MS])
+    expect(vi.getTimerCount()).toBe(1)
     await hops(5)
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
     expect(getSettings(db).lastBenchmark).toBeNull()
 
     settled.resolve()
     await expect(outcome).resolves.toBe('ran')
-    expect(clock.cancelled).toBe(1)
+    expect(vi.getTimerCount()).toBe(0)
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('the deferral boundary', () => {
-  it('at the timeout: "deferred", still no I/O, exactly one continuation registered', async () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('at the timeout (the shipped 120 s): "deferred", still no I/O', async () => {
     const root = freshRoot()
     const db = seededDb(root)
     const ctx = ctxWith(root, db)
     const settled = deferred()
-    const clock = fakeTimer()
-    const onContinuation = vi.fn<(p: Promise<FirstBenchmarkOutcome>) => void>()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
-    const outcome = scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), settled.promise, {
-      timer: clock.timer,
-      onContinuation
+    const outcome = scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), settled.promise)
+    let released = false
+    void outcome.then(() => {
+      released = true
     })
-    clock.fire()
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(released).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
 
-    await expect(outcome).resolves.toBe('deferred')
-    expect(onContinuation).toHaveBeenCalledTimes(1)
+    expect(await within(outcome, 'the deferral at 120 s')).toBe('deferred')
     await hops(5)
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
     expect(getSettings(db).lastBenchmark).toBeNull()
   })
 
-  it('late settlement after the timeout: the continuation runs once; a second settlement or scheduling runs nothing', async () => {
+  it('late settlement after the timeout: the notice keeps saying "measuring", the continuation runs once, a later scheduling runs nothing', async () => {
     const root = freshRoot()
     const db = seededDb(root)
+    movedToNewMachine(db)
     const ctx = ctxWith(root, db)
     const settled = deferred()
-    const clock = fakeTimer()
-    let continuation: Promise<FirstBenchmarkOutcome> | null = null
     const decision = prepareFirstBenchmark(ctx)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
-    const outcome = scheduleFirstBenchmark(ctx, decision, settled.promise, {
-      timer: clock.timer,
-      onContinuation: (p) => {
-        continuation = p
-      }
-    })
-    clock.fire()
+    const outcome = scheduleFirstBenchmark(ctx, decision, settled.promise)
+    await vi.advanceTimersByTimeAsync(120_000)
     await expect(outcome).resolves.toBe('deferred')
+    // A continuation is still pending, so "a check is running" stays true (benchmark.md "History per machine").
+    expect(movedDriveNotice(ctx)).toEqual({ kind: 'measuring' })
 
     settled.resolve()
-    await expect(continuation!).resolves.toBe('ran')
-    expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
+    await until(
+      () => runBenchmarkSpy.mock.calls.length === 1 && !ctx.runtime.occupancy.held('benchmark'),
+      'the continuation ran and released'
+    )
     expect(machineKey(getSettings(db).lastBenchmark)).toBe(here())
+    expect(movedDriveNotice(ctx)).toBeNull()
 
     // Scheduled again in the same session with the stale decision: SD2 refuses; prepared afresh:
     // the workspace now holds this computer's result, so nothing is owed.
     await expect(scheduleFirstBenchmark(ctx, decision, Promise.resolve())).resolves.toBe('skipped-attempted')
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('not-needed')
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('not-needed')
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
   })
 })
@@ -918,7 +845,7 @@ describe('settlement re-checks', () => {
     await expect(outcome).resolves.toBe('skipped-epoch')
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
     // The NEW session owes its own check — and makes its own attempt.
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('ran')
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('ran')
   })
 
   it('a quit during the wait → skipped-shutdown', async () => {
@@ -939,7 +866,8 @@ describe('settlement re-checks', () => {
   it('a lane holding the model at settlement → skipped-busy, no retry, no push', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ctx = ctxWith(root, db)
+    const ws = sessionWorkspace()
+    const ctx = ctxWith(root, db, { workspace: ws })
     const spy = performanceChangedSpy()
 
     // Another benchmark's span (the #185 re-entrancy guard).
@@ -950,11 +878,12 @@ describe('settlement re-checks', () => {
     await expect(outcome).resolves.toBe('skipped-busy')
     release()
 
-    // The user's first message (the foreground lane), in a fresh session.
-    resetFirstBenchmarkForTests()
+    // The user's first message (the foreground lane), in the next session.
+    ws.completeLock()
+    ws.completeUnlock()
     inFlightStreams.set('chat', new AbortController())
     try {
-      await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('skipped-busy')
+      await expect(firstBenchmarkNow(ctx)).resolves.toBe('skipped-busy')
       // The refusal the run itself throws is the typed one the scheduler maps.
       await expect(runAndPersistBenchmark(ctx)).rejects.toBeInstanceOf(BenchmarkBusyError)
       await expect(runAndPersistBenchmark(ctx)).rejects.toMatchObject({ lane: 'chat' })
@@ -997,7 +926,7 @@ describe('SD2: one automatic attempt per unlock session', () => {
     const d2 = prepareFirstBenchmark(ctx)
     expect(d2).toMatchObject({ run: null, attempted: true })
     await expect(scheduleFirstBenchmark(ctx, d2, Promise.resolve())).resolves.toBe('skipped-attempted')
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('skipped-attempted')
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('skipped-attempted')
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
 
     settled.resolve()
@@ -1032,7 +961,7 @@ describe('SD2: one automatic attempt per unlock session', () => {
     // The same session asks again (a second unlock landing on an already-open workspace, any
     // later caller): no retry.
     expect(prepareFirstBenchmark(ctx)).toMatchObject({ run: null, attempted: true, epoch: 1 })
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('skipped-attempted')
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('skipped-attempted')
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
 
     // Lock + unlock: a new session re-checks — and this time the measurement lands.
@@ -1053,7 +982,7 @@ describe('SD2: one automatic attempt per unlock session', () => {
     movedToNewMachine(db)
     runBenchmarkSpy.mockRejectedValueOnce(new Error('no binary'))
 
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('failed')
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('failed')
     expect(prepareFirstBenchmark(ctx)).toMatchObject({ run: null, attempted: true })
 
     await runAndPersistBenchmark(ctx) // Diagnostics → Run benchmark
@@ -1062,7 +991,7 @@ describe('SD2: one automatic attempt per unlock session', () => {
     ws.completeLock()
     ws.completeUnlock()
     expect(prepareFirstBenchmark(ctx)).toMatchObject({ run: null, attempted: false })
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('not-needed')
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('not-needed')
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(2) // the failed automatic one + the manual one
   })
 })
@@ -1132,7 +1061,7 @@ describe('the late-write guard (runAndPersistBenchmark)', () => {
       return measured
     })
 
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('failed')
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('failed')
     expect(getSettings(db).lastBenchmark).toEqual(foreign)
   })
 })
@@ -1150,13 +1079,8 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     const { result: created } = await invoke(handlers, IPC.createWorkspace, PASSWORD, 'encrypted')
     expect(created).toMatchObject({ ok: true })
 
-    // TH2: this goes through the real registerWorkspaceIpc seam, which `void`s
-    // scheduleFirstBenchmark — there is no returned outcome for the test to await, so this
-    // stays a poll on the persisted state (unlike the direct scheduler calls elsewhere in this
-    // file, which now await the outcome instead of vi.waitFor).
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(ctx.db).lastBenchmark)).toBe(here())
-    })
+    // The seam `void`s the scheduler, so there is no outcome to await.
+    await until(() => machineKey(getSettings(ctx.db).lastBenchmark) === here(), 'the first-run benchmark persisted')
     expect(rt.startCalls).toBe(0)
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
     ctrl.lock()
@@ -1209,11 +1133,8 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(getSettings(ctx.db).lastBenchmark).toEqual(foreign)
 
     rt.finishStart()
-    // TH2: same as the 'create' test above — a real IPC seam voids scheduleFirstBenchmark, so
-    // there is no handle to await and this stays a poll on the persisted state.
-    await vi.waitFor(() => {
-      expect(machineKey(getSettings(ctx.db).lastBenchmark)).toBe(here())
-    })
+    // The seam `void`s the scheduler, so there is no outcome to await.
+    await until(() => machineKey(getSettings(ctx.db).lastBenchmark) === here(), 'the new-computer benchmark persisted')
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
     expect(runBenchmarkSpy.mock.calls[0][0].runtime?.modelId).toBe('stub-chat')
     expect(getSettings(ctx.db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
@@ -1238,29 +1159,25 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     const events: string[] = []
     const rt = fakeRuntime({ onStart: () => events.push('runtime.start') })
     const pending = deferred<GpuDevice[] | null>()
-    const probe = fakeProbe(() => pending.promise)
+    const probe = fakeGpuProbe(() => pending.promise)
     const { ctrl, ctx, root } = lockedVault({ ...state(), activeModelId: CHAT_MODEL }, rt, probe)
-    withBinary(root)
+    withLlamaBinary(root)
     setPerformanceChangedSink(() => events.push('performance:changed'))
 
     const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
     expect(unlocked).toMatchObject({ ok: true })
 
-    // The driver has not answered yet — and NOTHING has been started, so the weight upload is
-    // not competing with the probe for it. RACED, not sampled after a fixed number of hops: the
-    // auto-start's own path runs `computeInstallState`, whose real fs work decides WHEN the
-    // pre-fix start lands, so a bare `startCalls === 0` after N hops could pass on the UNFIXED
-    // code purely because the disk was slow that run. Whichever settles first wins the race, so
-    // the pre-fix failure is unconditional. (RED before the fix: 'started'.)
-    const idle = hops(60).then(() => 'idle' as const)
-    expect(await Promise.race([rt.startReached.then(() => 'started' as const), idle])).toBe('idle')
-    await idle
-    expect(probe.calls()).toBe(1)
+    // The driver has not answered, and the auto-start has not even been CALLED. The seam makes that
+    // call from the probe's `then`; unsequenced it would come in the handler's own tick, so this does
+    // not depend on how long `computeInstallState`'s real fs work takes.
+    expect(probe.calls).toHaveBeenCalledTimes(1)
+    expect(autoStartSpy).not.toHaveBeenCalled()
     expect(rt.startCalls).toBe(0)
     expect(events).toEqual([])
 
     pending.resolve([RTX_DEVICE])
     await rt.startReached
+    expect(autoStartSpy).toHaveBeenCalledTimes(1)
 
     // The probe's stamped write — and its push — precede the start the ladder will label.
     expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [RTX_DEVICE], machineKey: here() })
@@ -1276,16 +1193,16 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     const { ctrl, ctx, root } = lockedVault(
       { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
       rt,
-      fakeProbe(() => pending.promise)
+      fakeGpuProbe(() => pending.promise)
     )
-    withBinary(root)
+    withLlamaBinary(root)
 
     await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
-    await hops(5)
-    expect(rt.startCalls).toBe(0)
+    expect(autoStartSpy).not.toHaveBeenCalled()
 
     pending.resolve([])
-    await rt.startReached // the control: the gate releases on ANY settled answer, not just a card
+    // The control: the gate releases on ANY settled answer, not just a card.
+    await within(rt.startReached, 'the auto-start after an empty probe answer')
     expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [], machineKey: here() })
     rt.finishStart()
     ctrl.lock()
@@ -1298,7 +1215,7 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     const rt = fakeRuntime()
     const known = hereResult()
     const never = deferred<GpuDevice[] | null>()
-    const probe = fakeProbe(() => never.promise)
+    const probe = fakeGpuProbe(() => never.promise)
     const { ctrl } = lockedVault(
       { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
       rt,
@@ -1307,7 +1224,7 @@ describe('the production seams (registerWorkspaceIpc)', () => {
 
     await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
     await rt.startReached
-    expect(probe.calls()).toBe(0)
+    expect(probe.calls).not.toHaveBeenCalled()
     rt.finishStart()
     ctrl.lock()
   })
@@ -1343,5 +1260,24 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(flagsAtStart).toEqual({ gpuAutoDisabled: false, gpuLastError: null })
     rt.finishStart()
     ctrl.lock()
+  })
+})
+
+describe('the persisted result downstream', () => {
+  it('getAppStatus reports the profile of the persisted run, UNKNOWN until then', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const ctx = ctxWith(root, db, {
+      paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'no-such-config') },
+      workspace: {
+        isUnlocked: () => true,
+        getState: (): WorkspaceStateInfo => ({ state: 'unlocked', mode: 'plaintext_dev', plaintextAllowed: true, encryptionRequired: false })
+      }
+    })
+    registerCoreIpc(ctx)
+    const profile = async (): Promise<string> => ((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).hardwareProfile
+    expect(await profile()).toBe('UNKNOWN')
+    await runAndPersistBenchmark(ctx)
+    expect(await profile()).toBe('LITE') // 16 GiB pinned, no card, no runtime
   })
 })
