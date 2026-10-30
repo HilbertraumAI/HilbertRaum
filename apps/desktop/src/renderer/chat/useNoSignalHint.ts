@@ -22,11 +22,7 @@ export const DEFAULT_NO_SIGNAL_TIMING: NoSignalTiming = { afterMs: 2000, pollMs:
 /** The gate's peak floor (−50 dBFS) as a linear amplitude, so the hint and the refusal agree. */
 const FLOOR = Math.pow(10, DICTATION_SILENCE_PEAK_DBFS / 20)
 
-export function useNoSignalHint(
-  analyser: AnalyserNode | null,
-  recording: boolean,
-  timing: NoSignalTiming = DEFAULT_NO_SIGNAL_TIMING
-): boolean {
+export function useNoSignalHint(analyser: AnalyserNode | null, recording: boolean): boolean {
   const [noSignal, setNoSignal] = useState(false)
   useEffect(() => {
     if (!recording || !analyser) {
@@ -49,13 +45,13 @@ export function useNoSignalHint(
         return
       }
       if (quietSince === null) quietSince = now
-      if (now - quietSince >= timing.afterMs) setNoSignal(true)
+      if (now - quietSince >= DEFAULT_NO_SIGNAL_TIMING.afterMs) setNoSignal(true)
     }
-    const timer = setInterval(tick, timing.pollMs)
+    const timer = setInterval(tick, DEFAULT_NO_SIGNAL_TIMING.pollMs)
     return () => {
       clearInterval(timer)
       setNoSignal(false)
     }
-  }, [analyser, recording, timing.afterMs, timing.pollMs])
+  }, [analyser, recording])
   return noSignal
 }

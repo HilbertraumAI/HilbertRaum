@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Button } from '../components'
 import { DictationButton, DictationUnavailableButton } from './DictationButton'
-import { useNoSignalHint, type NoSignalTiming } from './useNoSignalHint'
+import { useNoSignalHint } from './useNoSignalHint'
 import { Waveform } from './Waveform'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
@@ -53,8 +53,6 @@ interface ComposerProps {
   onOpenModels?: () => void
   /** Friendly dictation failure copy — surfaced by the screen like other errors. */
   onDictationError?: (message: string) => void
-  /** Test seam: the live no-signal hint's timing (two seconds / four samples a second by default). */
-  noSignalTiming?: NoSignalTiming
   /** Attach files to the chat (plan §11.2 net-new intake). Renders a paperclip button when
    *  given; the keyboard-reachable picker fallback for the chat-surface drag/drop target. */
   onAttach?: () => void
@@ -74,7 +72,6 @@ export function Composer({
   dictationMissing,
   onOpenModels,
   onDictationError,
-  noSignalTiming,
   onAttach
 }: ComposerProps): JSX.Element {
   const { t } = useT()
@@ -96,7 +93,7 @@ export function Composer({
   // #497: the "not installed" mic's explanation, revealed on click (never on hover alone).
   const [dictationHint, setDictationHint] = useState(false)
   // #497 follow-up: "no sound is reaching the microphone", live, from the waveform's tap.
-  const noSignal = useNoSignalHint(analyser, recording, noSignalTiming)
+  const noSignal = useNoSignalHint(analyser, recording)
   const dictationHintCopy = DICTATION_HINTS[dictationMissing ?? 'model']
 
   // Auto-grow with content, capped — past the cap the textarea scrolls. scrollHeight
