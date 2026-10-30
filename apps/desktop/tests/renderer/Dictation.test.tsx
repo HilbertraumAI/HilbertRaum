@@ -131,6 +131,8 @@ describe('availability gating (D14 precedent)', () => {
     stubApi(chatScreenStubs({ getAppStatus }))
     renderChatScreen()
     await screen.findByPlaceholderText('Message…')
+    // Wait for the status read (the "not installed" mic), so the negative is not just an unread status.
+    expect(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /dictate a message/i })).not.toBeInTheDocument()
 
     // Main re-selected the transcriber when the speech model landed (the #497 hook); the open
