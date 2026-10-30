@@ -355,7 +355,7 @@ export interface HashStore {
 
 const hashCache = new Map<string, CachedHash>()
 
-/** Test visibility: how many full-file hashes were actually computed. */
+/** How many full-file hashes were actually computed (`install_state_done.cacheHit` reads it; tests too). */
 export const checksumCacheStats = { computed: 0 }
 
 // ---- checksum instrumentation (#106) -------------------------------------------------
@@ -527,11 +527,10 @@ export function primeChecksum(filePath: string, actual: string, store?: HashStor
  * re-hash and left the old absolute keys as permanent orphans in the settings blob. Keying by
  * the path RELATIVE to the drive root (with forward slashes, matching a manifest's own
  * `local_path`) makes the key independent of the mount point. A path that escapes the root
- * (should never happen — weight paths are `safeDrivePath`-guarded) or a store created without a
- * root falls back to the absolute path verbatim, so behaviour never silently changes.
+ * (should never happen — weight paths are `safeDrivePath`-guarded) falls back to the absolute
+ * path verbatim, so behaviour never silently changes.
  */
-function driveRelKey(rootPath: string | undefined, absPath: string): string {
-  if (!rootPath) return absPath
+function driveRelKey(rootPath: string, absPath: string): string {
   const rel = relative(rootPath, absPath)
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) return absPath
   return rel.split(sep).join('/')
@@ -550,14 +549,14 @@ function driveRelKey(rootPath: string | undefined, absPath: string): string {
  * when the DB is unreachable — a live DB read always wins, so cross-instance invalidations
  * ("Verify checksum") are never shadowed by a stale local entry.
  *
- * Keyed by drive-RELATIVE path (CODE-15, full-audit 2026-07-11) when `rootPath` is supplied, so
- * a drive-letter move re-hashes nothing. Callers still pass the absolute path (its size+mtime
+ * Keyed by drive-RELATIVE path (CODE-15, full-audit 2026-07-11), so a drive-letter move
+ * re-hashes nothing. Callers still pass the absolute path (its size+mtime
  * is the validity check, unchanged); the store derives the relative key. Pre-migration entries
  * were keyed absolutely — on a relative-key miss the store lazily adopts a legacy absolute-key
  * entry (rewrites it under the relative key, drops the orphan), so old caches migrate as they
  * are read/written without a forced re-hash.
  */
-export function createSettingsHashStore(getDb: () => Db, rootPath?: string): HashStore {
+export function createSettingsHashStore(getDb: () => Db, rootPath: string): HashStore {
   const fallback = new Map<string, CachedHash>()
   const keyFor = (path: string): string => driveRelKey(rootPath, path)
   return {
@@ -1433,6 +1432,7 @@ function toModelInfo(
 export interface BuildModelListOptions {
   manifestsDir: string
   rootPath: string
+  /** Nothing reads this since `machineRamGb` became required. It goes when committed-catalog's calls and registerModelIpc:573 do (part 2). */
   profile: HardwareProfile
   developerMode: boolean
   /** Model id currently loaded in a running runtime, if any. */
@@ -1440,12 +1440,10 @@ export interface BuildModelListOptions {
   /** Optional persistent hash cache (L2) so unchanged weights are hashed once ever. */
   hashStore?: HashStore
   /**
-   * This machine's total RAM in whole GB. When provided, models whose
-   * `recommended_min_ram_gb` exceeds it are flagged `insufficientRam`, and the
-   * recommendation becomes RAM-best-fit (`recommendModelIdByRam`) instead of the
-   * profile-table lookup. Omitted (tests/legacy callers) → old behavior unchanged.
+   * This machine's total RAM in whole GB. Models whose `recommended_min_ram_gb` exceeds it are
+   * flagged `insufficientRam`, and the recommendation is RAM-best-fit (`recommendChatModelId`).
    */
-  machineRamGb?: number
+  machineRamGb: number
   /**
    * Measured-speed signal from the persisted Diagnostics benchmark (model-benchmarks.md
    * §6.5, issue #95), fed into the CHAT recommendation only (the probe streams through a
@@ -1509,21 +1507,14 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   const { manifests, errors } = discoverManifests(opts.manifestsDir)
   const all = manifests.map((m) => m.manifest)
   const ram = opts.machineRamGb
-  // RAM-best-fit recommendation when the machine RAM is known (it can never point at a
-  // RAM-gated model); the profile-table lookup remains the legacy/no-RAM path. The §6.5
-  // speed signal applies to the chat pick only.
-  const recommendedChat =
-    ram != null
-      ? recommendChatModelId(
-          all,
-          { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null },
-          opts.speedSignal
-        )
-      : recommendModelId(all, opts.profile, 'chat')
-  const recommendedEmbed =
-    ram != null
-      ? recommendModelIdByRam(all, ram, 'embeddings')
-      : recommendModelId(all, opts.profile, 'embeddings')
+  // RAM-best-fit recommendation (it can never point at a RAM-gated model); the §6.5 speed
+  // signal applies to the chat pick only.
+  const recommendedChat = recommendChatModelId(
+    all,
+    { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null },
+    opts.speedSignal
+  )
+  const recommendedEmbed = recommendModelIdByRam(all, ram, 'embeddings')
 
   // RT-3 lazy mode: when `onlyVerifyModelId` is present, hash only that model; report every
   // other present weight without hashing. `'onlyVerifyModelId' in opts` distinguishes a
@@ -1631,7 +1622,7 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     // renderer renders an affordance the MAIN process actually allows.
     const startableAsMock =
       state === 'missing' && manifest.role === 'chat' && opts.developerMode
-    const insufficientRam = ram != null && manifest.recommendedMinRamGb > ram
+    const insufficientRam = manifest.recommendedMinRamGb > ram
     models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
   }
   // Terminal event so the bar settles to 100% even if the last throttled callback landed
