@@ -92,9 +92,6 @@ export type DownloadAuditType =
 export interface DownloadManagerDeps {
   /** Injected fetch — production passes the global `fetch`; tests pass a fake. */
   fetchImpl?: FetchFn
-  /** Injected verifier (default `verifyDownloadedFile`) — tests gate it to pin the
-   *  cancel-during-verify contract deterministically (BE-4, full-audit 2026-07-10). */
-  verifyImpl?: typeof verifyDownloadedFile
   log?: (msg: string, meta?: unknown) => void
   /**
    * Audit hook: the IPC layer injects the app recorder so the background verify/fail
@@ -114,7 +111,7 @@ export interface DownloadManagerDeps {
 }
 
 /** The `.part` staging path for a weight destination. */
-export function partPath(dest: string): string {
+function partPath(dest: string): string {
   return `${dest}.part`
 }
 
@@ -572,15 +569,13 @@ export class DownloadManager {
    * The verify-after-download hash (#106): a real multi-GB model-weight hash that
    * bypasses `sha256FileCached` (it hashes the staged `.part`, then `finishVerifiedFile`
    * primes the cache). `verifyDownloadedFile` carries the instrumentation itself; this
-   * wrapper only supplies the model label. An injected `verifyImpl` (tests) is NOT
-   * instrumented — it does no real I/O.
+   * wrapper only supplies the model label.
    */
   private async verifyPart(
     part: string,
     task: ModelDownloadTask,
     job: DownloadJob
   ): Promise<VerifyResult> {
-    if (this.deps.verifyImpl) return this.deps.verifyImpl(part, task.expectedSha256)
     return verifyDownloadedFile(part, task.expectedSha256, {
       modelId: job.modelId,
       file: 'download'
