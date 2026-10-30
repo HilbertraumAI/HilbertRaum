@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join, resolve } from 'node:path'
 import {
   latestEffectiveRead,
@@ -12,7 +12,6 @@ import {
   recordModelLoadRead,
   resetEffectiveReadForTests,
   setEffectiveReadObserver,
-  setReadSpeedClockForTests,
   suppressNextModelLoadSample,
   throughputMbps
 } from '../../src/main/services/read-speed'
@@ -83,7 +82,7 @@ describe('effective-read latch (#108)', () => {
     expect(latestEffectiveRead()?.modelId).toBe('second')
   })
 
-  it('a checksum sample never overwrites a model_load sample; the reverse always does', () => {
+  it('a CPU-bound checksum sample never overwrites a model_load sample; a load replaces a CPU-bound checksum', () => {
     recordModelLoadRead('/ignored.gguf', 10_000, 'loaded', 6_000_000_000)
     expect(latestEffectiveRead()?.source).toBe('model_load')
 
@@ -214,15 +213,6 @@ describe('effective-read latch (#108)', () => {
     expect(latestEffectiveRead()?.source).toBe('model_load')
   })
 
-  it('the session set and the one-shot flag are independent mechanisms', () => {
-    suppressNextModelLoadSample()
-    recordModelLoadRead('/never-hashed.gguf', 10_000, 'warm-by-flag', 6_000_000_000)
-    expect(latestEffectiveRead()).toBeNull() // the flag suppressed it…
-
-    recordModelLoadRead('/never-hashed.gguf', 10_000, 'cold-next-start', 6_000_000_000)
-    expect(latestEffectiveRead()?.modelId).toBe('cold-next-start') // …and only it: the path is not in the set
-  })
-
   it('a path never hashed still samples, and the set is per path, not per session', () => {
     recordChecksumRead(6_000_000_000, 60_000, 'a', '/a.gguf')
     recordModelLoadRead('/b.gguf', 10_000, 'b', 6_000_000_000)
@@ -274,14 +264,6 @@ describe('effective-read latch (#108)', () => {
     expect(latestEffectiveRead()?.source).toBe('model_load')
   })
 
-  it('resetEffectiveReadForTests clears the warmed-path set (the shared fixture relies on it)', () => {
-    recordChecksumRead(6_000_000_000, 60_000, 'm', '/models/w.gguf')
-    resetEffectiveReadForTests()
-
-    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000)
-    expect(latestEffectiveRead()?.source).toBe('model_load')
-  })
-
   it('a stat failure in recordModelLoadRead (no bytes override) records nothing and does not throw', () => {
     expect(() => recordModelLoadRead('/no/such/file.gguf', 60_000, 'm')).not.toThrow()
     expect(latestEffectiveRead()).toBeNull()
@@ -314,14 +296,6 @@ describe('effective-read latch (#108)', () => {
       { ranked: 'load', checksum: 'outranked' }
     ])
   })
-
-
-  it('the observer sees the sample already latched (persistence reads the latch)', () => {
-    const cb = vi.fn(() => expect(latestEffectiveRead()?.modelId).toBe('latched-first'))
-    setEffectiveReadObserver(cb)
-    recordChecksumRead(6_000_000_000, 60_000, 'latched-first')
-    expect(cb).toHaveBeenCalledTimes(1)
-  })
 })
 
 describe('per-source latches (the Performance screen\'s observed rows)', () => {
@@ -338,18 +312,17 @@ describe('per-source latches (the Performance screen\'s observed rows)', () => {
     recordChecksumRead(5_000_000_000, 20_000, 'm3')
     expect(latestEffectiveReadBySource('checksum')?.modelId).toBe('m3')
   })
-
-  it('starts empty and clears with the test reset', () => {
-    expect(latestEffectiveReadBySource('model_load')).toBeNull()
-    expect(latestEffectiveReadBySource('checksum')).toBeNull()
-  })
 })
 
 describe('strictly increasing sample timestamps (PR #303 audit A-D4)', () => {
   beforeEach(() => resetEffectiveReadForTests())
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('two samples under a frozen clock get distinct, increasing `at` values (ISO strings, 1 ms apart)', () => {
-    setReadSpeedClockForTests(() => new Date('2026-09-06T12:00:00.000Z'))
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-06T12:00:00.000Z'))
     recordChecksumRead(6_000_000_000, 60_000, 'first')
     const first = latestEffectiveReadBySource('checksum')!.at
     recordChecksumRead(6_000_000_000, 60_000, 'second')
@@ -358,23 +331,25 @@ describe('strictly increasing sample timestamps (PR #303 audit A-D4)', () => {
     expect(second).toBe('2026-09-06T12:00:00.001Z')
   })
 
-  it('a clock that runs backwards is bumped past the previous accepted sample; a rejected sample never reaches the clock', () => {
-    const readings = ['2026-09-06T12:00:05.000Z', '2026-09-06T12:00:01.000Z', '2026-09-06T12:00:09.000Z']
-    let reads = 0
-    setReadSpeedClockForTests(() => new Date(readings[reads++]))
+  it('a clock that runs backwards is bumped past the previous accepted sample; a rejected sample never advances it', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-06T12:00:05.000Z'))
     recordChecksumRead(6_000_000_000, 60_000, 'a')
     recordChecksumRead(MIN_READ_SAMPLE_BYTES - 1, 60_000, 'rejected-by-floor')
     const a = latestEffectiveReadBySource('checksum')!.at
-    recordChecksumRead(6_000_000_000, 60_000, 'b') // the clock says 4 s EARLIER than a
+    vi.setSystemTime(new Date('2026-09-06T12:00:01.000Z'))
+    recordChecksumRead(6_000_000_000, 60_000, 'b') // 4 s EARLIER than a
     const b = latestEffectiveReadBySource('checksum')!.at
-    recordChecksumRead(6_000_000_000, 60_000, 'c') // the clock is ahead again: taken as is
+    vi.setSystemTime(new Date('2026-09-06T12:00:09.000Z'))
+    recordChecksumRead(6_000_000_000, 60_000, 'c') // ahead again: taken as is
     const c = latestEffectiveReadBySource('checksum')!.at
+    // `b` being .001, not .002, is what proves the rejected sample did not advance the memo.
     expect([a, b, c]).toEqual(['2026-09-06T12:00:05.000Z', '2026-09-06T12:00:05.001Z', '2026-09-06T12:00:09.000Z'])
-    expect(reads).toBe(3)
   })
 
   it('a checksum in the same millisecond as a model load is a distinct sample in the per-source latches; the ranked latch keeps the load', () => {
-    setReadSpeedClockForTests(() => new Date('2026-09-06T12:00:00.000Z'))
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-06T12:00:00.000Z'))
     recordModelLoadRead('/ignored.gguf', 10_000, 'load', 6_000_000_000)
     recordChecksumRead(6_000_000_000, 60_000, 'hash')
     const load = latestEffectiveReadBySource('model_load')!

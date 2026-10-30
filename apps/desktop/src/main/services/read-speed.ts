@@ -99,16 +99,10 @@ const pathKey = (p: string): string =>
   process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p)
 let observer: (() => void) | null = null
 /**
- * The clock a sample's `at` comes from. A sample is identified by that ISO timestamp (millisecond
- * resolution) everywhere downstream — the persister's per-destination "already carries this
- * sample" check, the handled memo, the ranking's tie order — so two samples recorded within ONE
- * millisecond would read as one. Real loads and hashes take seconds; a test recording two in a
- * row on a fast runner does not (PR #303 P5 CI: the fast sample after a slow one was ignored
- * on ubuntu/Node 24). `nextSampleAt` therefore never hands out a repeated `at` (A-D4, below);
- * tests that need to READ specific timestamps still install a clock through the seam below.
- */
-let clock: () => Date = () => new Date()
-/**
+ * A sample is identified by its ISO `at` (millisecond resolution) everywhere downstream — the
+ * persister's per-destination "already carries this sample" check, the handled memo, the ranking's
+ * tie order — so two samples recorded within ONE millisecond would read as one.
+ *
  * The previous ACCEPTED sample's `at`, epoch ms (PR #303 audit A-D4). Because `at` is the
  * sample's identity, two samples must never share one: a clock that repeats or runs backwards
  * (a coarse timer, a time step, a checksum landing in the same millisecond as a model load) is
@@ -119,7 +113,7 @@ let lastAcceptedAtMs: number | null = null
 
 /** The next sample's `at`: the clock, bumped past the previous accepted sample when it repeats or runs backwards. */
 function nextSampleAt(): string {
-  let ms = clock().getTime()
+  let ms = Date.now()
   if (lastAcceptedAtMs != null && ms <= lastAcceptedAtMs) ms = lastAcceptedAtMs + 1
   lastAcceptedAtMs = ms
   return new Date(ms).toISOString()
@@ -343,15 +337,9 @@ export function setEffectiveReadObserver(cb: (() => void) | null): void {
   observer = cb
 }
 
-/** Test seam: the clock every recorded sample is stamped with (null restores the wall clock). */
-export function setReadSpeedClockForTests(fn: (() => Date) | null): void {
-  clock = fn ?? (() => new Date())
-}
-
 /** Test seam: clear the session latch, the timestamp memo, both suppression mechanisms (the
- *  one-shot flag and the #392 warmed-path set), clock and observer. */
+ *  one-shot flag and the #392 warmed-path set) and observer. */
 export function resetEffectiveReadForTests(): void {
-  clock = () => new Date()
   lastAcceptedAtMs = null
   latest = null
   latestBySource.model_load = null
