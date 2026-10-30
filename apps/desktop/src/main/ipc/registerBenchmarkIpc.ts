@@ -303,8 +303,8 @@ async function runBenchmarkAndPersist(
   // never loses an observation.
   const effectiveRead = effectiveReadOrPersisted(ctx)
 
-  // The ONE runtime this run measures. Captured here, before the GPU + drive probes, so the
-  // busy predicate below can tell it apart from whatever the manager holds later (#393).
+  // The ONE runtime this run measures. Captured here, after the GPU probe and before the drive
+  // probe, so the busy predicate below can tell it apart from whatever the manager holds later (#393).
   const runtime = ctx.runtime.active()
 
   const measured = await runBenchmark({
@@ -489,17 +489,6 @@ export type FirstBenchmarkOutcome =
   /** The run threw (a refused late persist included) — logged; the Performance screen can run it on demand. */
   | 'failed'
 
-/** The scheduler's injectable seams — production passes none. */
-export interface FirstBenchmarkSchedulerDeps {
-  /** Arm `fn` after `ms` and return its cancel: the deferral clock, injectable so the timeout is
-   *  testable without real time (the ONLY thing a test may drive with a fake timer). */
-  timer?: (fn: () => void, ms: number) => () => void
-  /** The deferral boundary; defaults to `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS`. */
-  timeoutMs?: number
-  /** Test seam: receives the deferred continuation's outcome when the wait timed out. */
-  onContinuation?: (outcome: Promise<FirstBenchmarkOutcome>) => void
-}
-
 /**
  * How long the scheduler waits for the auto-start before it reports `'deferred'`. Sized to the
  * common slow case, not the worst: a ~5 GB GGUF on the ~70 MB/s USB stick #108 measured is hashed
@@ -512,9 +501,9 @@ export interface FirstBenchmarkSchedulerDeps {
  * whether the benchmark may overlap the load — it may not; it only decides when the caller's
  * outcome stops waiting.
  */
-export const FIRST_BENCHMARK_SETTLE_TIMEOUT_MS = 120_000
+const FIRST_BENCHMARK_SETTLE_TIMEOUT_MS = 120_000
 
-const defaultTimer: NonNullable<FirstBenchmarkSchedulerDeps['timer']> = (fn, ms) => {
+function armTimer(fn: () => void, ms: number): () => void {
   const handle = setTimeout(fn, ms)
   // A pending deferral must never keep the process alive on its own: at the ceiling the wait is
   // released and nothing runs unless the start settles.
@@ -746,8 +735,7 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
 export function scheduleFirstBenchmark(
   ctx: AppContext,
   decision: FirstBenchmarkDecision,
-  settled: Promise<unknown>,
-  deps: FirstBenchmarkSchedulerDeps = {}
+  settled: Promise<unknown>
 ): Promise<FirstBenchmarkOutcome> {
   if (decision.run === null) return Promise.resolve(decision.attempted ? 'skipped-attempted' : 'not-needed')
   let db: Db
@@ -763,25 +751,22 @@ export function scheduleFirstBenchmark(
     return Promise.resolve('skipped-attempted')
   }
   attemptMemo = { db, epoch: decision.epoch }
-  return runAfterSettled(ctx, decision, settled, deps)
+  return runAfterSettled(ctx, decision, settled)
 }
 
 async function runAfterSettled(
   ctx: AppContext,
   decision: FirstBenchmarkDecision,
-  settled: Promise<unknown>,
-  deps: FirstBenchmarkSchedulerDeps
+  settled: Promise<unknown>
 ): Promise<FirstBenchmarkOutcome> {
   // A FAILED start settles the wait too: the benchmark still runs, just without the speed leg.
   const quiet = settled.then(
     () => undefined,
     () => undefined
   )
-  const timeoutMs = deps.timeoutMs ?? FIRST_BENCHMARK_SETTLE_TIMEOUT_MS
-  const arm = deps.timer ?? defaultTimer
   let cancel: () => void = () => undefined
   const expired = new Promise<'expired'>((resolve) => {
-    cancel = arm(() => resolve('expired'), timeoutMs)
+    cancel = armTimer(() => resolve('expired'), FIRST_BENCHMARK_SETTLE_TIMEOUT_MS)
   })
   const first = await Promise.race([quiet.then(() => 'settled' as const), expired])
   // The start settled first: the timer is cleared; it fired first: clearing a fired timer is a no-op.
@@ -792,10 +777,9 @@ async function runAfterSettled(
   // ended meanwhile runs nothing, and a start that never settles leaves the next launch to
   // re-check. NEVER a run into the unfinished load.
   log.info('First-run benchmark deferred: the model start has not settled within the wait bound', {
-    waitedMs: timeoutMs
+    waitedMs: FIRST_BENCHMARK_SETTLE_TIMEOUT_MS
   })
-  const continuation = quiet.then(() => runOnceSettled(ctx, decision))
-  deps.onContinuation?.(continuation)
+  void quiet.then(() => runOnceSettled(ctx, decision))
   return 'deferred'
 }
 
