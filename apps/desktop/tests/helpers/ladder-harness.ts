@@ -224,10 +224,4 @@ function abortError(): Error {
 }
 
 /** A promise plus its resolver — lets a case settle an injected answer at a chosen moment. */
-export function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((res) => {
-    resolve = res
-  })
-  return { promise, resolve }
-}
+export { deferred } from './deferred'
