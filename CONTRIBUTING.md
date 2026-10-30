@@ -243,9 +243,13 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   overrides that way, so a renamed bridge method still compiled. `installPerformance` takes
   `Partial<PreloadApi>`. The same suite's mounts called two unstubbed methods in all 107 tests.
 - **The benchmark and Performance fixtures** are `tests/helpers/performance-fixture.ts` (main side:
-  `stubChatRuntime`, `fakeGpuProbe`, `withLlamaBinary`, `committingRuntime`, `firstBenchmarkNow`, `CARDS`),
-  `benchmark-records.ts` (pure record builders, safe in jsdom) and `performance-screen.tsx` (the screen's
-  `installPerformance`, `startOwnRun`, `copiedReport`). `deferred` is `tests/helpers/deferred.ts`.
+  `fakeGpuProbe`, `withLlamaBinary`, `committingRuntime`, `firstBenchmarkNow`, `CARDS`), `chat-runtime-stub.ts`
+  (`stubChatRuntime`, no IPC registrars, so a service suite needs no `electron` mock), `benchmark-records.ts`
+  (pure record builders, safe in jsdom) and `performance-screen.tsx` (the screen's `installPerformance`,
+  `startOwnRun`, `copiedReport`). `deferred` is `tests/helpers/deferred.ts`.
+- **`seededDb` opens the root's one file.** Two `seededDb(root)` calls on one root are two handles on the
+  same data, so first-benchmark-scheduler's "legacy blob" cases ran against the earlier case's history.
+  Give a case that needs its own workspace its own `freshRoot()`.
 - **The OCR fakes live in `tests/helpers/ocr-fixtures.ts`**: `fakeOcrEngine` (text per page, confidence,
   languages, call count), `fakeRasterizer` (honours the page list a re-run asks for, #575), `importScan`
   (a scan through the real pipeline, asserting it fails as a detected scan) and `ocrDrive` (a temp drive

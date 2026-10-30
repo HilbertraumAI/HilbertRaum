@@ -31,7 +31,10 @@ import type {
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import type { BenchmarkResult, GpuDevice, RuntimeStatus } from '../../src/shared/types'
 import { benchmarkResult } from './benchmark-records'
+import { stoppedStatus } from './chat-runtime-stub'
 import { ANY_SENDER } from './ipc'
+
+export { stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
 
 // Shared fixture for the Performance-screen main-side tests (performance-ipc,
 // performance-persistence, performance-notify, performance-gpu, performance-schema,
@@ -113,11 +116,6 @@ export async function closePerformanceFixture(): Promise<void> {
   }
 }
 
-/** A stopped chat runtime's status (the fixture's default `runtime.status()`). */
-export function stoppedStatus(): RuntimeStatus {
-  return { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
-}
-
 export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}): AppContext {
   return {
     paths: { rootPath: root, workspacePath: join(root, 'workspace') },
@@ -173,10 +171,10 @@ export function hereResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult
   })
 }
 
-/** The repo's committed `model-manifests/`, absolute. Replaces each suite's own `join(__dirname, …)`. */
+/** The repo's committed `model-manifests/`, absolute. */
 export const CATALOG_MANIFESTS: string = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
-/** THIS host's `machineKey` (null when detection fails). Replaces each suite's `here()`. */
+/** THIS host's `machineKey` (null when detection fails). */
 export function hereKey(): string | null {
   return machineKey(detectSystem())
 }
@@ -184,98 +182,17 @@ export function hereKey(): string | null {
 /**
  * 3 GB in 10 s: a 300 MB/s model-load sample (above the #110 gate), fed to `read-speed`'s observer.
  * The path matters since #392: a weight hashed anywhere in the session records no load sample at
- * all. Replaces performance-persistence's and performance-notify's copies. It only records: a test
+ * all. It only records: a test
  * still resets through `closePerformanceFixture`, and a stored record is `effectiveReadSample`.
  */
 export function loadSample(modelId: string, ms = 10_000, path = 'unused'): void {
   recordModelLoadRead(path, ms, modelId, 3_000_000_000)
 }
 
-/** Options for `stubChatRuntime`; every default reproduces the speed-leg stub the suites shared. */
-export interface StubChatRuntimeOptions {
-  /** Default `'stub-chat'`. */
-  modelId?: string
-  /** Default `['a', 'b']`. */
-  chunks?: string[]
-  /** `predicted_per_second` of the final timings block. Default 20. */
-  perSecond?: number
-  /** `predicted_n` of the final timings block. Default: the number of chunks. */
-  predictedN?: number
-  /** The whole timings block, replacing `perSecond` + `predictedN`. `null`: the stream reports none. */
-  timings?: RuntimeTimings | null
-  /**
-   * Runs between two chunks: once for the default stream, the window in which a manual "Use model"
-   * lands beside a running benchmark (#393). With `rejectAfterHook`, it runs after the first chunk.
-   */
-  onChunk?: () => void
-  /**
-   * After the first chunk the stream THROWS `model stopped`: the killed sidecar, whose iterator
-   * rejects rather than delivering another chunk (the realistic #334 leg S5 timing).
-   */
-  rejectAfterHook?: boolean
-  /** `status()` of the manager half (see `StubChatRuntime`). Default `stoppedStatus`. */
-  status?: () => RuntimeStatus
-  /** `occupancy` of the manager half. Default: a new, idle `ModelOccupancy`. */
-  occupancy?: ModelOccupancy
-}
-
-/**
- * The runtime `measureTokensPerSecond` reads, plus the three manager members the benchmark reads off
- * `ctx.runtime` (`occupancy`, `active`, `status`), so one object serves both `runBenchmark({ runtime })`
- * and `ctxWith(root, db, { runtime })`. `active()` hands out this object, not a spread copy of it.
- */
-export interface StubChatRuntime extends ModelRuntime {
-  occupancy: ModelOccupancy
-  active(): ModelRuntime | null
-  status(): RuntimeStatus
-}
-
-/**
- * A chat runtime whose stream is enough for the speed leg. Replaces first-benchmark-scheduler's
- * `stubRuntime`, benchmark's `timedRuntime` / `slowRuntime` / inline `timed`, and performance-ipc's and
- * performance-persistence's `stubRuntime`.
- *
- * It never sleeps: `slowRuntime`'s 450 ms per chunk and `timedRuntime`'s `perChunkDelayMs` have no
- * option here, so a slow reading is `perSecond`, and a wall-clock reading stubs the clock over
- * `timings: null`. To replace a method (a stream that throws at once, one that records its prompt),
- * spread it: `{ ...stubChatRuntime(), async *chatStream() { … } }`. A generation gate, the abort
- * signal and the finish reason (always `'length'`) are not modelled.
- */
-export function stubChatRuntime(opts: StubChatRuntimeOptions = {}): StubChatRuntime {
-  const chunks = opts.chunks ?? ['a', 'b']
-  const timings =
-    opts.timings === null
-      ? undefined
-      : (opts.timings ?? { predicted_n: opts.predictedN ?? chunks.length, predicted_per_second: opts.perSecond ?? 20 })
-  const stub: StubChatRuntime = {
-    modelId: opts.modelId ?? 'stub-chat',
-    async start() {},
-    async stop() {},
-    async health() {
-      return { healthy: true, message: '', port: null }
-    },
-    async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
-      for (const [i, chunk] of chunks.entries()) {
-        yield chunk
-        if (opts.rejectAfterHook) {
-          opts.onChunk?.()
-          throw new Error('model stopped')
-        }
-        if (i < chunks.length - 1) opts.onChunk?.()
-      }
-      options?.onFinish?.('length', timings)
-    },
-    occupancy: opts.occupancy ?? new ModelOccupancy(),
-    active: () => stub,
-    status: opts.status ?? stoppedStatus
-  }
-  return stub
-}
-
 /**
  * Pin `process.platform` and `process.arch` for the enclosing suite: registers `beforeAll` and
  * `afterAll`, which restores what the `beforeAll` found, so a pin inside a pinned describe hands
- * back the outer one. Replaces performance-gpu's and picker-seams' pairs. It does not pin RAM or
+ * back the outer one. It does not pin RAM or
  * anything else `node:os` answers: that mock is hoisted, so it stays in the test file.
  */
 export function pinPlatform(platform: NodeJS.Platform, arch: string): void {
@@ -294,9 +211,7 @@ export function pinPlatform(platform: NodeJS.Platform, arch: string): void {
 }
 
 /**
- * A placeholder `llama-server` under `root`, so `probeAndPersistGpu` resolves a binary. Replaces
- * first-benchmark-scheduler's and performance-gpu's `withBinary`, posture-writers' `rootWithBinary`
- * and picker-seams:128-130. Named for the platform at the CALL (under `pinPlatform`, call it from a
+ * A placeholder `llama-server` under `root`, so `probeAndPersistGpu` resolves a binary. Named for the platform at the CALL (under `pinPlatform`, call it from a
  * test or hook, not at collection). It mints no root, and the file cannot run: the probe is
  * `fakeGpuProbe`'s.
  */
@@ -310,8 +225,7 @@ type GpuProbeCall = (binPath: string) => Promise<GpuDevice[] | null>
 
 /**
  * The session-cached probe seam: never spawns anything, and takes the devices, `null` (the probe's
- * UNKNOWN answer, #380) or a function for a parked or scripted answer. Replaces picker-seams:135-142,
- * posture-writers' and first-benchmark-scheduler's `fakeProbe`. The probe IS its own mock, so both
+ * UNKNOWN answer, #380) or a function for a parked or scripted answer. The probe IS its own mock, so both
  * `expect(probe).toHaveBeenCalledTimes(1)` and `expect(probe.calls)…` read the same record, and
  * `probe.calls.mockImplementation(…)` re-scripts it. `invalidate` only records: it drops no cached answer.
  */
@@ -324,7 +238,7 @@ export function fakeGpuProbe(
 
 /**
  * The runtime manager's commit surface for `startModelRuntime`: `start` commits the model it was
- * given, and `activeModelId()` follows. Replaces posture-writers' 4 literals (and their `as any`).
+ * given, and `activeModelId()` follows.
  * `commit(id)` sets the model by hand, for an `over.start` that commits on its own terms. `status()`
  * says no start is in flight; a row about one passes `over.status`. `over` wins over every member.
  * There is no gate, queue or `active()`: a suite that parks a start keeps its own fake.
@@ -357,7 +271,7 @@ export function committingRuntime(
 
 /**
  * A session-aware workspace stand-in (the core-model-ipc shape): flags plus the epoch counter.
- * Moved from first-benchmark-scheduler. No `requireDb`: a context whose `db` follows the session
+ * No `requireDb`: a context whose `db` follows the session
  * keeps its own getter.
  */
 export function sessionWorkspace(): {

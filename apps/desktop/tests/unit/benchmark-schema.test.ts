@@ -39,8 +39,7 @@ import { completeBenchmarkResult, modelPlacement } from '../helpers/benchmark-re
 // legacy fields keep their ABSENCE, which the screens read as "not recorded".
 
 const complete = completeBenchmarkResult
-const placement = (over: Partial<ModelPlacement> = {}): ModelPlacement =>
-  modelPlacement({ modelId: 'qwen', machineKey: 'win32|x64|CPU|8|16', ...over })
+const placement = modelPlacement
 
 describe('normalizeBenchmarkResult — minimum validity', () => {
   it('rejects everything that is not an object, and the empty object itself', () => {

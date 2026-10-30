@@ -44,7 +44,7 @@ import { IPC } from '../../src/shared/ipc'
 import type { AppContext } from '../../src/main/services/context'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, SpeedSampleIdentity } from '../../src/shared/types'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, within } from '../helpers/hang-budget'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   CATALOG_MANIFESTS,
@@ -507,7 +507,7 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     const settled = new Promise<EngineDownloadJob>((resolve) => manager.onSettled(resolve))
     registerEngineIpc(f.ctx, manager)
     await invoke(handlers, IPC.downloadEngine, ...(request ? [request] : []))
-    return settled
+    return within(settled, 'the engine job settled')
   }
 
   /** A fresh install: no binary on the drive, a benchmark already run → the empty stamped probe. */

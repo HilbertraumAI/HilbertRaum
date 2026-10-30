@@ -323,7 +323,7 @@ describe('a sample landing mid-run survives the persist (M6)', () => {
     // ONE runtime object, handed out on every call — `RuntimeManager.active()` returns
     // `this.current`, a single instance per committed start, and since #393 the speed leg's busy
     // predicate compares the runtime it captured against what the manager holds now.
-    const running = stubChatRuntime({ perSecond: 20, predictedN: 2 })
+    const running = stubChatRuntime()
     const ctx = ctxWith(root, db, { runtime: running })
     registerModelIpc(ctx)
     const steps: BenchmarkProgressStep[] = []

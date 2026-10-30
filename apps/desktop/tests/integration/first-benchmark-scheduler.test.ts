@@ -17,9 +17,10 @@ import { join } from 'node:path'
 //  - the production seams (`registerWorkspaceIpc` unlock/create) run the split in that order,
 //    after the #530 heal of a GPU flag that an engine load refusal had set.
 //
-// Every wait here is on a real completion seam (the fake runtime's start gate, the scheduler's
-// outcome promise, an `until` on persisted state); the only clock is fake `setTimeout` for the
-// deferral rows, driven to the shipped 120 s.
+// Every positive wait here is on a real completion seam (the fake runtime's start gate, the
+// scheduler's outcome promise, an `until` on persisted state). A negative with no outcome to wait
+// for gives a wrong run `hops(5)` to start; the NEW-computer row pins that this reaches a real run.
+// The only clock is fake `setTimeout` for the deferral rows, driven to the shipped 120 s.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -328,9 +329,11 @@ describe('prepareFirstBenchmark: the cheap half', () => {
     expect(getSettings(db).lastBenchmark).toEqual(known)
     expect(spy.mock.results.map((r) => r.value)).toEqual([foreign.ranAt, known.ranAt])
 
-    const legacy = seededDb(root)
+    // Its own root: `seededDb` opens the root's one file, and this history must be empty.
+    const legacyRoot = freshRoot()
+    const legacy = seededDb(legacyRoot)
     updateSettings(legacy, { lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult })
-    expect(prepareFirstBenchmark(ctxWith(root, legacy))).toMatchObject({ run: null, attempted: false })
+    expect(prepareFirstBenchmark(ctxWith(legacyRoot, legacy))).toMatchObject({ run: null, attempted: false })
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
   })
 
@@ -392,15 +395,18 @@ describe('movedDriveNotice: what the moved-drive check did (§5 item 22 (a))', (
     expect(prepareFirstBenchmark(freshCtx)).toMatchObject({ run: 'first-run' })
     expect(movedDriveNotice(freshCtx)).toBeNull()
 
-    const same = seededDb(root)
+    // Each case its own root: `seededDb` opens the root's one file.
+    const sameRoot = freshRoot()
+    const same = seededDb(sameRoot)
     updateSettings(same, { lastBenchmark: hereResult() })
-    const sameCtx = ctxWith(root, same)
+    const sameCtx = ctxWith(sameRoot, same)
     prepareFirstBenchmark(sameCtx)
     expect(movedDriveNotice(sameCtx)).toBeNull()
 
-    const legacy = seededDb(root)
+    const legacyRoot = freshRoot()
+    const legacy = seededDb(legacyRoot)
     updateSettings(legacy, { lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult })
-    const legacyCtx = ctxWith(root, legacy)
+    const legacyCtx = ctxWith(legacyRoot, legacy)
     prepareFirstBenchmark(legacyCtx)
     expect(movedDriveNotice(legacyCtx)).toBeNull()
   })
@@ -1133,6 +1139,9 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(getSettings(ctx.db).lastBenchmark).toEqual(foreign)
 
     rt.finishStart()
+    // The hop budget the negatives in this file lean on does reach a real run.
+    await hops(5)
+    expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
     // The seam `void`s the scheduler, so there is no outcome to await.
     await until(() => machineKey(getSettings(ctx.db).lastBenchmark) === here(), 'the new-computer benchmark persisted')
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)

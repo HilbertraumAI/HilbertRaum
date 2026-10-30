@@ -54,7 +54,7 @@ import {
   seededDb
 } from '../helpers/performance-fixture'
 
-// Handoff 4: the GPU flags decide `cpuForced` only off Apple Silicon (performance.ts), and no CI leg
+// The GPU flags decide `cpuForced` only off Apple Silicon (performance.ts), and no CI leg
 // runs tests on macOS, so these rows state the platform rather than read it from the host.
 pinPlatform('win32', 'x64')
 

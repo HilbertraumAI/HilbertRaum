@@ -27,13 +27,7 @@ import {
 import { t } from '../../src/shared/i18n'
 import type { BenchmarkProgressStep } from '../../src/shared/types'
 import type { ModelRuntime, RuntimeTimings } from '../../src/main/services/runtime'
-import { stubChatRuntime } from '../helpers/performance-fixture'
-
-// The fixture pulls in the IPC registrars, and so `electron`, whose package can throw on load without its binary.
-vi.mock('electron', () => ({
-  ipcMain: { handle: () => undefined, removeHandler: () => undefined },
-  app: { getVersion: () => '0.0.0-test' }
-}))
+import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 
 // A switchable OS pin. The RAM is a KNOWN input wherever a row reads a profile or a pick, not the
 // host's (PR #308 audit plan T-item 3; the switch is null elsewhere and the mock passes through to

@@ -136,8 +136,8 @@ export function checkedSnapshot(over: Partial<PerformanceSnapshot> = {}): Perfor
 export const RUNNING_STATUS: RuntimeStatus = runtimeStatus({ modelId: 'qwen3.5-9b-ud-q4kxl', port: 1, message: '' })
 export const STOPPED_STATUS: RuntimeStatus = runtimeStatus({ running: false, modelId: null, port: null, healthy: false, message: '' })
 
-/** A typed `window.api` for a mounted screen answering `snap`. `over` replaces a default, and must be a `vi.fn`. */
-export function installPerformance(snap: PerformanceSnapshot, over: Partial<PreloadApi> = {}) {
+/** A typed `window.api` for a mounted screen answering `snap`. `over` replaces a default with a spy. */
+export function installPerformance(snap: PerformanceSnapshot, over: { [K in keyof PreloadApi]?: Mock<PreloadApi[K]> } = {}) {
   const progress: Array<(step: BenchmarkProgressStep) => void> = []
   /** Every live `performance:changed` subscriber (the payload-free "re-read the snapshot"). */
   const pushes: Array<() => void> = []
@@ -173,7 +173,7 @@ export function installPerformance(snap: PerformanceSnapshot, over: Partial<Prel
     useModel: vi.fn<PreloadApi['useModel']>(async () => RUNNING_STATUS),
     copyToClipboard: vi.fn<PreloadApi['copyToClipboard']>(async () => true)
   }
-  // Every override a suite passes is a vi.fn, so the merged record keeps `.mock`.
+  // `over`'s type makes every override a spy, so the merged record keeps `.mock`.
   const api = { ...defaults, ...over } as typeof defaults
   stubApi(api)
   return { api, progress, pushes, calls, unsubscribed: () => unsubscribes }

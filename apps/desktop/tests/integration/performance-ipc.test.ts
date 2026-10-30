@@ -37,7 +37,7 @@ import {
 } from '../helpers/performance-fixture'
 import { runtimeStatus } from '../helpers/status'
 
-// Handoff 4: the snapshot's memory class reads the platform, and no CI leg runs tests on macOS, so
+// The snapshot's memory class reads the platform, and no CI leg runs tests on macOS, so
 // these rows state it. Apple Silicon has its own rows in unit/performance and performance-gpu.
 pinPlatform('win32', 'x64')
 

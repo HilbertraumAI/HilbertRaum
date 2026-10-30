@@ -187,7 +187,7 @@ export interface RerankerOccupancySnapshot {
    * #495 follow-up: true once the reranker's own session
    * GPU-fallback latch is armed (`Reranker.gpuDemoted()` — a pure field read, never
    * `devicePosture()`, which would recurse for the sidecar's own posture callback below).
-   * OPTIONAL, unlike the other two fields: `snapshotRerankerOccupancy`'s existing 3-argument
+   * OPTIONAL, unlike the three above: `snapshotRerankerOccupancy`'s existing 3-argument
    * call sites (predating this field, several inside frozen test fixtures) must keep resolving
    * an omitted field to "not known to be demoted" rather than a compile error. The one
    * production reader that can actually see the latch is `registerRagIpc.ts`'s ask site, which

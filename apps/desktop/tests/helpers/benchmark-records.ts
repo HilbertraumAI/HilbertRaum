@@ -7,7 +7,7 @@ import type { BenchmarkResult, EffectiveReadSample, ModelPlacement } from '../..
 
 /**
  * A result from some OTHER computer: an RTX 3090 / PRO machine, a fingerprint no test host carries.
- * Replaces `performance-fixture`'s `result` body (`result` is now this function, re-exported).
+ * `performance-fixture` re-exports it as `result`.
  * Leaves the optional fields absent; for every field set, see `completeBenchmarkResult`.
  */
 export function benchmarkResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
@@ -32,8 +32,7 @@ export function benchmarkResult(over: Partial<BenchmarkResult> = {}): BenchmarkR
 }
 
 /**
- * A healthy result with every optional field set: the shape a real run persists. Replaces
- * unit/benchmark-schema's `complete`. It is not `benchmarkResult` plus the optional fields: the CPU,
+ * A healthy result with every optional field set: the shape a real run persists. It is not `benchmarkResult` plus the optional fields: the CPU,
  * the RAM, the model and the warnings differ too, so a row must not assume the two share a machine.
  */
 export function completeBenchmarkResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
@@ -61,8 +60,7 @@ export function completeBenchmarkResult(over: Partial<BenchmarkResult> = {}): Be
 }
 
 /**
- * A 300 MB/s model-load sample (3 GB in 10 s). Replaces unit/benchmark-persistence's `sample`. It
- * is a stored record: it does not feed `read-speed`'s observer, which `loadSample` in
+ * A 300 MB/s model-load sample (3 GB in 10 s). It is a stored record: it does not feed `read-speed`'s observer, which `loadSample` in
  * `performance-fixture.ts` does.
  */
 export function effectiveReadSample(over: Partial<EffectiveReadSample> = {}): EffectiveReadSample {
@@ -78,10 +76,9 @@ export function effectiveReadSample(over: Partial<EffectiveReadSample> = {}): Ef
 }
 
 /**
- * A fully-offloaded GPU placement (unit/benchmark-schema's `placement`, the richest of the local
- * copies). Its `machineKey` is a literal of no real host, so a record the snapshot must admit as
+ * A fully-offloaded GPU placement. Its `machineKey` is a literal of no real host, so a record the snapshot must admit as
  * observed passes `machineKey: hereKey()` and the launch `contextTokens`. Not a processor record:
- * the `cpu` literals in performance-ipc and performance-notify override `backend` and the MiB fields.
+ * a `cpu` row overrides `backend` and the MiB fields itself.
  */
 export function modelPlacement(over: Partial<ModelPlacement> = {}): ModelPlacement {
   return {
