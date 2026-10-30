@@ -53,7 +53,7 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
-import { checksumCacheStats, clearChecksumCache, primeChecksum } from '../../src/main/services/models'
+import { checksumCacheStats, primeChecksum } from '../../src/main/services/models'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
@@ -502,7 +502,6 @@ describe('registerModelIpc', () => {
 
     it('lazyVerify: true hashes ONLY the active model; both weights still report installed', async () => {
       reg(lazyCtx())
-      clearChecksumCache()
       const before = checksumCacheStats.computed
       const { result } = await invoke(handlers, IPC.listModels, true)
       expect(checksumCacheStats.computed).toBe(before + 1)
@@ -513,7 +512,6 @@ describe('registerModelIpc', () => {
 
     it('no argument ("Check all model files") still hashes every present weight', async () => {
       reg(lazyCtx())
-      clearChecksumCache()
       const before = checksumCacheStats.computed
       await invoke(handlers, IPC.listModels)
       expect(checksumCacheStats.computed).toBe(before + 2)
@@ -523,7 +521,6 @@ describe('registerModelIpc', () => {
       const ctx = lazyCtx()
       updateSettings(ctx.db, { activeModelId: null })
       reg(ctx)
-      clearChecksumCache()
       const before = checksumCacheStats.computed
       await invoke(handlers, IPC.listModels, true)
       expect(checksumCacheStats.computed).toBe(before)
@@ -599,13 +596,12 @@ describe('registerModelIpc', () => {
 
     it('cancels the in-flight pass: the weight it had not reached is never hashed', async () => {
       reg(cancelCtx())
-      clearChecksumCache()
       const before = checksumCacheStats.computed
       const { pass, cancelled } = passCancelledOnFirstProgress('run-420')
       const result = await pass
 
       expect(cancelled()).toBe(true)
-      // ONE weight hashed: the loop head saw the abort before opening the second file.
+      // ONE weight hashed: the cancel, fired from the first file's progress, stopped the pass before a second.
       expect(checksumCacheStats.computed).toBe(before + 1)
       // The list is still complete and calm — a cancelled pass is an ordinary result, never
       // a rejection: what finished is verified, the rest is simply unchecked.
@@ -616,7 +612,6 @@ describe('registerModelIpc', () => {
 
     it('is a no-op (false) when nothing is running under that id — including after the pass ended', async () => {
       reg(cancelCtx())
-      clearChecksumCache()
       expect(await invoke(handlers, IPC.cancelModelVerify, 'never-started')).toMatchObject({
         result: false
       })
@@ -629,7 +624,6 @@ describe('registerModelIpc', () => {
 
     it("does not disturb startModelRuntime's own §7.4 hash", async () => {
       reg(cancelCtx())
-      clearChecksumCache()
       const before = checksumCacheStats.computed
       await passCancelledOnFirstProgress('run-gate').pass
       expect(checksumCacheStats.computed).toBe(before + 1) // one of the two weights stayed unhashed
@@ -637,7 +631,6 @@ describe('registerModelIpc', () => {
       // The start gate passes NO signal, so a cancelled display pass can never reach it: the
       // model it launches is hashed and verified exactly as before. `beta` is the weight the
       // cancelled pass never reached, so nothing has cached it.
-      clearChecksumCache()
       const beforeStart = checksumCacheStats.computed
       await invoke(handlers, IPC.startRuntime, 'beta')
       expect(checksumCacheStats.computed).toBe(beforeStart + 1)
@@ -695,7 +688,6 @@ describe('registerModelIpc', () => {
     ])('$pass → re-armed $rearmed time(s)', async ({ damaged, lazy, rearmed }) => {
       const { ctx, resetStartFailure } = searchModelCtx(damaged)
       reg(ctx)
-      clearChecksumCache()
       const { result } = await invoke(handlers, IPC.listModels, lazy, lazy ? undefined : 'run-634')
       if (lazy === undefined) {
         expect((result as ModelInfo[]).find((m) => m.id === 'e5-test')?.state).toBe(damaged ? 'checksum_failed' : 'installed')
@@ -1191,7 +1183,6 @@ describe('registerModelIpc', () => {
 
     it('verifyModel invalidates the cache entry of EVERY declared file', async () => {
       const { root, manifestsDir } = shardedDrive()
-      clearChecksumCache()
       // A stale, WRONG cached hash for the LAST shard: only a per-file invalidation can
       // recover from it — a weight-only invalidation would keep serving 'checksum_failed'.
       primeChecksum(shardAbs(root, 3), 'a'.repeat(64))
@@ -1209,7 +1200,6 @@ describe('registerModelIpc', () => {
 
     it('startRuntime passes every file as weightPaths and their SUM as weightBytes', async () => {
       const { root, manifestsDir } = shardedDrive()
-      clearChecksumCache()
       const started: Array<Record<string, unknown>> = []
       const ctx = {
         db: seededDb(),

@@ -489,11 +489,6 @@ function awaitInFlightHash(
   })
 }
 
-/** Drop all in-memory cached hashes (tests / an explicit re-verify). */
-export function clearChecksumCache(): void {
-  hashCache.clear()
-}
-
 /** Drop one file's cached hash everywhere — the "Verify checksum" forced re-hash. */
 export function invalidateChecksum(filePath: string, store?: HashStore): void {
   hashCache.delete(filePath)

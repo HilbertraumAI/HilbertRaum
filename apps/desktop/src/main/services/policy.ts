@@ -245,11 +245,6 @@ interface PolicyCacheEntry {
 }
 const policyCache = new Map<string, PolicyCacheEntry>()
 
-/** Test hook (F-30): drop the policy cache. */
-export function __resetPolicyCache(): void {
-  policyCache.clear()
-}
-
 /** `(mtimeMs, size)` of a file, or `absent` if it is missing/unstatable (F-30 cache key part). */
 function fileSignature(path: string): string {
   try {
