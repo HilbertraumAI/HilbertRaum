@@ -1384,7 +1384,7 @@ for driver variance.
 *Blast radius, accepted.* The profile bump moves such a laptop one step up (a label, plus the
 RAM-unknown fallback picker); the tile reads "Usable" for these cards, which matches what the fit
 does with them; the boundary pins at 5,921 out / 6,144 in flip to 5,119 out / 5,120 in
-(`picker-seams.test.ts`, `performance.test.ts`). The tile has named the real card and its memory
+(`gpu-rules.test.ts`). The tile has named the real card and its memory
 regardless of the gate since #375, so "my card is invisible" was already fixed and is not part of
 this. The 6 GB row's CONTENT is unchanged — 4B at RAM 8, E2B at RAM 12, 4B from RAM 16 up — but it
 is now a row about real hardware rather than about an RTX 2060.

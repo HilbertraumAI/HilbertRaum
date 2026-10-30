@@ -151,7 +151,7 @@ describe('Wave 8: the wired callbacks actually reach the sidecar (functional, no
 // (`rag/device-posture.ts:232`) was indistinguishable from the literal `false` under the whole
 // suite — the wire itself was untested, only its two ENDPOINTS (`TranslationRuntime.gpuOccupied()`
 // in `translation-runtime.test.ts`, and `resolveRerankerDevicePosture`'s own occupancy branch with
-// a hand-built snapshot in `reranker-wave8.test.ts`/`posture-writers-wave8.test.ts`). These two
+// a hand-built snapshot in `rerank-profile-wiring.test.ts`). These two
 // tests drive the JOIN itself through the real, exported `createRerankerCallbacks` factory, with a
 // NON-null `Translator`. Confirmed both tests are load-bearing by temporarily replacing
 // `device-posture.ts:232`'s expression with the literal `false` in the worktree (`node -e` editing
