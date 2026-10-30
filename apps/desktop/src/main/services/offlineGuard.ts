@@ -97,12 +97,6 @@ export interface OfflinePosture {
 
 export interface AssertOfflinePostureDeps {
   posture: OfflinePosture
-  /**
-   * Whether to install the live connect tripwire. Production wiring (main/index.ts) installs
-   * it in ALL builds; tests pass `false` to opt out. (It is a loopback-exempt safety net, not
-   * a dev-only diagnostic.)
-   */
-  installGuard: boolean
   log: (msg: string, meta?: unknown) => void
   warn: (msg: string, meta?: unknown) => void
   /** Extra per-violation hook (feeds the audit log) — called alongside `warn`. */
@@ -110,7 +104,8 @@ export interface AssertOfflinePostureDeps {
 }
 
 /**
- * Startup self-check: log the offline posture and, when enabled, install the tripwire.
+ * Startup self-check: log the offline posture and, while offline, install the tripwire.
+ * It is a loopback-exempt safety net in ALL builds, not a dev-only diagnostic.
  * Defensive — only logs; returns an uninstaller for the guard (no-op if not installed).
  */
 export function assertOfflinePosture(deps: AssertOfflinePostureDeps): () => void {
@@ -121,7 +116,6 @@ export function assertOfflinePosture(deps: AssertOfflinePostureDeps): () => void
     note: 'No network in the core path; loopback (127.0.0.1/localhost) is exempt.'
   })
   if (!posture.offline) return () => {}
-  if (!deps.installGuard) return () => {}
   return installOfflineNetworkGuard({
     offline: true,
     onViolation: (host) => {
