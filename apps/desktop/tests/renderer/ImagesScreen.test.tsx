@@ -1,20 +1,22 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import { ToastProvider } from '../../src/renderer/components'
-import { resetVisionSessionForTests } from '../../src/renderer/lib/visionSession'
-import type { DecodedImage, DecodeImage } from '../../src/renderer/images'
-import type {
-  ImageJob,
-  VisionStatus,
-  VisionUnavailableReason,
-  ImageSessionSummary,
-  ImageSessionDetail
-} from '../../src/shared/types'
-import type { PreloadApi } from '../../src/preload'
-import { stubApi } from '../helpers/renderer'
+import { clearVisionSession, getVisionSession } from '../../src/renderer/lib/visionSession'
+import { decodeImage, DOWNSCALE_TARGET } from '../../src/renderer/images/decode'
+import type { VisionStatus, VisionUnavailableReason } from '../../src/shared/types'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { dropFiles } from '../helpers/drop'
+import {
+  decodedImage,
+  imageSessionDetail,
+  imageSessionSummary,
+  pickedImage,
+  visionScreenStubs,
+  visionStream
+} from '../helpers/vision-fixtures'
 import { t } from '../../src/shared/i18n'
 
 // PF-7c: count TurnRow renders test-side — production's memo object, inner component wrapped (no src seam).
@@ -25,86 +27,37 @@ vi.mock('../../src/renderer/images/TurnRow', async (importOriginal) => {
   return { ...m, TurnRow: countMemoRenders(m.TurnRow, (p) => p.turn.id, turnRenders) }
 })
 
-// F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
-// (no `as never` erasure). The status/history builders return the real shared types, and
-// `streamStubs().api` is `Partial<PreloadApi>`, so a rename of any mocked method or of
-// VisionStatus/ImageSession* reddens typecheck instead of drifting silently.
-
-// Renderer test (jsdom + RTL) for the Images screen state machine (image-understanding §5.6,
-// §17). The decode pipeline uses createImageBitmap/OffscreenCanvas which jsdom lacks, so a
-// fake decode is injected via the `decodeImpl` seam. Streaming is driven by capturing the
-// onImage* subscriber callbacks and invoking them, mirroring the Chat screen lifecycle.
-
-// The active analysis lives in a module-level store (so it survives navigation); reset it between
-// tests so a prior test's loaded image / thread doesn't leak into the next render.
-afterEach(() => {
-  cleanup()
-  resetVisionSessionForTests()
+// The decode module is replaced with `vi.mock` (jsdom has no createImageBitmap/OffscreenCanvas); decode.test.ts
+// runs the real pipeline. `images/index.ts` re-exports `./decode`, so the screen receives this mock, while
+// `blobToDataUrl`, `DOWNSCALE_TARGET` and the pure intake helpers stay real.
+vi.mock('../../src/renderer/images/decode', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../src/renderer/images/decode')>()
+  return { ...m, decodeImage: vi.fn(m.decodeImage) }
+})
+const decodeMock = vi.mocked(decodeImage)
+beforeEach(() => {
+  decodeMock.mockReset()
+  decodeMock.mockImplementation(async () => decodedImage())
 })
 
-function decoded(over?: Partial<DecodedImage>): DecodedImage {
-  return {
-    bytes: new Uint8Array([1, 2, 3, 4]),
-    mimeType: 'image/png',
-    dataUrl: 'data:image/png;base64,AAAA',
-    width: 120,
-    height: 90,
-    ...over
-  }
-}
+// F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
+// (no `as never` erasure). The status/history builders in tests/helpers/vision-fixtures.ts return the
+// real shared types, and `visionStream().api` is `Partial<PreloadApi>`, so a rename of any mocked method
+// or of VisionStatus/ImageSession* reddens typecheck instead of drifting silently.
 
-const fakeDecode: DecodeImage = async () => decoded()
+// Renderer test (jsdom + RTL) for the Images screen state machine (image-understanding §5.6,
+// §17). Streaming is driven through `visionStream()`: it records the onImage* subscriber per job
+// and emits main's event shapes into them, mirroring the Chat screen lifecycle.
 
-const AVAILABLE: VisionStatus = {
-  available: true,
-  modelId: 'qwen2.5-vl-3b',
-  modelDisplayName: 'Qwen2.5-VL 3B'
-}
+// The active analysis lives in a module-level store (so it survives navigation); drop it after each
+// test with the production purge `clearVisionSession()`, after RTL `cleanup()`.
+afterEach(() => {
+  assertNoUnexpectedApiCalls()
+  cleanup()
+  clearVisionSession()
+})
 
 const unavailable = (reason: VisionUnavailableReason): VisionStatus => ({ available: false, reason })
-
-/** Stream-driving stubs: capture the subscriber callbacks so a test can push tokens/done/error. */
-function streamStubs(): {
-  token: { fn?: (t: string) => void }
-  done: { fn?: (j: ImageJob) => void }
-  error: { fn?: (j: ImageJob) => void }
-  api: Partial<PreloadApi>
-  cancel: ReturnType<typeof vi.fn>
-  copyToClipboard: ReturnType<typeof vi.fn>
-} {
-  const token: { fn?: (t: string) => void } = {}
-  const done: { fn?: (j: ImageJob) => void } = {}
-  const error: { fn?: (j: ImageJob) => void } = {}
-  const cancel = vi.fn(async () => ({ jobId: 'j1', state: 'cancelled' }) as ImageJob)
-  const copyToClipboard = vi.fn(async () => true)
-  const api = {
-    imageGetStatus: vi.fn(async () => AVAILABLE),
-    imageAnalyze: vi.fn(async () => ({ jobId: 'j1', state: 'starting' }) as ImageJob),
-    imageCancel: cancel,
-    copyToClipboard,
-    onImageToken: vi.fn((_id: string, cb: (t: string) => void) => {
-      token.fn = cb
-      return () => {}
-    }),
-    onImageDone: vi.fn((_id: string, cb: (j: ImageJob) => void) => {
-      done.fn = cb
-      return () => {}
-    }),
-    onImageError: vi.fn((_id: string, cb: (j: ImageJob) => void) => {
-      error.fn = cb
-      return () => {}
-    })
-  }
-  return { token, done, error, api, cancel, copyToClipboard }
-}
-
-/** Choose-path stubs: the picker returns a token (D2); readBytes returns bytes; decode faked. */
-function pickStubs(name = 'receipt.png') {
-  return {
-    imageChooseImage: vi.fn(async () => ({ token: `tok-${name}`, name, sizeBytes: 4 })),
-    imageReadBytes: vi.fn(async () => new Uint8Array([1, 2, 3, 4]))
-  }
-}
 
 async function selectImageViaPicker(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(await screen.findByRole('button', { name: 'or choose an image' }))
@@ -112,37 +65,21 @@ async function selectImageViaPicker(user: ReturnType<typeof userEvent.setup>): P
 }
 
 describe('ImagesScreen — availability (§5.6)', () => {
-  it('shows the reason-adaptive unavailable card and routes the CTA to AI Model', async () => {
-    const user = userEvent.setup()
-    const onNavigate = vi.fn()
-    stubApi({ imageGetStatus: vi.fn(async () => unavailable('no-model')) })
-    render(<ImagesScreen onNavigate={onNavigate} decodeImpl={fakeDecode} />)
-
-    expect(
-      await screen.findByText('Image understanding needs a local vision model on this drive.')
-    ).toBeInTheDocument()
-    // The OCR pointer + the CTA to AI Model — on the vision model itself (#539).
-    expect(screen.getByText(/Make searchable \(OCR\) under Documents/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Go to AI Model' }))
-    expect(onNavigate).toHaveBeenCalledWith('models:images')
-  })
-
-  it('adapts the note for the no-runtime reason', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => unavailable('no-runtime')) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    expect(
-      await screen.findByText('Image understanding needs the AI engine installed first.')
-    ).toBeInTheDocument()
-  })
-
   // #539: one target for all three reasons — with the engine missing its banner leads that view,
   // with an engine too old the vision model's row says so.
-  it.each(['no-runtime', 'incompatible'] as const)('the %s CTA lands on the vision model too', async (reason) => {
+  it.each([
+    ['no-model', 'images.avail.noModel'],
+    ['no-runtime', 'images.avail.noRuntime'],
+    ['incompatible', 'images.avail.incompatible']
+  ] as const)('the %s card shows its note, the OCR pointer, and a CTA to the vision model (#539)', async (reason, noteKey) => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    stubApi({ imageGetStatus: vi.fn(async () => unavailable(reason)) })
-    render(<ImagesScreen onNavigate={onNavigate} decodeImpl={fakeDecode} />)
-    await user.click(await screen.findByRole('button', { name: 'Go to AI Model' }))
+    stubApi(visionScreenStubs({ imageGetStatus: vi.fn(async () => unavailable(reason)) }))
+    render(<ImagesScreen onNavigate={onNavigate} />)
+
+    expect(await screen.findByText(t('en', noteKey))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'images.avail.ocrPointer'))).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t('en', 'images.avail.cta') }))
     expect(onNavigate).toHaveBeenCalledWith('models:images')
   })
 })
@@ -155,19 +92,21 @@ async function findImageZone(): Promise<HTMLElement> {
 }
 
 describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
-  it('shows the drop zone when a model is available and no image is selected', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+  it('shows the drop zone when a model is available and no image is selected (the OCR pointer stays, #539)', async () => {
+    stubApi(visionScreenStubs())
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     expect(await findImageZone()).toBeInTheDocument()
     // The inner Button is THE single accessible control (FE-6 — no nested interactive).
     expect(screen.getByRole('button', { name: 'or choose an image' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Drop an image here' })).toBeNull()
+    // #539: the OCR pointer stays under the drop zone once the vision model is installed.
+    expect(screen.getByText(t('en', 'images.avail.ocrPointer'))).toBeVisible()
   })
 
   it('decodes a picked image into the two-pane workspace (preview + composer + chips)', async () => {
     const user = userEvent.setup()
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    stubApi(visionScreenStubs(pickedImage()))
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
 
     // Preview pane: image + filename + meta line.
@@ -179,30 +118,29 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
     expect(screen.getByRole('button', { name: 'Summarize this image' })).toBeInTheDocument()
   })
 
-  // #124: WEBP is an accepted INTAKE format (normalized to PNG inside decode — faked here);
+  // #124: WEBP is an accepted INTAKE format (normalized to PNG inside decode — mocked here);
   // HEIC stays unsupported but gets its specific "convert to JPEG" copy, not the generic banner.
   it('accepts a dropped WEBP into the decode pipeline (#124)', async () => {
-    const decodeSpy = vi.fn(fakeDecode)
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
+    stubApi(visionScreenStubs())
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     const zone = await findImageZone()
     const webp = new File([new Uint8Array([0x52, 0x49, 0x46, 0x46])], 'shot.webp', {
       type: 'image/webp'
     })
     await act(async () => {
-      fireDrop(zone, [webp])
+      dropFiles(zone, [webp])
     })
     await screen.findByText('shot.webp') // reached the workspace — not rejected as unsupported
-    expect(decodeSpy).toHaveBeenCalledWith(expect.anything(), 'image/webp')
+    expect(decodeMock).toHaveBeenCalledWith(expect.anything(), 'image/webp')
   })
 
   it('a dropped HEIC shows the specific convert-to-JPEG copy (#124)', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    stubApi(visionScreenStubs())
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     const zone = await findImageZone()
     const heic = new File([new Uint8Array([1])], 'IMG_0001.HEIC', { type: '' })
     await act(async () => {
-      fireDrop(zone, [heic])
+      dropFiles(zone, [heic])
     })
     expect(
       await screen.findByText("iPhone HEIC photos aren't supported yet. Convert the photo to JPEG first.")
@@ -221,16 +159,15 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
   ])('a dropped PDF (%s) points to OCR in Documents, with a button there', async (_how, pdf) => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    const decodeSpy = vi.fn(fakeDecode)
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), importDocuments: vi.fn() })
-    render(<ImagesScreen onNavigate={onNavigate} decodeImpl={decodeSpy} />)
+    stubApi(visionScreenStubs({ importDocuments: vi.fn() }))
+    render(<ImagesScreen onNavigate={onNavigate} />)
     const zone = await findImageZone()
     await act(async () => {
-      fireDrop(zone, [pdf])
+      dropFiles(zone, [pdf])
     })
     expect(await screen.findByText(PDF_COPY)).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'images.err.unsupported'))).not.toBeInTheDocument()
-    expect(decodeSpy).not.toHaveBeenCalled()
+    expect(decodeMock).not.toHaveBeenCalled()
     expect(window.api.importDocuments).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Go to Documents' }))
     expect(onNavigate).toHaveBeenCalledWith('documents')
@@ -239,9 +176,9 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
   it('a picked PDF ("All files" in the picker) gets the same pointer, and its bytes are never read', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    const picks = pickStubs('contract-scan.pdf')
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...picks })
-    render(<ImagesScreen onNavigate={onNavigate} decodeImpl={fakeDecode} />)
+    const picks = pickedImage('contract-scan.pdf')
+    stubApi(visionScreenStubs(picks))
+    render(<ImagesScreen onNavigate={onNavigate} />)
     await user.click(await screen.findByRole('button', { name: 'or choose an image' }))
     expect(await screen.findByText(PDF_COPY)).toBeInTheDocument()
     expect(picks.imageReadBytes).not.toHaveBeenCalled()
@@ -251,11 +188,11 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
 
   it('dismissing the PDF banner takes its button with it; another unsupported file keeps the generic copy', async () => {
     const user = userEvent.setup()
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    stubApi(visionScreenStubs())
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     const zone = await findImageZone()
     await act(async () => {
-      fireDrop(zone, [new File([new Uint8Array([1])], 'scan.pdf', { type: 'application/pdf' })])
+      dropFiles(zone, [new File([new Uint8Array([1])], 'scan.pdf', { type: 'application/pdf' })])
     })
     await screen.findByText(PDF_COPY)
     await user.click(screen.getByRole('button', { name: 'Dismiss' }))
@@ -263,52 +200,37 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
     expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
 
     await act(async () => {
-      fireDrop(zone, [new File([new Uint8Array([1])], 'notes.docx', { type: '' })])
+      dropFiles(zone, [new File([new Uint8Array([1])], 'notes.docx', { type: '' })])
     })
     expect(await screen.findByText(t('en', 'images.err.unsupported'))).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
   })
 
-  it('a multi-drop that includes a PDF is still a multi-drop', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+  // UX-3: the count is checked before any per-file check, so a PDF in the drop is still a multi-drop.
+  it.each([
+    ['two images', [['a.png', 'image/png'], ['b.png', 'image/png']]],
+    ['a PDF among them', [['scan.pdf', 'application/pdf'], ['a.png', 'image/png']]]
+  ] as const)('rejects a multi-drop (%s) with a friendly banner rather than taking the first file', async (_what, specs) => {
+    stubApi(visionScreenStubs())
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     const zone = await findImageZone()
     await act(async () => {
-      fireDrop(zone, [
-        new File([new Uint8Array([1])], 'scan.pdf', { type: 'application/pdf' }),
-        new File([new Uint8Array([1])], 'a.png', { type: 'image/png' })
-      ])
+      dropFiles(zone, specs.map(([name, type]) => new File([new Uint8Array([1])], name, { type })))
     })
-    expect(await screen.findByText('Drop one image at a time.')).toBeInTheDocument()
+    expect(await screen.findByText(t('en', 'images.err.multiDrop'))).toBeInTheDocument()
     expect(screen.queryByText(PDF_COPY)).not.toBeInTheDocument()
-  })
-
-  it('keeps the OCR pointer under the drop zone while the vision model is available (#539)', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    await findImageZone()
-    expect(screen.getByText(t('en', 'images.avail.ocrPointer'))).toBeVisible()
-  })
-
-  it('rejects a multi-drop with a friendly banner rather than taking the first file', async () => {
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    const zone = await findImageZone()
-    const file = (n: string) => new File([new Uint8Array([1])], n, { type: 'image/png' })
-    await act(async () => {
-      fireDrop(zone, [file('a.png'), file('b.png')])
-    })
-    expect(await screen.findByText('Drop one image at a time.')).toBeInTheDocument()
     // Still on the drop zone — no image was taken.
-    expect(screen.getByText('Drop an image here')).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'images.drop.title'))).toBeInTheDocument()
+    expect(decodeMock).not.toHaveBeenCalled()
   })
 })
 
 describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   it('a chip fills the composer (no auto-send)', async () => {
     const user = userEvent.setup()
-    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
 
     await user.click(screen.getByRole('button', { name: 'Extract visible text' }))
@@ -316,13 +238,16 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
     expect(box.value).toBe(
       'Extract the visible text you can read. Preserve line breaks where helpful. Say if any text is unclear.'
     )
+    // No auto-send: the store's analyze() reaches the bridge synchronously, so a send would show here.
+    expect(s.analyze).not.toHaveBeenCalled()
+    expect(screen.queryByText(t('en', 'images.answer.starting'))).not.toBeInTheDocument()
   })
 
   it('streams an answer: starting → tokens → done with Copy / Try again', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
 
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
@@ -330,14 +255,14 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
 
     // The calm starting line + a Stop, until the first token arrives.
     expect(await screen.findByText('Starting the vision model…')).toBeInTheDocument()
-    await waitFor(() => expect(s.token.fn).toBeDefined())
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
 
-    await act(async () => s.token.fn?.('It is '))
-    await act(async () => s.token.fn?.('a receipt.'))
+    await act(async () => s.token('j1', 'It is '))
+    await act(async () => s.token('j1', 'a receipt.'))
     // PF-7c: tokens land on the store's 40 ms batch flush, not synchronously — findByText waits.
     expect(await screen.findByText(/It is a receipt\./)).toBeInTheDocument()
 
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'It is a receipt.' }))
+    await act(async () => s.done('j1', 'It is a receipt.'))
     expect(screen.getByText('Generated locally from the selected image.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
@@ -345,30 +270,31 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
 
   it('Copy uses the main-process clipboard (not navigator.clipboard, which the renderer denies)', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.done.fn).toBeDefined())
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'It is a receipt.' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.done('j1', 'It is a receipt.'))
 
     await user.click(screen.getByRole('button', { name: 'Copy' }))
     expect(s.copyToClipboard).toHaveBeenCalledWith('It is a receipt.')
   })
 
+  // The screen wiring of the error event; the per-code copy is AnswerThread.test.tsx's table.
   it('shows a friendly runtime-failure banner (never raw output)', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
 
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.error.fn).toBeDefined())
-    await act(async () => s.error.fn?.({ jobId: 'j1', state: 'failed', error: 'runtimeFailed' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.error('j1', 'runtimeFailed'))
     expect(
       screen.getByText("The vision model couldn't start. Try again, or pick another model.")
     ).toBeInTheDocument()
@@ -379,16 +305,16 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   // busy job — the click vanished with no answer and no feedback. The trigger must now disable.
   it('disables a prior turn’s "Try again" while another analysis is in flight (F4)', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
 
     // First analysis → done: its turn shows an ENABLED "Try again".
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.done.fn).toBeDefined())
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'A receipt.' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.done('j1', 'A receipt.'))
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled()
 
     // Start a SECOND analysis (the composer is free again). The prior turn's "Try again" must go
@@ -403,62 +329,49 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
   // sibling turn — a per-id render-count oracle on TurnRow (the DocRow PERF-5 pattern).
   it('a settled TurnRow does not re-render while a new turn streams (PF-7c)', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
 
     // First turn settles.
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.done.fn).toBeDefined())
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'A receipt.' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.done('j1', 'A receipt.'))
     await screen.findByText('A receipt.')
 
     // Second turn starts streaming. Measure AFTER its first flush landed — the busy flip that
     // legitimately re-renders every row (it disables the settled row's "Try again") is behind us.
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'And this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.token.fn).toBeDefined())
-    await act(async () => s.token.fn?.('One'))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.token('j1', 'One'))
     await screen.findByText(/One/)
     const before = new Map(turnRenders)
+    // The store numbers its turns for the whole process (the production purge keeps the counter), so read the ids.
+    const [settledId, streamingId] = getVisionSession().turns.map((tn) => tn.id)
 
-    await act(async () => s.token.fn?.(' two'))
+    await act(async () => s.token('j1', ' two'))
     await screen.findByText(/One two/)
     const delta = (id: string): number =>
       (turnRenders.get(id) ?? 0) - (before.get(id) ?? 0)
-    expect(delta('img-turn-1')).toBe(0) // the settled row's memo held through the flush
-    expect(delta('img-turn-2')).toBeGreaterThan(0) // the streaming row is the only one updating
-  })
-
-  it('maps an empty model response to the friendly empty-response copy', async () => {
-    const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    await selectImageViaPicker(user)
-    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
-    await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.done.fn).toBeDefined())
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: '   ' }))
-    expect(
-      screen.getByText('No answer came back for that image. Try rephrasing your question.')
-    ).toBeInTheDocument()
+    expect(delta(settledId)).toBe(0) // the settled row's memo held through the flush
+    expect(delta(streamingId)).toBeGreaterThan(0) // the streaming row is the only one updating
   })
 })
 
 describe('ImagesScreen — reset + cancel (§5.6)', () => {
   it('Remove clears the image and the thread (back to the drop zone)', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.done.fn).toBeDefined())
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'Answer.' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.done('j1', 'Answer.'))
     expect(screen.getByText('Answer.')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Remove' }))
@@ -467,44 +380,16 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
     expect(screen.getByText('Drop an image here')).toBeInTheDocument()
   })
 
-  it('Replace is disabled mid-analysis (DOC-12); after it settles, replacing resets the thread', async () => {
-    // DOC-12 (#150): this test used to pin the OLD behavior — Replace mid-analysis opened the
-    // picker and cancelled the streaming answer without confirmation. Replace now gates on
-    // `decoding || analyzing` like the landing drop zone; the reset-on-replace behavior is
-    // asserted for the settled state (the store's supersede/cancel invariant stays covered in
-    // visionSession.test.ts).
-    const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-    await selectImageViaPicker(user)
-    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
-    await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.token.fn).toBeDefined())
-    await act(async () => s.token.fn?.('Partial…'))
-    // PF-7c: tokens land on the store's 40 ms batch flush, not synchronously — findByText waits.
-    expect(await screen.findByText(/Partial…/)).toBeInTheDocument()
-
-    // Mid-analysis the Replace affordance is gated off.
-    expect(screen.getByRole('button', { name: 'Replace' })).toBeDisabled()
-
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'Partial… done.' }))
-    await user.click(screen.getByRole('button', { name: 'Replace' }))
-    // The previous turn is gone — the thread reset for the new image; nothing to cancel.
-    await waitFor(() => expect(screen.queryByText(/Partial…/)).not.toBeInTheDocument())
-    expect(s.cancel).not.toHaveBeenCalled()
-  })
-
   it('Stop cancels the active job and marks the turn stopped', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.token.fn).toBeDefined())
-    await act(async () => s.token.fn?.('Half'))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.token('j1', 'Half'))
 
     await user.click(screen.getByRole('button', { name: 'Stop' }))
     expect(s.cancel).toHaveBeenCalledWith('j1')
@@ -515,14 +400,14 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
 describe('ImagesScreen — survives navigation (running analysis recovery)', () => {
   it('lands on the list with a running row after unmount + remount; clicking it shows the live stream', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    const { unmount } = render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    const { unmount } = render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.token.fn).toBeDefined())
-    await act(async () => s.token.fn?.('Partial so far'))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.token('j1', 'Partial so far'))
 
     // Navigate away: the screen unmounts WITHOUT cancelling the in-flight job.
     unmount()
@@ -530,7 +415,7 @@ describe('ImagesScreen — survives navigation (running analysis recovery)', () 
 
     // Come back: we land on the landing view (NOT the result view), and the running analysis is
     // surfaced as a row in the previous-results list.
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     expect(await screen.findByText('Analysis running…')).toBeInTheDocument()
     expect(screen.getByText('receipt.png')).toBeInTheDocument()
     // The upload is disabled while one runs (vision is one-at-a-time).
@@ -542,21 +427,21 @@ describe('ImagesScreen — survives navigation (running analysis recovery)', () 
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
 
     // The analysis completes, and the answer finalizes.
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'Partial so far — done.' }))
+    await act(async () => s.done('j1', 'Partial so far — done.'))
     expect(await screen.findByText('Partial so far — done.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
   })
 
   it('Back returns to the list (analysis keeps running) without cancelling', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.token.fn).toBeDefined())
-    await act(async () => s.token.fn?.('Half'))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.token('j1', 'Half'))
 
     await user.click(screen.getByRole('button', { name: '‹ Back to analyses' }))
     // On the list: the job was NOT cancelled, and it shows as the running row + the busy hint.
@@ -569,70 +454,25 @@ describe('ImagesScreen — survives navigation (running analysis recovery)', () 
 })
 
 describe('ImagesScreen — history (image-understanding history)', () => {
-  const summary = (over?: Partial<ImageSessionSummary>): ImageSessionSummary => ({
-    id: 's1',
-    title: 'receipt.png',
-    mimeType: 'image/png',
-    sizeBytes: 4,
-    width: 120,
-    height: 90,
-    turnCount: 2,
-    firstQuestion: 'What is this?',
-    createdAt: '2026-06-20T00:00:00Z',
-    updatedAt: '2026-06-20T00:00:00Z',
-    ...over
-  })
-
   it('lists saved analyses on the landing view (file name + question count)', async () => {
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions: vi.fn(async () => [summary()])
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    stubApi(visionScreenStubs({ listImageSessions: vi.fn(async () => [imageSessionSummary()]) }))
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     expect(await screen.findByText('History')).toBeInTheDocument()
     expect(await screen.findByText('receipt.png')).toBeInTheDocument()
     expect(screen.getByText('2 questions')).toBeInTheDocument()
   })
 
-  it('opening a saved analysis decrypts the image and replays its turns', async () => {
-    const getImageSession = vi.fn(async () => ({
-      id: 's1',
-      title: 'receipt.png',
-      mimeType: 'image/png',
-      sizeBytes: 4,
-      width: 120,
-      height: 90,
-      imageBytes: new Uint8Array([1, 2, 3, 4]),
-      turns: [{ id: 't1', question: 'What is this?', answer: 'A receipt.', createdAt: '2026-06-20T00:00:00Z' }],
-      createdAt: '2026-06-20T00:00:00Z',
-      updatedAt: '2026-06-20T00:00:00Z'
-    }))
-    const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions: vi.fn(async () => [summary()]),
-      getImageSession
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
-
-    await user.click(await screen.findByText('receipt.png'))
-    expect(getImageSession).toHaveBeenCalledWith('s1')
-    // The stored answer is replayed and the image is loaded into the workspace.
-    expect(await screen.findByText('A receipt.')).toBeInTheDocument()
-    expect(screen.getByAltText('Selected image')).toBeInTheDocument()
-  })
-
-  it('deleting a saved analysis confirms, calls deleteImageSession, and refreshes the list', async () => {
+  it('deleting a saved analysis confirms, calls deleteImageSession, refreshes the list, and toasts', async () => {
     const deleteImageSession = vi.fn(async () => {})
     let calls = 0
-    const listImageSessions = vi.fn(async () => (calls++ === 0 ? [summary()] : []))
+    const listImageSessions = vi.fn(async () => (calls++ === 0 ? [imageSessionSummary()] : []))
     const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions,
-      deleteImageSession
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    stubApi(visionScreenStubs({ listImageSessions, deleteImageSession }))
+    render(
+      <ToastProvider>
+        <ImagesScreen onNavigate={vi.fn()} />
+      </ToastProvider>
+    )
 
     await screen.findByText('receipt.png')
     // The row's Delete opens a ConfirmDialog; confirm inside the dialog (avoids the row button).
@@ -642,6 +482,8 @@ describe('ImagesScreen — history (image-understanding history)', () => {
 
     await waitFor(() => expect(deleteImageSession).toHaveBeenCalledWith('s1'))
     await waitFor(() => expect(screen.queryByText('receipt.png')).not.toBeInTheDocument())
+    // The positive for the CODE-34 row below: a delete that worked says so.
+    expect(await screen.findByText(t('en', 'images.history.deleted'))).toBeInTheDocument()
   })
 
   // full-audit 2026-07-11 CODE-34: a FAILED delete used to fall through to the success toast
@@ -650,16 +492,12 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     const deleteImageSession = vi.fn(async () => {
       throw new Error('The workspace is locked. Unlock it to continue.')
     })
-    const listImageSessions = vi.fn(async () => [summary()])
+    const listImageSessions = vi.fn(async () => [imageSessionSummary()])
     const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions,
-      deleteImageSession
-    })
+    stubApi(visionScreenStubs({ listImageSessions, deleteImageSession }))
     render(
       <ToastProvider>
-        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+        <ImagesScreen onNavigate={vi.fn()} />
       </ToastProvider>
     )
 
@@ -672,7 +510,7 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     expect(
       await screen.findByText("That analysis couldn't be deleted. Try again.")
     ).toBeInTheDocument()
-    expect(screen.queryByText('Removed from history')).not.toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'images.history.deleted'))).not.toBeInTheDocument()
     // The entry is still listed — the list refresh reflects the true state.
     expect(screen.getByText('receipt.png')).toBeInTheDocument()
   })
@@ -684,12 +522,8 @@ describe('ImagesScreen — history (image-understanding history)', () => {
       throw new Error('The workspace is locked. Unlock it to continue.')
     })
     const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions: vi.fn(async () => [summary()]),
-      getImageSession
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    stubApi(visionScreenStubs({ listImageSessions: vi.fn(async () => [imageSessionSummary()]), getImageSession }))
+    render(<ImagesScreen onNavigate={vi.fn()} />)
 
     await user.click(await screen.findByText('receipt.png'))
     // TEETH: pre-fix this was a silent no-op (the vanished-entry path) — no banner ever appeared.
@@ -702,96 +536,47 @@ describe('ImagesScreen — history (image-understanding history)', () => {
   // must not run them through decodeImage again (a no-op scale + a fresh JPEG q0.9 re-encode,
   // compounding generation loss into every reopened follow-up and defeating cache_prompt reuse).
   it('#121: reopening a stored entry bypasses the decode pipeline (stored bytes verbatim)', async () => {
-    const decodeSpy = vi.fn(fakeDecode)
-    const getImageSession = vi.fn(async (): Promise<ImageSessionDetail> => ({
-      id: 's1',
-      title: 'receipt.png',
-      mimeType: 'image/jpeg',
-      sizeBytes: 4,
-      width: 800, // persisted dims ≤ the 1536 downscale target ⇒ no scaling needed
-      height: 600,
-      imageBytes: new Uint8Array([1, 2, 3, 4]),
-      turns: [{ id: 't1', question: 'What is this?', answer: 'A receipt.', createdAt: '2026-06-20T00:00:00Z' }],
-      createdAt: '2026-06-20T00:00:00Z',
-      updatedAt: '2026-06-20T00:00:00Z'
-    }))
+    // Persisted dims AT the downscale target ⇒ no scaling needed (the `<=` bound, pinned where it is used).
+    const getImageSession = vi.fn(async () =>
+      imageSessionDetail({ mimeType: 'image/jpeg', width: DOWNSCALE_TARGET, height: 1024 })
+    )
     const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions: vi.fn(async () => [summary()]),
-      getImageSession
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
+    stubApi(visionScreenStubs({ listImageSessions: vi.fn(async () => [imageSessionSummary()]), getImageSession }))
+    render(<ImagesScreen onNavigate={vi.fn()} />)
 
     await user.click(await screen.findByText('receipt.png'))
-    // TEETH: pre-fix the reopen ALWAYS re-decoded (decodeSpy called once per open).
+    // The clicked row's id, not its title.
+    expect(getImageSession).toHaveBeenCalledWith('s1')
+    // TEETH: pre-fix the reopen ALWAYS re-decoded (decode called once per open).
     expect(await screen.findByText('A receipt.')).toBeInTheDocument()
     expect(screen.getByAltText('Selected image')).toBeInTheDocument()
-    expect(decodeSpy).not.toHaveBeenCalled()
+    expect(decodeMock).not.toHaveBeenCalled()
   })
 
-  it('#121: a legacy entry without persisted dimensions still takes the full pipeline', async () => {
-    const decodeSpy = vi.fn(fakeDecode)
-    const getImageSession = vi.fn(async (): Promise<ImageSessionDetail> => ({
-      id: 's1',
-      title: 'receipt.png',
-      mimeType: 'image/png',
-      sizeBytes: 4,
-      width: null, // legacy row: dims never persisted ⇒ can't prove no-scale ⇒ full pipeline
-      height: null,
-      imageBytes: new Uint8Array([1, 2, 3, 4]),
-      turns: [],
-      createdAt: '2026-06-20T00:00:00Z',
-      updatedAt: '2026-06-20T00:00:00Z'
-    }))
+  it.each([
+    ['no persisted dimensions, a legacy row', { width: null, height: null }],
+    ['one pixel above the downscale target', { width: DOWNSCALE_TARGET + 1, height: 1024 }]
+  ] as const)('#121: an entry the fast path cannot prove (%s) still takes the full pipeline', async (_what, dims) => {
+    const getImageSession = vi.fn(async () => imageSessionDetail({ ...dims, turns: [] }))
     const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions: vi.fn(async () => [summary()]),
-      getImageSession
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
+    stubApi(visionScreenStubs({ listImageSessions: vi.fn(async () => [imageSessionSummary()]), getImageSession }))
+    render(<ImagesScreen onNavigate={vi.fn()} />)
 
     await user.click(await screen.findByText('receipt.png'))
-    await waitFor(() => expect(decodeSpy).toHaveBeenCalledTimes(1))
-  })
-
-  it('#121: an oversized stored entry (dims above the downscale target) still re-decodes', async () => {
-    const decodeSpy = vi.fn(fakeDecode)
-    const getImageSession = vi.fn(async (): Promise<ImageSessionDetail> => ({
-      id: 's1',
-      title: 'big.png',
-      mimeType: 'image/png',
-      sizeBytes: 4,
-      width: 4000, // > 1536 ⇒ scaling IS needed ⇒ the fast path must not engage
-      height: 3000,
-      imageBytes: new Uint8Array([1, 2, 3, 4]),
-      turns: [],
-      createdAt: '2026-06-20T00:00:00Z',
-      updatedAt: '2026-06-20T00:00:00Z'
-    }))
-    const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions: vi.fn(async () => [summary({ title: 'big.png' })]),
-      getImageSession
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={decodeSpy} />)
-
-    await user.click(await screen.findByText('big.png'))
-    await waitFor(() => expect(decodeSpy).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(decodeMock).toHaveBeenCalledTimes(1))
   })
 
   // #122: the list says what it costs — per-entry stored size + the total in the header.
   it('#122: shows per-entry sizes and the total in the history header', async () => {
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions: vi.fn(async () => [
-        summary({ id: 's1', title: 'a.png', sizeBytes: 2 * 1024 * 1024 }),
-        summary({ id: 's2', title: 'b.png', sizeBytes: 1024 * 1024 })
-      ])
-    })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    stubApi(
+      visionScreenStubs({
+        listImageSessions: vi.fn(async () => [
+          imageSessionSummary({ id: 's1', title: 'a.png', sizeBytes: 2 * 1024 * 1024 }),
+          imageSessionSummary({ id: 's2', title: 'b.png', sizeBytes: 1024 * 1024 })
+        ])
+      })
+    )
+    render(<ImagesScreen onNavigate={vi.fn()} />)
 
     expect(await screen.findByText('Total: 3.0 MB')).toBeInTheDocument()
     expect(screen.getByText('2.0 MB')).toBeInTheDocument()
@@ -801,16 +586,12 @@ describe('ImagesScreen — history (image-understanding history)', () => {
   it('#122: Clear history confirms, calls clearImageSessions, refreshes the list, and toasts', async () => {
     const clearImageSessions = vi.fn(async () => 1)
     let calls = 0
-    const listImageSessions = vi.fn(async () => (calls++ === 0 ? [summary()] : []))
+    const listImageSessions = vi.fn(async () => (calls++ === 0 ? [imageSessionSummary()] : []))
     const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions,
-      clearImageSessions
-    })
+    stubApi(visionScreenStubs({ listImageSessions, clearImageSessions }))
     render(
       <ToastProvider>
-        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+        <ImagesScreen onNavigate={vi.fn()} />
       </ToastProvider>
     )
 
@@ -829,16 +610,12 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     const clearImageSessions = vi.fn(async () => {
       throw new Error('The workspace is locked. Unlock it to continue.')
     })
-    const listImageSessions = vi.fn(async () => [summary()])
+    const listImageSessions = vi.fn(async () => [imageSessionSummary()])
     const user = userEvent.setup()
-    stubApi({
-      imageGetStatus: vi.fn(async () => AVAILABLE),
-      listImageSessions,
-      clearImageSessions
-    })
+    stubApi(visionScreenStubs({ listImageSessions, clearImageSessions }))
     render(
       <ToastProvider>
-        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+        <ImagesScreen onNavigate={vi.fn()} />
       </ToastProvider>
     )
 
@@ -857,44 +634,35 @@ describe('ImagesScreen — history (image-understanding history)', () => {
 describe('ImagesScreen — copy feedback (full-audit 2026-07-11 CODE-36)', () => {
   it('a failed copy toasts the failure instead of staying silent', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
+    const s = visionStream()
     s.copyToClipboard.mockResolvedValue(false) // main refused the write
-    stubApi({ ...s.api, ...pickStubs() })
+    stubApi({ ...s.api, ...pickedImage() })
     render(
       <ToastProvider>
-        <ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />
+        <ImagesScreen onNavigate={vi.fn()} />
       </ToastProvider>
     )
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'q')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
-    await waitFor(() => expect(s.done.fn).toBeDefined())
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'Answer.' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.done('j1', 'Answer.'))
 
     await user.click(screen.getByRole('button', { name: 'Copy' }))
 
     // TEETH: pre-fix a refused copy gave NO feedback at all (the `if (ok)` gate).
     expect(await screen.findByText('Could not copy to the clipboard')).toBeInTheDocument()
-    expect(screen.queryByText('Copied')).not.toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'images.answer.copied'))).not.toBeInTheDocument()
   })
 })
 
-// Minimal drag-drop event with a files-bearing dataTransfer (jsdom has no real DataTransfer).
-// Carries `types: ['Files']` — DOC-3 (#143): the drop zone now accepts only real FILE drags
-// (the TranslateDropZone L8 pattern), exactly what a native OS file drop reports.
-function fireDrop(el: Element, files: File[]): void {
-  const event = new Event('drop', { bubbles: true, cancelable: true })
-  Object.defineProperty(event, 'dataTransfer', { value: { files, types: ['Files'] } })
-  el.dispatchEvent(event)
-}
-
 // DOC-12 + DOC-13 (frontend audit 2026-08-09, #150 — #143 companions).
 describe('ImagesScreen — analysis-window guards (DOC-12/DOC-13)', () => {
-  it('DOC-12: Replace and Remove are disabled while an analysis streams (like the landing zone)', async () => {
+  it('DOC-12: Replace and Remove are disabled while an analysis streams; after it settles, Replace resets the thread without a cancel', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
     await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
     await user.click(screen.getByRole('button', { name: 'Ask' }))
@@ -905,15 +673,23 @@ describe('ImagesScreen — analysis-window guards (DOC-12/DOC-13)', () => {
     expect(screen.getByRole('button', { name: 'Replace' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled()
 
-    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'A receipt.' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await act(async () => s.done('j1', 'A receipt.'))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Replace' })).toBeEnabled())
+
+    // Settled: Replace picks a new image and the previous turn is gone (the thread reset for it);
+    // nothing runs, so nothing is cancelled. The store's supersede/cancel invariant stays covered
+    // in visionSession.test.ts.
+    await user.click(screen.getByRole('button', { name: 'Replace' }))
+    await waitFor(() => expect(screen.queryByText('A receipt.')).not.toBeInTheDocument())
+    expect(s.cancel).not.toHaveBeenCalled()
   })
 
   it('DOC-13: a busy-refused Ask restores the typed question instead of discarding it', async () => {
     const user = userEvent.setup()
-    const s = streamStubs()
-    stubApi({ ...s.api, ...pickStubs() })
-    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const s = visionStream()
+    stubApi({ ...s.api, ...pickedImage() })
+    render(<ImagesScreen onNavigate={vi.fn()} />)
     await selectImageViaPicker(user)
 
     const box = screen.getByPlaceholderText('Ask about this image…') as HTMLTextAreaElement
