@@ -1,9 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import type { IpcMainInvokeEvent } from 'electron'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   appendMessage,
   createConversation,
@@ -17,6 +14,7 @@ import { endWorkOnModelStop } from '../../src/main/ipc/model-stop'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 import type { Message } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
 
 // #600 — the user stops or switches the chat model while an answer is being written. Before #600 the
 // sidecar was killed under the answer: the read failed with undici's raw "terminated", the turn
@@ -33,7 +31,7 @@ afterEach(() => {
 })
 
 function freshDb(): Db {
-  const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-modelstop-')), 'test.sqlite'))
+  const db = openFreshDb('modelstop')
   dbs.push(db)
   return db
 }

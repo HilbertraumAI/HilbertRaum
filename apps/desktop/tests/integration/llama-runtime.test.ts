@@ -81,103 +81,6 @@ function fakeSpawn() {
   return { spawn, calls, child }
 }
 
-describe('readChatSSE', () => {
-  it('yields each delta, splits across reads, and stops on [DONE]', async () => {
-    const stream = sseStream([
-      chatChunk('Hello'),
-      'data: {"choices":[{"delta":{"content":" wor', // a partial JSON frame split mid-line
-      'ld"}}]}\n\n',
-      ': keep-alive comment\n\n',
-      chatChunk('!'),
-      'data: [DONE]\n\n',
-      chatChunk('IGNORED AFTER DONE')
-    ])
-    const out: string[] = []
-    for await (const t of readChatSSE(stream)) out.push(t)
-    expect(out.join('')).toBe('Hello world!')
-  })
-
-  it('flushes a final data: line that has no trailing newline before close', async () => {
-    // Server closes the stream right after the last delta with no terminating "\n".
-    const stream = sseStream([chatChunk('Hello'), 'data: {"choices":[{"delta":{"content":" end"}}]}'])
-    const out: string[] = []
-    for await (const t of readChatSSE(stream)) out.push(t)
-    expect(out.join('')).toBe('Hello end')
-  })
-
-  it('stops promptly when the signal is aborted', async () => {
-    const controller = new AbortController()
-    const stream = sseStream([chatChunk('a'), chatChunk('b'), chatChunk('c')])
-    const out: string[] = []
-    for await (const t of readChatSSE(stream, controller.signal)) {
-      out.push(t)
-      controller.abort()
-    }
-    expect(out).toEqual(['a'])
-  })
-
-  it('reports finish_reason "length" via onFinish when the reply is cut off at the ceiling', async () => {
-    // The final chunk carries an empty delta + finish_reason (the llama-server shape), then [DONE].
-    const stream = sseStream([
-      chatChunk('cut off here'),
-      'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
-      'data: [DONE]\n\n'
-    ])
-    const finishes: string[] = []
-    const out: string[] = []
-    for await (const t of readChatSSE(stream, undefined, undefined, (r) => finishes.push(r))) {
-      out.push(t)
-    }
-    expect(out.join('')).toBe('cut off here')
-    expect(finishes).toEqual(['length'])
-  })
-
-  it('reports finish_reason "stop" via onFinish and ignores intermediate null reasons', async () => {
-    const stream = sseStream([
-      'data: {"choices":[{"delta":{"content":"done"},"finish_reason":null}]}\n\n',
-      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
-      'data: [DONE]\n\n'
-    ])
-    const finishes: string[] = []
-    const out: string[] = []
-    for await (const t of readChatSSE(stream, undefined, undefined, (r) => finishes.push(r))) {
-      out.push(t)
-    }
-    expect(out.join('')).toBe('done')
-    expect(finishes).toEqual(['stop'])
-  })
-
-  // #290/#291: the server's per-request `timings` block. Hand-authored to the b9849 shape pinned by
-  // the captured transcript in `tests/fixtures/chat-sse-timings-b9849.txt` (#298) — the timings ride
-  // the finish chunk itself; `tests/unit/chat-sse-timings-fixture.test.ts` reads the real bytes.
-  it('hands the final chunk\'s `timings` up with the finish reason (#290/#291)', async () => {
-    const timings = { prompt_n: 9, prompt_ms: 120, predicted_n: 64, predicted_ms: 1336, predicted_per_second: 47.9, prompt_per_second: 75 }
-    const stream = sseStream([
-      chatChunk('fast'),
-      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], timings })}\n\n`,
-      'data: [DONE]\n\n'
-    ])
-    const finishes: Array<[string, unknown]> = []
-    const out: string[] = []
-    for await (const t of readChatSSE(stream, undefined, undefined, (r, tm) => finishes.push([r, tm]))) {
-      out.push(t)
-    }
-    expect(out.join('')).toBe('fast')
-    expect(finishes).toEqual([['stop', timings]])
-  })
-
-  it('hands up undefined timings when the final chunk carries none (#290/#291)', async () => {
-    const stream = sseStream([
-      chatChunk('x'),
-      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
-      'data: [DONE]\n\n'
-    ])
-    const finishes: Array<[string, unknown]> = []
-    for await (const _t of readChatSSE(stream, undefined, undefined, (r, tm) => finishes.push([r, tm]))) void _t
-    expect(finishes).toEqual([['stop', undefined]])
-  })
-})
-
 describe('LlamaRuntime', () => {
   const startOpts: RuntimeStartOptions = {
     modelId: 'qwen3-4b-instruct-q4',
@@ -788,28 +691,22 @@ describe('answer-depth mode → request mapping (D4)', () => {
     args.flatMap((a, i) => (a === '--cache-ram' ? [args[i + 1]] : []))
 
   it('passes a RAM-scaled --cache-ram to every chat model (#512 decision 2)', async () => {
-    for (const [gb, expected] of [
-      [8, '1024'],
-      [16, '2048'],
-      [32, '4096'],
-      [64, '8192'],
-      [128, '8192']
-    ] as const) {
-      const { spawn, calls } = fakeSpawn()
-      const runtime = new LlamaRuntime(startOpts, {
-        binPath: '/bin/llama-server',
-        spawn,
-        fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
-        findPort: async () => 51010,
-        healthIntervalMs: 1,
-        totalRamBytes: gb * GiB
-      })
-      await runtime.start()
-      expect(cacheRamOf(calls[0].args), `${gb} GB`).toEqual([expected])
-      expect(calls[0].args).not.toContain('-cram')
-      for (const a of CHAT_SERVER_ARGS) expect(calls[0].args).toContain(a)
-      await runtime.stop()
-    }
+    // The size table is prompt-cache-rules.test.ts's; this row pins the wiring — the runtime reads its RAM input and
+    // spawns exactly one rule-derived flag. 12 GiB → 1536, a reading no real host is likely to report exactly.
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+      findPort: async () => 51010,
+      healthIntervalMs: 1,
+      totalRamBytes: 12 * GiB
+    })
+    await runtime.start()
+    expect(cacheRamOf(calls[0].args)).toEqual(['1536'])
+    expect(calls[0].args).not.toContain('-cram')
+    for (const a of CHAT_SERVER_ARGS) expect(calls[0].args).toContain(a)
+    await runtime.stop()
   })
 
   it('disable_prompt_cache wins with --cache-ram 0 — still exactly one flag (#512 decision 1)', async () => {

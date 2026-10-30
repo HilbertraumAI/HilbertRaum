@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createRequire } from 'node:module'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { appendMessage, createConversation, deleteConversation, deleteLastAssistantMessage, searchMessages } from '../../src/main/services/chat'
+import { legacyDbPath, openFreshDb, openRawDb, tempRoot } from '../helpers/db-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // CODE-4 (full audit 2026-07-11) — the FTS5 delete triggers used `DELETE FROM <fts> WHERE
@@ -18,11 +16,8 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // live in the DB file itself (everything below drives plain SQL, exactly what an older binary
 // executes against a migrated workspace).
 
-const nodeRequire = createRequire(process.execPath)
-const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')
-
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-ftsrowid-')), 'test.sqlite'))
+  return openFreshDb('ftsrowid')
 }
 
 const WORDS = ['invoice', 'solar', 'panel', 'contract', 'payment', 'delivery', 'warranty', 'amount', 'total', 'clause']
@@ -100,6 +95,9 @@ describe('CODE-4 — FTS delete triggers are rowid-targeted (timing + plan)', ()
     // …and the WHEN-split legacy fallbacks keep the old predicate for fts_rowid-NULL rows.
     expect(triggerSql(db, 'chunks_fts_ad_legacy')).toContain('chunk_id = old.id')
     expect(triggerSql(db, 'messages_fts_ad_legacy')).toContain('message_id = old.id')
+    // The AI triggers stamp the handle the AD/AU bodies above delete by.
+    expect(triggerSql(db, 'chunks_fts_ai')).toContain('fts_rowid = last_insert_rowid()')
+    expect(triggerSql(db, 'messages_fts_ai')).toContain('fts_rowid = last_insert_rowid()')
 
     // EXPLAIN QUERY PLAN: a rowid-constrained FTS5 delete plans as a rowid lookup
     // (idxStr '=' → "INDEX 0:="), NOT the bare full scan ("INDEX 0:") the old
@@ -196,9 +194,8 @@ describe('CODE-4 — migration of a pre-fix workspace (idempotent, backfilled)',
    * chunk_id/message_id-scanning trigger set — with data already indexed.
    */
   function buildPreMigrationDb(): string {
-    const path = join(mkdtempSync(join(tmpdir(), 'hilbertraum-ftsrowid-mig-')), 'old.sqlite')
-    const old = new DatabaseSync(path)
-    old.exec(`
+    return legacyDbPath('ftsrowid-mig', (old) =>
+      old.exec(`
 CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, original_path TEXT, stored_path TEXT,
   mime_type TEXT, size_bytes INTEGER, sha256 TEXT, status TEXT NOT NULL, error_message TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -240,8 +237,7 @@ INSERT INTO conversations (id, title, created_at, updated_at) VALUES ('v1','t','
 INSERT INTO messages (id, conversation_id, role, content, created_at)
   VALUES ('m1','v1','user','old zork question','2026-01-01');
 `)
-    old.close()
-    return path
+    )
   }
 
   it('opening twice migrates once: triggers rewritten, handles backfilled, no duplicate FTS rows, search intact', () => {
@@ -282,21 +278,20 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
 
   it('a pre-FTS workspace (no chunks_fts at all) gets the new triggers AND handles in one open', () => {
     // The pre-Phase-21 shape from hybrid-search.test.ts: chunks exist, no FTS table.
-    const path = join(mkdtempSync(join(tmpdir(), 'hilbertraum-ftsrowid-prefts-')), 'old.sqlite')
-    const old = new DatabaseSync(path)
-    old.exec(`CREATE TABLE documents (
-      id TEXT PRIMARY KEY, title TEXT NOT NULL, original_path TEXT, stored_path TEXT,
-      mime_type TEXT, size_bytes INTEGER, sha256 TEXT, status TEXT NOT NULL,
-      error_message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`)
-    old.exec(`CREATE TABLE chunks (
-      id TEXT PRIMARY KEY, document_id TEXT NOT NULL, chunk_index INTEGER NOT NULL,
-      text TEXT NOT NULL, source_label TEXT NOT NULL, page_number INTEGER,
-      section_label TEXT, token_count INTEGER, created_at TEXT NOT NULL)`)
-    old.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at)
-       VALUES ('legacy-chunk', 'doc1', 0, 'legacy invoice text', 'old.pdf', '2026-01-01')`
-    ).run()
-    old.close()
+    const path = legacyDbPath('ftsrowid-prefts', (old) => {
+      old.exec(`CREATE TABLE documents (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, original_path TEXT, stored_path TEXT,
+        mime_type TEXT, size_bytes INTEGER, sha256 TEXT, status TEXT NOT NULL,
+        error_message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`)
+      old.exec(`CREATE TABLE chunks (
+        id TEXT PRIMARY KEY, document_id TEXT NOT NULL, chunk_index INTEGER NOT NULL,
+        text TEXT NOT NULL, source_label TEXT NOT NULL, page_number INTEGER,
+        section_label TEXT, token_count INTEGER, created_at TEXT NOT NULL)`)
+      old.prepare(
+        `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at)
+         VALUES ('legacy-chunk', 'doc1', 0, 'legacy invoice text', 'old.pdf', '2026-01-01')`
+      ).run()
+    })
 
     const db = openDatabase(path)
     const row = db.prepare("SELECT fts_rowid FROM chunks WHERE id = 'legacy-chunk'").get() as unknown as { fts_rowid: number | null }
@@ -323,7 +318,7 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
     const path = buildPreMigrationDb()
     // A hostile trigger that fires on the backfill's UPDATE — the crash-equivalent injection:
     // the upgrade transaction dies AFTER its DDL ran but BEFORE the backfill finished.
-    const raw = new DatabaseSync(path)
+    const raw = openRawDb(path)
     raw.exec(`CREATE TRIGGER boom AFTER UPDATE ON chunks BEGIN SELECT RAISE(ABORT, 'torn-mid-upgrade'); END;`)
     raw.close()
 
@@ -331,7 +326,7 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
 
     // Rollback proof: NOTHING of the half-run upgrade committed — the OLD (pre-fix) AD
     // trigger is intact and no _legacy twin exists, so the sentinel will retry.
-    const inspect = new DatabaseSync(path)
+    const inspect = openRawDb(path)
     const ad = inspect
       .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='chunks_fts_ad'")
       .get() as unknown as { sql: string } | undefined
@@ -355,7 +350,7 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
   })
 
   it('a torn trigger state (AD dropped, handles lost) self-heals on the next open instead of failing silently forever', () => {
-    const path = join(mkdtempSync(join(tmpdir(), 'hilbertraum-ftsrowid-torn-')), 'test.sqlite')
+    const path = join(tempRoot('ftsrowid-torn'), 'test.sqlite')
     const db = openDatabase(path)
     const now = new Date().toISOString()
     db.prepare(`INSERT INTO documents (id, title, status, created_at, updated_at) VALUES ('d1','a.txt','indexed',?,?)`).run(now, now)

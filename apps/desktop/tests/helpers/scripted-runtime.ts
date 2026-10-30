@@ -1,7 +1,7 @@
-// Fake ModelRuntimes for the skills and RAG suites (pure: no electron import). `scriptedRuntime` streams a reply token
-// by token and records calls; `recordingRuntime` counts generations and yields one fixed chunk; `finishScriptedRuntime`
-// scripts a reply + finish reason (or a Stop) per call. Only `finishScriptedRuntime` fires `onFinish`, and none emits
-// `onReasoning`, so a test that needs reasoning keeps its own fake.
+// Fake ModelRuntimes for the skills, chat and RAG suites (pure: no electron import). `scriptedRuntime` streams a reply
+// token by token and records calls; `recordingRuntime` counts generations and yields one fixed chunk; `finishScriptedRuntime`
+// scripts a reply + finish reason (or a Stop) per call; `failingRuntime` throws before its first token. Only
+// `finishScriptedRuntime` fires `onFinish`, and none emits `onReasoning`, so a test that needs reasoning keeps its own fake.
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../../src/main/services/runtime'
 
 export interface ScriptedCall {
@@ -131,4 +131,23 @@ export function finishScriptedRuntime(script: FinishStep[], contextWindow = 2048
     }
   }
   return rt
+}
+
+/**
+ * A fake runtime whose every chatStream call throws `new Error(message)` before the first token (a request the
+ * server refused — by default llama-server's context-overflow 400, the regenerate-restore suites' trigger).
+ */
+export function failingRuntime(
+  message = 'Chat request failed: HTTP 400 exceed_context_size_error'
+): ModelRuntime {
+  return {
+    modelId: 'failing',
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+    // eslint-disable-next-line require-yield
+    async *chatStream(): AsyncGenerator<string> {
+      throw new Error(message)
+    }
+  }
 }

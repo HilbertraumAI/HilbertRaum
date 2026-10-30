@@ -4,7 +4,6 @@ import {
   CPU_HI_MIN_THREADS,
   GPU_RERANK_SCOPE,
   RERANKER_HEADROOM_FLOOR_MIB,
-  meetsThreadThreshold,
   resolveRerankProfile,
   rerankScopeFor,
   rerankerDeviceFor,
@@ -61,15 +60,8 @@ function input(overrides: Partial<RerankProfileInput>): RerankProfileInput {
 }
 
 describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDeviceFor (step 4-5" below)', () => {
-  it('gpu: a usable card, auto mode, not auto-disabled → gpu profile, GPU_RERANK_SCOPE (posture gpu — the provable-headroom machine, unchanged)', () => {
-    const i = input({ probeDevices: [RTX_3080_TI], gpuMode: 'auto', gpuAutoDisabled: false, threads: 16 })
-    const profile = resolveRerankProfile(i)
-    expect(profile).toBe('gpu')
-    expect(rerankScopeFor(profile, i, 'gpu')).toBe(GPU_RERANK_SCOPE)
-  })
-
   // Run L froze this by NAME (Frozen parameters: "pinned by name, updated in the run-L commit").
-  // `rerankScopeFor(profile, i, 'gpu')).toBe(GPU_RERANK_SCOPE)` above is true for ANY value the
+  // `rerankScopeFor(profile, i, 'gpu')).toBe(GPU_RERANK_SCOPE)` below is true for ANY value the
   // constant takes (it compares the function's own output against the constant), so it does not,
   // on its own, catch a future edit to the constant's VALUE — this pins the value itself.
   it('GPU_RERANK_SCOPE is frozen at \'all\' (run L, 2026-09-15) — changing this invalidates run A3\'s gpu-profile acceptance read', () => {
@@ -90,24 +82,6 @@ describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDe
     expect(rerankScopeFor(profile, i, 'cpu')).toBe('capped')
   })
 
-  // B12: the `threads >= CPU_HI_MIN_THREADS` comparator, exercised in BOTH directions via the
-  // extracted helper — `resolveRerankProfile` alone cannot observe the `true` branch today
-  // (`CPU_HI_MIN_THREADS` is `Infinity`), so a comparator inversion (`>` vs `>=`) would otherwise
-  // be invisible until a future re-measurement lowers the constant.
-  it('meetsThreadThreshold: the comparator is inclusive (>=), exercised at, above and below an injected threshold', () => {
-    expect(meetsThreadThreshold(8, 8)).toBe(true) // at the threshold
-    expect(meetsThreadThreshold(16, 8)).toBe(true) // above it
-    expect(meetsThreadThreshold(7, 8)).toBe(false) // below it
-    expect(meetsThreadThreshold(4, CPU_HI_MIN_THREADS)).toBe(false) // the real, frozen (Infinity) threshold
-  })
-
-  it('the cpu-hi BRANCH (forced profile, as run A3\'s --profile=cpu-hi and a future re-measurement would use it): opt-in ON → top48; opt-in OFF → capped (posture cpu — cpu-hi\'s only reachable posture)', () => {
-    const onInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: true })
-    expect(rerankScopeFor('cpu-hi', onInput, 'cpu')).toBe('top48')
-    const offInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: false })
-    expect(rerankScopeFor('cpu-hi', offInput, 'cpu')).toBe('capped')
-  })
-
   // Wave 6 ruling (a)/(c) — the REGRESSION GUARD: the coupling must be a property of the `gpu`
   // BRANCH only, never the general rule "posture cpu ⇒ capped" (that general rule would also
   // capture `cpu-hi`, whose posture is ALWAYS `cpu` by construction — no usable GPU, so
@@ -117,7 +91,7 @@ describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDe
   // shipped-disabled miss).
   //
   // Scoped Opus review of step 4-6, finding D12: an earlier version of this test injected a
-  // finite threshold into `meetsThreadThreshold` directly but forced the `cpu-hi` profile as a
+  // finite threshold into the comparator directly but forced the `cpu-hi` profile as a
   // string literal, so no finite `CPU_HI_MIN_THREADS` ever reached `resolveRerankProfile` — the
   // test's own name overstated what it proved. This version genuinely lowers the constant, via a
   // `vi.doMock` of `shared/rerank-rules` + a fresh dynamic import of `rerank-profile.ts` scoped to
@@ -141,6 +115,8 @@ describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDe
       expect(mod.rerankScopeFor(profile, onInput, 'cpu')).toBe('top48')
       const offInput: RerankProfileInput = { ...input({ probeDevices: [], threads: 8, wideScopeOptIn: false }) }
       expect(mod.resolveRerankProfile(offInput)).toBe('cpu-hi')
+      // One below the (mocked) threshold stays default: the comparator is `>=` and never off by one.
+      expect(mod.resolveRerankProfile(input({ probeDevices: [], threads: 7, wideScopeOptIn: true }))).toBe('default')
       expect(mod.rerankScopeFor('cpu-hi', offInput, 'cpu')).toBe('capped')
       // Posture 'gpu' is unreachable in production for cpu-hi (no usable GPU by construction) but
       // must not throw, and must not change the outcome either — the branch never reads posture.
@@ -149,13 +125,6 @@ describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDe
       vi.doUnmock('../../src/shared/rerank-rules')
       vi.resetModules()
     }
-  })
-
-  it('default: no usable card, a realistic thread count → capped (cpu-hi is unreachable — CPU_HI_MIN_THREADS is Infinity)', () => {
-    const i = input({ probeDevices: [], threads: 4 })
-    const profile = resolveRerankProfile(i)
-    expect(profile).toBe('default')
-    expect(rerankScopeFor(profile, i, 'cpu')).toBe('capped')
   })
 
   // Wave 6 ruling (a) — the `default` profile is explicitly UNCHANGED by the coupling, on EITHER

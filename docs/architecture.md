@@ -167,10 +167,11 @@ batching — no behavior change.
     BEGIN), exactly like `deleteDocument`.
   - **DATA-1 — `messages_fts_au` kind guard + backfill.** The UPDATE trigger now guards its INSERT with
     `WHERE new.kind IS NOT 'compaction'` (the DELETE stays unconditional, so a plain→compaction content
-    edit still purges the stale FTS row), matching the INSERT trigger. `ensureMessagesFtsUpdateKindFilter`
-    drop/recreates the trigger on existing DBs whose `au` trigger re-indexed updates unconditionally
-    (mirrors `ensureMessagesFtsKindFilter`) — so a future in-place edit of a checkpoint row can never leak
-    its summary text into conversation search, on old or new drives.
+    edit still purges the stale FTS row), matching the INSERT trigger. On existing DBs whose `au` trigger
+    re-indexed updates unconditionally, CODE-4's `ensureFtsRowidSync` installs the guarded canonical
+    trigger set in the same open (the separate `ensureMessagesFtsUpdateKindFilter` rewrite it superseded
+    was removed in the 2026-10 chat + RAG test campaign) — so a future in-place edit of a checkpoint row
+    can never leak its summary text into conversation search, on old or new drives.
   - **DATA-2 (invariant, no code change).** `tree_edges.child_id` is a polymorphic FK (chunks.id OR
     tree_nodes.id) with no FK to chunks; the no-dangling-edge invariant holds only because every
     chunk-delete path also tears down the document's `tree_nodes` (cascading the edges via `parent_id`).
@@ -6180,7 +6181,8 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   importing one stays the renderer's pending chip). Parsed with `parsePendingDestination`, never SQL
   `json_extract` (it throws on a malformed row); the partial index `idx_documents_pending_dest`
   (post-migration block, the column is migrated in late) keeps the per-ask read to the unfiled rows —
-  checked with `EXPLAIN QUERY PLAN` in `collections.test.ts`. No new column, no migration: every
+  checked with `EXPLAIN QUERY PLAN` on the statement production prepares in `collections.test.ts`.
+  No new column, no migration: every
   existing failed attachment is covered as it stands. **The rejoin after OCR is pinned:** "Make
   searchable (OCR)" re-indexes the same row, `reindexDocument` files it by the intent into Temporary +
   the chat's link and clears it (`docs-ipc.test.ts`, #570 — the chat pointer's copy rests on it).
@@ -8623,7 +8625,7 @@ citation through it.
 | SEC-N3 (Info) | 7 | **accepted Info residual** — sidecar `serverMessage` 500-char tail is structural-only (our loopback llama.cpp, never user content); pinned by an `INVARIANT (SEC-N3)` comment at the cap | security-model "Phase-7 security polish" |
 | TEST-N5 (Med) | 7 | **fixed (tests-only)** — assert observables not mechanisms (key-buffer-zero vs `Buffer.fill` spy; `≤ 1` read counts; `toContain` event arrays) | this ledger |
 | TEST-N7 (Low) | 7 | **fixed (tests-only)** — fixed LE byte-layout assertion for `decodeVector` (`[00 00 80 3f] → [1.0]`), independent of encode | this ledger |
-| TEST-N8 (Low) | 7 | **fixed (tests-only)** — structural lock test over every registered DB-touching chat/benchmark handler + a retrieve()-level rejecting-embedder test (failure propagates) | this ledger |
+| TEST-N8 (Low) | 7 | **fixed (tests-only)** — structural lock test over every registered DB-touching chat/benchmark handler + a retrieve()-level rejecting-embedder test (failure propagates; since folded into rag.test.ts TEST-3) | this ledger |
 | PERF-1 (Med) | 7 | **fixed** — picker image read → `fs/promises` (open → stat → read loop → close in finally), preserving the same-handle TOCTOU invariant + byte cap | this ledger (ING-8 convention) |
 | PERF-2 (Med) | 7 | **fixed** — dictation WAV write → `await writeFile` (finally still shreds) | this ledger (ING-8 convention) |
 | PERF-6 (Low) | 7 | **fixed** — `AnswerThread` memoized `TurnRow`; the in-flight turn renders plain text, markdown parsed once on completion | this ledger |
@@ -8677,8 +8679,9 @@ audit read each of these and found them correct and well-tested; they are delibe
   groups touched `ctx.db` with no **explicit** `requireUnlocked()` preamble, so they fail-closed but
   surfaced the raw English vault string. §30 added the localized preamble to those four groups and
   **generalized** the structural test across the core/model/audit/rag/benchmark/collections modules — see
-  `tests/integration/ipc-lock-coverage.test.ts`; images (vision test campaign) and docs/doctasks (documents
-  test campaign) have since joined its `MODULES` loop, and chat keeps its own TEST-N8 test.)*
+  `tests/integration/ipc-lock-coverage.test.ts`; images (vision test campaign), docs/doctasks (documents
+  test campaign) and chat (chat + RAG test campaign, retiring chat-ipc's own TEST-N8 test) have since joined
+  its `MODULES` loop.)*
 - **Electron hardening** — deny-by-default navigation / permission guards on both events, the closed preload
   allow-list, CSP `connect-src 'self'`, OCR window deny-all.
 - **spawn / process security** — array argv, no shell, hash-verified before spawn, drive-root escape guards,
@@ -11048,8 +11051,9 @@ not defects):** source-text scan "wiring pins" (`window-security.test.ts`, `pack
 `package.json` compare across hoist locations in `assistant-markdown.test.tsx` (since #698 a check that the app and
 rehype-katex resolve one install, plus a count of `KaTeX parse error` in the build output, a string pin a KaTeX
 that rewords it turns red); `as unknown as`
-private-field injection (`chat-ipc.test.ts:933`; `docs-ipc.test.ts` moved to `ctxWith` overrides in the
-documents test campaign) — whoever touches those files converts the pin to a
+private-field injection (both cited sites are gone: `docs-ipc.test.ts` moved to `ctxWith` overrides in the
+documents test campaign, chat-ipc's locked save-dialog row folded into `ipc-lock-coverage.test.ts` in the
+chat + RAG campaign) — whoever touches those files converts the pin to a
 behavioural assertion where the change is small, else leaves a `// watch-item` comment. Fake timers:
 the 2026-08-22 flake class is fixed; remaining `advanceTimersByTimeAsync(0)` loops drain microtasks
 only; `FullSuiteGuard` converts dropped test FILES into a hard failure but cannot see dropped
@@ -12097,7 +12101,7 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   of the real verifier, and T06 and `zim-serve` walk the verdicts on real install markers.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
-  (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
+  (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proved `retrieve()` rejects on a failing embedder (that row was later folded into this one: TEST-3 also fails when `retrieve()` swallows the error), but
   `generateGroundedAnswer` awaits `retrieve` and early-returns `NO_DOCUMENT_CONTEXT`/`REINDEX_NEEDED` on
   empty chunks — so a regression wrapping `retrieve` in `try/catch → []` would make a transient embed fault
   **masquerade as "no documents"** (a falsely-empty corpus) and redden nothing. The new test uses a **fresh**
@@ -12363,7 +12367,7 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   (!seenSignal) await …` so the abort lands only after the signal was genuinely handed to fetch), and
   `ocr-task.test.ts` "cancel persists nothing" (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the
   gate, polled through hang-budget's `until`, so the cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,
-  per "keep the timeout headroom"):** `chat.test.ts:171` + `image-history.test.ts:111` are timestamp-monotonicity
+  per "keep the timeout headroom"):** `chat.test.ts` "orders conversations by most recently updated" + `image-history.test.ts:111` are timestamp-monotonicity
   gaps (a small real-clock gap so `updated_at` strictly increases — converting needs a timestamp-injection seam
   into `createConversation`/`appendMessage`/`addImageTurn`, out of test-only scope; low flake risk given ISO-ms
   resolution + real elapsed insert work); `core-model-ipc.test.ts:448` is an ABSENCE-settle for a wrongly-fired

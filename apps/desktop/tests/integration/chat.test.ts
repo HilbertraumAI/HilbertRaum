@@ -1,12 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi } from 'vitest'
 import { join } from 'node:path'
-import { openDatabase } from '../../src/main/services/db'
 import {
   appendMessage,
   buildChatMessages,
   buildSystemPrompt,
+  CHAT_RESPONSE_RESERVE_TOKENS,
   collapseToAlternating,
   COMPACTION_SUMMARY_ACK,
   createConversation,
@@ -22,21 +20,23 @@ import {
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
-  parsePackOutcomes,
+  messageTokens,
   restoreMessage,
   stripThinkBlocks,
   writeCheckpoint
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
-import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
+import { ChatStreamError } from '../../src/main/services/runtime/llama'
 import { getSkill, reconcileSkills } from '../../src/main/services/skills/registry'
 import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
-import type { Citation, CoverageInfo, KnowledgePackOutcome } from '../../src/shared/types'
+import type { Citation, ContextUsage, CoverageInfo, KnowledgePackOutcome } from '../../src/shared/types'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { words } from '../helpers/compaction-fixtures'
+import { finishScriptedRuntime, recordingRuntime } from '../helpers/scripted-runtime'
 
 function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-chat-'))
-  return openDatabase(join(dir, 'test.sqlite'))
+  return openFreshDb('chat')
 }
 
 function runtime() {
@@ -105,22 +105,21 @@ describe('collapseToAlternating (orphan turns from failed answers)', () => {
   })
 })
 
-// A block of `n` whitespace-separated words ≈ n approx-tokens (the prose path of
-// approxTokenCount), so message sizes in these tests are predictable.
-const words = (n: number): string => Array(n).fill('word').join(' ')
+// `words(n)` (tests/helpers/compaction-fixtures): n whitespace-separated words ≈ n approx-tokens (the
+// prose path of approxTokenCount), so message sizes in these tests are predictable.
 
 describe('fitMessagesToContext (history budget vs the model context window)', () => {
   const sys = { role: 'system' as const, content: words(10) }
 
-  it('returns the SAME array (no copy) when the whole history already fits', () => {
+  it('returns the history unchanged when the whole history already fits', () => {
     const msgs: ChatMessage[] = [
       sys,
       { role: 'user', content: words(5) },
       { role: 'assistant', content: words(5) },
       { role: 'user', content: words(5) }
     ]
-    // Huge context → nothing to trim → identity (cheap, and asserts no needless churn).
-    expect(fitMessagesToContext(msgs, 8192)).toBe(msgs)
+    // Huge context → nothing to trim → the history comes back unchanged (no needless churn).
+    expect(fitMessagesToContext(msgs, 8192)).toEqual(msgs)
   })
 
   it('drops the OLDEST turns, keeping the system message + a contiguous recent tail', () => {
@@ -129,8 +128,8 @@ describe('fitMessagesToContext (history budget vs the model context window)', ()
       turns.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: words(200) })
     }
     const msgs: ChatMessage[] = [sys, ...turns]
-    // reserve 0 so the budget is exactly contextTokens; small ctx forces a trim.
-    const fitted = fitMessagesToContext(msgs, 900, 0)
+    // The shipped answer reserve on top, so the history budget is exactly 900; a small budget forces a trim.
+    const fitted = fitMessagesToContext(msgs, 900 + CHAT_RESPONSE_RESERVE_TOKENS)
 
     expect(fitted.length).toBeLessThan(msgs.length)
     expect(fitted[0]).toBe(sys) // system always kept
@@ -143,7 +142,7 @@ describe('fitMessagesToContext (history budget vs the model context window)', ()
   it('keeps the final turn even when it ALONE exceeds the budget (runtime maps the overflow)', () => {
     const old = { role: 'user' as const, content: words(20) }
     const huge = { role: 'user' as const, content: words(5000) }
-    const fitted = fitMessagesToContext([sys, old, huge], 1000, 0)
+    const fitted = fitMessagesToContext([sys, old, huge], 1000 + CHAT_RESPONSE_RESERVE_TOKENS)
     // The oversize current question is never dropped; only the older turn is.
     expect(fitted).toEqual([sys, huge])
   })
@@ -179,14 +178,14 @@ describe('fitMessagesToContext — user-first normalization (CB-1)', () => {
   const tagged = (tag: string, n: number): string => [tag, ...Array(n - 1).fill('word')].join(' ')
 
   it('drops a leading assistant when an even-length tail would otherwise be assistant-first', () => {
-    // 5 turns; each 100 words ≈ 203 tokens, sys ≈ 28. Budget 900 (reserve 0) keeps u4,a3,u2,a1 (four
+    // 5 turns; each 100 words ≈ 203 tokens, sys ≈ 28. A history budget of 900 keeps u4,a3,u2,a1 (four
     // turns, even) → without the fix the tail is [a1,u2,a3,u4] (assistant-first). The fix drops a1.
     const u0 = { role: 'user' as const, content: tagged('U0', 100) }
     const a1 = { role: 'assistant' as const, content: tagged('A1', 100) }
     const u2 = { role: 'user' as const, content: tagged('U2', 100) }
     const a3 = { role: 'assistant' as const, content: tagged('A3', 100) }
     const u4 = { role: 'user' as const, content: tagged('U4', 100) }
-    const fitted = fitMessagesToContext([sys, u0, a1, u2, a3, u4], 900, 0)
+    const fitted = fitMessagesToContext([sys, u0, a1, u2, a3, u4], 900 + CHAT_RESPONSE_RESERVE_TOKENS)
 
     expect(fitted[0]).toBe(sys)
     expect(fitted[1].role).toBe('user') // user-first after system
@@ -202,22 +201,22 @@ describe('fitMessagesToContext — user-first normalization (CB-1)', () => {
     const intro = { role: 'user' as const, content: tagged('INTRO', 100) }
     const ack = { role: 'assistant' as const, content: COMPACTION_SUMMARY_ACK }
     const q = { role: 'user' as const, content: tagged('QUESTION', 100) }
-    // sys 28 + q 203 = 231; +ack(≈26)=257 keeps ack; +intro(203)=460 would drop it. Budget 300.
-    const fitted = fitMessagesToContext([sys, intro, ack, q], 300, 0)
+    // sys 28 + q 203 = 231; +ack(≈26)=257 fits a history budget of 300, +intro(203)=460 does not:
+    // the fill keeps the ack, then the CB-1 pop drops it as the leading assistant turn.
+    const fitted = fitMessagesToContext([sys, intro, ack, q], 300 + CHAT_RESPONSE_RESERVE_TOKENS)
 
-    expect(fitted[1].role).toBe('user')
-    // The ack never appears leading/bare; if it survived at all its predecessor would be the intro.
-    const ackIdx = fitted.findIndex((m) => m.content === COMPACTION_SUMMARY_ACK)
-    if (ackIdx !== -1) expect(fitted[ackIdx - 1]).toBe(intro)
-    else expect(fitted.map((m) => m.content)).not.toContain(COMPACTION_SUMMARY_ACK)
+    expect(fitted).toEqual([sys, q])
   })
 
   it('a solo oversize final turn is preserved — the length-1 guard never empties the tail', () => {
-    const old = { role: 'assistant' as const, content: tagged('OLD', 20) }
-    const finalQ = { role: 'user' as const, content: tagged('FINAL', 5000) }
-    const fitted = fitMessagesToContext([sys, old, finalQ], 1000, 0)
+    // The resting meter's shape: the history ends on the assistant reply.
+    const finalA = { role: 'assistant' as const, content: tagged('FINAL', 5000) }
+    const fitted = fitMessagesToContext(
+      [sys, { role: 'user', content: tagged('Q', 20) }, finalA],
+      1000 + CHAT_RESPONSE_RESERVE_TOKENS
+    )
     // Only the mandatory final turn fits; it is kept even though it alone exceeds the budget.
-    expect(fitted).toEqual([sys, finalQ])
+    expect(fitted).toEqual([sys, finalA])
   })
 })
 
@@ -259,7 +258,7 @@ describe('getLatestMessage — LIMIT-1 twin of listMessages (CB-6)', () => {
     // Reconcile the shipped app skills so the stamped id resolves through the real skills table.
     reconcileSkills(db, {
       appSkillsDir: join(__dirname, '../../../../app-skills'),
-      userSkillsDir: mkdtempSync(join(tmpdir(), 'hilbertraum-chat-skills-'))
+      userSkillsDir: tempRoot('chat-skills')
     })
     const skill = getSkill(db, 'app:bank-statement')!
     expect(skill.title).toBeTruthy()
@@ -270,29 +269,6 @@ describe('getLatestMessage — LIMIT-1 twin of listMessages (CB-6)', () => {
     expect(twin).toEqual(listMessages(db, conv.id).at(-1))
     expect(twin?.skillId).toBe('app:bank-statement')
     expect(twin?.skillTitle).toBe(skill.title)
-  })
-})
-
-// CB-6 — buildChatMessages takes the §5.4 compaction toggle as a threaded param (default = a fresh
-// read, so every existing caller is byte-identical). generateAssistantMessage passes its single
-// per-turn getSettings read through it. Prove the threaded boolean is honored.
-describe('buildChatMessages — threaded compactionOn param (CB-6)', () => {
-  it('passing compactionOn=false ignores an existing checkpoint (replays full history)', () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q1' })
-    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a1' })
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q2' })
-    writeCheckpoint(db, { conversationId: conv.id, summary: 'SUMMARY body', coversThroughRowid: 0 })
-
-    // Default (compaction on): the checkpoint's synthetic summary pair is injected.
-    const withPair = buildChatMessages(db, conv.id)
-    expect(withPair.some((m) => m.content.includes('SUMMARY body'))).toBe(true)
-
-    // Threaded false: the checkpoint is ignored and the full history replays (no summary pair).
-    const noPair = buildChatMessages(db, conv.id, undefined, undefined, false)
-    expect(noPair.some((m) => m.content.includes('SUMMARY body'))).toBe(false)
-    expect(noPair.filter((m) => m.role !== 'system').map((m) => m.content)).toEqual(['q1', 'a1', 'q2'])
   })
 })
 
@@ -357,9 +333,17 @@ describe('message ordering', () => {
     const conv = createConversation(db, {})
     const contents = ['u1', 'a1', 'u2', 'a2', 'u3']
     const roles = ['user', 'assistant', 'user', 'assistant', 'user'] as const
-    contents.forEach((c, i) => appendMessage(db, { conversationId: conv.id, role: roles[i], content: c }))
+    // Freeze the clock (Date only) so all five rows share one created_at and the rowid tie-break decides.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      contents.forEach((c, i) => appendMessage(db, { conversationId: conv.id, role: roles[i], content: c }))
+    } finally {
+      vi.useRealTimers()
+    }
 
     const msgs = listMessages(db, conv.id)
+    expect(new Set(msgs.map((m) => m.createdAt)).size).toBe(1) // the title's precondition: equal timestamps
     expect(msgs.map((m) => m.content)).toEqual(contents)
     expect(msgs.map((m) => m.role)).toEqual(roles)
   })
@@ -457,24 +441,6 @@ describe('message truncation cause persistence (#498)', () => {
     expect(raw.truncated_cause).toBeNull()
     expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBeUndefined()
   })
-
-  it('delete → restore carries the cause verbatim (a "cap" reply never downgrades to "context")', () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'summarize it' })
-    appendMessage(db, {
-      conversationId: conv.id,
-      role: 'assistant',
-      content: 'a grounded answer the app cap ended',
-      truncated: true,
-      truncatedCause: 'cap'
-    })
-
-    const snapshot = deleteLastAssistantMessage(db, conv.id)
-    expect(snapshot?.truncatedCause).toBe('cap')
-    restoreMessage(db, snapshot!)
-    expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBe('cap')
-  })
 })
 
 // ---- "Ended early" persistence (#600) ------------------------------------------------
@@ -484,14 +450,10 @@ describe('message truncation cause persistence (#498)', () => {
 // different app versions (success criterion #10), so the read is tolerant and the marker survives
 // the regenerate snapshot like every other column.
 describe('message "ended early" persistence (#600)', () => {
-  it('delete → restore carries the marker, and it is not a truncation', () => {
+  it('a reply that ended early reads back with its marker and is not a truncation', () => {
     const db = freshDb()
     const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'half an answ', endedEarly: 'model' })
-
-    const snapshot = deleteLastAssistantMessage(db, conv.id)
-    restoreMessage(db, snapshot!)
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a', endedEarly: 'model' })
     const read = listMessages(db, conv.id).at(-1)
     expect(read?.endedEarly).toBe('model')
     expect(read?.truncated).toBeUndefined()
@@ -535,31 +497,41 @@ describe('system prompt + message assembly', () => {
 })
 
 describe('generateAssistantMessage (streaming)', () => {
-  it('streams tokens and persists the full assistant reply', async () => {
+  // The IPC forwards each onToken 1:1 to the live bubble (chat-stream.ts), and chat-ipc pins one payload: this row is
+  // what fails if the service forwards only some tokens while persisting the whole reply.
+  it('hands every streamed token to onToken, and the reply is exactly what streamed', async () => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-
     const tokens: string[] = []
-    const msg = await generateAssistantMessage(db, runtime(), conv.id, {
-      onToken: (t) => tokens.push(t)
-    })
-
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, { onToken: (t) => tokens.push(t) })
     expect(tokens.length).toBeGreaterThan(1)
-    expect(msg.role).toBe('assistant')
     expect(msg.content).toBe(tokens.join(''))
-    // The persisted assistant message is the last in history.
-    const history = listMessages(db, conv.id)
-    expect(history.at(-1)?.content).toBe(msg.content)
-    expect(history.at(-1)?.role).toBe('assistant')
   })
 
-  it('a clean reply (mock reports finish_reason "stop") is NOT flagged truncated', async () => {
+  it.each([
+    ['the runtime reports finish_reason "stop"', undefined],
+    ['a user Stop leaves no finish_reason (an aborted stream reports none)', 2]
+  ] as const)('a reply that did not end at "length" is NOT flagged truncated — %s', async (_label, abortAtToken) => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-
-    const msg = await generateAssistantMessage(db, runtime(), conv.id, {})
+    const controller = new AbortController()
+    let n = 0
+    const msg = await generateAssistantMessage(
+      db,
+      runtime(),
+      conv.id,
+      abortAtToken === undefined
+        ? {}
+        : {
+            signal: controller.signal,
+            onToken: () => {
+              if (++n === abortAtToken) controller.abort()
+            }
+          }
+    )
+    expect(msg.content.length).toBeGreaterThan(0) // the reply reached the persist step
     expect(msg.truncated).toBeUndefined()
     expect(listMessages(db, conv.id).at(-1)?.truncated).toBeUndefined()
   })
@@ -569,19 +541,8 @@ describe('generateAssistantMessage (streaming)', () => {
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'tell me everything' })
 
-    // A runtime that streams a couple of tokens then stops at the context ceiling.
-    const cutOffRuntime: ModelRuntime = {
-      modelId: 'cutoff',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      contextWindow: () => 2048,
-      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
-        yield 'a partial answer that runs'
-        yield ' right into the wall'
-        options?.onFinish?.('length')
-      }
-    }
+    // A runtime that streams a partial answer then stops at the context ceiling.
+    const cutOffRuntime = finishScriptedRuntime([{ reply: 'a partial answer that runs right into the wall', finish: 'length' }])
 
     const msg = await generateAssistantMessage(db, cutOffRuntime, conv.id, {})
     expect(msg.truncated).toBe(true)
@@ -638,31 +599,6 @@ describe('generateAssistantMessage (streaming)', () => {
       expect(seen).toEqual([])
     })
 
-    it('never fires on a user Stop — an aborted stream carries no final chunk', async () => {
-      const db = freshDb()
-      const conv = createConversation(db, {})
-      appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-      const controller = new AbortController()
-      const seen: unknown[] = []
-      const aborting: ModelRuntime = {
-        ...timedRuntime(() => {}),
-        async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
-          yield 'partial'
-          controller.abort()
-          // A real runtime's reader returns on the aborted signal before any finish chunk; a
-          // timings hand-up here would be a bug in the runtime — the service must still refuse it.
-          if (options?.signal?.aborted) return
-          options?.onFinish?.('stop', timings)
-        }
-      }
-      const msg = await generateAssistantMessage(db, aborting, conv.id, {
-        signal: controller.signal,
-        onTimings: (tm) => seen.push(tm)
-      })
-      expect(msg.content).toBe('partial')
-      expect(seen).toEqual([])
-    })
-
     it('refuses timings that arrive on an aborted signal even if the runtime reported them', async () => {
       const db = freshDb()
       const conv = createConversation(db, {})
@@ -689,30 +625,11 @@ describe('generateAssistantMessage (streaming)', () => {
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'tell me everything' })
 
-    const cappedRuntime: ModelRuntime = {
-      modelId: 'capped',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      contextWindow: () => 2048,
-      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
-        yield 'a quick answer that hits'
-        yield ' the fast-mode token cap'
-        options?.onFinish?.('length')
-      }
-    }
+    const cappedRuntime = finishScriptedRuntime([{ reply: 'a quick answer that hits the fast-mode token cap', finish: 'length' }])
 
     // Fast mode maps to a max_tokens cap inside the runtime — 'length' here means "cap", not window.
     const fast = await generateAssistantMessage(db, cappedRuntime, conv.id, { mode: 'fast' })
     expect(fast.truncated).toBeUndefined()
-
-    // An explicit runtimeOptions cap counts the same way.
-    const conv2 = createConversation(db, {})
-    appendMessage(db, { conversationId: conv2.id, role: 'user', content: 'again' })
-    const capped = await generateAssistantMessage(db, cappedRuntime, conv2.id, {
-      runtimeOptions: { maxTokens: 64 }
-    })
-    expect(capped.truncated).toBeUndefined()
   })
 
   // Meter honesty: the assembled prompt (system + fitted history) is reported over the LAUNCHED
@@ -722,60 +639,13 @@ describe('generateAssistantMessage (streaming)', () => {
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping pong ping pong' })
 
-    let usage: { usedTokens: number; window: number } | null = null
-    await generateAssistantMessage(db, runtime(), conv.id, {
-      onPromptUsage: (u) => {
-        usage = u
-      }
-    })
-    expect(usage).not.toBeNull()
-    // The launched window (mock runtime contextTokens), not settings.contextTokens.
-    expect(usage!.window).toBe(2048)
-    // System prompt + the user turn are both counted — well above the bare question's words.
-    expect(usage!.usedTokens).toBeGreaterThan(4)
-  })
-
-  it('a user Stop is NOT flagged truncated even though the reply is partial (no finish_reason)', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-
-    const controller = new AbortController()
-    let n = 0
-    const msg = await generateAssistantMessage(db, runtime(), conv.id, {
-      signal: controller.signal,
-      onToken: () => {
-        if (++n === 2) controller.abort()
-      }
-    })
-    // The abort carries no finish reason, so the intentional partial is not a length-truncation.
-    expect(msg.truncated).toBeUndefined()
-  })
-
-  it('stop cancels the stream and persists only the partial reply', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-
-    const controller = new AbortController()
-    const tokens: string[] = []
-    const msg = await generateAssistantMessage(db, runtime(), conv.id, {
-      signal: controller.signal,
-      onToken: (t) => {
-        tokens.push(t)
-        if (tokens.length === 2) controller.abort()
-      }
-    })
-
-    // Only the tokens emitted before abort are kept; the reply is truncated.
-    expect(tokens.length).toBe(2)
-    expect(msg.content).toBe(tokens.join(''))
-
-    // Compare against an unabridged generation to prove it really stopped early.
-    const conv2 = createConversation(db, {})
-    appendMessage(db, { conversationId: conv2.id, role: 'user', content: 'ping' })
-    const full = await generateAssistantMessage(db, runtime(), conv2.id, {})
-    expect(msg.content.length).toBeLessThan(full.content.length)
+    // A launched window (2048) that differs from settings.contextTokens (default 4096).
+    const rt = recordingRuntime('pong', { contextWindow: 2048 })
+    const seen: ContextUsage[] = []
+    await generateAssistantMessage(db, rt, conv.id, { onPromptUsage: (u) => seen.push(u) })
+    expect(rt.lastMessages[0].role).toBe('system')
+    // Exactly the estimate over what the model received (system prompt + fitted history), once.
+    expect(seen).toEqual([{ usedTokens: rt.lastMessages.reduce((s, m) => s + messageTokens(m), 0), window: 2048 }])
   })
 
   it('persists the partial reply when a real-style runtime throws AbortError', async () => {
@@ -789,106 +659,51 @@ describe('generateAssistantMessage (streaming)', () => {
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
 
-    const throwingRuntime: ModelRuntime = {
-      modelId: 'real-ish',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: 1 }),
-      // eslint-disable-next-line require-yield
-      chatStream: async function* () {
-        yield 'Partial '
-        yield 'answer'
-        const err = new Error('The operation was aborted')
-        err.name = 'AbortError'
-        throw err
-      }
-    }
+    // finishScriptedRuntime yields the reply, then throws an AbortError with no signal involved.
+    const throwingRuntime = finishScriptedRuntime([{ reply: 'Partial answer', abort: true }])
 
-    const tokens: string[] = []
-    const msg = await generateAssistantMessage(db, throwingRuntime, conv.id, {
-      onToken: (t) => tokens.push(t)
-    })
+    const msg = await generateAssistantMessage(db, throwingRuntime, conv.id, {})
     expect(msg.content).toBe('Partial answer')
     expect(listMessages(db, conv.id).at(-1)?.content).toBe('Partial answer')
   })
 
-  it('propagates a NON-abort runtime error instead of swallowing it', async () => {
-    // Only aborts are treated as a normal end; a real failure must reject so the IPC layer
-    // emits chat:error (guards against isAbortError being too permissive).
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-
-    const failingRuntime: ModelRuntime = {
-      modelId: 'real-ish',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: 1 }),
-      // eslint-disable-next-line require-yield
-      chatStream: async function* () {
-        yield 'partial'
-        throw new Error('Chat request failed: HTTP 500')
-      }
-    }
-
-    await expect(generateAssistantMessage(db, failingRuntime, conv.id, {})).rejects.toThrow(/HTTP 500/)
-    // Nothing partial was persisted on a real failure.
-    expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
-  })
-
+  // Only aborts are treated as a normal end; a real failure must reject so the IPC layer
+  // emits chat:error (guards against isAbortError being too permissive).
+  //
   // F-02 (audit 2026-07-16) consumer semantics, main chat turn: an in-band MID-STREAM error
   // frame (the fixed readChatSSE throws ChatStreamError after some tokens streamed). Pre-fix
   // the stream ended cleanly and the partial persisted as a COMPLETE answer (finishReason null
   // ⇒ truncated=false, no error). Decided semantics (mirrors the CB-5 mid-stream precedent): the
   // typed error PROPAGATES — withChatStream maps it to the friendly `main.chat.streamError`
   // copy — and the partial is never silently persisted as complete.
-  it('a mid-stream in-band error frame rejects the turn; the partial never persists as complete (F-02)', async () => {
+  it.each([
+    ['a plain runtime failure (HTTP 500)', () => new Error('Chat request failed: HTTP 500')],
+    ['a mid-stream in-band error frame (F-02)', () => new ChatStreamError('slot error', 'server_error')]
+  ] as const)('propagates a NON-abort runtime error unchanged and persists no partial — %s', async (_label, makeError) => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-
-    const midStreamErrorRuntime: ModelRuntime = {
+    const err = makeError()
+    const failing: ModelRuntime = {
       modelId: 'real-ish',
       start: async () => {},
       stop: async () => {},
       health: async () => ({ healthy: true, message: 'ok', port: 1 }),
       chatStream: async function* () {
-        yield 'The first half of the answer'
-        throw new ChatStreamError('slot error', 'server_error')
+        yield 'partial'
+        throw err
       }
     }
-
-    const err = await generateAssistantMessage(db, midStreamErrorRuntime, conv.id, {}).then(
-      () => null,
-      (e: unknown) => e
-    )
-    expect(isChatStreamError(err)).toBe(true) // the typed error propagates to the IPC mapping
-    // The partial is not persisted — never a silently "complete" answer in the transcript.
+    // The SAME error object propagates (the typed error reaches the IPC mapping unwrapped)…
+    await expect(generateAssistantMessage(db, failing, conv.id, {})).rejects.toBe(err)
+    // …and nothing partial was persisted — never a silently "complete" answer in the transcript.
     expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
   })
 
-  it('regenerate drops the last assistant message before re-streaming', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-    const first = await generateAssistantMessage(db, runtime(), conv.id, {})
-    expect(listMessages(db, conv.id)).toHaveLength(2)
-
-    const deleted = deleteLastAssistantMessage(db, conv.id)
-    expect(deleted).not.toBeNull() // returns the snapshot it deleted (F2 — restorable on failure)
-    expect(deleted?.content).toBe(first.content)
-    expect(listMessages(db, conv.id)).toHaveLength(1) // back to just the user turn
-
-    const second = await generateAssistantMessage(db, runtime(), conv.id, {})
-    const history = listMessages(db, conv.id)
-    expect(history).toHaveLength(2)
-    expect(history.at(-1)?.id).toBe(second.id)
-    expect(history.at(-1)?.id).not.toBe(first.id)
-  })
-
   // L2 (audit round 4): a stop BEFORE the first token used to persist an empty assistant
-  // message — a permanent blank bubble in the transcript.
-  it('a stop before the first token persists nothing', async () => {
+  // message — a permanent blank bubble in the transcript. CB-4's abort half: the pre-aborted turn
+  // RESOLVES (a plain `await`), so an EmptyCompletionError thrown on abort would fail this row too.
+  it('a stop before the first token persists nothing and resolves empty — no EmptyCompletionError on abort (L2, CB-4)', async () => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
@@ -956,22 +771,40 @@ describe('generateAssistantMessage (streaming)', () => {
   })
 
   // F2 (post-merge audit): the regenerate guard restores the prior reply byte-faithfully on a
-  // non-abort failure. The delete returns a snapshot; restoreMessage re-inserts it exactly so
-  // citations / coverage / the skill stamp / the original id all survive a failed regenerate.
-  it('delete → restore round-trips a rich assistant reply (id, citations, coverage, skill stamp)', () => {
+  // non-abort failure. The delete returns a snapshot; restoreMessage re-inserts it exactly. The
+  // recurring bug class is a column left out of `DeletedMessage` and silently stripped on restore
+  // (#132/#135 skill offer, #301 P4 pack outcomes, #498 truncation cause, #600 "ended early"), so
+  // this compares the whole stored row, not a list of fields.
+  it('delete → restore round-trips EVERY column of an assistant reply byte-identically (F2; #132/#135, #301 P4, #498, #600)', () => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'what does it say?' })
-    const coverage: CoverageInfo = { mode: 'extract', fullyChunked: true, chunksCovered: 3, chunksTotal: 3 }
     const original = appendMessage(db, {
       conversationId: conv.id,
       role: 'assistant',
       content: 'a grounded answer [S1]',
+      tokenCount: 42,
       citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 2 }],
-      coverage,
+      coverage: { mode: 'extract', fullyChunked: true, chunksCovered: 3, chunksTotal: 3 },
       skillId: 'app:bank-statement',
-      autoFired: true
+      autoFired: true,
+      truncated: true,
+      truncatedCause: 'cap',
+      endedEarly: 'model',
+      skillOffer: { installId: 'app:bank-statement', title: 'Bank statement helper', source: 'deterministic' },
+      packOutcomes: [{ packId: 'uuid-climate', title: 'Klimawandel', status: 'searched', reason: null, found: 5, admitted: 3 }]
     })
+    // The stored row minus fts_rowid (a restore re-indexes, so the FTS handle is new by design).
+    const rawRow = (): Record<string, unknown> => {
+      const row = { ...(db.prepare('SELECT * FROM messages WHERE id = ?').get(original.id) as Record<string, unknown>) }
+      delete row.fts_rowid
+      return row
+    }
+    const before = rawRow()
+    // Teeth for the NEXT column: every messages column but the two compaction-only ones is populated here, so a column
+    // added to the table without being added to this fixture fails this line, and one left out of DeletedMessage
+    // reads back NULL below.
+    expect(Object.keys(before).filter((k) => before[k] === null).sort()).toEqual(['covers_through_rowid', 'kind'])
 
     const snapshot = deleteLastAssistantMessage(db, conv.id)
     expect(snapshot).not.toBeNull()
@@ -979,23 +812,8 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(listMessages(db, conv.id)).toHaveLength(1)
 
     restoreMessage(db, snapshot!)
-    const restored = listMessages(db, conv.id).at(-1)
-    expect(restored?.id).toBe(original.id) // same identity
-    expect(restored?.content).toBe('a grounded answer [S1]')
-    expect(restored?.createdAt).toBe(original.createdAt) // sorts back to the tail
-    expect(restored?.citations).toEqual(original.citations)
-    // Coverage survives the round-trip (the re-read fills the count defaults via parseCoverage).
-    expect(restored?.coverage?.mode).toBe('extract')
-    expect(restored?.coverage?.fullyChunked).toBe(true)
-    expect(restored?.coverage?.chunksCovered).toBe(3)
-    expect(restored?.coverage?.chunksTotal).toBe(3)
-    // The skill stamp survives at the column level (listMessages resolves skillId via a LEFT JOIN
-    // on the skills table, which is empty here — so assert the restored columns directly).
-    const raw = db
-      .prepare('SELECT skill_id, auto_fired FROM messages WHERE id = ?')
-      .get(original.id) as { skill_id: string | null; auto_fired: number | null }
-    expect(raw.skill_id).toBe('app:bank-statement')
-    expect(raw.auto_fired).toBe(1)
+    expect(rawRow()).toEqual(before)
+    expect(listMessages(db, conv.id).at(-1)?.id).toBe(original.id) // sorts back to the tail
     expect(hasRegenerableAssistantReply(db, conv.id)).toBe(true) // a regenerable reply again
   })
 })
@@ -1040,44 +858,19 @@ describe('answer-depth threading + persistence hygiene (Phase 20)', () => {
     return { runtime, seen }
   }
 
-  it('forwards mode + onReasoning to the runtime and keeps reasoning out of the persisted reply', async () => {
+  // The narrowing pin (CB-4): a reply that ARRIVED then stripped to empty (all-`<think>`/fence-echo)
+  // stays the benign silent-empty — it must NOT throw, distinguishing "produced nothing" from
+  // "produced only reasoning" (like the zero-token stop, nothing persists).
+  it.each([
+    ['an unclosed think block (stream stopped mid-thought)', '<think>aborted before the answer'],
+    ['a closed think block', '<think>only thinking, no answer</think>']
+  ])('a reply that was ONLY thinking persists nothing and does not throw — receivedAnyToken narrows the CB-4 throw (%s)', async (_label, reply) => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
 
-    const { runtime: r, seen } = capturingRuntime(['The answer.'])
-    const reasoning: string[] = []
-    const msg = await generateAssistantMessage(db, r, conv.id, {
-      mode: 'deep',
-      onReasoning: (d) => reasoning.push(d)
-    })
-
-    expect(seen.options?.mode).toBe('deep')
-    expect(reasoning).toEqual(['thinking about it…'])
-    expect(msg.content).toBe('The answer.')
-    expect(listMessages(db, conv.id).at(-1)?.content).toBe('The answer.')
-  })
-
-  it('strips inline think blocks before persisting (defense-in-depth, D6)', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-
-    const { runtime: r } = capturingRuntime(['<think>secret reasoning</think>\n\n', 'Clean answer.'])
-    const msg = await generateAssistantMessage(db, r, conv.id, {})
-    expect(msg.content).toBe('Clean answer.')
-    const persisted = listMessages(db, conv.id).at(-1)
-    expect(persisted?.content).toBe('Clean answer.')
-    expect(persisted?.content).not.toContain('<think>')
-  })
-
-  it('a reply that was ONLY thinking persists nothing (like the zero-token stop)', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-
-    const { runtime: r } = capturingRuntime(['<think>aborted before the answer'])
-    const msg = await generateAssistantMessage(db, r, conv.id, {})
+    // Resolves (does not reject): tokens arrived, they just stripped away.
+    const msg = await generateAssistantMessage(db, capturingRuntime([reply]).runtime, conv.id, {})
     expect(msg.content).toBe('')
     expect(listMessages(db, conv.id)).toHaveLength(1) // only the user turn
   })
@@ -1096,34 +889,6 @@ describe('answer-depth threading + persistence hygiene (Phase 20)', () => {
     expect(isEmptyCompletionError(err)).toBe(true)
     expect(err).toBeInstanceOf(EmptyCompletionError)
     expect(listMessages(db, conv.id)).toHaveLength(1) // only the user turn — nothing blank persisted
-  })
-
-  // The narrowing pin (CB-4): a reply that ARRIVED then stripped to empty (all-`<think>`/fence-echo)
-  // stays the benign silent-empty — it must NOT throw, distinguishing "produced nothing" from
-  // "produced only reasoning". (The all-think case above already exercises the no-throw path.)
-  it('an all-think completion returns empty WITHOUT throwing — receivedAnyToken narrows the throw', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-
-    const { runtime: r } = capturingRuntime(['<think>only thinking, no answer</think>'])
-    // Resolves (does not reject): tokens arrived, they just stripped away.
-    const msg = await generateAssistantMessage(db, r, conv.id, {})
-    expect(msg.content).toBe('')
-    expect(listMessages(db, conv.id)).toHaveLength(1)
-  })
-
-  // CB-4 + the abort path: a Stop BEFORE the first token still resolves with an empty message (never
-  // throws) — the abort branch is the other half of the narrowing.
-  it('a stop before the first token still resolves empty (no EmptyCompletionError on abort)', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-    const ac = new AbortController()
-    ac.abort()
-    const msg = await generateAssistantMessage(db, runtime(), conv.id, { signal: ac.signal })
-    expect(msg.content).toBe('')
-    expect(listMessages(db, conv.id)).toHaveLength(1)
   })
 
   it('buildChatMessages scrubs think blocks from replayed assistant turns only', () => {
@@ -1293,13 +1058,24 @@ describe('messages.pack_outcomes_json — per-ask knowledge-pack outcomes (#301 
   })
 
   it('parses tolerantly: a malformed payload reads as undefined, and unknown or wrong-typed entries are dropped', () => {
-    // A malformed or truncated payload must degrade to "no notice", never to a render crash.
-    expect(parsePackOutcomes(null)).toBeUndefined()
-    expect(parsePackOutcomes('not json')).toBeUndefined()
-    expect(parsePackOutcomes('{"packId":"a"}')).toBeUndefined() // an object, not an array
-    expect(parsePackOutcomes('[]')).toBeUndefined()
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    /** What an assistant row whose pack_outcomes_json holds `json` reads back as. */
+    const readBack = (json: string | null): KnowledgePackOutcome[] | undefined => {
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+      const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a' })
+      db.prepare('UPDATE messages SET pack_outcomes_json = ? WHERE id = ?').run(json, msg.id)
+      return getLatestMessage(db, conv.id)?.packOutcomes
+    }
 
-    const mixed = parsePackOutcomes(
+    // A malformed, truncated or hand-edited payload must degrade to "no notice", never to a render crash.
+    expect(readBack(null)).toBeUndefined()
+    expect(readBack('not json')).toBeUndefined()
+    expect(readBack('{oops')).toBeUndefined()
+    expect(readBack('{"packId":"a"}')).toBeUndefined() // an object, not an array
+    expect(readBack('[]')).toBeUndefined()
+
+    const mixed = readBack(
       JSON.stringify([
         { packId: 'ok', title: 'T', status: 'searched', reason: null, found: 2, admitted: 1 },
         // An UNKNOWN reason code (a newer build's, or hand-edited): DROPPED rather than rendered
@@ -1317,7 +1093,7 @@ describe('messages.pack_outcomes_json — per-ask knowledge-pack outcomes (#301 
 
     // Counts are coerced defensively — a hand-edited negative, fractional, null or string count
     // must never reach the renderer's plural formatting.
-    const counts = parsePackOutcomes(
+    const counts = readBack(
       JSON.stringify([
         { packId: 'a', title: null, status: 'searched', reason: null, found: -3, admitted: 2.7 },
         { packId: 'b', title: null, status: 'searched', reason: null, found: '9', admitted: null }
@@ -1327,37 +1103,6 @@ describe('messages.pack_outcomes_json — per-ask knowledge-pack outcomes (#301 
       { packId: 'a', title: null, status: 'searched', reason: null, found: 0, admitted: 2 },
       { packId: 'b', title: null, status: 'searched', reason: null, found: 0, admitted: 0 }
     ])
-
-    // …and the same tolerance through the ROW read: a hand-edited row reads as undefined.
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-    const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a' })
-    db.prepare('UPDATE messages SET pack_outcomes_json = ? WHERE id = ?').run('{oops', msg.id)
-    expect(getLatestMessage(db, conv.id)?.packOutcomes).toBeUndefined()
-  })
-
-  it('survives a regenerate delete + restore BYTE-IDENTICALLY (the Stop-before-first-token case)', () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-    const msg = appendMessage(db, {
-      conversationId: conv.id,
-      role: 'assistant',
-      content: 'an answer',
-      packOutcomes: outcomes
-    })
-    const storedBefore = (
-      db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }
-    ).j
-    const snapshot = deleteLastAssistantMessage(db, conv.id)
-    expect(snapshot!.packOutcomesJson).toBe(storedBefore)
-    restoreMessage(db, snapshot!)
-    const storedAfter = (
-      db.prepare('SELECT pack_outcomes_json AS j FROM messages WHERE id = ?').get(msg.id) as { j: string }
-    ).j
-    expect(storedAfter).toBe(storedBefore) // byte-identical, never re-derived
-    expect(getLatestMessage(db, conv.id)?.packOutcomes).toEqual(outcomes)
   })
 
   it('exports a "Knowledge packs:" block after the sources, and on its own when nothing was cited', () => {

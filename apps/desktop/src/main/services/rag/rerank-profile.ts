@@ -127,19 +127,8 @@ export function resolveRerankProfile(input: RerankProfileInput): RerankProfile {
   ) {
     return 'gpu'
   }
-  if (meetsThreadThreshold(input.threads, CPU_HI_MIN_THREADS)) return 'cpu-hi'
+  if (input.threads >= CPU_HI_MIN_THREADS) return 'cpu-hi'
   return 'default'
-}
-
-/**
- * The `cpu-hi` branch's own comparator, extracted so a test can exercise BOTH directions (a
- * count under vs at/over a threshold) without a finite `CPU_HI_MIN_THREADS` existing in
- * production — today it is `Infinity` (see the constant's own doc comment), so
- * `resolveRerankProfile` alone can never observe the `true` branch at any real thread count.
- * Diagnostics/testability only; identical to the inline comparison it replaces.
- */
-export function meetsThreadThreshold(threads: number, minThreads: number): boolean {
-  return threads >= minThreads
 }
 
 /**

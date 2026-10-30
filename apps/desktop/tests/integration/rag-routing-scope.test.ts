@@ -35,6 +35,7 @@ import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/sk
 import { MEETING_PROTOCOL_INSTALL_ID } from '../../src/main/services/skills/analysis/whole-doc-skills'
 import { skillInstallId } from '../../src/main/services/skills/registry'
 import { t } from '../../src/shared/i18n'
+import { chunkIdsOf } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { scriptedRuntime } from '../helpers/scripted-runtime'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
@@ -86,9 +87,7 @@ async function makeHarness(): Promise<Harness> {
   // A legacy document, in no row's scope.
   await ingestTextFile(w, 'alt.txt', lines(5), { fullyChunked: false })
 
-  const chunkIds = (
-    w.db.prepare('SELECT id FROM chunks WHERE document_id = ? ORDER BY chunk_index').all(notes) as Array<{ id: string }>
-  ).map((r) => r.id)
+  const chunkIds = chunkIdsOf(w.db, notes)
   const now = new Date().toISOString()
   const record = w.db.prepare(
     `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)

@@ -589,9 +589,9 @@ This paragraph is the rider's record (the retired plan file used to carry a copy
   `Conversation.scopeDocumentIds` round-trips it; `createConversation` accepts it;
   `updateConversationScope` (IPC `chat:updateScope`) replaces/clears it. Malformed stored
   JSON reads back as null (unscoped), never throws.
-- **Threading:** `retrieve(db, embedder, question, settings, scopeDocumentIds?)`;
-  `generateGroundedAnswer` takes `opts.scopeDocumentIds`; `askDocuments` reads the
-  conversation's persisted scope — callers pass nothing per-request.
+- **Threading:** `retrieve(db, embedder, question, settings, scope?)`;
+  `generateGroundedAnswer` takes `opts.scope` (§13.3); `askDocuments` resolves the
+  conversation's scope — callers pass nothing per-request.
 - **Renderer:** Documents screen gets per-row checkboxes (indexed docs only) + **Ask these
   documents (N)** → Chat opens in documents mode with the selection as the next
   conversation's scope. **(Superseded affordance — #151 RD-1:** the Phase-17 "removable scope
@@ -614,9 +614,9 @@ naming a file as "use only that file", so other files showing up as sources read
   generic words (`document`, `file`, `pdf`, …) never trigger on their own; a question that
   would match the **entire** corpus narrows nothing and is treated as no match.
 - **Applied only when there is no explicit scope** — `askDocuments` runs the detector over
-  the indexed documents *just* for a conversation whose `scopeDocumentIds` is null/empty, and
-  uses the result as the per-request `scopeDocumentIds`. It can only ever **narrow**, never
-  widen; an explicit "ask selected documents" scope always wins and is left untouched.
+  the indexed documents in the resolved scope unless the user hand-picked documents
+  (`hasExplicitDocSelection`, N2, §13.5), and narrows that scope to the match. It can only ever
+  **narrow**, never widen; an explicit "ask selected documents" scope always wins and is left untouched.
 - **Visible + honest:** when it fires, the main process emits a one-shot, non-persisted
   `STREAM.scope` notice (`api.onScopeNotice`) and Chat shows an *"Answering from contract.pdf
   only"* toast, so a wrong guess is obvious and the user can rephrase or set scope manually.
@@ -762,8 +762,8 @@ the index; the duplicated text lives in the same workspace DB, encrypted at rest
 it). Synced by triggers on `chunks` (insert/delete/update-of-text), so
 ingest/re-index/delete can never miss it; created + backfilled by a guarded additive
 migration in `openDatabase` (the `scope_json` precedent). Questions are sanitized into
-`MATCH` queries by `fts.ts` `buildFtsMatchQuery` (shared with conversation search, re-exported
-from `rag/hybrid.ts`): quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax in user
+`MATCH` queries by `fts.ts` `buildFtsMatchQuery` (shared with conversation search):
+quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax in user
 text never reaches MATCH raw; ranking is `bm25()`.
 
 **Trigger sync is rowid-targeted (full-audit 2026-07-11 CODE-4).** The original delete/update
@@ -880,8 +880,8 @@ load-bearing relevance separator — recorded here so future work invests in the
 
 `tests/integration/reranker.test.ts` (spawn args incl. no-chat-args, index mapping,
 truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
-(migration + backfill + trigger sync, MATCH sanitization, visibility + scope, RRF,
-retrieve() e2e with a fake reranker, both grounding-guard variants),
+(the Phase-21 migration backfill, MATCH sanitization, visibility + scope, RRF,
+retrieve() e2e with a fake reranker, the grounding guard); trigger sync: `fts-rowid-sync.test.ts`,
 `e5-embedder.test.ts` (suspend), `drive.test.ts` (`models/reranker`). Manual:
 `tests/manual/rerank-smoke.test.ts` behind `HILBERTRAUM_RERANK_SMOKE` — **run 2026-06-10** on the
 real F16 GGUF + b9585: loads clean, ranks the relevant doc first (+8.82 vs −11.01), and the
@@ -1329,7 +1329,9 @@ are merged (N2), so filename auto-scope can tell a deliberate pick from an attac
 `retrieve()`'s parameter 5 is widened to `string[] | RetrievalScope | null` and **normalized
 internally** (`Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope`), so
 **every existing positional `scopeDocumentIds` caller and test stays valid byte-for-byte**;
-`generateGroundedAnswer` gains `opts.scope` and forwards it. The membership filter is pushed into SQL
+`generateGroundedAnswer` gains `opts.scope` and forwards it. (The chat + RAG test campaign, 2026-10-30,
+retired the bare-array form and `opts.scopeDocumentIds` once tests were their last callers: parameter 5 is
+`RetrievalScope | null`.) The membership filter is pushed into SQL
 as an **EXISTS/IN disjunction** (index-backed by `idx_doccoll_*`), not a materialized `IN (…thousands…)`:
 
 ```sql
@@ -1376,11 +1378,9 @@ project) ⇒ `NO_DOCUMENT_CONTEXT_ANSWER` (re-indexing wouldn't help); a scope w
 visible to the active embedder** ⇒ `REINDEX_NEEDED_ANSWER`. Collection filtering can only shrink the
 candidate set, so the empty-context ⇒ no-model-call guarantee strengthens, never weakens.
 `generateGroundedAnswer` passes the **same scope retrieval used** to this check —
-`corpusNeedsReindex(db, embedder.id, normalizeScope(opts.scope ?? opts.scopeDocumentIds))` — so the
-honesty story holds on the **legacy doc-id path too**, not only the composite-`scope` path (RAG-1). A
-bare `null`/`undefined` still normalizes to the whole-corpus check (the archived exclusion only),
-byte-identical to before; only the legacy `scopeDocumentIds` array path changes — from a wrong
-whole-corpus diagnosis to the correct scoped one.
+`corpusNeedsReindex(db, embedder.id, normalizeScope(opts.scope))` (RAG-1). A bare `null`/`undefined` still
+normalizes to the whole-corpus check (the archived exclusion only). (The legacy `opts.scopeDocumentIds`
+option this once also covered had no caller and was removed in the chat + RAG test campaign.)
 
 **`includeArchived` parity now regression-tested (RAG-N6, full audit 2026-06-28).** Because both
 `corpusNeedsReindex` and retrieval route through the shared `buildScopeFilter` (which adds the
@@ -2410,9 +2410,9 @@ else summarize the region older than the protected tail (folding the prior check
   `listMessages` so the renderer/export/fence-sizing auto-skip checkpoints. `writeCheckpoint` deliberately
   does NOT bump `conversations.updated_at` (internal context, not a user action).
 - **R8 — keep checkpoints out of search/export:** the `messages_fts_ai` AFTER INSERT trigger carries
-  `WHEN new.kind IS NOT 'compaction'` (fresh DBs); `ensureMessagesFtsKindFilter` idempotently rewrites the
-  trigger on a pre-feature DB and prunes any already-indexed checkpoint row; the FTS backfill SELECT is
-  also kind-filtered.
+  `WHEN new.kind IS NOT 'compaction'` (fresh DBs); on a pre-feature DB `ensureMessagesFtsKindFilter`
+  prunes any already-indexed checkpoint row and CODE-4's `ensureFtsRowidSync` installs the guarded
+  trigger (the canonical set, same open); the FTS backfill SELECT is also kind-filtered.
 
 ### 15.4 Summary representation + the summarizer call (§4.5/§4.6/§4.8, R3/R4/R6/R11/R-RAG)
 
@@ -2545,9 +2545,9 @@ independent fixes:
 **Not done here (offered, deferred):** raising the default `contextTokens` above 4096, and a "continue this
 reply" affordance on a truncated turn. **The exact `finish_reason`/`usage` capture** (curl the loopback
 `/v1/chat/completions`) remains the one measurement that would confirm `length`-vs-`stop` on the original
-D:\ transcript; the fix makes the app self-report it going forward. Tests: `llama-runtime.test.ts`
-(onFinish length/stop + null-intermediate) and `chat.test.ts` (truncated persist round-trip; clean-`stop`
-and user-Stop both unflagged).
+D:\ transcript; the fix makes the app self-report it going forward. Tests: `read-chat-sse.test.ts`
+(onFinish `length`), `chat-sse-timings-fixture.test.ts` (the captured `stop` after a null intermediate
+reason) and `chat.test.ts` (truncated persist round-trip; clean-`stop` and user-Stop both unflagged).
 
 ### 15.8 Context truth end-to-end: real-usage meter, grounded truncation parity, one window, user context size (2026-07-04 user report)
 
@@ -2572,13 +2572,12 @@ context size."* All four observations were real seams:
   `rag.test.ts` (grounded usage strictly exceeds the resting read).
 - **Grounded answers now wear the truncation badge too.** §15.7 scoped the honest `'length'` signal to
   plain chat, but a budget-filling document turn is exactly where the ceiling hits. Both grounded
-  generators now pass `onFinish` and stamp `messages.truncated` (rag.test.ts: cut-off flagged, clean run
-  unflagged).
+  generators now pass `onFinish` and stamp `messages.truncated` (rag.test.ts: an answer still cut after the
+  bounded continuations stays flagged; a clean run is unflagged).
 - **A `max_tokens` cap no longer masquerades as "context limit".** llama-server reports `'length'` for
   BOTH ceilings; a Fast-mode reply that hit `FAST_MAX_TOKENS` (1024) showed "reached the model's context
   limit" at single-digit meter usage — a false "context is full" signal. `generateAssistantMessage` flags
-  truncated only when NO cap was in effect (`runtimeOptions.maxTokens ?? requestParamsForMode(mode).maxTokens`
-  is null); prompt fitting reserves ≥ the Fast cap of answer room, so with a cap set the cap is what fired.
+  truncated only when NO cap was in effect (`requestParamsForMode(mode).maxTokens` is null); prompt fitting reserves ≥ the Fast cap of answer room, so with a cap set the cap is what fired.
   **Amended 2026-09-21 (#498):** that "no longer flagged" rule is PLAIN CHAT only. The grounded paths pin
   their own 1024-token cap per pass and still flag a reply it ended (#491), so the fix there is to stop
   NAMING a cause in the badge: the label is now just "Reply cut off", and the per-message

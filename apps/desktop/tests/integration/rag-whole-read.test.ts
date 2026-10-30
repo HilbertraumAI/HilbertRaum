@@ -26,6 +26,7 @@ import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
+import { chunkIdsOf } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
@@ -75,9 +76,7 @@ async function makeHarness(o: {
     mode: 'documents',
     scope: { collectionIds: [], documentIds, ...(o.packIds ? { packIds: o.packIds } : {}) }
   })
-  const chunkIds = (
-    w.db.prepare('SELECT id FROM chunks WHERE document_id = ? ORDER BY chunk_index').all(docId) as Array<{ id: string }>
-  ).map((r) => r.id)
+  const chunkIds = chunkIdsOf(w.db, docId)
   return { db: w.db, conversationId: conv.id, docId, chunkIds, runtime }
 }
 

@@ -2498,9 +2498,9 @@ otherwise solved.
 `ctx.db` getter throws when the workspace is locked — but surfaced the **raw English** "Workspace is
 locked — unlock it first." string instead of the friendly localized copy. They now call an explicit
 `requireUnlocked()` preamble (the same pattern as every other DB-backed channel), surfacing the
-localized `main.benchmark.locked`. A structural lock test (`chat-ipc.test.ts`, TEST-N8) enumerates every
-registered DB-touching handler — chat + these benchmark handlers — and asserts each refuses with the
-friendly copy (never the raw string) when locked.
+localized `main.benchmark.locked`. The structural lock test (`ipc-lock-coverage.test.ts`, whose MODULES
+list drives `registerChatIpc` and `registerBenchmarkIpc`) enumerates every registered DB-touching handler
+and asserts each refuses with the friendly copy (never the raw string) when locked.
 
 **SEC-N2, current coverage (PR #303 audit, 2026-09-06).** The performance wave added a third
 DB-backed benchmark channel, `performance:get` — a read-only snapshot builder

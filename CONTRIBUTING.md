@@ -147,11 +147,15 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **One behavioural row per listed keyword.** A parity test (SKILL.md ⇔ vocabulary) cannot see a
   term dropped from both lists; the trigger corpus pins each listed keyword with a question that hits
   only that keyword.
-- **Shared skills test setup lives in `tests/helpers/`** — `db-fixtures` (temp roots, fresh DBs),
-  `doc-fixtures`, `skill-fixtures` (SKILL.md packages, skill dirs), `skill-contexts`,
-  `audit-capture`, `db-spy`, `scripted-runtime`, `skills-world` (the skills-IPC and RAG-ask
-  contexts; the importing file must `vi.mock('electron', …)`) and `chat-fixtures`. Extend them
-  rather than copying setup into a new suite; keep a local copy only where it deliberately differs.
+- **Shared skills, chat and RAG test setup lives in `tests/helpers/`** — `db-fixtures` (temp roots, fresh DBs,
+  `openRawDb` / `legacyDbPath` for a file an older schema wrote), `doc-fixtures` (`seedEmbeddedDoc` takes pages,
+  sections, a foreign embedding model, `fully_chunked` and `origin_json`), `skill-fixtures` (SKILL.md packages,
+  skill dirs), `skill-contexts`, `audit-capture`, `db-spy` (`countPrepares`, and `capturePrepares` to EXPLAIN the
+  statement production prepares), `scripted-runtime` (incl. `failingRuntime`), `compaction-fixtures`
+  (`compactionRuntime`, `appendTurns`), `skills-world` (the skills-IPC and RAG-ask contexts; the importing file
+  must `vi.mock('electron', …)`) and `chat-fixtures`. Extend them rather than copying setup into a new suite; keep
+  a local copy only where it deliberately differs. The chat and RAG suites carried six copies of `seedDocument`
+  and three of the compaction runtime.
 - **Pin the bound that ships, not a shorter test-only one.** `RuntimeManager` once took timing
   options only tests passed: they proved a 50 ms teardown bound and a 0 or 60,000 ms probe TTL while
   5 s and 10 s shipped, and a probe test passed with the start's probe time never recorded. Drive
@@ -198,7 +202,8 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **A registrar's locked-vault proof is its `MODULES` entry in `ipc-lock-coverage.test.ts`**, which
   drives every channel and names each exempt one with its reason. A hand-picked lock test in the
   module's own suite drifts: docs-ipc's checked 5 of the 14 gated `docs:*` channels, and
-  doctasks-ipc's checked 1 of 3.
+  doctasks-ipc's checked 1 of 3. A module with its own locked sentence names it (`lockedCopy`): the shared
+  "Workspace is locked." prefix matched chat throwing the benchmark's sentence.
 - **An IPC copy of a service guard needs an IPC-specific risk** (routing, a sender check, the lock
   gate, error mapping). doctasks-ipc re-proved the manager's "refuse while chat streams" and
   "exactly two documents" checks through a handler that forwards them unchanged, while the one IPC
@@ -256,7 +261,19 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   the table, and the pinned sizes were checked nowhere. Make the test check what the doc says, or fix the
   doc in the same change.
 - **To show a test pins a shipped constant, mutate where it is used, not where it is defined.** A test
-  that imports `DEFAULT_OCR_PAGE_TIMEOUT_MS` moves with any edit to the constant and stays green.
+  that imports `DEFAULT_OCR_PAGE_TIMEOUT_MS` moves with any edit to the constant and stays green. Handing the
+  code a copy of the value is the same blind spot: read-chat-sse passed `readChatSSE` its own copy of the 30 s /
+  120 s idle budgets through a parameter only tests used, so changing either in `llama.ts` left the suite green.
+- **A one-document scope is read whole, not retrieved.** Since #643 `askDocuments` reads a single fitting document
+  in order instead of calling `retrieve()`, so an IPC scope test with one small document proves the whole read:
+  collections-ipc's pinned-document row stayed green with `generateGroundedAnswer` ignoring its `scope`. Give a
+  retrieval-scope test two documents (rag-scope's two identical ones), or one too large to read whole.
+- **An `every()` over an empty result passes.** rag-scope's scoped-retrieval row checked that every chunk came from
+  the scoped document; that document scored below the similarity floor, so nothing came back and the row passed with
+  the scope filter deleted. Assert the exact list, or that it is not empty, before quantifying over it.
+- **A positive row must reach the branch its title names.** chat-compaction's "still fits the context window after
+  compaction" used a 1,500-token window the compacted history never exceeded, so the trim it claimed never ran.
+  Size the input past the branch's threshold and break the branch once to watch the row go red.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

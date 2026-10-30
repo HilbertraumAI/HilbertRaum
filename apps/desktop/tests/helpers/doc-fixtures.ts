@@ -1,5 +1,5 @@
-// Document seeding for the skills and ZIM retrieval suites (rows only, except `seedStoredTextDoc`, which also writes a real .txt;
-// `seedEmbeddedDoc` also writes real embedding vectors).
+// Document seeding for the skills, ZIM retrieval and RAG suites (rows only, except `seedStoredTextDoc`, which also writes a real
+// .txt; `seedEmbeddedDoc` also writes real embedding vectors).
 // Constraint: a stored-file root is minted via `tempRoot`, so it carries the swept `hilbertraum-` prefix.
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
@@ -94,30 +94,72 @@ export function seedStoredTextDoc(
   return docId
 }
 
+/** One chunk of `seedEmbeddedDoc`: a bare string is a chunk with no page and no section. */
+export interface EmbeddedChunkSeed {
+  text: string
+  page?: number | null
+  section?: string | null
+}
+
+export interface EmbeddedDocOptions {
+  /** `embeddings.embedding_model_id`; default `embedder.id`. Another id seeds vectors a DIFFERENT embedder wrote
+   *  (the visibility rule: `retrieve()` ignores them). */
+  modelId?: string
+  /** Stamp `documents.fully_chunked` (the #643 whole-read and coverage paths read it); default NULL. */
+  fullyChunked?: boolean
+  /** `documents.origin_json` (a generated document's provenance); default NULL. */
+  origin?: string | null
+}
+
 /**
- * An indexed document whose chunks carry REAL embedding vectors from `embedder` (one chunk per entry of `texts`,
- * source_label = title). `token_count` is `approxTokenCount(text)`, the estimate the production chunker persists;
- * the embeddings rows carry `embedder.id`.
+ * An indexed document whose chunks carry REAL embedding vectors from `embedder` (one chunk per entry of `chunks`,
+ * source_label = title). `token_count` is `approxTokenCount(text)`, the estimate the production chunker persists.
+ * `chunkIdsOf` reads the chunk ids back in chunk order.
  */
-export async function seedEmbeddedDoc(db: Db, embedder: Embedder, title: string, texts: string[]): Promise<string> {
+export async function seedEmbeddedDoc(
+  db: Db,
+  embedder: Embedder,
+  title: string,
+  chunks: Array<string | EmbeddedChunkSeed>,
+  opts: EmbeddedDocOptions = {}
+): Promise<string> {
+  const seeds = chunks.map((c) => (typeof c === 'string' ? { text: c } : c))
   const now = new Date().toISOString()
   const docId = randomUUID()
   db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const vectors = await embedder.embed(texts)
+    `INSERT INTO documents (id, title, status, fully_chunked, origin_json, created_at, updated_at)
+     VALUES (?, ?, 'indexed', ?, ?, ?, ?)`
+  ).run(docId, title, opts.fullyChunked ? now : null, opts.origin ?? null, now, now)
+  const vectors = await embedder.embed(seeds.map((c) => c.text))
   const insertChunk = db.prepare(
     `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-     VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
   const insertEmbedding = db.prepare(
     `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
      VALUES (?, ?, ?, ?, ?)`
   )
-  for (let i = 0; i < texts.length; i++) {
+  for (let i = 0; i < seeds.length; i++) {
+    const c = seeds[i]!
     const chunkId = randomUUID()
-    insertChunk.run(chunkId, docId, i, texts[i]!, title, approxTokenCount(texts[i]!), now)
-    insertEmbedding.run(chunkId, embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
+    insertChunk.run(chunkId, docId, i, c.text, title, c.page ?? null, c.section ?? null, approxTokenCount(c.text), now)
+    insertEmbedding.run(chunkId, opts.modelId ?? embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
   }
   return docId
+}
+
+/** The document ids filed in a collection (`document_collections`), in no particular order. */
+export function documentIdsInCollection(db: Db, collectionId: string): string[] {
+  return (
+    db.prepare('SELECT document_id FROM document_collections WHERE collection_id = ?').all(collectionId) as Array<{
+      document_id: string
+    }>
+  ).map((r) => r.document_id)
+}
+
+/** A document's chunk ids in `chunk_index` order. */
+export function chunkIdsOf(db: Db, docId: string): string[] {
+  return (
+    db.prepare('SELECT id FROM chunks WHERE document_id = ? ORDER BY chunk_index').all(docId) as Array<{ id: string }>
+  ).map((r) => r.id)
 }

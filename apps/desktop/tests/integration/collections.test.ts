@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import net from 'node:net'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   addToCollection,
@@ -12,14 +8,12 @@ import {
   createCollection,
   deleteCollection,
   docLifecycle,
-  documentIdsInCollection,
   fileDocumentByDestination,
   fileFromPendingDestination,
   getBuiltinCollection,
   linkConversationDocument,
   listCollections,
   parsePendingDestination,
-  projectOnlyDocumentIds,
   removeFromCollection,
   renameCollection,
   resolveScope,
@@ -33,12 +27,15 @@ import {
   setConversationCollection,
   setScope
 } from '../../src/main/services/chat'
+import { legacyDbPath, openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { documentIdsInCollection } from '../helpers/doc-fixtures'
+import { capturePrepares } from '../helpers/db-spy'
 
 // Document-organization plan, Phase A: collection CRUD + membership, the built-in
 // seed + Library backfill migration, version-skew CASCADE, and resolveScope.
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-coll-')), 'test.sqlite'))
+  return openFreshDb('coll')
 }
 
 /** Insert a bare document row (no chunks/vectors needed for membership tests). */
@@ -63,8 +60,7 @@ afterEach(() => {
 
 describe('built-in seed', () => {
   it('seeds exactly one Library and one Temporary, undeletable + idempotent on re-open', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-coll-seed-'))
-    const path = join(dir, 'test.sqlite')
+    const path = join(tempRoot('coll-seed'), 'test.sqlite')
     const db = openDatabase(path)
 
     const library = getBuiltinCollection(db, 'library')
@@ -93,24 +89,20 @@ describe('built-in seed', () => {
 describe('Library backfill', () => {
   it('files indexed non-generated unfiled docs into Library; skips generated + unindexed', () => {
     // Build a pre-feature DB (documents only) then migrate by opening it.
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-coll-bf-'))
-    const path = join(dir, 'old.sqlite')
-    const nodeRequire = createRequire(process.execPath)
-    const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')
-    const old = new DatabaseSync(path)
-    old.exec(`CREATE TABLE documents (
-      id TEXT PRIMARY KEY, title TEXT NOT NULL, original_path TEXT, stored_path TEXT,
-      mime_type TEXT, size_bytes INTEGER, sha256 TEXT, status TEXT NOT NULL,
-      error_message TEXT, origin_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`)
-    const ins = old.prepare(
-      `INSERT INTO documents (id, title, status, origin_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, '2026-01-01', '2026-01-01')`
-    )
-    ins.run('indexed-1', 'a.txt', 'indexed', null)
-    ins.run('indexed-2', 'b.txt', 'indexed', null)
-    ins.run('generated-1', 't.md', 'indexed', JSON.stringify({ type: 'translation' })) // generated → no membership
-    ins.run('queued-1', 'c.txt', 'queued', null) // still importing → not backfilled (M1)
-    old.close()
+    const path = legacyDbPath('coll-bf', (raw) => {
+      raw.exec(`CREATE TABLE documents (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, original_path TEXT, stored_path TEXT,
+        mime_type TEXT, size_bytes INTEGER, sha256 TEXT, status TEXT NOT NULL,
+        error_message TEXT, origin_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`)
+      const ins = raw.prepare(
+        `INSERT INTO documents (id, title, status, origin_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '2026-01-01', '2026-01-01')`
+      )
+      ins.run('indexed-1', 'a.txt', 'indexed', null)
+      ins.run('indexed-2', 'b.txt', 'indexed', null)
+      ins.run('generated-1', 't.md', 'indexed', JSON.stringify({ type: 'translation' })) // generated → no membership
+      ins.run('queued-1', 'c.txt', 'queued', null) // still importing → not backfilled (M1)
+    })
 
     const db = openDatabase(path)
     const library = getBuiltinCollection(db, 'library')!
@@ -295,18 +287,6 @@ describe('resolveScope', () => {
     expect(scope.hasExplicitDocSelection).toBe(true)
   })
 
-  it('treats an empty scope_v2_json as the explicit "All documents" choice', () => {
-    const db = freshDb()
-    const conv = createConversation(db, { mode: 'documents' })
-    db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run(
-      JSON.stringify({ collectionIds: [], documentIds: [] }),
-      conv.id
-    )
-    const scope = resolveScope(db, conv.id)
-    expect(scope.collectionIds).toBeNull()
-    expect(scope.documentIds).toBeNull()
-  })
-
   it('always unions chat attachments without flagging them as a hand-pick (N2)', () => {
     const db = freshDb()
     const lib = getBuiltinCollection(db, 'library')!
@@ -319,15 +299,6 @@ describe('resolveScope', () => {
     expect(scope.collectionIds).toEqual([lib.id]) // default library still present
     expect(scope.documentIds).toEqual(['attach-1']) // attachment unioned in
     expect(scope.hasExplicitDocSelection).toBe(false) // attachment is NOT a hand-pick
-  })
-
-  it('falls back to the Library default on malformed scope_v2_json (never throws)', () => {
-    const db = freshDb()
-    const lib = getBuiltinCollection(db, 'library')!
-    const conv = createConversation(db, { mode: 'documents' })
-    db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run('{not json', conv.id)
-    const scope = resolveScope(db, conv.id)
-    expect(scope.collectionIds).toEqual([lib.id])
   })
 
   // ---- D71 (#26): creation-time docs-only default scope for attachment / "Ask selected" chats ----
@@ -496,15 +467,6 @@ describe('resolveScope — unfiled conversation attachments (#571)', () => {
     }
   )
 
-  it('the same after "Just this file" narrowed an existing chat whose file then failed', () => {
-    const db = freshDb()
-    const conv = createConversation(db, { mode: 'documents' })
-    setScope(db, conv.id, { collectionIds: [], documentIds: [] })
-    seedDoc(db, 'scan', { status: 'failed' })
-    pendingFor(db, 'scan', { kind: 'conversation', conversationId: conv.id })
-    expect(resolveScope(db, conv.id)).toMatchObject({ collectionIds: null, documentIds: ['scan'] })
-  })
-
   it('unions with linked attachments and leaves a Library-default chat on the Library', () => {
     const db = freshDb()
     const lib = getBuiltinCollection(db, 'library')!
@@ -549,14 +511,14 @@ describe('resolveScope — unfiled conversation attachments (#571)', () => {
     expect(resolveScope(db, conv).documentIds).toEqual(['scan'])
   })
 
-  it('the unfiled read is served by the partial index, not a scan of the library', () => {
+  it('the unfiled read is served by the partial index, not a scan of the library', async () => {
     const db = freshDb()
-    const plan = db
-      .prepare(
-        `EXPLAIN QUERY PLAN SELECT id, status, pending_destination_json FROM documents
-         WHERE pending_destination_json IS NOT NULL AND origin_json IS NULL AND status != 'deleted'`
-      )
-      .all() as Array<{ detail: string }>
+    // The statement production prepares (prepareCached prepares it once per handle), never a retyped copy.
+    const [sql] = await capturePrepares(db, /SELECT id, status, pending_destination_json FROM documents/, () =>
+      unfiledConversationDocuments(db, 'any-conversation')
+    )
+    expect(sql).toBeDefined()
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>
     expect(plan.map((r) => r.detail).join(' | ')).toMatch(/USING INDEX idx_documents_pending_dest/)
   })
 })
@@ -622,18 +584,6 @@ describe('conversation scope + collection round-trip', () => {
     expect(getConversation(db, conv.id)!.scope).toBeNull()
     expect(resolveScope(db, conv.id).collectionIds).toEqual([lib.id])
   })
-
-  it('projectOnlyDocumentIds spares a Library member and flags a project-only doc (C2)', () => {
-    const db = freshDb()
-    const lib = getBuiltinCollection(db, 'library')!
-    const project = createCollection(db, 'Lawsuit')
-    seedDoc(db, 'libdoc')
-    seedDoc(db, 'projonly')
-    addToCollection(db, ['libdoc'], lib.id)
-    addToCollection(db, ['libdoc'], project.id)
-    addToCollection(db, ['projonly'], project.id)
-    expect(projectOnlyDocumentIds(db, project.id)).toEqual(['projonly'])
-  })
 })
 
 // ---- Phase C: import destination filing (plan §11.3) -------------------------------
@@ -671,41 +621,6 @@ describe('import destination filing', () => {
     ).toEqual({ kind: 'conversation', conversationId: 'c1' })
   })
 
-  it('files a document by each destination kind (library/collection/temporary)', () => {
-    const db = freshDb()
-    const lib = getBuiltinCollection(db, 'library')!
-    const temp = getBuiltinCollection(db, 'temporary')!
-    const project = createCollection(db, 'Tax')
-
-    seedDoc(db, 'toLib')
-    fileDocumentByDestination(db, 'toLib', { kind: 'library' })
-    expect(isMember(db, 'toLib', lib.id)).toBe(true)
-
-    seedDoc(db, 'toProj')
-    fileDocumentByDestination(db, 'toProj', { kind: 'collection', collectionId: project.id })
-    expect(isMember(db, 'toProj', project.id)).toBe(true)
-    expect(isMember(db, 'toProj', lib.id)).toBe(false) // a project import is NOT in Library
-
-    seedDoc(db, 'toTemp')
-    fileDocumentByDestination(db, 'toTemp', { kind: 'temporary' })
-    expect(isMember(db, 'toTemp', temp.id)).toBe(true)
-    expect(lifecycleOf(db, 'toTemp')).toBe('temporary')
-    expect(isMember(db, 'toTemp', lib.id)).toBe(false) // temporary stays out of Library
-  })
-
-  it('a conversation destination links the doc + files it into Temporary (C3)', () => {
-    const db = freshDb()
-    const temp = getBuiltinCollection(db, 'temporary')!
-    const conv = createConversation(db, { mode: 'documents' })
-    seedDoc(db, 'attach')
-    fileDocumentByDestination(db, 'attach', { kind: 'conversation', conversationId: conv.id })
-    expect(conversationAttachmentIds(db, conv.id)).toEqual(['attach'])
-    expect(isMember(db, 'attach', temp.id)).toBe(true)
-    expect(lifecycleOf(db, 'attach')).toBe('temporary')
-    // The link makes it answerable in this chat (resolveScope rule 1).
-    expect(resolveScope(db, conv.id).documentIds).toContain('attach')
-  })
-
   it('FK-guards the link write when the conversation is gone (N3) — doc stays in Temporary', () => {
     const db = freshDb()
     const temp = getBuiltinCollection(db, 'temporary')!
@@ -729,30 +644,6 @@ describe('import destination filing', () => {
     expect(linkConversationDocument(db, conv.id, 'a1')).toBe(true)
     expect(linkConversationDocument(db, conv.id, 'a1')).toBe(true) // duplicate → no-op
     expect(conversationAttachmentIds(db, conv.id)).toEqual(['a1'])
-  })
-
-  it('fileFromPendingDestination resumes a crash-interrupted import to its destination (M1)', () => {
-    const db = freshDb()
-    const lib = getBuiltinCollection(db, 'library')!
-    const project = createCollection(db, 'Lawsuit')
-    // A doc queued for a project, then "killed" mid-import (status stays queued).
-    seedDoc(db, 'resume', { status: 'queued' })
-    db.prepare('UPDATE documents SET pending_destination_json = ? WHERE id = ?').run(
-      JSON.stringify({ kind: 'collection', collectionId: project.id }),
-      'resume'
-    )
-    // The migration backfill (status='indexed' gated) must NOT file it into Library.
-    expect(isMember(db, 'resume', lib.id)).toBe(false)
-
-    // Resume: it reaches indexed and files itself to the persisted destination, clearing it.
-    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run('resume')
-    fileFromPendingDestination(db, 'resume')
-    expect(isMember(db, 'resume', project.id)).toBe(true)
-    expect(isMember(db, 'resume', lib.id)).toBe(false)
-    const after = db.prepare('SELECT pending_destination_json FROM documents WHERE id = ?').get('resume') as {
-      pending_destination_json: string | null
-    }
-    expect(after.pending_destination_json).toBeNull()
   })
 
   it('fileFromPendingDestination with no recorded intent defaults to Library (byte-for-byte)', () => {

@@ -523,9 +523,9 @@ export function readWithIdleTimeout<T>(
  * a close without `[DONE]`) throws a `ChatStreamError` instead of ending cleanly, so a
  * partially-generated answer can never persist as if complete.
  *
- * CB-5: each read is raced against a two-phase idle watchdog (`idle`, injectable for tests; the
- * production default keeps behaviour byte-identical on any live stream) so a HUNG sidecar rejects with
- * `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop still wins first.
+ * CB-5: each read is raced against a two-phase idle watchdog (`DEFAULT_IDLE`) so a HUNG sidecar
+ * rejects with `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop
+ * still wins first.
  *
  * #594: both pinned builds send an SSE comment ping (`:`) after every ~30 s of silence
  * (`--sse-ping-interval`, default 30 — b9849 too, which the #594 record had wrong). A ping is the
@@ -551,8 +551,7 @@ export async function* readChatSSE(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
   onReasoning?: (delta: string) => void,
-  onFinish?: (finishReason: string, timings?: RuntimeTimings) => void,
-  idle: IdleWatchdog = DEFAULT_IDLE
+  onFinish?: (finishReason: string, timings?: RuntimeTimings) => void
 ): AsyncGenerator<string, void, unknown> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
@@ -577,7 +576,7 @@ export async function* readChatSSE(
       if (signal?.aborted) return
       // Which clock ends this read: the stream budget once a chunk landed; before that the process
       // clock (re-armed by every read, so always whole) or the compute clock, whichever runs out first.
-      const { waitMs, budget } = nextReadBudget(idle, { started: sawChunk, quietMs, sawProgress, stalledMs })
+      const { waitMs, budget } = nextReadBudget(DEFAULT_IDLE, { started: sawChunk, quietMs, sawProgress, stalledMs })
       const waitStart = performance.now() // monotonic: a wall-clock step must not eat the budget
       const { done, value } = await readWithIdleTimeout(reader, waitMs, budget, signal)
       if (done) break

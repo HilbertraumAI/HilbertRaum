@@ -111,6 +111,13 @@ describe('user-facing constants follow the §7 voice', () => {
 })
 
 describe('stale phrases stay out of user-facing string literals', () => {
+  it('the scanner finds a phrase that IS in a literal today (positive controls, so the rows below cannot pass vacuously)', () => {
+    // A one-line literal: the persisted catalog key (rag/index.ts, displayMap.ts, the en/de catalogs).
+    expect(literalOccurrences('main.rag.noContext').length).toBeGreaterThan(0)
+    // A MULTI-LINE template literal (the T-3/#147 mode): GROUNDING_RULES in rag/index.ts.
+    expect(literalOccurrences('Use only the document excerpts provided').length).toBeGreaterThan(0)
+  })
+
   it.each([
     'the Models screen', // renamed to "AI Model" in Phase 26
     'Checksum verification failed',

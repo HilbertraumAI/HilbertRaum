@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import type { Db } from '../../src/main/services/db'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import {
   corpusNeedsReindex,
   generateGroundedAnswer,
@@ -24,44 +20,18 @@ import {
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 
 // Document-organization plan §10.2 (Phase A): collection-aware retrieval — the
 // membership/id UNION (D1), the document-level archived exclusion (C1), the structural
-// exclusion of generated docs (D3/N1), and the scope-threaded re-index check (M2). The
-// legacy positional scope path stays byte-identical (covered in rag-scope.test.ts).
+// exclusion of generated docs (D3/N1), and the scope-threaded re-index check (M2). A plain
+// `documentIds` scope is rag-scope.test.ts's.
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-ragcoll-')), 'test.sqlite'))
-}
-
-async function seedDocument(
-  db: Db,
-  embedder: MockEmbedder,
-  title: string,
-  texts: string[],
-  opts: { modelId?: string; origin?: string | null } = {}
-): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, origin_json, created_at, updated_at)
-     VALUES (?, ?, 'indexed', ?, ?, ?)`
-  ).run(docId, title, opts.origin ?? null, now, now)
-  const vectors = await embedder.embed(texts)
-  for (let i = 0; i < texts.length; i++) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(chunkId, docId, i, texts[i], title, texts[i].split(/\s+/).length, now)
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, opts.modelId ?? embedder.id, encodeVector(vectors[i]), vectors[i].length, now)
-  }
-  return docId
+  return openFreshDb('ragcoll')
 }
 
 afterEach(() => {
@@ -73,9 +43,9 @@ describe('collection-scoped retrieval', () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     const q = 'shared phrase across documents'
-    const inProject = await seedDocument(db, embedder, 'project.pdf', [q])
-    const specific = await seedDocument(db, embedder, 'specific.pdf', [q])
-    await seedDocument(db, embedder, 'outsider.pdf', [q]) // neither in project nor selected
+    const inProject = await seedEmbeddedDoc(db, embedder, 'project.pdf', [q])
+    const specific = await seedEmbeddedDoc(db, embedder, 'specific.pdf', [q])
+    await seedEmbeddedDoc(db, embedder, 'outsider.pdf', [q]) // neither in project nor selected
 
     const project = createCollection(db, 'Tax')
     addToCollection(db, [inProject], project.id)
@@ -96,7 +66,7 @@ describe('collection-scoped retrieval', () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     const q = 'shared phrase across documents'
-    const both = await seedDocument(db, embedder, 'both.pdf', [q, q]) // two chunks
+    const both = await seedEmbeddedDoc(db, embedder, 'both.pdf', [q, q]) // two chunks
     const project = createCollection(db, 'Tax')
     addToCollection(db, [both], project.id)
 
@@ -114,7 +84,7 @@ describe('collection-scoped retrieval', () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     const q = 'archived content marker'
-    const doc = await seedDocument(db, embedder, 'old.pdf', [q])
+    const doc = await seedEmbeddedDoc(db, embedder, 'old.pdf', [q])
     const lib = getBuiltinCollection(db, 'library')!
     addToCollection(db, [doc], lib.id)
     db.prepare("UPDATE documents SET lifecycle = 'archived' WHERE id = ?").run(doc)
@@ -132,7 +102,7 @@ describe('collection-scoped retrieval', () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     const q = 'policy that lives in both library and a project'
-    const doc = await seedDocument(db, embedder, 'policy.pdf', [q])
+    const doc = await seedEmbeddedDoc(db, embedder, 'policy.pdf', [q])
     const lib = getBuiltinCollection(db, 'library')!
     const project = createCollection(db, 'Tax 2025')
     addToCollection(db, [doc], lib.id)
@@ -149,7 +119,7 @@ describe('collection-scoped retrieval', () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     const q = 'translated text body content'
-    const generated = await seedDocument(db, embedder, 'translation.md', [q], {
+    const generated = await seedEmbeddedDoc(db, embedder, 'translation.md', [q], {
       origin: JSON.stringify({ type: 'translation' })
     })
     // Generated docs get NO membership (it would be skipped by backfill too).
@@ -169,7 +139,7 @@ describe('scope-aware corpusNeedsReindex (M2)', () => {
     const embedder = new MockEmbedder()
     // Library has a visible doc, but the (empty) project scope has none.
     const lib = getBuiltinCollection(db, 'library')!
-    const inLib = await seedDocument(db, embedder, 'a.pdf', ['library content here'])
+    const inLib = await seedEmbeddedDoc(db, embedder, 'a.pdf', ['library content here'])
     addToCollection(db, [inLib], lib.id)
     const emptyProject = createCollection(db, 'Empty')
 
@@ -192,7 +162,7 @@ describe('scope-aware corpusNeedsReindex (M2)', () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     const lib = getBuiltinCollection(db, 'library')!
-    const privateDoc = await seedDocument(db, embedder, 'salaries.pdf', ['the salary of the director'])
+    const privateDoc = await seedEmbeddedDoc(db, embedder, 'salaries.pdf', ['the salary of the director'])
     addToCollection(db, [privateDoc], lib.id)
 
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
@@ -215,7 +185,7 @@ describe('scope-aware corpusNeedsReindex (M2)', () => {
   it('all-stale-project scope ⇒ REINDEX_NEEDED (indexed but invisible to the embedder)', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    const stale = await seedDocument(db, embedder, 'stale.pdf', ['stale words'], {
+    const stale = await seedEmbeddedDoc(db, embedder, 'stale.pdf', ['stale words'], {
       modelId: 'old-model'
     })
     const project = createCollection(db, 'Stale')
@@ -230,20 +200,5 @@ describe('scope-aware corpusNeedsReindex (M2)', () => {
       scope: { collectionIds: [project.id] }
     })
     expect(msg.content).toBe(REINDEX_NEEDED_ANSWER)
-  })
-})
-
-describe('legacy arg-5 union normalization (H3)', () => {
-  it('a bare doc-id array still scopes exactly like before', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    const q = 'identical phrase'
-    const docA = await seedDocument(db, embedder, 'a.pdf', [q])
-    await seedDocument(db, embedder, 'b.pdf', [q])
-    const scoped = await retrieve(db, embedder, q, SETTINGS, [docA])
-    expect(scoped.chunks.map((c) => c.documentId)).toEqual([docA])
-    // null = whole corpus.
-    const all = await retrieve(db, embedder, q, SETTINGS, null)
-    expect(all.chunks.length).toBe(2)
   })
 })

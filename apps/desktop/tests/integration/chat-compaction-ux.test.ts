@@ -1,8 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   appendMessage,
   buildChatMessages,
@@ -16,63 +13,24 @@ import {
   listMessages,
   writeCheckpoint
 } from '../../src/main/services/chat'
-import { selfSummaryPrompt } from '../../src/main/services/chat/compaction'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { appendTurns, compactionRuntime } from '../helpers/compaction-fixtures'
+import { recordingRuntime } from '../helpers/scripted-runtime'
 
 // Phase 2 UX (context-compaction plan §5.1/§5.3/§5.4): the resting context-usage read, the
 // transcript summary-marker reader, and the settings toggle that gates compaction. All deterministic
 // and offline (a scripted runtime, a temp DB) — no Electron, no network.
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-compaction-ux-')), 'test.sqlite'))
-}
-
-const words = (n: number): string => Array(n).fill('word').join(' ')
-
-function appendTurns(db: Db, conversationId: string, n: number, wordsPerTurn: number): void {
-  for (let i = 0; i < n; i++) {
-    appendMessage(db, {
-      conversationId,
-      role: i % 2 === 0 ? 'user' : 'assistant',
-      content: words(wordsPerTurn)
-    })
-  }
-}
-
-interface ScriptedRuntime extends ModelRuntime {
-  summaryCalls: number
-}
-
-/** A runtime that distinguishes the compaction summary call from a normal answer call. */
-function scriptedRuntime(window: number): ScriptedRuntime {
-  const rt: ScriptedRuntime = {
-    modelId: 'scripted',
-    summaryCalls: 0,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    contextWindow: () => window,
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      if (messages[0]?.content === selfSummaryPrompt) {
-        rt.summaryCalls += 1
-        for (const tok of 'Goal: testing. Facts: value 42.'.match(/\S+\s*/g) ?? []) {
-          if (options?.signal?.aborted) return
-          yield tok
-        }
-        return
-      }
-      yield 'answer'
-    }
-  }
-  return rt
+  return openFreshDb('compaction-ux')
 }
 
 describe('getConversationContextUsage (§5.1)', () => {
   it('reports { usedTokens, window } over the launched window and grows with history', () => {
     const db = freshDb()
     const conv = createConversation(db, { modelId: 'm' })
-    const rt = scriptedRuntime(8000)
+    const rt = compactionRuntime({ window: 8000 })
 
     appendTurns(db, conv.id, 4, 20)
     const small = getConversationContextUsage(db, rt, conv.id)
@@ -152,6 +110,12 @@ describe('chatCompactionEnabled toggle (§5.4) — false reproduces L1-only beha
     // summary pair (2) + the 6 post-checkpoint turns = 8 (vs 10 raw turns).
     expect(enabledTurns.length).toBe(2 + (turns.length - 4))
 
+    // CB-6: an explicit `compactionOn` wins over the stored setting (still on here), so the prompt follows the turn's
+    // one settings read even if the toggle flips mid-turn.
+    const threadedOff = buildChatMessages(db, conv.id, undefined, undefined, false)
+    expect(threadedOff.some((m) => m.content.includes('CHECKPOINTMARKER'))).toBe(false)
+    expect(threadedOff.filter((m) => m.role !== 'system').length).toBe(turns.length)
+
     // Disabled: no summary pair, FULL history replays — byte-identical to the pre-feature app.
     updateSettings(db, { chatCompactionEnabled: false })
     const disabled = buildChatMessages(db, conv.id)
@@ -165,10 +129,26 @@ describe('chatCompactionEnabled toggle (§5.4) — false reproduces L1-only beha
     updateSettings(db, { chatCompactionEnabled: false })
     appendTurns(db, conv.id, 14, 90) // well over 0.85 × 2000 — would compact if enabled
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'the current question' })
-    const rt = scriptedRuntime(2000)
+    const rt = compactionRuntime({ window: 2000 })
 
     await generateAssistantMessage(db, rt, conv.id)
-    expect(rt.summaryCalls).toBe(0)
+    expect(rt.summaryCalls).toHaveLength(0)
     expect(getLatestCheckpoint(db, conv.id)).toBeNull()
+
+    // §5.4: with compaction off, a checkpoint cut while it was on is ignored by the prompt too. (That the turn passes
+    // its one settings read rather than a second read is the toggle row's explicit `compactionOn` leg, above.)
+    const conv2 = createConversation(db, { modelId: 'm' })
+    appendTurns(db, conv2.id, 10, 20)
+    writeCheckpoint(db, {
+      conversationId: conv2.id,
+      summary: 'CHECKPOINTMARKER summary',
+      coversThroughRowid: listConversationTurns(db, conv2.id)[3].rowid
+    })
+    appendMessage(db, { conversationId: conv2.id, role: 'user', content: 'the next question' })
+    const rec = recordingRuntime('answer', { contextWindow: 8000 }) // ~715 est. tokens: no L1 trim, under the trigger
+    await generateAssistantMessage(db, rec, conv2.id)
+    expect(rec.calls).toBe(1)
+    expect(rec.lastMessages.some((m) => m.content.includes('CHECKPOINTMARKER'))).toBe(false)
+    expect(rec.lastMessages.filter((m) => m.role !== 'system')).toHaveLength(11) // all 10 turns + the question, no pair
   })
 })

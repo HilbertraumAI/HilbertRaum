@@ -5,6 +5,7 @@ import {
 } from '../../src/main/ipc/inflight'
 import { performShutdown } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
+import { within } from '../helpers/hang-budget'
 
 // full-audit 2026-07-12 REL-4 — the in-flight-stream settle await is BOUNDED (the 5 s
 // doc-task settle treatment). The settle promises never reject (resolved in the stream
@@ -20,21 +21,26 @@ afterEach(() => {
 
 describe('awaitInFlightStreamsSettled ceiling (full-audit 2026-07-12 REL-4)', () => {
   it('resolves after the ceiling when a settle never resolves (wedged stream)', async () => {
+    vi.useFakeTimers()
     const never = new Map<string, Promise<void>>([['c1', new Promise<void>(() => {})]])
-    const start = Date.now()
+    let done = false
     // Pre-fix this awaited the never-resolving allSettled forever (vitest test timeout).
-    await awaitInFlightStreamsSettled(never, 40)
-    expect(Date.now() - start).toBeLessThan(STREAM_SETTLE_TIMEOUT_MS)
+    const p = awaitInFlightStreamsSettled(never).then(() => (done = true)) // the shipped default bound
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1) // 5 000 ms, the literal REL-4 bound
+    await within(p, 'the ceiling ending the race at 5 000 ms')
+    expect(done).toBe(true)
   })
 
   it('resolves promptly when the settles finish — never waits out the ceiling', async () => {
+    vi.useFakeTimers()
     const settled = new Map<string, Promise<void>>([
       ['c1', Promise.resolve()],
       ['c2', Promise.resolve()]
     ])
-    const start = Date.now()
-    await awaitInFlightStreamsSettled(settled, STREAM_SETTLE_TIMEOUT_MS)
-    expect(Date.now() - start).toBeLessThan(1_000) // the race resolved on the settles
+    // The clock never moves, so only the settles can end the race.
+    await within(awaitInFlightStreamsSettled(settled), 'the race resolving on the settles')
   })
 
   it('quit proceeds after the ceiling with a never-settling stream (performShutdown wiring)', async () => {

@@ -3,6 +3,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readChatSSE } from '../../src/main/services/runtime/llama'
 import type { RuntimeTimings } from '../../src/main/services/runtime'
+import { answerSpeedFrom } from '../../src/main/ipc/chat-stream'
+import { formatAnswerSpeed } from '../../src/renderer/chat/answerSpeed'
+import { fmt1 } from '../../src/renderer/lib/format'
+import { t } from '../../src/shared/i18n'
+import type { Message } from '../../src/shared/types'
 
 // #290/#291 — the REAL wire shape of llama-server's `timings` on a streamed chat completion,
 // captured from the pinned b9849 on the #291 reporter's rig (issue #298, 2026-09-04). This
@@ -83,16 +88,13 @@ describe('readChatSSE on the captured b9849 timings transcript (#298)', () => {
   it('reports the decode figure the Diagnostics probe and the speed line would show', async () => {
     const { finishes } = await run(streamOf(FIXTURE))
     const tm = finishes[0].timings!
-    // Rounded to one decimal for the card, integer above 10 tok/s for the chat line.
-    expect(Math.round(tm.predicted_per_second! * 10) / 10).toBe(29.5)
-    expect(Math.round(tm.predicted_per_second!)).toBe(29)
-    // MTP evidence in the capture: 20 drafted, 15 accepted — the server counts TOKENS
-    // (predicted_n 25), which is exactly why the old chunk count under-read (#291).
-    const raw = JSON.parse(FIXTURE.split('\n').find((l) => l.includes('"timings"'))!.slice('data: '.length)) as {
-      timings: { draft_n: number; draft_n_accepted: number }
-    }
-    expect(raw.timings.draft_n).toBe(20)
-    expect(raw.timings.draft_n_accepted).toBe(15)
+    // The figures the app shows, through production: the speed payload, the chat line and the Performance screen.
+    const reply: Message = { id: 'a1', conversationId: 'c1', role: 'assistant', content: '.', createdAt: '2026-09-04T00:00:00Z', tokenCount: null }
+    const speed = answerSpeedFrom(reply, tm, 1_800)!
+    // The server counts TOKENS (predicted_n 25; the capture drafted 20 and accepted 15 with MTP) — why the old chunk count under-read (#291).
+    expect(speed).toEqual({ messageId: 'a1', tokensPerSecond: tm.predicted_per_second, ttftMs: 1_800, tokens: 25 })
+    expect(formatAnswerSpeed(speed, (key, params) => t('en', key, params), 'en')).toBe('29 tok/s · 1.8 s to first token · 25 tokens')
+    expect(fmt1(speed.tokensPerSecond, 'en')).toBe('29.5') // PerformanceScreen.tsx:1149
   })
 })
 

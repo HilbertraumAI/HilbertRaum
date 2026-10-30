@@ -1,18 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { EventEmitter } from 'node:events'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
-import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import {
-  buildCompareDiffPrompt,
   buildCompareWholeDocPrompt,
   buildGroundedChatMessages,
   buildGroundedPrompt,
@@ -20,7 +12,6 @@ import {
   EXCERPT_END,
   EXCERPT_GUARD_LINE,
   GROUNDED_SYSTEM_PROMPT,
-  detectFilenameScope,
   generateGroundedAnswer,
   generateGroundedDataAnswer,
   ragSettingsFrom,
@@ -43,84 +34,23 @@ import { MAX_REDUCE_CONTINUATIONS, streamWholeDocMapReduce } from '../../src/mai
 import { SKILL_GUARD_LINE, stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
 import { DATA_END, GROUNDED_DATA_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
-import {
-  createQueuedDocument,
-  documentsDir,
-  processDocument
-} from '../../src/main/services/ingestion'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
-import { finishScriptedRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
-
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-')), 'test.sqlite'))
-}
-function store(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-ws-')))
-}
-function write(name: string, data: string): string {
-  const p = join(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-src-')), name)
-  writeFileSync(p, data)
-  return p
-}
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
+import { docTaskWorld, importText } from '../helpers/doctask-fixtures'
+import { FakeChild } from '../helpers/fake-sidecar'
+import {
+  finishScriptedRuntime,
+  recordingRuntime,
+  scriptedRuntime,
+  type ScriptedCall
+} from '../helpers/scripted-runtime'
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
-
-interface SeedChunk {
-  text: string
-  pageNumber?: number | null
-  sectionLabel?: string | null
-}
-
-/** Insert one document with the given chunks + their mock embeddings. */
-async function seedDocument(
-  db: Db,
-  embedder: MockEmbedder,
-  title: string,
-  chunks: SeedChunk[]
-): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const vectors = await embedder.embed(chunks.map((c) => c.text))
-  for (let i = 0; i < chunks.length; i++) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      chunkId,
-      docId,
-      i,
-      chunks[i].text,
-      title,
-      chunks[i].pageNumber ?? null,
-      chunks[i].sectionLabel ?? null,
-      chunks[i].text.split(/\s+/).length,
-      now
-    )
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, embedder.id, encodeVector(vectors[i]), vectors[i].length, now)
-  }
-  return docId
-}
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
-
-class FakeRerankChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-}
 
 /**
  * A REAL `LlamaReranker` (so its internal per-field truncation runs) wired to a fake sidecar that
@@ -146,7 +76,7 @@ function contentScoringReranker(scoreOf: (receivedDocText: string) => number): L
     modelPath: '/models/reranker.gguf',
     findPort: async () => 53001,
     healthIntervalMs: 1,
-    spawn: () => new FakeRerankChild(),
+    spawn: () => new FakeChild(),
     fetchImpl
   })
 }
@@ -197,19 +127,26 @@ describe('buildGroundedPrompt', () => {
     expect(p.trimEnd().endsWith('Answer:')).toBe(true)
   })
 
-  it('the system prefix is byte-stable across turns so cache_prompt reuses it (RT-2)', () => {
+  it('the system prefix is byte-stable across turns so cache_prompt reuses it (RT-2)', async () => {
     // The grounded SYSTEM prompt must NOT depend on the question or excerpts — otherwise the
-    // longest-common-prefix cache reuse would break every turn. Build two unrelated turns and
-    // assert the system message is byte-identical.
-    const sys1 = buildGroundedChatMessages(freshDb(), 'no-conv', buildGroundedPrompt('Q1', chunks))[0]
-    const sys2 = buildGroundedChatMessages(
-      freshDb(),
-      'no-conv',
-      buildGroundedPrompt('a totally different question', [chunks[1]])
-    )[0]
-    expect(sys1.role).toBe('system')
-    expect(sys1.content).toBe(GROUNDED_SYSTEM_PROMPT)
-    expect(sys2.content).toBe(sys1.content) // byte-stable ⇒ reused prefix
+    // longest-common-prefix cache reuse would break every turn. Run two real grounded turns with
+    // different questions and excerpts and assert the system message each request sent is
+    // byte-identical.
+    const db = openFreshDb('rag')
+    const embedder = new MockEmbedder()
+    await seedEmbeddedDoc(db, embedder, 'Contract.pdf', [{ text: 'The liability cap is one million dollars.', page: 4 }])
+    await seedEmbeddedDoc(db, embedder, 'Terms.docx', [{ text: 'Either party may terminate with notice.', section: 'Termination' }])
+    const rt = recordingRuntime('Answer [S1].', { contextWindow: 4096 })
+    const conv = createConversation(db, { mode: 'documents' })
+    for (const q of ['What is the liability cap?', 'Can either party terminate with notice?']) {
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
+      await generateGroundedAnswer(db, rt, embedder, conv.id, q, SETTINGS)
+    }
+    expect(rt.turns).toHaveLength(2)
+    const [first, second] = rt.turns
+    expect(first[0]).toEqual({ role: 'system', content: GROUNDED_SYSTEM_PROMPT })
+    expect(second[0]).toEqual(first[0]) // byte-stable ⇒ reused prefix
+    expect(second.at(-1)?.content).not.toBe(first.at(-1)?.content) // the grounded turns really differed
   })
 
   it('omits the meta suffix when a chunk has neither page nor section', () => {
@@ -299,33 +236,15 @@ describe('buildGroundedPrompt', () => {
   })
 })
 
-describe('buildCompareDiffPrompt — completeness claim is honest when the change list was capped (W1, §2.2)', () => {
-  const args = ['what changed?', '~~100~~ **120**', '- fee 100 → 120', 'Document A: "v1" (imported 2026-01-01)', 'Document B: "v2" (imported 2026-02-01)'] as const
-
-  it('a COMPLETE change list is asserted "complete and exact"', () => {
-    const p = buildCompareDiffPrompt(...args, null, false)
-    expect(p).toContain('they are complete and exact')
-    expect(p).not.toContain('PARTIAL')
-  })
-
-  it('a TRUNCATED change list (W1 shrank this budget) is NOT called complete — it says PARTIAL', () => {
-    const p = buildCompareDiffPrompt(...args, null, true)
-    expect(p).not.toContain('complete and exact')
-    expect(p).toContain('PARTIAL')
-    // And the model is told not to infer "unchanged" from an absent change (audit §2.2 honesty).
-    expect(p).toMatch(/do NOT describe anything as unchanged/i)
-  })
-})
-
 // ---- Retrieval + citation resolution --------------------------------------------
 
 describe('retrieve', () => {
   it('returns the matching chunk for a question with resolved citations + snippet', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'science.pdf', [
-      { text: 'photosynthesis converts sunlight into chemical energy in plants', pageNumber: 2 },
-      { text: 'the stock market rallied on strong earnings reports today', pageNumber: 7 }
+    await seedEmbeddedDoc(db, embedder, 'science.pdf', [
+      { text: 'photosynthesis converts sunlight into chemical energy in plants', page: 2 },
+      { text: 'the stock market rallied on strong earnings reports today', page: 7 }
     ])
 
     const { chunks, citations } = await retrieve(
@@ -346,19 +265,6 @@ describe('retrieve', () => {
     expect(citations[0].snippet).toContain('photosynthesis')
   })
 
-  it('assigns sequential [Sn] labels in score order', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'a.txt', [
-      { text: 'alpha unique words one' },
-      { text: 'beta different words two' },
-      { text: 'gamma separate words three' }
-    ])
-    const { chunks } = await retrieve(db, embedder, 'alpha unique words one', SETTINGS)
-    expect(chunks.map((c) => c.label)).toEqual(['S1', 'S2', 'S3'])
-    expect(chunks[0].text).toContain('alpha')
-  })
-
   // TEST-N4 (full audit 2026-06-28): the other ordering tests all query text BYTE-IDENTICAL
   // to the target chunk, so "the exact match ranks #1" is the only thing asserted — a broken
   // cosine that merely got the identity case right would still pass. This drives GRADED token
@@ -370,15 +276,16 @@ describe('retrieve', () => {
   // cosine as `score` (the pass-through rule) — a degenerate cosine that only ranked the exact
   // match could not keep B strictly above C here.
   it('orders chunks by graded token overlap with strictly decreasing fused scores [TEST-N4]', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'graded.txt', [
+    await seedEmbeddedDoc(db, embedder, 'graded.txt', [
       { text: 'alpha bravo charlie delta foxtrot golf' }, // A: 4 shared with the query
       { text: 'alpha bravo mike november hotel india' }, // B: 2 shared
       { text: 'alpha oscar papa quebec romeo sierra' } // C: 1 shared
     ])
     const { chunks } = await retrieve(db, embedder, 'alpha bravo charlie delta', SETTINGS)
     expect(chunks).toHaveLength(3)
+    expect(chunks.map((c) => c.label)).toEqual(['S1', 'S2', 'S3'])
     // Full order A, B, C by graded overlap (the query is byte-identical to NONE of them).
     expect(chunks[0].text.startsWith('alpha bravo charlie delta')).toBe(true)
     expect(chunks[1].text.startsWith('alpha bravo mike')).toBe(true)
@@ -390,12 +297,12 @@ describe('retrieve', () => {
   })
 
   it('dedups by document/page, keeping the best-scoring chunk per page', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'doc.pdf', [
-      { text: 'alpha beta gamma delta', pageNumber: 4 }, // exact match → highest
-      { text: 'alpha beta gamma delta epsilon zeta', pageNumber: 4 }, // same page, lower
-      { text: 'unrelated content over here', pageNumber: 5 }
+    await seedEmbeddedDoc(db, embedder, 'doc.pdf', [
+      { text: 'alpha beta gamma delta', page: 4 }, // exact match → highest
+      { text: 'alpha beta gamma delta epsilon zeta', page: 4 }, // same page, lower
+      { text: 'unrelated content over here', page: 5 }
     ])
     const { chunks } = await retrieve(db, embedder, 'alpha beta gamma delta', SETTINGS)
     const page4 = chunks.filter((c) => c.pageNumber === 4)
@@ -412,14 +319,14 @@ describe('retrieve', () => {
   // favorite, and lost the page on fused order; with the whole chunk scored it wins. The reranker.ts
   // RAG-N3 test gives the truncation itself teeth; this pins the end-to-end dedup consequence.
   it('dedup-by-page winner rests on whole-chunk rerank scores (a tail sentence wins its page) [RAG-N3]', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
     const pad = Array.from({ length: 400 }, (_, i) => `pad${i}`).join(' ')
     // Two chunks on the SAME page → they compete for ONE dedup slot. headMiss is the lexical/vector
     // favorite (repeats the query word 'cap'); tailHit hides the answer SENTINEL past the old budget.
-    await seedDocument(db, embedder, 'contract.pdf', [
-      { text: 'cap cap cap cap generic preamble about a cap', pageNumber: 1 }, // headMiss
-      { text: `${pad} the liability cap is one million dollars TAILANSWER`, pageNumber: 1 } // tailHit
+    await seedEmbeddedDoc(db, embedder, 'contract.pdf', [
+      { text: 'cap cap cap cap generic preamble about a cap', page: 1 }, // headMiss
+      { text: `${pad} the liability cap is one million dollars TAILANSWER`, page: 1 } // tailHit
     ])
     const reranker = contentScoringReranker((d) => (d.includes('TAILANSWER') ? 10 : 1))
     const { chunks } = await retrieve(db, embedder, 'cap', SETTINGS, null, reranker)
@@ -431,11 +338,11 @@ describe('retrieve', () => {
   })
 
   it('trims to topKFinal under the max-context-tokens budget', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
     // Four ~1000-token chunks sharing the query tokens so all score high (no dedup: no page).
     const base = Array.from({ length: 1000 }, () => 'lorem').join(' ')
-    await seedDocument(db, embedder, 'big.txt', [
+    await seedEmbeddedDoc(db, embedder, 'big.txt', [
       { text: `${base} one` },
       { text: `${base} two` },
       { text: `${base} three` },
@@ -449,9 +356,9 @@ describe('retrieve', () => {
   })
 
   it('drops hits below the min-similarity threshold', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'a.txt', [
+    await seedEmbeddedDoc(db, embedder, 'a.txt', [
       { text: 'quantum chromodynamics gauge theory' },
       { text: 'banana smoothie recipe with yogurt' }
     ])
@@ -459,58 +366,6 @@ describe('retrieve', () => {
     const { chunks } = await retrieve(db, embedder, 'quantum chromodynamics gauge theory', strict)
     expect(chunks).toHaveLength(1)
     expect(chunks[0].text).toContain('quantum')
-  })
-
-  // Filename auto-scope (detectFilenameScope) + retrieve narrowing: naming a file in the
-  // question should keep other documents out of the sources. See scope.ts.
-  it('restricts sources to the named file when the question names a filename', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    const contractId = await seedDocument(db, embedder, 'contract.pdf', [
-      { text: 'the liability cap under this agreement is one million dollars', pageNumber: 1 }
-    ])
-    await seedDocument(db, embedder, 'invoice.pdf', [
-      // Worded to also resemble the question so it WOULD surface without scoping.
-      { text: 'the liability cap line item on this invoice is one million dollars', pageNumber: 1 }
-    ])
-
-    const question = 'what is the liability cap in contract.pdf?'
-
-    // Without scope, both documents surface as sources (the reported bug).
-    const wide = await retrieve(db, embedder, question, SETTINGS)
-    expect(new Set(wide.chunks.map((c) => c.sourceTitle))).toEqual(
-      new Set(['contract.pdf', 'invoice.pdf'])
-    )
-
-    // The detector picks the named file, and scoped retrieval returns only its chunks.
-    const detected = detectFilenameScope(question, [
-      { id: contractId, title: 'contract.pdf' },
-      { id: 'other', title: 'invoice.pdf' }
-    ])
-    expect(detected?.ids).toEqual([contractId])
-    const scoped = await retrieve(db, embedder, question, SETTINGS, detected?.ids)
-    expect(scoped.chunks.length).toBeGreaterThan(0)
-    expect(scoped.chunks.every((c) => c.sourceTitle === 'contract.pdf')).toBe(true)
-  })
-
-  // TEST-N8: a query-embed failure inside retrieve() must PROPAGATE — a swallowed reject would
-  // masquerade as "no documents" (NO_DOCUMENT_CONTEXT_ANSWER), wrongly telling the user their
-  // corpus is empty when it is actually a transient embedder fault. The corpus IS non-empty here,
-  // so an "empty corpus ⇒ []" path can't masquerade as the reject path.
-  it('propagates a query-embed failure instead of silently returning no documents (TEST-N8)', async () => {
-    const db = freshDb()
-    const indexer = new MockEmbedder()
-    await seedDocument(db, indexer, 'a.txt', [{ text: 'alpha beta gamma delta' }])
-    // A FRESH embedder instance (so the per-instance query-vector LRU can't mask the reject) that
-    // shares the seeded vectors' model id (so scoping matches) but rejects on the query embed.
-    const failing = {
-      id: indexer.id,
-      dimensions: indexer.dimensions,
-      embed: async (): Promise<never> => {
-        throw new Error('embed boom (simulated query-embed failure)')
-      }
-    }
-    await expect(retrieve(db, failing, 'alpha beta gamma delta', SETTINGS)).rejects.toThrow(/embed boom/)
   })
 })
 
@@ -528,7 +383,7 @@ describe('echoed fence framing never persists (#583)', () => {
       site: 'streamWholeDocMapReduce',
       echoed: FENCE_ECHO,
       answer: async (): Promise<string> => {
-        const db = freshDb()
+        const db = openFreshDb('rag')
         const conv = createConversation(db, { mode: 'documents' })
         appendMessage(db, { conversationId: conv.id, role: 'user', content: 'summarise it' })
         const msg = await streamWholeDocMapReduce({
@@ -552,7 +407,7 @@ describe('echoed fence framing never persists (#583)', () => {
       site: 'generateGroundedDataAnswer',
       echoed: FENCE_ECHO,
       answer: async (): Promise<string> => {
-        const db = freshDb()
+        const db = openFreshDb('rag')
         const conv = createConversation(db, { mode: 'documents' })
         appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
         const msg = await generateGroundedDataAnswer(db, scriptedRuntime(ECHOING_REPLY), conv.id, 'who is the vendor?', {
@@ -568,7 +423,7 @@ describe('echoed fence framing never persists (#583)', () => {
       site: 'generateGroundedDataAnswer, data block',
       echoed: [DATA_END, GROUNDED_DATA_GUARD_LINE],
       answer: async (): Promise<string> => {
-        const db = freshDb()
+        const db = openFreshDb('rag')
         const conv = createConversation(db, { mode: 'documents' })
         appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
         const calls: ScriptedCall[] = []
@@ -599,10 +454,10 @@ describe('generateGroundedAnswer', () => {
   }
 
   it('streams an answer and persists citations to citations_json', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'science.pdf', [
-      { text: 'photosynthesis converts sunlight into chemical energy in plants', pageNumber: 2 }
+    await seedEmbeddedDoc(db, embedder, 'science.pdf', [
+      { text: 'photosynthesis converts sunlight into chemical energy in plants', page: 2 }
     ])
     const conv = createConversation(db, { mode: 'documents' })
     const question = 'photosynthesis converts sunlight into chemical energy in plants'
@@ -630,7 +485,7 @@ describe('generateGroundedAnswer', () => {
   })
 
   it('drops structurally-wrong citations_json on reload instead of passing it untyped (L6)', () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const conv = createConversation(db, { mode: 'documents' })
     // A valid-JSON but wrong-shape payload (e.g. a stale/hand-edited row): one good citation,
     // one missing the required sourceTitle, one not even an object.
@@ -661,7 +516,7 @@ describe('generateGroundedAnswer', () => {
   })
 
   it('answers "not found in your documents" without calling the model on an empty corpus', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'anything?' })
@@ -672,22 +527,24 @@ describe('generateGroundedAnswer', () => {
 
     expect(msg.content).toBe(NO_DOCUMENT_CONTEXT_ANSWER)
     expect(msg.citations).toBeUndefined()
+    expect(msg.coverage).toBeUndefined()
     expect(chatSpy).not.toHaveBeenCalled()
   })
 
-  // TEST-3 (full-audit-2026-06-29, Phase 3): the COMPLEMENT of the empty-corpus test above. TEST-N8
-  // proves retrieve() REJECTS on a failing embedder, but generateGroundedAnswer awaits retrieve and
-  // early-returns NO_DOCUMENT_CONTEXT/REINDEX_NEEDED on empty chunks — so a regression wrapping
-  // retrieve in `try/catch → []` would make a transient embed fault MASQUERADE as "no documents"
-  // (a falsely-empty corpus) and redden nothing. This asserts the fault PROPAGATES out of
-  // generateGroundedAnswer rather than being swallowed into the friendly no-context answer.
+  // TEST-3 (full-audit-2026-06-29, Phase 3): the COMPLEMENT of the empty-corpus test above.
+  // generateGroundedAnswer awaits retrieve and early-returns NO_DOCUMENT_CONTEXT/REINDEX_NEEDED on
+  // empty chunks — so a regression wrapping retrieve in `try/catch → []` would make a transient embed
+  // fault MASQUERADE as "no documents" (a falsely-empty corpus). This asserts the fault PROPAGATES out
+  // of generateGroundedAnswer rather than being swallowed into the friendly no-context answer.
   // TEETH: wrap the `await retrieve(...)` in rag/index.ts in `try/catch → { chunks: [], citations: [] }`
-  // → generateGroundedAnswer then RESOLVES with the no-context answer and this test reddens.
+  // → generateGroundedAnswer then RESOLVES with the no-context answer and this test reddens. It also
+  // covers retrieve() itself (the TEST-N8 row, folded in here): `generateGroundedAnswer` is its only
+  // caller, so a swallow INSIDE retrieve (`searchText(...).catch(() => [])`) reddens this test too.
   it('REJECTS on a query-embed failure instead of masquerading as no documents (TEST-3)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const indexer = new MockEmbedder()
     // NON-EMPTY corpus, so the genuine "empty ⇒ []" early-return can't masquerade as the reject path.
-    await seedDocument(db, indexer, 'a.txt', [{ text: 'alpha beta gamma delta' }])
+    await seedEmbeddedDoc(db, indexer, 'a.txt', [{ text: 'alpha beta gamma delta' }])
     const conv = createConversation(db, { mode: 'documents' })
     const question = 'alpha beta gamma delta'
     appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
@@ -711,9 +568,9 @@ describe('generateGroundedAnswer', () => {
   // (chatStream's omitted-mode default IS balanced), and persisted grounded answers
   // get the same think-block hygiene as plain chat (D6).
   it('passes NO answer-depth mode to the runtime (documents stay balanced)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'a.txt', [{ text: 'grounded answers stay balanced here' }])
+    await seedEmbeddedDoc(db, embedder, 'a.txt', [{ text: 'grounded answers stay balanced here' }])
     const conv = createConversation(db, { mode: 'documents' })
     const q = 'grounded answers stay balanced here'
     appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
@@ -736,9 +593,9 @@ describe('generateGroundedAnswer', () => {
   // turn carries the injected excerpt block — content that never persists — so the reported usage
   // must exceed what the resting (persisted-history) read can see.
   it('reports the real grounded prompt usage via onPromptUsage, larger than the resting read', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'science.pdf', [
+    await seedEmbeddedDoc(db, embedder, 'science.pdf', [
       {
         text:
           'photosynthesis converts sunlight into chemical energy in plants using chlorophyll ' +
@@ -765,43 +622,6 @@ describe('generateGroundedAnswer', () => {
     expect(usage!.usedTokens).toBeGreaterThan(resting.usedTokens)
   })
 
-  // Honest-signal parity with plain chat (§L0): a grounded answer the model cut off at the
-  // context ceiling persists with the truncated flag, so the transcript shows the badge instead
-  // of passing a mid-word partial off as complete.
-  it('stamps truncated on a grounded answer cut off at the context ceiling', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'science.pdf', [
-      { text: 'photosynthesis converts sunlight into chemical energy in plants' }
-    ])
-    const conv = createConversation(db, { mode: 'documents' })
-    const question = 'photosynthesis converts sunlight into chemical energy in plants'
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
-
-    const cutOffRuntime: ModelRuntime = {
-      modelId: 'cutoff',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      contextWindow: () => 2048,
-      async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
-        yield 'a grounded answer that runs'
-        yield ' right into the wall'
-        options?.onFinish?.('length')
-      }
-    }
-
-    const msg = await generateGroundedAnswer(db, cutOffRuntime, embedder, conv.id, question, SETTINGS)
-    expect(msg.truncated).toBe(true)
-    expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
-
-    // A clean finish ('stop' from the mock runtime) stays unflagged.
-    const conv2 = createConversation(db, { mode: 'documents' })
-    appendMessage(db, { conversationId: conv2.id, role: 'user', content: question })
-    const clean = await generateGroundedAnswer(db, runtime(), embedder, conv2.id, question, SETTINGS)
-    expect(clean.truncated).toBeUndefined()
-  })
-
   // Continue-generation on the single-turn grounded path (follow-up #1): a grounded answer cut off at the
   // context ceiling ('length', no explicit cap) is FINISHED across bounded re-prompts via the shared engine
   // instead of persisting a mid-word partial — the same engine the map-reduce reduce uses. `finishScriptedRuntime`
@@ -810,9 +630,9 @@ describe('generateGroundedAnswer', () => {
   // of, and `caps` records the `max_tokens` each pass was actually sent (the room guard shrinking it).
 
   async function askGrounded(runtime: ModelRuntime, opts: GroundedAnswerOptions = {}) {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'science.pdf', [
+    await seedEmbeddedDoc(db, embedder, 'science.pdf', [
       { text: 'photosynthesis converts sunlight into chemical energy in plants' }
     ])
     const conv = createConversation(db, { mode: 'documents' })
@@ -905,9 +725,9 @@ describe('generateGroundedAnswer', () => {
   // one field still gets the pinned default for the other field. No real caller does this today, but
   // the field-by-field merge is part of the gate's contract and was previously unexercised.
   it('lets a caller override one field of the pinned decoding setting and keeps the pinned default for the other', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'a.txt', [{ text: 'grounded answers stay balanced here' }])
+    await seedEmbeddedDoc(db, embedder, 'a.txt', [{ text: 'grounded answers stay balanced here' }])
     const conv = createConversation(db, { mode: 'documents' })
     const q = 'grounded answers stay balanced here'
     appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
@@ -924,9 +744,9 @@ describe('generateGroundedAnswer', () => {
   })
 
   it('strips inline think blocks from the persisted grounded answer (D6)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'b.txt', [{ text: 'thinking hygiene applies to grounded answers' }])
+    await seedEmbeddedDoc(db, embedder, 'b.txt', [{ text: 'thinking hygiene applies to grounded answers' }])
     const conv = createConversation(db, { mode: 'documents' })
     const q = 'thinking hygiene applies to grounded answers'
     appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
@@ -947,9 +767,9 @@ describe('generateGroundedAnswer', () => {
   // the typed error propagates (registerRagIpc runs under the same withChatStream wrapper as
   // plain chat, which maps it to the friendly `main.chat.streamError` copy); nothing persists.
   it('a mid-stream in-band error frame rejects the grounded answer; the partial never persists (F-02)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
-    await seedDocument(db, embedder, 'science.pdf', [
+    await seedEmbeddedDoc(db, embedder, 'science.pdf', [
       { text: 'photosynthesis converts sunlight into chemical energy in plants' }
     ])
     const conv = createConversation(db, { mode: 'documents' })
@@ -973,7 +793,7 @@ describe('generateGroundedAnswer', () => {
   // semantics as the relevance path — propagate the typed error, persist nothing (a partial
   // narration over a verified extract must not be stamped with `extract` coverage).
   it('a mid-stream in-band error frame rejects the grounded-DATA answer; nothing persists (F-02)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
 
@@ -999,7 +819,7 @@ describe('generateGroundedAnswer', () => {
   // is marked "Reply stopped", as a "Reply cut off" narration keeps it. The echo is verified data that
   // contradicts a figure the partial misquoted; the marker is what says the answer is unfinished.
   it('a stopped grounded-DATA narration keeps its totals echo and is marked "Reply stopped" (#612)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'what is the total?' })
 
@@ -1025,7 +845,7 @@ describe('generateGroundedAnswer', () => {
   // Mirrors generateGroundedAnswer's own pinned decoding setting (above): the grounded-DATA
   // narration path pins the same values on its own request, independent of mode.
   it('pins its own decoding setting on the grounded-DATA request (temperature, cap, no seed)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
 
@@ -1049,7 +869,7 @@ describe('generateGroundedAnswer', () => {
   // a badge that read "reached the model's context limit" and advised raising the context size —
   // advice that cannot help. The flag stays; the cause now says which remedy applies.
   async function askGroundedData(rt: ModelRuntime) {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
     const msg = await generateGroundedDataAnswer(db, rt, conv.id, 'who is the vendor?', {
@@ -1103,7 +923,7 @@ describe('generateGroundedAnswer', () => {
   })
 
   it('buildGroundedChatMessages scrubs think blocks from replayed assistant turns', () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q1' })
     appendMessage(db, {
@@ -1120,7 +940,7 @@ describe('generateGroundedAnswer', () => {
   })
 
   it('buildGroundedChatMessages trims old history to the context window, always keeping the grounded turn', () => {
-    const db = freshDb()
+    const db = openFreshDb('rag')
     const conv = createConversation(db, { mode: 'documents' })
     const big = Array(300).fill('word').join(' ')
     // A long prior conversation that, with a fresh grounded block on top, would overflow.
@@ -1151,17 +971,18 @@ describe('offline guarantee (RAG ask path)', () => {
     const socketConnectSpy = vi.spyOn(net.Socket.prototype, 'connect')
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-    const db = freshDb()
+    const w = docTaskWorld('rag-offline')
     const embedder = new MockEmbedder()
-    const src = write('notes.txt', 'the local assistant answers strictly from your own documents')
-    const queued = createQueuedDocument(db, src)
-    await processDocument(db, store(), queued.id, { embedder })
+    await importText(w, 'the local assistant answers strictly from your own documents', {
+      name: 'notes.txt',
+      deps: { embedder }
+    })
 
-    const conv = createConversation(db, { mode: 'documents' })
+    const conv = createConversation(w.db, { mode: 'documents' })
     const q = 'the local assistant answers strictly from your own documents'
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
+    appendMessage(w.db, { conversationId: conv.id, role: 'user', content: q })
     const rt = createMockRuntime({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 1024 })
-    const msg = await generateGroundedAnswer(db, rt, embedder, conv.id, q, SETTINGS)
+    const msg = await generateGroundedAnswer(w.db, rt, embedder, conv.id, q, SETTINGS)
     expect(msg.citations?.length).toBeGreaterThan(0)
 
     expect(httpSpy).not.toHaveBeenCalled()

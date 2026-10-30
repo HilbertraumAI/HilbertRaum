@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Document-organization Phase B: the collections / membership / lifecycle / scope IPC
 // surface and the resolveScope-in-IPC wiring (filename auto-scope WITHIN the resolved
 // scope, skipped on a deliberate hand-pick — N2). CI stays zero-network / zero-model
-// (echo runtime + mock embedder behind the IngestionDeps seam).
+// (scripted runtime + mock embedder behind the IngestionDeps seam).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -23,33 +22,22 @@ import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
 import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIpc'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
-import { documentsDir } from '../../src/main/services/ingestion'
 import { IPC, STREAM } from '../../src/shared/ipc'
+import { t } from '../../src/shared/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getBuiltinCollection, resolveScope } from '../../src/main/services/collections'
 import { seedSettings } from '../../src/main/services/settings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
-import type { ModelRuntime, ChatMessage } from '../../src/main/services/runtime'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
 import type { Collection, Conversation, DocumentInfo, ImportJob, ImportJobStatus, Message } from '../../src/shared/types'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { tempRoot } from '../helpers/db-fixtures'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-
-function echoRuntime(): ModelRuntime {
-  return {
-    modelId: 'echo',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
-    async *chatStream(messages: ChatMessage[]) {
-      yield `echo: ${messages[messages.length - 1]?.content ?? ''}`
-    }
-  }
-}
 
 interface Harness {
   ctx: AppContext
@@ -58,12 +46,12 @@ interface Harness {
 }
 
 function makeHarness(): Harness {
-  const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-collipc-'))
+  const rootPath = tempRoot('collipc')
   const workspacePath = join(rootPath, 'workspace')
   mkdirSync(workspacePath, { recursive: true })
   const db = openDatabase(join(workspacePath, 'test.sqlite'))
   seedSettings(db)
-  const runtime = echoRuntime()
+  const runtime = scriptedRuntime('Model answer.')
   const ctx = {
     trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath },
@@ -91,10 +79,10 @@ function makeHarness(): Harness {
 }
 
 /** STREAM.scope titles the rag handler streamed via `event.sender.send`, if any. */
-function scopeTitles(event: ReturnType<typeof makeEvent>): string[] {
+function scopeTitles(event: ReturnType<typeof makeEvent>, conversationId: string): string[] {
   for (const call of event.sender.send.mock.calls) {
     const [channel, payload] = call as [string, { titles?: string[] }]
-    if (channel.startsWith('chat:scope:')) return payload.titles ?? []
+    if (channel === STREAM.scope(conversationId)) return payload.titles ?? []
   }
   return []
 }
@@ -145,7 +133,9 @@ describe('collections IPC — CRUD', () => {
     const h = makeHarness()
     registerCollectionsIpc(h.ctx)
     const library = getBuiltinCollection(h.db, 'library')!
-    await expect(invoke(handlers, IPC.deleteCollection, library.id, 'membershipOnly')).rejects.toThrow()
+    await expect(invoke(handlers, IPC.deleteCollection, library.id, 'membershipOnly')).rejects.toThrow(
+      t('en', 'main.collections.builtinUndeletable') // the IPC's own copy, not the service's 'Built-in collections cannot be deleted'
+    )
   })
 })
 
@@ -240,22 +230,32 @@ describe('resolveScope-in-IPC: filename auto-scope within the resolved scope', (
     registerChatIpc(h.ctx)
     registerCollectionsIpc(h.ctx)
     registerRagIpc(h.ctx)
-    void documentsDir(h.ctx.paths.workspacePath)
 
     const aPath = join(h.rootPath, 'contractA.txt')
     writeFileSync(aPath, 'the contract sets the delivery date to June\n', 'utf8')
     const aId = await importIndexed(h.ctx, aPath)
     const bPath = join(h.rootPath, 'manual.txt')
-    writeFileSync(bPath, 'the manual explains the setup steps\n', 'utf8')
+    writeFileSync(bPath, 'the manual sets the delivery date for the setup steps\n', 'utf8')
     await importIndexed(h.ctx, bPath)
 
-    // Default (Library) scope, no hand-pick: a question naming contractA narrows to it,
-    // emitting the STREAM.scope notice with that filename.
+    // Precondition: unscoped (Library chat, no file named) the question's words reach BOTH documents.
+    const { result: wideConv } = await invoke(handlers, IPC.createConversation, { mode: 'documents' })
+    const { result: wide } = await invoke(handlers, IPC.askDocuments, (wideConv as Conversation).id, 'what delivery date is set?')
+    expect(((wide as Message).citations ?? []).map((c) => c.sourceTitle)).toEqual(
+      expect.arrayContaining(['contractA.txt', 'manual.txt'])
+    )
+
+    // Default (Library) scope, no hand-pick: naming contractA narrows retrieval to it and emits the notice.
     const { result: convRaw } = await invoke(handlers, IPC.createConversation, { mode: 'documents' })
     const conv = convRaw as Conversation
     const e1 = makeEvent()
-    await invokeWithEvent(handlers, IPC.askDocuments, e1, conv.id, 'what does contractA say?')
-    expect(scopeTitles(e1)).toContain('contractA.txt')
+    const narrowed = (await invokeWithEvent(
+      handlers, IPC.askDocuments, e1, conv.id, 'what delivery date does contractA set?'
+    )) as Message
+    expect(scopeTitles(e1, conv.id)).toContain('contractA.txt')
+    const cited = (narrowed.citations ?? []).map((c) => c.sourceTitle)
+    expect(cited.length).toBeGreaterThan(0)
+    expect(new Set(cited)).toEqual(new Set(['contractA.txt']))
 
     // A deliberate hand-pick (scope.documentIds) skips filename auto-scope (N2): no notice.
     const { result: conv2Raw } = await invoke(handlers, IPC.createConversation, {
@@ -265,7 +265,7 @@ describe('resolveScope-in-IPC: filename auto-scope within the resolved scope', (
     const conv2 = conv2Raw as Conversation
     const e2 = makeEvent()
     await invokeWithEvent(handlers, IPC.askDocuments, e2, conv2.id, 'what does contractA say?')
-    expect(scopeTitles(e2)).toHaveLength(0)
+    expect(scopeTitles(e2, conv2.id)).toHaveLength(0)
   })
 })
 
@@ -279,7 +279,6 @@ describe('askDocuments — U3 routed-run scope pin (audit ux-6)', () => {
     registerChatIpc(h.ctx)
     registerCollectionsIpc(h.ctx)
     registerRagIpc(h.ctx)
-    void documentsDir(h.ctx.paths.workspacePath)
 
     // Two documents with the SAME text, so retrieval alone can't explain a single-source answer —
     // only the scope pin can. Both land in the Library (the whole-corpus default scope).
@@ -315,9 +314,4 @@ describe('askDocuments — U3 routed-run scope pin (audit ux-6)', () => {
     expect(citesBogus.length).toBeGreaterThan(0)
     expect(citesBogus.every((c) => c.sourceTitle === 'statement.txt' || c.sourceTitle === 'invoice.txt')).toBe(true)
   })
-})
-
-// Sanity: the STREAM channel shape the scope sink parses matches the real factory.
-it('STREAM.scope channel shape matches the sink parser', () => {
-  expect(STREAM.scope('abc')).toBe('chat:scope:abc')
 })

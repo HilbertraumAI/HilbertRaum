@@ -55,14 +55,4 @@ describe('prompt-cache server args (#512 decisions 1 + 2)', () => {
       ])
     }
   })
-
-  it('always emits exactly one --cache-ram, as an adjacent flag/value pair', () => {
-    // A malformed pair here breaks EVERY chat model start on every machine.
-    for (const disablePromptCache of [true, false, undefined]) {
-      const args = promptCacheServerArgs({ totalRamBytes: 32 * GiB, disablePromptCache })
-      expect(args).toHaveLength(2)
-      expect(args[0]).toBe('--cache-ram')
-      expect(args[1]).toMatch(/^\d+$/)
-    }
-  })
 })

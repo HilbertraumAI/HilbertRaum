@@ -30,7 +30,7 @@ import {
   skillFenceBudgetTokens,
   stripSkillFenceEcho
 } from './skills/prompt'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from './runtime'
+import type { ChatMessage, ModelRuntime, RuntimeTimings } from './runtime'
 import { requestParamsForMode } from './runtime/llama'
 import { endedEarlyCause, parseEndedEarly } from './chat/ended-early'
 import { ensureCompacted } from './chat/compaction'
@@ -405,10 +405,10 @@ function packOutcomeCount(v: unknown): number {
  * `KnowledgePackOutcome`, else undefined. A TOLERANT WHITELIST in the `parseCitations` /
  * `parseCoverage` tradition — a malformed payload must never break rendering a conversation, and
  * an element that does not match the shape is DROPPED rather than flowed untyped to the renderer
- * (the L6 hazard). Exported for the persistence tests and for any consumer that reads
- * `messages.pack_outcomes_json` directly, so no second parser can drift from this one.
+ * (the L6 hazard). Module-private: every read of `messages.pack_outcomes_json` goes through
+ * `rowToMessage`, so no second parser can drift from this one.
  */
-export function parsePackOutcomes(json: string | null | undefined): KnowledgePackOutcome[] | undefined {
+function parsePackOutcomes(json: string | null | undefined): KnowledgePackOutcome[] | undefined {
   if (!json) return undefined
   try {
     const v = JSON.parse(json) as unknown
@@ -1603,14 +1603,10 @@ export function getConversationContextUsage(
  *     (HTTP 500). So after the fill loop (trimmed branch only) any leading assistant turns are
  *     dropped, normalizing the kept tail user-first (CB-1). That also prevents replaying the
  *     synthetic compaction pair's ack without its intro — a lone kept ack IS that leading assistant.
- * `reserveTokens` holds back room for the answer (CHAT_RESPONSE_RESERVE_TOKENS default).
+ * `CHAT_RESPONSE_RESERVE_TOKENS` holds back room for the answer.
  */
-export function fitMessagesToContext(
-  messages: ChatMessage[],
-  contextTokens: number,
-  reserveTokens: number = CHAT_RESPONSE_RESERVE_TOKENS
-): ChatMessage[] {
-  const budget = Math.max(256, (Math.floor(contextTokens) || 0) - reserveTokens)
+export function fitMessagesToContext(messages: ChatMessage[], contextTokens: number): ChatMessage[] {
+  const budget = Math.max(256, (Math.floor(contextTokens) || 0) - CHAT_RESPONSE_RESERVE_TOKENS)
   let firstNonSystem = 0
   while (firstNonSystem < messages.length && messages[firstNonSystem].role === 'system') {
     firstNonSystem++
@@ -1639,7 +1635,7 @@ export function fitMessagesToContext(
   while (keptReversed.length > 1 && keptReversed[keptReversed.length - 1].role === 'assistant') {
     keptReversed.pop()
   }
-  // Nothing was dropped → return the original array unchanged (cheap identity for tests).
+  // Nothing was dropped → return the original array unchanged (cheap: no copy).
   if (keptReversed.length === turns.length) return messages
   return [...system, ...keptReversed.reverse()]
 }
@@ -1713,7 +1709,6 @@ export interface GenerateOptions {
   mode?: ChatDepthMode
   /** Called with each reasoning delta (Deep mode) — live display only, never persisted. */
   onReasoning?: (delta: string) => void
-  runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
   /**
    * The skill resolved for this turn (skills plan §10/§11). When set, its instructions are
    * assembled into a budgeted, guard-bracketed fence in the system message, and the assistant row
@@ -1810,8 +1805,7 @@ export async function generateAssistantMessage(
     onFinish: (reason, tm) => {
       finishReason = reason
       timings = tm ?? null
-    },
-    ...opts.runtimeOptions
+    }
   })
   let caughtAbort = false
   try {
@@ -1838,7 +1832,7 @@ export async function generateAssistantMessage(
   // fitting reserved ≥ CHAT_RESPONSE_RESERVE_TOKENS ≥ the Fast cap of answer room), and showing
   // the context-limit badge at 7% meter usage is exactly the false "context is full" signal the
   // 2026-07-04 user report described.
-  const capTokens = opts.runtimeOptions?.maxTokens ?? requestParamsForMode(opts.mode).maxTokens
+  const capTokens = requestParamsForMode(opts.mode).maxTokens
   const truncated = finishReason === 'length' && capTokens == null
   // Reasoning never reaches the DB: the runtime already streams it separately,
   // and any inline think block that slipped into the answer is stripped here.

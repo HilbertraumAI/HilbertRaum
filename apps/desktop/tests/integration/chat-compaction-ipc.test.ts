@@ -1,7 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 // IPC-layer test for the STREAM.compaction notice (context-compaction plan §5.2): the one-shot
 // ephemeral "summarizing…" event must fire EXACTLY once, only when the compaction pre-pass actually
@@ -20,32 +17,15 @@ vi.mock('electron', () => ({
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { selfSummaryPrompt } from '../../src/main/services/chat/compaction'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { appendTurns, compactionRuntime } from '../helpers/compaction-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-
-/** A runtime with a small window that summarizes on the §4.8 prompt and otherwise answers. */
-function compactingRuntime(window: number): ModelRuntime {
-  return {
-    modelId: 'rt',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    contextWindow: () => window,
-    async *chatStream(messages: ChatMessage[], _options?: RuntimeChatOptions) {
-      if (messages[0]?.content === selfSummaryPrompt) {
-        yield 'Goal: testing. Facts: value 42.'
-        return
-      }
-      yield 'answer'
-    }
-  }
-}
 
 function makeCtx(db: Db, runtime: ModelRuntime): AppContext {
   return {
@@ -56,12 +36,6 @@ function makeCtx(db: Db, runtime: ModelRuntime): AppContext {
   } as unknown as AppContext
 }
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-compaction-ipc-')), 'test.sqlite'))
-}
-
-const words = (n: number): string => Array(n).fill('word').join(' ')
-
 beforeEach(() => {
   ipcState.handlers.clear()
   inFlightStreams.clear()
@@ -69,13 +43,11 @@ beforeEach(() => {
 
 describe('registerChatIpc — STREAM.compaction notice (§5.2)', () => {
   it('fires the compaction notice exactly once when a turn summarizes', async () => {
-    const db = freshDb()
+    const db = openFreshDb('compaction-ipc')
     const conv = createConversation(db, { modelId: 'm' })
     // A long history (14 turns × 90 words) over 0.85 × 2000, with ≥6 compactable turns.
-    for (let i = 0; i < 14; i++) {
-      appendMessage(db, { conversationId: conv.id, role: i % 2 === 0 ? 'user' : 'assistant', content: words(90) })
-    }
-    registerChatIpc(makeCtx(db, compactingRuntime(2000)))
+    appendTurns(db, conv.id, 14, 90)
+    registerChatIpc(makeCtx(db, compactionRuntime({ window: 2000 })))
 
     const { event } = await invoke(handlers, IPC.sendChatMessage, conv.id, 'the next question')
 
@@ -87,10 +59,10 @@ describe('registerChatIpc — STREAM.compaction notice (§5.2)', () => {
   })
 
   it('does NOT fire the compaction notice on a short conversation (below threshold)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('compaction-ipc')
     const conv = createConversation(db, { modelId: 'm' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
-    registerChatIpc(makeCtx(db, compactingRuntime(8000)))
+    registerChatIpc(makeCtx(db, compactionRuntime({ window: 8000 })))
 
     const { event } = await invoke(handlers, IPC.sendChatMessage, conv.id, 'another short one')
 
