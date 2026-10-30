@@ -1,53 +1,30 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import type { Message } from '../../src/shared/types'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { runtimeStatus } from '../helpers/status'
+import { assistantMsg, makeConversation } from '../helpers/chat-fixtures'
+import { chatScreenStubs, deferred, fakeChatStream, renderChatScreen } from '../helpers/chat-screen'
 
 // Answer-depth tests (Phase 20 contracts under the Phase 25 UI): the composer-footer
 // "Answer detail" dropdown — labels are Quick/Balanced/Thorough (decision D-UI4) while
 // the ids sent over IPC stay fast|balanced|deep; Thorough is offered only when the
 // running model declares thinking support; the selection travels with sendChatMessage
-// and sticks per conversation; and Deep-mode reasoning renders as a collapsed
-// "Thinking…" line on the live bubble only (never persisted), auto-collapsing when the
-// first answer token streams.
-
-function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'Depth chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
-function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
-}
-
-function assistantMsg(content: string): Message {
-  return {
-    id: 'a1',
-    conversationId: 'c1',
-    role: 'assistant',
-    content,
-    createdAt: '2026-01-01T00:00:01Z',
-    tokenCount: null
-  }
-}
+// and sticks per conversation; and Deep-mode reasoning renders as a "Thinking…" line on
+// the live bubble only (never persisted), auto-collapsing when the first answer token
+// streams (the disclosure DOM itself: TranscriptA11y).
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
+  }
 })
 
 /** The composer-footer dropdown trigger, e.g. "Answer detail: Balanced ▾". */
@@ -58,11 +35,13 @@ function depthTrigger(): HTMLElement {
 describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
   it('offers Thorough only when the running model supports thinking', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true }))
-    })
-    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Depth chat' })]),
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ supportsThinkingMode: true }))
+      })
+    )
+    const { unmount } = renderChatScreen()
     await screen.findByText('Depth chat')
     await user.click(depthTrigger())
     expect(await screen.findByRole('menuitemradio', { name: /quick/i })).toBeInTheDocument()
@@ -71,11 +50,13 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
     await user.keyboard('{Escape}')
     unmount()
 
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => status()) // no supportsThinkingMode flag
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Depth chat' })]),
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ supportsThinkingMode: false }))
+      })
+    )
+    renderChatScreen()
     await screen.findByText('Depth chat')
     await user.click(depthTrigger())
     expect(await screen.findByRole('menuitemradio', { name: /quick/i })).toBeInTheDocument()
@@ -83,28 +64,23 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
   })
 
   it('hides the dropdown in Ask-my-documents mode (document answers stay balanced)', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true }))
-    })
-    render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
+    stubApi(chatScreenStubs({ getRuntimeStatus: vi.fn(async () => runtimeStatus({ supportsThinkingMode: true })) }))
+    renderChatScreen({ initialMode: 'documents' })
     await screen.findByPlaceholderText(/ask about your documents/i)
     expect(screen.queryByRole('button', { name: /answer detail/i })).not.toBeInTheDocument()
   })
 
   it('sends the selected depth id with the message and defaults to balanced', async () => {
     const user = userEvent.setup()
-    const sendChatMessage = vi.fn(async () => assistantMsg('ok'))
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      listMessages: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true })),
-      sendChatMessage,
-      onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {})
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'ok'))
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Depth chat' })]),
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ supportsThinkingMode: true })),
+        sendChatMessage
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Depth chat'))
 
     // Default: balanced.
@@ -127,12 +103,16 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
 
   it('keeps the depth sticky per conversation', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv(), conv({ id: 'c2', title: 'Other chat' })]),
-      listMessages: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true }))
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [
+          makeConversation({ title: 'Depth chat' }),
+          makeConversation({ id: 'c2', title: 'Other chat' })
+        ]),
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ supportsThinkingMode: true }))
+      })
+    )
+    renderChatScreen()
 
     await user.click(await screen.findByText('Depth chat'))
     await user.click(depthTrigger())
@@ -150,59 +130,47 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
 
   it('renders streamed reasoning as a collapsed Thinking… line that auto-collapses and is not persisted', async () => {
     const user = userEvent.setup()
-    let tokenCb: ((t: string) => void) | undefined
-    let reasoningCb: ((d: string) => void) | undefined
-    let resolveSend!: (m: Message) => void
-    const sendChatMessage = vi.fn(
-      () => new Promise<Message>((resolve) => (resolveSend = resolve))
-    )
+    const stream = fakeChatStream()
+    const send = deferred<Message>()
+    const sendChatMessage = vi.fn(() => send.promise)
     const listMessages = vi
       .fn<() => Promise<Message[]>>()
       .mockResolvedValue([]) // until the stream completes
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      listMessages,
-      getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true })),
-      sendChatMessage,
-      onToken: vi.fn((_id: string, cb: (t: string) => void) => {
-        tokenCb = cb
-        return () => {}
-      }),
-      onReasoning: vi.fn((_id: string, cb: (d: string) => void) => {
-        reasoningCb = cb
-        return () => {}
-      }),
-      onScopeNotice: vi.fn(() => () => {})
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        ...stream.stubs,
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Depth chat' })]),
+        listMessages,
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ supportsThinkingMode: true })),
+        sendChatMessage
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Depth chat'))
     await user.click(depthTrigger())
     await user.click(await screen.findByRole('menuitemradio', { name: /thorough/i }))
     await user.type(screen.getByPlaceholderText("Message…"), 'why?')
     await user.click(screen.getByRole('button', { name: 'Send' }))
-    await waitFor(() => expect(reasoningCb).toBeDefined())
+    await waitFor(() => expect(stream.subscribed()).toBe(true))
+    // Thorough sends the 'deep' id (no other row pins it; the row above pins fast + balanced).
+    expect(sendChatMessage).toHaveBeenCalledWith('c1', 'why?', { mode: 'deep' })
 
-    // Reasoning deltas (buffered) appear behind a collapsed disclosure on the live bubble.
-    // The disclosure is a <button aria-expanded> (audit L15), not a <details>/<summary>.
-    act(() => {
-      reasoningCb?.('step one, ')
-      reasoningCb?.('step two')
-    })
+    // Reasoning deltas are buffered, then flushed together onto the live bubble's Thinking… line.
+    stream.reasoning('step one, ')
+    stream.reasoning('step two')
     const toggle = await screen.findByRole('button', { name: 'Thinking…' })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false') // collapsed by default
-    const reasoning = await screen.findByText('step one, step two')
-    expect(reasoning).not.toBeVisible() // mounted (buffering) but hidden while collapsed
+    expect(await screen.findByText('step one, step two')).toBeInTheDocument()
 
     // Expanding, then receiving the first answer token, auto-collapses the line (§3).
     await user.click(toggle)
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
-    act(() => tokenCb?.('The answer.'))
+    stream.token('The answer.')
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'false'))
 
     // Stream completes → the transcript re-reads persisted history, which carries the
     // answer only (D6) — the live Thinking line is gone.
-    listMessages.mockResolvedValue([assistantMsg('The answer.')])
-    act(() => resolveSend(assistantMsg('The answer.')))
+    listMessages.mockResolvedValue([assistantMsg('a1', 'The answer.')])
+    await act(async () => send.resolve(assistantMsg('a1', 'The answer.')))
     await waitFor(() => expect(screen.queryByText('Thinking…')).not.toBeInTheDocument())
     expect(screen.getByText('The answer.')).toBeInTheDocument()
   })
