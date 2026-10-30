@@ -122,8 +122,8 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `Partial<PreloadApi>` (`tests/helpers/renderer.ts`) so a stub's shape is checked against the real
   preload bridge; a blanket `... as never` opts it out, and a later shared-type rename leaves the
   stub compiling against a stale shape (vacuous green). Build payloads with typed factories that
-  return the real shared type (the `runtimeStatus`/`appStatus`/`docTask` pattern in
-  `HomeScreenPoll`/`TranslateScreen`/`fileTranslateSession`); for a deliberately-partial "keep the
+  return the real shared type (`runtimeStatus`/`appStatus` in `tests/helpers/status.ts`, the `docTask`
+  pattern in `TranslateScreen`/`fileTranslateSession`); for a deliberately-partial "keep the
   shell calm" payload use a narrow, named `as unknown as <Type>` at exactly that value, never a
   blanket `} as never)`. A one-way ratchet (`tests/unit/as-never-ratchet.test.ts`) fails if the
   tests/ `as never` count climbs — the remaining casts get converted **fix-when-touched** (lower
