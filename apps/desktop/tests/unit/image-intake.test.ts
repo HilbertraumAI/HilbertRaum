@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   imageMimeFromName,
+  imageMimeOfFile,
   isHeicName,
   isPdfName,
   outputMimeFor,
@@ -13,35 +14,14 @@ import {
   jpegPixelCount,
   pngPixelCount
 } from '../../src/shared/image-headers'
+import { jpegHeader, pngHeader } from '../helpers/image-fixtures'
 
-// #118 / #124 intake-pipeline pure parts. `decodeImage` itself is untestable in jsdom (no
-// `createImageBitmap` — exactly why the old post-decode 4096 px reject survived unnoticed), so
-// the decisions are extracted pure and pinned here: the pre-decode header prescreen (mirrors
-// main's D4 parse, runs BEFORE the decode spends memory), the WEBP intake/normalize mapping,
-// and the HEIC extension detection.
-
-/** A 24-byte PNG header (signature + IHDR width@16/height@20, big-endian) — no pixel data. */
-function pngHeader(w: number, h: number): Uint8Array {
-  const b = new Uint8Array(24)
-  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
-  const dv = new DataView(b.buffer)
-  dv.setUint32(16, w)
-  dv.setUint32(20, h)
-  return b
-}
-
-/** A minimal JPEG: SOI + a baseline SOF0 segment carrying height then width (big-endian u16). */
-function jpegHeader(w: number, h: number): Uint8Array {
-  return new Uint8Array([
-    0xff, 0xd8, // SOI
-    0xff, 0xc0, // SOF0
-    0x00, 0x11, // segment length
-    0x08, // sample precision
-    (h >> 8) & 0xff, h & 0xff, // height
-    (w >> 8) & 0xff, w & 0xff, // width
-    0x03, 0, 0, 0, 0, 0, 0, 0, 0 // components (unparsed tail)
-  ])
-}
+// #118 / #124 intake-pipeline pure parts. `decodeImage` itself needs `createImageBitmap` (jsdom
+// has none — exactly why the old post-decode 4096 px reject survived unnoticed), so the decisions
+// are extracted pure and pinned here: the pre-decode header prescreen (mirrors main's D4 parse,
+// runs BEFORE the decode spends memory), the WEBP intake/normalize mapping, and the HEIC and PDF
+// detection. This suite owns every pure helper in decode.ts and shared/image-headers.ts;
+// decode.test.ts runs the `decodeImage` pipeline on a stubbed `createImageBitmap`.
 
 describe('shared image-headers (moved from vision/limits for the renderer prescreen, #118)', () => {
   it('parses PNG and JPEG dimensions identically to the main-side D4 guard', () => {
@@ -61,9 +41,11 @@ describe('prescreenPixelCount — the PRE-decode renderer guard (#118)', () => {
     expect(prescreenPixelCount(pngHeader(5100, 6600), 'image/png')).toBeNull()
   })
 
-  it('refuses a ~50 MP+ decode BEFORE createImageBitmap would spend the memory', () => {
-    expect(60000 * 60000).toBeGreaterThan(DEFAULT_MAX_IMAGE_PIXELS)
-    expect(prescreenPixelCount(pngHeader(60000, 60000), 'image/png')).toBe('tooLarge')
+  // The shipped budget, pinned at both edges where the prescreen uses it. decode.test.ts owns the
+  // ordering: the refusal lands BEFORE createImageBitmap would spend the memory.
+  it('admits exactly the ~50 MP budget and refuses one pixel more, before any decode (#118)', () => {
+    expect(prescreenPixelCount(pngHeader(DEFAULT_MAX_IMAGE_PIXELS, 1), 'image/png')).toBeNull()
+    expect(prescreenPixelCount(pngHeader(DEFAULT_MAX_IMAGE_PIXELS + 1, 1), 'image/png')).toBe('tooLarge')
     expect(prescreenPixelCount(jpegHeader(60000, 60000), 'image/jpeg')).toBe('tooLarge')
   })
 
@@ -81,13 +63,22 @@ describe('prescreenPixelCount — the PRE-decode renderer guard (#118)', () => {
 })
 
 describe('WEBP intake + HEIC detection (#124)', () => {
-  it('imageMimeFromName accepts .webp and stays null for HEIC/unknown', () => {
+  it('imageMimeFromName maps PNG/JPEG/WEBP names (any case) and stays null for everything else', () => {
     expect(imageMimeFromName('photo.webp')).toBe('image/webp')
     expect(imageMimeFromName('photo.WEBP')).toBe('image/webp')
     expect(imageMimeFromName('pic.png')).toBe('image/png')
     expect(imageMimeFromName('pic.jpeg')).toBe('image/jpeg')
+    expect(imageMimeFromName('a.JPG')).toBe('image/jpeg')
     expect(imageMimeFromName('pic.heic')).toBeNull()
     expect(imageMimeFromName('pic.gif')).toBeNull()
+    expect(imageMimeFromName('scan.tiff')).toBeNull()
+    // #539: a PDF is never an accepted image type — its detection is a separate branch (isPdfName).
+    expect(imageMimeFromName('notes.pdf')).toBeNull()
+  })
+
+  it('imageMimeOfFile falls back to the name when the OS leaves File.type blank', () => {
+    expect(imageMimeOfFile(new File([], 'shot.png', { type: '' }))).toBe('image/png')
+    expect(imageMimeOfFile(new File([], 'animation.gif', { type: '' }))).toBeNull()
   })
 
   it('outputMimeFor normalizes WEBP to PNG — the main-side accept set never sees WEBP', () => {
@@ -113,9 +104,5 @@ describe('PDF detection (#539)', () => {
     expect(isPdfName('pdf.png')).toBe(false)
     expect(isPdfName('notes.pdf.docx')).toBe(false)
     expect(isPdfName('photo.jpg', 'image/jpeg')).toBe(false)
-  })
-
-  it('a PDF is never an accepted image type — the detection is a separate branch', () => {
-    expect(imageMimeFromName('scan.pdf')).toBeNull()
   })
 })
