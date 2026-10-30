@@ -5,7 +5,6 @@ import type { ModelInfo } from '@shared/types'
  * `lib/modelLibrary`. They live here (and NOT in the screen) so `modelLibrary` can read them
  * without importing the screen back — the group-face selector needs the same priority keys the
  * order uses, and `ModelsScreen → modelLibrary → ModelsScreen` would be a cycle.
- * `ModelsScreen` re-exports all three, so existing imports keep resolving unchanged.
  */
 
 /**

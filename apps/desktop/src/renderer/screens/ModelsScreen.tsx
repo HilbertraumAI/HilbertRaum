@@ -151,13 +151,6 @@ const CONTEXT_SIZE_PRESETS = [4096, 8192, 16384, 32768, 65536, 131072] as const
 /** Picks at or above this show the "large windows cost memory" hint (issue #43). */
 const CONTEXT_SIZE_WARNING_MIN = 65_536
 
-/**
- * The pure availability predicates + picker order now live in `lib/modelAvailability.ts` so
- * `lib/modelLibrary` can share them without importing this screen back (that would be a cycle).
- * Re-exported here unchanged: every existing importer of these three keeps working.
- */
-export { isModelInstalled, isModelRunnableHere, orderPickerModels } from '../lib/modelAvailability'
-
 // The in-flight download survives leaving + re-entering the screen (the job itself
 // lives in the main process; this only remembers which one to keep polling).
 let rememberedJob: DownloadJob | null = null
