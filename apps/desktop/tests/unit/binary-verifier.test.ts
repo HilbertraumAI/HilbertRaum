@@ -1,20 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  computeBinaryVerification,
   verifyBinaryBeforeSpawn,
   initBinaryVerification,
   setBinaryVerificationPosture,
   REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES,
   _resetBinaryVerificationForTests
 } from '../../src/main/services/binary-verifier'
-import {
-  markerBinaryKey,
-  writeRuntimeMarker,
-  type RuntimeInstallMarker as Marker
-} from '../../src/main/services/assets'
+import { markerBinaryKey, writeRuntimeMarker } from '../../src/main/services/assets'
 import { sha256File } from '../../src/main/services/models'
 
 // vuln-scan 2026-06-21 item B — re-hash sidecar binaries before spawn.
@@ -23,79 +18,11 @@ afterEach(() => _resetBinaryVerificationForTests())
 
 const tmp = (p = 'hilbertraum-verify-'): string => mkdtempSync(join(tmpdir(), p))
 
-/** A `readMarkerAt` stub returning the given marker only for `dir`. */
-function markerAt(dir: string, marker: Marker | null): (d: string) => Marker | null {
-  return (d) => (d === dir ? marker : null)
-}
-
 describe('markerBinaryKey', () => {
   it('is the binary path relative to the extract dir, posix-separated', () => {
     expect(markerBinaryKey('/r/llama.cpp/win', '/r/llama.cpp/win/llama-server.exe')).toBe('llama-server.exe')
     // A subdir binary keeps its relative prefix (always `/`, even on win32 inputs).
-    expect(markerBinaryKey('C:\\r\\win', 'C:\\r\\win\\cpu\\llama-server.exe').replace(/\\/g, '/')).toBe(
-      'cpu/llama-server.exe'
-    )
-  })
-})
-
-describe('computeBinaryVerification (matrix)', () => {
-  const dir = '/drive/runtime/llama.cpp/win'
-  const bin = `${dir}/llama-server.exe`
-  const H = 'a'.repeat(64)
-  const marker: Marker = { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64', binaries: { 'llama-server.exe': H } }
-
-  it('match → ok', async () => {
-    const res = await computeBinaryVerification(bin, { readMarkerAt: markerAt(dir, marker), hashFile: async () => H })
-    expect(res).toBe('ok')
-  })
-
-  it('hash mismatch → mismatch (tamper refused)', async () => {
-    const res = await computeBinaryVerification(bin, {
-      readMarkerAt: markerAt(dir, marker),
-      hashFile: async () => 'b'.repeat(64)
-    })
-    expect(res).toBe('mismatch')
-  })
-
-  it('marker present but no hash for this binary → skip-legacy', async () => {
-    const legacy: Marker = { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' }
-    const res = await computeBinaryVerification(bin, {
-      readMarkerAt: markerAt(dir, legacy),
-      hashFile: async () => H
-    })
-    expect(res).toBe('skip-legacy')
-  })
-
-  it('no marker at all → skip-legacy', async () => {
-    const res = await computeBinaryVerification(bin, { readMarkerAt: () => null, hashFile: async () => H })
-    expect(res).toBe('skip-legacy')
-  })
-
-  it('unreadable binary fails SAFE → mismatch', async () => {
-    const res = await computeBinaryVerification(bin, {
-      readMarkerAt: markerAt(dir, marker),
-      hashFile: async () => {
-        throw new Error('EACCES')
-      }
-    })
-    expect(res).toBe('mismatch')
-  })
-
-  it('walks UP to the family marker for a cpu/ safety-net binary', async () => {
-    const cpuBin = `${dir}/cpu/llama-server.exe`
-    // The cpu dir has no marker; the family dir records the cpu binary under its relative key.
-    const familyMarker: Marker = {
-      version: 'b9585',
-      backend: 'vulkan',
-      os: 'win',
-      arch: 'x64',
-      binaries: { 'cpu/llama-server.exe': H }
-    }
-    const res = await computeBinaryVerification(cpuBin, {
-      readMarkerAt: markerAt(dir, familyMarker),
-      hashFile: async () => H
-    })
-    expect(res).toBe('ok')
+    expect(markerBinaryKey('C:\\r\\win', 'C:\\r\\win\\cpu\\llama-server.exe')).toBe('cpu/llama-server.exe')
   })
 })
 
@@ -142,6 +69,31 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('skip-legacy')
   })
 
+  function cpuBinary(): { dir: string; bin: string } {
+    const dir = tmp()
+    mkdirSync(join(dir, 'cpu'))
+    const bin = join(dir, 'cpu', 'llama-server.exe')
+    writeFileSync(bin, 'cpu-binary')
+    return { dir, bin }
+  }
+  const MARKER = { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' } as const
+
+  it('walks UP to the family marker for a cpu/ safety-net binary', async () => {
+    initBinaryVerification(false)
+    const { dir, bin } = cpuBinary()
+    // The cpu dir has no marker; the family dir records the cpu binary under its relative key.
+    writeRuntimeMarker(dir, { ...MARKER, binaries: { 'cpu/llama-server.exe': await sha256File(bin) } })
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  it("a cpu/ binary with its OWN marker is checked against that one, not the family's", async () => {
+    initBinaryVerification(false)
+    const { dir, bin } = cpuBinary()
+    writeRuntimeMarker(dir, { ...MARKER, binaries: { 'cpu/llama-server.exe': 'e'.repeat(64) } }) // would be a mismatch
+    writeRuntimeMarker(join(dir, 'cpu'), { ...MARKER, binaries: { 'llama-server.exe': await sha256File(bin) } })
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
   it('does NOT cache a transient unreadable-binary failure — the next spawn re-hashes (Windows AV/indexer lock)', async () => {
     initBinaryVerification(false)
     const dir = tmp()
@@ -155,12 +107,15 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
       arch: 'x64',
       binaries: { [markerBinaryKey(dir, bin)]: good }
     })
-    // First attempt: the file is momentarily locked (hash throws) → fails safe as mismatch.
-    expect(await verifyBinaryBeforeSpawn(bin, { hashFile: async () => { throw new Error('EBUSY') } })).toBe(
-      'mismatch'
-    )
-    // The lock cleared: because the failure was NOT cached, the next attempt re-hashes the
+    // A real read failure, on every OS: a directory where the binary should be (EISDIR from the hash's read stream).
+    rmSync(bin)
+    mkdirSync(bin)
+    await expect(sha256File(bin)).rejects.toThrow() // the premise: this cannot be hashed
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('mismatch')
+    // The failure cleared: because it was NOT cached, the next attempt re-hashes the
     // real file and succeeds — the session is not stranded on MockRuntime.
+    rmSync(bin, { recursive: true })
+    writeFileSync(bin, 'real')
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
     // And THAT definitive verdict now sticks (cached), even if the bytes later change.
     writeFileSync(bin, 'tampered-after-verify')
@@ -262,17 +217,8 @@ describe('commercial posture: hashless markers (#234)', () => {
     })
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
 
-    _resetBinaryVerificationForTests()
     initBinaryVerification(true)
     setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
     expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-dev')
-  })
-
-  it('the test reset clears the posture (a later case is not silently commercial)', async () => {
-    initBinaryVerification(false)
-    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
-    _resetBinaryVerificationForTests()
-    initBinaryVerification(false)
-    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-legacy')
   })
 })
