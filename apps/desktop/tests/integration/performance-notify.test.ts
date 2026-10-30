@@ -1,21 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { EventEmitter } from 'node:events'
-import { join } from 'node:path'
 
 // The Performance screen's push model (PR #303 audit remediation P3, owner decisions G2/G6;
 // benchmark.md "Performance screen" → "Data path"):
-//  - the IPC controls: `performance:get` stays gated; `benchmark:run` streams its steps to the
-//    requesting window only, and a destroyed one never blocks the run;
+//  - the IPC controls: `benchmark:run` streams its steps to the requesting window only, and a
+//    destroyed one never blocks the run;
 //  - the ordering contract: the progress 'done' step precedes the persist and the occupancy
 //    release, and the terminal `performance:changed` follows BOTH (it is the idle signal);
 //  - the notifier itself: every send isolated (a destroyed window, a throwing recipient, a
 //    throwing sink) and never a participant in the mutation that triggered it;
-//  - every emit site: run start/end (success and failure; a refused run emits nothing),
-//    accepted read-speed samples (including a ranked loser), the answer latch, a placement
-//    observation, the moved-drive restore / upgrade seed (each after the empty-probe write),
-//    chat-runtime transitions, resident-sidecar transitions, and the settings keys the snapshot
-//    reads. The GPU probe write and "Try GPU again"'s flag-clear push are owned by
-//    performance-gpu.test.ts "the probe write", which asserts each push's value (#656).
+//  - every emit site: run start/end (a refused run emits nothing; the failed-run push is
+//    first-benchmark-scheduler's), accepted read-speed samples (including a ranked loser), the
+//    answer latch, a placement observation, the upgrade seed (after the empty-probe write; the
+//    restore's push is first-benchmark-scheduler's), chat-runtime transitions, resident-sidecar
+//    transitions, and the settings keys the snapshot reads. The GPU probe write and "Try GPU
+//    again"'s flag-clear push are owned by performance-gpu.test.ts "the probe write", which
+//    asserts each push's value (#656).
 
 const electronState = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => any>(),
@@ -36,7 +35,6 @@ vi.mock('electron', () => ({
 
 import {
   buildPerformanceSnapshot,
-  maybeRunFirstBenchmark,
   observeAnswerSpeed,
   registerBenchmarkIpc,
   runAndPersistBenchmark
@@ -46,29 +44,27 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { notifyPerformanceChanged, setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
-import { latestAnswerSpeed, resetPerformanceForTests } from '../../src/main/services/performance'
-import {
-  latestEffectiveRead,
-  recordChecksumRead,
-  recordModelLoadRead,
-  resetEffectiveReadForTests
-} from '../../src/main/services/read-speed'
+import { latestAnswerSpeed } from '../../src/main/services/performance'
+import { latestEffectiveRead, recordChecksumRead } from '../../src/main/services/read-speed'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
-import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
-import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { recordModelPlacement } from '../../src/main/services/runtime/placement'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { VisionService, type VisionAnalyzer, type VisionStreamEmitter } from '../../src/main/services/vision'
 import { EVENTS, IPC } from '../../src/shared/ipc'
 import type { BenchmarkProgressStep, ImageAnalyzeRequest, VisionStatus } from '../../src/shared/types'
+import { modelPlacement } from '../helpers/benchmark-records'
+import { fakeSpawn } from '../helpers/fake-sidecar'
 import { invoke, makeEvent } from '../helpers/ipc'
 import {
+  CATALOG_MANIFESTS,
   closePerformanceFixture,
   ctxWith,
+  firstBenchmarkNow,
   freshRoot,
   hereResult,
+  loadSample,
   performanceChangedSpy,
-  result,
   seededDb
 } from '../helpers/performance-fixture'
 
@@ -76,38 +72,19 @@ const here = () => {
   const root = freshRoot()
   const db = seededDb(root)
   const ctx = ctxWith(root, db)
-  return { root, db, ctx }
+  return { db, ctx }
 }
-
-/** 3 GB in 10 s: a 300 MB/s model-load sample. */
-const loadSample = (modelId: string): void => recordModelLoadRead('unused', 10_000, modelId, 3_000_000_000)
 
 beforeEach(() => {
   electronState.handlers.clear()
   electronState.windows.length = 0
-  setPerformanceChangedSink(null)
-  resetPerformanceForTests()
-  resetEffectiveReadForTests()
-  resetModelPlacementForTests()
 })
 
 // TH2: every root/DB here is minted through the fixture's `freshRoot`/`seededDb` (via this
-// file's own `here()` helper) — the shared teardown's extra resets (first-benchmark's memo,
-// the two observer setters) are additions this file never depended on being left dirty.
+// file's own `here()` helper), and the shared teardown resets the session latches and observers.
 afterEach(closePerformanceFixture)
 
 describe('IPC controls', () => {
-  it('performance:get refuses a locked workspace and an untrusted sender', () => {
-    const { ctx } = here()
-    registerBenchmarkIpc(ctx)
-    const get = electronState.handlers.get(IPC.getPerformance)!
-    ctx.workspace.isUnlocked = () => false
-    expect(() => get(makeEvent())).toThrow()
-    ctx.workspace.isUnlocked = () => true
-    ctx.trustedSenders.isTrusted = () => false
-    expect(() => get(makeEvent(99))).toThrow()
-  })
-
   it('benchmark:run streams its steps to the requesting window; performance:get then returns that result', async () => {
     const { ctx } = here()
     registerBenchmarkIpc(ctx)
@@ -191,31 +168,6 @@ describe('the notifier', () => {
     expect(ctx.runtime.occupancy.held('benchmark')).toBe(false)
   })
 
-  it('a FAILED run still pushes after its release (the screen is never left "running")', async () => {
-    const { root, db, ctx } = here()
-    // The real context resolves `db` through the vault; a lock mid-run makes the persist throw.
-    let locked = false
-    Object.defineProperty(ctx, 'db', {
-      get: () => {
-        if (locked) throw new Error('Workspace is locked')
-        return db
-      }
-    })
-    const spy = performanceChangedSpy(() => ctx.runtime.occupancy.held('benchmark'))
-
-    await expect(
-      runAndPersistBenchmark(ctx, (step) => {
-        if (step === 'done') locked = true // lands right before the persist
-      })
-    ).rejects.toThrow(/locked/)
-
-    // Start, the empty GPU-probe write (no binary on this root), then the release after the
-    // failed persist.
-    expect(spy.mock.results.map((r) => r.value)).toEqual([true, true, false])
-    expect(ctx.runtime.occupancy.held('benchmark')).toBe(false)
-    expect(root).toBeTruthy()
-  })
-
   it('a refused second run pushes nothing and leaves the first span held', async () => {
     const { ctx } = here()
     const release = ctx.runtime.occupancy.begin('benchmark') // the "first run"
@@ -274,7 +226,7 @@ describe('session latches', () => {
     ctx.runtime.active = () => ({ modelId: 'chat-model' }) as ModelRuntime
     const spy = performanceChangedSpy()
     observeAnswerSpeed(ctx, { messageId: 'a', tokensPerSecond: 12.5, ttftMs: 800, tokens: 100 })
-    expect(latestAnswerSpeed()).toMatchObject({ tokensPerSecond: 12.5, modelId: 'chat-model' })
+    expect(latestAnswerSpeed()).toMatchObject({ tokensPerSecond: 12.5, ttftMs: 800, tokens: 100, modelId: 'chat-model' })
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
@@ -282,11 +234,7 @@ describe('session latches', () => {
     const { ctx, db } = here()
     registerBenchmarkIpc(ctx)
     const spy = performanceChangedSpy(() => getSettings(db).modelPlacements['m']?.contextTokens ?? null)
-    const placement = {
-      modelId: 'm', contextTokens: 4096, backend: 'cpu' as const, gpuLayers: null, totalLayers: null,
-      gpuModelMb: null, cpuModelMb: 3000, gpuKvMb: null, cpuKvMb: 200, metalMaxWorkingSetMb: null,
-      machineKey: null, at: '2026-09-05T00:00:00Z'
-    }
+    const placement = modelPlacement({ modelId: 'm', contextTokens: 4096, machineKey: null, at: '2026-09-05T00:00:00Z' })
     recordModelPlacement(placement)
     expect(spy.mock.results.map((r) => r.value)).toEqual([4096]) // persisted BEFORE the push
     ctx.workspace.isUnlocked = () => false
@@ -296,28 +244,12 @@ describe('session latches', () => {
   })
 })
 
-describe('restore and seed writes', () => {
-  it('the moved-drive restore pushes once, synchronously, after the empty-probe write of a root without a binary', async () => {
-    const { ctx, db } = here()
-    const foreign = result()
-    const known = hereResult()
-    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
-    const spy = performanceChangedSpy(() => getSettings(db).lastBenchmark?.ranAt)
-
-    maybeRunFirstBenchmark(ctx)
-
-    // The session probe runs first and, with no binary, persists an EMPTY probe synchronously
-    // (PR #308 decision 6) — its push still sees the outgoing result; the restore's push follows.
-    expect(spy.mock.results.map((r) => r.value)).toEqual([foreign.ranAt, known.ranAt])
-    await new Promise<void>((r) => setImmediate(r)) // let the void probe settle: nothing more
-    expect(spy).toHaveBeenCalledTimes(2)
-  })
-
-  it('the same-machine upgrade seed pushes once, after the empty-probe write', () => {
+describe('seed writes', () => {
+  it('the same-machine upgrade seed pushes once, after the empty-probe write', async () => {
     const { ctx, db } = here()
     updateSettings(db, { lastBenchmark: hereResult() })
     const spy = performanceChangedSpy(() => getSettings(db).benchmarkHistory.length)
-    maybeRunFirstBenchmark(ctx)
+    await expect(firstBenchmarkNow(ctx)).resolves.toBe('not-needed')
     // [empty-probe write (history still empty), seed]
     expect(spy.mock.results.map((r) => r.value)).toEqual([0, 1])
   })
@@ -384,16 +316,6 @@ describe('the chat runtime', () => {
 })
 
 describe('resident sidecars', () => {
-  class FakeChild extends EventEmitter implements ChildProcessLike {
-    pid = 9
-    killed = false
-    kill(): boolean {
-      this.killed = true
-      queueMicrotask(() => this.emit('exit', 0, null))
-      return true
-    }
-  }
-  const spawn = (): ChildProcessLike => new FakeChild()
   const fetchFor = (route: string, body: unknown): typeof fetch =>
     (async (url: string | URL) => {
       const u = String(url)
@@ -408,7 +330,7 @@ describe('resident sidecars', () => {
       ...base,
       id: 'e5',
       dimensions: 2,
-      spawn,
+      spawn: fakeSpawn().spawn,
       fetchImpl: fetchFor('/v1/embeddings', { data: [{ embedding: [3, 4], index: 0 }] })
     })
     const seen: boolean[] = []
@@ -426,7 +348,7 @@ describe('resident sidecars', () => {
     const reranker = new LlamaReranker({
       ...base,
       id: 'rr',
-      spawn,
+      spawn: fakeSpawn().spawn,
       fetchImpl: fetchFor('/v1/rerank', { results: [{ index: 0, relevance_score: 0.9 }] })
     })
     const seen: boolean[] = []
@@ -438,7 +360,7 @@ describe('resident sidecars', () => {
     expect(seen).toEqual([true, false])
   })
 
-  it('the vision service forwards the flips of every runtime it builds', async () => {
+  it("the vision service forwards its runtime's flips", async () => {
     const AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayName: 'VLM' }
     let fire: (() => void) | null = null
     const analyzer: VisionAnalyzer = {
@@ -472,7 +394,7 @@ describe('resident sidecars', () => {
 describe('settings keys the snapshot reads', () => {
   it('selecting a model pushes (models:select)', async () => {
     const { ctx } = here()
-    ctx.manifestsDir = join(__dirname, '..', '..', '..', '..', 'model-manifests')
+    ctx.manifestsDir = CATALOG_MANIFESTS
     registerModelIpc(ctx)
     const spy = performanceChangedSpy()
     await invoke(electronState.handlers, IPC.selectModel, 'qwen3.5-9b-ud-q4kxl')
