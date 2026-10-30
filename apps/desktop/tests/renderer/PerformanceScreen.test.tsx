@@ -7,18 +7,32 @@ import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import {
   DEFAULT_SETTINGS,
-  type BenchmarkProgressStep,
   type BenchmarkResult,
   type ModelInfo,
-  type ModelPlacement,
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/renderer/lib/format'
 import { FIT_TARGET_MARGIN_MB } from '../../src/shared/performance-rules'
-import { stubApi } from '../helpers/renderer'
+import { deferred } from '../helpers/deferred'
+import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import {
+  checkedSnapshot as snapshot,
+  copiedReport,
+  installPerformance as install,
+  laptopResult as result,
+  MODELS,
+  OBSERVED_FULL,
+  office,
+  oldLaptop,
+  placement,
+  pushChanged,
+  renderPerformanceScreen,
+  RUNNING_STATUS,
+  startOwnRun,
+  STOPPED_STATUS
+} from '../helpers/performance-screen'
 
 // The Performance screen (design-guidelines §2, benchmark.md "Performance screen"): the
 // check's answer as a verdict + four tiles (speed, memory, graphics memory, drive — the
@@ -28,186 +42,13 @@ import { stubApi } from '../helpers/renderer'
 // shaming.
 
 afterEach(() => {
-  cleanup()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    window.localStorage.clear()
+  }
 })
-
-function result(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
-  return {
-    os: 'linux',
-    arch: 'x64',
-    cpuModel: 'Intel Core i7-1260P',
-    cpuCores: 12,
-    ramGb: 15.7,
-    gpu: null,
-    gpuVramMb: null,
-    driveReadMbps: null,
-    driveWriteMbps: 312,
-    tokensPerSecond: 12,
-    speedBasis: { basis: 'timings', tokens: 64 },
-    measuredModelId: 'qwen3.5-9b-ud-q4kxl',
-    effectiveRead: {
-      mbps: 430,
-      bytes: 5_800_000_000,
-      ms: 13_500,
-      source: 'model_load',
-      modelId: 'qwen3.5-9b-ud-q4kxl',
-      at: '2026-09-04T12:00:00Z'
-    },
-    profile: 'LITE',
-    recommendedModelId: 'qwen3.5-9b-ud-q4kxl',
-    warnings: [],
-    ranAt: '2026-09-04T14:02:00Z',
-    ...over
-  }
-}
-
-const office = result({
-  cpuModel: 'Intel Core i9-13900K',
-  cpuCores: 32,
-  ramGb: 64,
-  gpu: 'NVIDIA GeForce RTX 3090',
-  gpuVramMb: 24576,
-  tokensPerSecond: 41,
-  measuredModelId: 'qwen3.8-27b-ud-q4km',
-  recommendedModelId: 'qwen3.8-27b-ud-q4km',
-  profile: 'PRO',
-  ranAt: '2026-09-02T10:00:00Z'
-})
-const oldLaptop = result({
-  cpuModel: 'Intel Core i5-8250U',
-  cpuCores: 8,
-  ramGb: 7.8,
-  tokensPerSecond: 2,
-  measuredModelId: 'qwen3.5-4b-ud-q4kxl',
-  effectiveRead: { mbps: 70, bytes: 2_500_000_000, ms: 36_000, source: 'model_load', modelId: 'qwen3.5-4b-ud-q4kxl', at: '2026-08-28T10:00:00Z' },
-  profile: 'TINY',
-  ranAt: '2026-08-28T10:00:00Z'
-})
-
-const models = [
-  { id: 'qwen3.5-9b-ud-q4kxl', displayName: 'Qwen3.5 9B (UD-Q4_K_XL)', state: 'installed', recommended: true, recommendedContextTokens: 8192 },
-  { id: 'qwen3.8-27b-ud-q4km', displayName: 'Qwen3.8 27B UD-Q4_K_M', state: 'missing', recommended: false, recommendedContextTokens: 8192 },
-  { id: 'qwen3.5-4b-ud-q4kxl', displayName: 'Qwen3.5 4B (UD-Q4_K_XL)', state: 'missing', recommended: false, recommendedContextTokens: 8192 }
-] as unknown as ModelInfo[]
-
-/** A discrete-GPU machine with the 9B active and no start observed yet (weights-only estimate). */
-function placement(over: Partial<PerformanceSnapshot['placement']> = {}): PerformanceSnapshot['placement'] {
-  return {
-    memoryClass: 'discrete',
-    ramMb: 16_077,
-    vramMb: 24_822,
-    model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, contextTokens: 8192 },
-    // Resolved MAIN-side by `launchContextTokens` since the PR #303 audit M5 residual fix: the
-    // screen reads it off the snapshot instead of recomputing it from the catalog entry.
-    recommendedContextTokens: 8192,
-    observed: null,
-    observedMismatch: null,
-    verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
-    models: [
-      { role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.4, device: 'gpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
-      { role: 'translation', modelId: 'translategemma-12b-it-q4', sizeOnDiskGb: 6.8, device: 'gpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
-      { role: 'vision', modelId: 'qwen2.5-vl-3b-instruct-q4', sizeOnDiskGb: 3.0, device: 'cpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
-      { role: 'reranker', modelId: 'bge-reranker-v2-m3-f16', sizeOnDiskGb: 1.1, device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
-      { role: 'embeddings', modelId: 'multilingual-e5-small-q8', sizeOnDiskGb: 0.2, device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
-      { role: 'transcriber', modelId: 'whisper-small', sizeOnDiskGb: 0.5, device: 'cpu', loaded: false, lifetime: 'per-use', gpuLayers: null, totalLayers: null }
-    ],
-    totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false },
-    ...over
-  }
-}
-
-const observedFull: ModelPlacement = {
-  modelId: 'qwen3.5-9b-ud-q4kxl',
-  contextTokens: 8192,
-  backend: 'gpu',
-  gpuLayers: 41,
-  totalLayers: 41,
-  gpuModelMb: 5500,
-  cpuModelMb: 400,
-  gpuKvMb: 640,
-  cpuKvMb: null,
-  metalMaxWorkingSetMb: null,
-  machineKey: null,
-  at: '2026-09-05T14:00:00Z'
-}
-
-function snapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot {
-  return {
-    current: result(),
-    // The LIVE pick (the same one the AI Model screen stars); the default agrees with the result's saved pick.
-    recommendation: { modelId: 'qwen3.5-9b-ud-q4kxl', basis: 'discrete' },
-    currentMachine: true,
-    currentGpu: null,
-    graphicsDevice: null,
-    otherMachines: [office, oldLaptop],
-    running: false,
-    placement: placement(),
-    observed: {
-      lastAnswer: { tokensPerSecond: 11.8, ttftMs: 900, tokens: 312, modelId: 'qwen3.5-9b-ud-q4kxl', at: '2026-09-05T14:02:00Z' },
-      lastModelLoad: result().effectiveRead ?? null,
-      lastChecksum: null
-    },
-    ...over
-  }
-}
-
-function install(snap: PerformanceSnapshot, over: Record<string, unknown> = {}) {
-  const progress: Array<(step: BenchmarkProgressStep) => void> = []
-  /** Every live `performance:changed` subscriber (the payload-free "re-read the snapshot"). */
-  const pushes: Array<() => void> = []
-  /** The order the screen touched the bridge in — defaults only; an override records nothing. */
-  const calls: string[] = []
-  let unsubscribes = 0
-  const api = {
-    getPerformance: vi.fn(async () => {
-      calls.push('getPerformance')
-      return snap
-    }),
-    listModels: vi.fn(async () => {
-      calls.push('listModels')
-      return models
-    }),
-    getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-    getRuntimeStatus: vi.fn(async () => ({ running: true, modelId: 'qwen3.5-9b-ud-q4kxl', port: 1, healthy: true, message: '' })),
-    onBenchmarkProgress: vi.fn((cb: (step: BenchmarkProgressStep) => void) => {
-      progress.push(cb)
-      return () => {}
-    }),
-    onPerformanceChanged: vi.fn((cb: () => void) => {
-      calls.push('onPerformanceChanged')
-      pushes.push(cb)
-      return () => {
-        unsubscribes += 1
-      }
-    }),
-    runBenchmark: vi.fn(async () => result()),
-    useModel: vi.fn(async () => ({ running: true, modelId: 'qwen3.5-9b-ud-q4kxl', port: 1, healthy: true, message: '' })),
-    copyToClipboard: vi.fn(async (_text: string) => true),
-    ...over
-  }
-  stubApi(api)
-  return { api, progress, pushes, calls, unsubscribed: () => unsubscribes }
-}
-
-/** Deliver `performance:changed` to every subscriber and let the re-read settle. */
-async function pushChanged(pushes: Array<() => void>): Promise<void> {
-  await act(async () => {
-    for (const cb of pushes) cb()
-  })
-}
-
-/** A promise a test resolves by hand — the only way to hold a read "in flight" without timers. */
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((res) => {
-    resolve = res
-  })
-  return { promise, resolve }
-}
-
-const RUNNING_STATUS = { running: true, modelId: 'qwen3.5-9b-ud-q4kxl', port: 1, healthy: true, message: '' }
-const STOPPED_STATUS = { running: false, modelId: null, port: null, healthy: false, message: '' }
 
 /** A snapshot with an answer in the observed rows (the M3 background observation). */
 const observedAnswer = {
@@ -217,28 +58,10 @@ const observedAnswer = {
 }
 const noObservations = { lastAnswer: null, lastModelLoad: null, lastChecksum: null }
 
-function renderScreen(onNavigate = vi.fn()) {
-  render(
-    <ToastProvider>
-      <PerformanceScreen onNavigate={onNavigate} />
-    </ToastProvider>
-  )
-  return onNavigate
-}
-
-/** Same render, but hands back the RTL result so a test can unmount on purpose. */
-function mountScreen() {
-  return render(
-    <ToastProvider>
-      <PerformanceScreen onNavigate={vi.fn()} />
-    </ToastProvider>
-  )
-}
-
 describe('PerformanceScreen: the check as an answer', () => {
   it('renders the verdict, the four tiles with ratings, and the context the pick assumes', async () => {
     install(snapshot())
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Runs Qwen3\.5 9B \(UD-Q4_K_XL\) at about 12 tokens per second\./)).toBeInTheDocument()
     expect(screen.getByText(/Model starts from this drive are fast\./)).toBeInTheDocument()
     // Tiles: value + rating word (never color alone).
@@ -266,7 +89,7 @@ describe('PerformanceScreen: the check as an answer', () => {
 
   it('lists the observed rows and the other computers with their own ratings', async () => {
     install(snapshot())
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Last answer: 11\.8 tokens \/ s, first token after 0\.9 s/)).toBeInTheDocument()
     expect(screen.getByText(/Model start: 13\.5 s/)).toBeInTheDocument()
     expect(screen.getByText(/41 tokens \/ s with Qwen3\.8 27B UD-Q4_K_M/)).toBeInTheDocument()
@@ -279,7 +102,7 @@ describe('PerformanceScreen: the check as an answer', () => {
 
   it('shows the honest empty states before any check and before any observation', async () => {
     install(snapshot({ current: null, otherMachines: [], observed: { lastAnswer: null, lastModelLoad: null, lastChecksum: null } }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByRole('button', { name: 'Check this computer' })).toBeInTheDocument()
     // The card header and the Memory tile both say it: not checked yet.
     expect(screen.getAllByText('Not checked yet').length).toBeGreaterThanOrEqual(1)
@@ -290,7 +113,7 @@ describe('PerformanceScreen: the check as an answer', () => {
 
   it('shows the graphics memory from the result, or from this machine’s eligible probe when the result predates the field', async () => {
     install(snapshot({ current: result({ gpu: 'NVIDIA GeForce RTX 3090', gpuVramMb: 24576 }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('24.0')).toBeInTheDocument()
     expect(screen.getByText('Usable')).toBeInTheDocument()
     cleanup()
@@ -299,7 +122,7 @@ describe('PerformanceScreen: the check as an answer', () => {
     const legacy = result()
     delete (legacy as Partial<BenchmarkResult>).gpuVramMb
     install(snapshot({ current: legacy, currentGpu: { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false } }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('4.0')).toBeInTheDocument()
     expect(screen.getByText('Small')).toBeInTheDocument()
     expect(screen.getByText(/NVIDIA GeForce GTX 1650 · Under 5 GB: models run on the processor/)).toBeInTheDocument()
@@ -307,7 +130,7 @@ describe('PerformanceScreen: the check as an answer', () => {
     // …but never for a result from ANOTHER computer: that check never recorded the field, so
     // the tile claims nothing either way (N1) — not "no usable graphics card".
     install(snapshot({ current: legacy, currentMachine: false, currentGpu: { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false } }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('That check did not record the graphics card.')).toBeInTheDocument()
     expect(screen.getByText('Not recorded')).toBeInTheDocument()
     expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
@@ -315,7 +138,7 @@ describe('PerformanceScreen: the check as an answer', () => {
     cleanup()
     // A foreign result that RECORDED nothing (an explicit null) is a real "none".
     install(snapshot({ current: result({ gpuVramMb: null }), currentMachine: false }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/No usable graphics card/)).toBeInTheDocument()
     expect(screen.getByText('None')).toBeInTheDocument()
   })
@@ -332,7 +155,7 @@ describe('PerformanceScreen: the check as an answer', () => {
         gpuProbe: { devices: [{ id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }], probedAt: '2026-09-05T00:00:00Z' }
       }))
     })
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/No usable graphics card/)).toBeInTheDocument()
     expect(screen.queryByText('11.3')).not.toBeInTheDocument()
     expect(screen.queryByText(/Intel\(R\) Graphics/)).not.toBeInTheDocument()
@@ -358,7 +181,7 @@ describe('PerformanceScreen: the check as an answer', () => {
         placement: placement({ memoryClass: 'cpu', vramMb: null })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('4.0')).toBeInTheDocument()
     expect(screen.getByText('Small')).toBeInTheDocument()
     expect(screen.getByText(/NVIDIA GeForce GTX 1650 · Under 5 GB: models run on the processor/)).toBeInTheDocument()
@@ -379,7 +202,7 @@ describe('PerformanceScreen: the check as an answer', () => {
         placement: placement({ memoryClass: 'discrete', vramMb: 5994 })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('5.9')).toBeInTheDocument()
     expect(screen.getByText('Usable')).toBeInTheDocument()
     expect(screen.queryByText('Small')).not.toBeInTheDocument()
@@ -398,7 +221,7 @@ describe('PerformanceScreen: the check as an answer', () => {
           gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }], probedAt: '2026-09-05T00:00:00Z' }
         }))
       })
-      renderScreen()
+      renderPerformanceScreen()
       expect(await screen.findByText('Graphics acceleration is off. Models run on the processor.')).toBeInTheDocument()
       expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
       expect(screen.getByText('None')).toBeInTheDocument()
@@ -422,7 +245,7 @@ describe('PerformanceScreen: the check as an answer', () => {
         })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('On processor')).toBeInTheDocument()
     expect(screen.getByText('16.0')).toBeInTheDocument()
     expect(screen.getByText('GB shared')).toBeInTheDocument()
@@ -439,14 +262,14 @@ describe('PerformanceScreen: the check as an answer', () => {
     // A foreign result (no live device applies) naming an integrated device: the same rule,
     // from the recorded name + memory.
     install(snapshot({ current: result({ gpu: 'AMD Radeon(TM) Graphics', gpuVramMb: 16_000 }), currentMachine: false, currentGpu: null }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Integrated')).toBeInTheDocument()
     expect(screen.queryByText('Usable')).not.toBeInTheDocument()
     cleanup()
     // An older main process without the flag on `currentGpu`: still never "Usable" for an iGPU.
     const oldShape = { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384 } as PerformanceSnapshot['currentGpu']
     install(snapshot({ current: result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 }), currentGpu: oldShape }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Integrated')).toBeInTheDocument()
     expect(screen.queryByText('Usable')).not.toBeInTheDocument()
   })
@@ -462,27 +285,20 @@ describe('PerformanceScreen: the check as an answer', () => {
       ranAt: '2026-08-30T10:00:00Z'
     })
     install(snapshot({ otherMachines: [office, igpuLaptop] }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM/)).toBeInTheDocument()
     expect(screen.getByText(/Intel Core i5-1235U, 16\.0 GB RAM · /)).toBeInTheDocument()
     expect(screen.queryByText(/16\.0 GB VRAM/)).not.toBeInTheDocument()
   })
 
   it('the integrated tile in German (asserted from the catalog, D-L8)', async () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     install(
       snapshot({
         current: result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 }),
         currentGpu: { name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, useful: false }
       })
     )
-    render(
-      <I18nProvider>
-        <ToastProvider>
-          <PerformanceScreen onNavigate={vi.fn()} />
-        </ToastProvider>
-      </I18nProvider>
-    )
+    renderPerformanceScreen({ lang: 'de' })
     expect(await screen.findByText(t('de', 'perf.rating.integrated'))).toBeInTheDocument()
     expect(screen.getByText(`Intel(R) Iris(R) Xe Graphics · ${t('de', 'perf.tile.graphics.integrated')}`)).toBeInTheDocument()
     expect(screen.getByText(t('de', 'perf.tile.graphics.unitShared'))).toBeInTheDocument()
@@ -491,7 +307,7 @@ describe('PerformanceScreen: the check as an answer', () => {
 
   it('says so when the last result belongs to a different computer', async () => {
     install(snapshot({ currentMachine: false }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/measured on a different computer/)).toBeInTheDocument()
   })
 })
@@ -499,10 +315,10 @@ describe('PerformanceScreen: the check as an answer', () => {
 describe('PerformanceScreen: the Your-model row', () => {
   it('reads an observed full offload off the log: layers, size with context, On GPU', async () => {
     install(snapshot({ placement: placement({
-      observed: observedFull,
+      observed: OBSERVED_FULL,
       verdict: { kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: 41, totalLayers: 41 }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Takes 6\.4 GB with this context\. Fits in graphics memory \(24\.2 GB\): all 41 layers on the GPU\./)).toBeInTheDocument()
     expect(screen.getByText('On GPU')).toBeInTheDocument()
   })
@@ -513,10 +329,10 @@ describe('PerformanceScreen: the Your-model row', () => {
     // Owner gate (c): the sentence names the runtime's SILENCE, never "measured on its first
     // start" — that start already happened, so a restart would change nothing.
     install(snapshot({ placement: placement({
-      observed: { ...observedFull, gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null },
+      observed: { ...OBSERVED_FULL, gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null },
       verdict: { kind: 'unknown', needMb: null, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('The runtime did not report where the model landed.')).toBeInTheDocument()
     expect(screen.queryByText(/measured the first time it starts/)).not.toBeInTheDocument()
     // Nothing here is an estimate, so the per-drive hint stays off.
@@ -538,7 +354,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       observed: null,
       verdict: { kind: 'unknown', needMb: null, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(
       await screen.findByText('Where the model lands is measured the first time it starts on this computer.')
     ).toBeInTheDocument()
@@ -552,7 +368,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       observed: null,
       observedMismatch: { contextTokens: 32_768, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Measured earlier with a 32,768-token context on/)).toBeInTheDocument()
     expect(screen.queryByText(/one record per model/)).not.toBeInTheDocument()
   })
@@ -562,10 +378,10 @@ describe('PerformanceScreen: the Your-model row', () => {
     // non-estimated 'gpu' with a null total can only come from a malformed record — it must
     // still never render the empty `{layers}` interpolation (L7 / gate (c)).
     install(snapshot({ placement: placement({
-      observed: observedFull,
+      observed: OBSERVED_FULL,
       verdict: { kind: 'gpu', needMb: 6540, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Should fit in graphics memory \(24\.2 GB\)\./)).toBeInTheDocument()
     expect(screen.queryByText(/all\s{2,}layers/, { normalizer: (s) => s })).not.toBeInTheDocument()
     expect(screen.queryByText(/layers on the GPU/)).not.toBeInTheDocument()
@@ -575,10 +391,10 @@ describe('PerformanceScreen: the Your-model row', () => {
   it('names a partial offload with the layer split and the RAM spill, in words', async () => {
     install(snapshot({ placement: placement({
       vramMb: 16_384,
-      observed: { ...observedFull, gpuLayers: 30, gpuModelMb: 4000, cpuModelMb: 1900 },
+      observed: { ...OBSERVED_FULL, gpuLayers: 30, gpuModelMb: 4000, cpuModelMb: 1900 },
       verdict: { kind: 'partial', needMb: 6540, estimated: false, budgetMb: 16_384, freeAtStartMb: null, workingMb: null, spillMb: 1900, gpuLayers: 30, totalLayers: 41 }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Graphics memory holds 16\.0 GB: 30 of 41 layers on the GPU, about 1\.9 GB runs from RAM\. Answers slower\./)).toBeInTheDocument()
     expect(screen.getByText('Partly on GPU')).toBeInTheDocument()
   })
@@ -586,20 +402,20 @@ describe('PerformanceScreen: the Your-model row', () => {
   it('explains a spill on a card that would hold the model: what was free at start, plus the margin', async () => {
     install(snapshot({ placement: placement({
       model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
-      observed: { ...observedFull, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_600, cpuModelMb: 1750, gpuKvMb: 512, gpuFreeAtStartMb: 20_300 },
+      observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_600, cpuModelMb: 1750, gpuKvMb: 512, gpuFreeAtStartMb: 20_300 },
       verdict: { kind: 'partial', needMb: 19_862, estimated: false, budgetMb: 24_822, freeAtStartMb: 20_300, workingMb: 2860, spillMb: 1750, gpuLayers: 62, totalLayers: 66 }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/62 of 66 layers on the GPU, about 1\.7 GB runs from RAM: only 19\.8 GB of the card’s 24\.2 GB was free when the model started, and the runtime keeps a 1 GB safety margin\. Answers slower\. Restart the model once the card is free\./)).toBeInTheDocument()
   })
 
   it('explains a spill on a card that WAS free: the working buffers and the fixed margin', async () => {
     install(snapshot({ placement: placement({
       model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
-      observed: { ...observedFull, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_134, cpuModelMb: 1711, gpuKvMb: 512, gpuFreeAtStartMb: 23_615, gpuComputeMb: 2860 },
+      observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_134, cpuModelMb: 1711, gpuKvMb: 512, gpuFreeAtStartMb: 23_615, gpuComputeMb: 2860 },
       verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: 2860, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/The card was free \(23\.1 of 24\.2 GB\), but the runtime also sets aside 2\.8 GB of working buffers and a 1 GB safety margin, and moves whole layers off the card when the sum gets close\. Answers slower\./)).toBeInTheDocument()
     expect(screen.queryByText(/only 23\.1 GB/)).not.toBeInTheDocument()
   })
@@ -611,14 +427,14 @@ describe('PerformanceScreen: the Your-model row', () => {
     const margin = String(FIT_TARGET_MARGIN_MB / 1024)
     const spilled = {
       model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
-      observed: { ...observedFull, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66 }
+      observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66 }
     }
     // (1) the card was NOT free at start.
     install(snapshot({ placement: placement({
       ...spilled,
       verdict: { kind: 'partial', needMb: 19_862, estimated: false, budgetMb: 24_822, freeAtStartMb: 20_300, workingMb: 2860, spillMb: 1750, gpuLayers: 62, totalLayers: 66 }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(new RegExp(`the runtime keeps a ${margin} GB safety margin`))).toBeInTheDocument()
     cleanup()
     // (2) the card WAS free and the working buffers are known.
@@ -626,7 +442,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       ...spilled,
       verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: 2860, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(new RegExp(`2\\.8 GB of working buffers and a ${margin} GB safety margin`))).toBeInTheDocument()
     cleanup()
     // (3) the card WAS free and the working buffers were never printed.
@@ -634,7 +450,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       ...spilled,
       verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: null, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(new RegExp(`sets aside working buffers and a ${margin} GB safety margin`))).toBeInTheDocument()
   })
 
@@ -645,7 +461,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       ramMb: 49_152,
       verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 36_864, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Unified memory')).toBeInTheDocument()
     expect(screen.queryByText('Graphics memory')).not.toBeInTheDocument()
     expect(screen.getByText(/Should fit in unified memory \(48\.0 GB, up to 36\.0 GB available to the model\)/)).toBeInTheDocument()
@@ -659,7 +475,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 16.5, contextTokens: 8192 },
       verdict: { kind: 'too_large', needMb: 16_896, estimated: true, budgetMb: 8192, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
-    const onNavigate = renderScreen()
+    const { onNavigate } = renderPerformanceScreen()
     expect(await screen.findByText(/Too large for this computer \(8\.0 GB available\)\. Pick a smaller model\./)).toBeInTheDocument()
     expect(screen.getByText('Too large')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Choose a smaller model' }))
@@ -668,7 +484,7 @@ describe('PerformanceScreen: the Your-model row', () => {
 
   it('with no model selected says so and points at AI Model', async () => {
     install(snapshot({ placement: placement({ model: null, verdict: { kind: 'unknown', needMb: null, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null } }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/No model selected yet/)).toBeInTheDocument()
     expect(screen.getByText('Not measured')).toBeInTheDocument()
   })
@@ -677,14 +493,14 @@ describe('PerformanceScreen: the Your-model row', () => {
 describe('PerformanceScreen: models on this computer', () => {
   it('lists every role with where it runs by design, its lifetime and whether it is loaded now', async () => {
     install(snapshot())
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Models on this computer')).toBeInTheDocument()
     expect(screen.getByText('Translation')).toBeInTheDocument()
     expect(screen.getByText(/Document search \(ranking\)/)).toBeInTheDocument()
     expect(screen.getByText(/Document search \(index\)/)).toBeInTheDocument()
     expect(screen.getByText('Voice')).toBeInTheDocument()
     // Pinned roles say so, in words; the CLI says it runs only while working. Wave 8 ruling (e)
-    // amendment: the reranker's `cpu` fixture row (`device: 'cpu'`, line ~111 above) used to be
+    // amendment: the reranker's `cpu` fixture row (`device: 'cpu'`, in `placement`) used to be
     // the fourth "by design" row before this step — Wave 8 ruling (d) makes a `cpu` reranker
     // read plain "processor" instead (its posture is headroom-gated, not a fixed design choice),
     // so three roles now say "by design": vision, the index embedder and voice.
@@ -697,7 +513,7 @@ describe('PerformanceScreen: models on this computer', () => {
 
   it('sums the card budget and the everything-at-once RAM need, flagging too much', async () => {
     install(snapshot({ placement: placement({ ramMb: 16_077, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false } }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
     expect(screen.getByText(/Everything loaded at once needs about 17\.0 GB of 15\.7 GB RAM\./)).toBeInTheDocument()
     expect(screen.getByText('Too much at once')).toBeInTheDocument()
@@ -712,7 +528,7 @@ describe('PerformanceScreen: models on this computer', () => {
         })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Both are on the card right now\. Whichever started second got what was left and runs slower/)).toBeInTheDocument()
     expect(screen.getByText('Fits')).toBeInTheDocument()
   })
@@ -733,7 +549,7 @@ describe('PerformanceScreen: models on this computer', () => {
         })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Graphics card: ranking 1\.1 GB, of 24\.2 GB\./)).toBeInTheDocument()
     // The chat/translation line is unaffected — both lines coexist.
     expect(screen.getByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
@@ -745,7 +561,7 @@ describe('PerformanceScreen: models on this computer', () => {
 
   it('#476: a reranker on the processor shows no reranker card line (byte-unchanged default)', async () => {
     install(snapshot())
-    renderScreen()
+    renderPerformanceScreen()
     await screen.findByText('Models on this computer')
     expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
   })
@@ -757,14 +573,14 @@ describe('PerformanceScreen: models on this computer', () => {
   it('#495 follow-up: a GPU-postured but not-yet-loaded reranker shows no reranker card line', async () => {
     const rows = placement().models.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const, loaded: false } : r))
     install(snapshot({ placement: placement({ models: rows }) }))
-    renderScreen()
+    renderPerformanceScreen()
     await screen.findByText('Models on this computer')
     expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
   })
 
   it('on a machine without a usable card there is no card line, only the RAM line', async () => {
     install(snapshot({ placement: placement({ memoryClass: 'cpu', vramMb: null, ramMb: 131_072 }) }))
-    renderScreen()
+    renderPerformanceScreen()
     await screen.findByText('Models on this computer')
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
     expect(screen.getByText(/Everything loaded at once needs about/)).toBeInTheDocument()
@@ -781,11 +597,11 @@ describe('PerformanceScreen: models on this computer', () => {
         })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     await screen.findByText('Models on this computer')
-    // Wave 8 ruling (e) amendment: the fixture's reranker row is ALSO `device: 'cpu'` (line
-    // ~111), so its row-sub line now starts with plain "processor · " too (ruling (d)) — three
-    // rows, not two — and only three roles (not four) say "by design".
+    // Wave 8 ruling (e) amendment: the fixture's reranker row is ALSO `device: 'cpu'`, so its
+    // row-sub line now starts with plain "processor · " too (ruling (d)) — three rows, not two —
+    // and only three roles (not four) say "by design".
     expect(screen.getAllByText(/^processor · /)).toHaveLength(3)
     expect(screen.getAllByText(/processor, by design/)).toHaveLength(3)
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
@@ -805,7 +621,7 @@ describe('PerformanceScreen: models on this computer', () => {
       return r
     })
     install(snapshot({ placement: placement({ models: rows }) }))
-    renderScreen()
+    renderPerformanceScreen()
     await screen.findByText('Models on this computer')
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
@@ -818,7 +634,7 @@ describe('PerformanceScreen: models on this computer', () => {
       return r
     })
     install(snapshot({ placement: placement({ models: rows }) }))
-    renderScreen()
+    renderPerformanceScreen()
     await screen.findByText('Models on this computer')
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
     expect(await screen.findByText(/Graphics card: ranking/)).toBeInTheDocument()
@@ -837,7 +653,7 @@ describe('PerformanceScreen: models on this computer', () => {
         })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Everything loaded at once needs about 40\.0 GB of the 36\.0 GB of unified memory available to models\./)).toBeInTheDocument()
     expect(screen.getByText('Too much at once')).toBeInTheDocument()
     expect(screen.queryByText(/GB RAM\./)).not.toBeInTheDocument()
@@ -846,12 +662,9 @@ describe('PerformanceScreen: models on this computer', () => {
 
 describe('PerformanceScreen: actions', () => {
   it('"Check again" runs the benchmark, shows the steps as they land, then refreshes', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { api, progress } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { api, progress } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     expect(api.runBenchmark).toHaveBeenCalledTimes(1)
     // Steps replace the tiles while the run is in flight.
     expect(screen.getByText('Hardware detected')).toBeInTheDocument()
@@ -861,18 +674,16 @@ describe('PerformanceScreen: actions', () => {
     expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
     act(() => progress.forEach((cb) => cb('system')))
     expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
     await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(2))
     expect(await screen.findByRole('button', { name: 'Check again' })).toBeInTheDocument()
   })
 
   it('offers "Start <model> and measure" when speed is unmeasured, the pick is installed and nothing runs', async () => {
     const { api } = install(snapshot({ current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null }) }), {
-      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: '' }))
+      getRuntimeStatus: vi.fn(async () => STOPPED_STATUS)
     })
-    renderScreen()
+    renderPerformanceScreen()
     const start = await screen.findByRole('button', { name: 'Start Qwen3.5 9B (UD-Q4_K_XL) and measure' })
     await userEvent.click(start)
     await waitFor(() => expect(api.useModel).toHaveBeenCalledWith('qwen3.5-9b-ud-q4kxl'))
@@ -882,7 +693,7 @@ describe('PerformanceScreen: actions', () => {
   it('"Start … and measure" targets the LIVE recommendation, never the id saved with the check, and labels the saved one', async () => {
     // A fresh probe moved the pick to the 4B (installed); the saved result still says 9B. The
     // offer and the verdict follow the live pick; the saved one is history and is labelled so.
-    const fourBInstalled = models.map((m) => (m.id === 'qwen3.5-4b-ud-q4kxl' ? { ...m, state: 'installed' } : m)) as ModelInfo[]
+    const fourBInstalled = MODELS.map((m) => (m.id === 'qwen3.5-4b-ud-q4kxl' ? { ...m, state: 'installed' } : m)) as ModelInfo[]
     const { api } = install(
       snapshot({
         current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null, recommendedModelId: 'qwen3.5-9b-ud-q4kxl' }),
@@ -890,10 +701,10 @@ describe('PerformanceScreen: actions', () => {
       }),
       {
         listModels: vi.fn(async () => fourBInstalled),
-        getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: '' }))
+        getRuntimeStatus: vi.fn(async () => STOPPED_STATUS)
       }
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Qwen3\.5 4B \(UD-Q4_K_XL\) is the best fit for this computer’s graphics memory\./)).toBeInTheDocument()
     expect(screen.getByText('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Start Qwen3\.5 9B/ })).not.toBeInTheDocument()
@@ -913,9 +724,9 @@ describe('PerformanceScreen: actions', () => {
     ]
     for (const [recommendation, text] of cases) {
       install(snapshot({ current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null }), recommendation }), {
-        getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: '' }))
+        getRuntimeStatus: vi.fn(async () => STOPPED_STATUS)
       })
-      renderScreen()
+      renderPerformanceScreen()
       expect(await screen.findByText(text)).toBeInTheDocument()
       if (!recommendation?.modelId) expect(screen.queryByRole('button', { name: /and measure/ })).not.toBeInTheDocument()
       cleanup()
@@ -924,7 +735,7 @@ describe('PerformanceScreen: actions', () => {
 
   it('"Change context size" goes to AI Model; the footer link opens Diagnostics; no "Why this model?" button', async () => {
     install(snapshot())
-    const onNavigate = renderScreen()
+    const { onNavigate } = renderPerformanceScreen()
     await userEvent.click(await screen.findByRole('button', { name: 'Change context size' }))
     expect(screen.queryByRole('button', { name: /Why this model/ })).not.toBeInTheDocument()
     expect(onNavigate).toHaveBeenLastCalledWith('models')
@@ -933,11 +744,9 @@ describe('PerformanceScreen: actions', () => {
   })
 
   it('"Copy report" hands the figures to the native clipboard', async () => {
-    const { api } = install(snapshot())
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    install(snapshot())
+    renderPerformanceScreen()
+    const text = await copiedReport()
     expect(text).toContain('This computer')
     expect(text).toContain('Qwen3.5 9B (UD-Q4_K_XL)')
     expect(text).toContain('8,192 tokens')
@@ -948,7 +757,7 @@ describe('PerformanceScreen: actions', () => {
 
   it('surfaces a failed run as a calm banner and returns to the tiles', async () => {
     install(snapshot(), { runBenchmark: vi.fn(async () => { throw new Error('Error: Model is busy right now') }) })
-    renderScreen()
+    renderPerformanceScreen()
     await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
@@ -964,7 +773,7 @@ describe('PerformanceScreen: focus survives the run', () => {
   it('returns focus to "Check again" after a run this window started', async () => {
     const run = deferred<BenchmarkResult>()
     const { api } = install(snapshot(), { runBenchmark: vi.fn(() => run.promise) })
-    renderScreen()
+    renderPerformanceScreen()
     const button = await screen.findByRole('button', { name: 'Check again' })
     button.focus()
     expect(document.activeElement).toBe(button)
@@ -986,7 +795,7 @@ describe('PerformanceScreen: focus survives the run', () => {
       getRuntimeStatus: vi.fn(async () => STOPPED_STATUS),
       runBenchmark: vi.fn(() => run.promise)
     })
-    renderScreen()
+    renderPerformanceScreen()
     const start = await screen.findByRole('button', { name: 'Start Qwen3.5 9B (UD-Q4_K_XL) and measure' })
     start.focus()
     await userEvent.keyboard('{Enter}')
@@ -1003,7 +812,7 @@ describe('PerformanceScreen: focus survives the run', () => {
     // Another window (or the first-run path) takes the lane and releases it. Nothing here was
     // activated, so the caret stays wherever the user left it — on the link they were reading.
     const { api, pushes } = install(snapshot({ running: true }))
-    mountScreen()
+    renderPerformanceScreen()
     await screen.findByRole('button', { name: 'Running…' })
     const elsewhere = screen.getByRole('button', { name: 'Open Diagnostics' })
     elsewhere.focus()
@@ -1023,7 +832,7 @@ describe('PerformanceScreen: focus survives the run', () => {
 describe('PerformanceScreen: the pushed refresh', () => {
   it('subscribes before the first read, and unsubscribes on unmount', async () => {
     const { api, calls, pushes, unsubscribed } = install(snapshot())
-    const view = mountScreen()
+    const view = renderPerformanceScreen()
     await screen.findByText(/Runs Qwen3\.5 9B/)
     // A push that lands DURING the first read must find a listener already there.
     expect(calls[0]).toBe('onPerformanceChanged')
@@ -1038,10 +847,10 @@ describe('PerformanceScreen: the pushed refresh', () => {
 
   it('registers one listener per mount and leaves none behind on a remount', async () => {
     const { api, pushes, unsubscribed } = install(snapshot())
-    const first = mountScreen()
+    const first = renderPerformanceScreen()
     await screen.findByText(/Runs Qwen3\.5 9B/)
     first.unmount()
-    mountScreen()
+    renderPerformanceScreen()
     await screen.findByText(/Runs Qwen3\.5 9B/)
     expect(api.onPerformanceChanged).toHaveBeenCalledTimes(2)
     expect(unsubscribed()).toBe(1)
@@ -1054,7 +863,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
 
   it('M1: a run this window did not start releases the screen the moment the backend is idle', async () => {
     const { api, pushes } = install(snapshot({ running: true }))
-    mountScreen()
+    renderPerformanceScreen()
     expect(await screen.findByRole('button', { name: 'Running…' })).toBeDisabled()
     api.getPerformance.mockResolvedValue(snapshot({ running: false }))
     await pushChanged(pushes)
@@ -1065,17 +874,12 @@ describe('PerformanceScreen: the pushed refresh', () => {
   })
 
   it('M1 + #438: an external run shows as running with the background line, never the last run’s steps', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { api, progress, pushes } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { api, progress, pushes } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     act(() => progress.forEach((cb) => cb('system')))
     expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
     await screen.findByRole('button', { name: 'Check again' })
     // Someone else takes the lane. Main addresses progress to the window that invoked the run, so
     // this window is never sent that run's steps and a step list could only sit frozen on step 1
@@ -1090,7 +894,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
 
   it('#438: the background line sits IN the step region, so an automatic check is still announced', async () => {
     install(snapshot({ running: true }))
-    renderScreen()
+    renderPerformanceScreen()
     // The region is the always-mounted <ul> of #437: the line arrives as a text change inside a
     // region that was already there, which is what makes it audible. An empty region would have
     // left the automatic check silent — the cost this option would otherwise have carried.
@@ -1100,68 +904,50 @@ describe('PerformanceScreen: the pushed refresh', () => {
   })
 
   it('#438: at the tail of our own run the list stays ours, never blinking to the background line', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { api, progress, pushes } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { api, progress, pushes } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     act(() => progress.forEach((cb) => cb('system')))
     // The backend still holds the span when the invoke resolves and `ownActionInFlight` drops —
     // exactly the window in which that flag ALONE would have handed the region to the background
     // line for a run the user is watching their own steps on.
     api.getPerformance.mockResolvedValue(snapshot({ running: true }))
     await pushChanged(pushes)
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
     expect(screen.queryByText('Checking this computer in the background.')).not.toBeInTheDocument()
     expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
   })
 
   it('the push announcing our OWN run does not un-tick the steps it already reported', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { api, progress, pushes } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { api, progress, pushes } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     act(() => progress.forEach((cb) => cb('system')))
     // Main pushes when the run takes its span — that snapshot is about OUR run.
     api.getPerformance.mockResolvedValue(snapshot({ running: true }))
     await pushChanged(pushes)
     expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
   })
 
   it('back-to-back checks each start with a clean step list', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { progress } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { progress } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     act(() => progress.forEach((cb) => cb('system')))
     act(() => progress.forEach((cb) => cb('drive')))
     expect(screen.getByText('Drive speed').closest('li')?.className).toContain('perf-step-done')
-    await act(async () => {
-      resolveRun(result())
-    })
-    await screen.findByRole('button', { name: 'Check again' })
-    await userEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await run.finish()
+    const second = await startOwnRun()
     // The second run starts from nothing — never from what the first one reported.
     expect(screen.getByText('Hardware detected').closest('li')?.className).not.toContain('perf-step-done')
     expect(screen.getByText('Drive speed').closest('li')?.className).not.toContain('perf-step-done')
-    await act(async () => {
-      resolveRun(result())
-    })
+    await second.finish()
   })
 
   it('M3: an observation from normal use fills the rows without leaving the screen', async () => {
     const { api, pushes } = install(snapshot({ observed: noObservations }))
-    mountScreen()
+    renderPerformanceScreen()
     await screen.findByText(/Nothing observed yet this session/)
     api.getPerformance.mockResolvedValue(snapshot({ observed: observedAnswer }))
     await pushChanged(pushes)
@@ -1170,18 +956,13 @@ describe('PerformanceScreen: the pushed refresh', () => {
   })
 
   it('a check this window starts disables its own button while the backend is still idle', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { api } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { api } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     // Nothing pushed and the snapshot still says idle: the local flag alone drives this.
     expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
     expect(api.getPerformance).toHaveBeenCalledTimes(1)
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
     expect(await screen.findByRole('button', { name: 'Check again' })).toBeEnabled()
     expect(api.getPerformance).toHaveBeenCalledTimes(2)
   })
@@ -1195,7 +976,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
         return call === 1 ? first.promise : Promise.resolve(snapshot({ observed: observedAnswer }))
       })
     })
-    mountScreen()
+    renderPerformanceScreen()
     await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
     await pushChanged(pushes)
     // Serialised: the follow-up waits for the read already out.
@@ -1216,7 +997,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
         return call === 1 ? first.promise : Promise.resolve(snapshot())
       })
     })
-    mountScreen()
+    renderPerformanceScreen()
     await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
     await pushChanged(pushes)
     await pushChanged(pushes)
@@ -1246,7 +1027,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
         })
       }
     )
-    mountScreen()
+    renderPerformanceScreen()
     await waitFor(() => expect(api.getRuntimeStatus).toHaveBeenCalledTimes(1))
     await pushChanged(pushes)
     await waitFor(() => expect(api.getRuntimeStatus).toHaveBeenCalledTimes(2))
@@ -1265,7 +1046,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
       errors.push(args)
     })
     try {
-      const view = mountScreen()
+      const view = renderPerformanceScreen()
       await waitFor(() => expect(api.getPerformance).toHaveBeenCalledTimes(1))
       view.unmount()
       await act(async () => {
@@ -1280,7 +1061,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
 
   it('the done step re-reads instead of declaring the run over', async () => {
     const { api, progress } = install(snapshot({ running: true }))
-    mountScreen()
+    renderPerformanceScreen()
     expect(await screen.findByRole('button', { name: 'Running…' })).toBeDisabled()
     // 'done' means the PROBES finished — the persist and the release still follow, so the
     // screen re-reads and keeps the run up until a snapshot says otherwise.
@@ -1305,7 +1086,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
         return snapshot()
       })
     })
-    mountScreen()
+    renderPerformanceScreen()
     await screen.findByText(/Runs Qwen3\.5 9B/)
     await pushChanged(pushes)
     expect(await screen.findByText(/Could not read the latest figures: Workspace is locked/)).toBeInTheDocument()
@@ -1329,7 +1110,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
         return snapshot()
       })
     })
-    mountScreen()
+    renderPerformanceScreen()
     await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
     expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
     await pushChanged(pushes)
@@ -1347,7 +1128,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
         throw new Error('Error: Model is busy right now')
       })
     })
-    mountScreen()
+    renderPerformanceScreen()
     await screen.findByRole('button', { name: 'Check again' })
     // Refused because another run already holds the lane — which the next read reports.
     api.getPerformance.mockResolvedValue(snapshot({ running: true }))
@@ -1402,7 +1183,7 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
     // The exact shape the old settings gate accepted and the snapshot exposed. `fmt1(undefined)`
     // threw here, and there is no error boundary above this screen: the whole page went blank.
     install(snapshot({ otherMachines: [{} as BenchmarkResult, office] }))
-    renderScreen()
+    renderPerformanceScreen()
     // The screen is up, the healthy row beside the blob is complete…
     expect(await screen.findByText('Other computers this drive has been used on')).toBeInTheDocument()
     expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM/)).toBeInTheDocument()
@@ -1414,7 +1195,7 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
   it('H1: a partially filled record renders the fields it has and dashes the ones it lacks', async () => {
     const partial = { cpuModel: 'Half A Record', profile: 'LITE', ranAt: '2026-08-01T00:00:00Z' } as unknown as BenchmarkResult
     install(snapshot({ otherMachines: [partial] }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Half A Record, – GB RAM/)).toBeInTheDocument()
     // Its own profile pill (the current result carries the same one).
     expect(screen.getAllByText('Lite')).toHaveLength(2)
@@ -1423,7 +1204,7 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
   it('H1: a current result with no usable figures still renders the card', async () => {
     const legacy = { profile: 'BALANCED', ranAt: '' } as unknown as BenchmarkResult
     install(snapshot({ current: legacy, otherMachines: [] }))
-    renderScreen()
+    renderPerformanceScreen()
     // An unknown date says so instead of printing "Invalid Date" or an empty stamp.
     expect(await screen.findByText('Checked –')).toBeInTheDocument()
     expect(screen.getByText('Balanced')).toBeInTheDocument()
@@ -1433,11 +1214,9 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
     // The catalog says 8,192 for this model; the snapshot says what the runtime would ACTUALLY
     // launch with (a manifest stating no window falls back to the settings default). The screen
     // must state the snapshot's figure — recomputing produced "0-token context" for that model.
-    const { api } = install(snapshot({ placement: placement({ recommendedContextTokens: 4096 }) }))
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    install(snapshot({ placement: placement({ recommendedContextTokens: 4096 }) }))
+    renderPerformanceScreen()
+    const text = await copiedReport()
     expect(text).toContain('4,096 tokens')
     expect(text).not.toContain('8,192 tokens')
     expect(text).not.toContain('0 tokens')
@@ -1445,7 +1224,7 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
 
   it('M5 residual: with nothing recommended the report states no context at all', async () => {
     const { api } = install(snapshot({ placement: placement({ recommendedContextTokens: null }) }))
-    renderScreen()
+    renderPerformanceScreen()
     await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
     await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
     expect(api.copyToClipboard.mock.calls[0][0] as string).not.toContain('Context size')
@@ -1460,14 +1239,13 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
         })
       })
     )
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText(/Measured earlier with a 32,768-token context on/)).toBeInTheDocument()
     // The verdict beside it is still the estimate for the CURRENT settings.
     expect(screen.getByText(/Needs at least 5\.8 GB for the weights/)).toBeInTheDocument()
   })
 
   it('the same line in German (D-L8: asserted from the catalog, never a retyped literal)', async () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     install(
       snapshot({
         placement: placement({
@@ -1476,13 +1254,7 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
         })
       })
     )
-    render(
-      <I18nProvider>
-        <ToastProvider>
-          <PerformanceScreen onNavigate={vi.fn()} />
-        </ToastProvider>
-      </I18nProvider>
-    )
+    renderPerformanceScreen({ lang: 'de' })
     const expected = t('de', 'perf.model.measuredOther', {
       context: (32_768).toLocaleString('de'),
       when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('de')
@@ -1497,11 +1269,9 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
 // rating, and the report headed every machine's figures "This computer".
 describe('PerformanceScreen: where a speed figure came from', () => {
   it('L6: the report carries the window a runtime-timings figure covers, and calls it nothing else', async () => {
-    const { api } = install(snapshot())
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    install(snapshot())
+    renderPerformanceScreen()
+    const text = await copiedReport()
     expect(text).toContain('12 tokens / s (Measured with Qwen3.5 9B (UD-Q4_K_XL) on')
     expect(text).toContain('over 64 tokens')
     expect(text).not.toMatch(/approximate/i)
@@ -1509,11 +1279,9 @@ describe('PerformanceScreen: where a speed figure came from', () => {
   })
 
   it('L6: the report preserves the approximation qualifier and the chunk window', async () => {
-    const { api } = install(snapshot({ current: result({ speedBasis: { basis: 'chunks', tokens: 10 } }) }))
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    install(snapshot({ current: result({ speedBasis: { basis: 'chunks', tokens: 10 } }) }))
+    renderPerformanceScreen()
+    const text = await copiedReport()
     expect(text).toMatch(/approximate|chunks/i)
     expect(text).toContain('Approximate: counted chunks, not runtime timings; 10 chunks')
     expect(text).not.toContain('over 10 tokens')
@@ -1524,24 +1292,20 @@ describe('PerformanceScreen: where a speed figure came from', () => {
     // so and stops there — it never dresses the missing figure up as a token or chunk count.
     const legacy = result()
     delete (legacy as Partial<BenchmarkResult>).speedBasis
-    const { api } = install(snapshot({ current: legacy }))
-    renderScreen()
+    install(snapshot({ current: legacy }))
+    renderPerformanceScreen()
     expect(await screen.findByText('Approximate')).toBeInTheDocument()
     expect(screen.getByText(/Approximate: counted chunks, not runtime timings/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    const text = await copiedReport()
     expect(text).toContain('Approximate: counted chunks, not runtime timings')
     expect(text).not.toMatch(/\d+ chunks/)
     expect(text).not.toMatch(/over \d+ tokens/)
   })
 
   it('L6: a result from another computer is not headed "This computer" — the report names the machine it belongs to', async () => {
-    const { api } = install(snapshot({ currentMachine: false }))
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    install(snapshot({ currentMachine: false }))
+    renderPerformanceScreen()
+    const text = await copiedReport()
     expect(text.split('\n')[0]).toBe('Another computer: Intel Core i7-1260P, 15.7 GB RAM')
     expect(text).not.toContain('This computer')
   })
@@ -1550,7 +1314,7 @@ describe('PerformanceScreen: where a speed figure came from', () => {
     install(snapshot({
       otherMachines: [result({ cpuModel: 'Old CPU', ramGb: 8, tokensPerSecond: 24, speedBasis: { basis: 'chunks', tokens: 10 } })]
     }))
-    renderScreen()
+    renderPerformanceScreen()
     const row = (await screen.findByText(/Old CPU/)).closest('.perf-row') as HTMLElement
     expect(within(row).getByText('Approximate')).toBeInTheDocument()
     // The qualifier travels with the row, in the same words the tile uses.
@@ -1568,7 +1332,7 @@ describe('PerformanceScreen: where a speed figure came from', () => {
     const legacy = result({ cpuModel: 'Older CPU', ramGb: 8, tokensPerSecond: 24 })
     delete (legacy as Partial<BenchmarkResult>).speedBasis
     install(snapshot({ otherMachines: [legacy] }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Approximate')).toBeInTheDocument()
     expect(screen.getByText(/Older CPU, 8\.0 GB RAM · .* · Approximate: counted chunks, not runtime timings$/)).toBeInTheDocument()
     expect(screen.queryByText(/chunks;/)).not.toBeInTheDocument()
@@ -1576,7 +1340,7 @@ describe('PerformanceScreen: where a speed figure came from', () => {
 
   it('L6: an other-computer row measured from runtime timings keeps its Good/Slow rating and names its window', async () => {
     install(snapshot({ otherMachines: [office, oldLaptop] }))
-    renderScreen()
+    renderPerformanceScreen()
     await screen.findByText(/41 tokens \/ s with Qwen3\.8 27B UD-Q4_K_M/)
     expect(screen.queryByText('Approximate')).not.toBeInTheDocument()
     // office (41 t/s) is Good, oldLaptop (2 t/s) is Slow — plus the current result's own Good.
@@ -1593,7 +1357,7 @@ describe('PerformanceScreen: where a speed figure came from', () => {
   describe('item 22 (d): the model-start duration on an other-computer row', () => {
     it("a 'model_load' sample shows the duration as a model start", async () => {
       install(snapshot({ otherMachines: [office] }))
-      renderScreen()
+      renderPerformanceScreen()
       await screen.findByText(/41 tokens \/ s with/)
       // office's sample: 13,500 ms → 13.5 s, beside the machine's own facts.
       expect(screen.getByText(/Intel Core i9-13900K, .* · model start 13\.5 s ·/)).toBeInTheDocument()
@@ -1605,7 +1369,7 @@ describe('PerformanceScreen: where a speed figure came from', () => {
         effectiveRead: { mbps: 70, bytes: 2_500_000_000, ms: 36_000, source: 'checksum', modelId: 'qwen3.5-4b-ud-q4kxl', at: '2026-08-28T10:00:00Z' }
       })
       install(snapshot({ otherMachines: [checked] }))
-      renderScreen()
+      renderPerformanceScreen()
       await screen.findByText(/Checksum Box/)
       expect(screen.getByText(/Checksum Box, .* · file check 36\.0 s ·/)).toBeInTheDocument()
       // The teeth: a full file check reads the same bytes but is NOT a model start.
@@ -1616,7 +1380,7 @@ describe('PerformanceScreen: where a speed figure came from', () => {
       const legacy = result({ cpuModel: 'Legacy Box' })
       delete (legacy as Partial<BenchmarkResult>).effectiveRead
       install(snapshot({ otherMachines: [legacy] }))
-      renderScreen()
+      renderPerformanceScreen()
       await screen.findByText(/Legacy Box/)
       expect(screen.queryByText(/model start/)).not.toBeInTheDocument()
       expect(screen.queryByText(/file check/)).not.toBeInTheDocument()
@@ -1628,7 +1392,7 @@ describe('PerformanceScreen: where a speed figure came from', () => {
 
     it('an explicit null effectiveRead behaves like an absent one', async () => {
       install(snapshot({ otherMachines: [result({ cpuModel: 'Null Box', effectiveRead: null })] }))
-      renderScreen()
+      renderPerformanceScreen()
       await screen.findByText(/Null Box/)
       expect(screen.queryByText(/model start/)).not.toBeInTheDocument()
       expect(screen.queryByText(/file check/)).not.toBeInTheDocument()
@@ -1640,22 +1404,19 @@ describe('PerformanceScreen: where a speed figure came from', () => {
 describe('PerformanceScreen: labels that match what is measured', () => {
   it('N4: the empty Drive tile credits a file check as well as a model start', async () => {
     install(snapshot({ current: result({ effectiveRead: null }) }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Measured by the first model start or file check')).toBeInTheDocument()
   })
 
   it('N5: the drive step is "Drive speed", not "Drive write speed" beside a tile reading MB/s read', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    install(snapshot(), { runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r))) })
-    renderScreen()
+    install(snapshot())
+    renderPerformanceScreen()
     // The step list belongs to a run THIS window started (#438), so press the button rather than
     // borrowing a foreign `running: true` span — that now shows the one-line background state.
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const run = await startOwnRun()
     expect(screen.getByText('Drive speed')).toBeInTheDocument()
     expect(screen.queryByText(/write speed/i)).not.toBeInTheDocument()
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
   })
 })
 
@@ -1669,18 +1430,16 @@ describe('PerformanceScreen: #325 residuals', () => {
 
   it('#325 (1): with the GPU switched off, a saved result that recorded a card no longer fills the tile — the off state wins', async () => {
     for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
-      const { api } = install(snapshot({ current: recordedCard, currentGpu: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }), {
+      install(snapshot({ current: recordedCard, currentGpu: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }), {
         getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, ...flags }))
       })
-      renderScreen()
+      renderPerformanceScreen()
       expect(await screen.findByText('Graphics acceleration is off. Models run on the processor.')).toBeInTheDocument()
       expect(screen.queryByText('Usable')).not.toBeInTheDocument()
       expect(screen.queryByText('NVIDIA GeForce RTX 3070')).not.toBeInTheDocument()
       expect(screen.getByText('None')).toBeInTheDocument()
       // The report follows the tile: the off copy, never the recorded card.
-      await userEvent.click(screen.getByRole('button', { name: 'Copy report' }))
-      await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-      const text = api.copyToClipboard.mock.calls[0][0] as string
+      const text = await copiedReport()
       expect(text).toContain('Graphics memory: Graphics acceleration is off. Models run on the processor.')
       expect(text).not.toContain('RTX 3070')
       cleanup()
@@ -1689,19 +1448,17 @@ describe('PerformanceScreen: #325 residuals', () => {
 
   it('#381 review: acceleration off HERE never overwrites another computer’s recorded card — the tile and the report both name it', async () => {
     for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
-      const { api } = install(
+      install(
         snapshot({ current: recordedCard, currentMachine: false, currentGpu: null, graphicsDevice: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }),
         { getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, ...flags })) }
       )
-      renderScreen()
+      renderPerformanceScreen()
       // One `graphicsFigure` feeds the tile AND the report, so the leak showed on both. The
       // pill is the tile's own tell: the record's card rates "Usable", the off branch "None".
       expect(await screen.findByText('Usable')).toBeInTheDocument()
       expect(screen.getByText('NVIDIA GeForce RTX 3070')).toBeInTheDocument()
       expect(screen.queryByText('Graphics acceleration is off. Models run on the processor.')).not.toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Copy report' }))
-      await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-      const text = api.copyToClipboard.mock.calls[0][0] as string
+      const text = await copiedReport()
       expect(text.split('\n')[0]).toBe('Another computer: Intel Core i7-1260P, 15.7 GB RAM')
       expect(text).toContain('Graphics memory: 8.0 GB VRAM (NVIDIA GeForce RTX 3070)')
       expect(text).not.toContain('Graphics acceleration is off')
@@ -1711,22 +1468,20 @@ describe('PerformanceScreen: #325 residuals', () => {
 
   it('#325 (1): with the GPU on, the same recorded card still fills the tile (the fallback is kept)', async () => {
     install(snapshot({ current: recordedCard, currentGpu: null }))
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Usable')).toBeInTheDocument()
     expect(screen.getByText('NVIDIA GeForce RTX 3070')).toBeInTheDocument()
   })
 
   it('#325 (2): the Copy report carries the live recommendation beside the one saved with the check', async () => {
-    const { api } = install(
+    install(
       snapshot({
         recommendation: { modelId: 'qwen3.5-4b-ud-q4kxl', basis: 'cpu' },
         placement: placement({ recommendedContextTokens: 4096 })
       })
     )
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    renderPerformanceScreen()
+    const text = await copiedReport()
     expect(text).toContain('Recommended for the next start: Qwen3.5 4B (UD-Q4_K_XL) (RAM)')
     expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
     expect(text.indexOf('Recommended for the next start')).toBeLessThan(text.indexOf('Recommended at the time of the check'))
@@ -1744,11 +1499,9 @@ describe('PerformanceScreen: #325 residuals', () => {
   it('#325 (2): with no catalog there is no live line, and the saved line stands alone', async () => {
     // Both figures derive from `recommendation?.modelId` MAIN-side (`contextFor(null)` is null),
     // so "no live pick" and "no context" are the only pair the snapshot can carry (#381 review).
-    const { api } = install(snapshot({ recommendation: null, placement: placement({ recommendedContextTokens: null }) }))
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    install(snapshot({ recommendation: null, placement: placement({ recommendedContextTokens: null }) }))
+    renderPerformanceScreen()
+    const text = await copiedReport()
     expect(text).not.toContain('Recommended for the next start')
     expect(text).not.toContain('Context size')
     expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
@@ -1764,17 +1517,17 @@ describe('PerformanceScreen: #325 residuals', () => {
 
   it('#325 (3): a model genuinely running on the graphics card right now says so, beside the dated earlier measurement', async () => {
     install(snapshot({ currentGpu: null, placement: mismatchOnCard }), { getRuntimeStatus: vi.fn(async () => onCard) })
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Running on the graphics card right now.')).toBeInTheDocument()
     // The #303 P4 rule is untouched: the mismatch note still dates the measurement.
     expect(screen.getByText(/Measured earlier with a 8,192-token context on/)).toBeInTheDocument()
   })
 
   it('#325 (3): the line also stands over a matching observation', async () => {
-    install(snapshot({ placement: placement({ observed: observedFull, verdict: { kind: 'gpu', needMb: 6140, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: 41, totalLayers: 41 } }) }), {
+    install(snapshot({ placement: placement({ observed: OBSERVED_FULL, verdict: { kind: 'gpu', needMb: 6140, estimated: false, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: 41, totalLayers: 41 } }) }), {
       getRuntimeStatus: vi.fn(async () => onCard)
     })
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Running on the graphics card right now.')).toBeInTheDocument()
   })
 
@@ -1791,22 +1544,15 @@ describe('PerformanceScreen: #325 residuals', () => {
     ['there is no placement evidence at all', onCard, placement({ observed: null, observedMismatch: null })]
   ])('#325 (3): no line when %s', async (_why, status, p) => {
     install(snapshot({ currentGpu: null, placement: p }), { getRuntimeStatus: vi.fn(async () => status) })
-    renderScreen()
+    renderPerformanceScreen()
     expect(await screen.findByText('Your model')).toBeInTheDocument()
     await waitFor(() => expect(window.api.getRuntimeStatus).toHaveBeenCalled())
     expect(screen.queryByText('Running on the graphics card right now.')).not.toBeInTheDocument()
   })
 
   it('#325 (3): the same line in German (asserted from the catalog)', async () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     install(snapshot({ currentGpu: null, placement: mismatchOnCard }), { getRuntimeStatus: vi.fn(async () => onCard) })
-    render(
-      <I18nProvider>
-        <ToastProvider>
-          <PerformanceScreen onNavigate={vi.fn()} />
-        </ToastProvider>
-      </I18nProvider>
-    )
+    renderPerformanceScreen({ lang: 'de' })
     expect(await screen.findByText(t('de', 'perf.model.runningOnCard'))).toBeInTheDocument()
     expect(t('de', 'perf.model.runningOnCard')).not.toBe(t('en', 'perf.model.runningOnCard'))
   })
@@ -1827,11 +1573,9 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
     )
 
   it('#381: under another computer’s heading the live pick is labelled as this computer’s, with its context beside it', async () => {
-    const { api } = otherMachineReport()
-    renderScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    otherMachineReport()
+    renderPerformanceScreen()
+    const text = await copiedReport()
     const lines = text.split('\n')
     expect(lines[0]).toBe('Another computer: Intel Core i7-1260P, 15.7 GB RAM')
     expect(text).toContain('Recommended for the next start on this computer: Qwen3.5 4B (UD-Q4_K_XL) (RAM)')
@@ -1846,18 +1590,9 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
   })
 
   it('#381: the same report in German (asserted from the catalog, D-L8)', async () => {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    const { api } = otherMachineReport()
-    render(
-      <I18nProvider>
-        <ToastProvider>
-          <PerformanceScreen onNavigate={vi.fn()} />
-        </ToastProvider>
-      </I18nProvider>
-    )
-    await userEvent.click(await screen.findByRole('button', { name: t('de', 'perf.copy') }))
-    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
-    const text = api.copyToClipboard.mock.calls[0][0] as string
+    otherMachineReport()
+    renderPerformanceScreen({ lang: 'de' })
+    const text = await copiedReport(t('de', 'perf.copy'))
     const lines = text.split('\n')
     expect(lines[0]).toBe(t('de', 'perf.report.otherComputer', { cpu: 'Intel Core i7-1260P', ram: fmt1(15.7, 'de') }))
     const liveLabel = t('de', 'perf.recommendation.nextOnThisComputer')
@@ -1893,7 +1628,7 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
 
   it('cause 1: the live region is mounted while idle, before any run', async () => {
     install(snapshot())
-    mountScreen()
+    renderPerformanceScreen()
     await screen.findByRole('button', { name: 'Check again' })
     const idle = stepList()
     expect(idle).not.toBeNull()
@@ -1903,19 +1638,14 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
   })
 
   it('cause 1: the steps arrive INSIDE the same region node, not with a fresh one', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     const during = stepList()
     // Same element instance as the idle one would be — identity is what makes it announceable.
     expect(during).not.toBeNull()
     expect(during?.querySelectorAll('li')).toHaveLength(3)
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
     await screen.findByRole('button', { name: 'Check again' })
     // Back to idle: the region survives the run and empties, ready for the next one.
     expect(stepList()).toBe(during)
@@ -1923,12 +1653,9 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
   })
 
   it('cause 2: an advance changes the region text, not only a CSS class', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { progress } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { progress } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     const before = stepList()?.textContent ?? ''
     expect(before).toContain('Hardware detected: in progress')
     expect(before).toContain('Drive speed: waiting')
@@ -1939,18 +1666,13 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
     expect(after).not.toBe(before)
     expect(after).toContain('Hardware detected: done')
     expect(after).toContain('Drive speed: in progress')
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
   })
 
   it('cause 2: the active step exposes aria-current, and only one step does', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    const { progress } = install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const { progress } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     const current = (): HTMLElement[] => Array.from(document.querySelectorAll('.perf-steps [aria-current="step"]'))
     expect(current()).toHaveLength(1)
     expect(current()[0]?.textContent).toContain('Hardware detected')
@@ -1959,37 +1681,25 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
 
     expect(current()).toHaveLength(1)
     expect(current()[0]?.textContent).toContain('Drive speed')
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
   })
 
   it('the step line reads once: the visible label is hidden from AT, the sr-only twin carries it', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     const li = screen.getByText('Hardware detected').closest('li')
     // Visible copy is unchanged and unduplicated on screen; only its accessible twin adds state.
     expect(screen.getByText('Hardware detected')).toHaveAttribute('aria-hidden', 'true')
     expect(li?.querySelector('.sr-only')?.textContent).toBe('Hardware detected: in progress')
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
   })
 
   it('#436 applies here too: no live-region role nests inside the step region', async () => {
-    let resolveRun: (r: BenchmarkResult) => void = () => {}
-    install(snapshot(), {
-      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
-    })
-    mountScreen()
-    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
     expect(stepList()?.querySelectorAll('[role], [aria-live]')).toHaveLength(0)
-    await act(async () => {
-      resolveRun(result())
-    })
+    await run.finish()
   })
 })
