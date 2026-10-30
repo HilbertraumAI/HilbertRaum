@@ -51,7 +51,7 @@ export interface DictationCapture {
   analyser: AnalyserNode | null
 }
 
-/** Starts the recording (the seam `DictationButton` injects in renderer tests). */
+/** Starts the recording. */
 export type DictationCaptureStart = () => Promise<DictationCapture>
 
 export const captureDictation: DictationCaptureStart = async () => {
