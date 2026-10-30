@@ -18,8 +18,10 @@ import {
   type ExtractFn
 } from '../../src/main/services/runtime-download'
 import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
-import { runtimeMarkerPath, type FetchFn } from '../../src/main/services/assets'
+import { runtimeMarkerPath } from '../../src/main/services/assets'
+import { tMain } from '../../src/main/services/i18n'
 import type { EngineDownloadJob } from '../../src/shared/types'
+import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
 // SEC-2 (full-audit 2026-07-12): the in-app engine extractor relies on the OS tar's implicit
@@ -45,10 +47,26 @@ const canPlantRelativeLink = ((): boolean => {
   try {
     symlinkSync(join('..', 'probe-target'), join(probe, 'probe-link'), 'dir')
     return true
-  } catch {
+  } catch (err) {
+    // Only the missing Windows privilege may skip the rows: ENOSPC, EACCES and the like are real failures.
+    if ((err as NodeJS.ErrnoException).code !== 'EPERM') throw err
     return false
   }
 })()
+
+// CODE-46's rule (ingestion.test.ts): a skip must be visible, and the Linux CI leg must really run the rows.
+if (!canPlantRelativeLink) {
+  console.warn(
+    'engine-extract-containment.test: relative symlinks need Developer Mode/admin on Windows; ' +
+      'the 2 TQ-2 relative-target rows are SKIPPED here.'
+  )
+}
+it.runIf(Boolean(process.env.CI) && process.platform === 'linux')(
+  'relative symlinks can be planted on Linux CI, so the TQ-2 rows actually run',
+  () => {
+    expect(canPlantRelativeLink).toBe(true)
+  }
+)
 
 describe('assertExtractedSymlinksContained (SEC-2)', () => {
   it('passes a plain extracted tree (no links)', async () => {
@@ -178,12 +196,6 @@ function makeDrive(): { rootPath: string; manifestsDir: string } {
   return { rootPath, manifestsDir }
 }
 
-const okFetch = (async () =>
-  new Response(BODY, {
-    status: 200,
-    headers: { 'content-length': String(BODY.length) }
-  })) as unknown as FetchFn
-
 async function runToEnd(mgr: EngineDownloadManager, jobId: string): Promise<EngineDownloadJob> {
   const start = Date.now()
   for (;;) {
@@ -198,11 +210,13 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
   it('the job fails and no install marker is written', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     const outside = mkdtempSync(join(tmpdir(), 'hr-contain-victim-'))
+    writeFileSync(join(outside, 'keep.txt'), 'x')
+    const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
     const escapingExtract: ExtractFn = async (_archive, destDir) => {
       await writeFile(join(destDir, BIN_NAME), 'binary')
       plantDirLink(outside, join(destDir, 'evil'))
     }
-    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: escapingExtract })
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: escapingExtract })
     const started = await mgr.start({
       rootPath,
       manifestsDir,
@@ -210,9 +224,11 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     })
     const job = await runToEnd(mgr, started.jobId)
     expect(job.status).toBe('failed')
-    expect(existsSync(runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS)))).toBe(
-      false
-    )
+    expect(job.error).toBe(tMain('main.engine.extractFailed'))
+    expect(existsSync(runtimeMarkerPath(extractTo))).toBe(false)
+    // The extracted binary itself stays behind: not a clean state, see the SEC-2 follow-up.
+    expect(existsSync(join(extractTo, 'evil'))).toBe(false) // the sweep removed the offender…
+    expect(existsSync(join(outside, 'keep.txt'))).toBe(true) // …without following the link
   })
 
   it('a clean archive through the same flow still installs (no false positive)', async () => {
@@ -220,7 +236,7 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     const cleanExtract: ExtractFn = async (_archive, destDir) => {
       await writeFile(join(destDir, BIN_NAME), 'binary')
     }
-    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: cleanExtract })
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: cleanExtract })
     const started = await mgr.start({
       rootPath,
       manifestsDir,
@@ -228,5 +244,7 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     })
     const job = await runToEnd(mgr, started.jobId)
     expect(job.status).toBe('done')
+    // The positive that pins the refused row's "no marker": same path expression.
+    expect(existsSync(runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS)))).toBe(true)
   })
 })
