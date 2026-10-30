@@ -577,8 +577,8 @@ permission to overlap the load**: at the ceiling the scheduler resolves `'deferr
 exactly **one continuation** on the same settlement, which runs the settlement re-checks and then
 the measurement once the start actually settles; a session or process that ends first runs
 nothing (the next launch re-checks), and a start that never settles leaves it to the next launch
-too. Nothing cancels the user's model start, and no new occupancy lane exists. The timer is
-injectable (`deps.timer`) so the timeout is testable without real time; production passes no deps.
+too. Nothing cancels the user's model start, and no new occupancy lane exists. The suite drives the
+shipped timer with fake timers (`first-benchmark-scheduler.test.ts`, describe "the deferral boundary").
 Measured 2026-09-08 (#334, `eval/results/hardware/334-slow-usb-20260908/`): a healthy 9B start on
 an 87 MB/s stick path with 15.8 GB RAM took 68 s to hash and 91 s to load, so the bound fired and
 the continuation ran 10 s after settlement — the deferral is the ordinary outcome on such media,
@@ -1325,7 +1325,7 @@ guess.
 | M8 | fixed P5 `be177a34` | One shared `isUsefulDevice`/`gpuUsefulForProfile`/`primaryUsefulDevice`/`displayDevice` rule (`shared/gpu-rules.ts`); `GpuProbeResult.machineKey` stamped and checked before any fold-in. | `performance-gpu.test.ts` "a hybrid [iGPU, dGPU] probe: currentGpu, the VRAM budget, the class and the fold-in all describe the dGPU"; "a probe stamped with ANOTHER machine supplies nothing…" |
 | L1 | fixed P7 `566a1043` | `prepareFirstBenchmark` (cheap restore/backfill) runs before `maybeAutoStartActiveModel`; the scheduler awaits the start before any drive/speed probe. | `first-benchmark-scheduler.test.ts` "no benchmark I/O while the start is pending; once it resolves the run measures the started runtime" |
 | L2 | fixed P2 `86fa8e10` | `persistEffectiveRead` (via `effectiveReadPatch`) writes a qualifying sample to `lastBenchmark` AND the matching history entry. | `performance-persistence.test.ts` "updates both lastBenchmark and the matching history entry"; "repairs a stale history entry beside a headline that already carries the sample" |
-| L3 | fixed P3 `3fbc51d0` | `benchmark.ts` reports the `'drive'`/`'speed'` steps only when they produced a figure; a busy or failed leg is silently omitted, never ticked. | `performance-ipc.test.ts` "a runtime that was busy elsewhere (the leg skipped, #185): no speed step"; "a drive probe that failed (unwritable workspace): no drive step, and no later step implies it" |
+| L3 | fixed P3 `3fbc51d0` | `benchmark.ts` reports the `'drive'`/`'speed'` steps only when they produced a figure; a busy or failed leg is silently omitted, never ticked. | `benchmark.test.ts` "a runtime that was busy elsewhere (the leg skipped, #185): no speed step"; "a drive probe that failed (unwritable workspace): no drive step, and no later step implies it" |
 | L4 | documented limitation (this phase) | Retained-hardware-records inventory, in user words and in the security/privacy inventories. | `security-model.md` SEC-N2; `PRIVACY.md` "What data is stored, and where"; `user-guide.md` §10 |
 | L5 | documented limitation (this phase) | Fingerprint-collision, RAM-rounding and OS/arch-split limitations. | `known-limitations.md` "Performance screen and per-computer history (PR #303 audit)" |
 | L6 | fixed P6 `9f703b87` | `speedIsApprox`/`speedBasisNote`/`buildReport` are the single provenance source for the Copy report and the Other-computers rows. | `PerformanceScreen.test.tsx` "L6: the report preserves the approximation qualifier and the chunk window"; "L6: an other-computer row measured from chunks reads \"Approximate\", never Good or Slow" |
