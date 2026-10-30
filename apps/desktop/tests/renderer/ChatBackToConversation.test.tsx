@@ -2,24 +2,20 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { App } from '../../src/renderer/App'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { en, t } from '../../src/shared/i18n'
+import type { Message, PreflightResult, WorkspaceStateInfo } from '../../src/shared/types'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { appStatus, makePolicyStatus } from '../helpers/status'
+import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
+import { assistantMsg, makeConversation, makeDocumentInfo, userMsg } from '../helpers/chat-fixtures'
 import {
-  DEFAULT_SETTINGS,
-  type AppSettings,
-  type AppStatus,
-  type Conversation,
-  type DocumentInfo,
-  type Message,
-  type PolicyStatus,
-  type PreflightResult,
-  type RuntimeStatus,
-  type WorkspaceStateInfo
-} from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
-import { makePolicyStatus } from '../helpers/status'
-import { makeDetail } from '../helpers/evidenceReview'
+  chatDropBridge,
+  chatScreenStubs,
+  conversationRow,
+  flushFakeTimers,
+  renderChatScreen
+} from '../helpers/chat-screen'
 
 // EP-1 P5 (plan §10) — "Back to chat" returns to the ORIGINATING conversation: App hands
 // the review's conversationId to ChatScreen as `initialConversationId`, and the mount-time
@@ -33,99 +29,56 @@ import { makeDetail } from '../helpers/evidenceReview'
 // the slot armed (the re-attach then resurrected the OLD conversation and stomped the
 // just-set documents mode).
 
-const idleStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-function conv(id: string, over: Partial<Conversation> = {}): Conversation {
-  return {
-    id,
-    title: `Conversation ${id}`,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
 afterEach(() => {
-  cleanup()
-  window.localStorage.clear()
-})
-
-function baseStubs(conversations: Conversation[]) {
-  return {
-    listConversations: vi.fn(async () => conversations),
-    getRuntimeStatus: vi.fn(async () => idleStatus),
-    listMessages: vi.fn(async () => []),
-    listDocuments: vi.fn(async () => []),
-    listCollections: vi.fn(async () => []),
-    listSkills: vi.fn(async () => []),
-    getAppStatus: vi.fn(async () => ({ dictationAvailable: false }) as AppStatus),
-    getActiveStream: vi.fn(async () => null),
-    listActiveStreamConversations: vi.fn(async () => []),
-    getConversationContextUsage: vi.fn(async () => null),
-    getConversationSummary: vi.fn(async () => null),
-    listSkillRuns: vi.fn(async () => []),
-    getSettings: vi.fn(async () => ({}) as AppSettings)
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    // The review store outlives the unmount (the FIX-1 row opens a review): the production purge.
+    purgeReviewSession()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+    window.localStorage.clear()
   }
-}
-
-/** The conversation-row button (`.chat-conv`) for a title, or null. The title also appears
- *  in the row's "⋯" aria-label, so role+name lookups are ambiguous — query the row class. */
-function convRow(title: string): HTMLElement | null {
-  return (
-    Array.from(document.querySelectorAll<HTMLElement>('.chat-conv')).find((el) =>
-      (el.textContent ?? '').includes(title)
-    ) ?? null
-  )
-}
+})
 
 describe('ChatScreen — back-to-originating-conversation handoff (P5)', () => {
   it('selects the handed-off conversation on mount (history loads, row current, mode mirrors)', async () => {
-    const stubs = baseStubs([conv('c1'), conv('c2', { mode: 'documents' })])
-    stubApi(stubs)
-    render(
-      <ChatScreen onNavigate={() => {}} initialConversationId="c2" onOpenReview={() => {}} />
+    const listMessages = vi.fn(async (_id: string): Promise<Message[]> => [])
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [
+          makeConversation({ id: 'c1', title: 'Conversation c1' }),
+          makeConversation({ id: 'c2', title: 'Conversation c2', mode: 'documents' })
+        ]),
+        listMessages
+      })
     )
+    renderChatScreen({ initialConversationId: 'c2', onOpenReview: () => {} })
 
     // The re-attach effect resolved: c2 is the ACTIVE conversation.
-    await waitFor(() => expect(stubs.listMessages).toHaveBeenCalledWith('c2'))
-    await waitFor(() =>
-      expect(convRow('Conversation c2')).toHaveAttribute('aria-current', 'true')
-    )
+    await waitFor(() => expect(listMessages).toHaveBeenCalledWith('c2'))
+    await waitFor(() => expect(conversationRow('Conversation c2')).toHaveAttribute('aria-current', 'true'))
     // Never a spurious load of some other conversation.
-    expect(stubs.listMessages).not.toHaveBeenCalledWith('c1')
+    expect(listMessages).not.toHaveBeenCalledWith('c1')
+    // c2 is a documents conversation: the composer mode mirrors it.
+    expect(screen.getByRole('radio', { name: t('en', 'chat.mode.documents') })).toHaveAttribute('aria-checked', 'true')
   })
 
-  it('an unknown (deleted) id degrades to chat home — nothing selected, nothing loaded', async () => {
-    const stubs = baseStubs([conv('c1')])
-    stubApi(stubs)
-    render(
-      <ChatScreen onNavigate={() => {}} initialConversationId="gone" onOpenReview={() => {}} />
-    )
-
-    // Let the mount + re-attach effects settle, then: no history load, no current row.
-    await waitFor(() => expect(convRow('Conversation c1')).not.toBeNull())
-    expect(stubs.listMessages).not.toHaveBeenCalled()
-    expect(convRow('Conversation c1')).not.toHaveAttribute('aria-current')
-  })
-
-  it('without a handoff the mount stays on chat home (baseline unchanged)', async () => {
-    const stubs = baseStubs([conv('c1')])
-    stubApi(stubs)
-    render(<ChatScreen onNavigate={() => {}} onOpenReview={() => {}} />)
-
-    await waitFor(() => expect(convRow('Conversation c1')).not.toBeNull())
-    expect(stubs.listMessages).not.toHaveBeenCalled()
+  it.each([
+    ['an unknown (deleted) id degrades to chat home — nothing selected, nothing loaded', 'gone', 2],
+    ['without a handoff the mount stays on chat home (baseline unchanged)', undefined, 1]
+  ] as const)('%s', async (_title, initialConversationId, conversationReads) => {
+    vi.useFakeTimers()
+    const listConversations = vi.fn(async () => [makeConversation({ id: 'c1', title: 'Conversation c1' })])
+    const listMessages = vi.fn(async (_id: string): Promise<Message[]> => [])
+    stubApi(chatScreenStubs({ listConversations, listMessages }))
+    renderChatScreen({ initialConversationId, onOpenReview: () => {} })
+    await flushFakeTimers() // mount, handoff and any history-load effect have all run
+    // Positive gate: the mount refresh, plus the handoff's own read when an id was handed over.
+    expect(listConversations).toHaveBeenCalledTimes(conversationReads)
+    expect(conversationRow('Conversation c1')).not.toHaveAttribute('aria-current')
+    expect(listMessages).not.toHaveBeenCalled()
   })
 })
 
@@ -140,98 +93,59 @@ const unlockedWorkspace: WorkspaceStateInfo = {
 
 const offlinePolicy = makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })
 
-describe('App — the back-handoff slot is one-shot across EVERY chat mount path (FIX-1)', () => {
-  afterEach(() => {
-    resetReviewSessionForTests()
-  })
+/** The App shell's boot reads (an unlocked dev workspace, the offline policy, a healthy drive, no
+ *  moved-drive notice, no engine or performance events) and the Documents screen's mount reads (no
+ *  import or reindex job to resume): everything these rows reach beyond `chatScreenStubs`. */
+const appShellStubs = () => ({
+  onEngineProblemsChanged: vi.fn(() => () => {}),
+  onPerformanceChanged: vi.fn(() => () => {}),
+  getMovedDriveNotice: vi.fn(async () => null),
+  getActiveImportJob: vi.fn(async () => null),
+  getReindexAllJob: vi.fn(async () => null),
+  getWorkspaceState: vi.fn(async () => unlockedWorkspace),
+  getPolicy: vi.fn(async () => offlinePolicy),
+  runPreflight: vi.fn(
+    async () =>
+      ({
+        ok: true,
+        rootPath: '/drive',
+        writable: true,
+        freeBytes: 1024 * 1024 * 1024,
+        slowDriveWarning: null,
+        problems: []
+      }) as unknown as PreflightResult
+  )
+})
 
+describe('App — the back-handoff slot is one-shot across EVERY chat mount path (FIX-1)', () => {
   it('review → back (slot works once) → Documents → "Ask these documents" wins: documents mode, no resurrected conversation', async () => {
     // c1 is a CHAT-mode conversation (its answer is eligible via citations), so a
     // resurrected re-attach would ALSO stomp the composer mode — both asserted below.
-    const conversation: Conversation = {
+    const conversation = makeConversation({
       id: 'c1',
       title: 'Contract chat',
-      createdAt: '2026-07-18T09:00:00.000Z',
-      updatedAt: '2026-07-18T10:00:00.000Z',
       modelId: 'm1',
-      mode: 'chat',
-      scopeDocumentIds: null,
-      collectionId: null
-    } as Conversation
+      createdAt: '2026-07-18T09:00:00.000Z',
+      updatedAt: '2026-07-18T10:00:00.000Z'
+    })
     const messages: Message[] = [
-      {
-        id: 'm1',
-        conversationId: 'c1',
-        role: 'user',
-        content: 'What does the contract say?',
-        createdAt: '2026-07-18T09:59:00.000Z'
-      },
-      {
-        id: 'm2',
-        conversationId: 'c1',
-        role: 'assistant',
-        content: 'It can be terminated with 90 days notice. [S1]',
+      userMsg('m1', 'What does the contract say?', { createdAt: '2026-07-18T09:59:00.000Z' }),
+      assistantMsg('m2', 'It can be terminated with 90 days notice. [S1]', {
         createdAt: '2026-07-18T10:00:00.000Z',
         citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12, snippet: '…' }]
-      }
+      })
     ]
-    const doc = {
-      id: 'd1',
-      title: 'contract.pdf',
-      originalPath: null,
-      mimeType: 'application/pdf',
-      sizeBytes: 2048,
-      status: 'indexed',
-      errorMessage: null,
-      chunkCount: 3
-    } as DocumentInfo
-    const listMessages = vi.fn(async () => messages)
-    stubApi({
-      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
-      getAppStatus: vi.fn(
-        async () =>
-          ({
-            appName: 'x',
-            appVersion: '0',
-            offlineMode: true,
-            networkAllowed: false,
-            activeModelId: 'm1',
-            hardwareProfile: 'UNKNOWN',
-            workspaceMode: 'plaintext_dev',
-            workspaceReady: true,
-            machineRamGb: 16,
-            dictationAvailable: false
-          }) as AppStatus
-      ),
-      runPreflight: vi.fn(
-        async () =>
-          ({
-            ok: true,
-            rootPath: '/drive',
-            writable: true,
-            freeBytes: 1024 * 1024 * 1024,
-            slowDriveWarning: null,
-            problems: []
-          }) as unknown as PreflightResult
-      ),
-      listConversations: vi.fn(async () => [conversation]),
-      listMessages,
-      listDocuments: vi.fn(async () => [doc]),
-      listCollections: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: true,
-        modelId: 'm1',
-        port: 1234,
-        healthy: true,
-        message: 'ok'
-      })),
+    const listMessages = vi.fn(async (_id: string) => messages)
+    stubReviewApi({
+      ...chatScreenStubs({
+        listConversations: vi.fn(async () => [conversation]),
+        listMessages,
+        listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf', sizeBytes: 2048 })])
+      }),
+      ...appShellStubs(),
+      getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', machineRamGb: 16 })),
       getEvidenceReviewForMessage: vi.fn(async () => null),
-      createEvidenceReview: vi.fn(async () =>
-        makeDetail({ conversationId: 'c1', messageId: 'm2' })
-      )
+      createEvidenceReview: vi.fn(async () => makeDetail({ conversationId: 'c1', messageId: 'm2' }))
     })
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -245,12 +159,7 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
 
     // Back → the slot fires ONCE: c1 comes back as the active conversation.
     fireEvent.click(screen.getByRole('button', { name: `‹ ${t('en', 'review.back')}` }))
-    await waitFor(() => {
-      const row = Array.from(document.querySelectorAll<HTMLElement>('.chat-conv')).find((el) =>
-        (el.textContent ?? '').includes('Contract chat')
-      )
-      expect(row).toHaveAttribute('aria-current', 'true')
-    })
+    await waitFor(() => expect(conversationRow('Contract chat')).toHaveAttribute('aria-current', 'true'))
 
     // Rail → Documents (no chatMode on this navigation — the slot must not survive it
     // into the NEXT chat mount), then "Ask these documents".
@@ -260,19 +169,14 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
     })
     fireEvent.click(checkbox)
     listMessages.mockClear()
-    fireEvent.click(
-      screen.getByRole('button', { name: t('en', 'docs.askSelected', { count: 1 }) })
-    )
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'docs.askSelected', { count: 1 }) }))
 
     // The scoped documents chat WINS: documents mode selected, c1 NOT resurrected.
     const documentsSegment = await screen.findByRole('radio', {
       name: t('en', 'chat.mode.documents')
     })
     await waitFor(() => expect(documentsSegment).toHaveAttribute('aria-checked', 'true'))
-    const c1Row = Array.from(document.querySelectorAll<HTMLElement>('.chat-conv')).find((el) =>
-      (el.textContent ?? '').includes('Contract chat')
-    )
-    expect(c1Row).not.toHaveAttribute('aria-current')
+    expect(conversationRow('Contract chat')).not.toHaveAttribute('aria-current')
     expect(listMessages).not.toHaveBeenCalledWith('c1')
   })
 })
@@ -281,86 +185,50 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
 // return slot: Documents offers "‹ Back to chat", which reopens THAT conversation. Reaching
 // Documents any other way offers nothing, and the rail's Chat keeps its plain chat-home landing.
 describe('App — "Back to chat" after a failed attachment sent the user to Documents (#573)', () => {
-  const droppedPaths = new WeakMap<object, string>()
-  function dropOnChat(name: string, path: string): void {
-    const target = document.querySelector('.chat-main')
-    if (!target) throw new Error('no .chat-main drop target')
-    const file = { name }
-    droppedPaths.set(file, path)
-    fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
+  let bridge = chatDropBridge()
+  const chatMain = (): Element => {
+    const el = document.querySelector('.chat-main')
+    if (!el) throw new Error('no .chat-main drop target')
+    return el
   }
 
   function stubApp(): void {
-    const scanChat = conv('c1', {
+    bridge = chatDropBridge()
+    const scanChat = makeConversation({
+      id: 'c1',
       title: 'Scan chat',
       mode: 'documents',
       scope: { collectionIds: [], documentIds: [] }
     })
-    const scan = {
+    const scan = makeDocumentInfo({
       id: 'd1',
       title: 'scan.pdf',
-      originalPath: null,
-      mimeType: 'application/pdf',
-      sizeBytes: 2048,
       status: 'failed',
       errorMessage: en['main.ingest.pdfScanDetected'],
       scanDetected: true,
-      chunkCount: 0
-    } as DocumentInfo
-    stubApi({
-      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
-      getAppStatus: vi.fn(
-        async () =>
-          ({
-            appName: 'x',
-            appVersion: '0',
-            offlineMode: true,
-            networkAllowed: false,
-            activeModelId: 'm1',
-            hardwareProfile: 'UNKNOWN',
-            workspaceMode: 'plaintext_dev',
-            workspaceReady: true,
-            machineRamGb: 16,
-            dictationAvailable: false,
-            ocrAvailable: true
-          }) as AppStatus
-      ),
-      runPreflight: vi.fn(
-        async () =>
-          ({
-            ok: true,
-            rootPath: '/drive',
-            writable: true,
-            freeBytes: 1024 * 1024 * 1024,
-            slowDriveWarning: null,
-            problems: []
-          }) as unknown as PreflightResult
-      ),
-      listConversations: vi.fn(async () => [scanChat]),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [scan]),
-      listCollections: vi.fn(async () => []),
-      listAttachments: vi.fn(async () => [scan]),
-      getRuntimeStatus: vi.fn(async () => idleStatus),
-      getDroppedFilePath: vi.fn((file: File) => droppedPaths.get(file) ?? ''),
-      importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1'] })),
-      getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 0, failed: 1, done: true }))
+      chunkCount: 0,
+      sizeBytes: 2048
     })
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        ...appShellStubs(),
+        getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', machineRamGb: 16, ocrAvailable: true })),
+        listConversations: vi.fn(async () => [scanChat]),
+        listDocuments: vi.fn(async () => [scan]),
+        listAttachments: vi.fn(async () => [scan]),
+        importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1'] })),
+        getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 0, failed: 1, done: true }))
+      })
+    )
   }
   const backLabel = `‹ ${t('en', 'docs.backToChat')}`
-  const currentRow = (): HTMLElement | undefined =>
-    Array.from(document.querySelectorAll<HTMLElement>('.chat-conv')).find(
-      (el) => el.getAttribute('aria-current') === 'true'
-    )
 
   async function pointerToDocuments(nav: HTMLElement): Promise<void> {
     fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.chat') }))
     fireEvent.click(await screen.findByRole('button', { name: /^Scan chat/ }))
-    await waitFor(() => expect(currentRow()?.textContent ?? '').toContain('Scan chat'))
-    dropOnChat('scan.pdf', '/tmp/scan.pdf')
+    await waitFor(() => expect(conversationRow('Scan chat')).toHaveAttribute('aria-current', 'true'))
+    bridge.drop(chatMain(), 'scan.pdf', '/tmp/scan.pdf')
     fireEvent.click(await screen.findByRole('button', { name: t('en', 'chat.attach.goToDocuments') }))
     await screen.findByRole('heading', { name: t('en', 'docs.title') })
   }
@@ -372,7 +240,7 @@ describe('App — "Back to chat" after a failed attachment sent the user to Docu
     await pointerToDocuments(nav)
 
     fireEvent.click(await screen.findByRole('button', { name: backLabel }))
-    await waitFor(() => expect(currentRow()?.textContent ?? '').toContain('Scan chat'))
+    await waitFor(() => expect(conversationRow('Scan chat')).toHaveAttribute('aria-current', 'true'))
   })
 
   it('Documents reached from the rail offers no way back, and the rail clears an armed one', async () => {
@@ -389,7 +257,7 @@ describe('App — "Back to chat" after a failed attachment sent the user to Docu
     expect(screen.getByRole('button', { name: backLabel })).toBeInTheDocument()
     fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.chat') }))
     await screen.findByRole('button', { name: /^Scan chat/ })
-    expect(currentRow()).toBeUndefined()
+    expect(conversationRow('Scan chat')).not.toHaveAttribute('aria-current')
     // …and the slot is spent: Documents again shows no Back.
     fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.documents') }))
     await screen.findByRole('heading', { name: t('en', 'docs.title') })
