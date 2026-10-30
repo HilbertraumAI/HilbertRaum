@@ -12,14 +12,14 @@ export { detectFilenameScope, type DetectedScope, type ScopeableDoc } from './sc
 export type { RetrievalScope } from '../../../shared/types'
 
 /**
- * Normalize retrieve's arg-5 union: a bare `string[]`/`null` is the legacy doc-id scope.
+ * Normalize retrieve's scope: null/undefined is the whole corpus.
  *
  * A `RetrievalScope` object is passed through BY IDENTITY, so every field `resolveScope`
  * produced — including the knowledge-pack `packIds` and the deny-all `noDocuments` flag
- * (#301 P4, M10) — reaches `retrieve` intact. The legacy array form can never carry either.
+ * (#301 P4, M10) — reaches `retrieve` intact.
  */
-function normalizeScope(scope: string[] | RetrievalScope | null | undefined): RetrievalScope {
-  return Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope
+function normalizeScope(scope: RetrievalScope | null | undefined): RetrievalScope {
+  return scope ?? { documentIds: null }
 }
 import { approxTokenCount, CHUNK_DEFAULTS } from '../ingestion/chunker'
 import {
@@ -311,18 +311,15 @@ interface ChunkRow {
  * pipeline (RRF over a single list is monotone in rank; vector candidates keep their
  * cosine as `score` until a reranker actually rescores them).
  *
- * `scope` (spec §10.4 + document-organization plan §10.2) is a normalized union on
- * parameter 5: a bare `string[]`/`null` is the legacy "ask selected documents" doc-id
- * scope (normalized to `{ documentIds }`), so every existing positional caller stays valid;
- * a `RetrievalScope` adds `collectionIds`/`includeArchived` (membership + archived filter,
- * unioned with `documentIds`).
+ * `scope` (spec §10.4 + document-organization plan §10.2): `documentIds` and `collectionIds`
+ * are unioned (membership + the archived filter, `includeArchived`); null is the whole corpus.
  */
 export async function retrieve(
   db: Db,
   embedder: Embedder,
   question: string,
   settings: RagRetrievalSettings,
-  scope?: string[] | RetrievalScope | null,
+  scope?: RetrievalScope | null,
   reranker?: Reranker | null,
   signal?: AbortSignal,
   externalArm?: ExternalRetrievalArm | null

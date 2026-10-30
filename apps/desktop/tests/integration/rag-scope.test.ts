@@ -87,10 +87,10 @@ describe('scoped retrieval', () => {
     const docA = await seedEmbeddedDoc(db, embedder, 'contract.pdf', ['the payment terms of the question are net thirty days'])
     const notes = await seedEmbeddedDoc(db, embedder, 'notes.txt', ['the exact question text verbatim match'])
     const q = 'the exact question text verbatim match'
-    const { chunks, citations } = await retrieve(db, embedder, q, SETTINGS, [docA])
+    const { chunks, citations } = await retrieve(db, embedder, q, SETTINGS, { documentIds: [docA] })
     expect(chunks.map((c) => c.documentId)).toEqual([docA])
     expect(citations.map((c) => c.sourceTitle)).toEqual(['contract.pdf'])
-    // H3 (rag-collections): null scope = the whole corpus, so the better match is back.
+    // A null scope is the whole corpus, so the better match is back.
     const all = await retrieve(db, embedder, q, SETTINGS, null)
     expect(new Set(all.chunks.map((c) => c.documentId))).toEqual(new Set([docA, notes]))
   })

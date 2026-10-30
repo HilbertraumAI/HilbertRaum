@@ -762,8 +762,8 @@ the index; the duplicated text lives in the same workspace DB, encrypted at rest
 it). Synced by triggers on `chunks` (insert/delete/update-of-text), so
 ingest/re-index/delete can never miss it; created + backfilled by a guarded additive
 migration in `openDatabase` (the `scope_json` precedent). Questions are sanitized into
-`MATCH` queries by `fts.ts` `buildFtsMatchQuery` (shared with conversation search, re-exported
-from `rag/hybrid.ts`): quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax in user
+`MATCH` queries by `fts.ts` `buildFtsMatchQuery` (shared with conversation search):
+quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax in user
 text never reaches MATCH raw; ranking is `bm25()`.
 
 **Trigger sync is rowid-targeted (full-audit 2026-07-11 CODE-4).** The original delete/update
@@ -1329,7 +1329,9 @@ are merged (N2), so filename auto-scope can tell a deliberate pick from an attac
 `retrieve()`'s parameter 5 is widened to `string[] | RetrievalScope | null` and **normalized
 internally** (`Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope`), so
 **every existing positional `scopeDocumentIds` caller and test stays valid byte-for-byte**;
-`generateGroundedAnswer` gains `opts.scope` and forwards it. The membership filter is pushed into SQL
+`generateGroundedAnswer` gains `opts.scope` and forwards it. (The chat + RAG test campaign, 2026-10-30,
+retired the bare-array form and `opts.scopeDocumentIds` once tests were their last callers: parameter 5 is
+`RetrievalScope | null`.) The membership filter is pushed into SQL
 as an **EXISTS/IN disjunction** (index-backed by `idx_doccoll_*`), not a materialized `IN (…thousands…)`:
 
 ```sql

@@ -25,8 +25,8 @@ import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 
 // Document-organization plan §10.2 (Phase A): collection-aware retrieval — the
 // membership/id UNION (D1), the document-level archived exclusion (C1), the structural
-// exclusion of generated docs (D3/N1), and the scope-threaded re-index check (M2). The
-// legacy positional scope path stays byte-identical (covered in rag-scope.test.ts).
+// exclusion of generated docs (D3/N1), and the scope-threaded re-index check (M2). A plain
+// `documentIds` scope is rag-scope.test.ts's.
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
@@ -200,20 +200,5 @@ describe('scope-aware corpusNeedsReindex (M2)', () => {
       scope: { collectionIds: [project.id] }
     })
     expect(msg.content).toBe(REINDEX_NEEDED_ANSWER)
-  })
-})
-
-describe('legacy arg-5 union normalization (H3)', () => {
-  it('a bare doc-id array still scopes exactly like before', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    const q = 'identical phrase'
-    const docA = await seedEmbeddedDoc(db, embedder, 'a.pdf', [q])
-    await seedEmbeddedDoc(db, embedder, 'b.pdf', [q])
-    const scoped = await retrieve(db, embedder, q, SETTINGS, [docA])
-    expect(scoped.chunks.map((c) => c.documentId)).toEqual([docA])
-    // null = whole corpus.
-    const all = await retrieve(db, embedder, q, SETTINGS, null)
-    expect(all.chunks.length).toBe(2)
   })
 })

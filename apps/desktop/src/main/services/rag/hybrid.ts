@@ -19,10 +19,6 @@ import { buildScopeFilter } from '../retrieval-scope'
 /** Standard RRF constant (Cormack et al.); rank-based, so scale-free. */
 const RRF_K = 60
 
-// The MATCH sanitizer lives in services/fts.ts (conversation search reuses it);
-// re-exported here so existing call/import sites are unchanged.
-export { buildFtsMatchQuery }
-
 export interface KeywordSearchOptions {
   /** Restrict hits to chunks with a vector under this embedding model (required — the visibility rule). */
   embeddingModelId: string
