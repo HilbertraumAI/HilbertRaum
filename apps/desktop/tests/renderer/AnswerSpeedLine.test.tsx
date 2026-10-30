@@ -1,49 +1,28 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, cleanup, screen } from '@testing-library/react'
-import { Transcript } from '../../src/renderer/chat/Transcript'
+import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { formatAnswerSpeed } from '../../src/renderer/chat/answerSpeed'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t, type UiLanguage } from '../../src/shared/i18n'
+import type { PreloadApi } from '../../src/preload'
 import type { Message } from '../../src/shared/types'
 import type { AnswerSpeed } from '../../src/shared/ipc'
+import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
+import {
+  chatScreenStubs,
+  conversationRow,
+  deferred,
+  fakeChatStream,
+  flushFakeTimers,
+  renderChatScreen
+} from '../helpers/chat-screen'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { renderTranscript } from '../helpers/transcript'
 
 // #290: the per-answer speed line under a FINISHED chat answer — `42 tok/s · 1.8 s to first
 // token · 615 tokens` — rendered only for messages whose speed payload arrived in this session.
 
-vi.mock('streamdown', () => ({
-  Streamdown: vi.fn(({ children }) => <div data-testid="sd">{children}</div>),
-  defaultRehypePlugins: { raw: () => undefined, sanitize: () => undefined }
-}))
-
-function assistantMsg(id: string, content = 'An answer.'): Message {
-  return { id, conversationId: 'c1', role: 'assistant', content, createdAt: '2026-01-01T00:00:00Z' }
-}
-const noop = (): void => {}
-const onCopy = (_c: string): void => {}
 const tFor = (lang: UiLanguage) => (key: Parameters<typeof t>[1], params?: Parameters<typeof t>[2]) =>
   t(lang, key, params)
-
-function renderTranscript(lang: UiLanguage, messages: Message[], answerSpeeds?: ReadonlyMap<string, AnswerSpeed>) {
-  window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, lang)
-  return render(
-    <I18nProvider>
-      <Transcript
-        messages={messages}
-        streamingHere={false}
-        streamText=""
-        streamThinking=""
-        thinkingOpen={false}
-        onThinkingOpenChange={noop}
-        emptyState={null}
-        onCopy={onCopy}
-        onSave={noop}
-        actionsDisabled={false}
-        answerSpeeds={answerSpeeds}
-      />
-    </I18nProvider>
-  )
-}
 
 beforeEach(() => window.localStorage.clear())
 afterEach(() => cleanup())
@@ -75,37 +54,84 @@ describe('Transcript speed line (#290)', () => {
   const speed: AnswerSpeed = { messageId: 'a2', tokensPerSecond: 42, ttftMs: 1_800, tokens: 615 }
 
   it('shows the line under the answer that has a speed payload, in English', () => {
-    renderTranscript('en', [assistantMsg('a1'), assistantMsg('a2')], new Map([['a2', speed]]))
+    renderTranscript({ messages: [assistantMsg('a1', 'An answer.'), assistantMsg('a2', 'An answer.')], answerSpeeds: new Map([['a2', speed]]) }, 'en')
     const line = screen.getByText('42 tok/s · 1.8 s to first token · 615 tokens')
     expect(line).toHaveAttribute('role', 'note')
     expect(line).toHaveAttribute('title', t('en', 'chat.speed.hint'))
     // Exactly one line: the other answer (no payload this session) shows nothing.
-    expect(screen.getAllByRole('note').filter((n) => n.className === 'msg-speed')).toHaveLength(1)
+    expect(screen.getAllByText(/to first token/)).toHaveLength(1)
   })
 
   it('shows the line in German', () => {
-    renderTranscript('de', [assistantMsg('a2')], new Map([['a2', speed]]))
+    renderTranscript({ messages: [assistantMsg('a2', 'An answer.')], answerSpeeds: new Map([['a2', speed]]) }, 'de')
     expect(screen.getByText('42 Token/s · 1,8 s bis zum ersten Token · 615 Token')).toBeInTheDocument()
   })
 
   it('renders cleanly with no line when there is no payload (mock runtime / aborted answer)', () => {
-    renderTranscript('en', [assistantMsg('a1'), assistantMsg('a2')], new Map())
-    expect(screen.queryByText(/to first token/)).not.toBeInTheDocument()
-    expect(document.querySelector('.msg-speed')).toBeNull()
-  })
-
-  it('shows nothing on reloaded history — a fresh session map carries no entries for old messages', () => {
-    // The payload is never persisted, so a reload re-renders the same messages with an empty map.
-    const { unmount } = renderTranscript('en', [assistantMsg('a2')], new Map([['a2', speed]]))
-    expect(screen.getByText(/to first token/)).toBeInTheDocument()
-    unmount()
-    renderTranscript('en', [assistantMsg('a2')], new Map())
+    renderTranscript({ messages: [assistantMsg('a1', 'An answer.'), assistantMsg('a2', 'An answer.')], answerSpeeds: new Map() }, 'en')
     expect(screen.queryByText(/to first token/)).not.toBeInTheDocument()
   })
 
   it('never renders a line on a user turn even if an id collides', () => {
-    const user: Message = { id: 'a2', conversationId: 'c1', role: 'user', content: 'hi', createdAt: '2026-01-01T00:00:00Z' }
-    renderTranscript('en', [user], new Map([['a2', speed]]))
-    expect(document.querySelector('.msg-speed')).toBeNull()
+    renderTranscript({ messages: [userMsg('a2', 'hi')], answerSpeeds: new Map([['a2', speed]]) }, 'en')
+    expect(screen.getByText('hi')).toBeInTheDocument()
+    expect(screen.queryByText(/to first token/)).not.toBeInTheDocument()
+  })
+})
+
+// The wiring no other suite fires: `onAnswerSpeed` → ChatScreen's session map → the line. `fakeChatStream`
+// has no speed channel yet, so the listener is captured here, in the same shape.
+describe('ChatScreen speed wiring (#290)', () => {
+  it('the chat:speed payload shows the line for this session; a remount over the same history shows none', async () => {
+    vi.useFakeTimers()
+    try {
+      const stream = fakeChatStream()
+      const reply = deferred<Message>()
+      const answer = assistantMsg('a2', 'An answer.')
+      let history: Message[] = []
+      const speedListener: { current: ((s: AnswerSpeed) => void) | null } = { current: null }
+      stubApi(
+        chatScreenStubs({
+          ...stream.stubs,
+          onAnswerSpeed: vi.fn<PreloadApi['onAnswerSpeed']>((_id, cb) => {
+            speedListener.current = cb
+            return () => {
+              speedListener.current = null
+            }
+          }),
+          listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
+          listMessages: vi.fn(async () => history),
+          sendChatMessage: vi.fn(() => reply.promise)
+        })
+      )
+      const first = renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'the question' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flushFakeTimers()
+      expect(stream.subscribed()).toBe(true)
+      expect(speedListener.current).not.toBeNull()
+      // Main sends the payload right before `done`, keyed to the persisted message.
+      act(() => speedListener.current?.({ messageId: 'a2', tokensPerSecond: 42, ttftMs: 1_800, tokens: 615 }))
+      history = [userMsg('u1', 'the question'), answer]
+      await act(async () => {
+        reply.resolve(answer)
+      })
+      await flushFakeTimers()
+      expect(screen.getByText('42 tok/s · 1.8 s to first token · 615 tokens')).toBeInTheDocument()
+      // A fresh mount is a reload: the same persisted answer, and no payload was persisted with it.
+      first.unmount()
+      renderChatScreen()
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
+      expect(screen.getByText('An answer.')).toBeInTheDocument()
+      expect(screen.queryByText(/to first token/)).not.toBeInTheDocument()
+      assertNoUnexpectedApiCalls()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
