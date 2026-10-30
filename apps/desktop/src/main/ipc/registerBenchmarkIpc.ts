@@ -923,12 +923,11 @@ export async function refreshGpuProbeAfterRuntimeInstall(ctx: AppContext): Promi
  * `status().running` stays false for that whole window — so a loading model reads "not
  * loaded" until it is actually ready. A start in flight (a first start or a switch) reads
  * the same way, and a runtime running some OTHER model than the active one does not count
- * for this row. Optional-chained like the sibling service probes: partial test contexts
- * build a `runtime` with only the members they need.
+ * for this row.
  */
 function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
-  const status = ctx.runtime?.status?.()
-  if (!status || !status.running || !status.healthy || status.startingModelId) return false
+  const status = ctx.runtime.status()
+  if (!status.running || !status.healthy || status.startingModelId) return false
   return activeId == null || status.modelId === activeId
 }
 
@@ -937,13 +936,9 @@ function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
  * `occupancy.ts`, `model-busy.ts` and the refusal copy of the chat / doc-task / skill lanes for a
  * harm the measurement bounded (issue #393). Read straight off the manager's status, the field
  * `chatModelResident` and the engine-install guard (`registerEngineIpc.ts`) already read.
- * Optional-chained like every sibling probe: partial test contexts build a `runtime` with only the
- * members they need (`performance-persistence.test.ts` builds one with no `status` at all), and an
- * unwired probe means "no start in flight".
  */
 function modelStartInFlight(ctx: AppContext): boolean {
-  const status = ctx.runtime?.status?.()
-  return status != null && isModelStarting(status) // #599: the weight check counts too
+  return isModelStarting(ctx.runtime.status()) // #599: the weight check counts too
 }
 
 /**

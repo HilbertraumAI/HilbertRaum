@@ -105,7 +105,7 @@ export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'me
  * on a decode figure, and the context is a setting users change often. A legacy sample without
  * the field keeps steering exactly as before.
  */
-export function speedSignalFor(s: AppSettings): PickerSpeedSignal | null {
+function speedSignalFor(s: AppSettings): PickerSpeedSignal | null {
   const last = s.lastBenchmark
   if (!last) return null
   const identity = last.speedIdentity
