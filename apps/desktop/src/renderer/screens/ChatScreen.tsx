@@ -130,7 +130,7 @@ export function advanceWordTally(tally: LiveWordTally, text: string): number {
 }
 
 /** localStorage key for the conversation-list collapse (a UI preference, not user data). */
-export const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
+const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
 /** Below this viewport width the history column auto-collapses (responsive; the
  *  persisted desktop preference is untouched — widening restores the user's choice). */
