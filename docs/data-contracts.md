@@ -1216,7 +1216,7 @@ head's own weights + KV.
   button, and `DownloadManager.start` refuses such a manifest before any request).
 ✅ **`services/downloads.ts`** — `DownloadGates { policyAllows, settingAllows }`,
   `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
-  `partPath(dest)`, `DownloadManager({ fetchImpl?, log? })` with `start({rootPath, manifest,
+  `DownloadManager({ fetchImpl?, log?, audit?, onModelInstalled? })` with `start({rootPath, manifest,
   gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
   (keeps the `.part`), `activeJob()`, and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`.
   `list()` returns snapshots of the active job (if any) plus every retained terminal job that is

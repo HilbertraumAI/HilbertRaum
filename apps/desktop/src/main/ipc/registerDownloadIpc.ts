@@ -13,15 +13,15 @@ import { log } from '../services/logging'
 // Async-with-polling like the import jobs: `downloadModel` returns the job
 // immediately, the renderer polls `getDownloadJob`. The gates are re-checked HERE, in
 // the main process, on every start: the policy ceiling (`allow_model_downloads`) AND
-// the user's `allowNetwork` setting (default off) — the renderer's confirmation dialog
+// the user's `allowNetwork` setting (default on) — the renderer's confirmation dialog
 // is UX, not the enforcement layer. `licenseAccepted` carries the dialog's explicit
 // license acknowledgement through to the planner's license gate (`--accept-license`
 // semantics) for manifests whose `license_review.status` is not `approved`.
 
 export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager): void {
   const ipcHandle = guardedHandleFor(ctx)
-  // Production injects the global fetch; tests pass a manager with a fake (CI is
-  // zero-network — nothing in the suite ever constructs the default). The audit hook
+  // Production injects the global fetch; tests pass a manager with a fake, and the one row
+  // that builds this default stubs the global first (CI is zero-network). The audit hook
   // routes the manager's background started/verified/failed outcomes to the app
   // audit recorder without the service touching the DB.
   const downloads =

@@ -79,7 +79,7 @@ export interface StartDownloadOptions {
    * Required when `license_review.status !== 'approved'` (mirrors `--accept-license`).
    */
   licenseAccepted?: boolean
-  /** Persistent checksum cache — invalidated for the weight path on success. */
+  /** Persistent checksum cache: primed with the verified hash on success; invalidated for a placeholder. */
   hashStore?: HashStore
 }
 
@@ -426,9 +426,9 @@ export class DownloadManager {
           fetchImpl: this.deps.fetchImpl,
           signal: controller.signal,
           // D3 + F17: cap the body so a redirected/hostile endpoint can't stream past it and fill the
-          // drive (the SHA verify already rejects wrong bytes). The cap is the manifest's exact
-          // `size_bytes` when known, else a bounded per-role default — never unbounded (so a manifest
-          // that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
+          // drive (the SHA verify already rejects wrong bytes). The cap is the manifest's size_bytes
+          // plus drift headroom when known, else a bounded per-role default — never unbounded (so a
+          // manifest that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
           maxBytes: modelWeightMaxBytes(task.role, task.sizeBytes),
           ...(resumeFrom > 0
             ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true, resumeFrom }
