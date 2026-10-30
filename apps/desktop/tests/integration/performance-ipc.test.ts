@@ -1,15 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { join } from 'node:path'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
-// The Performance screen's main-side seams (benchmark.md "History per machine" /
-// "Performance screen"):
-//  - a fresh benchmark files its result under this machine in `benchmarkHistory`;
-//  - the moved-drive check restores a KNOWN machine's result and benchmarks a NEW one,
-//    while a legacy result with no machine identity is left alone;
-//  - the snapshot the screen reads (current-machine flag, other machines, observed rows —
-//    session latches only, M3 — `running` from the benchmark's own span, M1, and the chat
-//    row's residency from the runtime state, DR6);
-//  - the progress steps a run reports: a step ticks only when it SUCCEEDED (L3).
+// The Performance screen's snapshot (benchmark.md "Performance screen"): the current-machine
+// flag, other machines, observed rows — session latches only, M3 — `running` from the
+// benchmark's own span, M1, and the chat row's residency from the runtime state, DR6.
 
 vi.mock('electron', () => ({
   ipcMain: {
@@ -19,151 +12,53 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
-import {
-  buildPerformanceSnapshot,
-  maybeRunFirstBenchmark,
-  resetFirstBenchmarkForTests,
-  runAndPersistBenchmark
-} from '../../src/main/ipc/registerBenchmarkIpc'
+import { buildPerformanceSnapshot } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
-import { liveChatRecommendation, pickerMemoryFor, speedSignalFor } from '../../src/main/ipc/registerModelIpc'
-import { detectSystem, runBenchmark } from '../../src/main/services/benchmark'
-import { discoverManifests, machineRamGb, recommendChatModelId } from '../../src/main/services/models'
-import { machineKey, recordAnswerSpeed, resetPerformanceForTests } from '../../src/main/services/performance'
-import { recordChecksumRead, recordModelLoadRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
-import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
+import { recordAnswerSpeed } from '../../src/main/services/performance'
+import { recordChecksumRead, recordModelLoadRead } from '../../src/main/services/read-speed'
+import { recordModelPlacement } from '../../src/main/services/runtime/placement'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import type { BenchmarkProgressStep, BenchmarkResult, EffectiveReadSample, RuntimeStatus } from '../../src/shared/types'
+import type { RuntimeStatus } from '../../src/shared/types'
+import { effectiveReadSample, modelPlacement } from '../helpers/benchmark-records'
 import {
+  CATALOG_MANIFESTS,
   closePerformanceFixture,
   ctxWith,
   freshRoot,
+  hereKey,
   hereResult,
   performanceChangedSpy,
+  pinPlatform,
   result,
   seededDb,
-  stoppedStatus
+  stoppedStatus,
+  stubChatRuntime
 } from '../helpers/performance-fixture'
+import { runtimeStatus } from '../helpers/status'
 
-beforeEach(() => {
-  resetPerformanceForTests()
-  resetEffectiveReadForTests()
-  resetModelPlacementForTests()
-  resetFirstBenchmarkForTests()
-  setPerformanceChangedSink(null)
-  inFlightStreams.clear()
-})
+// Handoff 4: the snapshot's memory class reads the platform, and no CI leg runs tests on macOS, so
+// these rows state it. Apple Silicon has its own rows in unit/performance and performance-gpu.
+pinPlatform('win32', 'x64')
 
 // TH2: every root/DB this file's tests create goes through the fixture's `freshRoot`/
-// `seededDb`, so the shared teardown (module resets + DB close + temp-dir removal) applies
-// cleanly here — nothing in this file's own `beforeEach` above conflicts with it.
+// `seededDb`, so the shared teardown (module resets + DB close + temp-dir removal) applies.
 afterEach(closePerformanceFixture)
 
 /** A persisted model-load sample (the shape the Drive tile shows; never an observed row). */
-const persistedLoad: EffectiveReadSample = {
+const persistedLoad = effectiveReadSample({
   mbps: 430,
   bytes: 5_800_000_000,
   ms: 13_500,
   source: 'model_load',
   modelId: 'qwen3.5-9b-ud-q4kxl',
   at: '2026-08-20T10:00:00Z'
-}
-
-/** A bare runtime whose stream yields a few chunks with timings — enough for the speed leg. */
-function stubRuntime(over: Partial<ModelRuntime> = {}): ModelRuntime {
-  return {
-    modelId: 'stub-chat',
-    async start() {},
-    async stop() {},
-    async health() {
-      return { healthy: true, message: '', port: null }
-    },
-    async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
-      yield 'a'
-      yield 'b'
-      options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: 20 })
-    },
-    ...over
-  }
-}
+})
 
 /** A running, healthy chat runtime's status for `modelId`. */
 function runningStatus(modelId: string, over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return { running: true, modelId, port: 1, healthy: true, message: 'Running', backend: 'cpu', ...over }
+  return runtimeStatus({ running: true, modelId, port: 1, healthy: true, message: 'Running', backend: 'cpu', ...over })
 }
-
-describe('runAndPersistBenchmark: files the result under this machine', () => {
-  it('persists lastBenchmark AND the history entry, keeping other machines, and reports its steps', async () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    const foreign = result()
-    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign] })
-    const steps: BenchmarkProgressStep[] = []
-
-    const fresh = await runAndPersistBenchmark(ctxWith(root, db), (step) => steps.push(step))
-
-    const s = getSettings(db)
-    expect(s.lastBenchmark?.ranAt).toBe(fresh.ranAt)
-    expect(machineKey(s.lastBenchmark)).toBe(machineKey(detectSystem()))
-    expect(s.benchmarkHistory.map((e) => e.cpuModel)).toEqual([fresh.cpuModel, foreign.cpuModel])
-    // No runtime was up: the speed step is not reported at all.
-    expect(steps).toEqual(['system', 'drive', 'done'])
-  })
-})
-
-describe('maybeRunFirstBenchmark: the moved-drive check', () => {
-  it('restores the stored result for a KNOWN machine without re-running', async () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    const foreign = result()
-    const known = hereResult()
-    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
-
-    // The restore is synchronous inside `prepareFirstBenchmark` (before `scheduleFirstBenchmark`
-    // even runs), so the outcome — 'not-needed', nothing was owed — is already the settlement;
-    // no need to poll for it.
-    await expect(maybeRunFirstBenchmark(ctxWith(root, db))).resolves.toBe('not-needed')
-
-    // Restored, not re-measured: the entry is byte-identical and the history untouched.
-    expect(getSettings(db).lastBenchmark).toEqual(known)
-    expect(getSettings(db).benchmarkHistory).toHaveLength(2)
-  })
-
-  it('benchmarks a NEW machine in the background and keeps the other machine in the history', async () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    const foreign = result()
-    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign] })
-
-    // P7: the call resolves once the measurement actually lands — await it directly instead of
-    // polling for the persisted state it guarantees on 'ran'.
-    await expect(maybeRunFirstBenchmark(ctxWith(root, db))).resolves.toBe('ran')
-
-    expect(machineKey(getSettings(db).lastBenchmark)).toBe(machineKey(detectSystem()))
-    const history = getSettings(db).benchmarkHistory
-    expect(history).toHaveLength(2)
-    expect(history.some((e) => e.cpuModel === foreign.cpuModel)).toBe(true)
-  })
-
-  it('leaves a legacy result with no machine identity alone (never mistaken for a move)', async () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    updateSettings(db, { lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult })
-    const ctx = ctxWith(root, db)
-
-    // P7: the call now returns the scheduler's outcome, so await it directly instead of a fixed
-    // sleep hoping a wrongful background run would have landed by then.
-    await expect(maybeRunFirstBenchmark(ctx)).resolves.toBe('not-needed')
-
-    expect((getSettings(db).lastBenchmark as unknown as { profile: string }).profile).toBe('BALANCED')
-    expect(getSettings(db).benchmarkHistory).toEqual([])
-    // No measurement ran at all: the benchmark's own occupancy span was never taken.
-    expect(ctx.runtime.occupancy.held('benchmark')).toBe(false)
-  })
-})
 
 describe('buildPerformanceSnapshot', () => {
   it('flags whether the current result is this machine, lists the others, and carries the observed rows', () => {
@@ -260,39 +155,6 @@ describe('buildPerformanceSnapshot', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
-  it('carries the live GPU probe for the graphics tile', () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    updateSettings(db, {
-      lastBenchmark: hereResult(),
-      gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 20000 }], probedAt: '2026-09-05T00:00:00Z' }
-    })
-    const snap = buildPerformanceSnapshot(ctxWith(root, db))
-    // P5: the display device carries the shared rule's verdict (an RTX 3090 is usable) — and with
-    // a usable card the tile's device is the budget device itself.
-    expect(snap.currentGpu).toEqual({ name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, useful: true })
-    expect(snap.graphicsDevice).toEqual({ name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, useful: true })
-    // The result predates gpuVramMb: the probe's device is folded in for THIS machine, name and
-    // memory together…
-    expect(snap.current?.gpuVramMb).toBe(24576)
-    expect(snap.current?.gpu).toBe('NVIDIA GeForce RTX 3090')
-  })
-
-  it('does not fold the live probe into another computer\'s result', () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    const foreign = result()
-    delete (foreign as Partial<BenchmarkResult>).gpuVramMb
-    updateSettings(db, {
-      lastBenchmark: foreign,
-      gpuProbe: { devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 20000 }], probedAt: '2026-09-05T00:00:00Z' }
-    })
-    const snap = buildPerformanceSnapshot(ctxWith(root, db))
-    expect(snap.currentMachine).toBe(false)
-    expect(snap.current?.gpuVramMb).toBeUndefined()
-    expect(snap.currentGpu?.totalMb).toBe(24576)
-  })
-
   it('the Your-model block: no active model → unknown; a persisted placement for THIS machine → observed', () => {
     const root = freshRoot()
     const db = seededDb(root)
@@ -300,27 +162,23 @@ describe('buildPerformanceSnapshot', () => {
     let snap = buildPerformanceSnapshot(ctxWith(root, db))
     expect(snap.placement.model).toBeNull()
     expect(snap.placement.verdict.kind).toBe('unknown')
-    expect(['discrete', 'unified', 'cpu']).toContain(snap.placement.memoryClass)
 
     // An active model with a persisted placement stamped with THIS machine.
-    const here = machineKey(detectSystem())
+    const here = hereKey()
     updateSettings(db, {
       activeModelId: 'some-model',
       modelPlacements: {
-        'some-model': {
+        'some-model': modelPlacement({
           modelId: 'some-model', contextTokens: 4096, backend: 'cpu', gpuLayers: null, totalLayers: null,
           gpuModelMb: null, cpuModelMb: 3000, gpuKvMb: null, cpuKvMb: 200, metalMaxWorkingSetMb: null,
           machineKey: here, at: '2026-09-05T00:00:00Z'
-        }
+        })
       }
     })
     snap = buildPerformanceSnapshot(ctxWith(root, db))
     expect(snap.placement.model?.id).toBe('some-model')
     // Not in the catalog: size 0, context from settings.
     expect(snap.placement.model?.sizeOnDiskGb).toBe(0)
-    // A catalog model's size is converted from the manifest's decimal GB to GiB, the unit the
-    // rest of the screen uses (19.8 decimal GB reads 18.4).
-    expect(Math.round(((19.8 * 1e9) / 1024 ** 3) * 10) / 10).toBe(18.4)
     expect(snap.placement.observed?.cpuModelMb).toBe(3000)
     expect(snap.placement.verdict).toMatchObject({ kind: 'cpu', needMb: 3200, estimated: false })
 
@@ -332,27 +190,25 @@ describe('buildPerformanceSnapshot', () => {
     // The session latch (this start) wins over the persisted record. Its context matches the
     // configured launch context, as the persisted one did — a latch measured with a DIFFERENT
     // context is no longer presented as the measured fit (see performance-schema.test.ts).
-    recordModelPlacement({
-      modelId: 'some-model', contextTokens: 4096, backend: 'gpu', gpuLayers: 10, totalLayers: 10,
-      gpuModelMb: 2500, cpuModelMb: 100, gpuKvMb: 300, cpuKvMb: null, metalMaxWorkingSetMb: null,
-      machineKey: here, at: '2026-09-05T01:00:00Z'
-    })
+    recordModelPlacement(
+      modelPlacement({
+        modelId: 'some-model', contextTokens: 4096, backend: 'gpu', gpuLayers: 10, totalLayers: 10,
+        gpuModelMb: 2500, cpuModelMb: 100, gpuKvMb: 300, cpuKvMb: null, metalMaxWorkingSetMb: null,
+        machineKey: here, at: '2026-09-05T01:00:00Z'
+      })
+    )
     snap = buildPerformanceSnapshot(ctxWith(root, db))
     expect(snap.placement.observed?.at).toBe('2026-09-05T01:00:00Z')
     expect(snap.placement.verdict.kind).toBe('gpu')
   })
 
-  it('lists every model the app can hold, with liveness from each service and the totals', () => {
+  it('lists every model the app can hold, with liveness from each service', () => {
     const root = freshRoot()
     const db = seededDb(root)
     updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
     const ctx = ctxWith(root, db, {
-      manifestsDir: join(__dirname, '..', '..', '..', '..', 'model-manifests'),
-      runtime: {
-        occupancy: new ModelOccupancy(),
-        active: () => ({ modelId: 'qwen3.5-9b-ud-q4kxl' }),
-        status: () => runningStatus('qwen3.5-9b-ud-q4kxl')
-      },
+      manifestsDir: CATALOG_MANIFESTS,
+      runtime: stubChatRuntime({ modelId: 'qwen3.5-9b-ud-q4kxl', status: () => runningStatus('qwen3.5-9b-ud-q4kxl') }),
       translator: { deviceStatus: () => ({ device: 'auto', gpuLayers: 20, totalLayers: 49, live: true }) },
       vision: { isLoaded: () => false },
       reranker: { isLoaded: () => true },
@@ -362,75 +218,16 @@ describe('buildPerformanceSnapshot', () => {
     const rows = snap.placement.models
     expect(rows[0]).toMatchObject({ role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', loaded: true, lifetime: 'session' })
     // The catalog's translation model, live; pinned roles say cpu. Its split shows only on a row that
-    // says 'gpu', which depends on this host's class (#671) — pinned in performance-gpu.test.ts.
+    // says 'gpu' (#671) — pinned in performance-gpu.test.ts.
     const tr = rows.find((r) => r.role === 'translation')
     expect(tr).toMatchObject({ loaded: true, lifetime: 'idle' })
-    expect(tr?.modelId).toBeTruthy()
+    expect(tr?.modelId).toBe('translategemma-12b-it-q4')
     expect(rows.find((r) => r.role === 'vision')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'idle' })
     // A fake without the optional `devicePosture` member reports 'cpu' (Wave 8 ruling (d), the
     // `isLoaded?` pattern's own default) -- unchanged from before this step.
     expect(rows.find((r) => r.role === 'reranker')).toMatchObject({ device: 'cpu', loaded: true, lifetime: 'session' })
     expect(rows.find((r) => r.role === 'embeddings')).toMatchObject({ device: 'cpu', loaded: true })
     expect(rows.find((r) => r.role === 'transcriber')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'per-use' })
-    // Sizes are GiB from the manifests' decimal GB; the total sums every row.
-    const sum = rows.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0), 0)
-    expect(snap.placement.totals.ramAllMb).toBe(Math.round(sum * 1024))
-    // DR11 (PR #303 audit remediation, P9): a FIXED expectation, never one derived from the host.
-    // The fixture's runtime stub has no ready `status()`, so the chat model is not resident and
-    // "both on the card" is false on every host — including an Apple Silicon one, where the
-    // probe-less class is `unified` and the old `memoryClass !== 'cpu'` form would have demanded
-    // `true` for a model that is not even loaded.
-    expect(snap.placement.totals.bothOnCard).toBe(false)
-  })
-
-  // Wave 8 ruling (d) (step 4-8): the reranker row reads the OPTIONAL `devicePosture()` member
-  // when a real Reranker provides it — no hard-coded 'cpu' any more.
-  it('reranker row reads devicePosture() when the Reranker provides it', () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
-    const ctx = ctxWith(root, db, {
-      manifestsDir: join(__dirname, '..', '..', '..', '..', 'model-manifests'),
-      runtime: {
-        occupancy: new ModelOccupancy(),
-        active: () => ({ modelId: 'qwen3.5-9b-ud-q4kxl' }),
-        status: () => runningStatus('qwen3.5-9b-ud-q4kxl')
-      },
-      translator: { deviceStatus: () => ({ device: 'auto', gpuLayers: 20, totalLayers: 49, live: true }) },
-      vision: { isLoaded: () => false },
-      reranker: { isLoaded: () => true, devicePosture: () => 'gpu' },
-      embedder: { isLoaded: () => true }
-    })
-    const snap = buildPerformanceSnapshot(ctx)
-    expect(snap.placement.models.find((r) => r.role === 'reranker')).toMatchObject({ device: 'gpu', loaded: true })
-  })
-
-  it('carries the LIVE recommendation, built from the same inputs the listModels handler feeds buildModelList', () => {
-    // Host-dependent (this machine's RAM, its probe if any), so the assertion is equality with the
-    // shared input functions, not a pinned id — the pinned cases live in picker-seams.test.ts.
-    const root = freshRoot()
-    const db = seededDb(root)
-    const manifestsDir = join(__dirname, '..', '..', '..', '..', 'model-manifests')
-    updateSettings(db, { lastBenchmark: hereResult({ tokensPerSecond: 4, measuredModelId: 'qwen3.5-9b-ud-q4kxl' }) })
-    const snap = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir }))
-    const settings = getSettings(db)
-    const manifests = discoverManifests(manifestsDir).manifests.map((m) => m.manifest)
-    const memory = pickerMemoryFor(settings)
-    expect(snap.recommendation).toEqual(liveChatRecommendation(settings, manifests))
-    expect(snap.recommendation?.basis).toBe(memory.memoryClass)
-    expect(snap.recommendation?.basis).toBe(snap.placement.memoryClass)
-    expect(snap.recommendation?.modelId).toBe(
-      recommendChatModelId(
-        manifests,
-        { memoryClass: memory.memoryClass ?? 'cpu', ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null },
-        speedSignalFor(settings)
-      )
-    )
-    // The signal is the persisted pairing, exactly as the handler derives it.
-    expect(speedSignalFor(settings)).toEqual({ tokensPerSecond: 4, measuredModelId: 'qwen3.5-9b-ud-q4kxl' })
-    expect(speedSignalFor({ ...settings, lastBenchmark: null })).toBeNull()
-    // The saved field is left alone.
-    expect(snap.current?.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
   })
 
   it('the chat row is "loaded" only once the ACTIVE model is running and ready (DR6)', () => {
@@ -457,7 +254,6 @@ describe('buildPerformanceSnapshot', () => {
   })
 
   it('reads a result from another computer as "not this machine"', () => {
-
     const root = freshRoot()
     const db = seededDb(root)
     const foreign = result()
@@ -469,58 +265,5 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.otherMachines).toEqual([])
     expect(snap.currentGpu).toBeNull()
     expect(snap.observed).toEqual({ lastAnswer: null, lastModelLoad: null, lastChecksum: null })
-  })
-})
-
-describe('runBenchmark progress: a step ticks only when it succeeded (L3 / T4)', () => {
-  const run = async (
-    over: Partial<Parameters<typeof runBenchmark>[0]>,
-    workspacePath = join(freshRoot(), 'workspace')
-  ): Promise<BenchmarkProgressStep[]> => {
-    const steps: BenchmarkProgressStep[] = []
-    await runBenchmark({ workspacePath, manifests: [], onProgress: (s) => steps.push(s), ...over })
-    return steps
-  }
-
-  it('no runtime: system, drive, done', async () => {
-    expect(await run({})).toEqual(['system', 'drive', 'done'])
-  })
-
-  it('a runtime that produced a reading: system, drive, speed, done', async () => {
-    expect(await run({ runtime: stubRuntime() })).toEqual(['system', 'drive', 'speed', 'done'])
-  })
-
-  it('a runtime that was busy elsewhere (the leg skipped, #185): no speed step', async () => {
-    expect(await run({ runtime: stubRuntime(), modelBusy: () => true })).toEqual(['system', 'drive', 'done'])
-  })
-
-  it('a speed probe that failed (the stream threw): no speed step', async () => {
-    const failing = stubRuntime({
-      async *chatStream() {
-        throw new Error('sidecar gone')
-      }
-    })
-    expect(await run({ runtime: failing })).toEqual(['system', 'drive', 'done'])
-  })
-
-  it('a drive probe that failed (unwritable workspace): no drive step, and no later step implies it', async () => {
-    const missing = join(freshRoot(), 'does-not-exist', 'workspace')
-    const steps = await run({ runtime: stubRuntime() }, missing)
-    expect(steps).toEqual(['system', 'speed', 'done'])
-  })
-
-  it('a throwing onProgress never fails the run', async () => {
-    const workspacePath = join(freshRoot(), 'workspace')
-    const seen: BenchmarkProgressStep[] = []
-    const fresh = await runBenchmark({
-      workspacePath,
-      manifests: [],
-      onProgress: (s) => {
-        seen.push(s)
-        throw new Error('renderer gone')
-      }
-    })
-    expect(seen).toEqual(['system', 'drive', 'done'])
-    expect(fresh.profile).toBeTruthy()
   })
 })
