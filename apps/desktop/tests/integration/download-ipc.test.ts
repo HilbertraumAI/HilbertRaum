@@ -27,7 +27,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
-import { bodyFetch, hangingFetch } from '../helpers/download-fixtures'
+import { bodyFetch, hangingFetch, runUnwound } from '../helpers/download-fixtures'
 import { sha256 } from '../helpers/manifest-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -115,8 +115,7 @@ function makeCtx(opts: {
   return { ctx, db, rootPath: drive.rootPath }
 }
 
-const okFetch = bodyFetch(BODY)
-
+/** Accepts `cancelled`, which flips before the run ends: a row that cancelled also awaits `runUnwound` before it finishes. */
 async function waitForTerminal(jobId: string): Promise<DownloadJob> {
   const start = Date.now()
   for (;;) {
@@ -160,7 +159,7 @@ describe('downloadModel gates (offline guarantee — closed gates never reach th
 
   it('throws on an unknown model id', async () => {
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
     await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(
       /Unknown model id/
     )
@@ -184,7 +183,7 @@ describe('downloadModel gates (offline guarantee — closed gates never reach th
 describe('downloadModel happy path (both gates open, injected fake fetch)', () => {
   it('downloads, verifies, and lands the weight at the manifest path', async () => {
     const { ctx, rootPath } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const job = result as DownloadJob
@@ -199,8 +198,9 @@ describe('downloadModel happy path (both gates open, injected fake fetch)', () =
   })
 
   it('cancelDownload routes the id: the job ends cancelled', async () => {
+    const manager = new DownloadManager({ fetchImpl: hangingFetch('partial-') })
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: hangingFetch('partial-') }))
+    registerDownloadIpc(ctx, manager)
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const job = result as DownloadJob
@@ -208,6 +208,7 @@ describe('downloadModel happy path (both gates open, injected fake fetch)', () =
     expect((cancelled as DownloadJob).status).toBe('cancelled')
     const finished = await waitForTerminal(job.jobId)
     expect(finished.status).toBe('cancelled')
+    await runUnwound(manager)
   })
 })
 
@@ -233,15 +234,16 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     const start = Date.now()
     for (;;) {
       const job = manager.get(jobId)
-      if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
+      if (job.status === 'done' || job.status === 'failed') return job
       if (Date.now() - start > hangBudgetMs(5000)) throw new Error('download job never finished')
       await new Promise((r) => setTimeout(r, 5))
     }
   }
 
   it('lists the running job while a download is in flight (progress + Cancel can re-attach)', async () => {
+    const manager = new DownloadManager({ fetchImpl: hangingFetch('partial-') })
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: hangingFetch('partial-') }))
+    registerDownloadIpc(ctx, manager)
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const started = result as DownloadJob
@@ -252,7 +254,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     expect(['queued', 'downloading', 'verifying']).toContain(listed[0].status)
 
     await invoke(handlers, IPC.cancelDownload, started.jobId)
-    await waitForTerminal(started.jobId)
+    await runUnwound(manager)
   })
 
   it('lists a failed job with its error, so the reloaded screen can name the failure', async () => {
@@ -272,7 +274,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
 
   it('lists a done-but-UNVERIFIED job (the placeholder-hash result still needs the user)', async () => {
     const { ctx } = makeCtx({ allowNetwork: true, placeholderHash: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const started = result as DownloadJob
@@ -286,7 +288,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
 
   it('never lists a VERIFIED done job — the model row already carries that state', async () => {
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const finished = await waitForTerminal((result as DownloadJob).jobId)
@@ -296,13 +298,15 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
   })
 
   it('never lists a CANCELLED job', async () => {
+    const manager = new DownloadManager({ fetchImpl: hangingFetch('partial-') })
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: hangingFetch('partial-') }))
+    registerDownloadIpc(ctx, manager)
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const started = result as DownloadJob
     await invoke(handlers, IPC.cancelDownload, started.jobId)
     expect((await waitForTerminal(started.jobId)).status).toBe('cancelled')
+    await runUnwound(manager)
     expect(await list()).toEqual([])
   })
 

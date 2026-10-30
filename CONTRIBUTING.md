@@ -233,13 +233,13 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **A status flip is not a settled run.** `DownloadManager.cancel()` sets `cancelled` at once and
   `activeJob()` then reads null, so a "wait" on either passes with the run still unwinding. Rows that
   checked a `.part` or a rename "after cancel" read too early and stayed green with the abort check
-  deleted. `downloads.test.ts`'s `runUnwound` waits for the run itself.
+  deleted. `runUnwound` in `tests/helpers/download-fixtures.ts` waits for the run itself.
 - **Prove a cache hit with a swap behind the cache, not a counter.** Rewrite the file with the same size
   and mtime: a stale value proves no read, and it needs no probe in production (`policy.test.ts`, F-30).
   Keep a changed-signature row beside it, or a cache that never re-reads passes.
 - **The manifest and download fixtures** are `tests/helpers/manifest-fixtures.ts` (`rawManifest`,
   `validManifest`, `manifestsDirWith`, `verifiedManifest`, …) and `download-fixtures.ts` (`bodyFetch`,
-  `hangingFetch`, `rangeFetch`, `routedFetch`). `download-fixtures` has no `node:fs` or main-service
+  `hangingFetch`, `rangeFetch`, `routedFetch`, `runUnwound`). `download-fixtures` has no `node:fs` or main-service
   value import, so it stays safe beside a `vi.mock` of either.
 - **A row that reads the host pins it.** No CI leg runs tests on macOS, and RAM differs per host.
   Two performance rows would fail on Apple Silicon while docs/benchmark.md said they held "on every

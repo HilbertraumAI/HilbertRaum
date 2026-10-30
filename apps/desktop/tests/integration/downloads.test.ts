@@ -13,7 +13,7 @@ import type { ModelManifest, ModelRole } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
 import { tempRoot } from '../helpers/db-fixtures'
 import { deferred } from '../helpers/deferred'
-import { OPEN_GATES, bodyFetch, hangingFetch, rangeFetch, routedFetch } from '../helpers/download-fixtures'
+import { OPEN_GATES, bodyFetch, hangingFetch, rangeFetch, routedFetch, runUnwound } from '../helpers/download-fixtures'
 import { until, within } from '../helpers/hang-budget'
 import {
   downloadManifest,
@@ -58,15 +58,6 @@ afterEach(() => {
 
 /** The suffix is an on-disk contract (a kept .part resumes across versions), so it is spelled here, not imported. */
 const partOf = (dest: string): string => `${dest}.part`
-
-/**
- * For a job the row cancelled: its status flips at once and `activeJob()` reads null with it, so neither says the run has
- * ended. `start()` clears `active` in the run's `finally`, past every await of the run: an awaited delete of the `.part`
- * lands before this returns. Narrow private read: the manager has no public run-settled signal.
- */
-async function runUnwound(mgr: DownloadManager): Promise<void> {
-  await until(() => (mgr as unknown as { active: unknown }).active === null, 'the cancelled run settling')
-}
 
 async function cancelAndUnwind(mgr: DownloadManager, jobId: string): Promise<DownloadJob> {
   mgr.cancel(jobId)
@@ -895,8 +886,9 @@ describe('DownloadManager jobs', () => {
       const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId) // pre-fix: stuck at 'verifying' → timeout
       expect(finished.status).toBe('failed')
-      // The copy carries the raw rename error today, so this row does not claim it is friendly.
+      // The copy still carries the raw errno text and paths, so this row claims only the wrapper, and no stringified Error.
       expect(finished.error).toMatch(/was interrupted/)
+      expect(finished.error).not.toMatch(/Error:/)
       expect(existsSync(dest)).toBe(false) // nothing half-renamed into place
     })
 

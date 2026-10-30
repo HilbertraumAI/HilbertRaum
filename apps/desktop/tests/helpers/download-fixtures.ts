@@ -2,10 +2,20 @@
 // imports from the services and no `node:fs`, so it is safe beside downloads.test's `vi.mock` of assets and beside a
 // `vi.mock('node:fs')`.
 import type { FetchFn } from '../../src/main/services/assets'
-import type { DownloadGates } from '../../src/main/services/downloads'
+import type { DownloadGates, DownloadManager } from '../../src/main/services/downloads'
+import { until } from './hang-budget'
 
 /** Both network gates open. Replaces the suites' local `OPEN`. A closed-gate row spells its own gates. */
 export const OPEN_GATES: DownloadGates = { policyAllows: true, settingAllows: true }
+
+/**
+ * For a job the row cancelled: its status flips at once and `activeJob()` reads null with it, so neither says the run has
+ * ended. `start()` clears `active` in the run's `finally`, past every await of the run: an awaited delete of the `.part`
+ * lands before this returns. Narrow private read: the manager has no public run-settled signal.
+ */
+export async function runUnwound(mgr: DownloadManager): Promise<void> {
+  await until(() => (mgr as unknown as { active: unknown }).active === null, 'the cancelled run settling')
+}
 
 /**
  * Answers every request with `body` (200 + content-length). Ignores Range and the signal: `rangeFetch` and `hangingFetch`
