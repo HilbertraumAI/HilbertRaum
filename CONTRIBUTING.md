@@ -122,8 +122,8 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `Partial<PreloadApi>` (`tests/helpers/renderer.ts`) so a stub's shape is checked against the real
   preload bridge; a blanket `... as never` opts it out, and a later shared-type rename leaves the
   stub compiling against a stale shape (vacuous green). Build payloads with typed factories that
-  return the real shared type (the `runtimeStatus`/`appStatus`/`docTask` pattern in
-  `HomeScreenPoll`/`TranslateScreen`/`fileTranslateSession`); for a deliberately-partial "keep the
+  return the real shared type (`runtimeStatus`/`appStatus` in `tests/helpers/status.ts`, the `docTask`
+  pattern in `TranslateScreen`/`fileTranslateSession`); for a deliberately-partial "keep the
   shell calm" payload use a narrow, named `as unknown as <Type>` at exactly that value, never a
   blanket `} as never)`. A one-way ratchet (`tests/unit/as-never-ratchet.test.ts`) fails if the
   tests/ `as never` count climbs — the remaining casts get converted **fix-when-touched** (lower
@@ -228,6 +228,19 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **Count memo re-renders on the test side.** `tests/helpers/render-counter.ts` wraps the
   production `memo(...)` component (keeping its compare function) inside a `vi.mock`, so no
   production module needs a DEV-only counter. Keep a positive control that shows the counter moves.
+  That wrapper never sees a component's own state updates, so `HomeScreenPoll` counts commits with a
+  `<Profiler>` instead, with a row that shows a changed poll does commit.
+- **A status flip is not a settled run.** `DownloadManager.cancel()` sets `cancelled` at once and
+  `activeJob()` then reads null, so a "wait" on either passes with the run still unwinding. Rows that
+  checked a `.part` or a rename "after cancel" read too early and stayed green with the abort check
+  deleted. `runUnwound` in `tests/helpers/download-fixtures.ts` waits for the run itself.
+- **Prove a cache hit with a swap behind the cache, not a counter.** Rewrite the file with the same size
+  and mtime: a stale value proves no read, and it needs no probe in production (`policy.test.ts`, F-30).
+  Keep a changed-signature row beside it, or a cache that never re-reads passes.
+- **The manifest and download fixtures** are `tests/helpers/manifest-fixtures.ts` (`rawManifest`,
+  `validManifest`, `manifestsDirWith`, `verifiedManifest`, …) and `download-fixtures.ts` (`bodyFetch`,
+  `hangingFetch`, `rangeFetch`, `routedFetch`, `runUnwound`). `download-fixtures` has no `node:fs` or main-service
+  value import, so it stays safe beside a `vi.mock` of either.
 - **A row that reads the host pins it.** No CI leg runs tests on macOS, and RAM differs per host.
   Two performance rows would fail on Apple Silicon while docs/benchmark.md said they held "on every
   host", and a recommended-context row would fail under 8 GB. Pin with `pinPlatform`

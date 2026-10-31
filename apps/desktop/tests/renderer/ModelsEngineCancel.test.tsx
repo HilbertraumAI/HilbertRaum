@@ -1,17 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
-import {
-  DEFAULT_SETTINGS,
-  type AppStatus,
-  type EngineDownloadJob,
-  type EngineStatus,
-  type PolicyStatus
-} from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
-import { makePolicyStatus } from '../helpers/status'
+import { ENGINE_MISSING, engineJob, stubModelsApi } from '../helpers/model-fixtures'
+import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // SH-1 (frontend audit 2026-08-09, #144): the engine download (multi-hundred-MB llama.cpp
 // fetch) had NO Cancel — cancelEngineDownload was exposed on the bridge with zero callers.
@@ -20,49 +13,23 @@ import { makePolicyStatus } from '../helpers/status'
 // Isolated in its own file so ModelsScreen's module-level rememberedEngineJob starts fresh;
 // the test drives the job to a terminal 'cancelled' state so nothing live leaks onward.
 
-function policy(): PolicyStatus {
-  return makePolicyStatus({
-    network: { allowModelDownloads: true },
-    allowNetworkSetting: true
-  })
-}
-
-const engineMissing: EngineStatus = {
-  installed: false,
-  available: true,
-  version: null,
-  backend: null,
-  missingFamilies: ['llama_cpp']
-}
-
-function engineJob(over: Partial<EngineDownloadJob>): EngineDownloadJob {
-  return {
-    jobId: 'e1',
-    status: 'downloading',
-    receivedBytes: 100_000_000,
-    totalBytes: 400_000_000,
-    unverified: false,
-    binaryPath: null,
-    error: null,
-    ...over
+afterEach(() => {
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
   }
-}
-
-afterEach(cleanup)
+})
 
 describe('ModelsScreen — engine download Cancel (SH-1, #144)', () => {
   it('offers Cancel while the engine fetch is live and cancelling ends the job', async () => {
     const user = userEvent.setup()
-    const live = engineJob({})
+    const live = engineJob()
     const cancelled = engineJob({ status: 'cancelled' })
     const downloadEngine = vi.fn(async () => live)
     const cancelEngineDownload = vi.fn(async () => cancelled)
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
-      getPolicy: vi.fn(async () => policy()),
-      getAppStatus: vi.fn(async () => ({ machineRamGb: 32 }) as AppStatus),
-      getEngineStatus: vi.fn(async () => engineMissing),
+    stubModelsApi({
+      getEngineStatus: vi.fn(async () => ENGINE_MISSING),
       getEngineJob: vi.fn(async () => live),
       downloadEngine,
       cancelEngineDownload

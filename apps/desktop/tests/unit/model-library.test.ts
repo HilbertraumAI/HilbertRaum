@@ -7,44 +7,40 @@ import {
   variantGroupOrder,
   type ModelVariantGroup
 } from '../../src/renderer/lib/modelLibrary'
-import { isModelOnDrive } from '../../src/renderer/lib/modelAvailability'
-import type { ModelDownloadInfo, ModelInfo, ModelState } from '../../src/shared/types'
-
-/** A complete, typed `ModelInfo` — no payload cast, so a shared-type change fails here first. */
-const BASE: ModelInfo = {
-  id: 'base',
-  displayName: 'Base',
-  family: 'qwen3.8',
-  role: 'chat',
-  format: 'gguf',
-  runtime: 'llama_cpp',
-  license: 'apache-2.0',
-  sizeOnDiskGb: 16,
-  recommendedMinRamGb: 24,
-  recommendedRamGb: 32,
-  recommendedContextTokens: 8192,
-  localPath: 'models/chat/base.gguf',
-  state: 'missing',
-  recommended: false
-}
+import {
+  isModelInstalled,
+  isModelOnDrive,
+  isModelRunnableHere,
+  orderPickerModels
+} from '../../src/renderer/lib/modelAvailability'
+import type { ModelInfo, ModelState } from '../../src/shared/types'
+import {
+  OBTAINABLE_DOWNLOAD as OBTAINABLE,
+  WITHDRAWN_DOWNLOAD as WITHDRAWN,
+  modelInfo
+} from '../helpers/model-fixtures'
 
 function model(displayName: string, extra: Partial<ModelInfo> = {}): ModelInfo {
-  return { ...BASE, id: displayName, displayName, ...extra }
+  return modelInfo({ id: displayName, displayName, ...extra })
 }
-
-const OBTAINABLE: ModelDownloadInfo = {
-  url: 'https://example.test/weights.gguf',
-  sizeBytes: 1000,
-  licenseUrl: null,
-  licenseApproved: true
-}
-
-/** #196: the pinned upstream file is gone — the row explains instead of offering a button. */
-const WITHDRAWN: ModelDownloadInfo = { ...OBTAINABLE, withdrawn: 'the publisher removed it' }
 
 /** Groups here are hand-built so the "already ordered" precondition is explicit in each case. */
 function group(models: ModelInfo[]): ModelVariantGroup {
   return { key: 'test-group', name: 'Test group', models }
+}
+
+const TIE: Partial<ModelInfo> = { state: 'missing', recommended: false, insufficientRam: true }
+
+/** Six quants that tie on all three ordering keys, exactly like the real 16 GB catalog group. */
+function tiedSix(): ModelInfo[] {
+  return [
+    model('Qwen3.8 27B Q4_K_M', { ...TIE, download: WITHDRAWN }),
+    model('Qwen3.8 27B UD-Q4_K_XL', { ...TIE, download: OBTAINABLE }),
+    model('Qwen3.8 27B Q4_K_S', { ...TIE, download: WITHDRAWN }),
+    model('Qwen3.8 27B Q6_K', { ...TIE, download: OBTAINABLE }),
+    model('Qwen3.8 27B Q8_0', { ...TIE, download: OBTAINABLE }),
+    model('Qwen3.8 27B UD-Q6_K_XL', { ...TIE, download: OBTAINABLE })
+  ]
 }
 
 describe('variant identity', () => {
@@ -65,7 +61,14 @@ describe('variant identity', () => {
       model('Qwen3 4B Instruct Q4', { role: 'vision' }),
       model('Qwen3 4B Instruct Q4', { family: 'custom' }),
       model('Qwen3 4B Instruct Q4', { runtime: 'other' }),
-      model('Qwen3 4B Instruct custom')
+      model('Qwen3 4B Instruct custom'),
+      // QAT is identity (#82 ships both); so are architecture notes and unrecognized suffixes.
+      model('Gemma 4 12B QAT Q4_0'),
+      model('Gemma 4 12B Q4_0'),
+      model('Qwen3.8 27B (MoE)'),
+      model('Qwen3.8 27B Q4_K_M'),
+      model('Qwen3.8 27B Q'),
+      model('Qwen3.8 27B v2')
     ]
     expect(groupModelVariants(models)).toHaveLength(models.length)
   })
@@ -111,20 +114,6 @@ describe('variant identity — quantization suffix boundaries (CG-ID)', () => {
     expect(modelVariantName(model(name))).toBe(kept)
   })
 
-  it('keeps QAT, revision and MoE names in separate groups', () => {
-    const names = [
-      'Gemma 4 12B QAT Q4_0',
-      'Gemma 4 12B Q4_0',
-      'Qwen3 4B Instruct 2507 Q4_K_M',
-      'Qwen3 4B Instruct Q4_K_M',
-      'Qwen3.8 27B (MoE)',
-      'Qwen3.8 27B Q4_K_M',
-      'Qwen3.8 27B Q',
-      'Qwen3.8 27B v2'
-    ]
-    expect(groupModelVariants(names.map((n) => model(n)))).toHaveLength(names.length)
-  })
-
   // Recorded, not endorsed: `Q4KM-beta` is not a real quantization, but it reads as one to the
   // regex (Q + digit + word characters), so it merges with the family's other quants. Pinned so a
   // future change to that behaviour is a deliberate decision with a failing test, not a surprise.
@@ -136,61 +125,33 @@ describe('variant identity — quantization suffix boundaries (CG-ID)', () => {
   })
 })
 
-describe('isModelOnDrive — known usable OR repair states (F3, Gate C1)', () => {
-  const EXPECTED: Record<ModelState, boolean> = {
-    installed: true,
-    running: true,
-    ready: true,
-    checksum_failed: true,
-    missing: false,
-    unsupported: false,
-    not_recommended: false
+describe('isModelOnDrive and isModelInstalled — the state table (F3, Gate C1)', () => {
+  // On the drive = usable OR repairable. Installed = usable right now, the picker's first key and the
+  // main side's start gate. `unsupported` and `not_recommended` describe the MACHINE or the policy, not
+  // what is on the drive; the renderer has no presence contract to read, so neither may guess (Gate C1).
+  // `Record<ModelState, …>` makes a new state, or an unknown key, a type error here: that decision
+  // must be taken deliberately (tsconfig.web.json type-checks tests).
+  const STATES: Record<ModelState, { onDrive: boolean; installed: boolean }> = {
+    installed: { onDrive: true, installed: true },
+    running: { onDrive: true, installed: true },
+    ready: { onDrive: true, installed: true },
+    checksum_failed: { onDrive: true, installed: false },
+    missing: { onDrive: false, installed: false },
+    unsupported: { onDrive: false, installed: false },
+    not_recommended: { onDrive: false, installed: false }
   }
-
-  it.each(Object.entries(EXPECTED) as [ModelState, boolean][])(
-    'state %s → %s',
-    (state, onDrive) => {
-      expect(isModelOnDrive(model('Any model', { state }))).toBe(onDrive)
-    }
+  const ROWS = Object.entries(STATES).map(
+    ([state, e]): [ModelState, boolean, boolean] => [state as ModelState, e.onDrive, e.installed]
   )
 
-  it('covers every ModelState the shared contract declares', () => {
-    // A new state added to the shared contract must be a deliberate decision about this view;
-    // `Record<ModelState, boolean>` above makes omitting one a type error, this pins the reverse.
-    expect(Object.keys(EXPECTED).sort()).toEqual([
-      'checksum_failed',
-      'installed',
-      'missing',
-      'not_recommended',
-      'ready',
-      'running',
-      'unsupported'
-    ])
-  })
-
-  it('never infers file presence for unsupported / not_recommended entries', () => {
-    // Those states describe the MACHINE or the policy, not what is on the drive; the renderer has
-    // no presence contract to read, so the view must not guess (Gate C1).
-    expect(isModelOnDrive(model('Unsupported', { state: 'unsupported' }))).toBe(false)
-    expect(isModelOnDrive(model('Not recommended', { state: 'not_recommended' }))).toBe(false)
+  it.each(ROWS)('state %s → on drive %s, installed %s', (state, onDrive, installed) => {
+    const m = model('Any model', { state })
+    expect(isModelOnDrive(m)).toBe(onDrive)
+    expect(isModelInstalled(m)).toBe(installed)
   })
 })
 
 describe('variantGroupFace — an obtainable face within the leader priority cohort (F5, #196)', () => {
-  const TIE: Partial<ModelInfo> = { state: 'missing', recommended: false, insufficientRam: true }
-
-  /** Six quants that tie on all three ordering keys, exactly like the real 16 GB catalog group. */
-  function tiedSix(): ModelInfo[] {
-    return [
-      model('Qwen3.8 27B Q4_K_M', { ...TIE, download: WITHDRAWN }),
-      model('Qwen3.8 27B UD-Q4_K_XL', { ...TIE, download: OBTAINABLE }),
-      model('Qwen3.8 27B Q4_K_S', { ...TIE, download: WITHDRAWN }),
-      model('Qwen3.8 27B Q6_K', { ...TIE, download: OBTAINABLE }),
-      model('Qwen3.8 27B Q8_0', { ...TIE, download: OBTAINABLE }),
-      model('Qwen3.8 27B UD-Q6_K_XL', { ...TIE, download: OBTAINABLE })
-    ]
-  }
-
   it('fronts the first obtainable variant when a withdrawn one leads a tie', () => {
     const g = group(tiedSix())
     expect(variantGroupFace(g).displayName).toBe('Qwen3.8 27B UD-Q4_K_XL')
@@ -215,11 +176,12 @@ describe('variantGroupFace — an obtainable face within the leader priority coh
   })
 
   it('an INSTALLED but withdrawn leader keeps the face — being on the drive is obtainable', () => {
-    const g = group([
+    // Both installed, so they tie on every key: only `isObtainable`'s installed half keeps the leader.
+    const tied = group([
       model('Priority Q4_K_M', { state: 'installed', download: WITHDRAWN }),
-      model('Priority Q6_K', { state: 'missing', download: OBTAINABLE })
+      model('Priority Q6_K', { state: 'installed', download: OBTAINABLE })
     ])
-    expect(variantGroupFace(g).displayName).toBe('Priority Q4_K_M')
+    expect(variantGroupFace(tied).displayName).toBe('Priority Q4_K_M')
   })
 
   it('never displaces a RECOMMENDED leader with a lower-priority obtainable sibling', () => {
@@ -239,10 +201,11 @@ describe('variantGroupFace — an obtainable face within the leader priority coh
   })
 
   it('stops at the first member that leaves the cohort, even mid-group', () => {
+    // A tied, obtainable member sits AFTER the leaver: only stopping the scan keeps the leader.
     const g = group([
       model('Cohort Q4_K_M', { insufficientRam: false, download: WITHDRAWN }),
-      model('Cohort Q4_K_S', { insufficientRam: false, download: WITHDRAWN }),
-      model('Cohort Q6_K', { insufficientRam: true, download: OBTAINABLE })
+      model('Too big Q6_K', { insufficientRam: true, download: OBTAINABLE }),
+      model('Cohort Q8_0', { insufficientRam: false, download: OBTAINABLE })
     ])
     expect(variantGroupFace(g)).toBe(g.models[0])
   })
@@ -260,20 +223,15 @@ describe('variantGroupFace — an obtainable face within the leader priority coh
 })
 
 describe('variantGroupOrder — face first, then every other variant exactly once', () => {
-  const TIE: Partial<ModelInfo> = { state: 'missing', recommended: false, insufficientRam: true }
-
   it('promotes the face and keeps the rest in their original relative order', () => {
-    const g = group([
-      model('Qwen3.8 27B Q4_K_M', { ...TIE, download: WITHDRAWN }),
-      model('Qwen3.8 27B UD-Q4_K_XL', { ...TIE, download: OBTAINABLE }),
-      model('Qwen3.8 27B Q4_K_S', { ...TIE, download: WITHDRAWN }),
-      model('Qwen3.8 27B Q6_K', { ...TIE, download: OBTAINABLE })
-    ])
+    const g = group(tiedSix())
     expect(variantGroupOrder(g).map((m) => m.displayName)).toEqual([
       'Qwen3.8 27B UD-Q4_K_XL',
       'Qwen3.8 27B Q4_K_M',
       'Qwen3.8 27B Q4_K_S',
-      'Qwen3.8 27B Q6_K'
+      'Qwen3.8 27B Q6_K',
+      'Qwen3.8 27B Q8_0',
+      'Qwen3.8 27B UD-Q6_K_XL'
     ])
   })
 
@@ -283,23 +241,6 @@ describe('variantGroupOrder — face first, then every other variant exactly onc
       model('Lead Q6_K', { download: OBTAINABLE })
     ])
     expect(variantGroupOrder(g).map((m) => m.displayName)).toEqual(['Lead Q4_K_M', 'Lead Q6_K'])
-  })
-
-  it('lists every variant exactly once — nothing duplicated, nothing dropped', () => {
-    const models = [
-      model('Six Q4_K_M', { ...TIE, download: WITHDRAWN }),
-      model('Six UD-Q4_K_XL', { ...TIE, download: OBTAINABLE }),
-      model('Six Q4_K_S', { ...TIE, download: WITHDRAWN }),
-      model('Six Q6_K', { ...TIE, download: OBTAINABLE }),
-      model('Six Q8_0', { ...TIE, download: OBTAINABLE }),
-      model('Six UD-Q6_K_XL', { ...TIE, download: OBTAINABLE })
-    ]
-    const ordered = variantGroupOrder(group(models))
-    expect(ordered).toHaveLength(models.length)
-    expect(new Set(ordered).size).toBe(models.length)
-    expect(ordered.map((m) => m.displayName).sort()).toEqual(
-      models.map((m) => m.displayName).sort()
-    )
   })
 })
 
@@ -338,21 +279,134 @@ describe('availableFamilies (#313)', () => {
     expect(
       availableFamilies(catalog, { activeChat: zeta, view: 'browse', task: 'all' })
     ).toEqual(['alpha', 'beta', 'gamma'])
-  })
-
-  it('has no search parameter to apply — the family set never narrows by a search term', () => {
-    // `availableFamilies`'s options type carries no `query`; the same call for the same
-    // view/task always yields the same set regardless of what a user has typed into search.
-    const first = availableFamilies(catalog, { activeChat: null, view: 'browse', task: 'all' })
-    const second = availableFamilies(catalog, { activeChat: null, view: 'browse', task: 'all' })
-    expect(first).toEqual(second)
-    expect(first).toEqual(['alpha', 'beta', 'gamma', 'zeta'])
-  })
-
-  it('is deterministically sorted regardless of catalog order', () => {
-    const shuffled = [gamma, zeta, alpha, beta]
+    // A family with another member stays: the exclusion is the pinned model, not its family.
+    const zeta2 = model('Zeta two', { family: 'zeta', role: 'chat', state: 'installed' })
     expect(
-      availableFamilies(shuffled, { activeChat: null, view: 'browse', task: 'all' })
-    ).toEqual(['alpha', 'beta', 'gamma', 'zeta'])
+      availableFamilies([zeta, zeta2, alpha], { activeChat: zeta, view: 'installed', task: 'all' })
+    ).toEqual(['zeta'])
+  })
+
+  it('lists a family once, however many members it has', () => {
+    const zeta2 = model('Zeta two', { family: 'zeta', role: 'chat', state: 'installed' })
+    expect(
+      availableFamilies([zeta, zeta2, alpha], { activeChat: null, view: 'browse', task: 'all' })
+    ).toEqual(['alpha', 'zeta'])
+  })
+})
+
+// DV-2 + issue #93 item 3 — display order of the chat model picker. Keys, in order: installed first
+// (primary), then recommended, then runnable-on-this-machine, then stable catalog order. Runnability is
+// read from `insufficientRam`, the SAME flag the card's RAM warning badge and banner render from, so the
+// order can never contradict the warning printed on a moved card. Display order only: nothing here
+// computes the recommendation. Once variants are grouped there is no global installed-first boundary in
+// the rendered rows (`modelAvailability.ts` O8; design-guidelines §15 "Ordering after grouping").
+const names = (list: ModelInfo[]): string[] => list.map((m) => m.id)
+
+describe('orderPickerModels — runnable-first is unconditional', () => {
+  it('pins the ★ card first in its group; without a recommendation runnable-first alone orders (#93 item 3)', () => {
+    // The un-runnable cards still sink regardless (that DV-2 property is unchanged); the ★
+    // card now additionally leads the runnable block instead of sitting in catalog order.
+    // The recommender only picks a model that fits this machine's RAM, so the ★ is runnable by construction.
+    const catalog = [
+      modelInfo({ id: 'gemma-26b', insufficientRam: true }),
+      modelInfo({ id: 'gemma-12b' }),
+      modelInfo({ id: 'qwen-27b', insufficientRam: true }),
+      modelInfo({ id: 'qwen-9b', recommended: true })
+    ]
+    expect(names(orderPickerModels(catalog))).toEqual([
+      'qwen-9b',
+      'gemma-12b',
+      'gemma-26b',
+      'qwen-27b'
+    ])
+    // Control: with no ★ anywhere, runnable-first + stable catalog order alone decide.
+    expect(names(orderPickerModels(catalog.map((m) => ({ ...m, recommended: false }))))).toEqual([
+      'gemma-12b',
+      'qwen-9b',
+      'gemma-26b',
+      'qwen-27b'
+    ])
+  })
+
+  it('lifts every runnable card above every un-runnable one, catalog order kept inside each group', () => {
+    const catalog = [
+      modelInfo({ id: 'gemma-26b', insufficientRam: true }),
+      modelInfo({ id: 'gemma-12b' }),
+      modelInfo({ id: 'gemma-31b', insufficientRam: true }),
+      modelInfo({ id: 'qwen-4b' }),
+      modelInfo({ id: 'qwen-27b', insufficientRam: true }),
+      modelInfo({ id: 'qwen-9b' })
+    ]
+    expect(names(orderPickerModels(catalog))).toEqual([
+      'gemma-12b',
+      'qwen-4b',
+      'qwen-9b',
+      'gemma-26b',
+      'gemma-31b',
+      'qwen-27b'
+    ])
+  })
+
+  it('treats an absent insufficientRam flag as runnable (older/partial payloads)', () => {
+    expect(isModelRunnableHere(modelInfo())).toBe(true)
+    expect(isModelRunnableHere(modelInfo({ insufficientRam: false }))).toBe(true)
+    expect(isModelRunnableHere(modelInfo({ insufficientRam: true }))).toBe(false)
+  })
+})
+
+describe('orderPickerModels — installed-first stays the primary key', () => {
+  it('an installed but un-runnable model still outranks a runnable one that needs downloading', () => {
+    // Runnability may only reorder cards WITHIN a group, never lift one across the installed-first key.
+    const installedTooBig = modelInfo({ id: 'on-drive', state: 'installed', insufficientRam: true })
+    const missingRunnable = modelInfo({ id: 'to-download' })
+    expect(names(orderPickerModels([missingRunnable, installedTooBig]))).toEqual([
+      'on-drive',
+      'to-download'
+    ])
+  })
+
+  it('orders runnable-first inside EACH group, not just the first one', () => {
+    const catalog = [
+      modelInfo({ id: 'drive-big', state: 'running', insufficientRam: true }),
+      modelInfo({ id: 'dl-big', insufficientRam: true }),
+      modelInfo({ id: 'drive-small', state: 'ready' }),
+      modelInfo({ id: 'dl-small' })
+    ]
+    expect(names(orderPickerModels(catalog))).toEqual([
+      'drive-small',
+      'drive-big',
+      'dl-small',
+      'dl-big'
+    ])
+  })
+})
+
+describe('orderPickerModels — the recommended card leads its group (#93 item 3)', () => {
+  it('never lifts a ★ needs-download card across the installed boundary', () => {
+    // Installed-first stays primary: a recommendation is not a reason to reorder across it.
+    const installed = modelInfo({ id: 'on-drive', state: 'installed' })
+    const recMissing = modelInfo({ id: 'star-to-download', recommended: true })
+    expect(names(orderPickerModels([recMissing, installed]))).toEqual([
+      'on-drive',
+      'star-to-download'
+    ])
+  })
+
+  it('an installed ★ card leads the installed group', () => {
+    const catalog = [
+      modelInfo({ id: 'drive-a', state: 'ready' }),
+      modelInfo({ id: 'drive-star', state: 'installed', recommended: true }),
+      modelInfo({ id: 'dl-a' })
+    ]
+    expect(names(orderPickerModels(catalog))).toEqual(['drive-star', 'drive-a', 'dl-a'])
+  })
+})
+
+describe('orderPickerModels — purity', () => {
+  it('returns a new array and never mutates the input', () => {
+    const input = [modelInfo({ id: 'big', insufficientRam: true }), modelInfo({ id: 'small' })]
+    const out = orderPickerModels(input)
+    expect(out).not.toBe(input)
+    expect(names(input)).toEqual(['big', 'small'])
   })
 })

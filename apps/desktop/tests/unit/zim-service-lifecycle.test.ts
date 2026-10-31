@@ -35,10 +35,10 @@ vi.mock('../../src/main/services/binary-verifier', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/main/services/binary-verifier')>()
   return {
     ...real,
-    verifyBinaryBeforeSpawn: (binPath: string, io?: Parameters<typeof real.verifyBinaryBeforeSpawn>[1]) =>
+    verifyBinaryBeforeSpawn: (binPath: string) =>
       parkedVerifier.gate && binPath.includes('kiwix-serve')
         ? parkedVerifier.gate.wait()
-        : real.verifyBinaryBeforeSpawn(binPath, io)
+        : real.verifyBinaryBeforeSpawn(binPath)
   }
 })
 

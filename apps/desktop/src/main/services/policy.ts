@@ -100,7 +100,7 @@ export const STRICT_POLICY: PrivacyPolicy = {
  * (encryption required, no plaintext, no unverified weights) so M-4/M-6 model-integrity
  * enforcement is untouched.
  */
-export const STANDALONE_POLICY: PrivacyPolicy = {
+const STANDALONE_POLICY: PrivacyPolicy = {
   network: {
     allowModelDownloads: true,
     allowUpdateChecks: false,
@@ -131,7 +131,7 @@ function asObject(value: unknown): Record<string, unknown> {
  * taken from the file only when it is a real boolean; otherwise the base value wins, so
  * partial or junk files can only ever leave you at the safe default.
  */
-export function mergePolicyObject(base: PrivacyPolicy, raw: unknown): PrivacyPolicy {
+function mergePolicyObject(base: PrivacyPolicy, raw: unknown): PrivacyPolicy {
   const obj = asObject(raw)
   const net = asObject(obj.network)
   const ws = asObject(obj.workspace)
@@ -217,7 +217,7 @@ export interface PolicyLoadOptions {
 }
 
 /** The base/fallback policy for a build type: strict when packaged, dev-friendly in dev. */
-export function basePolicyFor(opts: PolicyLoadOptions = {}): PrivacyPolicy {
+function basePolicyFor(opts: PolicyLoadOptions = {}): PrivacyPolicy {
   return opts.isDev === false ? STRICT_POLICY : DEFAULT_POLICY
 }
 
@@ -244,17 +244,6 @@ interface PolicyCacheEntry {
   loaded: LoadedPolicy
 }
 const policyCache = new Map<string, PolicyCacheEntry>()
-let policyMaterializations = 0
-
-/** Test probe (F-30): how many times `loadPolicy` actually parsed the files (cache misses). */
-export function __policyMaterializations(): number {
-  return policyMaterializations
-}
-/** Test hook (F-30): drop the policy cache + reset the probe. */
-export function __resetPolicyCache(): void {
-  policyCache.clear()
-  policyMaterializations = 0
-}
 
 /** `(mtimeMs, size)` of a file, or `absent` if it is missing/unstatable (F-30 cache key part). */
 function fileSignature(path: string): string {
@@ -320,7 +309,6 @@ export function loadPolicy(
 
   const loaded: LoadedPolicy = { policy, policyFilePresent, driveFilePresent, allowNetworkByDefault }
   policyCache.set(configDir, { sig, loaded })
-  policyMaterializations += 1
   return loaded
 }
 

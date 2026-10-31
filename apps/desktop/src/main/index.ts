@@ -912,7 +912,6 @@ function initBackend(): void {
   )
   assertOfflinePosture({
     posture: { offline: status.offlineMode, networkAllowed: status.networkAllowed },
-    installGuard: true,
     log: (m, meta) => log.info(m, meta),
     warn: (m, meta) => log.warn(m, meta),
     // A tripped offline guard goes on the user's local audit record too.

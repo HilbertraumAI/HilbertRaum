@@ -1065,7 +1065,7 @@ change; nothing here touches the model recommender. Code comments cite this sect
 2. **DV-2 — "can this computer run it" outranks alphabetical.** The chat picker fell back to
    catalog (alphabetical) order once the installed/not-installed key tied, so on a 16 GB machine
    three of the first four cards carried a "Needs at least 20/24 GB RAM" warning while the usable
-   models sat below the fold. `orderPickerModels` (`ModelsScreen.tsx`) adds **runnable-first as
+   models sat below the fold. `orderPickerModels` (`lib/modelAvailability.ts`) adds **runnable-first as
    an unconditional second key**, with installed-first still PRIMARY (the installed/needs-download
    boundary is a labelled subheading, so runnability may only reorder cards *within* a group).
    [**Superseded 2026-09-05 by §15:** the full-card picker's labelled subheading is gone — "On
@@ -1083,7 +1083,7 @@ change; nothing here touches the model recommender. Code comments cite this sect
    are the same state — and it was the wrong instinct anyway: the ★ sits on ONE card, while the
    first screenful is what a user actually scans. The ★ card is runnable **by construction**
    (the recommender never picks a RAM-gated model), so this key can only move it up, never down —
-   pinned by a test. Measured live on a 16 GB box, fresh workspace with the ★ in the picker: the
+   pinned by `integration/models.test.ts` "RAM stays a hard gate: never a model the Models screen would refuse to start". Measured live on a 16 GB box, fresh workspace with the ★ in the picker: the
    first RAM-warned card moved from position 1 to position 15 of 23.
    **Superseded in the upward direction (2026-08-03, issue #93 item 3):** the ★ card now LEADS
    its group — `orderPickerModels` inserts **recommended-first** between installed-first and
@@ -1101,11 +1101,11 @@ change; nothing here touches the model recommender. Code comments cite this sect
    field names inside import notes (`"{field}"`, `"language"`) keep straight ASCII pairs.
 
 **As built:** `renderer/styles.css` (`.select`), `renderer/screens/ModelsScreen.tsx`
-(`.select`; exported `isModelInstalled` / `isModelRunnableHere` / `orderPickerModels`),
+(`.select`; the picker predicates, now in `lib/modelAvailability.ts`),
 `renderer/screens/TranslateScreen.tsx` (`.select` ×2), `renderer/screens/DocumentsScreen.tsx`
 (`.select` ×2, the translate modal), `renderer/screens/settings/DiagnosticsTab.tsx` (`.select`,
 the activity filter), `shared/i18n/de.ts` (9 closers). Tests:
-`tests/unit/select-token-treatment.test.ts`, `tests/renderer/ModelsPickerOrder.test.tsx`, the
+`tests/unit/select-token-treatment.test.ts`, `tests/unit/model-library.test.ts`, the
 German-typography block in `tests/unit/i18n.test.ts`. **Verification:** typecheck clean; the
 Models / Translate / Documents / Images / Diagnostics renderer suites, the i18n / copy-tone /
 token-contrast / rail-labels guards and `repo-hygiene` green; before/after CDP capture of all

@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tempRoot } from '../helpers/db-fixtures'
+import { hangingFetch } from '../helpers/download-fixtures'
 
 // #410: `downloadToFile` settles a FAILED download only once its write stream has closed. The file
 // is opened asynchronously (the libuv thread pool), so under load a body that failed before the
@@ -13,15 +14,36 @@ import { join } from 'node:path'
 
 const OPEN_DELAY_MS = 60
 
+const probe = vi.hoisted(() => ({ issuedOpens: 0, pendingOpens: 0, closes: 0 }))
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
+  // Fault injection, not a wait: holds every open so the failure arrives first.
   const slowOpenFs = {
-    open: (...args: unknown[]): void => {
-      setTimeout(() => (actual.open as (...a: unknown[]) => void)(...args), OPEN_DELAY_MS)
+    open: (
+      path: string,
+      flags: string,
+      mode: number,
+      done: (err: NodeJS.ErrnoException | null, fd: number) => void
+    ): void => {
+      probe.issuedOpens++
+      probe.pendingOpens++
+      setTimeout(
+        () =>
+          actual.open(path, flags, mode, (err, fd) => {
+            probe.pendingOpens--
+            done(err, fd)
+          }),
+        OPEN_DELAY_MS
+      )
     },
     write: actual.write,
     writev: actual.writev,
-    close: actual.close
+    close: (fd: number, done: (err: NodeJS.ErrnoException | null) => void): void =>
+      actual.close(fd, (err) => {
+        probe.closes++
+        done(err)
+      })
   }
   type StreamOptions = Exclude<Parameters<typeof actual.createWriteStream>[1], string | undefined>
   const createWriteStream = (path: string, options?: StreamOptions) =>
@@ -33,44 +55,38 @@ vi.mock('node:fs', async (importOriginal) => {
 import { downloadToFile, type FetchFn } from '../../src/main/services/assets'
 
 describe('downloadToFile — a failure settles after the partial file is closed (#410)', () => {
-  it('a body that fails before the slow open completed rejects only once the file exists and is closed', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-dl-close-'))
-    const dest = join(root, 'deu.traineddata.gz.part')
-    const failing = new ReadableStream({
-      start(controller) {
-        controller.error(new Error('connection reset'))
-      }
-    })
-    const fetchImpl = (async () => new Response(failing)) as unknown as FetchFn
-    await expect(downloadToFile('https://example.test/deu.gz', dest, { fetchImpl })).rejects.toThrow()
-    // The stream opened (creating the file) and closed BEFORE the rejection — not after it…
-    expect(existsSync(dest)).toBe(true)
-    rmSync(dest)
-    // …so a caller's delete on failure is final: nothing re-creates the file later.
-    await new Promise((r) => setTimeout(r, OPEN_DELAY_MS * 3))
-    expect(existsSync(dest)).toBe(false)
-    rmSync(root, { recursive: true, force: true })
+  beforeEach(() => {
+    probe.issuedOpens = 0
+    probe.pendingOpens = 0
+    probe.closes = 0
   })
 
-  it('an abort that lands before the slow open completed leaves nothing behind once the caller deletes', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-dl-close-'))
-    const dest = join(root, 'eng.traineddata.gz.part')
+  const failingBody: FetchFn = async () =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          c.error(new Error('connection reset'))
+        }
+      })
+    )
+
+  it.each<[string, { fetchImpl: FetchFn; abort: boolean; message: RegExp }]>([
+    ['a body that fails', { fetchImpl: failingBody, abort: false, message: /connection reset/ }],
+    ['an abort that lands', { fetchImpl: hangingFetch('partial'), abort: true, message: /aborted/ }]
+  ])('%s before the slow open completed rejects only once the file is open and closed', async (_title, row) => {
+    const dest = join(tempRoot('dl-close'), 'deu.traineddata.gz.part')
     const controller = new AbortController()
-    const fetchImpl = (async (_url: unknown, init?: RequestInit) =>
-      new Response(
-        new ReadableStream({
-          start(c) {
-            c.enqueue(new TextEncoder().encode('partial'))
-            init?.signal?.addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError')))
-          }
-        })
-      )) as unknown as FetchFn
-    const pending = downloadToFile('https://example.test/eng.gz', dest, { fetchImpl, signal: controller.signal })
-    controller.abort()
-    await expect(pending).rejects.toThrow()
-    rmSync(dest, { force: true })
-    await new Promise((r) => setTimeout(r, OPEN_DELAY_MS * 3))
-    expect(existsSync(dest)).toBe(false)
-    rmSync(root, { recursive: true, force: true })
+    const pending = downloadToFile('https://example.test/deu.gz', dest, {
+      fetchImpl: row.fetchImpl,
+      signal: controller.signal
+    })
+    if (row.abort) controller.abort()
+    await expect(pending).rejects.toThrow(row.message)
+    // Premise: the delayed open really ran. Contract: nothing pending can re-create the file, and it is closed.
+    expect(probe.issuedOpens).toBe(1)
+    expect(probe.pendingOpens).toBe(0)
+    expect(probe.closes).toBe(1)
+    expect(existsSync(dest)).toBe(true)
+    rmSync(dest) // not forced: throws if the file is absent or still held, so a caller's delete is final
   })
 })

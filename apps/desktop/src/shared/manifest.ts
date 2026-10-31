@@ -146,7 +146,7 @@ export interface ModelManifest {
   localPath: string
   /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
   sha256: string
-  /** Hardware profiles this model is recommended for (legacy/no-RAM-known picker). */
+  /** Hardware profiles this model is recommended for (read only by `recommendModelId`, the benchmark's fallback). */
   recommendedProfiles: HardwareProfile[]
   /**
    * Recommendation tiebreak: higher = preferred among models that fit the

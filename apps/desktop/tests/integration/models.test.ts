@@ -1,12 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
 import { join, parse } from 'node:path'
-import { stringify } from 'yaml'
-import { openDatabase } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
 import {
+  MIN_READ_SAMPLE_MS,
   latestEffectiveRead,
   latestEffectiveReadBySource,
   recordModelLoadRead,
@@ -19,7 +18,6 @@ import {
   verifyChecksum,
   computeInstallState,
   buildModelList,
-  clearChecksumCache,
   checksumCacheStats,
   createSettingsHashStore,
   invalidateChecksum,
@@ -41,46 +39,55 @@ import {
   resolveManifestsDir,
   weightPath
 } from '../../src/main/services/models'
-import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import type { ModelManifest } from '../../src/shared/manifest'
 import type { ModelVerifyProgress } from '../../src/shared/types'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { until } from '../helpers/hang-budget'
+import { manifestsDirWith, rawManifest, sha256, validManifest, writeDriveFile, writeManifest } from '../helpers/manifest-fixtures'
 
-function tempDir(prefix: string): string {
-  return mkdtempSync(join(tmpdir(), prefix))
+/** What every `buildModelList` call passes for the machine's RAM, as production always does. Never the host's. */
+const PINNED_RAM_GB = 16
+
+/** Not shared: a static settings import in db-fixtures would change what its other importers load. */
+function seededFreshDb(label: string): Db {
+  const db = openFreshDb(label)
+  seedSettings(db)
+  return db
 }
 
-function manifestObj(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'qwen3-4b-instruct-q4',
-    display_name: 'Qwen3 4B Instruct Q4',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
-    size_on_disk_gb: 2.7,
-    recommended_min_ram_gb: 8,
-    recommended_ram_gb: 16,
-    recommended_context_tokens: 4096,
-    local_path: 'models/chat/qwen3-4b-instruct-q4.gguf',
-    sha256: 'REPLACE_WITH_REAL_HASH',
-    recommended_profiles: ['LITE'],
-    license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' },
-    ...overrides
+const savedPerfEnv = process.env.HILBERTRAUM_PERF_LOG
+
+afterEach(() => {
+  if (savedPerfEnv === undefined) delete process.env.HILBERTRAUM_PERF_LOG
+  else process.env.HILBERTRAUM_PERF_LOG = savedPerfEnv
+  vi.useRealTimers()
+})
+
+/** Route the shared perf module at a fresh dir and return a reader for its log. */
+function armPerfLog(): () => string[] {
+  const dir = tempRoot('perf')
+  process.env.HILBERTRAUM_PERF_LOG = '1'
+  initPerf(dir)
+  const file = join(dir, 'perf.log')
+  return () => {
+    if (!existsSync(file)) return []
+    return readFileSync(file, 'utf8').trimEnd().split('\n').filter(Boolean)
   }
 }
 
-function asManifest(overrides: Record<string, unknown> = {}): ModelManifest {
-  const res = validateManifest(manifestObj(overrides))
-  if (!res.manifest) throw new Error('fixture invalid: ' + res.errors.join(', '))
-  return res.manifest
+/** The parsed `checksum_done` marks: the read's own close, which lands AFTER a cancelled caller rejects. */
+function doneMarks(readLog: () => string[]): Array<{ ok: boolean }> {
+  return readLog()
+    .filter((l) => l.includes(' checksum_done '))
+    .map((l) => JSON.parse(l.slice(l.indexOf('{'))))
 }
 
 describe('checksum verification', () => {
   it('hashes a file and matches its own SHA-256', async () => {
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'hello world')
-    const expected = createHash('sha256').update('hello world').digest('hex')
+    const expected = sha256('hello world')
 
     expect(await sha256File(file)).toBe(expected)
 
@@ -92,12 +99,12 @@ describe('checksum verification', () => {
   })
 
   it('reports a missing file', async () => {
-    const res = await verifyChecksum(join(tempDir('hilbertraum-hash-'), 'nope.bin'), 'f'.repeat(64))
+    const res = await verifyChecksum(join(tempRoot('hash'), 'nope.bin'), 'f'.repeat(64))
     expect(res).toEqual({ exists: false, matched: null, actual: null })
   })
 
   it('returns matched=null for a placeholder hash', async () => {
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'data')
     const res = await verifyChecksum(file, 'REPLACE_WITH_REAL_HASH')
@@ -111,11 +118,10 @@ describe('checksum verification', () => {
 // navigation). Hash once per (path, size, mtime); a changed file re-hashes.
 describe('checksum cache (H5)', () => {
   it('hashes a file once and serves repeat verifications from the cache', async () => {
-    clearChecksumCache()
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'big model weights')
-    const expected = createHash('sha256').update('big model weights').digest('hex')
+    const expected = sha256('big model weights')
 
     const before = checksumCacheStats.computed
     expect((await verifyChecksum(file, expected)).matched).toBe(true)
@@ -128,11 +134,10 @@ describe('checksum cache (H5)', () => {
   })
 
   it('re-hashes when the file changes, so a swapped weight is still detected', async () => {
-    clearChecksumCache()
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'original')
-    const originalHash = createHash('sha256').update('original').digest('hex')
+    const originalHash = sha256('original')
     expect((await verifyChecksum(file, originalHash)).matched).toBe(true)
 
     const before = checksumCacheStats.computed
@@ -150,32 +155,20 @@ describe('checksum cache (H5)', () => {
 // unlock auto-start racing a Models-screen mount used to run two full media reads of
 // the same weight.
 describe('checksum instrumentation + single-flight (#106)', () => {
-  const savedEnv = process.env.HILBERTRAUM_PERF_LOG
-
-  afterEach(() => {
-    if (savedEnv === undefined) delete process.env.HILBERTRAUM_PERF_LOG
-    else process.env.HILBERTRAUM_PERF_LOG = savedEnv
-  })
-
-  /** Route the shared perf module at a fresh dir and return a reader for its log. */
-  function armPerfLog(): () => string[] {
-    const dir = tempDir('hilbertraum-perf-')
-    process.env.HILBERTRAUM_PERF_LOG = '1'
-    initPerf(dir)
-    const file = join(dir, 'perf.log')
-    return () => {
-      if (!existsSync(file)) return []
-      return readFileSync(file, 'utf8').trimEnd().split('\n').filter(Boolean)
-    }
+  const WEIGHT_BYTES = 6_000_000_000
+  /** One instrumented hash whose elapsed just clears the SHIPPED sample floor (performance clock is fake in these rows). */
+  function overFloor(file: 'download' | 'weight', path?: string | null): void {
+    const instrumentation = beginChecksumInstrumentation({ modelId: 'm', file }, WEIGHT_BYTES, path)
+    vi.advanceTimersByTime(MIN_READ_SAMPLE_MS + 1)
+    instrumentation.end(true)
   }
 
   it('emits one mark pair (+ bytes, model label) on a real hash — and none on a cache hit', async () => {
-    clearChecksumCache()
     const readLog = armPerfLog()
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'instrumented weights')
-    const expected = createHash('sha256').update('instrumented weights').digest('hex')
+    const expected = sha256('instrumented weights')
 
     expect(
       (
@@ -207,11 +200,10 @@ describe('checksum instrumentation + single-flight (#106)', () => {
   })
 
   it('a forced re-hash (invalidateChecksum, the "Verify checksum" button) fires the marks again', async () => {
-    clearChecksumCache()
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'reverify me')
-    const expected = createHash('sha256').update('reverify me').digest('hex')
+    const expected = sha256('reverify me')
     expect((await verifyChecksum(file, expected)).matched).toBe(true)
 
     const readLog = armPerfLog()
@@ -221,11 +213,10 @@ describe('checksum instrumentation + single-flight (#106)', () => {
   })
 
   it('a failing hash still closes its pair (checksum_done ok:false) and caches nothing', async () => {
-    clearChecksumCache()
     const readLog = armPerfLog()
     // A directory passes the existsSync guard and stats fine, but the read stream
     // rejects (EISDIR) — a deterministic mid-hash failure on every platform.
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const before = checksumCacheStats.computed
 
     await expect(verifyChecksum(dir, 'f'.repeat(64))).rejects.toThrow()
@@ -237,16 +228,14 @@ describe('checksum instrumentation + single-flight (#106)', () => {
   })
 
   it('concurrent verifications of the same file share ONE physical hash (single-flight)', async () => {
-    clearChecksumCache()
     const readLog = armPerfLog()
-    const dir = tempDir('hilbertraum-hash-')
+    const dir = tempRoot('hash')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'shared single-flight weights')
-    const expected = createHash('sha256').update('shared single-flight weights').digest('hex')
+    const expected = sha256('shared single-flight weights')
 
-    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'sf.sqlite'))
-    seedSettings(db)
-    const joinerStore = createSettingsHashStore(() => db)
+    const db = seededFreshDb('single-flight')
+    const joinerStore = createSettingsHashStore(() => db, dir)
     const joinerProgress: number[] = []
 
     const before = checksumCacheStats.computed
@@ -269,54 +258,44 @@ describe('checksum instrumentation + single-flight (#106)', () => {
     expect(joinerStore.get(file)?.size).toBe('shared single-flight weights'.length)
   })
 
-  it("a 'download' hash keeps its marks but never feeds the effective-read latch (page-cache-warm)", async () => {
+  it("a 'download' hash keeps its marks but never feeds the effective-read latch (page-cache-warm)", () => {
     resetEffectiveReadForTests()
+    vi.useFakeTimers({ toFake: ['performance'] })
     const readLog = armPerfLog()
-    const bytes = 6_000_000_000
-    // Real elapsed above the 250 ms sample floor, so the LABEL — not the floor — is
-    // what the download assertion proves.
-    const overFloor = async (file: 'download' | 'weight', path?: string | null): Promise<void> => {
-      const instrumentation = beginChecksumInstrumentation({ modelId: 'm', file }, bytes, path)
-      await new Promise((r) => setTimeout(r, 300))
-      instrumentation.end(true)
-    }
-
-    await overFloor('download')
+    // Elapsed past the floor, so the LABEL, not the floor, is what the download assertion proves.
+    overFloor('download')
     expect(latestEffectiveRead()).toBeNull() // the app just WROTE those bytes (F-35 class)
 
-    await overFloor('weight')
+    overFloor('weight')
     expect(latestEffectiveRead()?.source).toBe('checksum') // a cold-file hash samples
 
     // Both hashes were fully instrumented regardless.
     expect(readLog().filter((l) => l.includes(' checksum_done '))).toHaveLength(2)
   })
 
-  it("a 'download' verify never adds its path to the #392 warmed set (the .part is renamed away)", async () => {
+  it("a 'download' verify never adds its path to the #392 warmed set (the .part is renamed away)", () => {
     resetEffectiveReadForTests()
-    const bytes = 6_000_000_000
-    // What `verifyDownloadedFile` does for a download: the label says 'download' AND the path
-    // is withheld, so neither the sample nor the warmed set learns about the staged `.part`.
-    const download = beginChecksumInstrumentation({ modelId: 'm', file: 'download' }, bytes, null)
-    await new Promise((r) => setTimeout(r, 300))
-    download.end(true)
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const weight = '/models/w.gguf'
+    // Production's download verify also withholds the path (null). Handing it over here leaves the
+    // label alone to keep the sample and the warmed set away.
+    overFloor('download', weight)
     expect(latestEffectiveRead()).toBeNull()
-
     // A model started from that very path afterwards therefore still samples honestly.
-    recordModelLoadRead('/models/w.gguf', 10_000, 'm', bytes)
+    recordModelLoadRead(weight, 10_000, 'm', WEIGHT_BYTES)
     expect(latestEffectiveRead()?.source).toBe('model_load')
   })
 
-  it('a real weight hash registers its path: the start that follows records no load sample (#392)', async () => {
+  it('a real weight hash registers its path: the start that follows records no load sample (#392)', () => {
     resetEffectiveReadForTests()
-    const bytes = 6_000_000_000
+    vi.useFakeTimers({ toFake: ['performance'] })
     const weight = '/models/w.gguf'
-    const hash = beginChecksumInstrumentation({ modelId: 'm', file: 'weight' }, bytes, weight)
-    await new Promise((r) => setTimeout(r, 300))
-    hash.end(true)
+    overFloor('weight', weight)
     expect(latestEffectiveRead()?.source).toBe('checksum')
 
-    recordModelLoadRead(weight, 10_000, 'm', bytes)
+    recordModelLoadRead(weight, 10_000, 'm', WEIGHT_BYTES)
     expect(latestEffectiveRead()?.source).toBe('checksum') // the RAM figure never lands
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
   })
 })
 
@@ -325,38 +304,36 @@ describe('checksum instrumentation + single-flight (#106)', () => {
 // persists (path, size, mtime, sha256) inside the DB so an unchanged file is hashed
 // once EVER; size/mtime changes and the explicit "Verify checksum" force a real re-hash.
 describe('persistent checksum cache (settings hash store)', () => {
-  function makeStore(): { store: ReturnType<typeof createSettingsHashStore>; db: ReturnType<typeof openDatabase> } {
-    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'cache.sqlite'))
-    seedSettings(db)
-    return { store: createSettingsHashStore(() => db), db }
+  function makeStore(): { store: ReturnType<typeof createSettingsHashStore>; db: Db; root: string } {
+    const db = seededFreshDb('cache')
+    const root = tempRoot('drive')
+    return { store: createSettingsHashStore(() => db, root), db, root }
   }
 
   it('serves the hash from the DB after a simulated restart (no re-hash)', async () => {
-    clearChecksumCache()
-    const { store, db } = makeStore()
-    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
+    const { store, db, root } = makeStore()
+    const file = join(root, 'weight.bin')
     writeFileSync(file, 'persisted weights')
-    const expected = createHash('sha256').update('persisted weights').digest('hex')
+    const expected = sha256('persisted weights')
 
     const before = checksumCacheStats.computed
     expect((await verifyChecksum(file, expected, store)).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1)
-    expect(getSettings(db).checksumCache[file]?.sha256).toBe(expected)
+    expect(getSettings(db).checksumCache['weight.bin']?.sha256).toBe(expected)
 
-    clearChecksumCache() // simulate an app restart (in-memory L1 gone, DB survives)
+    invalidateChecksum(file) // simulate an app restart (in-memory L1 gone, DB survives)
     expect((await verifyChecksum(file, expected, store)).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1) // served from the store
   })
 
   it('re-hashes when the file content/size changed since the persisted entry', async () => {
-    clearChecksumCache()
-    const { store } = makeStore()
-    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
+    const { store, root } = makeStore()
+    const file = join(root, 'weight.bin')
     writeFileSync(file, 'original')
-    const originalHash = createHash('sha256').update('original').digest('hex')
+    const originalHash = sha256('original')
     expect((await verifyChecksum(file, originalHash, store)).matched).toBe(true)
 
-    clearChecksumCache()
+    invalidateChecksum(file)
     writeFileSync(file, 'replaced with another model') // different size → entry invalid
     const before = checksumCacheStats.computed
     const res = await verifyChecksum(file, originalHash, store)
@@ -365,39 +342,37 @@ describe('persistent checksum cache (settings hash store)', () => {
   })
 
   it('invalidateChecksum drops memory + store so the next verify truly re-hashes', async () => {
-    clearChecksumCache()
-    const { store, db } = makeStore()
-    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
+    const { store, db, root } = makeStore()
+    const file = join(root, 'weight.bin')
     writeFileSync(file, 'weights')
-    const expected = createHash('sha256').update('weights').digest('hex')
+    const expected = sha256('weights')
     await verifyChecksum(file, expected, store)
-    expect(getSettings(db).checksumCache[file]).toBeDefined()
+    expect(getSettings(db).checksumCache['weight.bin']).toBeDefined()
 
     invalidateChecksum(file, store)
-    expect(getSettings(db).checksumCache[file]).toBeUndefined()
+    expect(getSettings(db).checksumCache['weight.bin']).toBeUndefined()
     const before = checksumCacheStats.computed
     expect((await verifyChecksum(file, expected, store)).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1)
   })
 
   it('get degrades on a corrupted `checksumCache: null` row and the next set self-repairs it (BE-1)', () => {
-    clearChecksumCache()
-    const { store, db } = makeStore()
+    const { store, db, root } = makeStore()
+    const weight = join(root, 'weight.gguf')
     // A row corrupted BEFORE the write gate rejected null (full-audit 2026-07-10 BE-1):
     // updateSettings drops `{ checksumCache: null }` now, so plant it directly via SQL.
     db.prepare(`UPDATE settings SET value_json = 'null' WHERE key = 'checksumCache'`).run()
     expect(getSettings(db).checksumCache).toBeNull() // the corruption really is in place
     // Read-side belt: degrade to "no cache" instead of throwing out of every checksum reader.
-    expect(store.get('/some/weight.gguf')).toBeNull()
+    expect(store.get(weight)).toBeNull()
     // set() writes a healthy object over the corrupted row.
-    store.set('/some/weight.gguf', { size: 3, mtimeMs: 4, actual: 'feed' })
-    expect(getSettings(db).checksumCache['/some/weight.gguf']?.sha256).toBe('feed')
+    store.set(weight, { size: 3, mtimeMs: 4, actual: 'feed' })
+    expect(getSettings(db).checksumCache['weight.gguf']?.sha256).toBe('feed')
   })
 
   it('degrades to the in-memory fallback on a CLOSED DB — never throws into the caller (BE-2)', () => {
     // A workspace lock closes the settings DB while a multi-hour download still runs; the
     // store must keep serving (cache is an optimization), not throw "database is not open".
-    clearChecksumCache()
     const { store, db } = makeStore()
     db.close()
     expect(() => store.set('/w.gguf', { size: 1, mtimeMs: 2, actual: 'abcd' })).not.toThrow()
@@ -409,43 +384,37 @@ describe('persistent checksum cache (settings hash store)', () => {
   it('resolves the LIVE handle per call — a DB swapped between calls is used, never the stale one (BE-2)', () => {
     // The lock/unlock cycle REPLACES the DB handle (`ctx.db` is a getter); a store created at
     // IPC registration must follow it instead of pinning the handle it saw at construction.
-    clearChecksumCache()
-    const db1 = openDatabase(join(tempDir('hilbertraum-db-'), 'cache1.sqlite'))
-    seedSettings(db1)
+    const db1 = seededFreshDb('cache1')
     let current = db1
-    const store = createSettingsHashStore(() => current)
-    store.set('/a.gguf', { size: 1, mtimeMs: 2, actual: 'aaaa' })
-    expect(getSettings(db1).checksumCache['/a.gguf']?.sha256).toBe('aaaa')
+    const root = tempRoot('drive')
+    const store = createSettingsHashStore(() => current, root)
+    store.set(join(root, 'a.gguf'), { size: 1, mtimeMs: 2, actual: 'aaaa' })
+    expect(getSettings(db1).checksumCache['a.gguf']?.sha256).toBe('aaaa')
 
     db1.close() // lock…
-    const db2 = openDatabase(join(tempDir('hilbertraum-db-'), 'cache2.sqlite'))
-    seedSettings(db2)
+    const db2 = seededFreshDb('cache2')
     current = db2 // …unlock hands out a fresh handle
 
-    store.set('/b.gguf', { size: 3, mtimeMs: 4, actual: 'bbbb' })
-    expect(getSettings(db2).checksumCache['/b.gguf']?.sha256).toBe('bbbb') // wrote via the LIVE handle
-    expect(store.get('/b.gguf')).toEqual({ size: 3, mtimeMs: 4, actual: 'bbbb' })
+    store.set(join(root, 'b.gguf'), { size: 3, mtimeMs: 4, actual: 'bbbb' })
+    expect(getSettings(db2).checksumCache['b.gguf']?.sha256).toBe('bbbb') // wrote via the LIVE handle
+    expect(store.get(join(root, 'b.gguf'))).toEqual({ size: 3, mtimeMs: 4, actual: 'bbbb' })
   })
 
   // CODE-15 (full-audit 2026-07-11): keyed by drive-RELATIVE path so moving the drive between
   // machines (a new drive letter / mount point) re-hashes nothing — the flagship scenario that
   // an absolute key forced a full multi-GB re-hash for, plus permanent orphan entries.
   it('primes under drive root A and rebuilds under root B with ZERO re-hashes (drive-letter move)', async () => {
-    clearChecksumCache()
-    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'cache.sqlite'))
-    seedSettings(db)
+    const db = seededFreshDb('cache')
 
     // "Mount A" — the drive as first seen (e.g. E:\). Same physical file, same relative path.
-    const rootA = tempDir('hilbertraum-driveA-')
-    mkdirSync(join(rootA, 'models', 'chat'), { recursive: true })
+    const rootA = tempRoot('driveA')
+    const expected = writeDriveFile(rootA, 'models/chat/w.bin', 'drive-move weights')
     const fileA = join(rootA, 'models', 'chat', 'w.bin')
-    writeFileSync(fileA, 'drive-move weights')
     // A real drive move keeps the file's size AND mtime; pin both files to one fixed clean-ms
     // timestamp so the (size, mtime) validity check matches exactly across the two mounts (raw
     // statSync mtimeMs carries sub-ms precision an utimes copy would truncate).
     const fixed = new Date('2026-07-01T00:00:00.000Z')
     utimesSync(fileA, fixed, fixed)
-    const expected = createHash('sha256').update('drive-move weights').digest('hex')
     const storeA = createSettingsHashStore(() => db, rootA)
     expect((await verifyChecksum(fileA, expected, storeA)).matched).toBe(true)
     // Keyed relatively, not by the absolute mount-A path.
@@ -454,11 +423,9 @@ describe('persistent checksum cache (settings hash store)', () => {
 
     // Replug on another machine: the settings DB travels with the drive (reused `db`); the same
     // physical file now sits under a different mount root, size+mtime preserved by the filesystem.
-    clearChecksumCache() // in-memory L1 is gone across the app restart; the DB survives
-    const rootB = tempDir('hilbertraum-driveB-')
-    mkdirSync(join(rootB, 'models', 'chat'), { recursive: true })
+    const rootB = tempRoot('driveB')
+    writeDriveFile(rootB, 'models/chat/w.bin', 'drive-move weights')
     const fileB = join(rootB, 'models', 'chat', 'w.bin')
-    writeFileSync(fileB, 'drive-move weights')
     utimesSync(fileB, fixed, fixed)
 
     const before = checksumCacheStats.computed
@@ -468,10 +435,8 @@ describe('persistent checksum cache (settings hash store)', () => {
   })
 
   it('lazily migrates a legacy ABSOLUTE-key entry to the relative key on read (drops the orphan)', () => {
-    clearChecksumCache()
-    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'cache.sqlite'))
-    seedSettings(db)
-    const root = tempDir('hilbertraum-drive-')
+    const db = seededFreshDb('cache')
+    const root = tempRoot('drive')
     const abs = join(root, 'models', 'chat', 'legacy.bin')
     // Pre-migration code keyed by the absolute path — plant such an entry.
     updateSettings(db, { checksumCache: { [abs]: { size: 5, mtimeMs: 6, sha256: 'legacyhash' } } })
@@ -487,7 +452,7 @@ describe('persistent checksum cache (settings hash store)', () => {
 
 describe('weightPath', () => {
   it('resolves a normal relative local_path under the drive root', () => {
-    const p = weightPath('/drive', asManifest())
+    const p = weightPath('/drive', validManifest())
     expect(p).toBe(join('/drive', 'models/chat/qwen3-4b-instruct-q4.gguf'))
   })
 
@@ -495,7 +460,7 @@ describe('weightPath', () => {
     // weightPath keeps its OWN runtime escape guard (defense in depth). validateManifest now
     // rejects such a path up front (vuln-scan 2026-06-21), so build the manifest object
     // directly to exercise weightPath's independent guard rather than the validation layer.
-    const escaping: ModelManifest = { ...asManifest(), localPath: '../../etc/passwd' }
+    const escaping: ModelManifest = { ...validManifest(), localPath: '../../etc/passwd' }
     expect(() => weightPath('/drive', escaping)).toThrow(/escapes the drive root/)
   })
 
@@ -504,37 +469,42 @@ describe('weightPath', () => {
     // trailing separator there, so a naive `base + sep` containment check would double it
     // (`D:\\`) and wrongly reject every weight. Regression for the D:\ launch bug.
     const root = parse(process.cwd()).root // `C:\` on Windows, `/` on POSIX
-    expect(() => weightPath(root, asManifest())).not.toThrow()
-    expect(weightPath(root, asManifest())).toBe(join(root, 'models/chat/qwen3-4b-instruct-q4.gguf'))
+    expect(() => weightPath(root, validManifest())).not.toThrow()
+    expect(weightPath(root, validManifest())).toBe(join(root, 'models/chat/qwen3-4b-instruct-q4.gguf'))
   })
 })
 
 describe('computeInstallState', () => {
   function rootWithWeight(content: string): string {
-    const root = tempDir('hilbertraum-root-')
-    mkdirSync(join(root, 'models', 'chat'), { recursive: true })
-    writeFileSync(join(root, 'models', 'chat', 'qwen3-4b-instruct-q4.gguf'), content)
+    const root = tempRoot('root')
+    writeDriveFile(root, 'models/chat/qwen3-4b-instruct-q4.gguf', content)
     return root
   }
 
-  it('is missing when the weight file is absent', async () => {
-    const root = tempDir('hilbertraum-root-')
-    const state = await computeInstallState(asManifest(), root, { developerMode: true })
-    expect(state).toBe('missing')
+  // TG-1: install state is role-agnostic. A single-file `translation` GGUF is present + verified ⇒ installed, exactly like a
+  // chat weight; these rows guard the claim that discovery and install state need no per-role code.
+  const BY_ROLE: Array<[string, Record<string, unknown>]> = [
+    ['chat', {}],
+    ['translation', { id: 'translategemma-12b-it-q4', role: 'translation', family: 'translategemma', license: 'gemma', local_path: 'models/translation/tg.gguf' }]
+  ]
+
+  it.each(BY_ROLE)('is missing when the weight file is absent (%s)', async (_role, fields) => {
+    const root = tempRoot('root')
+    for (const developerMode of [true, false]) {
+      expect(await computeInstallState(validManifest(fields), root, { developerMode })).toBe('missing')
+    }
   })
 
-  it('is installed when present and the hash matches', async () => {
-    const root = rootWithWeight('weights')
-    const hash = createHash('sha256').update('weights').digest('hex')
-    const state = await computeInstallState(asManifest({ sha256: hash }), root, {
-      developerMode: false
-    })
+  it.each(BY_ROLE)('is installed when present and the hash matches (%s)', async (_role, fields) => {
+    const root = tempRoot('root')
+    const hash = writeDriveFile(root, validManifest(fields).localPath, 'weights')
+    const state = await computeInstallState(validManifest({ ...fields, sha256: hash }), root, { developerMode: false })
     expect(state).toBe('installed')
   })
 
   it('is checksum_failed when the hash mismatches', async () => {
     const root = rootWithWeight('weights')
-    const state = await computeInstallState(asManifest({ sha256: 'a'.repeat(64) }), root, {
+    const state = await computeInstallState(validManifest({ sha256: 'a'.repeat(64) }), root, {
       developerMode: false
     })
     expect(state).toBe('checksum_failed')
@@ -542,28 +512,27 @@ describe('computeInstallState', () => {
 
   it('treats a placeholder hash as installed in developer mode', async () => {
     const root = rootWithWeight('weights')
-    const state = await computeInstallState(asManifest(), root, { developerMode: true })
+    const state = await computeInstallState(validManifest(), root, { developerMode: true })
     expect(state).toBe('installed')
   })
 
   it('treats a placeholder hash as checksum_failed outside developer mode', async () => {
     const root = rootWithWeight('weights')
-    const state = await computeInstallState(asManifest(), root, { developerMode: false })
+    const state = await computeInstallState(validManifest(), root, { developerMode: false })
     expect(state).toBe('checksum_failed')
   })
 
   it('never hashes a placeholder-hash weight (H5: pure wasted I/O on a multi-GB file)', async () => {
-    clearChecksumCache()
     const root = rootWithWeight('weights')
     const before = checksumCacheStats.computed
-    await computeInstallState(asManifest(), root, { developerMode: true })
-    await computeInstallState(asManifest(), root, { developerMode: false })
+    await computeInstallState(validManifest(), root, { developerMode: true })
+    await computeInstallState(validManifest(), root, { developerMode: false })
     expect(checksumCacheStats.computed).toBe(before)
   })
 
   it('is unsupported for an unknown runtime/format', async () => {
-    const root = tempDir('hilbertraum-root-')
-    const state = await computeInstallState(asManifest({ runtime: 'onnx' }), root, {
+    const root = tempRoot('root')
+    const state = await computeInstallState(validManifest({ runtime: 'onnx' }), root, {
       developerMode: true
     })
     expect(state).toBe('unsupported')
@@ -574,8 +543,8 @@ describe('computeInstallState', () => {
   // llama-only whitelist and show "Unsupported" on the AI Model screen, which also
   // hid its in-app download (the download offer requires state 'missing').
   it('supports the whisper transcriber pair (whisper_cpp + ggml)', async () => {
-    const root = tempDir('hilbertraum-root-')
-    const whisper = asManifest({
+    const root = tempRoot('root')
+    const whisper = validManifest({
       id: 'whisper-small-multilingual',
       role: 'transcriber',
       runtime: 'whisper_cpp',
@@ -586,10 +555,8 @@ describe('computeInstallState', () => {
     expect(await computeInstallState(whisper, root, { developerMode: false })).toBe('missing')
 
     // Present + matching hash → installed.
-    mkdirSync(join(root, 'models', 'transcriber'), { recursive: true })
-    writeFileSync(join(root, 'models', 'transcriber', 'ggml-small.bin'), 'ggml-weights')
-    const hash = createHash('sha256').update('ggml-weights').digest('hex')
-    const verified = asManifest({
+    const hash = writeDriveFile(root, 'models/transcriber/ggml-small.bin', 'ggml-weights')
+    const verified = validManifest({
       id: 'whisper-small-multilingual',
       role: 'transcriber',
       runtime: 'whisper_cpp',
@@ -601,14 +568,14 @@ describe('computeInstallState', () => {
   })
 
   it('rejects MISMATCHED runtime/format pairs (never a silent pass)', async () => {
-    const root = tempDir('hilbertraum-root-')
+    const root = tempRoot('root')
     const cases = [
       { runtime: 'whisper_cpp', format: 'gguf' },
       { runtime: 'llama_cpp', format: 'ggml' }
     ]
     for (const c of cases) {
       expect(
-        await computeInstallState(asManifest(c), root, { developerMode: true }),
+        await computeInstallState(validManifest(c), root, { developerMode: true }),
         `${c.runtime}+${c.format}`
       ).toBe('unsupported')
     }
@@ -619,7 +586,7 @@ describe('computeInstallState', () => {
 // requires BOTH present + verified.
 describe('computeInstallState — vision (both files verified)', () => {
   function visionManifest(overrides: Record<string, unknown> = {}): ModelManifest {
-    return asManifest({
+    return validManifest({
       id: 'qwen2.5-vl-3b-instruct-q4',
       role: 'vision',
       family: 'qwen2.5-vl',
@@ -628,45 +595,40 @@ describe('computeInstallState — vision (both files verified)', () => {
       ...overrides
     })
   }
-  function writeFile(root: string, rel: string, content: string): void {
-    const dest = join(root, ...rel.split('/'))
-    mkdirSync(join(dest, '..'), { recursive: true })
-    writeFileSync(dest, content)
-  }
 
   it('is missing when the GGUF is present but the mmproj is absent', async () => {
-    const root = tempDir('hilbertraum-vision-')
-    writeFile(root, 'models/vision/vl.gguf', 'lm')
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm')
     expect(await computeInstallState(visionManifest(), root, { developerMode: true })).toBe('missing')
   })
 
   it('is installed (dev) when both files are present with placeholder hashes', async () => {
-    const root = tempDir('hilbertraum-vision-')
-    writeFile(root, 'models/vision/vl.gguf', 'lm')
-    writeFile(root, 'models/vision/mmproj.gguf', 'proj')
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm')
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj')
     expect(await computeInstallState(visionManifest(), root, { developerMode: true })).toBe('installed')
   })
 
   it('is installed when both files are present and BOTH hashes match', async () => {
-    const root = tempDir('hilbertraum-vision-')
-    writeFile(root, 'models/vision/vl.gguf', 'lm-bytes')
-    writeFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytes')
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
     const m = visionManifest({
-      sha256: createHash('sha256').update('lm-bytes').digest('hex'),
+      sha256: sha256('lm-bytes'),
       mmproj: {
         local_path: 'models/vision/mmproj.gguf',
-        sha256: createHash('sha256').update('proj-bytes').digest('hex')
+        sha256: sha256('proj-bytes')
       }
     })
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('installed')
   })
 
   it('is checksum_failed when the mmproj hash does NOT match (the GGUF is fine)', async () => {
-    const root = tempDir('hilbertraum-vision-')
-    writeFile(root, 'models/vision/vl.gguf', 'lm-bytes')
-    writeFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytes')
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
     const m = visionManifest({
-      sha256: createHash('sha256').update('lm-bytes').digest('hex'),
+      sha256: sha256('lm-bytes'),
       mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: 'a'.repeat(64) }
     })
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
@@ -680,22 +642,17 @@ describe('#310 multi-file install state (shard set)', () => {
   const shardPath = (n: number): string => `models/chat/flash-${String(n).padStart(5, '0')}-of-00004.gguf`
 
   function shardManifest(shas: [string, string, string, string]): ModelManifest {
-    return asManifest({
+    return validManifest({
       id: 'sharded-chat',
       local_path: shardPath(1),
       sha256: shas[0],
       files: [2, 3, 4].map((n, i) => ({ local_path: shardPath(n), sha256: shas[i + 1] }))
     })
   }
-  function writeShard(root: string, n: number, content: string): string {
-    const dest = join(root, ...shardPath(n).split('/'))
-    mkdirSync(join(dest, '..'), { recursive: true })
-    writeFileSync(dest, content)
-    return createHash('sha256').update(content).digest('hex')
-  }
+  const writeShard = (root: string, n: number, content: string): string => writeDriveFile(root, shardPath(n), content)
   const bytes = (n: number): string => `shard-${n}-bytes`
   const realHashes = (): [string, string, string, string] =>
-    [1, 2, 3, 4].map((n) => createHash('sha256').update(bytes(n)).digest('hex')) as [
+    [1, 2, 3, 4].map((n) => sha256(bytes(n))) as [
       string,
       string,
       string,
@@ -709,8 +666,7 @@ describe('#310 multi-file install state (shard set)', () => {
   })
 
   it('refuses installed when only the VERIFIED first shard exists (issue probe 2)', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-shard-')
+    const root = tempRoot('shard')
     const h = writeShard(root, 1, bytes(1))
     // The real checksum-cache seam: shard 1 is already known-good, so only the siblings' absence
     // can produce the honest answer.
@@ -720,8 +676,7 @@ describe('#310 multi-file install state (shard set)', () => {
   })
 
   it('refuses installed when the sibling shards are CORRUPT (issue probe 3)', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-shard-')
+    const root = tempRoot('shard')
     const h = writeShard(root, 1, bytes(1))
     primeChecksum(join(root, ...shardPath(1).split('/')), h)
     for (const n of [2, 3, 4]) writeShard(root, n, 'corrupt sibling bytes')
@@ -730,8 +685,7 @@ describe('#310 multi-file install state (shard set)', () => {
   })
 
   it('accepts the complete, matching set (criterion 4)', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-shard-')
+    const root = tempRoot('shard')
     for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
     expect(await computeInstallState(shardManifest(realHashes()), root, { developerMode: false })).toBe(
       'installed'
@@ -739,21 +693,16 @@ describe('#310 multi-file install state (shard set)', () => {
   })
 
   it('counts EVERY shard in the verification byte denominator', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-shard-')
+    const root = tempRoot('shard')
     for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
-    const dir = tempDir('hilbertraum-manifests-')
     const shas = realHashes()
-    writeFileSync(
-      join(dir, 'sharded.yaml'),
-      stringify(
-        manifestObj({
-          id: 'sharded-chat',
-          local_path: shardPath(1),
-          sha256: shas[0],
-          files: [2, 3, 4].map((n, i) => ({ local_path: shardPath(n), sha256: shas[i + 1] }))
-        })
-      )
+    const dir = manifestsDirWith(
+      rawManifest({
+        id: 'sharded-chat',
+        local_path: shardPath(1),
+        sha256: shas[0],
+        files: [2, 3, 4].map((n, i) => ({ local_path: shardPath(n), sha256: shas[i + 1] }))
+      })
     )
     const events: ModelVerifyProgress[] = []
     const { models } = await buildModelList({
@@ -761,6 +710,7 @@ describe('#310 multi-file install state (shard set)', () => {
       rootPath: root,
       profile: 'UNKNOWN',
       developerMode: false,
+      machineRamGb: PINNED_RAM_GB,
       onProgress: (p) => events.push(p)
     })
     expect(models[0].state).toBe('installed')
@@ -772,14 +722,13 @@ describe('#310 multi-file install state (shard set)', () => {
   // RT-3: the lazy path may answer from the cache only when EVERY file has a hit — a cached
   // shard 1 next to three un-hashed siblings must not decide the model's state.
   it('skipHash answers from the cache only when ALL shards are cached', async () => {
-    const root = tempDir('hilbertraum-shard-')
+    const root = tempRoot('shard')
     const shas = realHashes()
     for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
     const abs = (n: number): string => join(root, ...shardPath(n).split('/'))
     const m = shardManifest(shas)
 
     // Only shard 1 cached ⇒ display-only 'installed', nothing hashed.
-    clearChecksumCache()
     primeChecksum(abs(1), shas[0])
     let before = checksumCacheStats.computed
     expect(await computeInstallState(m, root, { developerMode: false, skipHash: true })).toBe('installed')
@@ -787,7 +736,6 @@ describe('#310 multi-file install state (shard set)', () => {
 
     // All four cached, and shard 3's cached hash does NOT match ⇒ honest checksum_failed,
     // still without hashing anything.
-    clearChecksumCache()
     primeChecksum(abs(1), shas[0])
     primeChecksum(abs(2), shas[1])
     primeChecksum(abs(3), 'a'.repeat(64))
@@ -800,8 +748,7 @@ describe('#310 multi-file install state (shard set)', () => {
   })
 
   it('treats a placeholder hash on a SIBLING the same as one on the primary', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-shard-')
+    const root = tempRoot('shard')
     for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
     const shas = realHashes()
     const m = shardManifest([shas[0], 'REPLACE_WITH_REAL_HASH', shas[2], shas[3]])
@@ -810,41 +757,10 @@ describe('#310 multi-file install state (shard set)', () => {
   })
 })
 
-// TG-1: the `translation` role is a plain single-file GGUF (llama_cpp), so install-state is
-// role-agnostic — present + verified ⇒ installed, exactly like a chat weight. Guards the claim
-// that discovery/install-state need no per-role code for the new role.
-describe('computeInstallState — translation role (TG-1)', () => {
-  function translationManifest(overrides: Record<string, unknown> = {}): ModelManifest {
-    return asManifest({
-      id: 'translategemma-12b-it-q4',
-      role: 'translation',
-      family: 'translategemma',
-      license: 'gemma',
-      local_path: 'models/translation/tg.gguf',
-      ...overrides
-    })
-  }
-
-  it('is missing when the weight is absent', async () => {
-    const root = tempDir('hilbertraum-tg-')
-    expect(await computeInstallState(translationManifest(), root, { developerMode: false })).toBe('missing')
-  })
-
-  it('is installed when the weight is present and its hash matches', async () => {
-    const root = tempDir('hilbertraum-tg-')
-    mkdirSync(join(root, 'models', 'translation'), { recursive: true })
-    writeFileSync(join(root, 'models', 'translation', 'tg.gguf'), 'tg-weights')
-    const hash = createHash('sha256').update('tg-weights').digest('hex')
-    expect(
-      await computeInstallState(translationManifest({ sha256: hash }), root, { developerMode: false })
-    ).toBe('installed')
-  })
-})
-
 describe('recommendModelId', () => {
-  const tiny = asManifest({ id: 'tiny', recommended_profiles: ['TINY', 'UNKNOWN'] })
-  const lite = asManifest({ id: 'lite', recommended_profiles: ['LITE'] })
-  const embed = asManifest({
+  const tiny = validManifest({ id: 'tiny', recommended_profiles: ['TINY', 'UNKNOWN'] })
+  const lite = validManifest({ id: 'lite', recommended_profiles: ['LITE'] })
+  const embed = validManifest({
     id: 'embed',
     role: 'embeddings',
     recommended_profiles: ['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN']
@@ -873,12 +789,12 @@ describe('recommendModelId', () => {
 // the RAM pick stands as the documented partial-offload fallback. RAM stays a hard gate, and the
 // §6.5 step-down is confined to the eligible pool on both ends (R1/R2).
 describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
-  const tiny = asManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
-  const small12 = asManifest({ id: 'small12', size_on_disk_gb: 3.3, recommended_min_ram_gb: 8, recommended_ram_gb: 12, recommendation_rank: 3 })
-  const mid = asManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
-  const g12 = asManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
-  const big = asManifest({ id: 'big', size_on_disk_gb: 19.8, recommended_min_ram_gb: 23, recommended_ram_gb: 32, recommendation_rank: 3 })
-  const huge = asManifest({ id: 'huge', size_on_disk_gb: 22.2, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 1 })
+  const tiny = validManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const small12 = validManifest({ id: 'small12', size_on_disk_gb: 3.3, recommended_min_ram_gb: 8, recommended_ram_gb: 12, recommendation_rank: 3 })
+  const mid = validManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const g12 = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
+  const big = validManifest({ id: 'big', size_on_disk_gb: 19.8, recommended_min_ram_gb: 23, recommended_ram_gb: 32, recommendation_rank: 3 })
+  const huge = validManifest({ id: 'huge', size_on_disk_gb: 22.2, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 1 })
   const all = [tiny, mid, big, huge]
   const slowOn = (id: string) => ({ tokensPerSecond: SLOW_PICK_TOKENS_PER_SECOND - 1, measuredModelId: id })
 
@@ -897,7 +813,7 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
     // §5 item 22 (e): a measured host-mapped share leaves BOTH the base and the 15 % term. The
     // 9B's real figures — 6.0 GB with 545.62 MiB host-mapped and a 0.3 GiB cache — read 7,284.3,
     // against 8,116.3 for the same weights with no field at all.
-    const hostMapped = asManifest({
+    const hostMapped = validManifest({
       id: 'hostMapped',
       size_on_disk_gb: 6.0,
       estimated_context_cache_gib: 0.3,
@@ -905,14 +821,14 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
     })
     expect(estimateGraphicsNeedMib(hostMapped)).toBeCloseTo((5722.045 - 545.62) * 1.15 + 0.3 * 1024 + 1024, 1)
     // Clamped, never negative: a figure at or above the weights leaves the cache + margin alone.
-    const silly = asManifest({ id: 'silly', size_on_disk_gb: 6.0, host_mapped_weights_mib: 99_999 })
+    const silly = validManifest({ id: 'silly', size_on_disk_gb: 6.0, host_mapped_weights_mib: 99_999 })
     expect(estimateGraphicsNeedMib(silly)).toBeCloseTo(0.5 * 1024 + 1024, 6)
-    const mid04 = asManifest({ id: 'mid04', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0.4 })
-    const big11 = asManifest({ id: 'big11', size_on_disk_gb: 19.8, estimated_context_cache_gib: 1.1 })
+    const mid04 = validManifest({ id: 'mid04', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0.4 })
+    const big11 = validManifest({ id: 'big11', size_on_disk_gb: 19.8, estimated_context_cache_gib: 1.1 })
     expect(estimateGraphicsNeedMib(mid04)).toBeCloseTo(8013.9, 0)
     expect(estimateGraphicsNeedMib(big11)).toBeCloseTo(23865.6, 0)
     // A zero cache figure is honoured (not treated as absent).
-    const zero = asManifest({ id: 'zero', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0 })
+    const zero = validManifest({ id: 'zero', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0 })
     expect(estimateGraphicsNeedMib(zero)).toBeCloseTo(8116.3 - 512, 0)
   })
 
@@ -947,7 +863,7 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
     // STRICTLY ranked (owner decision 2026-09-06, #326): a rank-0 model is never the automatic pick,
     // so when no ranked model fits the no-fit fallback wins — the RAM pick (big at RAM 64), which
     // partially offloads — never the rank-0 model that would fit.
-    const rank0 = asManifest({ id: 'rank0', size_on_disk_gb: 1.3, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 0 })
+    const rank0 = validManifest({ id: 'rank0', size_on_disk_gb: 1.3, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 0 })
     expect(recommendModelIdByVram([...all, rank0], 8_000, 64)).toBe('tiny')
     expect(recommendModelIdByVram([...all, rank0], 4_000, 64)).toBe(recommendModelIdByRam(all, 64))
     expect(recommendModelIdByVram([...all, rank0], 4_000, 64)).toBe('big')
@@ -1015,25 +931,25 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
 // LARGEST model that runs comfortably (recommended_ram_gb fits); if nothing fits
 // comfortably, the lightest model that at least meets its minimum; else null.
 describe('recommendModelIdByRam', () => {
-  const small = asManifest({
+  const small = validManifest({
     id: 'small',
     size_on_disk_gb: 2.7,
     recommended_min_ram_gb: 8,
     recommended_ram_gb: 16
   })
-  const medium = asManifest({
+  const medium = validManifest({
     id: 'medium',
     size_on_disk_gb: 5.5,
     recommended_min_ram_gb: 16,
     recommended_ram_gb: 32
   })
-  const large = asManifest({
+  const large = validManifest({
     id: 'large',
     size_on_disk_gb: 9.5,
     recommended_min_ram_gb: 32,
     recommended_ram_gb: 64
   })
-  const embed = asManifest({
+  const embed = validManifest({
     id: 'embed',
     role: 'embeddings',
     recommended_min_ram_gb: 4,
@@ -1066,16 +982,16 @@ describe('recommendModelIdByRam', () => {
   // recommendation_rank wins BEFORE disk size — so a benchmark winner is preferred over a
   // larger-on-disk loser. Default rank 0 keeps the legacy biggest-disk behaviour (above).
   it('prefers higher recommendation_rank among models that tie on comfortable RAM', () => {
-    const winner = asManifest({ id: 'winner', size_on_disk_gb: 5.2, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 2 })
-    const loser = asManifest({ id: 'loser', size_on_disk_gb: 5.3, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 0 })
+    const winner = validManifest({ id: 'winner', size_on_disk_gb: 5.2, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 2 })
+    const loser = validManifest({ id: 'loser', size_on_disk_gb: 5.3, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 0 })
     // 16 GB: both comfortable + tie on recommended_ram_gb; rank picks the (smaller) winner,
     // where the old disk-size tiebreak would have picked the bigger loser.
     expect(recommendModelIdByRam([winner, loser], 16)).toBe('winner')
   })
 
   it('applies the rank tiebreak in the lightest-runnable fallback too', () => {
-    const keep = asManifest({ id: 'keep', size_on_disk_gb: 2.7, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 2 })
-    const alt = asManifest({ id: 'alt', size_on_disk_gb: 2.5, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 1 })
+    const keep = validManifest({ id: 'keep', size_on_disk_gb: 2.7, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 2 })
+    const alt = validManifest({ id: 'alt', size_on_disk_gb: 2.5, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 1 })
     // 8 GB: neither comfortable; both runnable at min 8. Rank keeps the preferred 'keep' ahead
     // of the smaller 'alt' (e.g. the thinking-capable default over the instruct-only refresh).
     expect(recommendModelIdByRam([keep, alt], 8)).toBe('keep')
@@ -1086,15 +1002,15 @@ describe('recommendModelIdByRam', () => {
   // beat every ranked winner on capacity alone. Rank-0 models are now considered only when no
   // ranked model fits the stage at all.
   it('never recommends a comfortable rank-0 model over a ranked winner in a smaller tier [#48]', () => {
-    const winner = asManifest({ id: 'winner', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
-    const unevaled = asManifest({ id: 'unevaled', size_on_disk_gb: 22.2, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 0 })
+    const winner = validManifest({ id: 'winner', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
+    const unevaled = validManifest({ id: 'unevaled', size_on_disk_gb: 22.2, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 0 })
     // 32 GB: the never-evaled model tops the capacity sort, but a ranked winner fits → winner.
     expect(recommendModelIdByRam([winner, unevaled], 32)).toBe('winner')
   })
 
   it('still recommends a rank-0 model when nothing ranked fits the stage [#48]', () => {
-    const unevaled = asManifest({ id: 'unevaled', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 0 })
-    const rankedTooBig = asManifest({ id: 'big-winner', size_on_disk_gb: 9.5, recommended_min_ram_gb: 32, recommended_ram_gb: 64, recommendation_rank: 2 })
+    const unevaled = validManifest({ id: 'unevaled', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 0 })
+    const rankedTooBig = validManifest({ id: 'big-winner', size_on_disk_gb: 9.5, recommended_min_ram_gb: 32, recommended_ram_gb: 64, recommendation_rank: 2 })
     expect(recommendModelIdByRam([unevaled, rankedTooBig], 16)).toBe('unevaled') // comfortable stage
     expect(recommendModelIdByRam([unevaled, rankedTooBig], 8)).toBe('unevaled') // runnable fallback
   })
@@ -1103,10 +1019,10 @@ describe('recommendModelIdByRam', () => {
   // the comfortable pick down ONE capacity tier; every other shape of signal changes nothing.
   describe('speed-signal step-down (model-benchmarks §6.5, issue #95)', () => {
     // Three ranked tiers (mirrors the committed 16/24/32 structure) + a rank-0 floor below.
-    const top = asManifest({ id: 'top', size_on_disk_gb: 19.5, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 3 })
-    const mid = asManifest({ id: 'mid', size_on_disk_gb: 16.8, recommended_min_ram_gb: 20, recommended_ram_gb: 24, recommendation_rank: 3 })
-    const low = asManifest({ id: 'low', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
-    const floor0 = asManifest({ id: 'floor0', size_on_disk_gb: 1.3, recommended_min_ram_gb: 6, recommended_ram_gb: 8, recommendation_rank: 0 })
+    const top = validManifest({ id: 'top', size_on_disk_gb: 19.5, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 3 })
+    const mid = validManifest({ id: 'mid', size_on_disk_gb: 16.8, recommended_min_ram_gb: 20, recommended_ram_gb: 24, recommendation_rank: 3 })
+    const low = validManifest({ id: 'low', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
+    const floor0 = validManifest({ id: 'floor0', size_on_disk_gb: 1.3, recommended_min_ram_gb: 6, recommended_ram_gb: 8, recommendation_rank: 0 })
     const all = [top, mid, low, floor0]
     const slow = (measuredModelId: string | null, tokensPerSecond: number | null = 2.1) => ({
       tokensPerSecond,
@@ -1136,8 +1052,11 @@ describe('recommendModelIdByRam', () => {
     })
 
     it('a runnable-stage (fallback) pick never steps', () => {
-      // 12 GB: nothing fits comfortably; 'low' is the lightest runnable — already minimal.
-      expect(recommendModelIdByRam([top, mid, low], 12, 'chat', slow('low'))).toBe('low')
+      // 12 GB: nothing fits comfortably, so 'wide' (the lowest minimum) is the runnable pick, and 'narrow' is a ranked tier
+      // below it. A step has somewhere to land, so only the stage rule keeps 'wide'.
+      const wide = validManifest({ id: 'wide', recommended_min_ram_gb: 10, recommended_ram_gb: 24, recommendation_rank: 3 })
+      const narrow = validManifest({ id: 'narrow', recommended_min_ram_gb: 11, recommended_ram_gb: 16, recommendation_rank: 3 })
+      expect(recommendModelIdByRam([wide, narrow], 12, 'chat', slow('wide'))).toBe('wide')
     })
 
     it('an unresolvable or absent measuredModelId is no signal', () => {
@@ -1154,39 +1073,22 @@ describe('recommendModelIdByRam', () => {
       expect(recommendModelIdByRam(all, 32, 'chat', slow('top', 0))).toBe('top')
     })
 
-    it('no signal is byte-identical to the pure RAM path', () => {
-      for (const ram of [8, 12, 16, 24, 32, 64]) {
-        expect(recommendModelIdByRam(all, ram, 'chat', null)).toBe(
-          recommendModelIdByRam(all, ram, 'chat')
-        )
-        expect(recommendModelIdByRam(all, ram, 'chat', undefined)).toBe(
-          recommendModelIdByRam(all, ram, 'chat')
-        )
-      }
-    })
-
     it('scopes to the requested role: a chat crawl never moves an embeddings pick', () => {
-      const embed = asManifest({ id: 'embed', role: 'embeddings', recommended_min_ram_gb: 4, recommended_ram_gb: 8 })
+      const embed = validManifest({ id: 'embed', role: 'embeddings', recommended_min_ram_gb: 4, recommended_ram_gb: 8 })
       expect(recommendModelIdByRam([...all, embed], 32, 'embeddings', slow('top'))).toBe('embed')
     })
   })
 })
 
 describe('buildModelList — RAM gate', () => {
-  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
-    const dir = tempDir('hilbertraum-manifests-')
-    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
-    return dir
-  }
-
   it('flags models above the machine RAM and recommends the best RAM fit', async () => {
     const dir = manifestsDirWith(
-      manifestObj({ id: 'fits', recommended_min_ram_gb: 8, recommended_ram_gb: 16 }),
-      manifestObj({ id: 'too-big', recommended_min_ram_gb: 64, recommended_ram_gb: 128 })
+      rawManifest({ id: 'fits', recommended_min_ram_gb: 8, recommended_ram_gb: 16 }),
+      rawManifest({ id: 'too-big', recommended_min_ram_gb: 64, recommended_ram_gb: 128 })
     )
     const { models } = await buildModelList({
       manifestsDir: dir,
-      rootPath: tempDir('hilbertraum-root-'),
+      rootPath: tempRoot('root'),
       profile: 'UNKNOWN',
       developerMode: true,
       machineRamGb: 16
@@ -1198,29 +1100,17 @@ describe('buildModelList — RAM gate', () => {
     expect(byId['too-big'].recommended).toBe(false)
   })
 
-  it('keeps the legacy profile-based behavior when machine RAM is not provided', async () => {
-    const dir = manifestsDirWith(manifestObj({ id: 'lite-model', recommended_profiles: ['LITE'] }))
-    const { models } = await buildModelList({
-      manifestsDir: dir,
-      rootPath: tempDir('hilbertraum-root-'),
-      profile: 'LITE',
-      developerMode: true
-    })
-    expect(models[0].recommended).toBe(true)
-    expect(models[0].insufficientRam).toBe(false)
-  })
-
   // §6.5 (issue #95): the speedSignal option threads the persisted Diagnostics pairing into
   // the CHAT recommendation — the ★ flag moves one tier down on a right-sized crawl and is
   // byte-identical without a signal.
   it('moves the recommended flag one tier down on a slow speed signal (§6.5)', async () => {
     const dir = manifestsDirWith(
-      manifestObj({ id: 'big', recommended_min_ram_gb: 20, recommended_ram_gb: 24, recommendation_rank: 3, size_on_disk_gb: 16.8 }),
-      manifestObj({ id: 'small', recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3, size_on_disk_gb: 6.0 })
+      rawManifest({ id: 'big', recommended_min_ram_gb: 20, recommended_ram_gb: 24, recommendation_rank: 3, size_on_disk_gb: 16.8 }),
+      rawManifest({ id: 'small', recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3, size_on_disk_gb: 6.0 })
     )
     const base = {
       manifestsDir: dir,
-      rootPath: tempDir('hilbertraum-root-'),
+      rootPath: tempRoot('root'),
       profile: 'UNKNOWN' as const,
       developerMode: true,
       machineRamGb: 24
@@ -1248,69 +1138,26 @@ describe('buildModelList — RAM gate', () => {
 // own path). Inactive present weights are still reported `installed` (display-only — the start
 // gate re-verifies what it launches).
 describe('buildModelList — RT-3 lazy verification', () => {
-  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
-    const dir = tempDir('hilbertraum-manifests-')
-    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
-    return dir
-  }
-  function writeWeight(rootPath: string, relPath: string, content: string): string {
-    const p = join(rootPath, relPath)
-    mkdirSync(parse(p).dir, { recursive: true })
-    writeFileSync(p, content)
-    return createHash('sha256').update(content).digest('hex')
-  }
   function twoModels(): { dir: string; root: string } {
-    const root = tempDir('hilbertraum-root-')
-    const hA = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
-    const hB = writeWeight(root, 'models/chat/b.gguf', 'BBBBBBBB')
+    const root = tempRoot('root')
+    const hA = writeDriveFile(root, 'models/chat/a.gguf', 'AAAA')
+    const hB = writeDriveFile(root, 'models/chat/b.gguf', 'BBBBBBBB')
     const dir = manifestsDirWith(
-      manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: hA }),
-      manifestObj({ id: 'b', local_path: 'models/chat/b.gguf', sha256: hB })
+      rawManifest({ id: 'a', local_path: 'models/chat/a.gguf', sha256: hA }),
+      rawManifest({ id: 'b', local_path: 'models/chat/b.gguf', sha256: hB })
     )
     return { dir, root }
   }
 
-  it('chat path (cold cache) hashes ONLY the active model; both still report installed', async () => {
-    const { dir, root } = twoModels()
-    clearChecksumCache()
-    const before = checksumCacheStats.computed
-    const { models } = await buildModelList({
-      manifestsDir: dir,
-      rootPath: root,
-      profile: 'UNKNOWN',
-      developerMode: false,
-      onlyVerifyModelId: 'a' // the active model on the chat path
-    })
-    // Exactly one weight (the active 'a') was hashed — not the full set.
-    expect(checksumCacheStats.computed).toBe(before + 1)
-    const byId = Object.fromEntries(models.map((m) => [m.id, m.state]))
-    expect(byId['a']).toBe('installed') // hashed + verified
-    expect(byId['b']).toBe('installed') // present, reported without hashing (display-only)
-  })
-
-  it('"Check all model files" (cold cache) hashes the FULL set', async () => {
-    const { dir, root } = twoModels()
-    clearChecksumCache()
-    const before = checksumCacheStats.computed
-    await buildModelList({
-      manifestsDir: dir,
-      rootPath: root,
-      profile: 'UNKNOWN',
-      developerMode: false
-      // onlyVerifyModelId omitted ⇒ full hash
-    })
-    expect(checksumCacheStats.computed).toBe(before + 2)
-  })
-
   it('lazy with no active model (null) hashes nothing', async () => {
     const { dir, root } = twoModels()
-    clearChecksumCache()
     const before = checksumCacheStats.computed
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
       profile: 'UNKNOWN',
       developerMode: false,
+      machineRamGb: PINNED_RAM_GB,
       onlyVerifyModelId: null
     })
     expect(checksumCacheStats.computed).toBe(before)
@@ -1319,22 +1166,16 @@ describe('buildModelList — RT-3 lazy verification', () => {
 
   it('still serves a cached hash for an inactive model (honest checksum_failed)', async () => {
     const { dir, root } = twoModels()
-    clearChecksumCache()
-    // Warm the cache for both (full pass), then corrupt 'b' on disk WITHOUT changing the
-    // cache: a later lazy pass should still surface the cached hash for free (and 'b' is
-    // installed because its cached hash matched at warm time).
-    await buildModelList({ manifestsDir: dir, rootPath: root, profile: 'UNKNOWN', developerMode: false })
+    const base = { manifestsDir: dir, rootPath: root, profile: 'UNKNOWN' as const, developerMode: false, machineRamGb: PINNED_RAM_GB }
+    // Warm the cache for both (full pass), then plant a cached hash for 'b' that does not match its manifest:
+    // the lazy pass must surface it for free, not report 'installed' on the skip-hash branch.
+    await buildModelList(base)
+    primeChecksum(join(root, 'models', 'chat', 'b.gguf'), 'a'.repeat(64))
     const before = checksumCacheStats.computed
-    const { models } = await buildModelList({
-      manifestsDir: dir,
-      rootPath: root,
-      profile: 'UNKNOWN',
-      developerMode: false,
-      onlyVerifyModelId: 'a'
-    })
-    // Cache hits ⇒ no new hashing for either model.
+    const { models } = await buildModelList({ ...base, onlyVerifyModelId: 'a' })
     expect(checksumCacheStats.computed).toBe(before)
-    expect(models.find((m) => m.id === 'b')?.state).toBe('installed')
+    expect(models.find((m) => m.id === 'a')?.state).toBe('installed')
+    expect(models.find((m) => m.id === 'b')?.state).toBe('checksum_failed')
   })
 })
 
@@ -1343,47 +1184,28 @@ describe('buildModelList — RT-3 lazy verification', () => {
 // Models screen can show a determinate bar instead of an opaque spinner while multi-GB
 // weights hash for the first time.
 describe('buildModelList — verification progress', () => {
-  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
-    const dir = tempDir('hilbertraum-manifests-')
-    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
-    return dir
-  }
-  /** Write a weight at `<root>/<relPath>` and return its real SHA-256. */
-  function writeWeight(rootPath: string, relPath: string, content: string): string {
-    const p = join(rootPath, relPath)
-    mkdirSync(parse(p).dir, { recursive: true })
-    writeFileSync(p, content)
-    return createHash('sha256').update(content).digest('hex')
-  }
-
-  it('emits a final exact-total progress event when a weight is hashed', async () => {
-    clearChecksumCache()
-    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
-    writeFileSync(file, 'progress payload')
-    const seen: number[] = []
-    await sha256File(file, (b) => seen.push(b))
-    // Small file < the 64 MB throttle ⇒ exactly one (final flush) call with the byte total.
-    expect(seen).toEqual([Buffer.byteLength('progress payload')])
-  })
-
   it('reports byte-weighted progress across the models that hash', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const h1 = writeWeight(root, 'models/chat/a.gguf', 'AAAA') // 4 bytes
-    const h2 = writeWeight(root, 'models/chat/b.gguf', 'BBBBBBBB') // 8 bytes
+    const root = tempRoot('root')
+    const h1 = writeDriveFile(root, 'models/chat/a.gguf', 'AAAA') // 4 bytes
+    const h2 = writeDriveFile(root, 'models/chat/b.gguf', 'BBBBBBBB') // 8 bytes
     const dir = manifestsDirWith(
-      manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h1 }),
-      manifestObj({ id: 'b', local_path: 'models/chat/b.gguf', sha256: h2 })
+      rawManifest({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h1 }),
+      rawManifest({ id: 'b', local_path: 'models/chat/b.gguf', sha256: h2 })
     )
     const events: ModelVerifyProgress[] = []
+    const before = checksumCacheStats.computed
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
       profile: 'UNKNOWN',
       developerMode: false,
+      machineRamGb: PINNED_RAM_GB,
       onProgress: (p) => events.push(p)
     })
     expect(models.every((m) => m.state === 'installed')).toBe(true)
+    // Every weight really hashed, and each reported its own bytes: the terminal event alone is built from the pre-pass.
+    expect(checksumCacheStats.computed).toBe(before + 2)
+    expect(events.filter((e) => !e.done).map((e) => [e.modelIndex, e.overallBytesHashed])).toEqual([[1, 4], [2, 12]])
 
     // Denominator = both files; step counter spans both; overall byte count is monotonic.
     expect(events.every((e) => e.overallBytesTotal === 12)).toBe(true)
@@ -1400,15 +1222,13 @@ describe('buildModelList — verification progress', () => {
   })
 
   it('emits NO events when every weight is already cached (the common 2nd run)', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const h = writeWeight(root, 'models/chat/a.gguf', 'cached weights')
-    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
-    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'c.sqlite'))
-    seedSettings(db)
-    const store = createSettingsHashStore(() => db)
+    const root = tempRoot('root')
+    const h = writeDriveFile(root, 'models/chat/a.gguf', 'cached weights')
+    const dir = manifestsDirWith(rawManifest({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const db = seededFreshDb('cached')
+    const store = createSettingsHashStore(() => db, root)
 
-    const opts = { manifestsDir: dir, rootPath: root, profile: 'UNKNOWN' as const, developerMode: false, hashStore: store }
+    const opts = { manifestsDir: dir, rootPath: root, profile: 'UNKNOWN' as const, developerMode: false, machineRamGb: PINNED_RAM_GB, hashStore: store }
     await buildModelList(opts) // warm the cache
     const events: ModelVerifyProgress[] = []
     await buildModelList({ ...opts, onProgress: (p) => events.push(p) })
@@ -1416,14 +1236,13 @@ describe('buildModelList — verification progress', () => {
   })
 
   it('excludes missing and placeholder-hash weights from the byte denominator', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const real = writeWeight(root, 'models/chat/real.gguf', 'REAL') // 4 bytes, will hash
+    const root = tempRoot('root')
+    const real = writeDriveFile(root, 'models/chat/real.gguf', 'REAL') // 4 bytes, will hash
     // placeholder hash (default fixture) → never hashed; missing file → never hashed.
     const dir = manifestsDirWith(
-      manifestObj({ id: 'real', local_path: 'models/chat/real.gguf', sha256: real }),
-      manifestObj({ id: 'placeholder', local_path: 'models/chat/placeholder.gguf' }),
-      manifestObj({ id: 'missing', local_path: 'models/chat/missing.gguf', sha256: 'f'.repeat(64) })
+      rawManifest({ id: 'real', local_path: 'models/chat/real.gguf', sha256: real }),
+      rawManifest({ id: 'placeholder', local_path: 'models/chat/placeholder.gguf' }),
+      rawManifest({ id: 'missing', local_path: 'models/chat/missing.gguf', sha256: 'f'.repeat(64) })
     )
     const events: ModelVerifyProgress[] = []
     await buildModelList({
@@ -1431,6 +1250,7 @@ describe('buildModelList — verification progress', () => {
       rootPath: root,
       profile: 'UNKNOWN',
       developerMode: true, // placeholder counts as installed, still not hashed
+      machineRamGb: PINNED_RAM_GB,
       onProgress: (p) => events.push(p)
     })
     expect(events.length).toBeGreaterThan(0)
@@ -1447,23 +1267,13 @@ describe('cancellable verification (#420)', () => {
   /** A file big enough that `sha256File`'s 64 MiB progress throttle fires mid-read, which is
    *  what makes a mid-file abort deterministic (and what the #392 warm mark needs). */
   const OVER_PROGRESS_CHUNK = 70 * 1024 * 1024
+  let bigSha: string | undefined
+  const bigFileSha = (): string => (bigSha ??= createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex'))
 
   function bigFile(): string {
-    const file = join(tempDir('hilbertraum-abort-'), 'weight.bin')
+    const file = join(tempRoot('abort'), 'weight.bin')
     writeFileSync(file, Buffer.alloc(OVER_PROGRESS_CHUNK))
     return file
-  }
-
-  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
-    const dir = tempDir('hilbertraum-manifests-')
-    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
-    return dir
-  }
-  function writeWeight(rootPath: string, relPath: string, content: string): string {
-    const p = join(rootPath, relPath)
-    mkdirSync(parse(p).dir, { recursive: true })
-    writeFileSync(p, content)
-    return createHash('sha256').update(content).digest('hex')
   }
 
   // ---- trap 1: the promise must REJECT, never hang -----------------------------------
@@ -1472,8 +1282,7 @@ describe('cancellable verification (#420)', () => {
   // — computeInstallState, buildModelList, the IPC handler, the renderer's busy flag — would
   // park forever. These pin the rejection, not merely that hashing stopped.
   it('rejects (never hangs) when the signal fires while the read is open', async () => {
-    clearChecksumCache()
-    const file = join(tempDir('hilbertraum-abort-'), 'weight.bin')
+    const file = join(tempRoot('abort'), 'weight.bin')
     writeFileSync(file, 'abort me')
     const controller = new AbortController()
     const promise = sha256File(file, undefined, controller.signal)
@@ -1482,36 +1291,40 @@ describe('cancellable verification (#420)', () => {
   })
 
   it('rejects without reading anything when the signal is ALREADY aborted', async () => {
-    clearChecksumCache()
     const controller = new AbortController()
     controller.abort()
     // A path that does not exist: reaching the filesystem at all would give ENOENT instead.
     await expect(
-      sha256File(join(tempDir('hilbertraum-abort-'), 'never-opened.bin'), undefined, controller.signal)
+      sha256File(join(tempRoot('abort'), 'never-opened.bin'), undefined, controller.signal)
     ).rejects.toThrow(/cancelled/i)
   })
 
   it('with NO signal it behaves exactly as before (progress + digest)', async () => {
-    clearChecksumCache()
-    const file = join(tempDir('hilbertraum-abort-'), 'weight.bin')
+    const file = join(tempRoot('abort'), 'weight.bin')
     writeFileSync(file, 'unchanged')
     const seen: number[] = []
     await expect(sha256File(file, (b) => seen.push(b))).resolves.toBe(
-      createHash('sha256').update('unchanged').digest('hex')
+      sha256('unchanged')
     )
     expect(seen).toEqual([Buffer.byteLength('unchanged')])
   })
 
   it('aborts mid-file: the read stops and nothing is cached or counted', async () => {
-    clearChecksumCache()
+    const readLog = armPerfLog()
     const file = bigFile()
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     // The 64 MiB throttle fires once with ~6 MiB still to read — a genuine mid-read abort.
     await expect(
-      sha256File(file, () => controller.abort(), controller.signal)
+      verifyChecksum(file, bigFileSha(), undefined, () => controller.abort(), undefined, controller.signal)
     ).rejects.toThrow(/cancelled/i)
+    // The caller rejects first; the read's own catch closes the pair after it. Verifying again before that close joins the dying read.
+    await until(() => doneMarks(readLog).length > 0, 'the cancelled read closing')
+    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
     expect(checksumCacheStats.computed).toBe(before)
+    // Nothing was cached: a fresh verify hashes for real and matches.
+    expect((await verifyChecksum(file, bigFileSha())).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1)
   })
 
   // ---- trap 2: single-flight sharing --------------------------------------------------
@@ -1520,9 +1333,8 @@ describe('cancellable verification (#420)', () => {
   // same weight. The rule: the shared read is aborted only when EVERY waiter has abandoned
   // it, so an uncancellable caller can never be collateral damage.
   it('a cancelled screen pass does not abort the hash an uncancellable caller joined', async () => {
-    clearChecksumCache()
     const file = bigFile()
-    const expected = createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex')
+    const expected = bigFileSha()
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     // Same tick: the leader registers in `inFlightHashes` synchronously, so the second call
@@ -1537,9 +1349,8 @@ describe('cancellable verification (#420)', () => {
   })
 
   it('…and the other way round: a cancelled JOINER leaves the uncancellable leader alone', async () => {
-    clearChecksumCache()
     const file = bigFile()
-    const expected = createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex')
+    const expected = bigFileSha()
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     const gate = verifyChecksum(file, expected) // leads, uncancellable
@@ -1552,9 +1363,9 @@ describe('cancellable verification (#420)', () => {
   })
 
   it('the physical read DOES stop once every waiter has cancelled', async () => {
-    clearChecksumCache()
+    const readLog = armPerfLog()
     const file = bigFile()
-    const expected = createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex')
+    const expected = bigFileSha()
     const before = checksumCacheStats.computed
     const a = new AbortController()
     const b = new AbortController()
@@ -1565,26 +1376,31 @@ describe('cancellable verification (#420)', () => {
 
     await expect(first).rejects.toThrow(/cancelled/i)
     await expect(second).rejects.toThrow(/cancelled/i)
-    // No completed physical hash ⇒ nothing counted and nothing cached.
+    // Both rejections come from the waiters, not the read: only the close says the read really stopped.
+    await until(() => doneMarks(readLog).length > 0, 'the abandoned read closing')
+    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
     expect(checksumCacheStats.computed).toBe(before)
   })
 
   // ---- the persistence guarantees a cancelled hash must leave alone -------------------
   it('a cancelled hash records no read sample and never marks the file page-cache-warm', async () => {
-    clearChecksumCache()
+    const readLog = armPerfLog()
     resetEffectiveReadForTests()
     const file = bigFile()
     const controller = new AbortController()
     await expect(
       verifyChecksum(
         file,
-        createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex'),
+        bigFileSha(),
         undefined,
         () => controller.abort(),
         { modelId: 'm', file: 'weight' },
         controller.signal
       )
     ).rejects.toThrow(/cancelled/i)
+    await until(() => doneMarks(readLog).length > 0, 'the cancelled read closing')
+    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
+    // Weak alone on a fast disk (under the 250 ms floor); the warm mark below carries the proof, its registration ignores the elapsed floor.
     expect(latestEffectiveReadBySource('checksum')).toBeNull()
 
     // The teeth: the file was NOT registered in #392's warmed set, so a model-load window
@@ -1595,12 +1411,11 @@ describe('cancellable verification (#420)', () => {
   })
 
   it('…while a COMPLETED hash of the same file does mark it warm (the contrast)', async () => {
-    clearChecksumCache()
     resetEffectiveReadForTests()
     const file = bigFile()
     await verifyChecksum(
       file,
-      createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex'),
+      bigFileSha(),
       undefined,
       undefined,
       { modelId: 'm', file: 'weight' }
@@ -1611,22 +1426,22 @@ describe('cancellable verification (#420)', () => {
 
   // ---- the loops, not only the stream --------------------------------------------------
   it('a cancel between two weights stops the pass immediately — the next model never hashes', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const h1 = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
-    const h2 = writeWeight(root, 'models/chat/b.gguf', 'BBBBBBBB')
+    const root = tempRoot('root')
+    const h1 = writeDriveFile(root, 'models/chat/a.gguf', 'AAAA')
+    const h2 = writeDriveFile(root, 'models/chat/b.gguf', 'BBBBBBBB')
     const dir = manifestsDirWith(
-      manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h1 }),
-      manifestObj({ id: 'b', local_path: 'models/chat/b.gguf', sha256: h2 })
+      rawManifest({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h1 }),
+      rawManifest({ id: 'b', local_path: 'models/chat/b.gguf', sha256: h2 })
     )
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     const events: ModelVerifyProgress[] = []
-    const { models } = await buildModelList({
+    const { models, manifestErrors } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
       profile: 'UNKNOWN',
       developerMode: false,
+      machineRamGb: PINNED_RAM_GB,
       signal: controller.signal,
       // The first model's final progress event lands once its file is hashed — cancel there.
       onProgress: (p) => {
@@ -1634,8 +1449,9 @@ describe('cancellable verification (#420)', () => {
         if (!p.done) controller.abort()
       }
     })
-    // Exactly ONE physical hash: the loop head saw the abort before opening the second file.
+    // Exactly ONE physical hash: the abort lands in the first file's final progress, the waiter rejects, the pass goes calm, and 'b' never opens.
     expect(checksumCacheStats.computed).toBe(before + 1)
+    expect(manifestErrors).toEqual([])
     // The list is still complete and honest: what was reached is verified, the rest is
     // present-but-unchecked, which is exactly what RT-3 lazy verification reports.
     expect(models.map((m) => m.id).sort()).toEqual(['a', 'b'])
@@ -1646,112 +1462,79 @@ describe('cancellable verification (#420)', () => {
   })
 
   it('an already-cancelled pass hashes nothing at all and still settles the bar', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
-    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const root = tempRoot('root')
+    const h = writeDriveFile(root, 'models/chat/a.gguf', 'AAAA')
+    const dir = manifestsDirWith(rawManifest({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     controller.abort()
     const events: ModelVerifyProgress[] = []
-    const { models } = await buildModelList({
+    const { models, manifestErrors } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
       profile: 'UNKNOWN',
       developerMode: false,
+      machineRamGb: PINNED_RAM_GB,
       signal: controller.signal,
       onProgress: (p) => events.push(p)
     })
+    expect(manifestErrors).toEqual([]) // a cancelled model is never reported as a manifest ERROR
     expect(checksumCacheStats.computed).toBe(before)
     expect(models[0].state).toBe('installed')
     expect(events).toHaveLength(1)
     expect(events[0].done).toBe(true)
   })
 
-  it('a cancelled model is never reported as a manifest ERROR', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
-    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
-    const controller = new AbortController()
-    controller.abort()
-    const { manifestErrors } = await buildModelList({
-      manifestsDir: dir,
-      rootPath: root,
-      profile: 'UNKNOWN',
-      developerMode: false,
-      signal: controller.signal
-    })
-    expect(manifestErrors).toEqual([])
-  })
-
   it('the renderer-minted run id tags every event of the pass (it is the cancel handle)', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
-    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const root = tempRoot('root')
+    const h = writeDriveFile(root, 'models/chat/a.gguf', 'AAAA')
+    const dir = manifestsDirWith(rawManifest({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
     const events: ModelVerifyProgress[] = []
     await buildModelList({
       manifestsDir: dir,
       rootPath: root,
       profile: 'UNKNOWN',
       developerMode: false,
+      machineRamGb: PINNED_RAM_GB,
       runId: 'renderer-minted',
       onProgress: (p) => events.push(p)
     })
     expect(events.length).toBeGreaterThan(0)
     expect(events.every((e) => e.runId === 'renderer-minted')).toBe(true)
   })
-
-  it('a pass with NO signal is byte-identical to before (nothing is cancellable by accident)', async () => {
-    clearChecksumCache()
-    const root = tempDir('hilbertraum-root-')
-    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
-    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
-    const before = checksumCacheStats.computed
-    const { models } = await buildModelList({
-      manifestsDir: dir,
-      rootPath: root,
-      profile: 'UNKNOWN',
-      developerMode: false
-    })
-    expect(models[0].state).toBe('installed')
-    expect(checksumCacheStats.computed).toBe(before + 1)
-  })
 })
 
 
 describe('discoverManifests', () => {
-  function writeManifest(dir: string, name: string, obj: unknown): void {
-    writeFileSync(join(dir, name), stringify(obj))
-  }
-
   it('parses valid manifests and reports invalid ones', () => {
-    const dir = tempDir('hilbertraum-manifests-')
-    writeManifest(dir, 'good.yaml', manifestObj())
-    writeManifest(dir, 'embed.yml', manifestObj({ id: 'embed', role: 'embeddings' }))
+    const dir = tempRoot('manifests')
+    writeManifest(dir, 'good.yaml', rawManifest())
+    writeManifest(dir, 'embed.yml', rawManifest({ id: 'embed', role: 'embeddings' }))
     writeManifest(dir, 'bad.yaml', { id: 'broken' }) // missing required fields
     writeFileSync(join(dir, 'notes.txt'), 'ignored') // non-manifest file skipped
+    writeFileSync(join(dir, 'syntax.yaml'), 'a: [unclosed')
 
     const res = discoverManifests(dir)
     expect(res.manifests.map((m) => m.manifest.id).sort()).toEqual(['embed', 'qwen3-4b-instruct-q4'])
-    expect(res.errors.length).toBe(1)
+    expect(res.errors.length).toBe(2)
     expect(res.errors[0]).toContain('bad.yaml')
+    expect(res.errors[1]).toContain('syntax.yaml')
+    expect(res.errors[1]).toContain('YAML parse error')
   })
 
   it('flags duplicate ids', () => {
-    const dir = tempDir('hilbertraum-manifests-')
-    writeManifest(dir, 'a.yaml', manifestObj())
-    writeManifest(dir, 'b.yaml', manifestObj())
+    const dir = tempRoot('manifests')
+    writeManifest(dir, 'a.yaml', rawManifest())
+    writeManifest(dir, 'b.yaml', rawManifest())
     const res = discoverManifests(dir)
     expect(res.manifests.length).toBe(1)
     expect(res.errors.some((e) => e.includes('duplicate id'))).toBe(true)
   })
 
   it('recurses into subdirectories', () => {
-    const dir = tempDir('hilbertraum-manifests-')
+    const dir = tempRoot('manifests')
     mkdirSync(join(dir, 'chat'), { recursive: true })
-    writeManifest(join(dir, 'chat'), 'm.yaml', manifestObj())
+    writeManifest(join(dir, 'chat'), 'm.yaml', rawManifest())
     const res = discoverManifests(dir)
     expect(res.manifests.length).toBe(1)
   })
@@ -1763,10 +1546,10 @@ describe('discoverManifests', () => {
   // order, with the perf log on and off. The mark's CONTENT is not asserted here — perf.ts
   // buffers pre-`initPerf` marks in memory by design and exposes no reader.
   it('returns an identical result with the perf log enabled (#333 instrumentation)', () => {
-    const dir = tempDir('hilbertraum-manifests-')
-    writeManifest(dir, 'good.yaml', manifestObj())
+    const dir = tempRoot('manifests')
+    writeManifest(dir, 'good.yaml', rawManifest())
     mkdirSync(join(dir, 'chat'), { recursive: true })
-    writeManifest(join(dir, 'chat'), 'nested.yml', manifestObj({ id: 'nested' }))
+    writeManifest(join(dir, 'chat'), 'nested.yml', rawManifest({ id: 'nested' }))
     writeManifest(dir, 'bad.yaml', { id: 'broken' })
 
     const before = process.env.HILBERTRAUM_PERF_LOG
@@ -1797,24 +1580,24 @@ describe('launchContextTokens (full-audit 2026-07-10 BE-5)', () => {
   const legacy = { contextTokens: 4096, contextTokensOverride: null }
 
   it('prefers the manifest recommended window over the legacy setting', () => {
-    const dir = tempDir('hilbertraum-launch-ctx-')
-    writeFileSync(join(dir, 'm.yaml'), stringify(manifestObj({ recommended_context_tokens: 32768 })))
+    const dir = tempRoot('launch-ctx')
+    writeManifest(dir, 'm.yaml', rawManifest({ recommended_context_tokens: 32768 }))
     const manifest = findManifestById(dir, 'qwen3-4b-instruct-q4')
     expect(manifest?.recommendedContextTokens).toBe(32768)
     expect(launchContextTokens(legacy, manifest)).toBe(32768)
   })
 
   it('falls back to the legacy setting for a manifest without a recommended window (0)', () => {
-    expect(launchContextTokens(legacy, asManifest({ recommended_context_tokens: 0 }))).toBe(4096)
+    expect(launchContextTokens(legacy, validManifest({ recommended_context_tokens: 0 }))).toBe(4096)
   })
 
   it('falls back to the legacy setting when no manifest resolves', () => {
-    const dir = tempDir('hilbertraum-launch-ctx-')
-    writeFileSync(join(dir, 'm.yaml'), stringify(manifestObj()))
+    const dir = tempRoot('launch-ctx')
+    writeManifest(dir, 'm.yaml', rawManifest())
     // A manifest missing the field entirely fails validation → resolves to null, never NaN.
-    const missingField = manifestObj()
+    const missingField = rawManifest()
     delete missingField.recommended_context_tokens
-    writeFileSync(join(dir, 'missing.yaml'), stringify({ ...missingField, id: 'no-ctx-model' }))
+    writeManifest(dir, 'missing.yaml', { ...missingField, id: 'no-ctx-model' })
     expect(findManifestById(dir, 'no-ctx-model')).toBeNull()
     expect(findManifestById(dir, 'unknown-id')).toBeNull()
     expect(findManifestById(null, 'qwen3-4b-instruct-q4')).toBeNull()
@@ -1825,24 +1608,24 @@ describe('launchContextTokens (full-audit 2026-07-10 BE-5)', () => {
 
   it('the user context-size override wins over both', () => {
     const s = { contextTokens: 4096, contextTokensOverride: 8192 }
-    expect(launchContextTokens(s, asManifest({ recommended_context_tokens: 32768 }))).toBe(8192)
+    expect(launchContextTokens(s, validManifest({ recommended_context_tokens: 32768 }))).toBe(8192)
     expect(launchContextTokens(s, null)).toBe(8192)
   })
 })
 
 describe('resolveManifestsDir', () => {
   it('honours an explicit override that exists', () => {
-    const dir = tempDir('hilbertraum-manifests-')
+    const dir = tempRoot('manifests')
     expect(resolveManifestsDir('/somewhere', dir)).toBe(dir)
   })
   it('falls back to the walk-up when the override path is missing (M21)', () => {
-    const root = tempDir('hilbertraum-up-fallback-')
+    const root = tempRoot('up-fallback')
     const mdir = join(root, 'model-manifests')
     mkdirSync(mdir, { recursive: true })
     expect(resolveManifestsDir(root, join(root, 'no-such-dir'))).toBe(mdir)
   })
   it('finds model-manifests by walking up', () => {
-    const root = tempDir('hilbertraum-up-')
+    const root = tempRoot('up')
     const mdir = join(root, 'model-manifests')
     mkdirSync(mdir, { recursive: true })
     const deep = join(root, 'apps', 'desktop', 'out', 'main')
@@ -1850,92 +1633,50 @@ describe('resolveManifestsDir', () => {
     expect(resolveManifestsDir(deep)).toBe(mdir)
   })
   it('returns null when nothing is found', () => {
-    expect(resolveManifestsDir(tempDir('hilbertraum-empty-'))).toBe(null)
+    expect(resolveManifestsDir(tempRoot('empty'))).toBe(null)
   })
 })
 
 describe('selectModel', () => {
-  function setup(): { dbPath: string; manifestsDir: string } {
-    const manifestsDir = tempDir('hilbertraum-manifests-')
-    writeFileSync(join(manifestsDir, 'chat.yaml'), stringify(manifestObj()))
-    writeFileSync(
-      join(manifestsDir, 'embed.yaml'),
-      stringify(manifestObj({ id: 'embed', role: 'embeddings' }))
-    )
-    const dbPath = join(tempDir('hilbertraum-db-'), 'test.sqlite')
-    return { dbPath, manifestsDir }
+  function setup(): { db: Db; manifestsDir: string } {
+    const manifestsDir = tempRoot('manifests')
+    writeManifest(manifestsDir, 'chat.yaml', rawManifest())
+    writeManifest(manifestsDir, 'embed.yaml', rawManifest({ id: 'embed', role: 'embeddings' }))
+    return { db: seededFreshDb('select'), manifestsDir }
   }
 
   it('persists a chat selection to activeModelId', () => {
-    const { dbPath, manifestsDir } = setup()
-    const db = openDatabase(dbPath)
-    seedSettings(db)
+    const { db, manifestsDir } = setup()
     const res = selectModel(db, manifestsDir, 'qwen3-4b-instruct-q4')
     expect(res.activeModelId).toBe('qwen3-4b-instruct-q4')
     expect(getSettings(db).activeModelId).toBe('qwen3-4b-instruct-q4')
   })
 
   it('persists an embedding selection to activeEmbeddingModelId', () => {
-    const { dbPath, manifestsDir } = setup()
-    const db = openDatabase(dbPath)
-    seedSettings(db)
+    const { db, manifestsDir } = setup()
     const res = selectModel(db, manifestsDir, 'embed')
     expect(res.activeEmbeddingModelId).toBe('embed')
     expect(getSettings(db).activeModelId).toBe(null) // chat slot untouched
   })
 
   it('throws on an unknown model id', () => {
-    const { dbPath, manifestsDir } = setup()
-    const db = openDatabase(dbPath)
-    seedSettings(db)
+    const { db, manifestsDir } = setup()
     expect(() => selectModel(db, manifestsDir, 'nope')).toThrow()
   })
 
-  // Phase 36 fix: availability-driven roles have no settings slot. The old
-  // role-else-chat fallback would have written a transcriber/reranker id into
-  // activeModelId — the CHAT slot — and broken chat.
-  it('refuses transcriber/reranker selections and leaves both slots untouched', () => {
-    const { dbPath, manifestsDir } = setup()
-    writeFileSync(
-      join(manifestsDir, 'transcriber.yaml'),
-      stringify(
-        manifestObj({
-          id: 'whisper-small-multilingual',
-          role: 'transcriber',
-          runtime: 'whisper_cpp',
-          format: 'ggml',
-          local_path: 'models/transcriber/ggml-small.bin'
-        })
-      )
-    )
-    const db = openDatabase(dbPath)
-    seedSettings(db)
-    expect(() => selectModel(db, manifestsDir, 'whisper-small-multilingual')).toThrow(
-      /used automatically/
-    )
-    expect(getSettings(db).activeModelId).toBe(null)
-    expect(getSettings(db).activeEmbeddingModelId).toBe(null)
-  })
+  // Phase 36 fix + TG-1: availability-driven roles have no settings slot. The old role-else-chat fallback would have
+  // written such an id into activeModelId — the CHAT slot — and broken chat.
+  const AUTO_ROLES: Array<[string, Record<string, unknown>]> = [
+    ['transcriber', { id: 'whisper-small-multilingual', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: 'models/transcriber/ggml-small.bin' }],
+    ['reranker', { id: 'bge-reranker', role: 'reranker', local_path: 'models/reranker/bge.gguf' }],
+    ['vision', { id: 'qwen2.5-vl', role: 'vision', family: 'qwen2.5-vl', local_path: 'models/vision/vl.gguf', mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: 'REPLACE_WITH_REAL_HASH' } }],
+    ['translation', { id: 'translategemma-12b-it-q4', role: 'translation', family: 'translategemma', license: 'gemma', local_path: 'models/translation/translategemma-12b-it.Q4_K_M.gguf' }]
+  ]
 
-  // TG-1: the translation role is availability-driven too (like reranker/transcriber/vision) —
-  // it has no settings slot, so selectModel must refuse it and leave both slots untouched.
-  it('refuses a translation selection and leaves both slots untouched', () => {
-    const { dbPath, manifestsDir } = setup()
-    writeFileSync(
-      join(manifestsDir, 'translation.yaml'),
-      stringify(
-        manifestObj({
-          id: 'translategemma-12b-it-q4',
-          role: 'translation',
-          family: 'translategemma',
-          license: 'gemma',
-          local_path: 'models/translation/translategemma-12b-it.Q4_K_M.gguf'
-        })
-      )
-    )
-    const db = openDatabase(dbPath)
-    seedSettings(db)
-    expect(() => selectModel(db, manifestsDir, 'translategemma-12b-it-q4')).toThrow(/used automatically/)
+  it.each(AUTO_ROLES)('refuses a %s selection and leaves both slots untouched', (_role, fields) => {
+    const { db, manifestsDir } = setup()
+    writeManifest(manifestsDir, 'auto.yaml', rawManifest(fields))
+    expect(() => selectModel(db, manifestsDir, String(fields.id))).toThrow(/used automatically/)
     expect(getSettings(db).activeModelId).toBe(null)
     expect(getSettings(db).activeEmbeddingModelId).toBe(null)
   })

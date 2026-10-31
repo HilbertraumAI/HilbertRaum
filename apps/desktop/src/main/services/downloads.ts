@@ -79,7 +79,7 @@ export interface StartDownloadOptions {
    * Required when `license_review.status !== 'approved'` (mirrors `--accept-license`).
    */
   licenseAccepted?: boolean
-  /** Persistent checksum cache — invalidated for the weight path on success. */
+  /** Persistent checksum cache: primed with the verified hash on success; invalidated for a placeholder. */
   hashStore?: HashStore
 }
 
@@ -92,9 +92,6 @@ export type DownloadAuditType =
 export interface DownloadManagerDeps {
   /** Injected fetch — production passes the global `fetch`; tests pass a fake. */
   fetchImpl?: FetchFn
-  /** Injected verifier (default `verifyDownloadedFile`) — tests gate it to pin the
-   *  cancel-during-verify contract deterministically (BE-4, full-audit 2026-07-10). */
-  verifyImpl?: typeof verifyDownloadedFile
   log?: (msg: string, meta?: unknown) => void
   /**
    * Audit hook: the IPC layer injects the app recorder so the background verify/fail
@@ -114,7 +111,7 @@ export interface DownloadManagerDeps {
 }
 
 /** The `.part` staging path for a weight destination. */
-export function partPath(dest: string): string {
+function partPath(dest: string): string {
   return `${dest}.part`
 }
 
@@ -429,9 +426,9 @@ export class DownloadManager {
           fetchImpl: this.deps.fetchImpl,
           signal: controller.signal,
           // D3 + F17: cap the body so a redirected/hostile endpoint can't stream past it and fill the
-          // drive (the SHA verify already rejects wrong bytes). The cap is the manifest's exact
-          // `size_bytes` when known, else a bounded per-role default — never unbounded (so a manifest
-          // that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
+          // drive (the SHA verify already rejects wrong bytes). The cap is the manifest's size_bytes
+          // plus drift headroom when known, else a bounded per-role default — never unbounded (so a
+          // manifest that omits size_bytes no longer collapses the cap to the multi-GiB backstop).
           maxBytes: modelWeightMaxBytes(task.role, task.sizeBytes),
           ...(resumeFrom > 0
             ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true, resumeFrom }
@@ -572,15 +569,13 @@ export class DownloadManager {
    * The verify-after-download hash (#106): a real multi-GB model-weight hash that
    * bypasses `sha256FileCached` (it hashes the staged `.part`, then `finishVerifiedFile`
    * primes the cache). `verifyDownloadedFile` carries the instrumentation itself; this
-   * wrapper only supplies the model label. An injected `verifyImpl` (tests) is NOT
-   * instrumented — it does no real I/O.
+   * wrapper only supplies the model label.
    */
   private async verifyPart(
     part: string,
     task: ModelDownloadTask,
     job: DownloadJob
   ): Promise<VerifyResult> {
-    if (this.deps.verifyImpl) return this.deps.verifyImpl(part, task.expectedSha256)
     return verifyDownloadedFile(part, task.expectedSha256, {
       modelId: job.modelId,
       file: 'download'

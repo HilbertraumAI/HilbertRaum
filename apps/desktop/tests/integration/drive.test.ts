@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  DRIVE_OS_DIRS,
   driveLayoutDirs,
   buildDriveJson,
   buildPolicyJson,
@@ -13,80 +11,63 @@ import {
   planPrepareDrive
 } from '../../src/main/services/drive'
 import { resolvePaths } from '../../src/main/services/workspace'
-import { parsePolicy, mergePolicyObject, DEFAULT_POLICY } from '../../src/main/services/policy'
-import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
-
-function tempDir(prefix: string): string {
-  return mkdtempSync(join(tmpdir(), prefix))
-}
-
-function manifestObj(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'qwen3-4b-instruct-q4',
-    display_name: 'Qwen3 4B Instruct Q4',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
-    size_on_disk_gb: 2.7,
-    recommended_min_ram_gb: 8,
-    recommended_ram_gb: 16,
-    recommended_context_tokens: 4096,
-    local_path: 'models/chat/qwen3-4b-instruct-q4.gguf',
-    sha256: 'REPLACE_WITH_REAL_HASH',
-    recommended_profiles: ['LITE'],
-    license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' },
-    ...overrides
-  }
-}
-
-function asManifest(overrides: Record<string, unknown> = {}): ModelManifest {
-  const res = validateManifest(manifestObj(overrides))
-  if (!res.manifest) throw new Error('fixture invalid: ' + res.errors.join(', '))
-  return res.manifest
-}
-
-/** Create a weight file under the drive root from its manifest local_path. */
-function writeWeight(root: string, manifest: ModelManifest, content: string): void {
-  const dest = join(root, ...manifest.localPath.split('/'))
-  mkdirSync(join(dest, '..'), { recursive: true })
-  writeFileSync(dest, content)
-}
+import { parsePolicy, STRICT_POLICY } from '../../src/main/services/policy'
+import type { ModelManifest } from '../../src/shared/manifest'
+import { tempRoot } from '../helpers/db-fixtures'
+import { sha256, validManifest, visionManifest, writeDriveFile } from '../helpers/manifest-fixtures'
 
 describe('drive layout', () => {
   it('lays out the directories the code reads, with win/mac/linux sidecar dirs', () => {
     const root = join(tmpdir(), 'hilbertraum-drive-x')
     const dirs = driveLayoutDirs(root)
     const rels = dirs.map((d) => d.slice(root.length + 1).replace(/\\/g, '/'))
-    expect(rels).toContain('workspace')
-    expect(rels).toContain('models/chat')
-    expect(rels).toContain('models/embeddings')
-    expect(rels).toContain('models/reranker') // Phase 21
-    expect(rels).toContain('models/vision') // image-understanding §8.4
-    expect(rels).toContain('models/translation') // TranslateGemma (TG-1)
-    expect(rels).toContain('model-manifests')
-    expect(rels).toContain('model-manifests/vision') // image-understanding §8.4
-    expect(rels).toContain('model-manifests/translation') // TranslateGemma (TG-1)
-    expect(rels).toContain('logs')
-    expect(rels).toContain('config')
-    for (const os of DRIVE_OS_DIRS) {
-      expect(rels).toContain(`runtime/llama.cpp/${os}`)
-    }
-    // Must NOT use the spec's prose names (windows/macos/linux) — code uses win/mac/linux.
-    expect(rels).not.toContain('runtime/llama.cpp/windows')
-    expect(rels).not.toContain('runtime/llama.cpp/macos')
+    // In creation order. The sidecar OS dirs are win/mac/linux, the keys llamaOsDir resolves, NOT the spec's windows/macos/linux.
+    expect(rels).toEqual([
+      'workspace',
+      'app-skills',
+      'user-skills',
+      'models/chat',
+      'models/embeddings',
+      'models/reranker',
+      'models/transcriber',
+      'models/vision',
+      'models/translation',
+      'model-manifests',
+      'model-manifests/vision',
+      'model-manifests/translation',
+      'runtime/llama.cpp/win',
+      'runtime/llama.cpp/mac',
+      'runtime/llama.cpp/linux',
+      'runtime/whisper.cpp/win',
+      'runtime/whisper.cpp/mac',
+      'runtime/whisper.cpp/linux',
+      'runtime/kiwix-tools/win',
+      'runtime/kiwix-tools/mac',
+      'runtime/kiwix-tools/linux',
+      'ocr',
+      'zim',
+      'logs',
+      'config',
+      'docs'
+    ])
   })
 })
 
 describe('config generators', () => {
-  it('drive.json is a valid prepared-drive marker resolvePaths detects', () => {
-    const root = tempDir('hilbertraum-drive-')
+  it("the generated drive.json has the marker's exact shape and path, and resolvePaths detects it", () => {
+    const root = tempRoot('drive')
     mkdirSync(join(root, 'config'), { recursive: true })
     const drive = buildDriveJson({ createdAt: '2026-06-09T00:00:00Z' })
-    expect(drive.product).toBe('HilbertRaum')
-    expect(drive.offline_by_default).toBe(true)
-    expect(drive.allow_network_by_default).toBe(false)
+    expect(drive).toEqual({
+      product: 'HilbertRaum',
+      drive_format_version: 1,
+      created_at: '2026-06-09T00:00:00Z',
+      edition: 'lite',
+      offline_by_default: true,
+      models_dir: 'models',
+      workspace_dir: 'workspace',
+      allow_network_by_default: false
+    })
     writeFileSync(join(root, 'config', 'drive.json'), JSON.stringify(drive))
     const paths = resolvePaths({ envRoot: root, fallbackRoot: join(tmpdir(), 'fallback') })
     expect(paths.isPreparedDrive).toBe(true)
@@ -122,20 +103,24 @@ describe('config generators', () => {
     // Downloads permitted in both postures; update-checks stay off (the app never phones home).
     expect(json.network.allow_model_downloads).toBe(true)
     expect(json.network.allow_update_checks).toBe(false)
-
-    const policy = mergePolicyObject(DEFAULT_POLICY, json)
-    expect(policy.workspace.allowPlaintextDevMode).toBe(true)
-    expect(policy.network.allowModelDownloads).toBe(true)
     // Dev drives leave the local-API ceiling open (setting still default-off).
     expect(json.network.allow_local_api).toBe(true)
+
+    // A packaged build reading a dev drive: STRICT differs on every value, so each one proves the file was read.
+    const policy = parsePolicy(JSON.stringify(json), undefined, STRICT_POLICY)
+    expect(policy.workspace.allowPlaintextDevMode).toBe(true)
+    expect(policy.workspace.encryptionRequired).toBe(false)
+    expect(policy.models.allowUnverifiedModels).toBe(true)
+    expect(policy.models.requireSha256Match).toBe(false)
+    expect(policy.network.allowModelDownloads).toBe(true)
     expect(policy.network.allowLocalApi).toBe(true)
   })
 })
 
 describe('planPrepareDrive (dry-run)', () => {
   it('produces the full layout, config files, and weight destinations', () => {
-    const root = tempDir('hilbertraum-plan-')
-    const manifests = [asManifest(), asManifest({ id: 'embed', role: 'embeddings', local_path: 'models/embeddings/e5.gguf' })]
+    const root = tempRoot('plan')
+    const manifests = [validManifest(), validManifest({ id: 'embed', role: 'embeddings', local_path: 'models/embeddings/e5.gguf' })]
     const plan = planPrepareDrive(root, manifests, { createdAt: '2026-06-09T00:00:00Z' })
 
     expect(plan.dirsToCreate).toEqual(driveLayoutDirs(root))
@@ -152,60 +137,57 @@ describe('planPrepareDrive (dry-run)', () => {
   })
 
   it('flags an existing config as would-overwrite', () => {
-    const root = tempDir('hilbertraum-plan-')
+    const root = tempRoot('plan')
     mkdirSync(join(root, 'config'), { recursive: true })
     writeFileSync(join(root, 'config', 'drive.json'), '{}')
-    const plan = planPrepareDrive(root, [asManifest()])
+    const plan = planPrepareDrive(root, [validManifest()])
     expect(plan.configWouldOverwrite).toBe(true)
   })
 
   // S9: when the repo app-skills/ source is supplied, the plan lists its product skills to copy
   // (a folder with a SKILL.md). A bare folder with no SKILL.md is not a skill and is skipped.
   it('lists app skills to copy from the supplied app-skills source', () => {
-    const root = tempDir('hilbertraum-plan-')
-    const appSkillsDir = join(tempDir('hilbertraum-appskills-'), 'app-skills')
+    const root = tempRoot('plan')
+    const appSkillsDir = join(tempRoot('appskills'), 'app-skills')
     for (const id of ['bank-statement', 'contract-review']) {
       mkdirSync(join(appSkillsDir, id), { recursive: true })
       writeFileSync(join(appSkillsDir, id, 'SKILL.md'), `---\nid: ${id}\ntitle: ${id}\ndescription: d\nversion: 1.0.0\n---\nb`)
     }
     mkdirSync(join(appSkillsDir, 'not-a-skill'), { recursive: true }) // no SKILL.md → skipped
-    const plan = planPrepareDrive(root, [asManifest()], { appSkillsDir })
+    const plan = planPrepareDrive(root, [validManifest()], { appSkillsDir })
     expect(plan.appSkillsToCopy).toEqual(['bank-statement', 'contract-review'])
   })
 })
 
 describe('verifyDriveModels', () => {
   it('reports missing / placeholder / verified / mismatch / unsupported honestly', async () => {
-    const root = tempDir('hilbertraum-verify-')
-    const real = asManifest({ id: 'real', local_path: 'models/chat/real.gguf' })
-    const placeholder = asManifest({ id: 'ph', local_path: 'models/chat/ph.gguf' })
-    const mismatch = asManifest({
+    const root = tempRoot('verify')
+    const real = validManifest({ id: 'real', local_path: 'models/chat/real.gguf' })
+    const placeholder = validManifest({ id: 'ph', local_path: 'models/chat/ph.gguf' })
+    const mismatch = validManifest({
       id: 'mm',
       local_path: 'models/chat/mm.gguf',
       sha256: 'a'.repeat(64)
     })
-    const missing = asManifest({ id: 'gone', local_path: 'models/chat/gone.gguf' })
-    const unsupported = asManifest({ id: 'onnx', runtime: 'onnx', local_path: 'models/chat/x.onnx' })
+    const missing = validManifest({ id: 'gone', local_path: 'models/chat/gone.gguf' })
+    const unsupported = validManifest({ id: 'onnx', runtime: 'onnx', local_path: 'models/chat/x.onnx' })
     // Phase 36 fix: the bundled ggml/whisper_cpp transcriber has a real sha256 and MUST verify
     // by hash (not be falsely UNSUPPORTED, which would fail the ship gate). Mirrors the
     // computeInstallState pair-check + verify-models.{ps1,sh} gate (script-drift.test.ts).
     const whisperContent = 'ggml-whisper-weights'
-    const whisperHash = createHash('sha256').update(whisperContent).digest('hex')
-    const whisper = asManifest({
+    const whisper = validManifest({
       id: 'whisper',
       runtime: 'whisper_cpp',
       format: 'ggml',
       local_path: 'models/transcriber/ggml-small.bin',
-      sha256: whisperHash
+      sha256: sha256(whisperContent)
     })
 
-    writeWeight(root, placeholder, 'data')
-    writeWeight(root, mismatch, 'data')
-    writeWeight(root, whisper, whisperContent)
-    const realContent = 'real-weights'
-    writeWeight(root, real, realContent)
-    const realHash = createHash('sha256').update(realContent).digest('hex')
-    const realFixed = asManifest({ id: 'real', local_path: 'models/chat/real.gguf', sha256: realHash })
+    writeDriveFile(root, placeholder.localPath, 'data')
+    writeDriveFile(root, mismatch.localPath, 'data')
+    writeDriveFile(root, whisper.localPath, whisperContent)
+    const realHash = writeDriveFile(root, real.localPath, 'real-weights')
+    const realFixed = validManifest({ id: 'real', local_path: 'models/chat/real.gguf', sha256: realHash })
 
     const results = await verifyDriveModels(root, [realFixed, placeholder, mismatch, missing, unsupported, whisper])
     const byId = Object.fromEntries(results.map((r) => [r.id, r.status]))
@@ -220,63 +202,31 @@ describe('verifyDriveModels', () => {
 
 // DIST-2: a vision model is GGUF + mmproj; the verify/generate side must iterate BOTH so a
 // half-installed vision drive (good GGUF, missing/corrupt projector) cannot pass the sell gate.
-function visionManifest(gguf: { sha: string }, mmproj: { sha: string }): ModelManifest {
-  const res = validateManifest({
-    id: 'vlm',
-    display_name: 'Test VLM',
-    family: 'qwen2.5-vl',
-    role: 'vision',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
-    size_on_disk_gb: 3.3,
-    recommended_min_ram_gb: 8,
-    recommended_ram_gb: 16,
-    recommended_context_tokens: 4096,
-    local_path: 'models/vision/vlm.gguf',
-    sha256: gguf.sha,
-    license_review: { status: 'approved', reviewed_by: 'me', reviewed_at: '2026-01-01', notes: '' },
-    mmproj: { local_path: 'models/vision/vlm-mmproj.gguf', sha256: mmproj.sha }
-  })
-  if (!res.manifest) throw new Error('vision fixture invalid: ' + res.errors.join(', '))
-  return res.manifest
-}
-
-function writeFileAt(root: string, relPath: string, content: string): void {
-  const dest = join(root, ...relPath.split('/'))
-  mkdirSync(join(dest, '..'), { recursive: true })
-  writeFileSync(dest, content)
-}
-
 describe('verifyDriveModels — vision two-file fold (DIST-2)', () => {
   it('FAILS the model when the GGUF verifies but the mmproj projector is missing', async () => {
-    const root = tempDir('hilbertraum-verify-vision-')
-    const ggufHash = createHash('sha256').update('gguf').digest('hex')
-    const m = visionManifest({ sha: ggufHash }, { sha: createHash('sha256').update('proj').digest('hex') })
-    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf') // GGUF good; projector absent
+    const root = tempRoot('verify-vision')
+    const m = visionManifest('gguf', 'proj')
+    writeDriveFile(root, m.localPath, 'gguf') // GGUF good; projector absent
     const [r] = await verifyDriveModels(root, [m])
     expect(r.status).toBe('missing') // the projector decides — not a false 'verified'
-    expect(r.localPath).toBe('models/vision/vlm-mmproj.gguf')
+    expect(r.localPath).toBe('models/vision/vl-mmproj.gguf')
   })
 
   it('FAILS the model when the mmproj is present but its hash mismatches', async () => {
-    const root = tempDir('hilbertraum-verify-vision-')
-    const ggufHash = createHash('sha256').update('gguf').digest('hex')
-    const m = visionManifest({ sha: ggufHash }, { sha: 'a'.repeat(64) })
-    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf')
-    writeFileAt(root, 'models/vision/vlm-mmproj.gguf', 'wrong-projector-bytes')
+    const root = tempRoot('verify-vision')
+    const m = visionManifest('gguf', 'proj')
+    writeDriveFile(root, m.localPath, 'gguf')
+    writeDriveFile(root, 'models/vision/vl-mmproj.gguf', 'wrong-projector-bytes')
     const [r] = await verifyDriveModels(root, [m])
     expect(r.status).toBe('mismatch')
-    expect(r.localPath).toBe('models/vision/vlm-mmproj.gguf')
+    expect(r.localPath).toBe('models/vision/vl-mmproj.gguf')
   })
 
   it('VERIFIES the model only when BOTH files match', async () => {
-    const root = tempDir('hilbertraum-verify-vision-')
-    const ggufHash = createHash('sha256').update('gguf').digest('hex')
-    const projHash = createHash('sha256').update('proj').digest('hex')
-    const m = visionManifest({ sha: ggufHash }, { sha: projHash })
-    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf')
-    writeFileAt(root, 'models/vision/vlm-mmproj.gguf', 'proj')
+    const root = tempRoot('verify-vision')
+    const m = visionManifest('gguf', 'proj')
+    writeDriveFile(root, m.localPath, 'gguf')
+    writeDriveFile(root, 'models/vision/vl-mmproj.gguf', 'proj')
     const [r] = await verifyDriveModels(root, [m])
     expect(r.status).toBe('verified')
   })
@@ -287,7 +237,7 @@ describe('verifyDriveModels — vision two-file fold (DIST-2)', () => {
 const SHARD = (n: number): string => `models/chat/big-${String(n).padStart(5, '0')}-of-00003.gguf`
 
 function shardedManifest(shas: [string, string, string]): ModelManifest {
-  return asManifest({
+  return validManifest({
     id: 'sharded',
     local_path: SHARD(1),
     sha256: shas[0],
@@ -298,14 +248,14 @@ function shardedManifest(shas: [string, string, string]): ModelManifest {
   })
 }
 const shardBytes = (n: number): string => `shard-${n}`
-const shardHash = (n: number): string => createHash('sha256').update(shardBytes(n)).digest('hex')
+const shardHash = (n: number): string => sha256(shardBytes(n))
 
 describe('verifyDriveModels — multi-file weight fold (#310)', () => {
   it('FAILS the model when a declared shard is MISSING, naming that file', async () => {
-    const root = tempDir('hilbertraum-verify-shards-')
+    const root = tempRoot('verify-shards')
     const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
-    writeFileAt(root, SHARD(1), shardBytes(1))
-    writeFileAt(root, SHARD(3), shardBytes(3)) // shard 2 absent
+    writeDriveFile(root, SHARD(1), shardBytes(1))
+    writeDriveFile(root, SHARD(3), shardBytes(3)) // shard 2 absent
     const rows = await verifyDriveModels(root, [m])
     expect(rows).toHaveLength(1) // one row per model, not per file
     expect(rows[0].status).toBe('missing')
@@ -313,20 +263,20 @@ describe('verifyDriveModels — multi-file weight fold (#310)', () => {
   })
 
   it('FAILS the model when a later shard is CORRUPT, naming that file', async () => {
-    const root = tempDir('hilbertraum-verify-shards-')
+    const root = tempRoot('verify-shards')
     const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
-    writeFileAt(root, SHARD(1), shardBytes(1))
-    writeFileAt(root, SHARD(2), shardBytes(2))
-    writeFileAt(root, SHARD(3), 'corrupt shard bytes')
+    writeDriveFile(root, SHARD(1), shardBytes(1))
+    writeDriveFile(root, SHARD(2), shardBytes(2))
+    writeDriveFile(root, SHARD(3), 'corrupt shard bytes')
     const [r] = await verifyDriveModels(root, [m])
     expect(r.status).toBe('mismatch')
     expect(r.localPath).toBe(SHARD(3))
   })
 
   it('VERIFIES the model only when EVERY shard matches', async () => {
-    const root = tempDir('hilbertraum-verify-shards-')
+    const root = tempRoot('verify-shards')
     const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
-    for (const n of [1, 2, 3]) writeFileAt(root, SHARD(n), shardBytes(n))
+    for (const n of [1, 2, 3]) writeDriveFile(root, SHARD(n), shardBytes(n))
     const [r] = await verifyDriveModels(root, [m])
     expect(r.status).toBe('verified')
     expect(r.localPath).toBe(SHARD(1))
@@ -337,9 +287,9 @@ describe('buildChecksumsJson (generate mode)', () => {
   // #310: one entry per declared file, in declaration order (the vision case below pins the
   // same rule for the GGUF + projector pair).
   it('captures every shard of a multi-file weight in declaration order', async () => {
-    const root = tempDir('hilbertraum-sums-shards-')
+    const root = tempRoot('sums-shards')
     const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
-    for (const n of [1, 2]) writeFileAt(root, SHARD(n), shardBytes(n)) // shard 3 absent
+    for (const n of [1, 2]) writeDriveFile(root, SHARD(n), shardBytes(n)) // shard 3 absent
     const sums = await buildChecksumsJson(root, [m], '2026-09-07T00:00:00Z')
     expect(sums.entries.map((e) => e.local_path)).toEqual([SHARD(1), SHARD(2), SHARD(3)])
     expect(sums.entries.map((e) => e.id)).toEqual(['sharded', 'sharded', 'sharded'])
@@ -349,25 +299,22 @@ describe('buildChecksumsJson (generate mode)', () => {
   })
 
   it('captures BOTH the GGUF and the mmproj of a vision model (DIST-2)', async () => {
-    const root = tempDir('hilbertraum-sums-vision-')
-    const ggufHash = createHash('sha256').update('gguf').digest('hex')
-    const projHash = createHash('sha256').update('proj').digest('hex')
-    const m = visionManifest({ sha: ggufHash }, { sha: projHash })
-    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf')
-    writeFileAt(root, 'models/vision/vlm-mmproj.gguf', 'proj')
+    const root = tempRoot('sums-vision')
+    const m = visionManifest('gguf', 'proj')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'gguf')
+    writeDriveFile(root, 'models/vision/vl-mmproj.gguf', 'proj')
     const sums = await buildChecksumsJson(root, [m], '2026-06-20T00:00:00Z')
     const paths = sums.entries.map((e) => e.local_path)
-    expect(paths).toEqual(['models/vision/vlm.gguf', 'models/vision/vlm-mmproj.gguf'])
+    expect(paths).toEqual(['models/vision/vl.gguf', 'models/vision/vl-mmproj.gguf'])
     expect(sums.entries.every((e) => e.present)).toBe(true)
-    expect(sums.entries.find((e) => e.local_path.endsWith('mmproj.gguf'))!.sha256).toBe(projHash)
+    expect(sums.entries.find((e) => e.local_path.endsWith('mmproj.gguf'))!.sha256).toBe(sha256('proj'))
   })
 
   it('captures real hashes for present weights and null for absent', async () => {
-    const root = tempDir('hilbertraum-sums-')
-    const present = asManifest({ id: 'present', local_path: 'models/chat/present.gguf' })
-    const absent = asManifest({ id: 'absent', local_path: 'models/chat/absent.gguf' })
-    writeWeight(root, present, 'abc')
-    const expected = createHash('sha256').update('abc').digest('hex')
+    const root = tempRoot('sums')
+    const present = validManifest({ id: 'present', local_path: 'models/chat/present.gguf' })
+    const absent = validManifest({ id: 'absent', local_path: 'models/chat/absent.gguf' })
+    const expected = writeDriveFile(root, present.localPath, 'abc')
 
     const sums = await buildChecksumsJson(root, [present, absent], '2026-06-09T00:00:00Z')
     expect(sums.algorithm).toBe('sha256')

@@ -1,196 +1,90 @@
-import { describe, it, expect, vi } from 'vitest'
-import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  DownloadManager,
-  assertDownloadAllowed,
-  partPath,
-  type DownloadGates
-} from '../../src/main/services/downloads'
-import { verifyDownloadedFile, type FetchFn } from '../../src/main/services/assets'
+import { DownloadManager, assertDownloadAllowed } from '../../src/main/services/downloads'
+import type { FetchFn } from '../../src/main/services/assets'
 import { weightPath, mmprojPath, type HashStore } from '../../src/main/services/models'
 import {
   latestEffectiveRead,
   recordModelLoadRead,
   resetEffectiveReadForTests
 } from '../../src/main/services/read-speed'
-import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import type { ModelManifest, ModelRole } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { tempRoot } from '../helpers/db-fixtures'
+import { deferred } from '../helpers/deferred'
+import { OPEN_GATES, bodyFetch, hangingFetch, rangeFetch, routedFetch, runUnwound } from '../helpers/download-fixtures'
+import { until, within } from '../helpers/hang-budget'
+import {
+  downloadManifest,
+  sha256,
+  verifiedManifest,
+  visionManifest,
+  writeDriveFile
+} from '../helpers/manifest-fixtures'
 
-// F17 (#687): the per-role cap row reads the `maxBytes` the manager hands `downloadToFile`. The
-// wrapper records it and delegates to the REAL downloader (driven by the row's fake fetch), so no
-// production injection seam is needed; every other row runs the real function unchanged. The role
-// defaults are ≥ 4 GiB, so a real body-size bracket around the cap is out of reach here.
-const { downloadCaps } = vi.hoisted(() => ({ downloadCaps: [] as Array<number | undefined> }))
+// Two seams over the REAL assets module, so no production injection seam is needed; every row
+// without a hook runs the real functions unchanged:
+// - F17 (#687): `downloadCaps` records the `maxBytes` the manager hands `downloadToFile`. The role
+//   defaults are ≥ 4 GiB, so a real body-size bracket around the cap is out of reach here.
+// - `verifyHook` holds or faults a verify, the #687 way (BE-4, F-13), calling through to the real one.
+type VerifyFn = typeof import('../../src/main/services/assets').verifyDownloadedFile
+type VerifyHook = (real: VerifyFn, ...args: Parameters<VerifyFn>) => ReturnType<VerifyFn>
+
+const seams = vi.hoisted(() => ({
+  downloadCaps: [] as Array<number | undefined>,
+  verifyHook: null as VerifyHook | null
+}))
 vi.mock('../../src/main/services/assets', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../src/main/services/assets')>()
   return {
     ...orig,
     downloadToFile: (...args: Parameters<typeof orig.downloadToFile>) => {
-      downloadCaps.push(args[2]?.maxBytes)
+      seams.downloadCaps.push(args[2]?.maxBytes)
       return orig.downloadToFile(...args)
-    }
+    },
+    verifyDownloadedFile: (...args: Parameters<typeof orig.verifyDownloadedFile>) =>
+      seams.verifyHook ? seams.verifyHook(orig.verifyDownloadedFile, ...args) : orig.verifyDownloadedFile(...args)
   }
+})
+
+afterEach(() => {
+  seams.verifyHook = null
 })
 
 // Phase 18 — the in-app model downloader (architecture.md "In-app model downloader"). Everything
 // runs through the INJECTED fake fetch: the suite makes zero real network calls, and the
 // gate tests prove a closed gate never even reaches the fetch seam.
 
-function tempRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-downloads-'))
-}
+/** The suffix is an on-disk contract (a kept .part resumes across versions), so it is spelled here, not imported. */
+const partOf = (dest: string): string => `${dest}.part`
 
-function sha256(s: string): string {
-  return createHash('sha256').update(s).digest('hex')
-}
-
-function manifest(overrides: Record<string, unknown> = {}): ModelManifest {
-  const raw: Record<string, unknown> = {
-    id: 'qwen3-4b-instruct-q4',
-    display_name: 'Qwen3 4B Instruct Q4',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
-    size_on_disk_gb: 2.7,
-    recommended_min_ram_gb: 8,
-    recommended_ram_gb: 16,
-    recommended_context_tokens: 4096,
-    local_path: 'models/chat/qwen3-4b-instruct-q4.gguf',
-    sha256: 'REPLACE_WITH_REAL_HASH',
-    recommended_profiles: ['LITE'],
-    license_review: {
-      status: 'approved',
-      reviewed_by: 'test',
-      reviewed_at: '2026-06-10',
-      notes: ''
-    },
-    download: {
-      url: 'https://example.test/qwen3-4b.gguf',
-      sha256: 'REPLACE_WITH_REAL_HASH',
-      size_bytes: 1000,
-      license_url: 'https://example.test/license'
-    },
-    ...overrides
-  }
-  const res = validateManifest(raw)
-  if (!res.manifest) throw new Error('fixture invalid: ' + res.errors.join(', '))
-  return res.manifest
-}
-
-/** Manifest whose top-level AND download hashes are the real hash of `body`. */
-function verifiedManifest(body: string): ModelManifest {
-  return manifest({
-    sha256: sha256(body),
-    download: {
-      url: 'https://example.test/qwen3-4b.gguf',
-      sha256: sha256(body),
-      size_bytes: body.length,
-      license_url: 'https://example.test/license'
-    }
-  })
-}
-
-const OPEN: DownloadGates = { policyAllows: true, settingAllows: true }
-
-/**
- * Range-aware fake fetch: serves `body`, honouring `Range: bytes=N-` with a 206 when
- * `honourRange` (else a full 200). Records every request's Range header.
- */
-function rangeFetch(
-  body: string,
-  opts: { honourRange?: boolean } = {}
-): { fetch: FetchFn; ranges: Array<string | null> } {
-  const ranges: Array<string | null> = []
-  const fetch = (async (_url: unknown, init?: RequestInit) => {
-    const range = new Headers(init?.headers).get('range')
-    ranges.push(range)
-    const m = range && opts.honourRange ? /^bytes=(\d+)-$/.exec(range) : null
-    const slice = m ? body.slice(Number(m[1])) : body
-    return new Response(slice, {
-      status: m ? 206 : 200,
-      headers: { 'content-length': String(slice.length) }
-    })
-  }) as unknown as FetchFn
-  return { fetch, ranges }
-}
-
-/** Fake fetch that streams one chunk then stays open until the signal aborts. */
-function hangingFetch(firstChunk: string): FetchFn {
-  return (async (_url: unknown, init?: RequestInit) => {
-    const signal = init?.signal
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(firstChunk))
-        signal?.addEventListener('abort', () =>
-          controller.error(new DOMException('aborted', 'AbortError'))
-        )
-      }
-    })
-    return new Response(stream, { status: 200 })
-  }) as unknown as FetchFn
-}
-
-/** A vision manifest: language GGUF + mmproj projector, each hashed to the real hash of its body. */
-function visionManifest(ggufBody: string, mmprojBody: string): ModelManifest {
-  return manifest({
-    role: 'vision',
-    input_modalities: ['text', 'image'],
-    local_path: 'models/vision/vl.gguf',
-    sha256: sha256(ggufBody),
-    download: {
-      url: 'https://example.test/vl.gguf',
-      sha256: sha256(ggufBody),
-      size_bytes: ggufBody.length,
-      license_url: 'https://example.test/license'
-    },
-    mmproj: {
-      local_path: 'models/vision/vl-mmproj.gguf',
-      sha256: sha256(mmprojBody),
-      download: {
-        url: 'https://example.test/vl-mmproj.gguf',
-        sha256: sha256(mmprojBody),
-        size_bytes: mmprojBody.length,
-        license_url: 'https://example.test/license'
-      }
-    }
-  })
-}
-
-/** Fake fetch that serves a body per URL (404 for any unrouted URL); records every URL asked for. */
-function routedFetch(routes: Record<string, string>): { fetch: FetchFn; urls: string[] } {
-  const urls: string[] = []
-  const fetch = (async (url: unknown) => {
-    const u = String(url)
-    urls.push(u)
-    const body = routes[u]
-    if (body == null) return new Response(null, { status: 404 })
-    return new Response(body, { status: 200, headers: { 'content-length': String(body.length) } })
-  }) as unknown as FetchFn
-  return { fetch, urls }
-}
-
-async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
-  const start = Date.now()
-  while (!cond()) {
-    if (Date.now() - start > hangBudgetMs(ms)) throw new Error('waitFor timed out')
-    await new Promise((r) => setTimeout(r, 10))
-  }
-}
-
-async function waitForTerminal(mgr: DownloadManager, jobId: string): Promise<DownloadJob> {
-  await waitFor(() => {
-    const s = mgr.get(jobId).status
-    return s === 'done' || s === 'failed' || s === 'cancelled'
-  })
-  // Let the background runner's `finally` clear the active slot too.
-  await waitFor(() => mgr.activeJob() === null)
+async function cancelAndUnwind(mgr: DownloadManager, jobId: string): Promise<DownloadJob> {
+  mgr.cancel(jobId)
+  await runUnwound(mgr)
   return mgr.get(jobId)
+}
+
+/** Done and failed only: both are set at the end of the run. A cancelled job reads terminal before the run has unwound. */
+async function waitForTerminal(mgr: DownloadManager, jobId: string): Promise<DownloadJob> {
+  await until(() => {
+    const s = mgr.get(jobId).status
+    return s === 'done' || s === 'failed'
+  }, 'download job finishing')
+  return mgr.get(jobId)
+}
+
+/** Holds the NEXT verify (one shot; a later file verifies unhooked). */
+function gateNextVerify(): { entered: Promise<void>; release: () => void } {
+  const entered = deferred()
+  const gate = deferred()
+  seams.verifyHook = async (real, ...args) => {
+    seams.verifyHook = null
+    entered.resolve()
+    await gate.promise
+    return real(...args)
+  }
+  return { entered: entered.promise, release: () => gate.resolve() }
 }
 
 // ---- gates (the offline guarantee: a closed gate never reaches the network seam) ----
@@ -206,39 +100,44 @@ describe('download gates', () => {
     expect(() => assertDownloadAllowed({ policyAllows: true, settingAllows: false })).toThrow(
       /Settings/
     )
-    expect(() => assertDownloadAllowed(OPEN)).not.toThrow()
+    expect(() => assertDownloadAllowed(OPEN_GATES)).not.toThrow()
   })
 
   it('refuses to start when EITHER gate is closed — and never calls fetch', async () => {
     const fetchSpy = vi.fn()
     const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     await expect(
-      mgr.start({ rootPath: root, manifest: manifest(), gates: { policyAllows: false, settingAllows: true } })
+      mgr.start({ rootPath: root, manifest: downloadManifest(), gates: { policyAllows: false, settingAllows: true } })
     ).rejects.toThrow(/policy/)
     await expect(
-      mgr.start({ rootPath: root, manifest: manifest(), gates: { policyAllows: true, settingAllows: false } })
+      mgr.start({ rootPath: root, manifest: downloadManifest(), gates: { policyAllows: true, settingAllows: false } })
     ).rejects.toThrow(/Settings/)
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(mgr.activeJob()).toBeNull()
   })
 
   it('license gate: a non-approved license needs the explicit acknowledgement', async () => {
-    const fetchSpy = vi.fn()
-    const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
-    const pending = manifest({
+    const body = 'pending-license-weights'
+    const pending = verifiedManifest(body, {
       license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
     })
+    const fetchSpy = vi.fn(bodyFetch(body))
+    const root = tempRoot('downloads')
+    const mgr = new DownloadManager({ fetchImpl: fetchSpy })
     await expect(
-      mgr.start({ rootPath: tempRoot(), manifest: pending, gates: OPEN })
+      mgr.start({ rootPath: root, manifest: pending, gates: OPEN_GATES })
     ).rejects.toThrow(/license/)
     expect(fetchSpy).not.toHaveBeenCalled()
+    const job = await mgr.start({ rootPath: root, manifest: pending, gates: OPEN_GATES, licenseAccepted: true })
+    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
   it('a manifest without a download block is refused', async () => {
     const mgr = new DownloadManager({ fetchImpl: vi.fn() as unknown as FetchFn })
     await expect(
-      mgr.start({ rootPath: tempRoot(), manifest: manifest({ download: undefined }), gates: OPEN })
+      mgr.start({ rootPath: tempRoot('downloads'), manifest: downloadManifest({ download: undefined }), gates: OPEN_GATES })
     ).rejects.toThrow(/no download source/)
   })
 
@@ -248,24 +147,7 @@ describe('download gates', () => {
   it('a withdrawn upstream source is refused by NAME and never reaches fetch', async () => {
     const fetchSpy = vi.fn()
     const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
-    const gone = manifest({
-      download: {
-        url: 'https://example.test/qwen3-4b.gguf',
-        sha256: 'REPLACE_WITH_REAL_HASH',
-        size_bytes: 1000,
-        license_url: 'https://example.test/license',
-        withdrawn: '2026-08-20: upstream deleted the file'
-      }
-    })
-    await expect(mgr.start({ rootPath: tempRoot(), manifest: gone, gates: OPEN })).rejects.toThrow(
-      /removed this exact file/
-    )
-    expect(fetchSpy).not.toHaveBeenCalled()
-  })
-
-  it('the withdrawal message names the model and the reason (not a bare "nothing to fetch")', async () => {
-    const mgr = new DownloadManager({ fetchImpl: vi.fn() as unknown as FetchFn })
-    const gone = manifest({
+    const gone = downloadManifest({
       download: {
         url: 'https://example.test/qwen3-4b.gguf',
         sha256: 'REPLACE_WITH_REAL_HASH',
@@ -274,39 +156,67 @@ describe('download gates', () => {
         withdrawn: '2026-08-20: Dynamic 3.0 restructure'
       }
     })
-    await expect(
-      mgr.start({ rootPath: tempRoot(), manifest: gone, gates: OPEN })
-    ).rejects.toThrow(/qwen3-4b-instruct-q4[\s\S]*Dynamic 3\.0 restructure/)
+    await expect(mgr.start({ rootPath: tempRoot('downloads'), manifest: gone, gates: OPEN_GATES })).rejects.toThrow(
+      /qwen3-4b-instruct-q4[\s\S]*removed this exact file[\s\S]*Dynamic 3\.0 restructure/
+    )
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('a present + verified weight is refused (nothing to download)', async () => {
-    const body = 'verified-weights'
-    const m = verifiedManifest(body)
-    const root = tempRoot()
-    const dest = weightPath(root, m)
-    mkdirSync(join(dest, '..'), { recursive: true })
-    writeFileSync(dest, body)
-    const mgr = new DownloadManager({ fetchImpl: vi.fn() as unknown as FetchFn })
-    await expect(mgr.start({ rootPath: root, manifest: m, gates: OPEN })).rejects.toThrow(
-      /already downloaded/
-    )
+  const W = 'verified-weights'
+  const G = 'gguf-bytes'
+  const P = 'mmproj-bytes'
+  it.each<[string, { manifest: ModelManifest; files: Array<[string, string]>; refusal: RegExp }]>([
+    [
+      'a present + verified weight',
+      {
+        manifest: verifiedManifest(W),
+        files: [['models/chat/qwen3-4b-instruct-q4.gguf', W]],
+        refusal: /already downloaded/
+      }
+    ],
+    [
+      'a fully present + verified vision model (both files in place)',
+      {
+        manifest: visionManifest(G, P),
+        files: [
+          ['models/vision/vl.gguf', G],
+          ['models/vision/vl-mmproj.gguf', P]
+        ],
+        refusal: /already downloaded/
+      }
+    ],
+    [
+      'a present placeholder-hash weight',
+      {
+        manifest: downloadManifest(),
+        files: [['models/chat/qwen3-4b-instruct-q4.gguf', 'whatever-bytes']],
+        refusal: /cannot be verified/
+      }
+    ]
+  ])('%s is refused: nothing to download, nothing fetched', async (_title, row) => {
+    const root = tempRoot('downloads')
+    for (const [rel, body] of row.files) writeDriveFile(root, rel, body)
+    const fetchSpy = vi.fn()
+    const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+    await expect(mgr.start({ rootPath: root, manifest: row.manifest, gates: OPEN_GATES })).rejects.toThrow(row.refusal)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('rejects a concurrent start() — single-flight latch closes the check-then-set window (BUG vuln-scan-2026-06-21)', async () => {
     const body = 'hello-world-weights'
     const m = verifiedManifest(body)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const mgr = new DownloadManager({ fetchImpl: hangingFetch('hello-') })
     // Fire two starts in the same tick: the first sets the `starting` latch synchronously
     // before its `await planModelDownloads`, so the second must reject rather than launch a
     // second concurrent run (which previously orphaned the first AbortController).
-    const p1 = mgr.start({ rootPath: root, manifest: m, gates: OPEN })
-    const p2 = mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const p1 = mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    const p2 = mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     await expect(p2).rejects.toThrow(/already running/i)
     const job1 = await p1
     expect(['queued', 'downloading']).toContain(job1.status)
     expect(mgr.activeJob()).toBe(job1.jobId) // exactly one active job
-    mgr.cancel(job1.jobId) // unwind the hanging fetch
+    await cancelAndUnwind(mgr, job1.jobId) // unwind the hanging fetch
   })
 })
 
@@ -317,19 +227,20 @@ describe('DownloadManager vision (two files)', () => {
     const gguf = 'the-language-gguf-bytes'
     const mmproj = 'the-mmproj-projector-bytes'
     const m = visionManifest(gguf, mmproj)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const { fetch, urls } = routedFetch({
       'https://example.test/vl.gguf': gguf,
       'https://example.test/vl-mmproj.gguf': mmproj
     })
     const mgr = new DownloadManager({ fetchImpl: fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     expect(job.totalBytes).toBe(gguf.length + mmproj.length)
 
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('done')
     expect(finished.unverified).toBe(false)
     expect(finished.receivedBytes).toBe(gguf.length + mmproj.length)
+    expect(finished.totalBytes).toBe(gguf.length + mmproj.length)
     // The GGUF is fetched before the projector, and both land verified on disk.
     expect(urls).toEqual([
       'https://example.test/vl.gguf',
@@ -339,36 +250,41 @@ describe('DownloadManager vision (two files)', () => {
     expect(readFileSync(mmprojPath(root, m), 'utf8')).toBe(mmproj)
   })
 
+  it('a tampered mmproj fails the job: the GGUF stays, the projector never lands, no install fires', async () => {
+    const gguf = 'the-language-gguf-bytes'
+    const m = visionManifest(gguf, 'the-mmproj-we-expected')
+    const root = tempRoot('downloads')
+    const { fetch, urls } = routedFetch({
+      'https://example.test/vl.gguf': gguf,
+      'https://example.test/vl-mmproj.gguf': 'tampered-mmproj-bytes'
+    })
+    const installed: string[] = []
+    const mgr = new DownloadManager({ fetchImpl: fetch, onModelInstalled: (id) => installed.push(id) })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    const finished = await waitForTerminal(mgr, job.jobId)
+    expect(finished.status).toBe('failed')
+    expect(finished.error).toMatch(/checksum/i)
+    expect(urls).toHaveLength(2)
+    expect(readFileSync(weightPath(root, m), 'utf8')).toBe(gguf)
+    expect(existsSync(mmprojPath(root, m))).toBe(false)
+    expect(existsSync(partOf(mmprojPath(root, m)))).toBe(false)
+    expect(installed).toEqual([])
+  })
+
   it('finishes a half-downloaded vision model: GGUF already present → fetches JUST the mmproj', async () => {
     const gguf = 'already-here-gguf'
     const mmproj = 'still-missing-mmproj'
     const m = visionManifest(gguf, mmproj)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     // The GGUF arrived + verified in a prior run; the mmproj never did (the reported bug).
-    const ggufDest = weightPath(root, m)
-    mkdirSync(join(ggufDest, '..'), { recursive: true })
-    writeFileSync(ggufDest, gguf)
+    writeDriveFile(root, m.localPath, gguf)
     const { fetch, urls } = routedFetch({ 'https://example.test/vl-mmproj.gguf': mmproj })
     const mgr = new DownloadManager({ fetchImpl: fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('done')
     expect(urls).toEqual(['https://example.test/vl-mmproj.gguf']) // the present GGUF is NOT re-fetched
     expect(readFileSync(mmprojPath(root, m), 'utf8')).toBe(mmproj)
-  })
-
-  it('a fully present + verified vision model is refused (both files in place)', async () => {
-    const gguf = 'gguf-bytes'
-    const mmproj = 'mmproj-bytes'
-    const m = visionManifest(gguf, mmproj)
-    const root = tempRoot()
-    mkdirSync(join(weightPath(root, m), '..'), { recursive: true })
-    writeFileSync(weightPath(root, m), gguf)
-    writeFileSync(mmprojPath(root, m), mmproj)
-    const mgr = new DownloadManager({ fetchImpl: vi.fn() as unknown as FetchFn })
-    await expect(mgr.start({ rootPath: root, manifest: m, gates: OPEN })).rejects.toThrow(
-      /already downloaded/
-    )
   })
 })
 
@@ -379,7 +295,7 @@ describe('DownloadManager multi-file weight (#310)', () => {
   const shardUrl = (n: number): string => `https://example.test/big-${n}.gguf`
   /** A three-shard manifest whose every hash is the real hash of its body. */
   function shardedManifest(bodies: [string, string, string]): ModelManifest {
-    return manifest({
+    return downloadManifest({
       id: 'sharded-chat',
       local_path: shardPath(1),
       sha256: sha256(bodies[0]),
@@ -401,14 +317,14 @@ describe('DownloadManager multi-file weight (#310)', () => {
 
   it('fetches every shard in order, sums their bytes, and settles done only after the LAST', async () => {
     const m = shardedManifest(BODIES)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const { fetch, urls } = routedFetch({
       [shardUrl(1)]: BODIES[0],
       [shardUrl(2)]: BODIES[1],
       [shardUrl(3)]: BODIES[2]
     })
     const mgr = new DownloadManager({ fetchImpl: fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     expect(job.totalBytes).toBe(BODIES.reduce((n, b) => n + b.length, 0))
 
     const finished = await waitForTerminal(mgr, job.jobId)
@@ -421,45 +337,44 @@ describe('DownloadManager multi-file weight (#310)', () => {
 
   it('fetches only the shards that are missing (a resumed half-installed set)', async () => {
     const m = shardedManifest(BODIES)
-    const root = tempRoot()
-    mkdirSync(join(abs(root, 1), '..'), { recursive: true })
-    writeFileSync(abs(root, 1), BODIES[0]) // shard 1 arrived + verified in a prior run
-    writeFileSync(abs(root, 3), BODIES[2])
+    const root = tempRoot('downloads')
+    writeDriveFile(root, shardPath(1), BODIES[0]) // shard 1 arrived + verified in a prior run
+    writeDriveFile(root, shardPath(3), BODIES[2])
     const { fetch, urls } = routedFetch({ [shardUrl(2)]: BODIES[1] })
     const mgr = new DownloadManager({ fetchImpl: fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
     expect(urls).toEqual([shardUrl(2)])
   })
 
   it('a cancel between files stops before the NEXT shard is requested', async () => {
     const m = shardedManifest(BODIES)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const { fetch, urls } = routedFetch({
       [shardUrl(1)]: BODIES[0],
       [shardUrl(2)]: BODIES[1],
       [shardUrl(3)]: BODIES[2]
     })
-    // Deterministic gate (the BE-4 idiom): hold the FIRST verify, cancel, then release.
-    let verifyEntered!: () => void
-    const verifyStarted = new Promise<void>((resolve) => (verifyEntered = resolve))
-    let releaseVerify!: () => void
-    const verifyGate = new Promise<void>((resolve) => (releaseVerify = resolve))
-    const mgr = new DownloadManager({
-      fetchImpl: fetch,
-      verifyImpl: async (path, expected) => {
-        verifyEntered()
-        await verifyGate
-        return verifyDownloadedFile(path, expected)
-      }
-    })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
-    await verifyStarted
-    expect(mgr.cancel(job.jobId).status).toBe('cancelled')
-    releaseVerify()
-    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('cancelled')
+    const installed: string[] = []
+    const mgr = new DownloadManager({ fetchImpl: fetch, onModelInstalled: (id) => installed.push(id) })
+    // `set` runs inside finishVerifiedFile: past the first file's verify and abort check, past its rename, before run()'s between-files check.
+    const cancelLanded = deferred()
+    const hashStore: HashStore = {
+      get: () => null,
+      set: () => {
+        mgr.cancel(mgr.activeJob() ?? 'no-active-job')
+        cancelLanded.resolve()
+      },
+      delete: () => undefined
+    }
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES, hashStore })
+    await within(cancelLanded.promise, 'the first shard finishing')
+    await runUnwound(mgr)
+    expect(mgr.get(job.jobId).status).toBe('cancelled')
     expect(urls).toEqual([shardUrl(1)]) // shards 2 and 3 were never requested
+    expect(readFileSync(abs(root, 1), 'utf8')).toBe(BODIES[0])
     expect(existsSync(abs(root, 2))).toBe(false)
+    expect(installed).toEqual([])
   })
 })
 
@@ -469,7 +384,7 @@ describe('DownloadManager jobs', () => {
   it('downloads, verifies, renames .part into place, and PRIMES the checksum cache with the verified hash', async () => {
     const body = 'real-model-weights-bytes'
     const m = verifiedManifest(body)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
     const primed: Array<{ path: string; actual: string }> = []
     const hashStore: HashStore = {
@@ -478,7 +393,7 @@ describe('DownloadManager jobs', () => {
       delete: () => undefined
     }
     const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN, hashStore })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES, hashStore })
     expect(job.status === 'queued' || job.status === 'downloading').toBe(true)
     expect(job.totalBytes).toBe(body.length)
 
@@ -487,7 +402,7 @@ describe('DownloadManager jobs', () => {
     expect(finished.unverified).toBe(false)
     expect(finished.receivedBytes).toBe(body.length)
     expect(readFileSync(dest, 'utf8')).toBe(body)
-    expect(existsSync(partPath(dest))).toBe(false)
+    expect(existsSync(partOf(dest))).toBe(false)
     // Prime (not invalidate) the checksum cache with the hash just verified, so the Models screen
     // reports `installed` without redundantly re-hashing the multi-GB weight (download→verify UX).
     expect(primed.find((p) => p.path === dest)?.actual).toBe(sha256(body))
@@ -503,10 +418,10 @@ describe('DownloadManager jobs', () => {
     resetEffectiveReadForTests()
     const body = 'real-model-weights-bytes'
     const m = verifiedManifest(body)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
     const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
 
     recordModelLoadRead(dest, 10_000, m.id, 6_000_000_000)
@@ -516,10 +431,10 @@ describe('DownloadManager jobs', () => {
   it('a download that FAILS verification marks nothing: a later start of that path still samples (#392)', async () => {
     resetEffectiveReadForTests()
     const m = verifiedManifest('the-bytes-we-expected')
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
     const mgr = new DownloadManager({ fetchImpl: rangeFetch('tampered-bytes').fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     expect((await waitForTerminal(mgr, job.jobId)).status).toBe('failed')
 
     recordModelLoadRead(dest, 10_000, m.id, 6_000_000_000)
@@ -527,14 +442,19 @@ describe('DownloadManager jobs', () => {
   })
 
   it('placeholder expected hash → job done but flagged unverified (checksum honesty, R5)', async () => {
-    const m = manifest() // placeholder hashes
-    const root = tempRoot()
-    const mgr = new DownloadManager({ fetchImpl: rangeFetch('whatever-bytes').fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const m = downloadManifest() // placeholder hashes
+    const root = tempRoot('downloads')
+    const audited: string[] = []
+    const mgr = new DownloadManager({
+      fetchImpl: rangeFetch('whatever-bytes').fetch,
+      audit: (type) => audited.push(type)
+    })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('done')
     expect(finished.unverified).toBe(true)
     expect(existsSync(weightPath(root, m))).toBe(true)
+    expect(audited).toEqual(['model_download_started'])
   })
 
   // Issue #40: `onModelInstalled` is the seam that lets the app re-run the startup-frozen
@@ -543,28 +463,28 @@ describe('DownloadManager jobs', () => {
   it('fires onModelInstalled exactly once when the job reaches done — AFTER the weight is in place', async () => {
     const body = 'real-model-weights-bytes'
     const m = verifiedManifest(body)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
     const installed: Array<{ modelId: string; weightPresent: boolean }> = []
     const mgr = new DownloadManager({
       fetchImpl: rangeFetch(body).fetch,
       onModelInstalled: (modelId) => installed.push({ modelId, weightPresent: existsSync(dest) })
     })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('done')
     expect(installed).toEqual([{ modelId: m.id, weightPresent: true }]) // once, and PRESENCE holds
   })
 
   it('fires onModelInstalled for a placeholder-hash (unverified) completion too — presence is what the selectors check', async () => {
-    const m = manifest() // placeholder hashes → done + unverified
-    const root = tempRoot()
+    const m = downloadManifest() // placeholder hashes → done + unverified
+    const root = tempRoot('downloads')
     const installed: string[] = []
     const mgr = new DownloadManager({
       fetchImpl: rangeFetch('whatever-bytes').fetch,
       onModelInstalled: (modelId) => installed.push(modelId)
     })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('done')
     expect(finished.unverified).toBe(true)
@@ -575,86 +495,90 @@ describe('DownloadManager jobs', () => {
     const installed: string[] = []
     // Failed: checksum mismatch.
     const bad = verifiedManifest('the-bytes-we-expected')
-    const root1 = tempRoot()
+    const root1 = tempRoot('downloads')
     const mgrFail = new DownloadManager({
       fetchImpl: rangeFetch('tampered-bytes').fetch,
       onModelInstalled: (modelId) => installed.push(modelId)
     })
-    const failJob = await mgrFail.start({ rootPath: root1, manifest: bad, gates: OPEN })
+    const failJob = await mgrFail.start({ rootPath: root1, manifest: bad, gates: OPEN_GATES })
     expect((await waitForTerminal(mgrFail, failJob.jobId)).status).toBe('failed')
     // Cancelled: abort mid-stream.
     const m = verifiedManifest('hello-world-weights')
-    const root2 = tempRoot()
+    const root2 = tempRoot('downloads')
     const mgrCancel = new DownloadManager({
       fetchImpl: hangingFetch('hello-'),
       onModelInstalled: (modelId) => installed.push(modelId)
     })
-    const cancelJob = await mgrCancel.start({ rootPath: root2, manifest: m, gates: OPEN })
-    await waitFor(() => mgrCancel.get(cancelJob.jobId).receivedBytes > 0)
-    mgrCancel.cancel(cancelJob.jobId)
-    expect((await waitForTerminal(mgrCancel, cancelJob.jobId)).status).toBe('cancelled')
+    const cancelJob = await mgrCancel.start({ rootPath: root2, manifest: m, gates: OPEN_GATES })
+    await until(() => mgrCancel.get(cancelJob.jobId).receivedBytes > 0, 'the first chunk')
+    const finished = await cancelAndUnwind(mgrCancel, cancelJob.jobId)
+    expect(finished.status).toBe('cancelled')
     expect(installed).toEqual([])
   })
 
   it('a throwing onModelInstalled hook never fails the finished job', async () => {
     const body = 'real-model-weights-bytes'
     const m = verifiedManifest(body)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
+    const audited: string[] = []
     const mgr = new DownloadManager({
       fetchImpl: rangeFetch(body).fetch,
+      audit: (type) => audited.push(type),
       onModelInstalled: () => {
         throw new Error('selector refresh blew up')
       }
     })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('done') // the download outcome is untouched
     expect(finished.error).toBeNull()
+    expect(audited).toContain('model_download_verified') // the rest of run() survived the hook fault
   })
 
   it('hash mismatch → the partial is DELETED and the job fails with friendly copy', async () => {
     const m = verifiedManifest('the-bytes-we-expected')
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
-    const mgr = new DownloadManager({ fetchImpl: rangeFetch('tampered-bytes').fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const audited: string[] = []
+    const mgr = new DownloadManager({
+      fetchImpl: rangeFetch('tampered-bytes').fetch,
+      audit: (type) => audited.push(type)
+    })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('failed')
     expect(finished.error).toMatch(/checksum/i)
     expect(finished.error).not.toMatch(/Error:/)
     expect(existsSync(dest)).toBe(false)
-    expect(existsSync(partPath(dest))).toBe(false)
+    expect(existsSync(partOf(dest))).toBe(false)
+    expect(audited).toEqual(['model_download_started', 'model_download_failed'])
   })
 
   it('cancel mid-download keeps the .part for resume and never installs a half-weight', async () => {
     const m = verifiedManifest('hello-world-weights')
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
     const mgr = new DownloadManager({ fetchImpl: hangingFetch('hello-') })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
-    await waitFor(() => mgr.get(job.jobId).receivedBytes > 0)
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    // `receivedBytes`, not the on-disk size: the chunk may still be buffered here, and the resume prefix
+    // survives only because the failed stream flushes it (`end()`). A `destroy()` would drop it.
+    await until(() => mgr.get(job.jobId).receivedBytes > 0, 'the first chunk arriving')
 
-    const cancelled = mgr.cancel(job.jobId)
-    expect(cancelled.status).toBe('cancelled')
-    const finished = await waitForTerminal(mgr, job.jobId)
+    const finished = await cancelAndUnwind(mgr, job.jobId)
     expect(finished.status).toBe('cancelled')
+    expect(readFileSync(partOf(dest), 'utf8')).toBe('hello-')
     expect(existsSync(dest)).toBe(false)
-    // The streamed prefix lands on disk asynchronously — poll for it.
-    await waitFor(
-      () => existsSync(partPath(dest)) && readFileSync(partPath(dest), 'utf8') === 'hello-'
-    )
   })
 
   it('resumes a kept .part with a Range request (206 appends; hash verifies the whole)', async () => {
     const body = 'hello-world-weights'
     const m = verifiedManifest(body)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
-    mkdirSync(join(dest, '..'), { recursive: true })
-    writeFileSync(partPath(dest), 'hello-') // a previous cancelled attempt
+    writeDriveFile(root, `${m.localPath}.part`, 'hello-') // a previous cancelled attempt
     const { fetch, ranges } = rangeFetch(body, { honourRange: true })
     const mgr = new DownloadManager({ fetchImpl: fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(ranges[0]).toBe('bytes=6-')
     expect(finished.status).toBe('done')
@@ -665,13 +589,12 @@ describe('DownloadManager jobs', () => {
   it('restarts cleanly when the server ignores the Range header (200 truncates)', async () => {
     const body = 'fresh-complete-weights'
     const m = verifiedManifest(body)
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const dest = weightPath(root, m)
-    mkdirSync(join(dest, '..'), { recursive: true })
-    writeFileSync(partPath(dest), 'stale-garbage-prefix')
+    writeDriveFile(root, `${m.localPath}.part`, 'stale-garbage-prefix')
     const { fetch, ranges } = rangeFetch(body) // honourRange off → plain 200
     const mgr = new DownloadManager({ fetchImpl: fetch })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(ranges[0]).toBe('bytes=20-') // we ASKED to resume…
     expect(finished.status).toBe('done') // …the 200 restarted instead of corrupting
@@ -681,22 +604,21 @@ describe('DownloadManager jobs', () => {
 
   it('one download at a time: a second start is refused while one runs', async () => {
     const m = verifiedManifest('hello-world-weights')
-    const root = tempRoot()
+    const root = tempRoot('downloads')
     const mgr = new DownloadManager({ fetchImpl: hangingFetch('hello-') })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     await expect(
-      mgr.start({ rootPath: tempRoot(), manifest: manifest({ id: 'other-model' }), gates: OPEN })
+      mgr.start({ rootPath: tempRoot('downloads'), manifest: downloadManifest({ id: 'other-model' }), gates: OPEN_GATES })
     ).rejects.toThrow(/one model downloads at a time/i)
-    mgr.cancel(job.jobId)
-    await waitForTerminal(mgr, job.jobId)
+    await cancelAndUnwind(mgr, job.jobId)
   })
 
   it('an HTTP error fails the job with friendly copy (no half-state)', async () => {
-    const m = manifest()
-    const root = tempRoot()
+    const m = downloadManifest()
+    const root = tempRoot('downloads')
     const notFound = (async () => new Response(null, { status: 404 })) as unknown as FetchFn
     const mgr = new DownloadManager({ fetchImpl: notFound })
-    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('failed')
     expect(finished.error).toMatch(/could not start/)
@@ -716,23 +638,22 @@ describe('DownloadManager jobs', () => {
   describe('size cap (F17)', () => {
     const GiB = 1024 * 1024 * 1024
 
-    it('passes a bounded per-role maxBytes even when the manifest omits size_bytes', async () => {
+    it.each<[string, { role: ModelRole; cap: number }]>([
+      ['chat', { role: 'chat', cap: 40 * GiB }],
+      ['embeddings', { role: 'embeddings', cap: 4 * GiB }]
+    ])('passes a bounded per-role maxBytes even when the manifest omits size_bytes: %s', async (_title, row) => {
       const body = 'weights-with-no-declared-size'
-      const m = manifest({
+      const m = downloadManifest({
+        role: row.role,
         sha256: sha256(body),
         // download block WITHOUT size_bytes → planOneFile sets sizeBytes:null.
         download: { url: 'https://example.test/x.gguf', sha256: sha256(body), license_url: 'https://example.test/l' }
       })
-      downloadCaps.length = 0
+      seams.downloadCaps.length = 0
       const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
-      const job = await mgr.start({ rootPath: tempRoot(), manifest: m, gates: OPEN })
-      const finished = await waitForTerminal(mgr, job.jobId)
-      expect(finished.status).toBe('done')
-      expect(downloadCaps).toHaveLength(1)
-      const [cap] = downloadCaps
-      expect(typeof cap).toBe('number')
-      expect(cap as number).toBeGreaterThan(0)
-      expect(cap as number).toBeLessThan(64 * GiB)
+      const job = await mgr.start({ rootPath: tempRoot('downloads'), manifest: m, gates: OPEN_GATES })
+      expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+      expect(seams.downloadCaps).toEqual([row.cap])
     })
 
     it('COMPLETES a fresh download whose real body is larger than the declared size_bytes (regression)', async () => {
@@ -742,7 +663,7 @@ describe('DownloadManager jobs', () => {
       // the declared size only 256 KiB — a >1 MiB overshoot that the OLD cap would have truncated.
       const body = 'q'.repeat(Math.ceil(1.5 * 1024 * 1024))
       const declared = 256 * 1024
-      const m = manifest({
+      const m = downloadManifest({
         sha256: sha256(body),
         download: {
           url: 'https://example.test/big.gguf',
@@ -751,10 +672,10 @@ describe('DownloadManager jobs', () => {
           license_url: 'https://example.test/license'
         }
       })
-      const root = tempRoot()
+      const root = tempRoot('downloads')
       const dest = weightPath(root, m)
       const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId)
       expect(finished.status).toBe('done')
       expect(finished.unverified).toBe(false)
@@ -768,17 +689,31 @@ describe('DownloadManager jobs', () => {
   // throw ("database is not open") on completion — that fault must never turn a verified,
   // in-place download into a failed job, suppress onModelInstalled, or skip a later file.
   describe('hash-store faults (BE-2)', () => {
-    it('a store whose set/delete throws (workspace locked mid-download) never changes the job outcome', async () => {
+    const placeholders = (m: ModelManifest): ModelManifest => ({
+      ...m,
+      sha256: 'REPLACE_WITH_REAL_HASH',
+      mmproj: m.mmproj && { ...m.mmproj, sha256: 'REPLACE_WITH_REAL_HASH' }
+    })
+
+    it.each<[string, { hashes: 'real' | 'placeholder'; sets: number; deletes: number; unverified: boolean }]>([
+      ['a real hash primes', { hashes: 'real', sets: 2, deletes: 0, unverified: false }],
+      ['a placeholder invalidates, never primes', { hashes: 'placeholder', sets: 0, deletes: 2, unverified: true }]
+    ])('a store whose set/delete throws (workspace locked mid-download) never changes the job outcome: %s', async (_title, row) => {
       const gguf = 'the-language-gguf-bytes'
       const mmproj = 'the-mmproj-projector-bytes'
-      const m = visionManifest(gguf, mmproj) // TWO tasks — the second must still run
-      const root = tempRoot()
+      const base = visionManifest(gguf, mmproj) // TWO tasks — the second must still run
+      const m = row.hashes === 'real' ? base : placeholders(base)
+      const root = tempRoot('downloads')
+      let sets = 0
+      let deletes = 0
       const lockedStore: HashStore = {
         get: () => null,
         set: () => {
+          sets++
           throw new Error('database is not open')
         },
         delete: () => {
+          deletes++
           throw new Error('database is not open')
         }
       }
@@ -791,15 +726,17 @@ describe('DownloadManager jobs', () => {
         fetchImpl: fetch,
         onModelInstalled: (modelId) => installed.push(modelId)
       })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN, hashStore: lockedStore })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES, hashStore: lockedStore })
       const finished = await waitForTerminal(mgr, job.jobId)
       expect(finished.status).toBe('done') // the cache fault never reached the job outcome
-      expect(finished.unverified).toBe(false)
+      expect(finished.unverified).toBe(row.unverified)
       expect(installed).toEqual([m.id]) // fired exactly once — #40 activation preserved
       // The second task ran despite the first file's store fault, and both files are in place.
       expect(urls).toEqual(['https://example.test/vl.gguf', 'https://example.test/vl-mmproj.gguf'])
       expect(readFileSync(weightPath(root, m), 'utf8')).toBe(gguf)
       expect(readFileSync(mmprojPath(root, m), 'utf8')).toBe(mmproj)
+      expect(sets).toBe(row.sets)
+      expect(deletes).toBe(row.deletes)
     })
   })
 
@@ -807,43 +744,46 @@ describe('DownloadManager jobs', () => {
   // during `verifying` (a multi-GB SHA-256 on USB takes minutes) was silently dropped and a
   // two-task job then started downloading its next file.
   describe('cancel during verifying (BE-4)', () => {
-    it('is honoured: terminal cancelled, nothing renamed, .part kept, the second file never starts', async () => {
-      const gguf = 'the-language-gguf-bytes'
-      const mmproj = 'the-mmproj-projector-bytes'
+    const gguf = 'the-language-gguf-bytes'
+    const mmproj = 'the-mmproj-projector-bytes'
+    function twoFileRun(): { m: ModelManifest; root: string; dest: string; mgr: DownloadManager; urls: string[] } {
       const m = visionManifest(gguf, mmproj)
-      const root = tempRoot()
-      const dest = weightPath(root, m)
+      const root = tempRoot('downloads')
       const { fetch, urls } = routedFetch({
         'https://example.test/vl.gguf': gguf,
         'https://example.test/vl-mmproj.gguf': mmproj
       })
-      // Deterministic gate (no sleeps): the fake verify signals entry and holds until released.
-      let verifyEntered!: () => void
-      const verifyStarted = new Promise<void>((resolve) => (verifyEntered = resolve))
-      let releaseVerify!: () => void
-      const verifyGate = new Promise<void>((resolve) => (releaseVerify = resolve))
-      const mgr = new DownloadManager({
-        fetchImpl: fetch,
-        verifyImpl: async (path, expected) => {
-          verifyEntered()
-          await verifyGate
-          return verifyDownloadedFile(path, expected) // the real result — the bytes DO verify
-        }
-      })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
-      await verifyStarted
+      return { m, root, dest: weightPath(root, m), mgr: new DownloadManager({ fetchImpl: fetch }), urls }
+    }
+
+    it('is honoured: terminal cancelled, nothing renamed, .part kept, the second file never starts', async () => {
+      const { m, root, dest, mgr, urls } = twoFileRun()
+      const gate = gateNextVerify()
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      await within(gate.entered, 'the first verify starting')
       expect(mgr.get(job.jobId).status).toBe('verifying')
-      const cancelled = mgr.cancel(job.jobId) // previously a silent no-op in this state
-      expect(cancelled.status).toBe('cancelled')
-      releaseVerify()
-      const finished = await waitForTerminal(mgr, job.jobId)
-      expect(finished.status).toBe('cancelled')
+      expect(mgr.cancel(job.jobId).status).toBe('cancelled') // previously a silent no-op in this state
+      gate.release()
+      await runUnwound(mgr)
+      expect(mgr.get(job.jobId).status).toBe('cancelled')
       // The mid-download-cancel contract holds here too: nothing renamed into place, the
       // fully-downloaded .part KEPT for the next attempt…
       expect(existsSync(dest)).toBe(false)
-      expect(readFileSync(partPath(dest), 'utf8')).toBe(gguf)
+      expect(readFileSync(partOf(dest), 'utf8')).toBe(gguf)
       // …and task 2 (the mmproj) was never requested.
       expect(urls).toEqual(['https://example.test/vl.gguf'])
+    })
+
+    it('the same held verify with no cancel renames the file and goes on to the second', async () => {
+      const { m, root, dest, mgr, urls } = twoFileRun()
+      const gate = gateNextVerify()
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      await within(gate.entered, 'the first verify starting')
+      gate.release()
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('done')
+      expect(readFileSync(dest, 'utf8')).toBe(gguf)
+      expect(urls).toEqual(['https://example.test/vl.gguf', 'https://example.test/vl-mmproj.gguf'])
     })
   })
 
@@ -852,10 +792,9 @@ describe('DownloadManager jobs', () => {
     it('a 206 whose Content-Range starts at the WRONG offset fails the job AND deletes the .part', async () => {
       const body = 'hello-world-weights'
       const m = verifiedManifest(body)
-      const root = tempRoot()
+      const root = tempRoot('downloads')
       const dest = weightPath(root, m)
-      mkdirSync(join(dest, '..'), { recursive: true })
-      writeFileSync(partPath(dest), 'hello-') // a prior partial (6 bytes); resume asks for bytes=6-
+      writeDriveFile(root, `${m.localPath}.part`, 'hello-') // a prior partial (6 bytes); resume asks for bytes=6-
       // Server answers 206 but from byte 0 (wrong slice) — appending would corrupt the file.
       const fetchImpl = (async () =>
         new Response(body, {
@@ -863,11 +802,11 @@ describe('DownloadManager jobs', () => {
           headers: { 'content-length': String(body.length), 'content-range': `bytes 0-${body.length - 1}/${body.length}` }
         })) as unknown as FetchFn
       const mgr = new DownloadManager({ fetchImpl })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId)
       expect(finished.status).toBe('failed')
       // Poisoned prefix discarded → the next attempt restarts clean rather than re-appending.
-      expect(existsSync(partPath(dest))).toBe(false)
+      expect(existsSync(partOf(dest))).toBe(false)
       expect(existsSync(dest)).toBe(false)
     })
   })
@@ -881,100 +820,115 @@ describe('DownloadManager jobs', () => {
     it('a matching complete .part renames into place WITHOUT re-requesting (no 416 dead-end)', async () => {
       const body = 'hello-world-weights'
       const m = verifiedManifest(body) // size_bytes = body.length
-      const root = tempRoot()
+      const root = tempRoot('downloads')
       const dest = weightPath(root, m)
-      mkdirSync(join(dest, '..'), { recursive: true })
-      writeFileSync(partPath(dest), body) // the full file, staged by a cancel-during-verify
+      writeDriveFile(root, `${m.localPath}.part`, body) // the full file, staged by a cancel-during-verify
       const fetchSpy = vi.fn()
       const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId)
       expect(finished.status).toBe('done')
       expect(finished.unverified).toBe(false)
       // The pre-download short-circuit means the unsatisfiable Range is never even sent.
       expect(fetchSpy).not.toHaveBeenCalled()
       expect(readFileSync(dest, 'utf8')).toBe(body)
-      expect(existsSync(partPath(dest))).toBe(false)
+      expect(existsSync(partOf(dest))).toBe(false)
     })
 
     it('a caught HTTP 416 on a complete .part (size unknown) verifies in place → done', async () => {
       const body = 'hello-world-weights'
       // No size_bytes → the pre-download short-circuit cannot fire; recovery goes via the 416 catch.
-      const m = manifest({
+      const m = downloadManifest({
         sha256: sha256(body),
         download: { url: 'https://example.test/x.gguf', sha256: sha256(body), license_url: 'https://example.test/l' }
       })
-      const root = tempRoot()
+      const root = tempRoot('downloads')
       const dest = weightPath(root, m)
-      mkdirSync(join(dest, '..'), { recursive: true })
-      writeFileSync(partPath(dest), body) // complete file already staged
+      writeDriveFile(root, `${m.localPath}.part`, body) // complete file already staged
       const ranges: Array<string | null> = []
       const only416 = (async (_url: unknown, init?: RequestInit) => {
         ranges.push(new Headers(init?.headers).get('range'))
         return new Response(null, { status: 416 }) // Range Not Satisfiable — the .part is complete
       }) as unknown as FetchFn
       const mgr = new DownloadManager({ fetchImpl: only416 })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId)
       expect(ranges[0]).toBe('bytes=19-') // we DID ask to resume the full-length .part…
       expect(finished.status).toBe('done') // …and recovered by verifying it in place, not looping
       expect(readFileSync(dest, 'utf8')).toBe(body)
-      expect(existsSync(partPath(dest))).toBe(false)
+      expect(existsSync(partOf(dest))).toBe(false)
     })
 
-    it('a throw INSIDE the 416-path settle fails the job with friendly copy (never a stuck job / unhandled rejection)', async () => {
+    it('a throw INSIDE the 416-path settle fails the job (never a stuck job / unhandled rejection)', async () => {
       // Review fix-up (Phase 5): the catch-path settleCompletePart invocation had no exception
       // protection — a rename/finish failure on the AV-interfered destination (the audit F-13
       // entry's own named producer of complete .parts) escaped runOne, became an unhandled
       // rejection, and left the job stuck at non-terminal 'verifying' forever (no error copy,
-      // never pruned). Deterministic stand-in for the AV interference: the injected verifier
+      // never pruned). Deterministic stand-in for the AV interference: the hooked verifier
       // reports OK and then the `.part` VANISHES (AV quarantine) before the rename, so
       // finishVerifiedFile's renameSync throws inside the settle.
       const body = 'hello-world-weights'
       // No size_bytes → the pre-download short-circuit cannot fire; recovery goes via the 416 catch.
-      const m = manifest({
+      const m = downloadManifest({
         sha256: sha256(body),
         download: { url: 'https://example.test/x.gguf', sha256: sha256(body), license_url: 'https://example.test/l' }
       })
-      const root = tempRoot()
+      const root = tempRoot('downloads')
       const dest = weightPath(root, m)
-      mkdirSync(join(dest, '..'), { recursive: true })
-      writeFileSync(partPath(dest), body) // complete file already staged
+      writeDriveFile(root, `${m.localPath}.part`, body) // complete file already staged
       const only416 = (async () => new Response(null, { status: 416 })) as unknown as FetchFn
-      const mgr = new DownloadManager({
-        fetchImpl: only416,
-        verifyImpl: async (path, expected) => {
-          const result = await verifyDownloadedFile(path, expected) // ok — the bytes DO verify
-          rmSync(path) // …then the .part vanishes (AV quarantine) → the rename throws
-          return result
-        }
-      })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      seams.verifyHook = async (real, ...args) => {
+        const result = await real(...args) // ok: the bytes DO verify
+        rmSync(args[0]) // then the .part vanishes (AV quarantine), so the rename throws
+        return result
+      }
+      const mgr = new DownloadManager({ fetchImpl: only416 })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId) // pre-fix: stuck at 'verifying' → timeout
       expect(finished.status).toBe('failed')
-      expect(finished.error).toBeTruthy() // friendly copy, not a raw stack
+      // The copy still carries the raw errno text and paths, so this row claims only the wrapper, and no stringified Error.
+      expect(finished.error).toMatch(/was interrupted/)
       expect(finished.error).not.toMatch(/Error:/)
       expect(existsSync(dest)).toBe(false) // nothing half-renamed into place
+    })
+
+    it('a cancel during the complete .part verify keeps it and renames nothing', async () => {
+      const body = 'hello-world-weights'
+      const m = verifiedManifest(body)
+      const root = tempRoot('downloads')
+      const dest = weightPath(root, m)
+      writeDriveFile(root, `${m.localPath}.part`, body)
+      const fetchSpy = vi.fn()
+      const gate = gateNextVerify()
+      const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      await within(gate.entered, 'the complete .part verify starting')
+      expect(mgr.cancel(job.jobId).status).toBe('cancelled')
+      gate.release()
+      await runUnwound(mgr)
+      expect(mgr.get(job.jobId).status).toBe('cancelled')
+      expect(existsSync(dest)).toBe(false)
+      expect(readFileSync(partOf(dest), 'utf8')).toBe(body)
+      expect(fetchSpy).not.toHaveBeenCalled()
     })
 
     it('a complete-but-CORRUPT .part is discarded and the download restarts clean', async () => {
       const body = 'fresh-complete-weights'
       const m = verifiedManifest(body) // size_bytes = body.length
-      const root = tempRoot()
+      const root = tempRoot('downloads')
       const dest = weightPath(root, m)
-      mkdirSync(join(dest, '..'), { recursive: true })
       // A torn/aborted prior write left a full-length .part whose bytes DON'T match the hash.
-      writeFileSync(partPath(dest), 'X'.repeat(body.length))
+      writeDriveFile(root, `${m.localPath}.part`, 'X'.repeat(body.length))
       const { fetch, ranges } = rangeFetch(body) // honourRange off → 200 full body on a fresh request
       const mgr = new DownloadManager({ fetchImpl: fetch })
-      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId)
       // The corrupt .part failed verify → discarded → a single clean re-download (no Range).
       expect(ranges).toEqual([null])
       expect(finished.status).toBe('done')
       expect(finished.unverified).toBe(false)
       expect(readFileSync(dest, 'utf8')).toBe(body)
-      expect(existsSync(partPath(dest))).toBe(false)
+      expect(existsSync(partOf(dest))).toBe(false)
     })
   })
 })

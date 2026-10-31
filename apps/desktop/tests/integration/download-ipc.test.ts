@@ -1,7 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 
@@ -28,17 +26,16 @@ import type { DownloadJob } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { tempRoot } from '../helpers/db-fixtures'
+import { bodyFetch, hangingFetch, runUnwound } from '../helpers/download-fixtures'
+import { sha256 } from '../helpers/manifest-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-
-function sha256(s: string): string {
-  return createHash('sha256').update(s).digest('hex')
-}
 
 const BODY = 'downloaded-model-bytes'
 
 /** A drive root with one downloadable manifest (real hash of BODY) + optional policy. */
-function makeDrive(opts: { policyDeniesDownloads?: boolean; placeholderHash?: boolean } = {}): {
+function makeDrive(opts: { policyDeniesDownloads?: boolean; placeholderHash?: boolean; pendingLicense?: boolean } = {}): {
   rootPath: string
   configPath: string
   manifestsDir: string
@@ -46,7 +43,7 @@ function makeDrive(opts: { policyDeniesDownloads?: boolean; placeholderHash?: bo
   // #314: a placeholder hash lands the weight but leaves the job `done` + `unverified` — the
   // second kind of unresolved result `downloads:list` has to keep offering.
   const hash = opts.placeholderHash ? 'PLACEHOLDER' : sha256(BODY)
-  const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-dlipc-'))
+  const rootPath = tempRoot('dlipc')
   const manifestsDir = join(rootPath, 'model-manifests')
   mkdirSync(manifestsDir, { recursive: true })
   writeFileSync(
@@ -66,7 +63,9 @@ function makeDrive(opts: { policyDeniesDownloads?: boolean; placeholderHash?: bo
       local_path: 'models/chat/test-model-q4.gguf',
       sha256: hash,
       recommended_profiles: ['LITE'],
-      license_review: { status: 'approved', reviewed_by: 't', reviewed_at: '2026-06-10', notes: '' },
+      license_review: opts.pendingLicense
+        ? { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
+        : { status: 'approved', reviewed_by: 't', reviewed_at: '2026-06-10', notes: '' },
       download: {
         url: 'https://example.test/test-model.gguf',
         sha256: hash,
@@ -86,17 +85,22 @@ function makeDrive(opts: { policyDeniesDownloads?: boolean; placeholderHash?: bo
   return { rootPath, configPath, manifestsDir }
 }
 
+const openedDbs: Db[] = []
+
 function makeCtx(opts: {
   policyDeniesDownloads?: boolean
   allowNetwork?: boolean
   unlocked?: boolean
   placeholderHash?: boolean
+  pendingLicense?: boolean
 }): { ctx: AppContext; db: Db; rootPath: string } {
   const drive = makeDrive({
     policyDeniesDownloads: opts.policyDeniesDownloads,
-    placeholderHash: opts.placeholderHash
+    placeholderHash: opts.placeholderHash,
+    pendingLicense: opts.pendingLicense
   })
   const db = openDatabase(join(drive.rootPath, 'test.sqlite'))
+  openedDbs.push(db)
   seedSettings(db)
   // Set explicitly (the seeded default is now allowNetwork:true) so an `allowNetwork:false`
   // case genuinely exercises the setting-off gate rather than inheriting the default.
@@ -111,12 +115,7 @@ function makeCtx(opts: {
   return { ctx, db, rootPath: drive.rootPath }
 }
 
-const okFetch = (async () =>
-  new Response(BODY, {
-    status: 200,
-    headers: { 'content-length': String(BODY.length) }
-  })) as unknown as FetchFn
-
+/** Accepts `cancelled`, which flips before the run ends: a row that cancelled also awaits `runUnwound` before it finishes. */
 async function waitForTerminal(jobId: string): Promise<DownloadJob> {
   const start = Date.now()
   for (;;) {
@@ -129,6 +128,9 @@ async function waitForTerminal(jobId: string): Promise<DownloadJob> {
 }
 
 beforeEach(() => ipcState.handlers.clear())
+afterEach(() => {
+  for (const db of openedDbs.splice(0)) db.close()
+})
 
 describe('downloadModel gates (offline guarantee — closed gates never reach the network seam)', () => {
   it('refuses when the policy ceiling denies downloads — fetch never called', async () => {
@@ -157,17 +159,31 @@ describe('downloadModel gates (offline guarantee — closed gates never reach th
 
   it('throws on an unknown model id', async () => {
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
     await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(
       /Unknown model id/
     )
+  })
+
+  it('a manifest awaiting license review needs licenseAccepted to be exactly true', async () => {
+    const fetchSpy = vi.fn(bodyFetch(BODY))
+    const { ctx } = makeCtx({ allowNetwork: true, pendingLicense: true })
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: fetchSpy }))
+    await expect(invoke(handlers, IPC.downloadModel, 'test-model-q4')).rejects.toThrow(/license/)
+    await expect(
+      invoke(handlers, IPC.downloadModel, 'test-model-q4', { licenseAccepted: 'yes' })
+    ).rejects.toThrow(/license/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4', { licenseAccepted: true })
+    expect((await waitForTerminal((result as DownloadJob).jobId)).status).toBe('done')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('downloadModel happy path (both gates open, injected fake fetch)', () => {
   it('downloads, verifies, and lands the weight at the manifest path', async () => {
     const { ctx, rootPath } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const job = result as DownloadJob
@@ -181,20 +197,10 @@ describe('downloadModel happy path (both gates open, injected fake fetch)', () =
     expect(existsSync(`${dest}.part`)).toBe(false)
   })
 
-  it('cancelDownload stops an in-flight job and keeps the .part', async () => {
-    const { ctx, rootPath } = makeCtx({ allowNetwork: true })
-    const hanging = (async (_u: unknown, init?: RequestInit) => {
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('partial-'))
-          init?.signal?.addEventListener('abort', () =>
-            controller.error(new DOMException('aborted', 'AbortError'))
-          )
-        }
-      })
-      return new Response(stream, { status: 200 })
-    }) as unknown as FetchFn
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: hanging }))
+  it('cancelDownload routes the id: the job ends cancelled', async () => {
+    const manager = new DownloadManager({ fetchImpl: hangingFetch('partial-') })
+    const { ctx } = makeCtx({ allowNetwork: true })
+    registerDownloadIpc(ctx, manager)
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const job = result as DownloadJob
@@ -202,7 +208,7 @@ describe('downloadModel happy path (both gates open, injected fake fetch)', () =
     expect((cancelled as DownloadJob).status).toBe('cancelled')
     const finished = await waitForTerminal(job.jobId)
     expect(finished.status).toBe('cancelled')
-    expect(existsSync(join(rootPath, 'models', 'chat', 'test-model-q4.gguf'))).toBe(false)
+    await runUnwound(manager)
   })
 })
 
@@ -214,18 +220,9 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     throw new Error('connection reset')
   }) as unknown as FetchFn
 
-  /** A fetch that streams a first chunk and then hangs until aborted. */
-  const hangingFetch = (async (_u: unknown, init?: RequestInit) => {
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('partial-'))
-        init?.signal?.addEventListener('abort', () =>
-          controller.error(new DOMException('aborted', 'AbortError'))
-        )
-      }
-    })
-    return new Response(stream, { status: 200 })
-  }) as unknown as FetchFn
+  /** Narrow private read: memory is the only effect of this set's bound, and no public observable shows it. */
+  const dismissedIds = (m: DownloadManager): Set<string> =>
+    (m as unknown as { dismissed: Set<string> }).dismissed
 
   async function list(): Promise<DownloadJob[]> {
     const { result } = await invoke(handlers, IPC.listDownloadJobs)
@@ -237,21 +234,16 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     const start = Date.now()
     for (;;) {
       const job = manager.get(jobId)
-      if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
+      if (job.status === 'done' || job.status === 'failed') return job
       if (Date.now() - start > hangBudgetMs(5000)) throw new Error('download job never finished')
       await new Promise((r) => setTimeout(r, 5))
     }
   }
 
-  it('returns an empty list when no download has ever run', async () => {
-    const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
-    expect(await list()).toEqual([])
-  })
-
   it('lists the running job while a download is in flight (progress + Cancel can re-attach)', async () => {
+    const manager = new DownloadManager({ fetchImpl: hangingFetch('partial-') })
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: hangingFetch }))
+    registerDownloadIpc(ctx, manager)
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const started = result as DownloadJob
@@ -262,7 +254,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     expect(['queued', 'downloading', 'verifying']).toContain(listed[0].status)
 
     await invoke(handlers, IPC.cancelDownload, started.jobId)
-    await waitForTerminal(started.jobId)
+    await runUnwound(manager)
   })
 
   it('lists a failed job with its error, so the reloaded screen can name the failure', async () => {
@@ -282,7 +274,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
 
   it('lists a done-but-UNVERIFIED job (the placeholder-hash result still needs the user)', async () => {
     const { ctx } = makeCtx({ allowNetwork: true, placeholderHash: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const started = result as DownloadJob
@@ -296,7 +288,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
 
   it('never lists a VERIFIED done job — the model row already carries that state', async () => {
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: okFetch }))
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const finished = await waitForTerminal((result as DownloadJob).jobId)
@@ -306,13 +298,15 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
   })
 
   it('never lists a CANCELLED job', async () => {
+    const manager = new DownloadManager({ fetchImpl: hangingFetch('partial-') })
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: hangingFetch }))
+    registerDownloadIpc(ctx, manager)
 
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const started = result as DownloadJob
     await invoke(handlers, IPC.cancelDownload, started.jobId)
     expect((await waitForTerminal(started.jobId)).status).toBe('cancelled')
+    await runUnwound(manager)
     expect(await list()).toEqual([])
   })
 
@@ -333,10 +327,12 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
   })
 
   it('dismissing an id this manager never issued changes nothing', async () => {
+    const manager = new DownloadManager({ fetchImpl: failingFetch })
     const { ctx } = makeCtx({ allowNetwork: true })
-    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: failingFetch }))
+    registerDownloadIpc(ctx, manager)
 
-    await expect(invoke(handlers, IPC.dismissDownloadJob, 'no-such-job')).resolves.toBeDefined()
+    await invoke(handlers, IPC.dismissDownloadJob, 'no-such-job')
+    expect(dismissedIds(manager).size).toBe(0)
     const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
     const started = result as DownloadJob
     await waitForTerminal(started.jobId)
@@ -363,10 +359,11 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     const manager = new DownloadManager({ fetchImpl: failingFetch })
     registerDownloadIpc(ctx, manager)
 
-    // 22 failed jobs, the first one dismissed straight away. Pruning runs at the START of a
-    // download, so the 22nd start is the one that finds 21 terminal jobs and drops the oldest.
+    // 23 failed jobs, the first one dismissed straight away. Pruning runs at the START of a
+    // download: the 22nd start finds 21 terminal jobs and drops ids[0] (dismissed), the 23rd finds
+    // 21 again and drops ids[1] (undismissed), the one a pruning failure would still leave listed.
     const ids: string[] = []
-    for (let i = 0; i < 22; i++) {
+    for (let i = 0; i < 23; i++) {
       const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
       const started = result as DownloadJob
       ids.push(started.jobId)
@@ -374,14 +371,33 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
       if (i === 0) manager.dismiss(started.jobId)
     }
 
-    // The kept window (MAX_TERMINAL_JOBS = 20) plus the job that triggered the prune, in
-    // creation order — the oldest is gone.
-    const listed = manager.list().map((j) => j.jobId)
-    expect(listed).toEqual(ids.slice(1))
-    expect(listed).not.toContain(ids[0])
+    // 21 kept: the window (MAX_TERMINAL_JOBS = 20) plus the job whose start ran the prune, in
+    // creation order. ids[0] (dismissed) and ids[1] (not) are gone.
+    expect(manager.list().map((j) => j.jobId)).toEqual(ids.slice(2))
+    expect(manager.get(ids[0]).error).toMatch(/Unknown/)
+    expect(manager.get(ids[1]).error).toMatch(/Unknown/)
     // …and the dismissal record left with it, so the set can never outgrow the keep window.
-    const internals = manager as unknown as { dismissed: Set<string> }
-    expect(internals.dismissed.has(ids[0])).toBe(false)
-    expect(internals.dismissed.size).toBe(0)
+    expect(dismissedIds(manager).has(ids[0])).toBe(false)
+    expect(dismissedIds(manager).size).toBe(0)
+  })
+})
+
+describe('the default manager main/index.ts registers (no injected manager)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('the default manager main/index.ts registers fetches globally and reports to the context', async () => {
+    const fetchSpy = vi.fn(bodyFetch(BODY))
+    vi.stubGlobal('fetch', fetchSpy) // before registering: the registrar reads `fetch` when it builds the manager
+    const { ctx } = makeCtx({ allowNetwork: true })
+    const audit = vi.fn()
+    const onModelInstalled = vi.fn()
+    ctx.audit = audit
+    ctx.onModelInstalled = onModelInstalled
+    registerDownloadIpc(ctx)
+    const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
+    expect((await waitForTerminal((result as DownloadJob).jobId)).status).toBe('done')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(onModelInstalled).toHaveBeenCalledWith('test-model-q4')
+    expect(audit.mock.calls.map(([type]) => type)).toEqual(['model_download_started', 'model_download_verified'])
   })
 })

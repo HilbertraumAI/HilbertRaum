@@ -459,27 +459,3 @@ export function planPrepareDrive(
     configWouldOverwrite
   }
 }
-
-/** Render a prepare-drive plan as a human-readable dry-run report. */
-export function formatPlan(plan: PreparePlan): string {
-  const lines: string[] = []
-  lines.push(`Prepare drive at: ${plan.rootPath}`)
-  lines.push('')
-  lines.push('Directories to create:')
-  for (const d of plan.dirsToCreate) lines.push(`  + ${d}`)
-  lines.push('')
-  lines.push('Config files to write:')
-  for (const f of plan.filesToWrite) lines.push(`  + ${f.relPath}`)
-  if (plan.configWouldOverwrite) lines.push('  (existing config/*.json present — use --force to overwrite)')
-  if (plan.appSkillsToCopy.length > 0) {
-    lines.push('')
-    lines.push('App skills to copy from the repo app-skills/ source:')
-    for (const s of plan.appSkillsToCopy) lines.push(`  + app-skills/${s}/`)
-  }
-  lines.push('')
-  lines.push('Model weights you must add (git-ignored, not provisioned by this script):')
-  for (const w of plan.weightDestinations) lines.push(`  · ${w}`)
-  lines.push('')
-  lines.push('Sidecar binaries you must add: runtime/llama.cpp/{win,mac,linux}/llama-server[.exe]')
-  return lines.join('\n')
-}

@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { openDatabase } from '../../src/main/services/db'
 import { seedSettings, updateSettings } from '../../src/main/services/settings'
 import { RuntimeManager } from '../../src/main/services/runtime'
-import { __resetPolicyCache } from '../../src/main/services/policy'
 import {
   applyLocalApiSettings,
   createLocalApiServer,
@@ -28,7 +27,6 @@ afterEach(async () => {
 })
 
 function makeCtx(opts?: { unlocked?: boolean; policyJson?: string; isDev?: boolean }): AppContext {
-  __resetPolicyCache()
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-lapi-life-'))
   if (opts?.policyJson) writeFileSync(join(dir, 'policy.json'), opts.policyJson)
   const db = openDatabase(join(dir, 'test.sqlite'))

@@ -140,7 +140,7 @@ const correctBytesFetch: FetchFn = (async (url: unknown) => {
 }) as unknown as FetchFn
 
 /** A fetch whose body stream sends one chunk then hangs until its request signal aborts
- *  (the downloads.test.ts `hangingFetch` idiom) — pins a cancel deterministically mid-download. */
+ *  (the `hangingFetch` idiom of tests/helpers/download-fixtures.ts) — pins a cancel deterministically mid-download. */
 function hangingFetch(firstChunk: string): FetchFn {
   return (async (_url: unknown, init?: RequestInit) => {
     const signal = init?.signal

@@ -1,27 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { validateManifest, isRealSha256 } from '../../src/shared/manifest'
-
-// A minimal valid raw manifest (snake_case, as parsed from YAML).
-function rawManifest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'qwen3-4b-instruct-q4',
-    display_name: 'Qwen3 4B Instruct Q4',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
-    size_on_disk_gb: 2.7,
-    recommended_min_ram_gb: 8,
-    recommended_ram_gb: 16,
-    recommended_context_tokens: 4096,
-    local_path: 'models/chat/qwen3-4b-instruct-q4.gguf',
-    sha256: 'REPLACE_WITH_REAL_HASH',
-    recommended_profiles: ['LITE'],
-    license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' },
-    ...overrides
-  }
-}
+import { rawManifest } from '../helpers/manifest-fixtures'
 
 describe('validateManifest', () => {
   it('accepts a well-formed manifest and camelCases fields', () => {
@@ -33,6 +12,10 @@ describe('validateManifest', () => {
     expect(res.manifest?.recommendedContextTokens).toBe(4096)
     expect(res.manifest?.recommendedProfiles).toEqual(['LITE'])
     expect(res.manifest?.licenseReview.status).toBe('pending')
+    // A manifest declaring none of the optional blocks stays valid, and each is absent (`files` absent, not empty).
+    expect(res.manifest?.download).toBeUndefined()
+    expect(res.manifest?.mmproj).toBeUndefined()
+    expect(res.manifest).not.toHaveProperty('files')
   })
 
   it('rejects a non-object', () => {
@@ -41,12 +24,12 @@ describe('validateManifest', () => {
     expect(res.errors.length).toBeGreaterThan(0)
   })
 
-  it('reports a missing required field', () => {
+  it.each(['id', 'display_name', 'family', 'role', 'format', 'runtime', 'license', 'size_on_disk_gb', 'recommended_min_ram_gb', 'recommended_ram_gb', 'recommended_context_tokens', 'local_path', 'sha256'])('reports a missing required field: %s', (key) => {
     const raw = rawManifest()
-    delete raw.id
+    delete raw[key]
     const res = validateManifest(raw)
     expect(res.ok).toBe(false)
-    expect(res.errors.some((e) => e.includes('"id"'))).toBe(true)
+    expect(res.errors.some((e) => e.includes(`"${key}"`))).toBe(true)
   })
 
   it('rejects an invalid role', () => {
@@ -55,18 +38,23 @@ describe('validateManifest', () => {
     expect(res.errors.some((e) => e.includes('role'))).toBe(true)
   })
 
-  it('rejects a non-numeric size', () => {
-    const res = validateManifest(rawManifest({ size_on_disk_gb: 'big' }))
-    expect(res.ok).toBe(false)
-    expect(res.errors.some((e) => e.includes('size_on_disk_gb'))).toBe(true)
+  it.each(['size_on_disk_gb', 'recommended_min_ram_gb', 'recommended_ram_gb', 'recommended_context_tokens'])('rejects a non-numeric or negative %s', (key) => {
+    for (const value of ['big', -1, Number.NaN]) {
+      const res = validateManifest(rawManifest({ [key]: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes(key)), String(value)).toBe(true)
+    }
   })
 
-  it('requires the license_review block', () => {
+  it('requires the license_review block and a known status', () => {
     const raw = rawManifest()
     delete raw.license_review
     const res = validateManifest(raw)
     expect(res.ok).toBe(false)
     expect(res.errors.some((e) => e.includes('license_review'))).toBe(true)
+    const bad = validateManifest(rawManifest({ license_review: { status: 'nope' } }))
+    expect(bad.ok).toBe(false)
+    expect(bad.errors.some((e) => e.includes('license_review.status'))).toBe(true)
   })
 
   it('rejects bad recommended_profiles', () => {
@@ -94,6 +82,14 @@ describe('validateManifest', () => {
     const res = validateManifest(rawManifest({ supports_thinking_mode: 'yes' }))
     expect(res.ok).toBe(false)
     expect(res.errors.some((e) => e.includes('supports_thinking_mode'))).toBe(true)
+  })
+
+  it('rejects a non-numeric recommendation_rank (the field moves a recommendation)', () => {
+    for (const value of ['2', true, Number.NaN, null]) {
+      const res = validateManifest(rawManifest({ recommendation_rank: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('recommendation_rank')), String(value)).toBe(true)
+    }
   })
 
   // PR #308 audit decision 11: the per-model context-cache term of the graphics-memory fit
@@ -204,15 +200,12 @@ describe('validateManifest', () => {
     expect(res.errors.some((e) => e.includes('local_path'))).toBe(true)
   })
 
-  it('rejects an absolute local_path (POSIX and Windows drive-letter forms)', () => {
-    expect(validateManifest(rawManifest({ local_path: '/etc/shadow' })).ok).toBe(false)
-    expect(validateManifest(rawManifest({ local_path: 'C:/Windows/system32/x' })).ok).toBe(false)
-    expect(validateManifest(rawManifest({ local_path: 'C:\\Windows\\system32\\x' })).ok).toBe(false)
-  })
-
-  it('still accepts a normal drive-relative local_path (forward slashes)', () => {
-    const res = validateManifest(rawManifest({ local_path: 'models/chat/ok.gguf' }))
-    expect(res.ok).toBe(true)
+  it('rejects an absolute local_path (POSIX, Windows drive-letter and UNC forms)', () => {
+    for (const p of ['/etc/shadow', 'C:/Windows/system32/x', 'C:\\Windows\\system32\\x', '\\\\server\\share\\x.gguf']) {
+      const res = validateManifest(rawManifest({ local_path: p }))
+      expect(res.ok, p).toBe(false)
+      expect(res.errors.some((e) => e.includes('"local_path"')), p).toBe(true)
+    }
   })
 })
 
@@ -225,12 +218,6 @@ describe('validateManifest — optional download block (Phase 12)', () => {
     ...overrides
   })
 
-  it('stays valid when the download block is absent (existing manifests)', () => {
-    const res = validateManifest(rawManifest())
-    expect(res.ok).toBe(true)
-    expect(res.manifest?.download).toBeUndefined()
-  })
-
   it('accepts a well-formed download block and camelCases its fields', () => {
     const res = validateManifest(rawManifest({ download: downloadBlock() }))
     expect(res.ok).toBe(true)
@@ -238,6 +225,7 @@ describe('validateManifest — optional download block (Phase 12)', () => {
     expect(res.manifest?.download?.sha256).toBe('replace_with_real_hash')
     expect(res.manifest?.download?.sizeBytes).toBe(2497280256)
     expect(res.manifest?.download?.licenseUrl).toContain('LICENSE')
+    expect(res.manifest?.download?.withdrawn).toBeUndefined() // every existing manifest keeps a live source
   })
 
   it('treats size_bytes + license_url as optional within the block', () => {
@@ -253,6 +241,12 @@ describe('validateManifest — optional download block (Phase 12)', () => {
     const res = validateManifest(rawManifest({ download: downloadBlock({ url: '' }) }))
     expect(res.ok).toBe(false)
     expect(res.errors.some((e) => e.includes('download.url'))).toBe(true)
+  })
+
+  it('rejects a download block with no sha256 (every fetched file needs a hash or an explicit placeholder)', () => {
+    const res = validateManifest(rawManifest({ download: downloadBlock({ sha256: undefined }) }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"download.sha256" is required and must be a string (hash or placeholder)')
   })
 
   it('rejects a non-mapping download block', () => {
@@ -321,12 +315,6 @@ describe('validateManifest — optional download block (Phase 12)', () => {
   // provenance record of the weight existing drives carry); `withdrawn` marks the URL as dead so
   // no code path requests it.
   describe('download.withdrawn (issue #196)', () => {
-    it('is absent by default — every existing manifest keeps a live source', () => {
-      const res = validateManifest(rawManifest({ download: downloadBlock() }))
-      expect(res.ok).toBe(true)
-      expect(res.manifest?.download?.withdrawn).toBeUndefined()
-    })
-
     it('accepts a dated note and trims it', () => {
       const note = '2026-08-20: upstream deleted the file (Dynamic 3.0 restructure)'
       const res = validateManifest(rawManifest({ download: downloadBlock({ withdrawn: `  ${note}  ` }) }))
@@ -398,16 +386,16 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
     expect(res.errors.some((e) => e.includes('mmproj'))).toBe(true)
   })
 
-  it('leaves non-vision manifests unaffected (no mmproj needed)', () => {
-    const res = validateManifest(rawManifest())
-    expect(res.ok).toBe(true)
-    expect(res.manifest?.mmproj).toBeUndefined()
-  })
-
   it('rejects an mmproj block with an empty local_path', () => {
     const res = validateManifest(visionRaw({ mmproj: mmprojBlock({ local_path: '' }) }))
     expect(res.ok).toBe(false)
     expect(res.errors.some((e) => e.includes('mmproj.local_path'))).toBe(true)
+  })
+
+  it('rejects an mmproj block with no sha256', () => {
+    const res = validateManifest(visionRaw({ mmproj: mmprojBlock({ sha256: undefined }) }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"mmproj.sha256" is required and must be a string (hash or placeholder)')
   })
 
   it('rejects an mmproj.local_path that escapes the drive root (vuln-scan 2026-06-21)', () => {
@@ -477,10 +465,12 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
     expect(res.ok).toBe(true)
   })
 
-  it('rejects a non-list input_modalities', () => {
-    const res = validateManifest(visionRaw({ input_modalities: 'text' }))
-    expect(res.ok).toBe(false)
-    expect(res.errors.some((e) => e.includes('input_modalities'))).toBe(true)
+  it('rejects an input_modalities that is not a list of strings', () => {
+    for (const value of ['text', ['text', 1]]) {
+      const res = validateManifest(visionRaw({ input_modalities: value }))
+      expect(res.ok).toBe(false)
+      expect(res.errors.some((e) => e.includes('input_modalities'))).toBe(true)
+    }
   })
 })
 
@@ -504,30 +494,6 @@ describe('validateManifest — translation role (TranslateGemma, TG-1)', () => {
     expect(res.ok).toBe(true)
     expect(res.manifest?.role).toBe('translation')
     expect(res.manifest?.mmproj).toBeUndefined()
-  })
-
-  it('accepts a translation manifest with a download block + pending license review', () => {
-    const res = validateManifest(
-      translationRaw({
-        license: 'gemma',
-        license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: 'Gemma Terms' },
-        download: {
-          url: 'https://huggingface.co/mradermacher/translategemma-12b-it-GGUF/resolve/main/translategemma-12b-it.Q4_K_M.gguf?download=true',
-          sha256: 'b7aac4b4be7ab0c49b6556c29c4467e74313df7f1e95d9f9676bb2adf0afa528',
-          size_bytes: 7300794112,
-          license_url: 'https://ai.google.dev/gemma/terms'
-        }
-      })
-    )
-    expect(res.ok).toBe(true)
-    expect(res.manifest?.licenseReview.status).toBe('pending')
-    expect(res.manifest?.download?.sizeBytes).toBe(7300794112)
-  })
-
-  it('still rejects an unknown role (the pre-role build behaviour)', () => {
-    const res = validateManifest(translationRaw({ role: 'translater' }))
-    expect(res.ok).toBe(false)
-    expect(res.errors.some((e) => e.includes('role'))).toBe(true)
   })
 })
 
@@ -587,12 +553,6 @@ describe('validateManifest — files: additional required files (#310)', () => {
       sizeBytes: 20,
       licenseUrl: null
     })
-  })
-
-  it('a manifest WITHOUT files: is untouched (no files key on the result)', () => {
-    const res = validateManifest(rawManifest())
-    expect(res.ok).toBe(true)
-    expect(res.manifest).not.toHaveProperty('files')
   })
 
   it('rejects a non-list files:', () => {
