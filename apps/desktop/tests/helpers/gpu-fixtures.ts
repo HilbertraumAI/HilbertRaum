@@ -1,8 +1,9 @@
 import { join } from 'node:path'
+import type { RerankerOccupancySnapshot } from '../../src/main/services/rag/device-posture'
 import type { GpuDevice } from '../../src/shared/types'
 
-// The measured cards and the committed catalog. It imports no main-process value, so a pure service suite can use it
-// without an `electron` mock; `performance-fixture.ts` re-exports both for its own suites.
+// The measured cards, the committed catalog and an idle card's occupancy. It imports no main-process value, so a pure
+// service suite can use it without an `electron` mock; `performance-fixture.ts` re-exports the first two for its suites.
 
 /** The repo's committed `model-manifests/`, absolute. */
 export const CATALOG_MANIFESTS: string = join(__dirname, '..', '..', '..', '..', 'model-manifests')
@@ -21,4 +22,20 @@ export const CARDS: Record<'RTX_3080_TI' | 'RTX_3090' | 'GTX_1070_TI' | 'RTX_306
   GTX_1070_TI: { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7504 },
   // tests/fixtures/placement-b9849-partial-18of33-np4.txt; leg 4. Vulkan1: that laptop lists its iGPU first.
   RTX_3060_LAPTOP: { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
+}
+
+/** The hybrid desktop's iGPU (list-devices-b11146-vulkan-rtx3080ti.txt): it reports shared RAM as free, far above any card. */
+export const UHD_770: GpuDevice = { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
+
+/** The occupancy of a card nothing competes for: no model committed, nothing starting, nothing else on it. */
+export function idleOccupancy(over: Partial<RerankerOccupancySnapshot> = {}): RerankerOccupancySnapshot {
+  return {
+    committedModelId: null,
+    chatStartBusy: false,
+    translationOccupied: false,
+    committedContextTokens: null,
+    committedBackend: null,
+    chatStartRequested: false,
+    ...over
+  }
 }

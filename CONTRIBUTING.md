@@ -270,7 +270,7 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `Partial<PreloadApi>`. The same suite's mounts called two unstubbed methods in all 107 tests.
 - **The benchmark and Performance fixtures** are `tests/helpers/performance-fixture.ts` (main side:
   `fakeGpuProbe`, `withLlamaBinary`, `firstBenchmarkNow`), `chat-runtime-stub.ts` (`stubChatRuntime`, `committingRuntime`,
-  `runningManager`, `START_READS`) and `gpu-fixtures.ts` (`CARDS`, `CATALOG_MANIFESTS`), which load no IPC registrar, so
+  `runningManager`, `START_READS`) and `gpu-fixtures.ts` (`CARDS`, `CATALOG_MANIFESTS`, `idleOccupancy`), which load no IPC registrar, so
   a service suite needs no `electron` mock, `benchmark-records.ts` (pure record builders, safe in jsdom) and
   `performance-screen.tsx` (the screen's `installPerformance`, `startOwnRun`, `copiedReport`). `deferred` is
   `tests/helpers/deferred.ts`.

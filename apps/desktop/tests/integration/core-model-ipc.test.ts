@@ -701,7 +701,7 @@ describe('registerModelIpc', () => {
       manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: false,
-      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
+      runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model')).rejects.toThrow(
@@ -866,7 +866,7 @@ describe('registerModelIpc', () => {
       manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(), // missing config dir → no policy.json
       isDev: false,
-      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
+      runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
@@ -901,7 +901,7 @@ describe('registerModelIpc', () => {
       manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: false,
-      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
+      runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
@@ -927,7 +927,7 @@ describe('registerModelIpc', () => {
       manifestsDir: CATALOG_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath },
       isDev: true,
-      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
+      runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
@@ -941,7 +941,7 @@ describe('registerModelIpc', () => {
       manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
-      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
+      runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
@@ -965,7 +965,7 @@ describe('registerModelIpc', () => {
       manifestsDir,
       paths: { rootPath: root, configPath: bogusConfigDir() },
       isDev: true,
-      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
+      runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'huge-model')).rejects.toThrow(

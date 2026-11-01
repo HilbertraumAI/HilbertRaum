@@ -15,7 +15,7 @@ import { resolveAskCandidateScope } from '../../src/main/ipc/registerRagIpc'
 import { resolveRerankerDevicePosture, type RerankerOccupancySnapshot } from '../../src/main/services/rag/device-posture'
 import { GPU_RERANK_SCOPE } from '../../src/main/services/rag/rerank-profile'
 import { DEFAULT_SETTINGS, type AppSettings, type GpuDevice } from '../../src/shared/types'
-import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
+import { CATALOG_MANIFESTS, idleOccupancy } from '../helpers/gpu-fixtures'
 
 // B12 (scoped Opus review, step 4-4): `resolveAskCandidateScope` and its one production call
 // site (this ask's `externalArm` wiring) had no test in the diff — a dropped `candidateScope`
@@ -33,14 +33,7 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
 // itself exercise B′/T passes explicitly (an omitted/optional parameter would silently readmit
 // the pre-Wave-8 "trust the setting" behaviour — NF-1, the Wave 8 analysis).
 function noOccupancy(committedModelId: string | null = null): RerankerOccupancySnapshot {
-  return {
-    committedModelId,
-    chatStartBusy: false,
-    translationOccupied: false,
-    committedContextTokens: null,
-    committedBackend: null,
-    chatStartRequested: false
-  }
+  return idleOccupancy({ committedModelId })
 }
 
 const COMMITTED_4B = 'qwen3.5-4b-ud-q4kxl'

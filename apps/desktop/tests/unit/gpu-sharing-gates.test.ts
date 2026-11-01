@@ -17,7 +17,7 @@ import {
   type ModelPlacement,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { CARDS, CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
+import { CARDS, CATALOG_MANIFESTS, idleOccupancy, UHD_770 } from '../helpers/gpu-fixtures'
 
 // #473 Phase 1 (owner rulings of 2026-10-12): the two sidecar headroom gates — translation's new
 // one and the reranker's — read the running chat model's share of the card (ruling 3), and the
@@ -28,8 +28,6 @@ import { CARDS, CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 const CHAT = 'qwen3.5-9b-ud-q4kxl'
 const TRANSLATION = 'translategemma-12b-it-q4'
 
-/** The other half of the hybrid desktop's b11146 capture (list-devices-b11146-vulkan-rtx3080ti.txt). */
-const UHD_770: GpuDevice = { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
 /** `CARDS.GTX_1070_TI` is the #318 card: 7,504 MiB free, under the translation model's 8,892 alone. */
 const { RTX_3080_TI, RTX_3090, GTX_1070_TI } = CARDS
 
@@ -38,15 +36,7 @@ function withProbe(...devices: GpuDevice[]): AppSettings {
 }
 
 function chat(overrides: Partial<RerankerOccupancySnapshot> = {}): RerankerOccupancySnapshot {
-  return {
-    committedModelId: CHAT,
-    chatStartBusy: false,
-    translationOccupied: false,
-    committedContextTokens: 8192,
-    committedBackend: 'gpu',
-    chatStartRequested: false,
-    ...overrides
-  }
+  return idleOccupancy({ committedModelId: CHAT, committedContextTokens: 8192, committedBackend: 'gpu', ...overrides })
 }
 
 /** A measured 9B start: 6,010 MiB on the card (the #318 measurement read 6,007). */
@@ -125,7 +115,7 @@ describe('the reranker gate reads the same chat share (#473 ruling 3)', () => {
   })
 
   it('a chat model on the processor holds nothing on the card', () => {
-    const laptop = withProbe({ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 })
+    const laptop = withProbe({ ...CARDS.RTX_3060_LAPTOP, id: 'Vulkan0' })
     expect(resolveRerankerDevicePosture(laptop, CATALOG_MANIFESTS, chat())).toBe('cpu')
     expect(resolveRerankerDevicePosture(laptop, CATALOG_MANIFESTS, chat({ committedBackend: 'cpu' }))).toBe('gpu')
   })

@@ -99,11 +99,6 @@ describe('normalizeBenchmarkResult — the legacy profile-only blob (G3)', () =>
   })
 })
 
-// B-G1 (PR #303 audit remediation): identity is all-or-nothing. `hasMachineIdentity` used to
-// ask only for `cpuModel` + `ramGb`, so a record with no `os`/`arch` normalized to `os: ''`,
-// `arch: ''` and keyed as `'||x|0|16'` — a phantom the history filed and kept forever, because
-// `detectSystem` always reports a real platform and arch, so no living computer could produce
-// that key to match or replace it.
 describe('machineKey', () => {
   it('fingerprints OS, arch, CPU model, cores and ROUNDED RAM', () => {
     expect(machineKey(complete())).toBe('win32|x64|Intel Core i7-1260P|12|16')
@@ -118,6 +113,11 @@ describe('machineKey', () => {
   })
 })
 
+// B-G1 (PR #303 audit remediation): identity is all-or-nothing. `hasMachineIdentity` used to
+// ask only for `cpuModel` + `ramGb`, so a record with no `os`/`arch` normalized to `os: ''`,
+// `arch: ''` and keyed as `'||x|0|16'` — a phantom the history filed and kept forever, because
+// `detectSystem` always reports a real platform and arch, so no living computer could produce
+// that key to match or replace it.
 describe('hasMachineIdentity — every field a real detection fills, or none (B-G1)', () => {
   it('a record without os/arch has no identity: machineKey null, dropped from history, kept as an unkeyed current record', () => {
     const half = { ranAt: '2026-09-05T00:00:00Z', cpuModel: 'x', ramGb: 16 }

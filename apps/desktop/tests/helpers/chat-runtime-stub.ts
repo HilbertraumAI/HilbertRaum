@@ -17,6 +17,12 @@ export function stoppedStatus(): RuntimeStatus {
   return { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
 }
 
+/** What `startModelRuntime` asks the manager around its `start`: a request with nothing to release, and no quit. */
+export const START_READS: Pick<RuntimeManager, 'beginStartRequest' | 'isShutdown'> = {
+  beginStartRequest: () => () => {},
+  isShutdown: () => false
+}
+
 /** Options for `stubChatRuntime`; every default reproduces the speed-leg stub the suites shared. */
 export interface StubChatRuntimeOptions {
   /** Default `'stub-chat'`. */
@@ -49,16 +55,15 @@ export interface StubChatRuntimeOptions {
 }
 
 /**
- * The runtime `measureTokensPerSecond` reads, plus the four manager members the benchmark reads off
- * `ctx.runtime` (`occupancy`, `active`, `status`, `isShutdown`), so one object serves both
+ * The runtime `measureTokensPerSecond` reads, plus the manager members a benchmark or a start reads off
+ * `ctx.runtime` (`occupancy`, `active`, `status`, `START_READS`), so one object serves both
  * `runBenchmark({ runtime })` and `ctxWith(root, db, { runtime })`. `active()` hands out the object it
  * is called on, so a spread copy with a replaced method is what the benchmark measures.
  */
-export interface StubChatRuntime extends ModelRuntime {
+export interface StubChatRuntime extends ModelRuntime, Pick<RuntimeManager, 'beginStartRequest' | 'isShutdown'> {
   occupancy: ModelOccupancy
   active(): ModelRuntime | null
   status(): RuntimeStatus
-  isShutdown(): boolean
 }
 
 /**
@@ -98,7 +103,7 @@ export function stubChatRuntime(opts: StubChatRuntimeOptions = {}): StubChatRunt
       return this
     },
     status: opts.status ?? stoppedStatus,
-    isShutdown: () => false
+    ...START_READS
   }
   return stub
 }
@@ -113,12 +118,6 @@ function committedStatus(modelId: string | null): RuntimeStatus {
     message: 'ok',
     startingModelId: null
   }
-}
-
-/** What `startModelRuntime` asks the manager around its `start`: a request with nothing to release, and no quit. */
-export const START_READS: Pick<RuntimeManager, 'beginStartRequest' | 'isShutdown'> = {
-  beginStartRequest: () => () => {},
-  isShutdown: () => false
 }
 
 /** The manager reads an ask or a skill makes off `ctx.runtime`, over one running model. */

@@ -128,7 +128,6 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 }
 
 const here = hereKey
-/** The card of the #330 round trip — the one the probe was too slow to enumerate. */
 /** One macrotask hop — room for a wrong implementation to (wrongly) start I/O before an assert. */
 const hop = (): Promise<void> => new Promise((r) => setImmediate(r))
 async function hops(n: number): Promise<void> {

@@ -90,8 +90,6 @@ import { updateSettings } from '../../src/main/services/settings'
 import type { LocalApiServer } from '../../src/main/services/local-api/server'
 import type { Message } from '../../src/shared/types'
 
-/** The repo's manifest tree, so the REAL `startModelRuntime` install gate runs (#344 leg). */
-
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
 const ENCRYPTION_REQUIRED: PrivacyPolicy = {
@@ -295,6 +293,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     },
     translator,
     ocrEngine: opts.ocrEngine ?? null,
+    // The repo's manifest tree, so the REAL `startModelRuntime` install gate runs (#344 leg).
     manifestsDir: opts.chatEngine ? CATALOG_MANIFESTS : null,
     isDev: opts.chatEngine !== undefined,
     // #477: pendingModelSwitches is required — startModelRuntime's committed-switch branch
