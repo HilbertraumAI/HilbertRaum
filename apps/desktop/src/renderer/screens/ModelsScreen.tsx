@@ -232,17 +232,13 @@ function setActiveVerify(next: typeof activeVerify): void {
 }
 
 /**
- * Test/preview-only reset (optionally: seed) of this module's download memory. Module state is
- * deliberately outside React so it survives a remount, which also means a jsdom test or a preview
- * case has no other way to start from a known state. Production code never calls this.
+ * Test-only reset of this module's download memory. Module state is deliberately outside React so
+ * it survives a remount, which also means a jsdom test has no other way to start from a known
+ * state. Production code never calls this.
  */
-export function __resetModelsScreenMemoryForTests(seed?: {
-  job?: DownloadJob | null
-  jobName?: string | null
-}): void {
-  rememberedJob = seed?.job ?? null
-  rememberedJobName =
-    seed?.job && seed.jobName ? { jobId: seed.job.jobId, name: seed.jobName } : null
+export function __resetModelsScreenMemoryForTests(): void {
+  rememberedJob = null
+  rememberedJobName = null
   dismissedJobId = null
   rememberedEngineJob = null
   setActiveVerify(null)

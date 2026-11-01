@@ -26,7 +26,7 @@ import { en, type MessageKey } from '../../src/shared/i18n'
 //
 // `preview/` is INCLUDED in the scan (not excluded): it lives under `src/renderer` and drives
 // the real screens/components through the same translators (e.g. the `models-download-failed`
-// case seeds a real failed job and renders the real `ModelsScreen`), so a key exercised only
+// case hands a real failed job to the real `ModelsScreen`), so a key exercised only
 // through a preview override is still real production code reading it. Including it can only
 // ADD "used" evidence — it never manufactures a false negative — so there is no safety cost to
 // keeping it in scope. The two i18n catalog files themselves are excluded: they declare every
