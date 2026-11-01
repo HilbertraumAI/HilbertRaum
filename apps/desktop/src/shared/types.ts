@@ -2785,7 +2785,8 @@ export interface PlacementDevice {
  * How this computer's memory is organised for a model (benchmark.md "Your model"):
  * 'discrete' = a usable graphics card with its own memory (the budget is VRAM),
  * 'unified' = Apple Silicon, one pool shared by CPU and GPU (the budget is what Metal lets
- * the GPU take), 'cpu' = no usable graphics card (the budget is RAM).
+ * the GPU take), 'cpu' = no usable graphics card (the budget is RAM). Not whether a start uses
+ * the GPU: forced onto the processor, Apple Silicon stays 'unified' (`nextStartUsesGpu`, #746).
  */
 export type MemoryClass = 'discrete' | 'unified' | 'cpu'
 

@@ -138,8 +138,7 @@ export interface NextStartMemory {
    * a small card under 'auto', so an observed GPU start there is evidence the row keeps
    * (`buildPlacement`'s configuration match reads this, PR #303 P4/P5 over a second read of
    * the flags). On Apple Silicon it stands beside the `unified` class (#746): the memory is one
-   * pool either way, so a reader asking "does the next start use the GPU?" reads this flag,
-   * never the class alone.
+   * pool either way. "Does the next start use the GPU?" is `nextStartUsesGpu`, never the class.
    */
   cpuForced: boolean
 }
@@ -175,6 +174,14 @@ export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
   if (cpuForced) return { memoryClass: 'cpu', device: null, cpuForced: true }
   const device = selectBudgetDevice(devices)
   return device ? { memoryClass: 'discrete', device, cpuForced: false } : { memoryClass: 'cpu', device: null, cpuForced: false }
+}
+
+/**
+ * Will the next start use a graphics device? The class alone does not say: it describes how the
+ * memory is organised, and Apple Silicon stays `unified` when the flags force the processor (#746).
+ */
+export function nextStartUsesGpu(next: NextStartMemory): boolean {
+  return next.memoryClass !== 'cpu' && !next.cpuForced
 }
 
 /**
@@ -288,9 +295,9 @@ export interface PlacementVerdictInput {
  * budget with `ESTIMATE_HEADROOM` (unchanged); a model larger than that is 'too_large'.
  * `needMb` on an estimate is always the weights alone (the copy says the cache is measured).
  *
- * `memoryClass` is the EFFECTIVE class of the NEXT start (`nextStartMemory`: already `cpu` when
- * the configuration forces the processor — `gpuMode: 'off'`, `gpuAutoDisabled` — and passed as
- * `cpu` by `buildPlacement` when the matching observed start landed on the CPU backend), so the
+ * `memoryClass` is the EFFECTIVE class of the NEXT start (`nextStartMemory`'s, passed as `cpu` by
+ * `buildPlacement` when the configuration forces the processor — `gpuMode: 'off'`,
+ * `gpuAutoDisabled` — or the matching observed start landed on the CPU backend), so the
  * estimate never promises the card a start would not use (PR #303 audit DR1). `gpuName` names
  * the budget device so the observed free/working figures are attributed to it (DR2).
  */

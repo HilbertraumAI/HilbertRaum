@@ -22,9 +22,10 @@ IPC: `runBenchmark()` (`benchmark:run`) in
 2. **GPU** ([`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
    the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
    (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws; a clean
-   run that lists nothing answers `[]`, and anything that is not an answer — a probe that hits the
-   bound, #380, is refused by the OS, #530, crashes or cannot be spawned, #653 — answers `null`
-   (unknown), neither cached nor persisted) and
+   run that lists nothing answers `[]`, as does a binary that fails its integrity check, and
+   anything that is not an answer — a probe that hits the bound, #380, is refused by the OS loader,
+   #530, crashes or cannot be spawned, #653 — answers `null` (unknown), neither cached nor
+   persisted) and
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful, totalMb,
    budgetMb, memoryClass }` — `name`, `totalMb` and `budgetMb` describe ONE device, the BUDGET
    device `nextStartMemory` selects for the next start (the largest usable card by the
@@ -47,8 +48,8 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    refresh that could not see it, so the Models badge, the benchmark and the tile agree; an empty
    stamped result re-stamps no old device, so #303's "never re-stamp old devices as local" holds
    either way, and the foreign-machine case is covered by the stamp). **The one exception (#380,
-   2026-09-08; widened by #530 and #653):** a probe that gave no answer (timed out, refused,
-   crashed, not spawned) is the absence of one, so it writes
+   2026-09-08; widened by #530 and #653):** a probe that gave no answer (timed out, refused by
+   the OS loader, crashed, not spawned) is the absence of one, so it writes
    nothing and pushes nothing — the stored stamped probe stands until the next start, the next
    check or "Try GPU again" — and the summary injected into that run is built from what this
    machine already has on record (`eligibleDevicesFor`), so decision 6's real requirement (the ★,
@@ -783,9 +784,8 @@ is `cpu` for the next start (`nextStartMemory` says so as `cpuForced`), the budg
 lists the card, "Try GPU again" re-arms it). **Apple Silicon keeps its class (#746):** the flags
 stop the ladder there too, but the memory is one pool either way, so the class stays `unified` (the
 tile, the RAM pick) while `cpuForced` is set and `device` is null; `buildPlacement` and the speed
-sample read `cpuForced` beside the class, so nothing takes `unified` for "the next start uses the
-GPU". Pinned with the platform set to darwin/arm64 (`performance-gpu`, `picker-seams`); no real Mac
-has run it (#332). The verdict is asked for that EFFECTIVE class — `cpu` when the configuration
+sample ask `nextStartUsesGpu`, never the class. Pinned with the platform set to darwin/arm64
+(`performance-gpu`, `picker-seams`); no real Mac has run it (#332). The verdict is asked for that EFFECTIVE class — `cpu` when the configuration
 forces the processor, and when the matching observed start landed on the CPU backend — so the
 estimate reads "Will run on the processor from RAM", never "Should fit in graphics memory" for a
 card the start would not use; the resident rows follow the same class (chat and translation say

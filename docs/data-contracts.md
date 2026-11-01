@@ -901,8 +901,11 @@ head's own weights + KV.
   `current` gets that device folded in (name and memory together) only for the current machine
   and only when it predates `gpuVramMb`; `placement.memoryClass` and `placement.vramMb` are the
   NEXT start's (`cpu` / null when the flags force the processor, whatever the probe lists — the
-  same answer `pickerMemoryFor` gives the Models ★); `ResidentModelRow.device` is where a row
-  runs under the CURRENT configuration (`'cpu'` for chat/translation under a `cpu` class — no
+  same answer `pickerMemoryFor` gives the Models ★; on Apple Silicon the class stays `unified`
+  there and only `vramMb` goes null, #746, so the class never says a start uses the GPU);
+  `ResidentModelRow.device` is where a row
+  runs under the CURRENT configuration (`'cpu'` for chat/translation when the next start uses no
+  GPU, `nextStartUsesGpu` — no
   usable card, GPU off / auto-disabled — or when the matching observed start was on the CPU
   backend, or the translation sidecar's posture is `--device none`; **Wave 8 ruling (a)**: for
   the reranker role, `'gpu'`/`'cpu'` follows its own headroom gate against the RUNTIME's
@@ -918,8 +921,8 @@ head's own weights + KV.
   never the reranker — it gates `perf.models.cardBoth`'s pair-naming sentence so that sentence
   stays true when the contending pair `bothOnCard` reports is chat+reranker or
   translation+reranker instead of chat+translation.
-  The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the observed
-  start was CPU). Two `placement` fields were added by
+  The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the flags force
+  the processor or the observed start was CPU). Two `placement` fields were added by
   the PR #303 audit P4: **`recommendedContextTokens`** (`number | null`) is the context the
   RECOMMENDED model would launch with — the live `recommendation.modelId`, the model the screen's
   CTA starts, never the id saved with the check (PR #308 decision 8 on top of #303 M5) — resolved

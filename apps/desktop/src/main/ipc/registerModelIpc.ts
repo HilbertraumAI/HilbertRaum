@@ -34,7 +34,7 @@ import {
   type PickerSpeedSignal
 } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
-import { nextStartMemoryFor, type NextStartMemory } from '../services/performance'
+import { nextStartMemoryFor, nextStartUsesGpu, type NextStartMemory } from '../services/performance'
 import { notifyPerformanceChanged } from './performance-notify'
 import {
   rerankerPostureInputsChanged,
@@ -122,8 +122,7 @@ function sampleCountsForNextStart(identity: SpeedSampleIdentity, next: NextStart
   // The path the sample was measured on: the card only when the ladder actually landed there
   // under a card class; a CPU rung (or an unknown backend) under any class is the processor.
   const measuredOnCard = identity.backend === 'gpu' && identity.memoryClass !== 'cpu'
-  const nextOnCard = next.memoryClass !== 'cpu' && !next.cpuForced // Apple Silicon keeps its class (#746)
-  if (!nextOnCard) return true // the processor is never faster than what was measured
+  if (!nextStartUsesGpu(next)) return true // the processor is never faster than what was measured
   if (!measuredOnCard) return false // a processor crawl says nothing about the card
   return (identity.deviceName ?? null) === (next.device?.name ?? null)
 }
