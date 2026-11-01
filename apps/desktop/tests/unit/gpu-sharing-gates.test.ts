@@ -176,6 +176,8 @@ describe('cardIsShared — where the chat-first hook yields (#473 ruling 2)', ()
     ['an integrated GPU only (nothing on a card to give back)', false, withProbe(UHD_770)],
     ['no stored probe', false, { ...DEFAULT_SETTINGS, gpuMode: 'auto' }],
     ['the GPU switched off', false, { ...withProbe(RTX_3080_TI), gpuMode: 'off' }],
+    ['the GPU auto-disabled after a crash', false, { ...withProbe(RTX_3080_TI), gpuAutoDisabled: true }],
+    ['a card stamped for another computer', false, { ...withProbe(RTX_3080_TI), gpuProbe: { devices: [RTX_3080_TI], probedAt: new Date().toISOString(), machineKey: 'linux|x64|Some Other CPU|32|64' } }],
     ['a locked workspace', false, null]
   ])('%s → %s', (_label, expected, settings) => {
     expect(cardIsShared(settings)).toBe(expected)

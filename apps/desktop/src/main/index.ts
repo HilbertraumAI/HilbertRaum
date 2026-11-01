@@ -18,7 +18,7 @@ import {
   createWindowOpenPolicy,
   disableSpellCheckerDownloads
 } from './window-security'
-import { getSettings, updateSettings } from './services/settings'
+import { getSettings } from './services/settings'
 import { effectiveContextWindow } from './services/chat'
 import { loadPolicy, buildPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
@@ -88,6 +88,7 @@ import {
   createSpeculativeCrashAutoFallback,
   createCpuCrashAutoRestart
 } from './services/runtime/factory'
+import { createGpuFailureRecorder } from './services/runtime/gpu-failure'
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
@@ -307,21 +308,7 @@ function initBackend(): void {
   // the crash path additionally restarts the same model once at CPU and broadcasts the
   // friendly compatibility-mode notice to the renderer.
   const gpuProbe = createCachedGpuProbe()
-  const persistGpuFailure = (reason: string): void => {
-    try {
-      updateSettings(workspace.requireDb(), {
-        gpuAutoDisabled: true,
-        gpuLastError: `${new Date().toISOString()} — ${reason}`.slice(0, 2000)
-      })
-    } catch (err) {
-      log.warn('Could not persist GPU fallback state', { error: String(err) })
-    }
-    log.warn('GPU start/run failed — continuing in compatibility (CPU) mode', { reason })
-    // Audit: the reason is sidecar stderr/health output, never user content.
-    audit('runtime_fallback', 'Switched to compatibility (CPU) mode', {
-      reason: reason.slice(0, 500)
-    })
-  }
+  const persistGpuFailure = createGpuFailureRecorder({ requireDb: () => workspace.requireDb(), audit })
   // `target` (#530): where the notice's button should take the user — omitted, it opens
   // Diagnostics ("Details"); 'models' opens the AI Model screen, where the engine banner says what to do.
   const notifyRenderer = (message: string, target?: 'models'): void => {

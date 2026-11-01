@@ -61,6 +61,15 @@ describe('Transcript speed line (#290)', () => {
     expect(screen.getAllByText(/to first token/)).toHaveLength(1)
   })
 
+  it('the line sits under the answer it measures, not a neighbour', () => {
+    const messages = [assistantMsg('a1', 'First answer.'), assistantMsg('a2', 'Second answer.'), assistantMsg('a3', 'Third answer.')]
+    renderTranscript({ messages, answerSpeeds: new Map([['a2', speed]]) }, 'en')
+    const block = screen.getByText('42 tok/s · 1.8 s to first token · 615 tokens').closest<HTMLElement>('.msg-block')
+    expect(block).toHaveTextContent('Second answer.')
+    expect(block).not.toHaveTextContent('First answer.')
+    expect(block).not.toHaveTextContent('Third answer.')
+  })
+
   it('shows the line in German', () => {
     renderTranscript({ messages: [assistantMsg('a2', 'An answer.')], answerSpeeds: new Map([['a2', speed]]) }, 'de')
     expect(screen.getByText('42 Token/s · 1,8 s bis zum ersten Token · 615 Token')).toBeInTheDocument()

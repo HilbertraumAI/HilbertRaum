@@ -99,6 +99,7 @@ const GTX1650: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1650', tot
 // A hybrid laptop as the pinned b9849 Vulkan build lists it (audit R6): the iGPU first.
 const ARL: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }
 const RTX5060: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 5060', totalMb: 8151, freeMb: 7573 }
+const FOREIGN_KEY = 'linux|x64|Some Other CPU|32|64'
 
 // Pinned explicitly, not inherited from the host: the class decision reads process.platform /
 // process.arch, and the fake binary below is named for the same pinned platform.
@@ -422,6 +423,8 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     ['an 8 GiB probe', CARD8_PICK, { probeReturns: [], persisted: [CARD8] }, 'discrete', CARD8, true],
     ['no probe', RAM_PICK, { probeReturns: [], persisted: [] }, 'cpu', null, true],
     ['GPU off with a card present', RAM_PICK, { probeReturns: [], persisted: [CARD8], settings: { gpuMode: 'off' } }, 'cpu', null, true],
+    // The drive moved: another computer's card supplies nothing to the ★ either (G3).
+    ['a card stamped for another computer', RAM_PICK, { probeReturns: [], settings: { gpuProbe: { devices: [CARD8], probedAt: STALE_AT, machineKey: FOREIGN_KEY } } }, 'cpu', null, true],
     // No saved result at all: the persisted probe alone drives both surfaces.
     ['a hybrid laptop, Intel first', RTX5060_PICK, { probeReturns: [], persisted: [ARL, RTX5060] }, 'discrete', RTX5060, false]
   ])('both surfaces agree with %s: the listModels ★ === snapshot.recommendation.modelId (%s)', async (_label, expected, opts, basis, card, saved) => {
@@ -695,6 +698,14 @@ describe('picker seams: the speed sample carries the identity it was measured un
     expect(await both(f)).toBe(CARD8_PICK)
   })
 
+  it('the next start is read with THIS machine’s key: a card stamped here is the card, so a processor crawl stays out of it', async () => {
+    // The row above can't tell: its probe is unstamped, eligible under any key. Read with another
+    // machine's key this one has no card, the next start is the processor, and the crawl would count.
+    const stamped = { devices: [CARD8], probedAt: STALE_AT, machineKey: hereKey() }
+    const f = savedCrawl(fixture({ probeReturns: [], settings: { gpuProbe: stamped } }), { identity: { ...ON_CARD8, backend: 'cpu' } })
+    expect(await both(f)).toBe(CARD8_PICK)
+  })
+
   it('a crawl measured on the processor with no card counts for a processor start, and for nothing faster', async () => {
     const onCpu = { memoryClass: 'cpu' as const, deviceName: null, contextTokens: 8192, backend: 'cpu' as const }
     // No card now either: the processor is not faster than the processor → the RAM pick steps.
@@ -722,5 +733,25 @@ describe('picker seams: the speed sample carries the identity it was measured un
   it('a different context size in Settings: still a signal (the context is recorded, not matched)', async () => {
     const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { contextTokensOverride: 32_768 } }))
     expect(await both(f)).toBe(CARD8_STEP)
+  })
+
+  // #746: the class stays `unified` under the GPU flags, so "next on the card" has to read them.
+  describe('on Apple Silicon', () => {
+    pinPlatform('darwin', 'arm64')
+    const M2: GpuDevice = { id: 'Metal0', name: 'Apple M2 Pro', totalMb: 21_845, freeMb: 20_000 }
+    const ON_PROCESSOR = { memoryClass: 'unified' as const, deviceName: null, contextTokens: 8192, backend: 'cpu' as const }
+
+    it('GPU on: a processor crawl says nothing about Metal (the control)', async () => {
+      const f = savedCrawl(fixture({ probeReturns: [], persisted: [M2] }), { identity: ON_PROCESSOR })
+      expect(await both(f)).toBe(RAM_PICK)
+    })
+
+    it.each<[string, Partial<AppSettings>]>([
+      ['the GPU switched off', { gpuMode: 'off' }],
+      ['auto-disabled after a crash', { gpuAutoDisabled: true }]
+    ])('%s: the next start runs on the processor too, so the same crawl counts and the pick steps down', async (_label, settings) => {
+      const f = savedCrawl(fixture({ probeReturns: [], persisted: [M2], settings }), { identity: ON_PROCESSOR })
+      expect(await both(f)).toBe(Q4)
+    })
   })
 })

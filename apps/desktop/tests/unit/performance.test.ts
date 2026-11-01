@@ -170,7 +170,11 @@ describe('nextStartMemory', () => {
     const m2 = { id: 'Metal0', name: 'Apple M2 Pro', totalMb: 21845, freeMb: 20000 }
     expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [m2] })).toEqual({ memoryClass: 'unified', device: m2, cpuForced: false })
     expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [] })).toEqual({ memoryClass: 'unified', device: null, cpuForced: false })
-    expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [m2], gpuMode: 'off' }).memoryClass).toBe('unified')
+    // #746: the ladder skips every GPU rung on these flags on a Mac too. The memory stays one pool,
+    // but the next start uses no Metal device, and it says so like every other platform.
+    const forced = { memoryClass: 'unified', device: null, cpuForced: true }
+    expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [m2], gpuMode: 'off' })).toEqual(forced)
+    expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'arm64', devices: [m2], gpuAutoDisabled: true })).toEqual(forced)
     // An Intel Mac is not unified memory.
     expect(nextStartMemory({ ...win, platform: 'darwin', arch: 'x64', devices: [] }).memoryClass).toBe('cpu')
   })

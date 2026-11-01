@@ -1044,7 +1044,8 @@ function buildPlacement(
   const embeddingsManifest = settings.activeEmbeddingModelId
     ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
     : byRole('embeddings')
-  const cardEligible = memoryClass !== 'cpu'
+  // `cpuForced` beside the class: forced onto the processor, Apple Silicon keeps `unified` (#746).
+  const cardEligible = memoryClass !== 'cpu' && !memory.cpuForced
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
   // #671: a start whose own load log put no buffer on a graphics device ran on the processor, and
@@ -1124,13 +1125,13 @@ function buildPlacement(
     }
   ]
   const rows = allRows.filter((r) => r.role === 'chat' || r.modelId != null)
-  // The verdict is asked for the EFFECTIVE class: the next start's (already `cpu` when the
-  // configuration forces the processor — the RAM estimate, "Will run on the processor", never
-  // "Should fit in graphics memory" for a card the start would not use, DR1), and `cpu` for a
-  // matching start OBSERVED on the CPU backend (the ladder fell through under 'auto'), which is
-  // judged against RAM too, as its row says. The profile bump's gate (`gpuUsefulForProfile`, all
-  // devices) is unchanged (G4).
-  const effectiveClass: MemoryClass = observed?.backend === 'cpu' ? 'cpu' : memoryClass
+  // The verdict is asked for the EFFECTIVE class: the next start's, and `cpu` when the
+  // configuration forces the processor (the RAM estimate, "Will run on the processor", never
+  // "Should fit in graphics memory" for a card the start would not use, DR1; Apple Silicon keeps
+  // its class there, #746) or for a matching start OBSERVED on the CPU backend (the ladder fell
+  // through under 'auto'), which is judged against RAM too, as its row says. The profile bump's
+  // gate (`gpuUsefulForProfile`, all devices) is unchanged (G4).
+  const effectiveClass: MemoryClass = memory.cpuForced || observed?.backend === 'cpu' ? 'cpu' : memoryClass
   const verdict = placementVerdict({
     memoryClass: effectiveClass,
     ramMb,

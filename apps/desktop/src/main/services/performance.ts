@@ -127,8 +127,8 @@ export interface NextStartMemory {
   memoryClass: MemoryClass
   /**
    * The budget device (`selectBudgetDevice`) on a `discrete` machine; the Metal pool's device
-   * (the largest one listed) on `unified`; null on `cpu` — including when a card IS present
-   * but the next start will not use it (GPU off, auto-disabled).
+   * (the largest one listed) on `unified`; null on `cpu`, and null whenever a device IS present
+   * but the next start will not use it (GPU off, auto-disabled), on `unified` too (#746).
    */
   device: GpuDevice | null
   /**
@@ -137,7 +137,9 @@ export interface NextStartMemory {
    * `cpu` class that merely has no usable card — the ladder may still put layers on an iGPU or
    * a small card under 'auto', so an observed GPU start there is evidence the row keeps
    * (`buildPlacement`'s configuration match reads this, PR #303 P4/P5 over a second read of
-   * the flags).
+   * the flags). On Apple Silicon it stands beside the `unified` class (#746): the memory is one
+   * pool either way, so a reader asking "does the next start use the GPU?" reads this flag,
+   * never the class alone.
    */
   cpuForced: boolean
 }
@@ -145,9 +147,10 @@ export interface NextStartMemory {
 /**
  * How this computer's memory is organised for the NEXT model start (PR #308 audit, decisions
  * 6 and 9): Apple Silicon (darwin + arm64) is one unified pool; with the GPU switched off in
- * Settings or auto-disabled after a crash the ladder skips every GPU rung, so the next start
- * runs from RAM whatever the probe lists (class `cpu`, no device); otherwise a usable discrete
- * card — the budget device — has its own memory, and everything else runs from RAM.
+ * Settings or auto-disabled after a crash the ladder skips every GPU rung, on any platform, so
+ * the next start runs from RAM whatever the probe lists (no device, and class `cpu` everywhere
+ * but on that pool, #746); otherwise a usable discrete card — the budget device — has its own
+ * memory, and everything else runs from RAM.
  *
  * This is the ONE place class and device are decided; `probeAndPersistGpu`, `listModels`,
  * `buildPlacement` and the graphics tile all read it, so the Performance screen and the Models
@@ -158,7 +161,9 @@ export interface NextStartMemory {
  */
 export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
   const { platform, arch, devices, gpuMode, gpuAutoDisabled } = input
+  const cpuForced = gpuMode === 'off' || gpuAutoDisabled
   if (platform === 'darwin' && arch === 'arm64') {
+    if (cpuForced) return { memoryClass: 'unified', device: null, cpuForced: true }
     // One Metal device is the pool itself; the gate below (a "not integrated" name check)
     // does not apply to it, so name the largest device listed, without the gate.
     let pool: GpuDevice | null = null
@@ -167,7 +172,7 @@ export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
     }
     return { memoryClass: 'unified', device: pool, cpuForced: false }
   }
-  if (gpuMode === 'off' || gpuAutoDisabled) return { memoryClass: 'cpu', device: null, cpuForced: true }
+  if (cpuForced) return { memoryClass: 'cpu', device: null, cpuForced: true }
   const device = selectBudgetDevice(devices)
   return device ? { memoryClass: 'discrete', device, cpuForced: false } : { memoryClass: 'cpu', device: null, cpuForced: false }
 }

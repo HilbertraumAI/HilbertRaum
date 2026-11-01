@@ -479,6 +479,68 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
 // sidecar arms the same latch. The latch is session-only and never writes the persisted
 // `gpuAutoDisabled` (chat's ladder owns that) — a translation-only GPU fault must not force chat
 // into compatibility mode.
+// PR #303 P3: what moves the Performance screen's "loaded now" pill. `initBackend` subscribes
+// (`answer-speed-wiring.test.ts`); that the push reaches a window is performance-notify's.
+describe('TranslationRuntime — residency transitions', () => {
+  /** A translated-once runtime, and what a listener read of `live` at each flip. */
+  async function residentRuntime(spawn: ReturnType<typeof fakeSpawn>['spawn']) {
+    const { clock, state } = fakeIdleClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl, idleClock: clock })
+    const live: Array<boolean | undefined> = []
+    rt.onResidencyChange(() => live.push(rt.deviceStatus()?.live))
+    await rt.translate(translateOpts)
+    return { rt, live, idle: state }
+  }
+
+  it('a cold start reads live and the idle teardown reads gone; a stop with nothing resident says nothing', async () => {
+    const { rt, live, idle } = await residentRuntime(fakeSpawn().spawn)
+    expect(live).toEqual([true])
+    idle.fire!()
+    expect(live).toEqual([true, false])
+    await rt.stop()
+    expect(live).toEqual([true, false])
+  })
+
+  it.each(['stop', 'suspend'] as const)('%s() reads gone before the kill is awaited', async (method) => {
+    const { held, spawn } = spawnHoldingFirst()
+    const { rt, live } = await residentRuntime(spawn)
+    let settled = false
+    const stopping = rt[method]().then(() => {
+      settled = true
+    })
+    await until(() => live.length === 2, 'the flip')
+    expect(live).toEqual([true, false])
+    expect(settled).toBe(false)
+    held.releaseExit()
+    await stopping
+  })
+
+  it('an unexpected exit reads gone', async () => {
+    const { spawn, children } = fakeSpawn()
+    const { rt, live } = await residentRuntime(spawn)
+    children[0].crash(134)
+    await until(() => live.length === 2, 'the flip')
+    expect(live).toEqual([true, false])
+    await rt.stop()
+  })
+
+  it('a throwing listener never breaks the start, and an unsubscribed one hears nothing more', async () => {
+    const { clock, state } = fakeIdleClock()
+    const rt = new TranslationRuntime({ ...base, spawn: fakeSpawn().spawn, fetchImpl: translationFetch().fetchImpl, idleClock: clock })
+    rt.onResidencyChange(() => {
+      throw new Error('listener exploded')
+    })
+    const heard = vi.fn()
+    const off = rt.onResidencyChange(heard)
+    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
+    expect(heard).toHaveBeenCalledTimes(1)
+    off()
+    state.fire!()
+    expect(heard).toHaveBeenCalledTimes(1)
+    await rt.stop()
+  })
+})
+
 describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
   const deviceOf = (args: string[]): string => (args.join(' ').includes('--device none') ? 'cpu' : 'auto')
 

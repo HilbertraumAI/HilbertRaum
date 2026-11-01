@@ -7,6 +7,7 @@ import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import {
   DEFAULT_SETTINGS,
+  type BenchmarkProgressStep,
   type BenchmarkResult,
   type ModelInfo,
   type PerformanceSnapshot,
@@ -14,6 +15,7 @@ import {
 } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/renderer/lib/format'
+import { effectiveReadSample } from '../helpers/benchmark-records'
 import { deferred } from '../helpers/deferred'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import {
@@ -58,6 +60,9 @@ const observedAnswer = {
   lastChecksum: null
 }
 const noObservations = { lastAnswer: null, lastModelLoad: null, lastChecksum: null }
+
+/** The always-mounted live region of #437. */
+const stepList = (): HTMLElement | null => document.querySelector('ul.perf-steps')
 
 describe('PerformanceScreen: the check as an answer', () => {
   it('renders the verdict, the four tiles with ratings, and the context the pick assumes', async () => {
@@ -285,6 +290,47 @@ describe('PerformanceScreen: the check as an answer', () => {
     renderPerformanceScreen()
     expect(await screen.findByText(/measured on a different computer/)).toBeInTheDocument()
   })
+
+  it.each([
+    [4.9, 'Slow'],
+    [5, 'Good']
+  ])('a speed of %s tokens / s rates "%s" on the tile: slow is strictly under 5', async (tps, rating) => {
+    install(snapshot({ current: result({ tokensPerSecond: tps }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Speed')
+    expect(within(tile('Speed')).getByText(String(tps))).toBeInTheDocument()
+    expect(within(tile('Speed')).getByText(rating)).toBeInTheDocument()
+  })
+
+  it.each([
+    [99, 'Slow', 'Model starts from this drive are slow.'],
+    [100, 'Fast', 'Model starts from this drive are fast.']
+  ])('a read of %s MB/s rates "%s" on the Drive tile, and the verdict says so: slow is strictly under 100', async (mbps, rating, sentence) => {
+    install(snapshot({ current: result({ effectiveRead: effectiveReadSample({ mbps }) }) }))
+    renderPerformanceScreen()
+    expect(await screen.findByText(new RegExp(sentence.replace('.', '\\.')))).toBeInTheDocument()
+    expect(within(tile('Drive')).getByText(String(mbps))).toBeInTheDocument()
+    expect(within(tile('Drive')).getByText(rating)).toBeInTheDocument()
+  })
+
+  it('a Drive figure from a checksum sample says it came from a file check, not a model load', async () => {
+    const at = '2026-09-03T12:00:00'
+    install(snapshot({ current: result({ effectiveRead: effectiveReadSample({ source: 'checksum', bytes: 5_800_000_000, at }) }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Speed')
+    expect(within(tile('Drive')).getByText(`From a file check on ${new Date(at).toLocaleDateString('en')}, 5.8 GB read`)).toBeInTheDocument()
+  })
+
+  it('a full file check fills its own observed row, named a check and marked once per model', async () => {
+    const at = '2026-09-03T12:00:00'
+    const lastChecksum = effectiveReadSample({ source: 'checksum', ms: 40_000, bytes: 5_800_000_000, modelId: 'qwen3.5-9b-ud-q4kxl', at })
+    install(snapshot({ observed: { ...noObservations, lastChecksum } }))
+    renderPerformanceScreen()
+    expect(await screen.findByText('File check: 40.0 s')).toBeInTheDocument()
+    expect(await screen.findByText(`Full file check of Qwen3.5 9B (UD-Q4_K_XL) on ${new Date(at).toLocaleDateString('en')}, 5.8 GB read`)).toBeInTheDocument()
+    expect(screen.getByText('Once per model')).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing observed yet this session/)).not.toBeInTheDocument()
+  })
 })
 
 describe('PerformanceScreen: the Your-model row', () => {
@@ -374,6 +420,40 @@ describe('PerformanceScreen: the Your-model row', () => {
     renderPerformanceScreen()
     expect(await screen.findByText(/Graphics memory holds 16\.0 GB: 30 of 41 layers on the GPU, about 1\.9 GB runs from RAM\. Answers slower\./)).toBeInTheDocument()
     expect(screen.getByText('Partly on GPU')).toBeInTheDocument()
+  })
+
+  it('an estimated spill states the budget and the spill, and claims no layer split', async () => {
+    install(snapshot({ placement: placement({
+      verdict: { kind: 'partial', needMb: 10_254, estimated: true, budgetMb: 8192, freeAtStartMb: null, workingMb: null, spillMb: 1843, gpuLayers: null, totalLayers: null }
+    }) }))
+    renderPerformanceScreen()
+    expect(await screen.findByText(/Graphics memory holds 8\.0 GB: about 1\.8 GB will run from RAM\. Answers slower\./)).toBeInTheDocument()
+    expect(screen.queryByText(/layers on the GPU/)).not.toBeInTheDocument()
+  })
+
+  it('a start observed on the processor says it runs there, not that it will', async () => {
+    install(snapshot({ placement: placement({
+      memoryClass: 'cpu',
+      vramMb: null,
+      verdict: { kind: 'cpu', needMb: null, estimated: false, budgetMb: 16_077, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+    }) }))
+    renderPerformanceScreen()
+    expect(await screen.findByText(/Runs on the processor from RAM \(15\.7 GB\)\./)).toBeInTheDocument()
+    expect(screen.queryByText(/Will run on the processor/)).not.toBeInTheDocument()
+    expect(screen.getByText('On processor')).toBeInTheDocument()
+  })
+
+  // CARD_FREE_SLACK_MB is 1,536: on this 24,822 MiB card the copy changes hands at 23,286 MiB free.
+  it.each([
+    ['exactly the slack in use: the card counts as free', 23_286, /The card was free \(22\.7 of 24\.2 GB\)/],
+    ['one MiB more in use: what else held the card is the reason', 23_285, /only 22\.7 GB of the card’s 24\.2 GB was free/]
+  ])('the partial copy at the free-at-start boundary, %s', async (_why, freeAtStartMb, copy) => {
+    install(snapshot({ placement: placement({
+      observed: { ...OBSERVED_FULL, gpuLayers: 62, totalLayers: 66 },
+      verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb, workingMb: 2860, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
+    }) }))
+    renderPerformanceScreen()
+    expect(await screen.findByText(copy)).toBeInTheDocument()
   })
 
   it('explains a spill on a card that would hold the model: what was free at start, plus the margin', async () => {
@@ -617,6 +697,41 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.getByText('Too much at once')).toBeInTheDocument()
     expect(screen.queryByText(/GB RAM\./)).not.toBeInTheDocument()
   })
+
+  it('#746: a probed Metal device prints no graphics-card line: the pool is counted once, by the memory line (#332)', async () => {
+    // `vramMb` carries the Metal pool's device. With a chat row on 'gpu' and a reranker resident
+    // there, both card gates would open on anything but `discrete`.
+    const rows = placement().models.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const, loaded: true } : r))
+    install(snapshot({ placement: placement({
+      memoryClass: 'unified',
+      vramMb: 21_845,
+      ramMb: 32_768,
+      models: rows,
+      verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_576, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
+    }) }))
+    renderPerformanceScreen()
+    expect(await screen.findByText(/Everything loaded at once needs about 17\.0 GB of the 24\.0 GB of unified memory available to models\./)).toBeInTheDocument()
+    expect(screen.queryByText(/Graphics card:/)).not.toBeInTheDocument()
+  })
+
+  it('a role with no model says so without a loaded pill, one with no size names the model alone, a live split is stated', async () => {
+    const rows = placement().models.map((r) => {
+      if (r.role === 'vision') return { ...r, modelId: null, sizeOnDiskGb: null }
+      if (r.role === 'reranker') return { ...r, sizeOnDiskGb: null }
+      if (r.role === 'translation') return { ...r, loaded: true, gpuLayers: 20, totalLayers: 49 }
+      return r
+    })
+    install(snapshot({ placement: placement({ models: rows }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const images = otherRow(/^Images$/)
+    expect(within(images).getByText(/No model installed for this\./)).toBeInTheDocument()
+    expect(within(images).queryByText(/loaded/)).not.toBeInTheDocument()
+    const ranking = otherRow(/^Document search \(ranking\)$/)
+    expect(within(ranking).getByText(/bge-reranker-v2-m3-f16/)).toBeInTheDocument()
+    expect(within(ranking).queryByText(/ GB/)).not.toBeInTheDocument()
+    expect(within(otherRow(/^Translation$/)).getByText(/20 of 49 layers on the card/)).toBeInTheDocument()
+  })
 })
 
 describe('PerformanceScreen: actions', () => {
@@ -647,6 +762,20 @@ describe('PerformanceScreen: actions', () => {
     await userEvent.click(start)
     await waitFor(() => expect(api.useModel).toHaveBeenCalledWith('qwen3.5-9b-ud-q4kxl'))
     await waitFor(() => expect(api.runBenchmark).toHaveBeenCalledTimes(1))
+  })
+
+  it('a model that will not start ends "Start … and measure" with the banner and measures nothing', async () => {
+    const { api } = install(snapshot({ current: result({ tokensPerSecond: null, measuredModelId: null, speedBasis: null }) }), {
+      getRuntimeStatus: vi.fn(async () => STOPPED_STATUS),
+      useModel: vi.fn(async () => {
+        throw new Error('Error: The model could not start')
+      })
+    })
+    renderPerformanceScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Start Qwen3.5 9B (UD-Q4_K_XL) and measure' }))
+    expect(await screen.findByText(/Check failed: .*could not start/)).toBeInTheDocument()
+    expect(api.runBenchmark).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled()
   })
 
   it('"Start … and measure" targets the LIVE recommendation, never the id saved with the check, and labels the saved one', async () => {
@@ -714,6 +843,23 @@ describe('PerformanceScreen: actions', () => {
     expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
   })
 
+  it.each<[string, (text: string) => Promise<boolean>, string]>([
+    ['the clipboard took it', async () => true, 'Copied to clipboard'],
+    ['the clipboard refused it', async () => false, 'Could not copy to the clipboard'],
+    [
+      'the call itself rejected',
+      async () => {
+        throw new Error('clipboard unavailable')
+      },
+      'Could not copy to the clipboard'
+    ]
+  ])('"Copy report" says how it went: %s', async (_why, copy, toast) => {
+    install(snapshot(), { copyToClipboard: vi.fn(copy) })
+    renderPerformanceScreen()
+    await copiedReport()
+    expect(await screen.findByText(toast)).toBeInTheDocument()
+  })
+
   it('surfaces a failed run as a calm banner and returns to the tiles', async () => {
     install(snapshot(), { runBenchmark: vi.fn(async () => { throw new Error('Error: Model is busy right now') }) })
     renderPerformanceScreen()
@@ -765,6 +911,22 @@ describe('PerformanceScreen: focus survives the run', () => {
     })
     const back = await screen.findByRole('button', { name: 'Check again' })
     expect(document.activeElement).toBe(back)
+  })
+
+  it('returns focus after a run that failed: the banner must not strand the keyboard on <body>', async () => {
+    const run = deferred<BenchmarkResult>()
+    const { api } = install(snapshot(), { runBenchmark: vi.fn(() => run.promise) })
+    renderPerformanceScreen()
+    const button = await screen.findByRole('button', { name: 'Check again' })
+    button.focus()
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(api.runBenchmark).toHaveBeenCalledTimes(1))
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => {
+      run.reject(new Error('Error: Model is busy right now'))
+    })
+    expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Check again' }))
   })
 
   it('a run this window did NOT start never steals focus', async () => {
@@ -1170,6 +1332,12 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
     expect(screen.getByText('Balanced')).toBeInTheDocument()
   })
 
+  it('#746: the same record still copies: no warnings list is no reason to lose the report', async () => {
+    install(snapshot({ current: { profile: 'BALANCED', ranAt: '' } as unknown as BenchmarkResult, otherMachines: [] }))
+    renderPerformanceScreen()
+    expect(await copiedReport()).toContain('BALANCED')
+  })
+
   it('M5 residual: the context in the report is the snapshot’s, not a recomputed catalog value', async () => {
     // The catalog says 8,192 for this model; the snapshot says what the runtime would ACTUALLY
     // launch with (a manifest stating no window falls back to the settings default). The screen
@@ -1272,6 +1440,16 @@ describe('PerformanceScreen: where a speed figure came from', () => {
     // result is a timings figure and keeps its own Good rating on the Speed tile.
     expect(within(row).queryByText('Good')).not.toBeInTheDocument()
     expect(within(row).queryByText('Slow')).not.toBeInTheDocument()
+  })
+
+  it('an other-computer row with no speed names the model recommended there, and rates nothing it did not measure', async () => {
+    install(snapshot({
+      otherMachines: [result({ cpuModel: 'Quiet CPU', tokensPerSecond: null, measuredModelId: null, speedBasis: null, recommendedModelId: 'qwen3.5-4b-ud-q4kxl' })]
+    }))
+    renderPerformanceScreen()
+    expect(await screen.findByText('Qwen3.5 4B (UD-Q4_K_XL) recommended, speed not measured')).toBeInTheDocument()
+    const row = otherRow(/Quiet CPU/)
+    for (const rating of ['Good', 'Slow', 'Approximate']) expect(within(row).queryByText(rating)).not.toBeInTheDocument()
   })
 
   it('L6: an other-computer row with NO basis is approximate with no window', async () => {
@@ -1583,8 +1761,6 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
 // These tests are the DOM half of the acceptance; the by-ear half cannot be automated.
 // -------------------------------------------------------------------------------------------
 describe('PerformanceScreen: the step list is announceable (#437)', () => {
-  const stepList = (): HTMLElement | null => document.querySelector('ul.perf-steps')
-
   it('cause 1: the live region is mounted while idle, before any run', async () => {
     install(snapshot())
     renderPerformanceScreen()
@@ -1597,7 +1773,7 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
   })
 
   it('cause 1: the steps arrive INSIDE the same region node, not with a fresh one', async () => {
-    install(snapshot())
+    const { progress } = install(snapshot())
     renderPerformanceScreen()
     await screen.findByRole('button', { name: 'Check again' })
     const idle = stepList()
@@ -1607,6 +1783,7 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
     // The same element instance as the idle one: identity is what makes it announceable.
     expect(during).toBe(idle)
     expect(during?.querySelectorAll('li')).toHaveLength(3)
+    act(() => progress.forEach((cb) => cb('system')))
     await run.finish()
     await screen.findByRole('button', { name: 'Check again' })
     // Back to idle: the region survives the run and empties, ready for the next one.
@@ -1663,5 +1840,70 @@ describe('PerformanceScreen: the step list is announceable (#437)', () => {
     const run = await startOwnRun()
     expect(stepList()?.querySelectorAll('[role], [aria-live]')).toHaveLength(0)
     await run.finish()
+  })
+
+  it('#436 holds for the #438 background line as well', async () => {
+    install(snapshot({ running: true }))
+    renderPerformanceScreen()
+    await screen.findByText('Checking this computer in the background.')
+    expect(stepList()?.querySelectorAll('[role], [aria-live]')).toHaveLength(0)
+  })
+})
+
+// #746: the finished steps stayed in state after the run, and the list rendered on that alone. So
+// every check with no model up (main sends system, drive, done, L3) left "Generation speed …: in
+// progress" with aria-current on the idle card, and a failed run left whatever step it stopped at.
+describe('PerformanceScreen: the step list ends with the run (#746)', () => {
+  const finishRun = async (progress: Array<(step: BenchmarkProgressStep) => void>, steps: BenchmarkProgressStep[]): Promise<void> => {
+    const run = await startOwnRun()
+    act(() => {
+      for (const step of steps) progress.forEach((cb) => cb(step))
+    })
+    await act(async () => {
+      progress.forEach((cb) => cb('done'))
+    })
+    await run.finish()
+    await screen.findByRole('button', { name: 'Check again' })
+  }
+
+  it.each<[string, BenchmarkProgressStep[]]>([
+    ['every step reported', ['system', 'drive', 'speed']],
+    ['no speed leg ran', ['system', 'drive']],
+    ['the drive probe failed as well', ['system']]
+  ])('the idle card shows no step after a run that ended: %s', async (_why, steps) => {
+    const { progress } = install(snapshot())
+    renderPerformanceScreen()
+    await finishRun(progress, steps)
+    expect(stepList()).toBeEmptyDOMElement()
+  })
+
+  it('a run that failed after a step leaves no step "in progress" beside its banner', async () => {
+    const { progress } = install(snapshot())
+    renderPerformanceScreen()
+    const run = deferred<BenchmarkResult>()
+    vi.mocked(window.api.runBenchmark).mockImplementationOnce(() => run.promise)
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    act(() => progress.forEach((cb) => cb('system')))
+    expect(screen.getByText('Drive speed: in progress')).toBeInTheDocument()
+    await act(async () => {
+      run.reject(new Error('Error: Model is busy right now'))
+    })
+    expect(await screen.findByText(/Check failed: .*busy/)).toBeInTheDocument()
+    expect(stepList()).toBeEmptyDOMElement()
+  })
+
+  it('the list goes with the idle read, not before: the tail of our own run still shows it (#438)', async () => {
+    const { api, progress, pushes } = install(snapshot())
+    renderPerformanceScreen()
+    const run = await startOwnRun()
+    act(() => progress.forEach((cb) => cb('system')))
+    api.getPerformance.mockResolvedValue(snapshot({ running: true }))
+    await pushChanged(pushes)
+    await run.finish()
+    expect(screen.getByText('Hardware detected: done')).toBeInTheDocument()
+    api.getPerformance.mockResolvedValue(snapshot({ running: false }))
+    await pushChanged(pushes)
+    await screen.findByRole('button', { name: 'Check again' })
+    expect(stepList()).toBeEmptyDOMElement()
   })
 })

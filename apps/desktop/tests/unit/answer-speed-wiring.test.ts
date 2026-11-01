@@ -50,4 +50,32 @@ describe('wiring pin: initBackend routes chat-stream speed through observeAnswer
   it('recordAnswerSpeed is never called directly from index.ts (only reachable via observeAnswerSpeed)', () => {
     expect(stripComments(indexSrc)).not.toMatch(/\brecordAnswerSpeed\(/)
   })
+
+  // #747: the rest of `initBackend`'s Performance wiring, the same kind of pin. Each emitter's flips
+  // are proved at its owner (performance-notify, translation-runtime, vision-runtime); these say the
+  // composition listens. The regex takes any `?.` and spacing, and each row deletes its line from a
+  // COPY of the slice to prove the pin can fail.
+  const initBackendCode = stripComments(initBackendSrc)
+  const pushedBy = (source: string): RegExp =>
+    new RegExp(`(?<![.\\w])${source}\\??\\.?(?:onChange|onResidencyChange)\\??\\.?\\(\\s*notifyPerformanceChanged\\s*\\)`)
+
+  it.each(['runtime', 'embedder', 'reranker', 'translator', 'ctx\\.vision'])('%s pushes performance:changed on every transition', (source) => {
+    const pin = pushedBy(source)
+    expect(initBackendCode).toMatch(pin)
+    expect(initBackendCode.replace(pin, '')).not.toMatch(pin)
+  })
+
+  it('a translator composed after a download gets the same subscription: it is a fresh instance', () => {
+    const start = initBackendCode.indexOf('ctx.refreshTranslatorSlot =')
+    const slot = initBackendCode.slice(start, initBackendCode.indexOf('rearmWhenChatEngineHeals(', start))
+    const pin = pushedBy('ctx\\.translator')
+    expect(slot).toMatch(pin)
+    expect(slot.replace(pin, '')).not.toMatch(pin)
+  })
+
+  it('the ladder and the crash fallback reach one GPU failure recorder', () => {
+    expect(initBackendCode).toMatch(/const persistGpuFailure = createGpuFailureRecorder\(/)
+    expect(initBackendCode).toMatch(/onGpuFailure: persistGpuFailure\b/)
+    expect(initBackendCode).toMatch(/persistFailure: \(reason\) => \{[\s\S]*?persistGpuFailure\(reason\)/)
+  })
 })
