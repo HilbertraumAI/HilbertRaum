@@ -784,9 +784,11 @@ head's own weights + KV.
   measured as a byproduct of real multi-GB reads (`services/read-speed.ts` session latch).
   Honesty guards (adversarial-review round 2026-08-09): sample floors ≥ 64 MB / ≥ 250 ms, plus
   ≥ 2 GiB for `model_load` (parse/KV-alloc/graph-init fixed costs must not dominate the window);
-  the source ranking (`preferCandidate` — `model_load` beats `checksum`, else newest wins) is ONE
+  the source ranking (`preferCandidate` — `model_load` beats `checksum`, else newest wins; except
+  that since **#404** a media-bound `checksum`, one under 100 MB/s, displaces a `model_load` and
+  is not displaced by one, `benchmark.md` §6.3) is ONE
   exported rule applied by the latch, by persistence, and by the latch-vs-persisted resolution
-  (`effectiveReadOrPersisted`), so a fresh session's checksum sample never overwrites last
+  (`effectiveReadOrPersisted`), so a fresh session's ordinary checksum sample never overwrites last
   session's model-load sample; `'download'`-labelled hashes never sample (they read bytes the app
   just wrote — page-cache-resident, the F-35 class); a start whose install-state pass really
   hashed suppresses its own load-window sample (`suppressNextModelLoadSample` — the hash warmed

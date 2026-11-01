@@ -366,16 +366,11 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // `freeMb` = nominal × 1024 − 1,024 (idle desktop use; also what a probe without a free figure
   // yields for a card reporting its nominal total) × RAM {8, 12, 16, 24, 32}. Reference for the
   // CHANGE (not the pin): the total-basis rule-C grid in the audit's a7 read 9B on the 8 GB row
-  // from RAM 16, Q4 on the 20 GB row from RAM 24 and Q5 at 24 GB / RAM 32; on the free basis the
-  // 8 GB row is the 4B (the 9B's need exceeds ≈ 7.2 GiB free), the 20 GB row is the 9B (Q4's need
-  // exceeds 19,456) and the 24 GB row is Q4 throughout (Q5's exceeds 23,552).
-  // UNCHANGED by the `-np 1` recomputation (issue #319, 2026-09-07), which is worth stating because
-  // the ruling expected the 24 GB row to flip: every threshold moved DOWN (4B −102, 9B −102, Q4/Q5
-  // −205 MiB), but none crossed a row's free figure. The two the decision watched: the 9B needs
-  // 7,830 against 7,168 free on the 8 GB row (662 short; 846 before either decision), and Q5 needs
-  // 23,559 against 23,552 on the 24 GB row — 7 MiB short after BOTH decisions, so the nominal row
-  // keeps Q4. A real 24 GB card is not that stingy: the RTX 3090 reports 24,822 MiB, so its budget
-  // is 23,798 and it stars Q5 (pinned in `benchmark.test.ts`), which is what the hardware measured.
+  // from RAM 16, Q4 on the 20 GB row from RAM 24 and Q5 at 24 GB / RAM 32. On the free basis the
+  // 8 GB row stays the 4B: the 9B needs 7,285 against 7,168 free, 117 MiB short. The 20 and 24 GB
+  // rows came back as the thresholds fell (#319, #321, §5 item 22 (e)): Q4 needs 19,258 against
+  // 19,456 free, and Q5 22,877 against 23,552. The RTX 3090 reports 24,822 MiB, so its budget is
+  // 23,798 and it stars Q5 too (pinned in `benchmark.test.ts`), which is what the hardware measured.
   const GRID: Array<[cardGb: number, picks: string]> = [
     [6, '4B / E2B / 4B / 4B / 4B'],
     [8, '4B / E2B / 4B / 4B / 4B'],

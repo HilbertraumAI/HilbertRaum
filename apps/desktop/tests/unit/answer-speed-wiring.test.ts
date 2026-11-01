@@ -59,7 +59,13 @@ describe('wiring pin: initBackend routes chat-stream speed through observeAnswer
   const pushedBy = (source: string): RegExp =>
     new RegExp(`(?<![.\\w])${source}\\??\\.?(?:onChange|onResidencyChange)\\??\\.?\\(\\s*notifyPerformanceChanged\\s*\\)`)
 
-  it.each(['runtime', 'embedder', 'reranker', 'translator', 'ctx\\.vision'])('%s pushes performance:changed on every transition', (source) => {
+  it.each([
+    ['the chat runtime', 'runtime'],
+    ['the embedder', 'embedder'],
+    ['the reranker', 'reranker'],
+    ['the translator', 'translator'],
+    ['the vision service', 'ctx\\.vision']
+  ])('%s pushes performance:changed on every transition', (_label, source) => {
     const pin = pushedBy(source)
     expect(initBackendCode).toMatch(pin)
     expect(initBackendCode.replace(pin, '')).not.toMatch(pin)

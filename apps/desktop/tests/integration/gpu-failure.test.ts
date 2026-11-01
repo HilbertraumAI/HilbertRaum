@@ -28,7 +28,7 @@ describe('createGpuFailureRecorder', () => {
     expect(event.metadata).toEqual({ reason: 'vk::Queue::submit: ErrorDeviceLost' })
   })
 
-  it('a reason past the store`s cap still lands, cut to 2,000 characters; the audit keeps 500', () => {
+  it('a reason past the store’s cap still lands, cut to 2,000 characters; the audit keeps 500', () => {
     // The store drops an over-long `gpuLastError` whole (BE-1), which would hide why the GPU went off.
     const db = seededFreshDb('gpu-failure-long')
     recorder(() => db)('e'.repeat(5000))

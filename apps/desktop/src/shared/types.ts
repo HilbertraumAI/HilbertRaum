@@ -2854,7 +2854,7 @@ export interface LiveRecommendation {
 }
 
 /**
- * What the moved-drive check did for THIS unlock session (`benchmark:movedDriveNotice`,
+ * What the moved-drive check did for THIS unlock session (`benchmark:moved-drive-notice`,
  * §5 item 22 (a), owner decision 2026-09-08). The check runs after every unlock and used to be
  * entirely silent; Home now reports it, and the two cases are DIFFERENT facts that must not
  * share a message:
@@ -2940,9 +2940,9 @@ export interface PerformanceSnapshot {
      */
     model: { id: string; sizeOnDiskGb: number; contextTokens: number } | null
     /**
-     * The context the RECOMMENDED model (`current.recommendedModelId`) would launch with,
-     * resolved main-side by the SAME `launchContextTokens` the start path uses; null when
-     * nothing is recommended. The screen used to recompute it with `??` over the catalog
+     * The context the LIVE recommended model (`recommendation.modelId`, PR #308 decision 8) would
+     * launch with, resolved main-side by the SAME `launchContextTokens` the start path uses; null
+     * when nothing is recommended. The screen used to recompute it with `??` over the catalog
      * entry, which showed a "0-token context" for a manifest whose `recommended_context_tokens`
      * is missing or 0 while the launch path (`||`) actually starts on `settings.contextTokens`
      * — PR #303 audit M5 residual.

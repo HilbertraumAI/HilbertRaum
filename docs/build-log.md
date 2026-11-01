@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-01 — the closed 2026-10-13 #653 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-01 (preamble budget, making room for the #747 entry). Its record is unchanged:
+GPU record §5.2 "#653 amendment". Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#653 — a start's own GPU buffers label it; a GPU probe that crashed is unknown, not "no graphics card" (`fix/653-empty-probe-gpu-label`).** A `--list-devices`
+child that crashed or failed to spawn answered `[]`: cached, stamped over the stored card, and outranking the load log, so a card start read CPU everywhere (placement `cpu` beside 37/37 layers)
+and a GPU crash took #599's same-rung restart. Now it resolves `null` (no verdict, nothing written), and a probe that lists no device yields to GPU BUFFERS in the log, never the offload line:
+a GPU-less rung 1 prints 37/37 too (measured, both pins), so #380's label called such a PC `gpu`. Owner calls as recommended (a 0/N start beside a listed card stays `gpu`). Real app (GTX 1070 Ti,
+wrapper): master CPU + same-rung restart + stop, fix GPU + §5.3; GPU-less: master "GPU", fix CPU. Record: GPU record §5.2 "#653 amendment". Open: #671 (Translate hint); a contradicted exit-0 `[]` stays stored._
+
 ## 2026-11-01 — the closed 2026-10-13 #654/#655/#658 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-01 (preamble budget, making room for the #749 entry). Its record is unchanged:
