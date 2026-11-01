@@ -11,6 +11,7 @@ import { DEFAULT_SETTINGS, type GpuDevice } from '../../src/shared/types'
 import type { RerankerDevice } from '../../src/main/services/rag/rerank-profile'
 import { isEngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import type { RuntimeManager } from '../../src/main/services/runtime'
+import { committingRuntime } from '../helpers/chat-runtime-stub'
 import { until } from '../helpers/hang-budget'
 import { FakeChild, GatedChild, exitingChild, fakeSpawn, loadingSidecar } from '../helpers/fake-sidecar'
 
@@ -596,27 +597,11 @@ const GTX_SETTINGS = {
 const NINE_B = 'qwen3.5-9b-ud-q4kxl'
 const FOUR_B = 'qwen3.5-4b-ud-q4kxl'
 
-/** A minimal fake RuntimeManager (Pick<RuntimeManager, 'activeModelId'>): `commit()` models
- *  `doStart`'s synchronous assignment of `current` on a successful load. No chat start is ever in
- *  flight here (the occupancy snapshot reads an absent `status` as none), and nothing is masked
- *  (F15) -- the masked-restart case gets its own dedicated test in the registerModelIpc suite. */
-function fakeRuntimeManager(initialModelId: string | null): Pick<RuntimeManager, 'activeModelId'> & {
-  commit(id: string | null): void
-} {
-  let committed = initialModelId
-  return {
-    activeModelId: () => committed,
-    commit(id) {
-      committed = id
-    }
-  }
-}
-
 /** The production posture callback on the GTX 1070 Ti fixture, over `runtime`'s committed model
  *  and the pending-switch counter. */
 const gtxPosture =
   (
-    runtime: ReturnType<typeof fakeRuntimeManager>,
+    runtime: ReturnType<typeof committingRuntime>,
     pending: ReturnType<typeof createPendingModelSwitchCounter>
   ) =>
   (): RerankerDevice =>
@@ -625,7 +610,7 @@ const gtxPosture =
 describe("Wave 8 scenarios S4, S5 (option B', the analysis §4)", () => {
   it('S4: 9B -> 4B; the FIRST ask after the commit restarts Q on the GPU', async () => {
     const { spawn, calls } = fakeSpawn()
-    const runtime = fakeRuntimeManager(NINE_B)
+    const runtime = committingRuntime(NINE_B)
     const pending = createPendingModelSwitchCounter()
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: gtxPosture(runtime, pending) })
     await reranker.rerank('before', docs(1)) // resident, recorded 'cpu' (9B)
@@ -643,7 +628,7 @@ describe("Wave 8 scenarios S4, S5 (option B', the analysis §4)", () => {
 
   it("S5: mid-ask -- a wide ('all') set resolved on the resident 4B/gpu sidecar; Use on the 9B lands BEFORE this rerank() call -- G refuses the now-cpu-postured wide set", async () => {
     const { spawn, calls } = fakeSpawn()
-    const runtime = fakeRuntimeManager(FOUR_B)
+    const runtime = committingRuntime(FOUR_B)
     const pending = createPendingModelSwitchCounter()
     const reranker = new LlamaReranker({
       ...base,

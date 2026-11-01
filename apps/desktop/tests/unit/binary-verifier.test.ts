@@ -6,15 +6,15 @@ import {
   verifyBinaryBeforeSpawn,
   initBinaryVerification,
   setBinaryVerificationPosture,
-  REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES,
-  _resetBinaryVerificationForTests
+  REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
 } from '../../src/main/services/binary-verifier'
 import { markerBinaryKey, writeRuntimeMarker } from '../../src/main/services/assets'
 import { sha256File } from '../../src/main/services/models'
+import { verifierInert } from '../helpers/binary-fixtures'
 
 // vuln-scan 2026-06-21 item B — re-hash sidecar binaries before spawn.
 
-afterEach(() => _resetBinaryVerificationForTests())
+afterEach(() => verifierInert())
 
 const tmp = (p = 'hilbertraum-verify-'): string => mkdtempSync(join(tmpdir(), p))
 
@@ -220,14 +220,5 @@ describe('commercial posture: hashless markers (#234)', () => {
     initBinaryVerification(true)
     setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
     expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-dev')
-  })
-
-  // Five suites call this reset in afterEach, so a posture it left set would leak into them.
-  it('the test reset clears the posture (a later case is not silently commercial)', async () => {
-    initBinaryVerification(false)
-    setBinaryVerificationPosture({ commercial: true, refuseHashlessMarkers: true })
-    _resetBinaryVerificationForTests()
-    initBinaryVerification(false)
-    expect(await verifyBinaryBeforeSpawn(hashlessInstall())).toBe('skip-legacy')
   })
 })

@@ -34,7 +34,7 @@ import { benchmarkResult } from './benchmark-records'
 import { stoppedStatus } from './chat-runtime-stub'
 import { ANY_SENDER } from './ipc'
 
-export { stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
+export { committingRuntime, stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
 
 // Shared fixture for the Performance-screen main-side tests (performance-ipc,
 // performance-persistence, performance-notify, performance-gpu, performance-schema,
@@ -237,42 +237,9 @@ export function fakeGpuProbe(
 }
 
 /**
- * The runtime manager's commit surface for `startModelRuntime`: `start` commits the model it was
- * given, and `activeModelId()` follows.
- * `commit(id)` sets the model by hand, for an `over.start` that commits on its own terms. `status()`
- * says no start is in flight; a row about one passes `over.status`. `over` wins over every member.
- * There is no gate, queue or `active()`: a suite that parks a start keeps its own fake.
- */
-export function committingRuntime(
-  initial: string | null = null,
-  over: Partial<RuntimeManager> = {}
-): Pick<RuntimeManager, 'activeModelId' | 'status' | 'start'> & { commit(id: string): void } {
-  let committed = initial
-  return {
-    activeModelId: () => committed,
-    status: () => ({
-      running: committed !== null,
-      modelId: committed,
-      port: null,
-      healthy: committed !== null,
-      message: 'ok',
-      startingModelId: null
-    }),
-    start: async (opts: RuntimeStartOptions) => {
-      committed = opts.modelId
-      return { running: true, modelId: committed, port: null, healthy: true, message: 'ok' }
-    },
-    commit: (id: string) => {
-      committed = id
-    },
-    ...over
-  }
-}
-
-/**
- * A session-aware workspace stand-in (the core-model-ipc shape): flags plus the epoch counter.
- * No `requireDb`: a context whose `db` follows the session
- * keeps its own getter.
+ * A session-aware workspace stand-in: flags plus the epoch counter, in the real controller's shape.
+ * A lock arms the latch first and closes the DB last; an unlock clears the latch and advances the
+ * session epoch. No `requireDb`: a context whose `db` follows the session keeps its own getter.
  */
 export function sessionWorkspace(): {
   isUnlocked: () => boolean
@@ -289,12 +256,15 @@ export function sessionWorkspace(): {
     isUnlocked: () => unlocked,
     isLocking: () => locking,
     unlockEpoch: () => epoch,
+    // The MID-TEARDOWN state, and the one the epoch cannot see: the latch is armed but the DB
+    // is still open, so `isUnlocked()` alone still says "go". This is the majority of the real
+    // lock window (seconds of awaited sidecar/stream/task teardown), not a transient.
     beginLock: () => {
       locking = true
     },
     completeLock: () => {
-      locking = true
-      unlocked = false
+      locking = true // armed as the lock handler's first act…
+      unlocked = false // …and the DB closes at the very end of its teardown
     },
     completeUnlock: () => {
       locking = false

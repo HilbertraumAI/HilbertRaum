@@ -11,7 +11,7 @@ import {
   recordModelLoadRead,
   resetEffectiveReadForTests
 } from '../../src/main/services/read-speed'
-import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
+import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   beginChecksumInstrumentation,
   sha256File,
@@ -41,19 +41,13 @@ import {
 } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
 import type { ModelVerifyProgress } from '../../src/shared/types'
-import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { tempRoot } from '../helpers/db-fixtures'
+import { seededFreshDb } from '../helpers/seeded-db'
 import { until } from '../helpers/hang-budget'
 import { manifestsDirWith, rawManifest, sha256, validManifest, writeDriveFile, writeManifest } from '../helpers/manifest-fixtures'
 
 /** What every `buildModelList` call passes for the machine's RAM, as production always does. Never the host's. */
 const PINNED_RAM_GB = 16
-
-/** Not shared: a static settings import in db-fixtures would change what its other importers load. */
-function seededFreshDb(label: string): Db {
-  const db = openFreshDb(label)
-  seedSettings(db)
-  return db
-}
 
 const savedPerfEnv = process.env.HILBERTRAUM_PERF_LOG
 

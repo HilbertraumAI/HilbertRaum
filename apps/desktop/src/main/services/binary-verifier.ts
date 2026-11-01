@@ -85,14 +85,6 @@ export function setBinaryVerificationPosture(opts: {
   refuseHashlessMarkers = opts.refuseHashlessMarkers ?? false
 }
 
-/** Test-only: reset enforcement + posture and drop the session cache between cases. */
-export function _resetBinaryVerificationForTests(): void {
-  enforced = false
-  commercialPosture = false
-  refuseHashlessMarkers = false
-  cache.clear()
-}
-
 /**
  * Evict one binary's session-cached verdict (full-audit 2026-07-11 CODE-12). The in-app
  * engine installer calls this after re-extracting a binary and writing its fresh marker:

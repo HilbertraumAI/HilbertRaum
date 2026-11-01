@@ -1,9 +1,16 @@
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../../src/main/services/runtime'
+import type {
+  ChatMessage,
+  ModelRuntime,
+  RuntimeChatOptions,
+  RuntimeManager,
+  RuntimeStartOptions,
+  RuntimeTimings
+} from '../../src/main/services/runtime'
 import type { RuntimeStatus } from '../../src/shared/types'
 
 // The speed leg's chat runtime stub. It imports no IPC registrar, so a pure service suite can use it
-// without an `electron` mock; `performance-fixture.ts` re-exports both functions for its own suites.
+// without an `electron` mock; `performance-fixture.ts` re-exports these for its own suites.
 
 /** A stopped chat runtime's status (the fixture's default `runtime.status()`). */
 export function stoppedStatus(): RuntimeStatus {
@@ -89,4 +96,38 @@ export function stubChatRuntime(opts: StubChatRuntimeOptions = {}): StubChatRunt
     status: opts.status ?? stoppedStatus
   }
   return stub
+}
+
+/**
+ * The runtime manager's commit surface for `startModelRuntime`: `start` commits the model it was
+ * given, and `activeModelId()` follows, as the real `RuntimeManager.doStart` does (it never touches
+ * `settings.activeModelId`).
+ * `commit(id)` sets the model by hand, for an `over.start` that commits on its own terms. `status()`
+ * says no start is in flight; a row about one passes `over.status`. `over` wins over every member.
+ * There is no gate, queue or `active()`: a suite that parks a start keeps its own fake.
+ */
+export function committingRuntime(
+  initial: string | null = null,
+  over: Partial<RuntimeManager> = {}
+): Pick<RuntimeManager, 'activeModelId' | 'status' | 'start'> & { commit(id: string): void } {
+  let committed = initial
+  return {
+    activeModelId: () => committed,
+    status: () => ({
+      running: committed !== null,
+      modelId: committed,
+      port: null,
+      healthy: committed !== null,
+      message: 'ok',
+      startingModelId: null
+    }),
+    start: async (opts: RuntimeStartOptions) => {
+      committed = opts.modelId
+      return { running: true, modelId: committed, port: null, healthy: true, message: 'ok' }
+    },
+    commit: (id: string) => {
+      committed = id
+    },
+    ...over
+  }
 }

@@ -1,21 +1,17 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
-import {
-  initBinaryVerification,
-  _resetBinaryVerificationForTests
-} from '../../src/main/services/binary-verifier'
-import { writeRuntimeMarker, markerBinaryKey } from '../../src/main/services/assets'
-import { sha256File } from '../../src/main/services/models'
+import { initBinaryVerification } from '../../src/main/services/binary-verifier'
 import { LlamaServer, type ChildProcessLike, type SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { probeGpuDevices } from '../../src/main/services/runtime/gpu'
 import { createWhisperCliTranscriber } from '../../src/main/services/transcriber'
 import { checkProgramLoads } from '../../src/main/services/engine-health'
 import { KiwixServer } from '../../src/main/services/zim/serve'
 import { kiwixManageAdd } from '../../src/main/services/zim/tools'
+import { binaryWithMarker, verifierInert, type MarkerVerdict } from '../helpers/binary-fixtures'
 
 // TEST-2 (full-audit-2026-06-29, Phase 3): the binary-verifier verdict/cache matrix is well unit-
 // tested (binary-verifier.test.ts). A seam test that injects a fake verdict (`verify: () => 'mismatch'`)
@@ -40,46 +36,7 @@ import { kiwixManageAdd } from '../../src/main/services/zim/tools'
 // the refusal vanishes) → the matching test reddens. The matching-marker positive control proves the
 // refusal is genuinely the hash mismatch, not an always-refuse harness artefact.
 
-afterEach(() => _resetBinaryVerificationForTests())
-
-/** A real on-disk binary whose install marker records a WRONG hash → the verifier returns `mismatch`. */
-function tamperedBinary(name: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-verify-spawn-'))
-  const bin = join(dir, name)
-  writeFileSync(bin, 'real-binary-bytes')
-  writeRuntimeMarker(dir, {
-    version: 'b9585',
-    backend: 'vulkan',
-    os: 'win',
-    arch: 'x64',
-    binaries: { [markerBinaryKey(dir, bin)]: 'c'.repeat(64) } // recorded hash ≠ the actual bytes
-  })
-  return bin
-}
-
-/** A real on-disk binary whose install marker records its TRUE hash → the verifier returns `ok`. */
-async function matchingBinary(name: string): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-verify-spawn-'))
-  const bin = join(dir, name)
-  writeFileSync(bin, 'real-binary-bytes')
-  writeRuntimeMarker(dir, {
-    version: 'b9585',
-    backend: 'vulkan',
-    os: 'win',
-    arch: 'x64',
-    binaries: { [markerBinaryKey(dir, bin)]: await sha256File(bin) }
-  })
-  return bin
-}
-
-/** A real on-disk binary under a LEGACY install marker (no recorded hashes) → the verifier says `skip-legacy`. */
-function legacyBinary(name: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-verify-spawn-'))
-  const bin = join(dir, name)
-  writeFileSync(bin, 'real-binary-bytes')
-  writeRuntimeMarker(dir, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
-  return bin
-}
+afterEach(() => verifierInert())
 
 // ---- LlamaServer.start seam (chat / embedder / reranker / vision all funnel here) -----
 
@@ -118,7 +75,7 @@ class FakeProbeChild extends EventEmitter implements ChildProcessLike {
 describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REAL verifier', () => {
   it('LlamaServer.start REFUSES a tampered binary (no child ever spawned)', async () => {
     initBinaryVerification(false) // packaged build → enforcement ON
-    const bin = tamperedBinary('llama-server.exe')
+    const bin = await binaryWithMarker('llama-server.exe', 'mismatch')
     const { spawn, calls } = recordingLlamaSpawn()
     const server = new LlamaServer({
       binPath: bin,
@@ -135,13 +92,13 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
     expect(calls).toHaveLength(0) // the real verifier blocked the spawn before any port/child
   })
 
-  it.each<[string, () => Promise<string> | string]>([
-    ['the marker records the true hash (ok)', () => matchingBinary('llama-server.exe')],
+  it.each<[string, MarkerVerdict]>([
+    ['the marker records the true hash (ok)', 'ok'],
     // security-model.md §3 "non-breaking rollout": a packaged legacy drive still launches.
-    ['no marker records a hash — a legacy drive (skip-legacy)', () => legacyBinary('llama-server.exe')]
-  ])('LlamaServer.start PROCEEDS through the real verifier: %s (positive control)', async (_label, make) => {
+    ['no marker records a hash — a legacy drive (skip-legacy)', 'legacy']
+  ])('LlamaServer.start PROCEEDS through the real verifier: %s (positive control)', async (_label, verdict) => {
     initBinaryVerification(false)
-    const bin = await make()
+    const bin = await binaryWithMarker('llama-server.exe', verdict)
     const { spawn, calls } = recordingLlamaSpawn()
     const server = new LlamaServer({
       binPath: bin,
@@ -161,7 +118,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
 
   it('the GPU probe REFUSES a tampered binary (returns [], no child spawned)', async () => {
     initBinaryVerification(false)
-    const bin = tamperedBinary('llama-server.exe')
+    const bin = await binaryWithMarker('llama-server.exe', 'mismatch')
     const calls: string[][] = []
     const spawn: SpawnFn = (_command, args) => {
       calls.push(args)
@@ -179,7 +136,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
 
   it('the engine check REFUSES to launch a tampered binary (unchecked, no child spawned)', async () => {
     initBinaryVerification(false)
-    const bin = tamperedBinary('llama-server.exe')
+    const bin = await binaryWithMarker('llama-server.exe', 'mismatch')
     const calls: string[][] = []
     const spawn: SpawnFn = (_command, args) => {
       calls.push(args)
@@ -197,7 +154,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
 
   it('WhisperCliTranscriber.transcribe REFUSES a tampered whisper-cli (no child spawned)', async () => {
     initBinaryVerification(false)
-    const bin = tamperedBinary('whisper-cli.exe')
+    const bin = await binaryWithMarker('whisper-cli.exe', 'mismatch')
     const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-verify-spawn-work-'))
     let spawned = false
     const transcriber = createWhisperCliTranscriber({
@@ -223,7 +180,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
 
   it('KiwixServer.ensureStarted REFUSES a tampered kiwix-serve (no port, no child spawned)', async () => {
     initBinaryVerification(false)
-    const bin = tamperedBinary('kiwix-serve.exe')
+    const bin = await binaryWithMarker('kiwix-serve.exe', 'mismatch')
     const { spawn, calls } = recordingLlamaSpawn()
     let ports = 0
     const server = new KiwixServer({
@@ -247,7 +204,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
 
   it('kiwixManageAdd REFUSES a tampered kiwix-manage (no child spawned)', async () => {
     initBinaryVerification(false)
-    const bin = tamperedBinary('kiwix-manage.exe')
+    const bin = await binaryWithMarker('kiwix-manage.exe', 'mismatch')
     const calls: string[][] = []
     const spawn: SpawnFn = (_command, args) => {
       calls.push(args)
