@@ -10029,7 +10029,7 @@ Per-finding disposition (fixed → phase@commit / deferred·watch → where regi
 | **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes opt-in `assertNoUnexpectedApiCalls()`; renderer-tier sweep found zero fresh-spy reliance. |
 | **TS-5** | LOW | P9 `d6846d1` | **fixed** — EXPLAIN QUERY PLAN assertions match index NAMES, never planner phrasing (the Node-pinned-SQLite coupling is commented); the teeth counterfactuals kept. |
 | **TS-6** | LOW | P13 `19dfbc9` | **fixed** — optional `test:coverage` (v8 provider, `@vitest/coverage-v8` devDep) + root passthrough; deliberately not CI-wired, no threshold; `coverage/` gitignored; documented in CONTRIBUTING. |
-| **TS-7** | LOW | — | **deferred → owner call** — no macOS CI leg despite first-class macOS support and a history of cross-platform path bugs; a `macos-latest` entry is cheap (the suite is offline and Electron-binary-free) but costs CI minutes. Registered in BUILD_STATE §5. |
+| **TS-7** | LOW | — | **decided 2026-11-01 (#753): a per-PR `macos 24.x` leg (`macos-15`), packaging.md CI section** (was deferred → owner call) — no macOS CI leg despite first-class macOS support and a history of cross-platform path bugs; a `macos-latest` entry is cheap (the suite is offline and Electron-binary-free) but costs CI minutes. Registered in BUILD_STATE §5. |
 | **TS-8** | LOW | P13 `19dfbc9` | **fixed** — the screenshot harness polls a per-case READY condition (fonts + per-case selector + brand-`img` complete) with the old 1.8 s/4.5 s settles kept as timeout ceilings; 11-case walk 19.3 s, captures verified. |
 | **TS-9** | LOW | — | **closed 2026-10-05** — the owner ratified the suggestion bar; it is now a per-row production gate with the auto-fire bar (§18 "Suggestion-selector bar"). Originally: the S13a suggestion-selector eval tier measured and printed its baseline without a hard bar. |
 | **DOC-101** | HIGH | P5 `0fba6d0` | **fixed** — the 2026-07-01 download-posture flip propagated to the four lagging docs (model-policy's canonical gate section, packaging, troubleshooting, user-guide ×3) + one architecture clause + the `policy.ts` comments; duplicated gate re-tellings replaced by pointers to the canonical model-policy section. |
@@ -11102,7 +11102,7 @@ residues; (6) path containment — SEC-2 (archive name), BUILD_STATE §8 L-7 (ar
   shows; (7) export one evidence pack as PDF and open it; (8) unlock a scratch workspace and run one
   IPC-backed action (Settings → Diagnostics) after the sender guard; (9) DOC-16 — run a write tool and
   read the document name in the confirm. Plus, before those kits ship: the macOS/Linux packaged-OCR
-  probes and adjacent-version walks (release acceptance lines 4 and 6; no macOS CI leg exists).
+  probes and adjacent-version walks (release acceptance lines 4 and 6; the macOS CI leg runs no packaged app).
 - **Release acceptance (the audit's eight lines):** 1 offline boundary — Phase 0 (SEC-1), Phase 8
   (GAP-3 outcome) landed; the browser-open and raw-path halves wait on #221/#222; 2 lock boundary —
   Phases 0 + 4 (B1, B2 inverted); 3 migration — Phase 6 (crash at every journal phase, every class);

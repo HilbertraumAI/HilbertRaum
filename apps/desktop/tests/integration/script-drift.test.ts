@@ -806,11 +806,11 @@ describe('verify-models / fetch-models enumerate every declared file (#310)', ()
 
 describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
   // macOS ships Bash 3.2 (GPLv2) and `#!/usr/bin/env bash` resolves to it on a stock machine
-  // and on the `macos-14` release runner. A Bash 4+ construct passes every Windows/Linux leg
-  // (git-bash and ubuntu carry Bash 5) and then dies on a Mac with "command not found": a
-  // `mapfile` in fetch-runtime.sh, added after v0.1.59, failed the v0.1.60 release's mac leg —
-  // the only place any CI runs these scripts on macOS. String scan of CODE lines only (the
-  // comments legitimately name the builtins they avoid).
+  // and on the macOS runners. A Bash 4+ construct passes every Windows/Linux leg (git-bash and
+  // ubuntu carry Bash 5) and then dies on a Mac with "command not found": a `mapfile` in
+  // fetch-runtime.sh, added after v0.1.59, failed the v0.1.60 release's mac leg, then the only
+  // place any CI ran these scripts on macOS. String scan of CODE lines only (the comments
+  // legitimately name the builtins they avoid).
   const SHELL_SCRIPTS = [
     ...readdirSync(join(REPO_ROOT, 'scripts'))
       .filter((f) => f.endsWith('.sh'))
