@@ -1,7 +1,7 @@
 # CI — offline build + test gate (fixes audit finding TEST-N1).
 #
 # Runs the exact pre-release command chain (npm ci -> typecheck -> build -> test) on every
-# pull request and on pushes to master, on Ubuntu and Windows. The unit+integration suite is
+# pull request and on pushes to master, on Ubuntu, Windows and macOS. The unit+integration suite is
 # fully OFFLINE: it uses the mock runtime + mock embedder and mocks `electron`, so it needs no
 # weights, no sidecar binaries, and no network — nothing here launches Electron.
 #
@@ -99,6 +99,12 @@ jobs:
         # leaked global, an ordering dependency) keeps a leg that can see it. A fully sharded
         # matrix would partition that surface away on every leg at once.
         #
+        # WHY ONE MAC LEG (#753, the TS-7 owner call). macOS is a supported platform, and until
+        # this leg no test had ever run on one: release.yml's build-mac packages without running
+        # `npm test`. It runs the whole suite, unsharded, on the runner and the Node that job
+        # builds with, so the POSIX-only rows meet a real Mac and script-execution's .sh leg meets
+        # stock Bash 3.2 at PR time. v0.1.60's `mapfile` only failed once the tag was pushed.
+        #
         # Adding or renaming a leg is safe: `ci-success` below is the only required check and
         # aggregates whatever legs exist. NEVER mark a leg's own name required.
         include:
@@ -108,6 +114,7 @@ jobs:
           - { label: 'windows 22.x, 2 of 2',  os: windows-latest, node: '22.x', shard: '--shard=2/2' }
           - { label: 'windows 24.x, 1 of 2',  os: windows-latest, node: '24.x', shard: '--shard=1/2' }
           - { label: 'windows 24.x, 2 of 2',  os: windows-latest, node: '24.x', shard: '--shard=2/2' }
+          - { label: 'macos 24.x',            os: macos-14,       node: '24.x' }
 
     steps:
       - name: Checkout

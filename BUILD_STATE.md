@@ -407,9 +407,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
          copy surfaces (never raw model/runtime text). Also watch the PARTIAL-frame case: an error
          frame truncated mid-write (`data: {"error":{"mess` + close, no `[DONE]`) must parse as a
          keep-alive and end the stream CLEANLY (Phase 4's scoped close-without-`[DONE]` semantics).
-   - **TS-7 (owner call — CI minutes):** add a `macos-latest` CI leg. The suite is offline and
-     Electron-binary-free, and cross-platform path bugs have historically been caught only by the
-     Ubuntu leg.
+   - **TS-7 — decided 2026-11-01 (#753):** a per-PR `macos 24.x` CI leg (`macos-14`), packaging.md
+     CI section. Packaged-app checks on a Mac stay manual.
    - **BE-1 rider:** the `rag*` numeric settings knobs remain deliberately unclamped (they flow
      into retrieval via `ragSettingsFrom`; clamping changes behavior for extreme-value users —
      needs its own small decision before any bound).
@@ -548,7 +547,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     [`docs/build-log.md`](docs/build-log.md) (register moved 2026-09-03, PR #275). **Still
     open:** the SEC-1 orphan-`.enc` sweep (Info, deferred — the startup sweep runs LOCKED and
     cannot know live ids; a crash mid-lock-encrypt leaves a partial-CIPHERTEXT `<enc>.tmp`, same
-    family, exposure nil); ① GAP-1 push + tag decision; TS-7 (macOS CI leg) — item 7.
+    family, exposure nil); ① GAP-1 push + tag decision.
 
 13. **Full-audit 2026-07-12b — ROUND COMPLETE** (close-out 2026-07-12; working paper DELETED,
     never committed, no history copy). Baseline `06920c1`; 24 findings (23 fixed across
