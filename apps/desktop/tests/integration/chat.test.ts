@@ -32,7 +32,7 @@ import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { Citation, ContextUsage, CoverageInfo, KnowledgePackOutcome } from '../../src/shared/types'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
-import { words } from '../helpers/compaction-fixtures'
+import { WIDE_WINDOW, words } from '../helpers/compaction-fixtures'
 import { finishScriptedRuntime, recordingRuntime } from '../helpers/scripted-runtime'
 
 function freshDb(): Db {
@@ -100,7 +100,7 @@ describe('collapseToAlternating (orphan turns from failed answers)', () => {
     const conv = createConversation(db, { modelId: 'mock-chat' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'first' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'second' })
-    const built = buildChatMessages(db, conv.id)
+    const built = buildChatMessages(db, conv.id, WIDE_WINDOW)
     expect(built.filter((m) => m.role === 'user')).toEqual([{ role: 'user', content: 'second' }])
   })
 })
@@ -157,7 +157,7 @@ describe('fitMessagesToContext (history budget vs the model context window)', ()
     }
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'FINAL QUESTION' })
 
-    const full = buildChatMessages(db, conv.id) // no budget → whole history
+    const full = buildChatMessages(db, conv.id, WIDE_WINDOW) // room for the whole history
     const fitted = buildChatMessages(db, conv.id, 2048) // budgeted to the model context
 
     expect(fitted.length).toBeLessThan(full.length)
@@ -487,7 +487,7 @@ describe('system prompt + message assembly', () => {
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hello' })
     appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'hi there' })
-    const built = buildChatMessages(db, conv.id)
+    const built = buildChatMessages(db, conv.id, WIDE_WINDOW)
     expect(built[0].role).toBe('system')
     expect(built.slice(1)).toEqual([
       { role: 'user', content: 'hello' },
@@ -904,7 +904,7 @@ describe('answer-depth threading + persistence hygiene (Phase 20)', () => {
       role: 'assistant',
       content: '<think>legacy persisted reasoning</think>\n\nVisible answer'
     })
-    const built = buildChatMessages(db, conv.id)
+    const built = buildChatMessages(db, conv.id, WIDE_WINDOW)
     expect(built[1].content).toBe('literal <think>user text</think> stays')
     expect(built[2].content).toBe('Visible answer')
   })

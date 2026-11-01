@@ -36,10 +36,6 @@ export function createTrustedSenders(): MutableTrustedSenders {
   }
 }
 
-/** Test-only: the fake IPC harness passes senders with no `webContents.id`. Never used in
- *  production (`index.ts` builds the real set). */
-export const ANY_SENDER: TrustedSenders = { isTrusted: () => true }
-
 export class UntrustedSenderError extends Error {
   constructor() {
     super('IPC refused: untrusted sender')

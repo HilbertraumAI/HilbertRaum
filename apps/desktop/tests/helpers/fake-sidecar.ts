@@ -3,9 +3,9 @@ import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
 // Fakes shared by the suites of the lazily started llama-server sidecars (the embedder, the
 // reranker, vision and translation): a spawned child, one that dies before it is healthy, a spawn
-// recorder, a one-chunk SSE body, an idle clock fired by hand, and a llama-server that is still
-// loading its model. Each suite drives its real service class through these, over the injected
-// `spawn` / `fetchImpl` seams.
+// recorder, the SSE bodies (whole, chopped, framed, written by hand), an idle clock fired by hand,
+// and a llama-server that is still loading its model. Each suite drives its real service class
+// through these, over the injected `spawn` / `fetchImpl` seams.
 
 /** A child that exits cleanly right after `kill()`, as llama-server does. */
 export class FakeChild extends EventEmitter implements ChildProcessLike {
@@ -73,18 +73,45 @@ export function fakeSpawn<T extends ChildProcessLike = FakeChild>(
   return { spawn, calls, children }
 }
 
-/** A `ReadableStream` that delivers the whole SSE text as one chunk; the readers under test do
- *  their own framing. */
-export function sseBody(text: string): ReadableStream<Uint8Array> {
+/**
+ * A `ReadableStream` over the whole SSE text: one chunk, or `chunkSize`-byte pieces, where a boundary can fall inside a
+ * frame or a UTF-8 character. The readers under test do their own framing.
+ */
+export function sseBody(text: string, chunkSize?: number): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(text)
-  let sent = false
+  let pos = 0
   return new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (sent) return controller.close()
-      sent = true
-      controller.enqueue(bytes)
+      if (pos >= bytes.length) return controller.close()
+      const end = chunkSize ? Math.min(pos + chunkSize, bytes.length) : bytes.length
+      controller.enqueue(bytes.slice(pos, end))
+      pos = end
     }
   })
+}
+
+/** A `ReadableStream` that delivers each entry verbatim as one chunk, the way the network framed them. */
+export function sseFrames(frames: string[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder()
+  let i = 0
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i >= frames.length) return controller.close()
+      controller.enqueue(enc.encode(frames[i++]))
+    }
+  })
+}
+
+/** A body the test writes into, like the sidecar's socket. It stays open, so a reader waits on it. */
+export function sidecarBody(): { body: ReadableStream<Uint8Array>; write: (frame: string) => void } {
+  const enc = new TextEncoder()
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c
+    }
+  })
+  return { body, write: (frame) => controller.enqueue(enc.encode(frame)) }
 }
 
 /**

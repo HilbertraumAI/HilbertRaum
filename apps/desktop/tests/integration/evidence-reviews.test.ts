@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { openDatabase, listTables, type Db } from '../../src/main/services/db'
 import {
   appendMessage,
@@ -28,7 +27,7 @@ import {
   updateEvidenceReview,
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import {
   answerWholeDocFromChunks,
   ragSettingsFrom,
@@ -39,6 +38,7 @@ import {
 import { documentLeafProvenance } from '../../src/main/services/analysis/coverage'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import { DEFAULT_SETTINGS, type EvidenceSourceSnapshot, type ReviewDecision } from '../../src/shared/types'
+import { chunkIdsOf, seedEmbeddedDoc, seedReadyTree } from '../helpers/doc-fixtures'
 
 // EP-1 Phase 0 (evidence-pack plan §5) — the persisted layer: schema creation, full
 // round-trips through SQLite (incl. Unicode/markdown/hostile strings), tolerant parsing of
@@ -763,47 +763,16 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
 })
 
 describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)', () => {
-  interface SeededChunk {
-    id: string
-    text: string
-  }
-
-  /** One document + chunks + mock embeddings (the shape of doc-fixtures' `seedEmbeddedDoc`); returns ids. */
-  async function seedDocument(
-    db: Db,
-    embedder: MockEmbedder,
-    title: string,
-    texts: string[]
-  ): Promise<{ docId: string; chunks: SeededChunk[] }> {
-    const now = new Date().toISOString()
-    const docId = randomUUID()
-    db.prepare(
-      `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-    ).run(docId, title, now, now)
-    const vectors = await embedder.embed(texts)
-    const chunks: SeededChunk[] = []
-    for (let i = 0; i < texts.length; i++) {
-      const chunkId = randomUUID()
-      db.prepare(
-        `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`
-      ).run(chunkId, docId, i, texts[i], title, i + 1, texts[i].split(/\s+/).length, now)
-      db.prepare(
-        `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(chunkId, embedder.id, encodeVector(vectors[i]), vectors[i].length, now)
-      chunks.push({ id: chunkId, text: texts[i] })
-    }
-    return { docId, chunks }
-  }
+  /** One page per chunk, as a PDF has: the citation dedup and the whole read's segment check both read the page. */
+  const paged = (texts: string[]): Array<{ text: string; page: number }> => texts.map((text, i) => ({ text, page: i + 1 }))
 
   it('relevance retrieval citations now carry documentId + chunkId', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    const { docId, chunks } = await seedDocument(db, embedder, 'science.pdf', [
+    const docId = await seedEmbeddedDoc(db, embedder, 'science.pdf', paged([
       'photosynthesis converts sunlight into chemical energy in plants',
       'the stock market rallied on strong earnings reports today'
-    ])
+    ]))
     const { citations } = await retrieve(
       db,
       embedder,
@@ -814,55 +783,46 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
       label: 'S1',
       sourceTitle: 'science.pdf',
       documentId: docId,
-      chunkId: chunks[0].id
+      chunkId: chunkIdsOf(db, docId)[0]
     })
   })
 
   it('whole-document read citations carry them too', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    const { docId, chunks } = await seedDocument(db, embedder, 'doc.txt', [
+    const docId = await seedEmbeddedDoc(db, embedder, 'doc.txt', paged([
       'first section text here',
       'second section text here'
-    ])
+    ]))
     const result = retrieveWholeDocument(db, docId, 100000)
     expect(result.citations).toHaveLength(2)
-    expect(result.citations.map((c) => c.chunkId)).toEqual(chunks.map((c) => c.id))
+    expect(result.citations.map((c) => c.chunkId)).toEqual(chunkIdsOf(db, docId))
     expect(result.citations.every((c) => c.documentId === docId)).toBe(true)
   })
 
   it('deep-index leaf provenance citations carry them too', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    const { docId, chunks } = await seedDocument(db, embedder, 'tree.txt', [
+    const docId = await seedEmbeddedDoc(db, embedder, 'tree.txt', paged([
       'leaf one text',
       'leaf two text'
-    ])
-    // Minimal ready tree: one root node whose edges point at the two leaf chunks.
-    const now = new Date().toISOString()
-    const rootId = randomUUID()
-    db.prepare(
-      `INSERT INTO tree_nodes (id, document_id, level, ordinal, is_root, summary_text, content_hash, created_at)
-       VALUES (?, ?, 1, 0, 1, 'summary', 'hash', ?)`
-    ).run(rootId, docId, now)
-    for (let i = 0; i < chunks.length; i++) {
-      db.prepare(
-        `INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 1, ?)`
-      ).run(rootId, chunks[i].id, i)
-    }
+    ]))
+    const chunkIds = chunkIdsOf(db, docId)
+    seedReadyTree(db, docId, chunkIds)
     const provenance = documentLeafProvenance(db, docId, 'tree.txt')
     expect(provenance).toHaveLength(2)
-    expect(provenance.map((c) => c.chunkId)).toEqual(chunks.map((c) => c.id))
+    expect(provenance.map((c) => c.chunkId)).toEqual(chunkIds)
     expect(provenance.every((c) => c.documentId === docId)).toBe(true)
   })
 
   it('chunk map-reduce rep citations (answerWholeDocFromChunks) carry them too', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    const { docId, chunks } = await seedDocument(db, embedder, 'big.txt', [
+    const docId = await seedEmbeddedDoc(db, embedder, 'big.txt', paged([
       'alpha section body text here',
       'beta section body text here'
-    ])
+    ]))
+    const chunkIds = chunkIdsOf(db, docId)
     const conv = createConversation(db, { mode: 'documents' })
     // Minimal mock runtime (the recordingRuntime idiom): one reduce reply, no model process.
     const runtime = {
@@ -887,7 +847,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
     expect(msg!.citations!.length).toBeGreaterThan(0)
     for (const c of msg!.citations!) {
       expect(c.documentId).toBe(docId)
-      expect(chunks.map((x) => x.id)).toContain(c.chunkId)
+      expect(chunkIds).toContain(c.chunkId)
     }
   })
 

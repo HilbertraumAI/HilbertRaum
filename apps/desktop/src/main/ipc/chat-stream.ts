@@ -164,8 +164,7 @@ export type ChatStreamRunFn = (
   sendReasoning: SendReasoning,
   sendCompaction: SendCompaction,
   sendUsage: SendUsage,
-  /** Optional so existing five-argument callers (the regenerate tests) stay source-compatible. */
-  sendTimings?: SendTimings
+  sendTimings: SendTimings
 ) => Promise<Message>
 
 /**

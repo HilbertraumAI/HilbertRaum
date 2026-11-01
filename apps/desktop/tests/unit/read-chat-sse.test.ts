@@ -6,6 +6,7 @@ import {
   ChatStreamError,
   isChatStreamError
 } from '../../src/main/services/runtime/llama'
+import { sidecarBody, sseFrames } from '../helpers/fake-sidecar'
 
 // CB-5 — the completion stream had no inactivity timeout: a sidecar that HANGS (GPU stall, deadlocked
 // slot) left `readChatSSE` awaiting the next SSE read forever, wedging the conversation in
@@ -37,17 +38,6 @@ function pacedStream(frames: string[], gapMs: number): ReadableStream<Uint8Array
       controller.close()
     }
   })
-}
-
-/** A body the test writes into, like the sidecar's socket. */
-function sidecarBody(): { body: ReadableStream<Uint8Array>; write: (frame: string) => void } {
-  let controller!: ReadableStreamDefaultController<Uint8Array>
-  const body = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c
-    }
-  })
-  return { body, write: (frame) => controller.enqueue(enc.encode(frame)) }
 }
 
 // The b11146 progress event's shape (chat-sse-progress-b11146.txt): a role-only delta plus a
@@ -310,6 +300,20 @@ describe('readChatSSE — SSE framing and the finish reason (moved from llama-ru
     expect(out.join('')).toBe('cut off here')
     expect(finishes).toEqual(['length'])
   })
+
+  it('reports reasoning via the callback and stops at [DONE], the callback included', async () => {
+    const stream = sseFrames([
+      reasoningChunk('r1'),
+      chatChunk('c1'),
+      'data: [DONE]\n\n',
+      reasoningChunk('IGNORED AFTER DONE')
+    ])
+    const reasoning: string[] = []
+    const out: string[] = []
+    for await (const t of readChatSSE(stream, undefined, (d) => reasoning.push(d))) out.push(t)
+    expect(reasoning).toEqual(['r1'])
+    expect(out).toEqual(['c1'])
+  })
 })
 
 // F-02 (audit 2026-07-16) — llama-server reports a MID-GENERATION failure in-band on the open
@@ -372,14 +376,8 @@ describe('readChatSSE — in-band error frames reject the stream (F-02)', () => 
   })
 
   it('an error frame sent WITHOUT a trailing newline before close (the flushed tail) still rejects', async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(enc.encode(chatChunk('tok')))
-        // The server dies mid-write: the error frame arrives with no trailing newline, then close.
-        controller.enqueue(enc.encode('data: {"error":{"message":"oom","type":"server_error"}}'))
-        controller.close()
-      }
-    })
+    // The server dies mid-write: the error frame arrives with no trailing newline, then close.
+    const stream = sseFrames([chatChunk('tok'), 'data: {"error":{"message":"oom","type":"server_error"}}'])
     const err = await (async () => {
       for await (const _t of readChatSSE(stream)) void _t
       return null
@@ -448,15 +446,8 @@ describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', (
   })
 
   it('hands the timings up on a clean close WITHOUT [DONE] (the flush path)', async () => {
-    const enc2 = new TextEncoder()
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(enc2.encode(chatChunk('a')))
-        // No trailing newline, no sentinel — the server closed right after the finish chunk.
-        controller.enqueue(enc2.encode(finishWithTimings().trimEnd()))
-        controller.close()
-      }
-    })
+    // No trailing newline, no sentinel — the server closed right after the finish chunk.
+    const stream = sseFrames([chatChunk('a'), finishWithTimings().trimEnd()])
     const finishes: Finish[] = []
     for await (const _t of readChatSSE(stream, undefined, undefined, (reason, timings) =>
       finishes.push({ reason, timings })
@@ -472,12 +463,9 @@ describe('readChatSSE — server timings ride the finish hand-up (#290/#291)', (
     const out: string[] = []
     // The answer token and the finish chunk arrive in ONE read, so the finish is parsed before the loop-top abort
     // check; [DONE] never arrives.
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(enc.encode(chatChunk('a') + finishWithTimings()))
-      }
-    })
-    for await (const t of readChatSSE(stream, controller.signal, undefined, (reason, timings) =>
+    const { body, write } = sidecarBody()
+    write(chatChunk('a') + finishWithTimings())
+    for await (const t of readChatSSE(body, controller.signal, undefined, (reason, timings) =>
       finishes.push({ reason, timings })
     )) {
       out.push(t)

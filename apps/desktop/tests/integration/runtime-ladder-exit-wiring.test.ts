@@ -11,6 +11,7 @@ import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { GpuDevice } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
+import { sseBody } from '../helpers/fake-sidecar'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
 // DX-5 (full-audit-2026-06-29 follow-up, Phase 7): pin the SPAWN-'exit' → onUnexpectedExit → GPU
@@ -66,13 +67,7 @@ function fakeSpawn() {
 const healthOkFetch = (async (url: string | URL) => {
   if (String(url).endsWith('/health')) return { ok: true, status: 200 } as Response
   if (String(url).endsWith('/v1/chat/completions')) {
-    const sse = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
-    const body = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(new TextEncoder().encode(sse))
-        c.close()
-      }
-    })
+    const body = sseBody('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n')
     return { ok: true, status: 200, body } as unknown as Response
   }
   throw new Error(`unexpected url ${String(url)}`)

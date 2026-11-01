@@ -26,7 +26,7 @@ import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
-import { chunkIdsOf } from '../helpers/doc-fixtures'
+import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
@@ -85,21 +85,10 @@ async function ask(h: Harness, question: string): Promise<Message> {
   return result as Message
 }
 
-/** A ready single-level deep index: one root summary over every section (the tree map-reduce material).
- *  `usable: false` leaves the root summary empty: the status says ready, but the tree has nothing to read. */
-function seedReadyTree(h: Harness, usable = true): void {
-  const now = new Date().toISOString()
-  h.db
-    .prepare(
-      `INSERT INTO tree_nodes
-         (id, document_id, scope_key, level, ordinal, parent_id, is_root, summary_text,
-          embedding_blob, dimensions, embedding_model_id, content_hash, model_id, created_at)
-       VALUES (?, ?, NULL, 1, 0, NULL, 1, ?, NULL, NULL, NULL, ?, 'mock', ?)`
-    )
-    .run('root-1', h.docId, usable ? 'Summary: monthly rent payments of 800 EUR.' : ' ', 'hash-root-1', now)
-  const edge = h.db.prepare('INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 1, ?)')
-  h.chunkIds.forEach((id, i) => edge.run('root-1', id, i))
-  h.db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(h.docId)
+/** The tree map-reduce material. `usable: false` leaves the root summary empty: the status says ready, but the tree
+ *  has nothing to read. */
+function readyTree(h: Harness, usable = true): void {
+  seedReadyTree(h.db, h.docId, h.chunkIds, { summary: usable ? 'Summary: monthly rent payments of 800 EUR.' : ' ' })
 }
 
 beforeEach(() => {
@@ -186,7 +175,7 @@ describe('askDocuments — a summary ask with a ready deep index reads the tree 
     { name: "too large, another document's deep index → top-k", contextWindow: 4096, tree: false, mode: 'relevance', reindexingTreeDoc: true }
   ])('$name', async ({ contextWindow, tree, mode, reindexingTreeDoc }) => {
     const h = await makeHarness({ text: EIGHT_SECTIONS, contextWindow, reindexingTreeDoc })
-    if (tree) seedReadyTree(h, tree !== 'empty')
+    if (tree) readyTree(h, tree !== 'empty')
 
     const msg = await ask(h, 'Fasse die Abrechnung zusammen')
     expect(msg.coverage?.mode).toBe(mode)

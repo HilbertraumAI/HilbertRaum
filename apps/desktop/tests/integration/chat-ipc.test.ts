@@ -38,15 +38,15 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type { Db } from '../../src/main/services/db'
 import { createConversation, listConversations, listMessages, appendMessage } from '../../src/main/services/chat'
-import { addToCollection, createCollection, getBuiltinCollection, linkConversationDocument } from '../../src/main/services/collections'
-import { listDocuments, listDocumentsByIds } from '../../src/main/services/ingestion'
+import { linkConversationDocument } from '../../src/main/services/collections'
 import { saveResultTable } from '../../src/main/services/tables/store'
 import type { TableSpec } from '../../src/main/services/tables'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
-import { failingRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { seedMixedCorpus } from '../helpers/doc-fixtures'
+import { failingRuntime, finishScriptedRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 import { capturePrepares } from '../helpers/db-spy'
 import { makeSkillDirs, writeSkillPackage } from '../helpers/skill-fixtures'
@@ -131,6 +131,20 @@ describe('registerChatIpc', () => {
     await expect(invoke(handlers, IPC.sendChatMessage, 'nope', 'hi')).rejects.toThrow(/Unknown conversation/)
   })
 
+  // #290: `withChatStream` turns a reported timing into the speed payload, and only this handler hands the turn its sender.
+  it('a plain chat turn sends the speed payload of its persisted answer', async () => {
+    const db = openFreshDb('chatipc')
+    const conv = createConversation(db, {})
+    const timings = { predicted_n: 8, predicted_per_second: 16 }
+    registerChatIpc(makeCtx(db, finishScriptedRuntime([{ reply: 'the answer', timings }])))
+    const event = makeEvent()
+    const msg = (await invokeWithEvent(handlers, IPC.sendChatMessage, event, conv.id, 'hi')) as { id: string }
+    expect(event.sender.send).toHaveBeenCalledWith(
+      STREAM.speed(conv.id),
+      expect.objectContaining({ messageId: msg.id, tokensPerSecond: 16, tokens: 8 })
+    )
+  })
+
   it('streams tokens over the per-conversation channel and resolves with the persisted reply', async () => {
     const db = openFreshDb('chatipc')
     const { runtime, release } = gatedRuntime()
@@ -196,65 +210,9 @@ describe('registerChatIpc', () => {
 
   // ---- CODE-21 (full audit 2026-07-11): id-targeted attachment listing ---------------
   // `listAttachments` used to materialize the ENTIRE library via `listDocuments` (the PF-5
-  // load-all) and filter to the attached handful. It now uses `listDocumentsByIds`, which
-  // must (a) return byte-identical results to the old filter-based path and (b) scope every
-  // aggregate with `IN (…)` — no full-table GROUP BY / membership join.
-
-  /** A mixed corpus: chunked+embedded docs (two embedder ids), memberships, a chunkless doc,
-   *  a failed doc, and a status='deleted' doc — every branch rowToInfo/stale/collections take. */
-  function seedMixedCorpus(db: Db): void {
-    const now = new Date().toISOString()
-    const insDoc = db.prepare(
-      `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
-    )
-    const insChunk = db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    const insEmb = db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-    // att-a: indexed, embedded under the active model, filed into Library + a project.
-    insDoc.run('att-a', 'a.pdf', 'indexed', '2026-01-01T00:00:01Z', now)
-    insChunk.run('ch-a1', 'att-a', 0, 'alpha text', 'a.pdf', now)
-    insChunk.run('ch-a2', 'att-a', 1, 'beta text', 'a.pdf', now)
-    insEmb.run('ch-a1', 'active-model', new Uint8Array(8), 2, now)
-    insEmb.run('ch-a2', 'active-model', new Uint8Array(8), 2, now)
-    // att-b: indexed with chunks but embedded under ANOTHER model → staleEmbeddings.
-    insDoc.run('att-b', 'b.pdf', 'indexed', '2026-01-01T00:00:02Z', now)
-    insChunk.run('ch-b1', 'att-b', 0, 'gamma text', 'b.pdf', now)
-    insEmb.run('ch-b1', 'old-model', new Uint8Array(8), 2, now)
-    // att-c: failed, chunkless. att-d: deleted (must not be listed). lib-x: unattached noise.
-    insDoc.run('att-c', 'c.pdf', 'failed', '2026-01-01T00:00:03Z', now)
-    insDoc.run('att-d', 'd.pdf', 'deleted', '2026-01-01T00:00:04Z', now)
-    insDoc.run('lib-x', 'x.pdf', 'indexed', '2026-01-01T00:00:05Z', now)
-    const lib = getBuiltinCollection(db, 'library')!
-    const project = createCollection(db, 'P')
-    addToCollection(db, ['att-a', 'lib-x'], lib.id)
-    addToCollection(db, ['att-a'], project.id)
-  }
-
-  /** Order-insensitive membership compare (the grouped-join row order is unspecified). */
-  function sortedCollections(docs: Array<{ collections?: Array<{ id: string }> }>): unknown {
-    return docs.map((d) => ({ ...d, collections: [...(d.collections ?? [])].sort((a, b) => a.id.localeCompare(b.id)) }))
-  }
-
-  it('listDocumentsByIds is result-identical to the old filter-over-listDocuments path (CODE-21 equivalence)', () => {
-    const db = openFreshDb('chatipc')
-    seedMixedCorpus(db)
-    const ids = ['att-a', 'att-b', 'att-c', 'att-d', 'att-missing']
-    const targeted = listDocumentsByIds(db, 'active-model', ids)
-    const wanted = new Set(ids)
-    const filtered = listDocuments(db, 'active-model').filter((d) => wanted.has(d.id))
-    expect(sortedCollections(targeted)).toEqual(sortedCollections(filtered))
-    // Teeth: the comparison covered real rows and every branch we seeded.
-    expect(targeted.map((d) => d.id)).toEqual(['att-c', 'att-b', 'att-a']) // newest first; deleted+missing dropped
-    expect(targeted.find((d) => d.id === 'att-a')?.staleEmbeddings).toBe(false)
-    expect(targeted.find((d) => d.id === 'att-b')?.staleEmbeddings).toBe(true)
-    expect(targeted.find((d) => d.id === 'att-a')?.collections).toHaveLength(2)
-    expect(listDocumentsByIds(db, 'active-model', [])).toEqual([])
-  })
+  // load-all) and filter to the attached handful. It now uses `listDocumentsByIds`, whose results
+  // ingestion.test.ts pins against that old path; here it must scope every aggregate with `IN (…)`
+  // — no full-table GROUP BY / membership join.
 
   it('listAttachments scopes every query with IN — no full-table aggregation (CODE-21)', async () => {
     const db = openFreshDb('chatipc')

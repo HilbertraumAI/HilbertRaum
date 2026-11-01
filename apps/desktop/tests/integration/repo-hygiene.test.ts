@@ -664,14 +664,13 @@ describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through 
     expect((code.match(/ipcMain\.handle\(/g) ?? []).length).toBe(1)
   })
 
-  it('the permissive ANY_SENDER set is referenced nowhere under src/main except its definition', () => {
+  it('the permissive ANY_SENDER set stays out of src/main: only the test harness has one', () => {
     const mainDir = join(process.cwd(), 'src', 'main')
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
         e.isDirectory() ? walk(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : []
       )
     const offenders = walk(mainDir)
-      .filter((p) => !p.endsWith('guarded-handle.ts'))
       .filter((p) => /\bANY_SENDER\b/.test(readFileSync(p, 'utf8')))
       .map((p) => p.slice(mainDir.length + 1))
     expect(offenders).toEqual([])

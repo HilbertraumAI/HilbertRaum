@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 
 // REAL-MODEL harness (Wave 3) — drives the ACTUAL whole-doc / compare / tree code paths with a real
 // local llama.cpp model from the portable drive, no GUI and no workspace access. It is the autonomous
@@ -44,6 +43,7 @@ import { answerWholeDocFromTree } from '../../src/main/services/rag/whole-doc-tr
 import { RuntimeManager } from '../../src/main/services/runtime'
 import { createSelectingRuntimeFactory } from '../../src/main/services/runtime/factory'
 import type { ModelRuntime } from '../../src/main/services/runtime'
+import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
 
 // --- Fixtures (inline so the harness is self-contained) ---------------------------------------
 // Each transcript ENDS with its decisions/actions (Prometheus→Q3, Dana→Friday/Freitag) so a tail hit
@@ -199,26 +199,7 @@ async function runCompare(
 async function runTree(label: string, doc: string, rootSummary: string, question: string): Promise<string> {
   const ws = freshWorkspace()
   const docId = await ingest(ws, 'doc.txt', doc)
-  const chunkIds = (
-    ws.db.prepare('SELECT id FROM chunks WHERE document_id = ? ORDER BY chunk_index').all(docId) as Array<{
-      id: string
-    }>
-  ).map((r) => r.id)
-  const rootId = randomUUID()
-  ws.db
-    .prepare(
-      `INSERT INTO tree_nodes
-         (id, document_id, scope_key, level, ordinal, parent_id, is_root, summary_text,
-          embedding_blob, dimensions, embedding_model_id, content_hash, model_id, created_at)
-       VALUES (?, ?, NULL, 1, 0, NULL, 1, ?, NULL, NULL, NULL, ?, 'qwen3.5-4b', ?)`
-    )
-    .run(rootId, docId, rootSummary, `hash-${rootId}`, new Date().toISOString())
-  chunkIds.forEach((cid, i) => {
-    ws.db
-      .prepare('INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 1, ?)')
-      .run(rootId, cid, i)
-  })
-  ws.db.prepare('UPDATE documents SET tree_status = ? WHERE id = ?').run('ready', docId)
+  seedReadyTree(ws.db, docId, chunkIdsOf(ws.db, docId), { summary: rootSummary, modelId: 'qwen3.5-4b' })
   const conv = createConversation(ws.db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   const msg = await answerWholeDocFromTree({
     db: ws.db,

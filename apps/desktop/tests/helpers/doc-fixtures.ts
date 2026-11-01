@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { addToCollection, createCollection, getBuiltinCollection } from '../../src/main/services/collections'
 import type { Db } from '../../src/main/services/db'
 import { encodeVector, type Embedder } from '../../src/main/services/embeddings'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
@@ -146,6 +147,62 @@ export async function seedEmbeddedDoc(
     insertEmbedding.run(chunkId, opts.modelId ?? embedder.id, encodeVector(vectors[i]!), vectors[i]!.length, now)
   }
   return docId
+}
+
+/**
+ * A ready single-level deep index, seeded by hand because a real build needs a model: one root holding `summary`, an
+ * edge to each chunk in order, `tree_status` 'ready'. A blank `summary` is a ready tree with nothing to read; `modelId`
+ * is the root's writer, which a Tier 1 summary reports.
+ */
+export function seedReadyTree(
+  db: Db,
+  docId: string,
+  chunkIds: string[],
+  opts: { summary?: string; modelId?: string } = {}
+): void {
+  const rootId = randomUUID()
+  db.prepare(
+    `INSERT INTO tree_nodes
+       (id, document_id, scope_key, level, ordinal, parent_id, is_root, summary_text,
+        embedding_blob, dimensions, embedding_model_id, content_hash, model_id, created_at)
+     VALUES (?, ?, NULL, 1, 0, NULL, 1, ?, NULL, NULL, NULL, ?, ?, ?)`
+  ).run(rootId, docId, opts.summary ?? 'Summary.', `hash-${rootId}`, opts.modelId ?? 'mock', new Date().toISOString())
+  const edge = db.prepare('INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 1, ?)')
+  chunkIds.forEach((id, i) => edge.run(rootId, id, i))
+  db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(docId)
+}
+
+/**
+ * A mixed corpus for the targeted document listings: every branch `rowToInfo`, the stale flag and the collections join
+ * take. `att-a` is embedded under 'active-model' and filed in the Library and a project; `att-b` is embedded under
+ * another model; `att-c` failed; `att-d` is deleted; `lib-x` is attached to nothing.
+ */
+export function seedMixedCorpus(db: Db): void {
+  const now = new Date().toISOString()
+  const insDoc = db.prepare(`INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
+  const insChunk = db.prepare(
+    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  )
+  const insEmb = db.prepare(
+    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+  insDoc.run('att-a', 'a.pdf', 'indexed', '2026-01-01T00:00:01Z', now)
+  insChunk.run('ch-a1', 'att-a', 0, 'alpha text', 'a.pdf', now)
+  insChunk.run('ch-a2', 'att-a', 1, 'beta text', 'a.pdf', now)
+  insEmb.run('ch-a1', 'active-model', new Uint8Array(8), 2, now)
+  insEmb.run('ch-a2', 'active-model', new Uint8Array(8), 2, now)
+  insDoc.run('att-b', 'b.pdf', 'indexed', '2026-01-01T00:00:02Z', now)
+  insChunk.run('ch-b1', 'att-b', 0, 'gamma text', 'b.pdf', now)
+  insEmb.run('ch-b1', 'old-model', new Uint8Array(8), 2, now)
+  insDoc.run('att-c', 'c.pdf', 'failed', '2026-01-01T00:00:03Z', now)
+  insDoc.run('att-d', 'd.pdf', 'deleted', '2026-01-01T00:00:04Z', now)
+  insDoc.run('lib-x', 'x.pdf', 'indexed', '2026-01-01T00:00:05Z', now)
+  const lib = getBuiltinCollection(db, 'library')!
+  const project = createCollection(db, 'P')
+  addToCollection(db, ['att-a', 'lib-x'], lib.id)
+  addToCollection(db, ['att-a'], project.id)
 }
 
 /** The document ids filed in a collection (`document_collections`), in no particular order. */

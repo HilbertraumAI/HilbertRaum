@@ -35,7 +35,7 @@ import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/sk
 import { MEETING_PROTOCOL_INSTALL_ID } from '../../src/main/services/skills/analysis/whole-doc-skills'
 import { skillInstallId } from '../../src/main/services/skills/registry'
 import { t } from '../../src/shared/i18n'
-import { chunkIdsOf } from '../helpers/doc-fixtures'
+import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { scriptedRuntime } from '../helpers/scripted-runtime'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
@@ -95,17 +95,7 @@ async function makeHarness(): Promise<Harness> {
   )
   record.run(randomUUID(), notes, chunkIds[0], SCAN_MARKER_TYPE, '', 'ok', 'hash-714', now)
   record.run(randomUUID(), notes, chunkIds[0], 'date', '2026-01-15', '2026-01-15', 'hash-714', now)
-  w.db
-    .prepare(
-      `INSERT INTO tree_nodes
-         (id, document_id, scope_key, level, ordinal, parent_id, is_root, summary_text,
-          embedding_blob, dimensions, embedding_model_id, content_hash, model_id, created_at)
-       VALUES (?, ?, NULL, 1, 0, NULL, 1, ?, NULL, NULL, NULL, ?, 'mock', ?)`
-    )
-    .run('root-714', notes, 'Summary: deadlines and greenhouse gases.', 'hash-root-714', now)
-  const edge = w.db.prepare('INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 1, ?)')
-  chunkIds.forEach((id, i) => edge.run('root-714', id, i))
-  w.db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(notes)
+  seedReadyTree(w.db, notes, chunkIds, { summary: 'Summary: deadlines and greenhouse gases.' })
 
   const runtime = {
     ...scriptedRuntime(

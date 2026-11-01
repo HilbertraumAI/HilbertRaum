@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import type { TrustedSenders } from '../../src/main/ipc/guarded-handle'
 
 // Lightweight harness for testing the `register*Ipc` handlers in a node-env vitest run.
 //
@@ -12,7 +13,7 @@ import { EventEmitter } from 'node:events'
 // Every registrar registers through `guardedHandle` (#252), which checks `event.sender.id`
 // against the context's trusted set; fake contexts pass `ANY_SENDER` so the harness stays
 // permissive, and `makeEvent(senderId)` builds a sender with an id for the guard's own tests.
-export { ANY_SENDER } from '../../src/main/ipc/guarded-handle'
+export const ANY_SENDER: TrustedSenders = { isTrusted: () => true }
 
 export type IpcHandler = (event: FakeIpcEvent, ...args: unknown[]) => unknown
 export type IpcHandlers = Map<string, IpcHandler>

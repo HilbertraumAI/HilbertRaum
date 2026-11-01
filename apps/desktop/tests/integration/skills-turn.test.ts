@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import type { Db } from '../../src/main/services/db'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
@@ -29,6 +28,7 @@ import {
 } from '../../src/main/services/rag'
 import { SKILL_GUARD_LINE } from '../../src/main/services/skills/prompt'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { WIDE_WINDOW } from '../helpers/compaction-fixtures'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 
@@ -136,7 +136,7 @@ describe('fence placement (§11.2/§22-H2)', () => {
     expect(GROUNDED_SYSTEM_PROMPT).toContain('Use only the document excerpts')
     expect(grounded).not.toContain('Use only the document excerpts')
 
-    const messages = buildGroundedChatMessages(db, conv.id, grounded)
+    const messages = buildGroundedChatMessages(db, conv.id, grounded, WIDE_WINDOW)
     expect(messages[0].role).toBe('system')
     // The fence is NOT in system (untrusted reference text); the grounded system prompt is
     // the base preamble + the stable grounding rules (RT-2), and starts with the base.

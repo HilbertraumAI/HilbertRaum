@@ -22,7 +22,6 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  ANY_SENDER,
   UntrustedSenderError,
   createTrustedSenders,
   guardedHandle,
@@ -34,7 +33,7 @@ import { log as appLog } from '../../src/main/services/logging'
 import { openDatabase } from '../../src/main/services/db'
 import type { AppContext } from '../../src/main/services/context'
 import { IPC } from '../../src/shared/ipc'
-import { makeEvent } from '../helpers/ipc'
+import { ANY_SENDER, makeEvent } from '../helpers/ipc'
 
 const SECRET_ARG = 'ARG_SENTINEL_never_logged'
 

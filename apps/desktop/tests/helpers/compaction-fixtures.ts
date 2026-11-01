@@ -6,6 +6,9 @@ import { appendMessage } from '../../src/main/services/chat'
 import { selfSummaryPrompt } from '../../src/main/services/chat/compaction'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
+/** A context window no test history reaches, so the message builders keep every turn. */
+export const WIDE_WINDOW = 1_000_000
+
 /** A block of `n` whitespace-separated words, about `n` approx-tokens (the prose estimate path). */
 export const words = (n: number): string => Array(n).fill('word').join(' ')
 
