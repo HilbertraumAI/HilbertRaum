@@ -28,8 +28,8 @@ export const DRIVE_FORMAT_VERSION = 1
 /**
  * The directory tree a prepared drive contains (relative to the drive root), in the
  * order they are created. `mkdir -p` makes intermediate dirs implicit, but listing the
- * leaves keeps the dry-run plan explicit + testable. These are exactly the dirs the app
- * reads (`workspace`, `models`, `model-manifests`, `runtime/llama.cpp/<os>`, `logs`,
+ * leaves gives `script-drift` one list to hold both prepare-drive scripts to. These are
+ * exactly the dirs the app reads (`workspace`, `models`, `model-manifests`, `runtime/llama.cpp/<os>`, `logs`,
  * `config`) plus `docs/` for the bundled user guide (spec §6).
  */
 export const DRIVE_LAYOUT_DIRS: readonly string[] = [
@@ -83,11 +83,6 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'docs'
 ]
 
-/** Absolute directory paths to create for a prepared drive at `rootPath`. */
-export function driveLayoutDirs(rootPath: string): string[] {
-  return DRIVE_LAYOUT_DIRS.map((rel) => join(rootPath, ...rel.split('/')))
-}
-
 /**
  * Resolve the app-shipped skills directory (skills plan §7.3, the `resolveManifestsDir`
  * precedent). Prefers `<root>/app-skills/` (where `prepare-drive` provisions it); in a dev build
@@ -131,8 +126,7 @@ export function resolveUserSkillsDir(rootPath: string): string {
 
 /**
  * List the skill folder names under a skills directory (a sub-directory that contains a
- * `SKILL.md`). Used to (a) compute what `prepare-drive` copies from the repo `app-skills/`
- * source and (b) assert a sold drive ships at least one trusted product skill
+ * `SKILL.md`). Used to assert a sold drive ships at least one trusted product skill
  * (`assertCommercialDrive`). Returns `[]` for an absent/unreadable directory — discovery
  * tolerates an empty skills area. Sorted for stable, testable output.
  */
@@ -382,80 +376,5 @@ export async function buildChecksumsJson(
     generated_at: generatedAt,
     algorithm: 'sha256',
     entries
-  }
-}
-
-// ---- prepare-drive plan (dry-run is the automatable test) -------------------------
-
-export interface PreparePlanFile {
-  /** Path relative to the drive root, using forward slashes. */
-  relPath: string
-  contents: string
-}
-
-export interface PreparePlan {
-  rootPath: string
-  /** Absolute directories to create (idempotent). */
-  dirsToCreate: string[]
-  /** Config files to write (relative path + JSON contents). */
-  filesToWrite: PreparePlanFile[]
-  /** Manifest filenames to copy from the repo `model-manifests/` onto the drive. */
-  manifestsToCopy: string[]
-  /**
-   * App-skill folder names to copy from the repo `app-skills/` source onto the drive (S9). The
-   * whole tree is copied wholesale (like model-manifests/); this lists the discovered skills so a
-   * dry-run/test can confirm the bundled product skill is provisioned. Empty when no source dir
-   * is supplied (the scripts copy wholesale regardless — drive.ts is the dry-run reference).
-   */
-  appSkillsToCopy: string[]
-  /** Weight destinations the user must populate (resolved from manifests). */
-  weightDestinations: string[]
-  /** Whether `config/*.json` would be overwritten (they already exist). */
-  configWouldOverwrite: boolean
-}
-
-export interface PreparePlanOptions extends DriveJsonOptions, PolicyJsonOptions {
-  /** Forces config regeneration even if files already exist. */
-  force?: boolean
-  /**
-   * The repo `app-skills/` source directory (resolveAppSkillsDir on a dev clone). When supplied,
-   * the plan lists its skill folders as `appSkillsToCopy` (S9). Omitted ⇒ `[]`.
-   */
-  appSkillsDir?: string
-}
-
-const CONFIG_INDENT = 2
-
-/**
- * Compute the full prepare-drive plan WITHOUT touching the filesystem (beyond reading
- * to detect existing config). The dry-run prints this; a real run executes it. Pure
- * enough to unit-test the whole layout + every generated config file.
- */
-export function planPrepareDrive(
-  rootPath: string,
-  manifests: ModelManifest[],
-  opts: PreparePlanOptions = {}
-): PreparePlan {
-  const dirsToCreate = driveLayoutDirs(rootPath)
-
-  const drive = buildDriveJson(opts)
-  const policy = buildPolicyJson(opts)
-  const filesToWrite: PreparePlanFile[] = [
-    { relPath: 'config/drive.json', contents: JSON.stringify(drive, null, CONFIG_INDENT) + '\n' },
-    { relPath: 'config/policy.json', contents: JSON.stringify(policy, null, CONFIG_INDENT) + '\n' }
-  ]
-
-  const configWouldOverwrite =
-    existsSync(join(rootPath, 'config', 'drive.json')) ||
-    existsSync(join(rootPath, 'config', 'policy.json'))
-
-  return {
-    rootPath,
-    dirsToCreate,
-    filesToWrite,
-    manifestsToCopy: manifests.map((m) => `${m.id}.yaml`),
-    appSkillsToCopy: opts.appSkillsDir ? listSkillFolders(opts.appSkillsDir) : [],
-    weightDestinations: manifests.map((m) => m.localPath),
-    configWouldOverwrite
   }
 }
