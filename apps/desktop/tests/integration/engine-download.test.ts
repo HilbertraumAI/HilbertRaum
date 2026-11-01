@@ -59,6 +59,7 @@ import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../s
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { verifierInert } from '../helpers/binary-fixtures'
+import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
@@ -120,8 +121,7 @@ function makeMultiFamilyDrive(): { rootPath: string; manifestsDir: string } {
 
 const WHISPER_BIN = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli'
 
-const okFetch = (async () =>
-  new Response(BODY, { status: 200, headers: { 'content-length': String(BODY.length) } })) as unknown as FetchFn
+const okFetch = bodyFetch(BODY)
 
 /** A fake extractor that drops the family-correct binary (keyed off the extract dir). */
 const familyExtract: ExtractFn = async (_archive, destDir) => {

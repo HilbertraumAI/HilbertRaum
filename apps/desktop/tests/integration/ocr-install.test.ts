@@ -33,6 +33,7 @@ import { tMain } from '../../src/main/services/i18n'
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
+import { hangingFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs, until } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import type { OcrInstallJob, OcrInstallStatus, OcrRefreshOutcome } from '../../src/shared/types'
@@ -138,23 +139,6 @@ const correctBytesFetch: FetchFn = (async (url: unknown) => {
   if (body === null) throw new Error(`unexpected fetch: ${u}`)
   return new Response(body, { status: 200, headers: { 'content-length': String(body.length) } })
 }) as unknown as FetchFn
-
-/** A fetch whose body stream sends one chunk then hangs until its request signal aborts
- *  (the `hangingFetch` idiom of tests/helpers/download-fixtures.ts) — pins a cancel deterministically mid-download. */
-function hangingFetch(firstChunk: string): FetchFn {
-  return (async (_url: unknown, init?: RequestInit) => {
-    const signal = init?.signal
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(firstChunk))
-        signal?.addEventListener('abort', () =>
-          controller.error(new DOMException('aborted', 'AbortError'))
-        )
-      }
-    })
-    return new Response(stream, { status: 200 })
-  }) as unknown as FetchFn
-}
 
 /** One chunk, then a body error carrying a drive error code. `isDiskError` reads only `.code`, and a real ENOSPC
  *  arrives from the write stream through the same `fail(err)` in `downloadToFile`. The chunk means the `.part`

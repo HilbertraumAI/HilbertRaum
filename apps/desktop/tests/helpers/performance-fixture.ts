@@ -2,7 +2,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, vi, type Mock } from 'vitest'
-import { stringify } from 'yaml'
 import { detectSystem } from '../../src/main/services/benchmark'
 import { setAnswerSpeedObserver } from '../../src/main/ipc/chat-stream'
 import {
@@ -33,6 +32,7 @@ import type { BenchmarkResult, GpuDevice, RuntimeStatus } from '../../src/shared
 import { benchmarkResult } from './benchmark-records'
 import { stoppedStatus } from './chat-runtime-stub'
 import { ANY_SENDER } from './ipc'
+import { rawManifest, writeManifest } from './manifest-fixtures'
 
 export { committingRuntime, stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
 
@@ -305,24 +305,16 @@ export const CARDS: Record<'RTX_3080_TI' | 'RTX_3090' | 'GTX_1070_TI' | 'RTX_306
  * the manifest only: the weight file at `local_path`, which makes the model installed, stays the test's.
  */
 export function writeChatManifest(dir: string, over: Record<string, unknown> = {}): void {
-  const manifest = {
+  const manifest = rawManifest({
     id: 'huge-model',
     display_name: 'Huge Model',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
     size_on_disk_gb: 999,
-    recommended_min_ram_gb: 9999,
+    recommended_min_ram_gb: 9999, // no real machine passes
     recommended_ram_gb: 9999,
-    recommended_context_tokens: 4096,
     local_path: 'models/chat/huge.gguf',
-    sha256: 'REPLACE_WITH_REAL_HASH',
     recommended_profiles: ['PRO'],
-    license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' },
     ...over
-  }
+  })
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `${manifest.id}.yaml`), stringify(manifest))
+  writeManifest(dir, `${manifest.id}.yaml`, manifest)
 }

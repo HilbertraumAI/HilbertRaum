@@ -11,7 +11,8 @@ import {
 } from '../../src/main/services/commercial-drive'
 import { buildPolicyJson } from '../../src/main/services/drive'
 import { writeRuntimeMarker } from '../../src/main/services/assets'
-import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import type { ModelManifest } from '../../src/shared/manifest'
+import { validManifest, writeDriveFile } from '../helpers/manifest-fixtures'
 import {
   validateRuntimeSources,
   type KitPlatform,
@@ -68,41 +69,16 @@ function provisionExtractedApp(root: string, version: string): void {
   )
 }
 
-function manifestObj(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'qwen3-4b-instruct-q4',
-    display_name: 'Qwen3 4B Instruct Q4',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
-    size_on_disk_gb: 2.7,
-    recommended_min_ram_gb: 8,
-    recommended_ram_gb: 16,
-    recommended_context_tokens: 4096,
-    local_path: 'models/chat/qwen3-4b-instruct-q4.gguf',
-    sha256: 'REPLACE_WITH_REAL_HASH',
-    recommended_profiles: ['LITE'],
+/** A sold drive's weights passed review, which the shared factory's pending default would fail. */
+const asManifest = (overrides: Record<string, unknown> = {}): ModelManifest =>
+  validManifest({
     license_review: { status: 'approved', reviewed_by: 'legal', reviewed_at: '2026-06-09', notes: '' },
     ...overrides
-  }
-}
-
-function asManifest(overrides: Record<string, unknown> = {}): ModelManifest {
-  const res = validateManifest(manifestObj(overrides))
-  if (!res.manifest) throw new Error('fixture invalid: ' + res.errors.join(', '))
-  return res.manifest
-}
+  })
 
 /** Write a weight file + return a manifest whose sha256 matches its content (VERIFIED). */
-function writeVerifiedWeight(root: string, id: string, relPath: string, content: string): ModelManifest {
-  const dest = join(root, ...relPath.split('/'))
-  mkdirSync(join(dest, '..'), { recursive: true })
-  writeFileSync(dest, content)
-  const sha = createHash('sha256').update(content).digest('hex')
-  return asManifest({ id, local_path: relPath, sha256: sha })
-}
+const writeVerifiedWeight = (root: string, id: string, relPath: string, content: string): ModelManifest =>
+  asManifest({ id, local_path: relPath, sha256: writeDriveFile(root, relPath, content) })
 
 function writePolicy(root: string, json: unknown): void {
   mkdirSync(join(root, 'config'), { recursive: true })
