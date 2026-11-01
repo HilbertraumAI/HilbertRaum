@@ -34,7 +34,7 @@ vi.mock('node:os', async (importOriginal) => ({
 import { buildPerformanceSnapshot, runAndPersistBenchmark, tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
 import { pickerMemoryFor, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
-import { writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
+import { writeRuntimeMarker } from '../../src/main/services/assets'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
 import { discoverManifests, weightsMib } from '../../src/main/services/models'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'

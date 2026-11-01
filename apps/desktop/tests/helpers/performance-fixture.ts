@@ -19,16 +19,8 @@ import { seedSettings } from '../../src/main/services/settings'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
-import type {
-  ChatMessage,
-  ModelRuntime,
-  RuntimeChatOptions,
-  RuntimeManager,
-  RuntimeStartOptions,
-  RuntimeTimings
-} from '../../src/main/services/runtime'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
-import type { BenchmarkResult, GpuDevice, RuntimeStatus } from '../../src/shared/types'
+import type { BenchmarkResult, GpuDevice } from '../../src/shared/types'
 import { benchmarkResult } from './benchmark-records'
 import { stoppedStatus } from './chat-runtime-stub'
 import { ANY_SENDER } from './ipc'

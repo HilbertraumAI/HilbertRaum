@@ -19,17 +19,13 @@ import {
   clearVisionSession
 } from '../../src/renderer/lib/visionSession'
 import {
-  DEFAULT_SETTINGS,
-  type PolicyStatus,
   type WorkspaceStateInfo,
-  type AppStatus,
-  type PreflightResult,
   type TranslateJob,
   type ImportJob
 } from '../../src/shared/types'
 import type { DecodedImage } from '../../src/renderer/images/decode'
+import { appShellStubs } from '../helpers/app-shell'
 import { stubApi } from '../helpers/renderer'
-import { makePolicyStatus } from '../helpers/status'
 
 // F-41 (audit-2026-07-16): the stubApi payloads are typed against the real PreloadApi bridge
 // contract (no blanket `} as never)` erasure) — a rename of any mocked method now reddens
@@ -54,7 +50,6 @@ const lockedState: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
-const offlinePolicy = makePolicyStatus()
 
 const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
 
@@ -69,25 +64,19 @@ afterEach(() => {
 describe('App.lockNow — purges the session stores at the real lock seam (TA-2)', () => {
   it('empties the text, document, and vision stores when the workspace locks', async () => {
     const lockWorkspace = vi.fn(async () => lockedState)
-    stubApi({
-      getWorkspaceState: vi.fn(async () => unlockedEncrypted),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
-      lockWorkspace,
-      // Home (default screen) readiness — keep the shell calm.
-      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as unknown as AppStatus),
-      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: 'Stopped' })),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async () => ({ ok: true, rootPath: '/d', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] }) as unknown as PreflightResult),
-      // Seeds: a running text job to re-adopt + a never-resolving document import.
-      getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
-      onTranslateToken: vi.fn(() => () => {}),
-      onTranslateDone: vi.fn(() => () => {}),
-      onTranslateError: vi.fn(() => () => {}),
-      getDroppedFilePath: vi.fn(() => 'C:\\docs\\secret.pdf'),
-      importDocuments: vi.fn(() => new Promise<ImportJob>(() => {}))
-    })
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        lockWorkspace,
+        // Seeds: a running text job to re-adopt + a never-resolving document import.
+        getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
+        onTranslateToken: vi.fn(() => () => {}),
+        onTranslateDone: vi.fn(() => () => {}),
+        onTranslateError: vi.fn(() => () => {}),
+        getDroppedFilePath: vi.fn(() => 'C:\\docs\\secret.pdf'),
+        importDocuments: vi.fn(() => new Promise<ImportJob>(() => {}))
+      })
+    )
 
     const user = userEvent.setup()
     render(<App />)
@@ -132,17 +121,12 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
         "Error invoking remote method 'workspace:lock': Error: The workspace could not be locked — free some disk space and try again."
       )
     })
-    stubApi({
-      getWorkspaceState: vi.fn(async () => unlockedEncrypted),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
-      lockWorkspace,
-      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as unknown as AppStatus),
-      getRuntimeStatus: vi.fn(async () => ({ running: false, modelId: null, port: null, healthy: false, message: 'Stopped' })),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async () => ({ ok: true, rootPath: '/d', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] }) as unknown as PreflightResult)
-    })
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        lockWorkspace
+      })
+    )
 
     const user = userEvent.setup()
     render(<App />)

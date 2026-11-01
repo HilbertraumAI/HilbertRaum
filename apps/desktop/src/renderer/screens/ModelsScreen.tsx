@@ -405,10 +405,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
       window.api.listModels(true),
       window.api.getSettings(),
       window.api.getPolicy().catch(() => null),
-      // Wrapped in Promise.resolve so a partial bridge (older preload, or a test stub that
-      // returns nothing) degrades to null instead of throwing; the real preload resolves it.
-      Promise.resolve(window.api.getEngineStatus?.()).then((r) => r ?? null, () => null),
-      Promise.resolve(window.api.getRuntimeStatus?.()).then((r) => r ?? null, () => null)
+      window.api.getEngineStatus().catch(() => null),
+      window.api.getRuntimeStatus().catch(() => null)
     ])
     if (!mountedRef.current) return // unmounted while the batch was loading (FE-4)
     setModels(m)
@@ -441,10 +439,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   // name-remembering effect and the panel derivation then run exactly as if nothing was lost.
   useEffect(() => {
     if (rememberedJob) return
-    // Promise.resolve + `?.`: an older preload or a partial test bridge resolves nothing.
-    Promise.resolve(window.api.listDownloadJobs?.())
+    window.api
+      .listDownloadJobs()
       .then((jobs) => {
-        if (!mountedRef.current || !Array.isArray(jobs) || jobs.length === 0) return
+        if (!mountedRef.current || jobs.length === 0) return
         // A download the user started while this read was in flight is newer — never overwrite it.
         if (jobRef.current) return
         const unresolved = jobs.filter(isUnresolvedDownloadResult)
@@ -459,10 +457,9 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   }, [])
 
   // Stream first-run verification progress (the cold-hash bar). The terminal `done` event
-  // clears it so the bar never lingers after hashing finishes. `?.` tolerates older
-  // preloads / test stubs (they simply never drive the bar).
+  // clears it so the bar never lingers after hashing finishes.
   useEffect(() => {
-    return window.api.onModelVerifyProgress?.((p) => {
+    return window.api.onModelVerifyProgress((p) => {
       // #420: keep the module's memory of the live full pass fresh, so leaving and coming
       // back re-draws the bar where it actually is instead of at zero.
       if (activeVerify && activeVerify.runId === p.runId) activeVerify.latest = p.done ? null : p
@@ -504,9 +501,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   useEffect(() => {
     if (!runtime?.startingModelId) return
     const timer = setInterval(() => {
-      void Promise.resolve(window.api.getRuntimeStatus?.())
+      void window.api
+        .getRuntimeStatus()
         .then((rt) => {
-          if (!mountedRef.current || !rt) return
+          if (!mountedRef.current) return
           setRuntime(rt)
           if (!rt.startingModelId) {
             // Settled (running or stopped): the cards' install/active state may have changed.
@@ -525,9 +523,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   useEffect(() => {
     if (!runtime?.answering || runtime.startingModelId) return
     const timer = setInterval(() => {
-      void Promise.resolve(window.api.getRuntimeStatus?.())
+      void window.api
+        .getRuntimeStatus()
         .then((rt) => {
-          if (mountedRef.current && rt) setRuntime(rt)
+          if (mountedRef.current) setRuntime(rt)
         })
         .catch(() => undefined)
     }, RUNTIME_POLL_MS)
@@ -649,9 +648,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
    */
   async function restartModel(): Promise<void> {
     const done = window.api.restartRuntime()
-    void Promise.resolve(window.api.getRuntimeStatus?.())
+    void window.api
+      .getRuntimeStatus()
       .then((rt) => {
-        if (mountedRef.current && rt) setRuntime(rt)
+        if (mountedRef.current) setRuntime(rt)
       })
       .catch(() => undefined)
     await done
@@ -732,7 +732,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     if (!active) return
     setVerifyCancelling(true)
     try {
-      await window.api.cancelModelVerify?.(active.runId)
+      await window.api.cancelModelVerify(active.runId)
     } catch {
       // Nothing to surface: either the pass had already finished, or it will finish on its
       // own. Re-enable the button so the user can try again.
@@ -1807,9 +1807,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
                     setDismissedJob(panelJob.jobId)
                     // #314: tell the main process too, so a renderer reload does not resurrect it.
                     // Fire-and-forget — the in-session hiding above is already done.
-                    void Promise.resolve(window.api.dismissDownloadJob?.(panelJob.jobId)).catch(
-                      () => undefined
-                    )
+                    void window.api.dismissDownloadJob(panelJob.jobId).catch(() => undefined)
                   }}
                 >
                   {t('models.download.dismiss')}

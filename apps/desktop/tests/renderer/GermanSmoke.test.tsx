@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import type { ReactNode } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -16,7 +15,6 @@ import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceRev
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
 import { Banner, CoverageMeter, PasswordField, ToastProvider, type Translator } from '../../src/renderer/components'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import {
   DEFAULT_SETTINGS,
@@ -26,6 +24,10 @@ import {
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
+import { stubHomeApi } from '../helpers/home-screen'
+import { modelInfo, stubModelsApi } from '../helpers/model-fixtures'
+import { laptopResult } from '../helpers/performance-screen'
+import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 
 // Phase-40 German render smokes (i18n record §5): one per migrated screen. Each renders
@@ -65,25 +67,7 @@ const runningStatus: RuntimeStatus = {
  *  `observedMismatch`, `currentGpu`, `observed`. */
 function perfSnapshot(): PerformanceSnapshot {
   return {
-    current: {
-      os: 'win32',
-      arch: 'x64',
-      cpuModel: 'Intel Core i7-1260P',
-      cpuCores: 12,
-      ramGb: 15.7,
-      gpu: null,
-      gpuVramMb: null,
-      driveReadMbps: null,
-      driveWriteMbps: 312,
-      tokensPerSecond: 12,
-      speedBasis: { basis: 'timings', tokens: 64 },
-      measuredModelId: 'qwen',
-      effectiveRead: null,
-      profile: 'LITE',
-      recommendedModelId: 'qwen',
-      warnings: [],
-      ranAt: '2026-09-04T14:02:00Z'
-    },
+    current: laptopResult({ os: 'win32', measuredModelId: 'qwen', effectiveRead: null, recommendedModelId: 'qwen' }),
     currentMachine: true,
     // The live pick equals the saved one here, so the smoke's copy carries no "at the time of the
     // check" label (PR #308: `PerformanceSnapshot.recommendation`).
@@ -108,11 +92,6 @@ function perfSnapshot(): PerformanceSnapshot {
   }
 }
 
-function german(node: ReactNode): JSX.Element {
-  window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-  return <I18nProvider>{node}</I18nProvider>
-}
-
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
@@ -121,24 +100,15 @@ afterEach(() => {
 
 describe('German render smokes (Phase 40)', () => {
   it('HomeScreen renders German', async () => {
-    stubApi({
+    stubHomeApi({
       getAppStatus: vi.fn(async () => appStatus()),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async () => ({
-        rootPath: 'x',
-        writable: true,
-        freeBytes: null,
-        slowDriveWarning: null,
-        problems: []
-      })),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       // §5 item 22 (a): the moved-drive notice is a Home surface, so it belongs in this smoke.
       // The restored case is the one that interpolates a date, which is where a German render
-      // can go wrong on its own.
-      getMovedDriveNotice: vi.fn(async (): Promise<MovedDriveNotice> => ({ kind: 'restored', ranAt: '2026-08-14T09:00:00Z' })),
-      onPerformanceChanged: vi.fn(() => () => {})
+      // can go wrong on its own. A local time, no `Z`: a UTC instant is another day somewhere.
+      getMovedDriveNotice: vi.fn(async (): Promise<MovedDriveNotice> => ({ kind: 'restored', ranAt: '2026-08-14T12:00:00' }))
     })
-    render(german(<HomeScreen onNavigate={() => {}} />))
+    renderInLanguage(<HomeScreen onNavigate={() => {}} />, 'de')
 
     expect(
       await screen.findByRole('button', { name: t('de', 'home.actions.startChat') })
@@ -160,7 +130,7 @@ describe('German render smokes (Phase 40)', () => {
       listDocuments: vi.fn(async () => []),
       getAppStatus: vi.fn(async () => appStatus())
     })
-    render(german(<ChatScreen onNavigate={() => {}} />))
+    renderInLanguage(<ChatScreen onNavigate={() => {}} />, 'de')
 
     expect(await screen.findByText(t('de', 'chat.empty.title'))).toBeInTheDocument()
     // The header hint's label helper gets the active-language t (D-L8).
@@ -190,7 +160,7 @@ describe('German render smokes (Phase 40)', () => {
       listCollections: vi.fn(async () => []),
       getAppStatus: vi.fn(async () => appStatus())
     })
-    render(german(<DocumentsScreen />))
+    renderInLanguage(<DocumentsScreen />, 'de')
 
     expect(
       await screen.findByRole('heading', { name: t('de', 'docs.title') })
@@ -232,7 +202,7 @@ describe('German render smokes (Phase 40)', () => {
       ]),
       getAppStatus: vi.fn(async () => appStatus())
     })
-    render(german(<DocumentsScreen />))
+    renderInLanguage(<DocumentsScreen />, 'de')
     await screen.findByText('bericht.pdf')
     // The "Build deep index" action renders its German label inside the "⋯" overflow (§11.6).
     await user.click(screen.getByRole('button', { name: t('de', 'docs.moreActions', { title: 'bericht.pdf' }) }))
@@ -242,12 +212,11 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('CoverageMeter renders its German breadth + depth copy (honesty layer)', () => {
-    render(
-      german(
-        <CoverageMeter
-          coverage={{ mode: 'tree', treeStatus: 'ready', chunksCovered: 40, chunksTotal: 40, tier: 1 }}
-        />
-      )
+    renderInLanguage(
+      <CoverageMeter
+        coverage={{ mode: 'tree', treeStatus: 'ready', chunksCovered: 40, chunksTotal: 40, tier: 1 }}
+      />,
+      'de'
     )
     expect(screen.getByText(t('de', 'coverage.tree.whole'))).toBeInTheDocument()
     expect(
@@ -256,12 +225,11 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('CoverageMeter renders the German extract-listing copy (Phase 3 honesty)', () => {
-    render(
-      german(
-        <CoverageMeter
-          coverage={{ mode: 'extract', chunksCovered: 12, chunksTotal: 12, fullyChunked: true }}
-        />
-      )
+    renderInLanguage(
+      <CoverageMeter
+        coverage={{ mode: 'extract', chunksCovered: 12, chunksTotal: 12, fullyChunked: true }}
+      />,
+      'de'
     )
     expect(screen.getByText(t('de', 'coverage.extract.whole', { scanned: 12 }))).toBeInTheDocument()
   })
@@ -287,7 +255,7 @@ describe('German render smokes (Phase 40)', () => {
       ]),
       getAppStatus: vi.fn(async () => appStatus())
     })
-    render(german(<ChatScreen onNavigate={() => {}} initialMode="documents" />))
+    renderInLanguage(<ChatScreen onNavigate={() => {}} initialMode="documents" />, 'de')
     // The composer footer's "Answering from:" scope chip (D71) reads in German, and the whole-library
     // case names the corpus size (one indexed document here).
     const source = t('de', 'chat.scope.wholeLibrary.one', { count: 1 })
@@ -303,7 +271,7 @@ describe('German render smokes (Phase 40)', () => {
       getAppStatus: vi.fn(async () => appStatus({ translationAvailable: true })),
       getActiveTranslateJob: vi.fn(async () => null)
     })
-    render(german(<TranslateScreen onNavigate={() => {}} />))
+    renderInLanguage(<TranslateScreen onNavigate={() => {}} />, 'de')
 
     expect(
       await screen.findByRole('heading', { name: t('de', 'translate.title') })
@@ -317,15 +285,13 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('ModelsScreen renders German (empty manifests)', async () => {
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+    stubModelsApi({
       getPolicy: vi.fn(async () => {
         throw new Error('no policy')
       }),
       getAppStatus: vi.fn(async () => appStatus())
     })
-    render(german(<ModelsScreen />))
+    renderInLanguage(<ModelsScreen />, 'de')
 
     expect(
       await screen.findByRole('heading', { name: t('de', 'models.title') })
@@ -334,33 +300,24 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('ModelsScreen renders the German vision card: where it is used + its button (#539)', async () => {
-    stubApi({
+    stubModelsApi({
       listModels: vi.fn(async (): Promise<ModelInfo[]> => [
-        {
+        modelInfo({
           id: 'qwen2.5-vl-3b-instruct-q4',
           displayName: 'Qwen2.5-VL 3B Instruct Q4',
           family: 'qwen2.5-vl',
           role: 'vision',
-          format: 'gguf',
-          runtime: 'llama_cpp',
-          license: 'apache-2.0',
-          sizeOnDiskGb: 3.27,
-          recommendedMinRamGb: 8,
-          recommendedRamGb: 16,
-          recommendedContextTokens: 4096,
           localPath: 'models/vision/qwen2.5-vl.gguf',
-          state: 'installed',
-          recommended: false
-        }
+          state: 'installed'
+        })
       ]),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getPolicy: vi.fn(async () => {
         throw new Error('no policy')
       }),
       getAppStatus: vi.fn(async () => appStatus())
     })
     const onNavigate = vi.fn()
-    render(german(<ModelsScreen onNavigate={onNavigate} />))
+    renderInLanguage(<ModelsScreen onNavigate={onNavigate} />, 'de')
 
     expect(await screen.findByText(t('de', 'models.vision.installed'))).toBeVisible()
     await userEvent.setup().click(screen.getByRole('button', { name: t('de', 'models.vision.goToImages') }))
@@ -374,7 +331,7 @@ describe('German render smokes (Phase 40)', () => {
     })
     const onNavigate = vi.fn()
     const user = userEvent.setup()
-    render(german(<ImagesScreen onNavigate={onNavigate} />))
+    renderInLanguage(<ImagesScreen onNavigate={onNavigate} />, 'de')
 
     expect(await screen.findByText(t('de', 'images.avail.ocrPointer'))).toBeVisible()
     await user.click(screen.getByRole('button', { name: t('de', 'images.drop.choose') }))
@@ -395,7 +352,7 @@ describe('German render smokes (Phase 40)', () => {
         throw new Error('no settings')
       })
     })
-    render(german(<PrivacyTab />))
+    renderInLanguage(<PrivacyTab />, 'de')
 
     expect(
       await screen.findByRole('heading', { name: t('de', 'privacy.network.title') })
@@ -424,7 +381,7 @@ describe('German render smokes (Phase 40)', () => {
         throw new Error('no snapshot')
       })
     })
-    render(german(<DiagnosticsTab />))
+    renderInLanguage(<DiagnosticsTab />, 'de')
 
     expect(
       await screen.findByRole('heading', { name: t('de', 'diag.bench.title') })
@@ -451,12 +408,11 @@ describe('German render smokes (Phase 40)', () => {
       onPerformanceChanged: vi.fn(() => () => {}),
       onBenchmarkProgress: vi.fn(() => () => {})
     })
-    render(
-      german(
-        <ToastProvider>
-          <PerformanceScreen onNavigate={() => {}} />
-        </ToastProvider>
-      )
+    renderInLanguage(
+      <ToastProvider>
+        <PerformanceScreen onNavigate={() => {}} />
+      </ToastProvider>,
+      'de'
     )
 
     expect(await screen.findByRole('heading', { name: t('de', 'perf.title') })).toBeInTheDocument()
@@ -494,7 +450,7 @@ describe('German render smokes (Phase 40)', () => {
   it('ReviewScreen renders German (EP-1 plan §7.7 — header, decisions, evidence caption)', async () => {
     resetReviewSessionForTests()
     stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
-    render(german(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />))
+    renderInLanguage(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />, 'de')
 
     expect(
       await screen.findByRole('button', { name: `‹ ${t('de', 'review.back')}` })
@@ -522,7 +478,7 @@ describe('German render smokes (Phase 40)', () => {
       { getEvidenceReview: vi.fn(async () => makeDetail()) },
       makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
     )
-    render(german(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />))
+    renderInLanguage(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />, 'de')
 
     // Banner (§15.5) + acknowledge action + the ADDITIONAL Outdated chip.
     expect(await screen.findByText(t('de', 'review.outdated.title'))).toBeInTheDocument()

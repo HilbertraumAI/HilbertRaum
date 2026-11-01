@@ -11,13 +11,12 @@ import {
   type EngineDownloadJob,
   type EngineProblem,
   type EngineStatus,
-  type EngineVersionInfo,
-  type OcrInstallStatus,
-  type RuntimeStatus
+  type EngineVersionInfo
 } from '../../src/shared/types'
+import { engineJob, stubModelsApi } from '../helpers/model-fixtures'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
-import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
+import { STOPPED_RUNTIME, appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
 // #516: an engine on the drive OLDER than this app's pin gets a quiet "update available" notice on
 // the AI Model screen (one Update for every outdated engine, the shared engine-job controls), and
@@ -47,8 +46,6 @@ const engine = (versions: EngineVersionInfo[]): EngineStatus => ({
   missingFamilies: [],
   engineVersions: versions
 })
-const IDLE_RUNTIME: RuntimeStatus = { running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: '' }
-const NO_OCR_SOURCES: OcrInstallStatus = { available: false, languages: [], totalBytes: 0, sourceHost: null, license: 'Apache-2.0' }
 
 describe('ModelsScreen — the engine update notice (#516)', () => {
   beforeEach(() => {
@@ -61,18 +58,10 @@ describe('ModelsScreen — the engine update notice (#516)', () => {
     downloadEngine?: Mock
     getEngineJob?: Mock
   }): void {
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      getPolicy: vi.fn(async () => makePolicyStatus({ network: { allowModelDownloads: true }, allowNetworkSetting: true })),
+    stubModelsApi({
       getAppStatus: vi.fn(async () => appStatus({ engineProblems: opts.problems ?? [] })),
       getEngineStatus: vi.fn(async () => opts.engine),
-      onEngineProblemsChanged: vi.fn(() => () => {}),
       recheckEngine: vi.fn(async () => ({ problems: [] })),
-      getOcrInstallStatus: vi.fn(async () => NO_OCR_SOURCES),
-      getRuntimeStatus: vi.fn(async () => IDLE_RUNTIME),
-      onModelVerifyProgress: vi.fn(() => () => {}),
-      listDownloadJobs: vi.fn(async () => []),
       ...(opts.downloadEngine ? { downloadEngine: opts.downloadEngine } : {}),
       ...(opts.getEngineJob ? { getEngineJob: opts.getEngineJob } : {})
     })
@@ -83,18 +72,8 @@ describe('ModelsScreen — the engine update notice (#516)', () => {
         <ModelsScreen />
       </ToastProvider>
     )
-  const job = (over: Partial<EngineDownloadJob>): EngineDownloadJob => ({
-    jobId: 'u1',
-    status: 'downloading',
-    receivedBytes: 25,
-    totalBytes: 100,
-    unverified: false,
-    binaryPath: null,
-    error: null,
-    families: ['llama_cpp'],
-    update: true,
-    ...over
-  })
+  const job = (over: Partial<EngineDownloadJob>): EngineDownloadJob =>
+    engineJob({ jobId: 'u1', receivedBytes: 25, totalBytes: 100, families: ['llama_cpp'], update: true, ...over })
 
   it('offers one quiet Update, runs it in the notice and confirms it when done', async () => {
     const user = userEvent.setup()
@@ -156,7 +135,7 @@ describe('Settings → Diagnostics — engine versions (#516)', () => {
     stubApi({
       getAppStatus: vi.fn(async () => appStatus({ appVersion: '0.1.62', engineProblems: [] })),
       getDriveStatus: vi.fn(async () => driveStatus()),
-      getRuntimeStatus: vi.fn(async () => IDLE_RUNTIME),
+      getRuntimeStatus: vi.fn(async () => STOPPED_RUNTIME),
       getRuntimeInstall: vi.fn(async () => ({ version: 'b9849', backend: 'vulkan', os: 'win', arch: 'x64' })),
       getEngineStatus: vi.fn(async () => engine(versions)),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),

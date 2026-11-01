@@ -1,84 +1,78 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
-import type { AppStatus, KnowledgePack, PreflightResult, RuntimeStatus } from '../../src/shared/types'
+import type { KnowledgePack } from '../../src/shared/types'
+import { renderHome, stubHomeApi } from '../helpers/home-screen'
 import { knowledgePack, WIKIPEDIA_EN_PACK } from '../helpers/knowledge-pack-fixtures'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // §11.16: Home's fourth readiness row — the knowledge packs (an offline Wikipedia) as a source
-// beside the documents. Three states, and the row is absent while the packs are unknown (an
-// older bridge without the channel, or a failed read) so an unstubbed harness never sees it.
-
-const APP_STATUS = {
-  workspaceMode: 'plaintext_dev',
-  activeModelId: 'qwen3-chat'
-} as unknown as AppStatus
-const PREFLIGHT = { ok: true, problems: [], slowDriveWarning: null } as unknown as PreflightResult
-const RUNTIME: RuntimeStatus = { running: true, modelId: 'qwen3-chat', port: 1, healthy: true, message: '' }
+// beside the documents. Three states, and the row is absent while the packs are unknown.
 
 const pack = (over: Partial<KnowledgePack> = {}): KnowledgePack => knowledgePack({ ...WIKIPEDIA_EN_PACK, ...over })
 
-function stubs(listKnowledgePacks?: () => Promise<KnowledgePack[]>): void {
-  stubApi({
-    getAppStatus: vi.fn(async () => APP_STATUS),
-    listDocuments: vi.fn(async () => []),
-    runPreflight: vi.fn(async () => PREFLIGHT),
-    getRuntimeStatus: vi.fn(async () => RUNTIME),
-    ...(listKnowledgePacks ? { listKnowledgePacks } : {})
-  })
-}
-
-afterEach(cleanup)
+afterEach(() => {
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+  }
+})
 
 describe('HomeScreen — knowledge packs readiness row (§11.16)', () => {
   it('says how many packs are ready when at least one is present and enabled', async () => {
-    stubs(async () => [
-      pack(),
-      pack({ id: 'p2', enabled: false }),
-      pack({ id: 'p3', available: false }),
-      // A confirmed no-full-text-index archive is not askable in the panel, so Home must not count it.
-      pack({ id: 'p4', searchable: 'no' })
-    ])
-    render(<HomeScreen onNavigate={() => {}} />)
+    stubHomeApi({
+      listKnowledgePacks: async () => [
+        pack(),
+        pack({ id: 'p2', enabled: false }),
+        pack({ id: 'p3', available: false }),
+        // A confirmed no-full-text-index archive is not askable in the panel, so Home must not count it.
+        pack({ id: 'p4', searchable: 'no' })
+      ]
+    })
+    renderHome()
     expect(await screen.findByText('1 knowledge pack ready to ask')).toBeInTheDocument()
     expect(screen.getByText('Knowledge packs')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add packs' })).toBeNull()
   })
 
   it('offers "Add packs" when none is registered, deep-linking to the packs mode', async () => {
-    const onNavigate = vi.fn()
-    stubs(async () => [])
+    stubHomeApi()
     const user = userEvent.setup()
-    render(<HomeScreen onNavigate={onNavigate} />)
+    const { onNavigate } = renderHome()
     expect(await screen.findByText(/No packs yet — add an offline Wikipedia/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Add packs' }))
     expect(onNavigate).toHaveBeenCalledWith('documents:packs')
   })
 
   it('says none is ready when packs exist but none is usable, and opens the panel', async () => {
-    const onNavigate = vi.fn()
     // Every way a registered pack can be unusable: switched off, file missing (still ENABLED —
     // why the copy says "ready", not "enabled"), and no full-text index.
-    stubs(async () => [
-      pack({ enabled: false }),
-      pack({ id: 'p2', available: false }),
-      pack({ id: 'p3', searchable: 'no' })
-    ])
+    stubHomeApi({
+      listKnowledgePacks: async () => [
+        pack({ enabled: false }),
+        pack({ id: 'p2', available: false }),
+        pack({ id: 'p3', searchable: 'no' })
+      ]
+    })
     const user = userEvent.setup()
-    render(<HomeScreen onNavigate={onNavigate} />)
+    const { onNavigate } = renderHome()
     expect(await screen.findByText(/No pack is ready to ask/)).toBeInTheDocument()
     expect(screen.getByText('None ready')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Open knowledge packs' }))
     expect(onNavigate).toHaveBeenCalledWith('documents:packs')
   })
 
-  it('renders no row at all while the packs are unknown (no channel / failed read)', async () => {
-    stubs()
-    render(<HomeScreen onNavigate={() => {}} />)
+  it('renders no row at all when the packs could not be read', async () => {
+    const listKnowledgePacks = vi.fn(async (): Promise<KnowledgePack[]> => {
+      throw new Error('the pack service is not up')
+    })
+    stubHomeApi({ listKnowledgePacks })
+    renderHome()
     // Settle the other reads first (the Documents row is the last one rendered before it).
     expect(await screen.findByText(/No documents yet/)).toBeInTheDocument()
+    expect(listKnowledgePacks).toHaveBeenCalledOnce()
     expect(screen.queryByText('Knowledge packs')).toBeNull()
   })
 })

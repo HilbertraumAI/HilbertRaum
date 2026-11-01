@@ -10,7 +10,6 @@ import {
 import { DEFAULT_SETTINGS, type GpuDevice } from '../../src/shared/types'
 import type { RerankerDevice } from '../../src/main/services/rag/rerank-profile'
 import { isEngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
-import type { RuntimeManager } from '../../src/main/services/runtime'
 import { committingRuntime } from '../helpers/chat-runtime-stub'
 import { until } from '../helpers/hang-budget'
 import { FakeChild, GatedChild, exitingChild, fakeSpawn, loadingSidecar } from '../helpers/fake-sidecar'

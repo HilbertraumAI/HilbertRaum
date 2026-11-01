@@ -24,8 +24,7 @@ import { appStatus, performanceSnapshot, runtimeStatus } from './status'
 // `result`, `office`, `oldLaptop`, `models`, `placement`, `observedFull`, `snapshot`, `install`,
 // `pushChanged`, `renderScreen` / `mountScreen`, plus the "Check again with the run held open" and
 // "press Copy report" sequences the suite spelled out 12 and 13 times. Imports no main module, so it is
-// safe in jsdom. EngineProblem.test.tsx (`stubPerformance`) and GermanSmoke.test.tsx (`perfSnapshot`)
-// carry the same result literal and have not adopted this yet.
+// safe in jsdom.
 
 /** The laptop every default snapshot describes. Sets every field `benchmarkResult` sets, so none of that default's other-computer RTX 3090 leaks in. */
 export function laptopResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult {

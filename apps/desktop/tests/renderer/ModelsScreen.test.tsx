@@ -10,21 +10,20 @@ import {
   DEFAULT_SETTINGS,
   type AppStatus,
   type DownloadJob,
-  type EngineDownloadJob,
   type EngineOptionalFamily,
   type EngineProblem,
   type EngineStatus,
   type EngineVersionInfo,
   type ModelInfo,
   type ModelVerifyProgress,
-  type OcrInstallStatus,
   type PolicyStatus,
   type RuntimeStatus
 } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
-import { appStatus as appStatusFixture, makePolicyStatus } from '../helpers/status'
+import { ENGINE_MISSING, engineJob, modelInfo, stubModelsApi } from '../helpers/model-fixtures'
+import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { STOPPED_RUNTIME, appStatus, makePolicyStatus } from '../helpers/status'
 import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
 import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
 
@@ -33,21 +32,15 @@ import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
 // acknowledgement when the review is not approved), and the progress/cancel affordance.
 
 function model(over: Partial<ModelInfo> = {}): ModelInfo {
-  return {
+  return modelInfo({
     id: 'qwen3-4b-instruct-q4',
     displayName: 'Qwen3 4B Instruct',
     family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
     sizeOnDiskGb: 2.7,
     recommendedMinRamGb: 8,
     recommendedRamGb: 16,
     recommendedContextTokens: 4096,
     localPath: 'models/chat/qwen3-4b-instruct-q4.gguf',
-    state: 'missing',
-    recommended: false,
     download: {
       url: 'https://example.test/qwen3-4b.gguf',
       sizeBytes: 2_900_000_000,
@@ -55,7 +48,7 @@ function model(over: Partial<ModelInfo> = {}): ModelInfo {
       licenseApproved: true
     },
     ...over
-  }
+  })
 }
 
 function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): PolicyStatus {
@@ -65,19 +58,8 @@ function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): 
   })
 }
 
-const appStatus = { machineRamGb: 32 } as unknown as AppStatus
-
 /** #532: the chat engine is on the drive, but the OS found its own files damaged. */
 const DAMAGED_ENGINE: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' }
-
-/** #410: a drive with no usable OCR source list — the AI Model screen's OCR row stays hidden. */
-const NO_OCR_SOURCES: OcrInstallStatus = {
-  available: false,
-  languages: [],
-  totalBytes: 0,
-  sourceHost: null,
-  license: 'Apache-2.0'
-}
 
 function stub(opts: {
   models?: ModelInfo[]
@@ -87,25 +69,28 @@ function stub(opts: {
   getDownloadJob?: Mock
   /** Overrides on the base status (#527: `transcriberMissing`). */
   appStatus?: Partial<AppStatus>
-  /** The engine status (#527 banner cases); absent = the bridge has none (reads as null). */
+  /** The engine status (#527 banner cases); absent = every engine in place. */
   engine?: EngineStatus
 }): void {
-  stubApi({
+  stubModelsApi({
     listModels: vi.fn(async () => opts.models ?? [model()]),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: opts.activeModelId ?? null })),
-    getPolicy: vi.fn(async () => opts.policy ?? policyStatus({ downloadsAllowed: true, settingOn: true })),
-    getAppStatus: vi.fn(async () => ({ ...appStatus, ...opts.appStatus })),
+    getAppStatus: vi.fn(async () => appStatus({ machineRamGb: 32, ...opts.appStatus })),
+    ...(opts.policy ? { getPolicy: vi.fn(async () => opts.policy as PolicyStatus) } : {}),
     ...(opts.engine ? { getEngineStatus: vi.fn(async (): Promise<EngineStatus> => opts.engine as EngineStatus) } : {}),
     downloadModel: (opts.downloadModel ?? vi.fn()),
     getDownloadJob: (opts.getDownloadJob ?? vi.fn()),
-    // #314: the mount-time adopt read and the main-side dismissal. Idle by default — these
-    // tests exercise the ordinary lifecycle, where the screen's own memory answers first.
-    listDownloadJobs: vi.fn(async () => []),
     dismissDownloadJob: vi.fn(async () => undefined)
   })
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+  }
+})
 
 // The screen deliberately keeps the download job, its model's name and any dismissed result in
 // MODULE state so leaving and re-entering the screen resumes/restores them. Tests must therefore
@@ -1064,7 +1049,8 @@ describe('ModelsScreen — search, tasks and model variants', () => {
         .map((o) => o.textContent ?? '')
     }
 
-    it('offers only on-drive families in On this drive, every family in Browse', async () => {
+    // The rule itself is `availableFamilies`' (unit/model-library): this row proves the <select> reads the current view and task.
+    it('the family options follow the view and the task', async () => {
       const user = userEvent.setup()
       stub({ activeModelId: 'active', models: fixture() })
       render(<ModelsScreen />)
@@ -1072,19 +1058,12 @@ describe('ModelsScreen — search, tasks and model variants', () => {
       // Something is installed here, so the screen opens on "On this drive" (design-guidelines §15).
       expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
       expect(familyOptionNames()).toEqual(['All families', 'bge', 'e5', 'whisper'])
-      await user.click(screen.getByRole('radio', { name: 'Browse models' }))
-      expect(familyOptionNames()).toEqual(['All families', 'bge', 'colbert', 'e5', 'phi', 'whisper'])
-    })
-
-    it('narrows the family options by the selected task, combined with the view', async () => {
-      const user = userEvent.setup()
-      stub({ activeModelId: 'active', models: fixture() })
-      render(<ModelsScreen />)
-      await screen.findByText('Active model')
       await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'documents')
       expect(familyOptionNames()).toEqual(['All families', 'bge', 'e5'])
       await user.click(screen.getByRole('radio', { name: 'Browse models' }))
       expect(familyOptionNames()).toEqual(['All families', 'bge', 'colbert', 'e5'])
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'all')
+      expect(familyOptionNames()).toEqual(['All families', 'bge', 'colbert', 'e5', 'phi', 'whisper'])
     })
 
     it('keeps a family selected in Browse, marked and explained, after switching to On this drive', async () => {
@@ -1179,11 +1158,9 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
     settingsOver: Record<string, unknown>,
     models: ModelInfo[] = [model({ state: 'installed' })]
   ): void {
-    stubApi({
+    stubModelsApi({
       listModels: vi.fn(async () => models),
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, ...settingsOver })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus)
     })
   }
 
@@ -1459,11 +1436,9 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
       }
       return { jobId, modelId: 'qwen3-4b-instruct-q4', status: 'cancelled', receivedBytes: 0, totalBytes: null, unverified: false, error: null }
     })
-    stubApi({
+    stubModelsApi({
       listModels,
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: null })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus),
       downloadModel: downloadModel,
       getDownloadJob: getDownloadJob
     })
@@ -1553,24 +1528,6 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     }
   }
 
-  // Typed idle fixtures instead of `... as never` payload casts (F-41 ratchet): the engine has
-  // every family installed (no installer banner) and nothing is starting.
-  const idleEngine: EngineStatus = {
-    installed: true,
-    available: true,
-    version: null,
-    backend: null,
-    missingFamilies: []
-  }
-  const idleRuntime: RuntimeStatus = {
-    running: false,
-    modelId: null,
-    startingModelId: null,
-    port: null,
-    healthy: false,
-    message: ''
-  }
-
   /** Every bridge method the screen actually calls, so `assertNoUnexpectedApiCalls` has teeth. */
   function stubLive(opts: {
     models: () => ModelInfo[]
@@ -1595,7 +1552,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     const getDownloadJob = vi.fn(opts.getDownloadJob ?? (async () => opts.job!()))
     const listDownloadJobs = vi.fn(opts.listDownloadJobs ?? (async () => []))
     const dismissDownloadJob = vi.fn(async () => undefined)
-    stubApi({
+    stubModelsApi({
       listModels,
       getSettings: vi.fn(async () => ({
         ...DEFAULT_SETTINGS,
@@ -1604,14 +1561,6 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       getPolicy: vi.fn(async () =>
         (opts.policy ?? (() => policyStatus({ downloadsAllowed: true, settingOn: true })))()
       ),
-      getAppStatus: vi.fn(async () => appStatus),
-      getEngineStatus: vi.fn(async () => idleEngine),
-      // #530: the engine-verdict push the screen subscribes to.
-      onEngineProblemsChanged: vi.fn(() => () => {}),
-      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
-      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
-      getRuntimeStatus: vi.fn(async () => idleRuntime),
-      onModelVerifyProgress: vi.fn(() => () => {}),
       downloadModel,
       getDownloadJob,
       listDownloadJobs,
@@ -1786,7 +1735,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     const user = userEvent.setup()
     const first = variant('q4-use-control', 'Use control Q4_K_M', { state: 'installed' })
     const second = variant('q6-use-control', 'Use control Q6_K', { state: 'installed' })
-    const useModel = vi.fn(async () => idleRuntime)
+    const useModel = vi.fn(async () => STOPPED_RUNTIME)
     stubLive({ models: () => [first, second], useModel })
     render(<ModelsScreen />)
 
@@ -2182,7 +2131,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
         if (id === another.id) current = jobOf('stale-new-job', id)
         return current
       },
-      useModel: vi.fn(async () => idleRuntime)
+      useModel: vi.fn(async () => STOPPED_RUNTIME)
     })
     render(<ModelsScreen />)
 
@@ -2508,23 +2457,6 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
 })
 
 describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)', () => {
-  // Typed idle fixtures instead of `... as never` payload casts (F-41 ratchet).
-  const idleEngine: EngineStatus = {
-    installed: true,
-    available: true,
-    version: null,
-    backend: null,
-    missingFamilies: []
-  }
-  const idleRuntime: RuntimeStatus = {
-    running: false,
-    modelId: null,
-    startingModelId: null,
-    port: null,
-    healthy: false,
-    message: ''
-  }
-
   const OBTAINABLE = {
     url: 'https://example.test/weights.gguf',
     sizeBytes: 1000,
@@ -2545,23 +2477,13 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
     useModel?: Mock
   }): { listModels: Mock } {
     const listModels = vi.fn(async () => opts.models())
-    stubApi({
+    stubModelsApi({
       listModels,
       getSettings: vi.fn(async () => ({
         ...DEFAULT_SETTINGS,
         activeModelId: opts.activeModelId ?? null
       })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatusFixture({ machineRamGb: opts.machineRamGb ?? 32 })),
-      getEngineStatus: vi.fn(async () => idleEngine),
-      // #530: the engine-verdict push the screen subscribes to.
-      onEngineProblemsChanged: vi.fn(() => () => {}),
-      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
-      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
-      getRuntimeStatus: vi.fn(async () => idleRuntime),
-      onModelVerifyProgress: vi.fn(() => () => {}),
-      // #314: the mount-time adopt read. Nothing is downloading in these cases.
-      listDownloadJobs: vi.fn(async () => []),
+      getAppStatus: vi.fn(async () => appStatus({ machineRamGb: opts.machineRamGb ?? 32 })),
       ...(opts.useModel ? { useModel: opts.useModel } : {})
     })
     return { listModels }
@@ -2730,7 +2652,7 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
     const healthy = variant('pair-q4', 'Refresh pair Q4_K_M', { state: 'installed' })
     const sibling = variant('pair-q6', 'Refresh pair Q6_K', { state: 'installed' })
     let damagedYet = false
-    const useModel = vi.fn(async () => idleRuntime)
+    const useModel = vi.fn(async () => STOPPED_RUNTIME)
     stubLibrary({
       models: () =>
         damagedYet ? [healthy, { ...sibling, state: 'checksum_failed' as const }] : [healthy, sibling],
@@ -2763,7 +2685,7 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
     const user = userEvent.setup()
     const healthy = variant('toggle-q4', 'Toggle pair Q4_K_M', { state: 'installed' })
     const damaged = variant('toggle-q6', 'Toggle pair Q6_K', { state: 'checksum_failed' })
-    const useModel = vi.fn(async () => idleRuntime)
+    const useModel = vi.fn(async () => STOPPED_RUNTIME)
     const api = stubLibrary({ models: () => [healthy, damaged], useModel })
     render(<ModelsScreen />)
     await screen.findByText(damaged.displayName)
@@ -2913,11 +2835,7 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
 
   it('missingOptionalFamilies names kiwix_tools → the quiet row and Install… render and open the consent dialog', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus),
+    stubModelsApi({
       getEngineStatus: vi.fn(async () => engineWithMissingTools())
     })
     render(<ModelsScreen />)
@@ -2927,11 +2845,7 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
   })
 
   it('an installed family (missingOptionalFamilies empty) shows no row', async () => {
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus),
+    stubModelsApi({
       getEngineStatus: vi.fn(async () =>
         engineWithMissingTools({
           missingOptionalFamilies: [],
@@ -2949,11 +2863,7 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
   // An `optionalFamilies`-less / `missingOptionalFamilies`-less EngineStatus (an older main) must
   // render exactly like "absent" — never a crash, never a phantom row.
   it('an EngineStatus with neither field (an older main) shows no row', async () => {
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus),
+    stubModelsApi({
       getEngineStatus: vi.fn(async () => ({
         installed: true,
         available: true,
@@ -2981,11 +2891,7 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
       binaryPath: null,
       error: null
     }))
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus),
+    stubModelsApi({
       getEngineStatus: vi.fn(
         async (): Promise<EngineStatus> => ({
           installed: false,
@@ -3012,15 +2918,6 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
 // opt-in action, which needs its own in-place progress bar (before #382 the only bar lived
 // inside the `!models` branch, which lazy verification skips).
 describe('lazy verification + "Check all model files" (#382)', () => {
-  const idleEngine: EngineStatus = {
-    installed: true,
-    available: true,
-    version: '1',
-    backend: 'cpu',
-    missingFamilies: []
-  }
-  const idleRuntime = { running: false, modelId: null, startingModelId: null } as unknown as RuntimeStatus
-
   /** Stubs the screen's bridge and hands back the listModels spy + the progress emitter. */
   function stubVerify(models: ModelInfo[]): {
     listModels: Mock
@@ -3028,24 +2925,15 @@ describe('lazy verification + "Check all model files" (#382)', () => {
   } {
     const listModels = vi.fn(async () => models)
     let sink: ((p: ModelVerifyProgress) => void) | null = null
-    stubApi({
+    stubModelsApi({
       listModels,
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: models[0]?.id ?? null })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus),
-      getEngineStatus: vi.fn(async () => idleEngine),
-      // #530: the engine-verdict push the screen subscribes to.
-      onEngineProblemsChanged: vi.fn(() => () => {}),
-      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
-      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
-      getRuntimeStatus: vi.fn(async () => idleRuntime),
       onModelVerifyProgress: vi.fn((cb: (p: ModelVerifyProgress) => void) => {
         sink = cb
         return () => {
           sink = null
         }
       }),
-      listDownloadJobs: vi.fn(async () => [])
     })
     const emit = (p: Partial<ModelVerifyProgress>): void => {
       act(() =>
@@ -3117,15 +3005,6 @@ describe('lazy verification + "Check all model files" (#382)', () => {
 // end whatever the user did: ~25 minutes of USB I/O on the #330 slow drive, surviving even
 // navigating away. Cancelling is not a failure, so the screen must settle calmly.
 describe('cancelling "Check all model files" (#420)', () => {
-  const idleEngine: EngineStatus = {
-    installed: true,
-    available: true,
-    version: '1',
-    backend: 'cpu',
-    missingFamilies: []
-  }
-  const idleRuntime = { running: false, modelId: null, startingModelId: null } as unknown as RuntimeStatus
-
   /** Like the #382 stub, but the full pass is held open so a Cancel can land mid-pass. */
   function stubCancellable(models: ModelInfo[]): {
     listModels: Mock
@@ -3145,25 +3024,16 @@ describe('cancelling "Check all model files" (#420)', () => {
     })
     const cancelModelVerify = vi.fn(async () => true)
     let sink: ((p: ModelVerifyProgress) => void) | null = null
-    stubApi({
+    stubModelsApi({
       listModels,
       cancelModelVerify,
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: models[0]?.id ?? null })),
-      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
-      getAppStatus: vi.fn(async () => appStatus),
-      getEngineStatus: vi.fn(async () => idleEngine),
-      // #530: the engine-verdict push the screen subscribes to.
-      onEngineProblemsChanged: vi.fn(() => () => {}),
-      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
-      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
-      getRuntimeStatus: vi.fn(async () => idleRuntime),
       onModelVerifyProgress: vi.fn((cb: (p: ModelVerifyProgress) => void) => {
         sink = cb
         return () => {
           sink = null
         }
       }),
-      listDownloadJobs: vi.fn(async () => [])
     })
     const runIdOf = (): string | undefined =>
       listModels.mock.calls.find((c) => !c[0])?.[1] as string | undefined
@@ -3288,3 +3158,33 @@ describe('cancelling "Check all model files" (#420)', () => {
   })
 })
 
+// SH-1 (frontend audit 2026-08-09, #144): the engine download (multi-hundred-MB llama.cpp
+// fetch) had NO Cancel — cancelEngineDownload was exposed on the bridge with zero callers.
+// The live branch of the engine banner now carries a Cancel mirroring the model-download one.
+describe('ModelsScreen — engine download Cancel (SH-1, #144)', () => {
+  it('offers Cancel while the engine fetch is live and cancelling ends the job', async () => {
+    const user = userEvent.setup()
+    const live = engineJob()
+    const cancelled = engineJob({ status: 'cancelled' })
+    const downloadEngine = vi.fn(async () => live)
+    const cancelEngineDownload = vi.fn(async () => cancelled)
+    stubModelsApi({
+      getEngineStatus: vi.fn(async () => ENGINE_MISSING),
+      getEngineJob: vi.fn(async () => live),
+      downloadEngine,
+      cancelEngineDownload
+    })
+    render(<ModelsScreen />)
+
+    // The demo-mode warning offers the install; starting it shows progress + Cancel.
+    await user.click(await screen.findByRole('button', { name: 'Install AI engine' }))
+    // Pre-fix TEETH: the live branch rendered ONLY the Progress — no Cancel existed anywhere.
+    const cancelBtn = await screen.findByRole('button', { name: 'Cancel download' })
+    await user.click(cancelBtn)
+    expect(cancelEngineDownload).toHaveBeenCalledWith('e1')
+
+    // The cancelled job leaves the live branch: the install affordance returns.
+    expect(await screen.findByRole('button', { name: 'Install AI engine' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel download' })).not.toBeInTheDocument()
+  })
+})
