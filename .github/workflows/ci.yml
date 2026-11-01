@@ -104,6 +104,8 @@ jobs:
         # `npm test`. It runs the whole suite, unsharded, on the runner and the Node that job
         # builds with, so the POSIX-only rows meet a real Mac and script-execution's .sh leg meets
         # stock Bash 3.2 at PR time. v0.1.60's `mapfile` only failed once the tag was pushed.
+        # The label is pinned and shared with build-mac on purpose: GitHub fails a retiring image
+        # in scheduled brownouts first, and this leg shows those on PRs, months before a tag.
         #
         # Adding or renaming a leg is safe: `ci-success` below is the only required check and
         # aggregates whatever legs exist. NEVER mark a leg's own name required.
@@ -114,7 +116,7 @@ jobs:
           - { label: 'windows 22.x, 2 of 2',  os: windows-latest, node: '22.x', shard: '--shard=2/2' }
           - { label: 'windows 24.x, 1 of 2',  os: windows-latest, node: '24.x', shard: '--shard=1/2' }
           - { label: 'windows 24.x, 2 of 2',  os: windows-latest, node: '24.x', shard: '--shard=2/2' }
-          - { label: 'macos 24.x',            os: macos-14,       node: '24.x' }
+          - { label: 'macos 24.x',            os: macos-15,       node: '24.x' }
 
     steps:
       - name: Checkout

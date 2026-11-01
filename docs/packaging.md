@@ -779,7 +779,7 @@ second-laptop continuity check.
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the **exact pre-release command
 chain** — `npm ci` → `npm run typecheck` → `npm run build` → `npm test` — on every pull request
 and on pushes to `master`, on **`ubuntu-latest` and `windows-latest`** (Windows is
-first-class for this project) × **Node `22.x` and `24.x`**, plus one **`macos-14`** leg on
+first-class for this project) × **Node `22.x` and `24.x`**, plus one **`macos-15`** leg on
 Node `24.x` (#753, below). It is the machine
 backstop the audit asked for (TEST-N1): before CI, the suite was green only by author discipline,
 and the repo's own anti-false-green check ([`tests/full-suite-guard.ts`](../apps/desktop/tests/full-suite-guard.ts))
@@ -793,11 +793,19 @@ matching; never mark an individual leg required.
 
 **Why one macOS leg (#753, the TS-7 owner call, 2026-11-01).** macOS is a supported platform, and
 until this leg no test had ever run on one: the release workflow's `build-mac` packages without
-running `npm test`. One leg, on the runner and the Node that job builds with (`macos-14`, Apple
+running `npm test`. One leg, on the runner and the Node that job builds with (`macos-15`, Apple
 Silicon, Node 24), is enough for what only a Mac can show: the POSIX-only rows on a real one, and
 `script-execution`'s `.sh` leg under stock Bash 3.2, at PR time rather than at a tag (v0.1.60's
 `mapfile` failed only once the tag was pushed). It proves the suite, not the app: nothing here launches
 Electron, so the packaged-app checks under "Platform verification" stay manual.
+
+**The macOS label is pinned, and shared with `build-mac`, on purpose.** GitHub keeps the latest two
+macOS images and fails a retiring one in scheduled brownouts before removing it. `macos-14` went that
+way on 2026-11-02 ([runner-images#13518](https://github.com/actions/runner-images/issues/13518)), and
+`build-mac` was the only thing using it, so nothing showed the notice: a release in a brownout window
+or after the retirement would have failed at the Mac build. The PR leg now shows a brownout months
+ahead, as a cancelled `macos 24.x` job with a "runner image brownout" annotation and a red
+`ci-success`: it is not a test failure. Move both labels together.
 
 **Why the windows legs are sharded and the ubuntu ones are not (#458).** The `npm test` step was
 483–542 s of a 10–14 min windows leg against ~5 min for a whole ubuntu leg, so the windows legs ran
@@ -1079,7 +1087,7 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
   (issue #102 item 1): parity for the win release + an offline/air-gapped engine install path
   without the repo scripts (unzip into `runtime/llama.cpp/`). No symlink-dereference concern on
   win (the Vulkan build carries none).
-- **`build-mac`** — `macos-14` (Apple Silicon): `npm ci` → typecheck → `npm run package` (`dir`
+- **`build-mac`** — `macos-15` (Apple Silicon): `npm ci` → typecheck → `npm run package` (`dir`
   target) → **ad-hoc sign** (`codesign --force --deep --sign -`, required to launch on Apple
   Silicon) → **ditto-zip** (`HilbertRaum-<version>-mac-arm64.app.zip` — it must STAY zipped on
   exFAT, which can't hold the `.app`'s framework symlinks; the drive launcher extracts to a local

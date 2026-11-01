@@ -407,8 +407,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
          copy surfaces (never raw model/runtime text). Also watch the PARTIAL-frame case: an error
          frame truncated mid-write (`data: {"error":{"mess` + close, no `[DONE]`) must parse as a
          keep-alive and end the stream CLEANLY (Phase 4's scoped close-without-`[DONE]` semantics).
-   - **TS-7 — decided 2026-11-01 (#753):** a per-PR `macos 24.x` CI leg (`macos-14`), packaging.md
-     CI section. Packaged-app checks on a Mac stay manual.
+   - **TS-7 — decided 2026-11-01 (#753):** a per-PR `macos 24.x` CI leg (`macos-15`, shared with
+     `build-mac`: `macos-14` retired 2026-11-02), packaging.md CI section. Packaged-app checks on a
+     Mac stay manual.
    - **BE-1 rider:** the `rag*` numeric settings knobs remain deliberately unclamped (they flow
      into retrieval via `ragSettingsFrom`; clamping changes behavior for extreme-value users —
      needs its own small decision before any bound).
