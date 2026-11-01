@@ -1548,8 +1548,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   let cancelled = false
   for (let i = 0; i < manifests.length; i++) {
     const { manifest } = manifests[i]
-    // Loop head: a cancel between two multi-GB weights stops the pass here, before the next
-    // one is opened.
+    // Loop head: a cancel between two multi-GB weights is noticed here, before the next one is
+    // opened. `computeInstallState` takes the signal too, so the two back each other up.
     if (!cancelled && opts.signal?.aborted) cancelled = true
     const thisHashes = !cancelled && willHash[i] > 0
     if (emit && thisHashes) stepIndex++

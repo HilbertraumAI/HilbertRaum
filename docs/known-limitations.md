@@ -2589,7 +2589,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   (DIST-2).** `assertCommercialDrive` → `verifyDriveModels` iterates the same `manifestFiles` set
   (GGUF + mmproj) that `computeInstallState` requires, so a half-installed vision drive (good GGUF,
   missing/corrupt projector) fails `weightsVerified`. The in-app `DownloadManager` now fetches **both
-  files (GGUF + mmproj) as one job** (DIST-1) — `planDownload` enqueues the language GGUF then its
+  files (GGUF + mmproj) as one job** (DIST-1) — `planModelDownloads` plans the language GGUF then its
   `mmproj` projector, the job's `totalBytes`/`receivedBytes` cover both, and a finish of a
   half-installed vision model (GGUF already present, projector missing) fetches just the projector
   (`downloads.test.ts`). The `fetch-models.{sh,ps1}` scripts remain the offline/CLI two-file path.
