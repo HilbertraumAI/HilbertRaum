@@ -327,6 +327,9 @@ describe('offline self-check', () => {
     expect(isLoopbackHost('localhost')).toBe(true)
     expect(isLoopbackHost('::1')).toBe(true)
     expect(isLoopbackHost('[::1]')).toBe(true)
+    expect(isLoopbackHost('0:0:0:0:0:0:0:1')).toBe(true)
+    expect(isLoopbackHost('::ffff:127.0.0.1')).toBe(true)
+    expect(isLoopbackHost('::ffff:7f00:1')).toBe(true)
     expect(isLoopbackHost('127.0.0.53')).toBe(true)
     expect(isLoopbackHost('app.localhost')).toBe(true)
     expect(isLoopbackHost(undefined)).toBe(true)
@@ -339,6 +342,9 @@ describe('offline self-check', () => {
     expect(isLoopbackHost('127.0.0.1.evil.com')).toBe(false)
     expect(isLoopbackHost('127.0.0.1.example.org')).toBe(false)
     expect(isLoopbackHost('notlocalhost')).toBe(false)
+    // An IPv4-mapped remote address, in both spellings, is remote.
+    expect(isLoopbackHost('::ffff:93.184.216.34')).toBe(false)
+    expect(isLoopbackHost('::ffff:5db8:d822')).toBe(false)
     // Genuine IPv4 loopback addresses still match.
     expect(isLoopbackHost('127.0.0.1')).toBe(true)
     expect(isLoopbackHost('127.255.255.255')).toBe(true)
@@ -388,12 +394,15 @@ describe('offline self-check', () => {
     ['net.connect({ host })', () => failed(net.connect({ host: 'example.com', port: 80 })), 'example.com'],
     ['net.connect(port, host)', () => failed(net.connect(80, 'example.com')), 'example.com'],
     ['http.request', () => failed(http.request({ host: 'example.com', port: 80 }).end()), 'example.com'],
+    // The knowledge-pack client's shape. A request path that reached the socket would read as a unix socket.
+    ['http.request with a request path', () => failed(http.request({ host: 'example.com', port: 80, path: '/x' }).end()), 'example.com'],
     ['plain-http fetch', () => fetch('http://example.com/').then(ignored, ignored), 'example.com'],
     ['https.request', () => failed(https.request({ host: 'example.com', port: 443 }).end()), 'example.com'],
     ['https fetch', () => fetch('https://example.com/').then(ignored, ignored), 'example.com'],
     ['net.connect, loopback', () => failed(net.connect({ host: '127.0.0.1', port: 1 })), null],
     ['http.request, localhost', () => failed(http.request({ host: 'localhost', port: 1 }).end()), null],
     ['plain-http fetch, loopback', () => fetch('http://127.0.0.1:8080/').then(ignored, ignored), null],
+    ['plain-http fetch, IPv4-mapped loopback', () => fetch('http://[::ffff:127.0.0.1]:8080/').then(ignored, ignored), null],
     ['net.connect, port only', () => failed(net.connect(1)), null],
     ['net.connect, a socket path wins over host', () => failed(net.connect({ path: '/tmp/s', host: 'example.com' } as net.NetConnectOpts)), null]
   ])('installOfflineNetworkGuard sees through every route to a socket: %s', async (_label, route, flagged) => {

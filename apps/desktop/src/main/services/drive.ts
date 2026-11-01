@@ -6,13 +6,13 @@ import { isSupportedRuntimeFormat, manifestFiles, sha256File, verifyChecksum } f
 
 // Drive preparation logic (spec §6 / §12).
 //
-// This module is the CANONICAL, unit-tested reference for what `prepare-drive` and
+// This module is the CANONICAL, unit-tested reference for parts of what `prepare-drive` and
 // `verify-models` do: which directories a prepared drive contains, the exact shape of
 // the `config/{drive,policy,checksums}.json` files, and how a weight file is verified
 // against its manifest. The `scripts/prepare-drive.{ps1,sh}` + `scripts/verify-models.
-// {ps1,sh}` re-implement the SAME plan natively so a drive can be laid out on a fresh
-// machine with no Node/npm (decision: drive-prep must not require a build). Keep the two
-// in sync; this file is the source of truth and is exercised by `tests/integration/drive.test.ts`.
+// {ps1,sh}` do the whole job natively so a drive can be laid out on a fresh machine with
+// no Node/npm (decision: drive-prep must not require a build). `script-drift` holds them to
+// the layout and config shapes here; `tests/integration/drive.test.ts` exercises this file.
 //
 // LAY OUT WHAT THE CODE READS, not a parallel scheme: the directory names match
 // `services/workspace.ts` (`resolvePaths`), the manifests live in a top-level

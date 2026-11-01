@@ -245,7 +245,8 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `db-fixtures` so that the skills suites do not load `services/settings`.
 - **Home, AI Model and the whole App start from shared stubs**: `stubHomeApi` and `renderHome`
   (`tests/helpers/home-screen.tsx`), `stubModelsApi` and `modelsScreenStubs` (`model-fixtures.ts`), `appShellStubs`
-  (`app-shell.ts`). Those screens no longer tolerate a missing channel, because the preload ships inside the app.
+  (`app-shell.ts`). Those screens' own reads no longer tolerate a missing channel, because the preload ships inside
+  the app. The hooks they use still do (`useOcrInstall`, `useEngineProblems`).
 - **A screen error boundary can hide a missing stub.** With that tolerance gone, Home crashed under AppLock and
   ReviewLockSeam, and both stayed green: the boundary caught it and their rows read only the nav rail. In a full-App
   suite, use `appShellStubs` and read the run's `stubApi: unmocked` warnings. A suite that adds a screen's reads to

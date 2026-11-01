@@ -5,8 +5,8 @@ import { STOPPED_RUNTIME, appStatus, makePolicyStatus, preflightResult } from '.
 
 // Bridge stubs for the suites that render Home or the whole App, calm by default. Imports no renderer
 // module, so a suite that mocks a screen, or proves one loads lazily, can use it. Home's and Models'
-// reads carry no tolerance for a missing channel: the preload ships inside the app, so a stub that
-// leaves one out fails at the call instead of reading as "nothing to say".
+// own reads carry no tolerance for a missing channel, because the preload ships inside the app:
+// `stubApi` answers an unmocked channel with `undefined`, so the `.then` after it throws.
 
 /** The dev workspace a plain App render unlocks into. */
 export const UNLOCKED_DEV_WORKSPACE: WorkspaceStateInfo = {

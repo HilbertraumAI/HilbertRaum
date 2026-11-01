@@ -1697,7 +1697,7 @@ describe('maybeAutoStartActiveModel', () => {
   // to keep the session served, the RAM gate is OS-only, and the GPU-settings reads degrade to
   // safe defaults while locked. So the hash resolved after the lock finished and spawned a full
   // llama-server while the app sat at the unlock gate.
-  //
+
   /** Drive one legitimate auto-start to completion. Anything a previously-released start would
    *  have spawned was enqueued on this same path earlier, so it has landed by the time this
    *  resolves — a deterministic replacement for "wait a bit and hope" (the TS-1 sentinel idiom). */

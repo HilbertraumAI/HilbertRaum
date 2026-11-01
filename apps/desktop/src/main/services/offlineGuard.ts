@@ -18,15 +18,17 @@ import net from 'node:net'
  * (audit M-S1; security-model.md "Detection-only, not enforcement"), so an over-match
  * here only ever costs an audit line, never an allowed remote connection. The IPv4 form
  * is anchored end-to-end (`/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/`) so a hostname like
- * `127.evil.com` / `127.0.0.1.evil.com` is NOT misclassified as loopback.
+ * `127.evil.com` / `127.0.0.1.evil.com` is NOT misclassified as loopback. IPv4-mapped loopback
+ * comes in two spellings: dotted, and the hex one the URL parser turns `[::ffff:127.0.0.1]` into.
  */
 export function isLoopbackHost(host?: string | null): boolean {
   if (!host) return true // net.connect() with no host defaults to localhost
   let h = host.trim().toLowerCase()
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1) // strip IPv6 brackets
   if (h === 'localhost' || h.endsWith('.localhost')) return true
-  if (h === '::1' || h === '::ffff:127.0.0.1') return true
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true
+  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true
+  if (/^(::ffff:)?127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true
+  if (/^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(h)) return true
   return false
 }
 

@@ -201,8 +201,7 @@ Write-Host ''
 # --- App skills ---------------------------------------------------------------------
 # Copy the committed product skills (text-only: SKILL.md + JSON schemas + examples) from the
 # repo app-skills/ tree onto the drive, the same wholesale copy as model-manifests/ (skills
-# plan S9 / DS17). user-skills/ is left EMPTY (the buyer fills it). Canonical reference:
-# drive.ts listSkillFolders.
+# plan S9 / DS17). user-skills/ is left EMPTY (the buyer fills it).
 $AppSkillSrc = Join-Path $RepoRoot 'app-skills'
 $AppSkillDst = Join-DrivePath 'app-skills'
 Write-Host 'App skills:'
