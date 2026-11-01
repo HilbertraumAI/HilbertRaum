@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, win32 } from 'node:path'
@@ -14,7 +13,6 @@ import {
   requiredInstallFiles,
   verifyDownloadedFile,
   downloadToFile,
-  fetchAndVerify,
   formatAssetPlan,
   runtimeBinaryName,
   readRuntimeMarker,
@@ -33,32 +31,15 @@ import {
 } from '../../src/main/services/assets'
 import { validateManifest, isRealSha256, type ModelManifest } from '../../src/shared/manifest'
 import { validateRuntimeSources, type RuntimeSources } from '../../src/shared/runtime-sources'
+import { sha256, validManifest } from '../helpers/manifest-fixtures'
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
 }
 
-function sha256(s: string): string {
-  return createHash('sha256').update(s).digest('hex')
-}
-
-function manifest(overrides: Record<string, unknown> = {}): ModelManifest {
-  const raw: Record<string, unknown> = {
-    id: 'qwen3-4b-instruct-q4',
-    display_name: 'Qwen3 4B Instruct Q4',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama_cpp',
-    license: 'apache-2.0',
+const manifest = (overrides: Record<string, unknown> = {}): ModelManifest =>
+  validManifest({
     size_on_disk_gb: 2.5,
-    recommended_min_ram_gb: 8,
-    recommended_ram_gb: 16,
-    recommended_context_tokens: 4096,
-    local_path: 'models/chat/qwen3-4b-instruct-q4.gguf',
-    sha256: 'REPLACE_WITH_REAL_HASH',
-    recommended_profiles: ['LITE'],
-    license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' },
     download: {
       url: 'https://example.test/qwen3-4b.gguf',
       sha256: 'REPLACE_WITH_REAL_HASH',
@@ -66,11 +47,7 @@ function manifest(overrides: Record<string, unknown> = {}): ModelManifest {
       license_url: 'https://example.test/license'
     },
     ...overrides
-  }
-  const res = validateManifest(raw)
-  if (!res.manifest) throw new Error('fixture invalid: ' + res.errors.join(', '))
-  return res.manifest
-}
+  })
 
 function writeWeight(root: string, m: ModelManifest, content: string): void {
   const dest = join(root, ...m.localPath.split('/'))
@@ -932,7 +909,7 @@ describe('verifyDownloadedFile', () => {
   })
 })
 
-describe('downloadToFile + fetchAndVerify (injected fetch — no real network)', () => {
+describe('downloadToFile (injected fetch — no real network)', () => {
   const fakeFetch = (body: string, ok = true): FetchFn =>
     (async () => new Response(ok ? body : null, { status: ok ? 200 : 404 })) as unknown as FetchFn
 
@@ -971,29 +948,6 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
     ).rejects.toThrow(/non-HTTPS/)
     // The guard fires BEFORE any fetch — nothing was requested in cleartext.
     expect(spy).not.toHaveBeenCalled()
-  })
-
-  it('fetchAndVerify passes for a matching real hash', async () => {
-    const root = tempDir('hilbertraum-dl-')
-    const dest = join(root, 'w.gguf')
-    const body = 'verified-bytes'
-    const res = await fetchAndVerify(
-      { url: 'https://example.test/w.gguf', dest, expectedSha256: sha256(body) },
-      { fetchImpl: fakeFetch(body) }
-    )
-    expect(res.ok).toBe(true)
-  })
-
-  it('fetchAndVerify deletes the partial and throws on a mismatch', async () => {
-    const root = tempDir('hilbertraum-dl-')
-    const dest = join(root, 'w.gguf')
-    await expect(
-      fetchAndVerify(
-        { url: 'https://example.test/w.gguf', dest, expectedSha256: 'a'.repeat(64) },
-        { fetchImpl: fakeFetch('not-the-expected-bytes') }
-      )
-    ).rejects.toThrow(/mismatch/)
-    expect(existsSync(dest)).toBe(false)
   })
 
   // D3 (vuln-scan-2026-06-21): redirects are followed MANUALLY and re-validated per hop, and the

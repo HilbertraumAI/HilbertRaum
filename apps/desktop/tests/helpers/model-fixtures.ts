@@ -11,7 +11,7 @@ import {
   type PolicyStatus
 } from '../../src/shared/types'
 import { stubApi } from './renderer'
-import { appStatus, makePolicyStatus, runtimeStatus } from './status'
+import { STOPPED_RUNTIME, appStatus, makePolicyStatus } from './status'
 
 // Typed fixtures for the Models renderer suites and the pure library rules. `window` is touched only
 // inside `stubModelsApi`, so a node-environment suite (unit/model-library) can import `modelInfo`.
@@ -88,7 +88,8 @@ export const ENGINE_MISSING: EngineStatus = {
   missingFamilies: ['llama_cpp']
 }
 
-const ENGINE_INSTALLED: EngineStatus = {
+/** Every required engine is in place: no banner. */
+export const ENGINE_INSTALLED: EngineStatus = {
   installed: true,
   available: true,
   version: null,
@@ -97,7 +98,7 @@ const ENGINE_INSTALLED: EngineStatus = {
 }
 
 /** A drive with no usable OCR source list: the AI Model screen's OCR row stays hidden. */
-const NO_OCR_SOURCES: OcrInstallStatus = {
+export const NO_OCR_SOURCES: OcrInstallStatus = {
   available: false,
   languages: [],
   totalBytes: 0,
@@ -110,23 +111,28 @@ export function downloadsAllowedPolicy(): PolicyStatus {
   return makePolicyStatus({ network: { allowModelDownloads: true }, allowNetworkSetting: true })
 }
 
+/** What `ModelsScreen` reads beyond the App shell: for a row that navigates there, spread into `appShellStubs`. */
+export function modelsScreenStubs(): Partial<PreloadApi> {
+  return {
+    listModels: vi.fn(async (): Promise<ModelInfo[]> => []),
+    getEngineStatus: vi.fn(async () => ENGINE_INSTALLED),
+    listDownloadJobs: vi.fn(async (): Promise<DownloadJob[]> => []),
+    onModelVerifyProgress: vi.fn(() => () => {}),
+    getOcrInstallStatus: vi.fn(async () => NO_OCR_SOURCES)
+  }
+}
+
 /**
  * Everything `ModelsScreen` calls at mount, idle: an empty catalog, no job to adopt, engine in place,
  * nothing running. So `assertNoUnexpectedApiCalls()` has teeth in a suite that uses this.
  */
 export function stubModelsApi(over: Partial<PreloadApi> = {}): void {
   stubApi({
-    listModels: vi.fn(async (): Promise<ModelInfo[]> => []),
+    ...modelsScreenStubs(),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
     getPolicy: vi.fn(async () => downloadsAllowedPolicy()),
     getAppStatus: vi.fn(async () => appStatus({ machineRamGb: 32 })),
-    getEngineStatus: vi.fn(async () => ENGINE_INSTALLED),
-    getRuntimeStatus: vi.fn(async () =>
-      runtimeStatus({ running: false, modelId: null, port: null, healthy: false, message: '' })
-    ),
-    listDownloadJobs: vi.fn(async (): Promise<DownloadJob[]> => []),
-    onModelVerifyProgress: vi.fn(() => () => {}),
-    getOcrInstallStatus: vi.fn(async () => NO_OCR_SOURCES),
+    getRuntimeStatus: vi.fn(async () => STOPPED_RUNTIME),
     onEngineProblemsChanged: vi.fn(() => () => {}),
     ...over
   })

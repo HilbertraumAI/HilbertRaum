@@ -240,7 +240,20 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **The manifest and download fixtures** are `tests/helpers/manifest-fixtures.ts` (`rawManifest`,
   `validManifest`, `manifestsDirWith`, `verifiedManifest`, …) and `download-fixtures.ts` (`bodyFetch`,
   `hangingFetch`, `rangeFetch`, `routedFetch`, `runUnwound`). `download-fixtures` has no `node:fs` or main-service
-  value import, so it stays safe beside a `vi.mock` of either.
+  value import, so it stays safe beside a `vi.mock` of either. `binary-fixtures.ts` (`binaryWithMarker`,
+  `verifierInert`) is for suites that drive the real pre-spawn verifier. `seeded-db.ts` is `seededFreshDb`, apart from
+  `db-fixtures` so that the skills suites do not load `services/settings`.
+- **Home, AI Model and the whole App start from shared stubs**: `stubHomeApi` and `renderHome`
+  (`tests/helpers/home-screen.tsx`), `stubModelsApi` and `modelsScreenStubs` (`model-fixtures.ts`), `appShellStubs`
+  (`app-shell.ts`). Those screens' own reads no longer tolerate a missing channel, because the preload ships inside
+  the app. The hooks they use still do (`useOcrInstall`, `useEngineProblems`).
+- **A screen error boundary can hide a missing stub.** With that tolerance gone, Home crashed under AppLock and
+  ReviewLockSeam, and both stayed green: the boundary caught it and their rows read only the nav rail. In a full-App
+  suite, use `appShellStubs` and read the run's `stubApi: unmocked` warnings. A suite that adds a screen's reads to
+  `chatScreenStubs` keeps them separate, since `appShellStubs` would replace its running model with a stopped one.
+- **A date a screen prints takes a local time in the fixture, with no `Z`.** `2026-08-14T09:00:00Z` is the 13th at
+  UTC−11 and `2026-06-15T11:58:00Z` the 16th at UTC+14, and no UTC instant is one calendar day everywhere. To check a
+  suite, run it with `$env:TZ='Pacific/Pago_Pago'` and with `'Pacific/Kiritimati'`.
 - **A row that reads the host pins it.** No CI leg runs tests on macOS, and RAM differs per host.
   Two performance rows would fail on Apple Silicon while docs/benchmark.md said they held "on every
   host", and a recommended-context row would fail under 8 GB. Pin with `pinPlatform`

@@ -15,13 +15,13 @@ import { ToastProvider } from '../../src/renderer/components'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { en, de, t as translate } from '../../src/shared/i18n'
 import {
-  DEFAULT_SETTINGS,
   type DocumentInfo,
   type OcrInstallJob,
   type OcrInstallLanguage,
   type OcrInstallStatus,
   type PolicyStatus
 } from '../../src/shared/types'
+import { stubModelsApi } from '../helpers/model-fixtures'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { appStatus as appStatusFixture, makePolicyStatus } from '../helpers/status'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -455,12 +455,8 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
     getOcrInstallJob?: Mock
   } = {}) {
     const getOcrInstallStatus = vi.fn(async () => opts.status ?? ocrStatus())
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+    stubModelsApi({
       getPolicy: vi.fn(async () => opts.policy ?? allowedPolicy()),
-      getAppStatus: vi.fn(async () => appStatusFixture()),
-      listDownloadJobs: vi.fn(async () => []),
       dismissDownloadJob: vi.fn(async () => undefined),
       getOcrInstallStatus,
       installOcr: opts.installOcr,
@@ -636,12 +632,7 @@ describe('OcrInstall — German (#410)', () => {
     cleanup()
     window.localStorage.clear()
 
-    stubApi({
-      listModels: vi.fn(async () => []),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      getPolicy: vi.fn(async () => allowedPolicy()),
-      getAppStatus: vi.fn(async () => appStatusFixture()),
-      listDownloadJobs: vi.fn(async () => []),
+    stubModelsApi({
       dismissDownloadJob: vi.fn(async () => undefined),
       getOcrInstallStatus: vi.fn(async () => ocrStatus())
     })

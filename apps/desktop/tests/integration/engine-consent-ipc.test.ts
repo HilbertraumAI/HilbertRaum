@@ -41,6 +41,7 @@ import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../
 import { engineProblemFor, reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { updateSettings } from '../../src/main/services/settings'
 import { log } from '../../src/main/services/logging'
+import { bodyFetch } from '../helpers/download-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
 import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
@@ -56,7 +57,6 @@ const BODY = 'archive-bytes'
 const SHA = createHash('sha256').update(BODY).digest('hex')
 const KIWIX_SIZE = 18_301_924
 
-const okFetch: FetchFn = async () => new Response(BODY, { status: 200, headers: { 'content-length': String(BODY.length) } })
 /** Drops the family's declared files at the extract root (the flat-zip shape). */
 const extractAll: ExtractFn = async (_archive, destDir) => {
   await mkdir(destDir, { recursive: true })
@@ -187,7 +187,7 @@ function makeDrive(
   const db = seededDb(root)
   updateSettings(db, { allowNetwork: true })
   const reconcile = vi.fn(async () => undefined)
-  const fetchSpy = vi.fn(okFetch)
+  const fetchSpy = vi.fn(bodyFetch(BODY))
   const ctx = ctxWith(root, db, {
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     manifestsDir: manifests,

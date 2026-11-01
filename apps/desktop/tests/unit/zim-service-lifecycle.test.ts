@@ -11,13 +11,11 @@ import { packUuid, writeZimFixture } from '../helpers/zim-header'
 import { KiwixManageError, kiwixManageAdd } from '../../src/main/services/zim/tools'
 import {
   initBinaryVerification,
-  _resetBinaryVerificationForTests,
   type BinaryVerifyResult
 } from '../../src/main/services/binary-verifier'
 import { ZimService, type ServedLibrary, type ZimAdmission } from '../../src/main/services/zim'
 import {
   ServeFakeChild,
-  binaryWithMarker,
   expectAbortError,
   fakeManageSpawn,
   serveGate,
@@ -25,6 +23,7 @@ import {
   type ServeChildMode,
   type ServeGate
 } from '../helpers/zim-fakes'
+import { binaryWithMarker, verifierInert } from '../helpers/binary-fixtures'
 import { manageAddFromHeader } from '../helpers/zim-library'
 import { until, within } from '../helpers/hang-budget'
 
@@ -164,7 +163,7 @@ describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanu
       expect(r1Warnings()).toHaveLength(1) // once per process, not once per call
       expect(r1Warnings()[0]).not.toMatch(/[\\/]/) // never a path in the message
     } finally {
-      _resetBinaryVerificationForTests()
+      verifierInert()
     }
 
     // --- timeout: the promise stays pending after kill() while the fake ignores it,

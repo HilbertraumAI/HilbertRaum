@@ -3,18 +3,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, fireEvent } from '@testing-library/react'
 import { App } from '../../src/renderer/App'
 import { t } from '../../src/shared/i18n'
-import {
-  DEFAULT_SETTINGS,
-  type AppStatus,
-  type Conversation,
-  type Message,
-  type PolicyStatus,
-  type PreflightResult,
-  type WorkspaceStateInfo
-} from '../../src/shared/types'
+import type { Conversation, Message } from '../../src/shared/types'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { appShellStubs } from '../helpers/app-shell'
+import { modelsScreenStubs } from '../helpers/model-fixtures'
 import { stubApi } from '../helpers/renderer'
-import { appStatus, makePolicyStatus } from '../helpers/status'
+import { appStatus, runtimeStatus } from '../helpers/status'
 import { makeDetail } from '../helpers/evidenceReview'
 
 // Route-level code split (full-audit 2026-07-10 PF-6): Documents/Translate/Images/Models/
@@ -29,47 +23,14 @@ afterEach(() => {
   resetReviewSessionForTests()
 })
 
-const unlockedWorkspace: WorkspaceStateInfo = {
-  state: 'unlocked',
-  mode: 'plaintext_dev',
-  plaintextAllowed: true,
-  encryptionRequired: false
-}
-
-const offlinePolicy = makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })
-
 function stubAppShell(): void {
-  stubApi({
-    getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-    getPolicy: vi.fn(async () => offlinePolicy),
-    getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-    onRuntimeNotice: vi.fn(() => () => {}),
-    // Home (the default, eager screen) readiness data:
-    getAppStatus: vi.fn(async () => appStatus({
-      appName: 'x',
-      appVersion: '0',
-      machineRamGb: 16
-    })),
-    getRuntimeStatus: vi.fn(async () => ({
-      running: false,
-      modelId: null,
-      port: null,
-      healthy: false,
-      message: 'Stopped'
-    })),
-    listDocuments: vi.fn(async () => []),
-    runPreflight: vi.fn(async () => ({
-      ok: true,
-      rootPath: '/drive',
-      writable: true,
-      freeBytes: 1024 * 1024 * 1024,
-      slowDriveWarning: null,
-      problems: []
-    })),
-    // The lazy AI Model screen's data:
-    listModels: vi.fn(async () => []),
-    getRuntimeInstall: vi.fn(async () => null)
-  })
+  stubApi(
+    appShellStubs({
+      ...modelsScreenStubs(),
+      getAppStatus: vi.fn(async () => appStatus({ appName: 'x', appVersion: '0', machineRamGb: 16 })),
+      getRuntimeInstall: vi.fn(async () => null)
+    })
+  )
 }
 
 describe('lazy screens — suspense fallback → content (PF-6)', () => {
@@ -122,54 +83,18 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
         citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12, snippet: '…' }]
       }
     ]
-    stubApi({
-      // The app-shell base (same shape stubAppShell installs)… Typed against the real
-      // bridge contract; the two partial DTOs use NARROW named casts (the F-41 rule —
-      // never a blanket `as never`).
-      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
-      getAppStatus: vi.fn(
-        async () =>
-          ({
-            appName: 'x',
-            appVersion: '0',
-            offlineMode: true,
-            networkAllowed: false,
-            activeModelId: 'm1',
-            hardwareProfile: 'UNKNOWN',
-            workspaceMode: 'plaintext_dev',
-            workspaceReady: true,
-            machineRamGb: 16,
-            dictationAvailable: false
-          }) as AppStatus
-      ),
-      runPreflight: vi.fn(
-        async () =>
-          ({
-            ok: true,
-            rootPath: '/drive',
-            writable: true,
-            freeBytes: 1024 * 1024 * 1024,
-            slowDriveWarning: null,
-            problems: []
-          }) as unknown as PreflightResult
-      ),
-      // …plus the chat surface this flow drives (a running model so the chat gate opens):
-      listConversations: vi.fn(async () => [conversation]),
-      listMessages: vi.fn(async () => messages),
-      listDocuments: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: true,
-        modelId: 'm1',
-        port: 1234,
-        healthy: true,
-        message: 'ok'
-      })),
-      getEvidenceReviewForMessage: vi.fn(async () => null),
-      createEvidenceReview: vi.fn(async () => makeDetail({ messageId: 'm2' }))
-    })
+    stubApi(
+      appShellStubs({
+        getAppStatus: vi.fn(async () => appStatus({ appName: 'x', appVersion: '0', activeModelId: 'm1', machineRamGb: 16 })),
+        // …plus the chat surface this flow drives (a running model so the chat gate opens):
+        listConversations: vi.fn(async () => [conversation]),
+        listMessages: vi.fn(async () => messages),
+        listDocuments: vi.fn(async () => []),
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ warmedUp: undefined })),
+        getEvidenceReviewForMessage: vi.fn(async () => null),
+        createEvidenceReview: vi.fn(async () => makeDetail({ messageId: 'm2' }))
+      })
+    )
     render(<App />)
     const nav = await screen.findByRole('navigation')
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -22,27 +22,11 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 })
 
 import { composeServices, composeTranslator, refreshTranscriberSlot } from '../../src/main/services/compose-services'
+import { rawManifest, writeManifest } from '../helpers/manifest-fixtures'
 
-/** A minimal VALID manifest per role (JSON is YAML — discoverManifests parses it fine). */
-function roleManifest(id: string, role: string, runtime = 'llama_cpp', format = 'gguf') {
-  return {
-    id,
-    display_name: `${id} (test)`,
-    family: 'test-family',
-    role,
-    format,
-    runtime,
-    license: 'apache-2.0',
-    size_on_disk_gb: 0.1,
-    recommended_min_ram_gb: 1,
-    recommended_ram_gb: 2,
-    recommended_context_tokens: 4096,
-    local_path: `models/${role}/${id}.bin`,
-    sha256: 'REPLACE_WITH_REAL_HASH',
-    recommended_profiles: [],
-    license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-07-10', notes: '' }
-  }
-}
+/** A minimal VALID manifest per role. */
+const roleManifest = (id: string, role: string, runtime = 'llama_cpp', format = 'gguf'): Record<string, unknown> =>
+  rawManifest({ id, role, format, runtime, local_path: `models/${role}/${id}.bin` })
 
 function tempDrive(): { root: string; manifestsDir: string } {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-discovery-'))
@@ -54,7 +38,7 @@ function tempDrive(): { root: string; manifestsDir: string } {
     roleManifest('whisper-test', 'transcriber', 'whisper_cpp', 'ggml'),
     roleManifest('translate-test', 'translation')
   ]) {
-    writeFileSync(join(manifestsDir, `${m.id}.yaml`), JSON.stringify(m))
+    writeManifest(manifestsDir, `${m.id}.yaml`, m)
   }
   return { root, manifestsDir }
 }

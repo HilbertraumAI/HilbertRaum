@@ -1,17 +1,12 @@
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { expect } from 'vitest'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
-import { markerBinaryKey, writeRuntimeMarker } from '../../src/main/services/assets'
-import { sha256File } from '../../src/main/services/models'
 import type { ZimServiceDeps } from '../../src/main/services/zim'
 import { appendLibraryBook, type LibraryBookOptions } from './zim-library'
 
 // Shared knowledge-pack test doubles (#301): the controlled-promise gate, the fake kiwix-serve /
 // kiwix-manage child and its scripted early deaths, the fake kiwix-manage spawn, the ZimService
-// deps every service suite passes, and a real install marker for the real pre-spawn verifier.
+// deps every service suite passes.
 // Ordering facts are established by an `entered`/`release` pair, never by a fixed sleep, and
 // every suite drives the SAME three kill behaviours, so no two suites can drift apart on what
 // "the child ignored SIGTERM" means. The `<book>` line a fake manager writes is `zim-library.ts`.
@@ -185,29 +180,6 @@ export function zimServiceDeps(over: ZimServiceDepsOverrides): ZimServiceDeps {
     Object.defineProperty(deps, key, descriptor)
   }
   return deps
-}
-
-/** What an install marker records for a binary: its true hash, a wrong hash, or no hashes (a
- *  bundle placed by hand). The real verifier answers `ok`, `mismatch` and `skip-legacy`. */
-export type MarkerVerdict = 'ok' | 'mismatch' | 'legacy'
-
-/**
- * A real on-disk binary `name` under a real install marker, for a suite that drives the REAL
- * pre-spawn verifier: `initBinaryVerification(false)` turns enforcement on, and
- * `_resetBinaryVerificationForTests()` must undo it. Returns the binary's path.
- */
-export async function binaryWithMarker(name: string, verdict: MarkerVerdict): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-marker-'))
-  const bin = join(dir, name)
-  writeFileSync(bin, 'real-binary-bytes')
-  const marker = { version: '3.8.1', backend: 'cpu', os: 'win' as const, arch: 'x64' }
-  if (verdict === 'legacy') {
-    writeRuntimeMarker(dir, marker)
-  } else {
-    const hash = verdict === 'ok' ? await sha256File(bin) : 'c'.repeat(64)
-    writeRuntimeMarker(dir, { ...marker, binaries: { [markerBinaryKey(dir, bin)]: hash } })
-  }
-  return bin
 }
 
 /** Assert a promise rejects with the #159 AbortError convention (a `DOMException` named

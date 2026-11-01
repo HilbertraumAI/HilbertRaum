@@ -10,6 +10,7 @@ import type {
   ModelInfo,
   ModelVerifyProgress
 } from '../../src/shared/types'
+import { modelInfo } from '../helpers/model-fixtures'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the pre-app gate. Phase 27 turned the CREATE path
@@ -34,24 +35,7 @@ const LOCKED: WorkspaceStateInfo = {
 const UNLOCKED: WorkspaceStateInfo = { ...UNINITIALIZED, state: 'unlocked', mode: 'encrypted' }
 
 /** A minimal installed chat model for the starter-step gate. */
-function chatModel(state: ModelInfo['state']): ModelInfo {
-  return {
-    id: 'qwen3-4b-instruct-q4',
-    displayName: 'Qwen3 4B',
-    family: 'qwen3',
-    role: 'chat',
-    format: 'gguf',
-    runtime: 'llama.cpp',
-    license: 'apache-2.0',
-    sizeOnDiskGb: 2.5,
-    recommendedMinRamGb: 8,
-    recommendedRamGb: 16,
-    recommendedContextTokens: 8192,
-    localPath: 'models/qwen3.gguf',
-    state,
-    recommended: true
-  }
-}
+const chatModel = (state: ModelInfo['state']): ModelInfo => modelInfo({ id: 'qwen3-4b-instruct-q4', state, recommended: true })
 
 const okCreate = (): Mock =>
   vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED }))

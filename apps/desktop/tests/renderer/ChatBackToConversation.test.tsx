@@ -4,9 +4,10 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { App } from '../../src/renderer/App'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { en, t } from '../../src/shared/i18n'
-import type { Message, PreflightResult, WorkspaceStateInfo } from '../../src/shared/types'
+import type { Message } from '../../src/shared/types'
+import { UNLOCKED_DEV_WORKSPACE } from '../helpers/app-shell'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
-import { appStatus, makePolicyStatus } from '../helpers/status'
+import { appStatus, makePolicyStatus, preflightResult } from '../helpers/status'
 import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
 import { assistantMsg, makeConversation, makeDocumentInfo, userMsg } from '../helpers/chat-fixtures'
 import {
@@ -84,35 +85,19 @@ describe('ChatScreen — back-to-originating-conversation handoff (P5)', () => {
 
 // ---- App-level handoff-slot lifecycle (review FIX-1) -----------------------------------
 
-const unlockedWorkspace: WorkspaceStateInfo = {
-  state: 'unlocked',
-  mode: 'plaintext_dev',
-  plaintextAllowed: true,
-  encryptionRequired: false
-}
-
-const offlinePolicy = makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })
-
 /** The App shell's boot reads (an unlocked dev workspace, the offline policy, a healthy drive, no
  *  moved-drive notice, no engine or performance events) and the Documents screen's mount reads (no
- *  import or reindex job to resume): everything these rows reach beyond `chatScreenStubs`. */
-const appShellStubs = () => ({
+ *  import or reindex job to resume): everything these rows reach beyond `chatScreenStubs`, whose
+ *  running model the shared `appShellStubs` would replace with a stopped one. */
+const beyondChatStubs = () => ({
   onEngineProblemsChanged: vi.fn(() => () => {}),
   onPerformanceChanged: vi.fn(() => () => {}),
   getMovedDriveNotice: vi.fn(async () => null),
   getActiveImportJob: vi.fn(async () => null),
   getReindexAllJob: vi.fn(async () => null),
-  getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-  getPolicy: vi.fn(async () => offlinePolicy),
-  runPreflight: vi.fn(
-    async (): Promise<PreflightResult> => ({
-      rootPath: '/drive',
-      writable: true,
-      freeBytes: 1024 * 1024 * 1024,
-      slowDriveWarning: null,
-      problems: []
-    })
-  )
+  getWorkspaceState: vi.fn(async () => UNLOCKED_DEV_WORKSPACE),
+  getPolicy: vi.fn(async () => makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })),
+  runPreflight: vi.fn(async () => preflightResult())
 })
 
 describe('App — the back-handoff slot is one-shot across EVERY chat mount path (FIX-1)', () => {
@@ -140,7 +125,7 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
         listMessages,
         listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf', sizeBytes: 2048 })])
       }),
-      ...appShellStubs(),
+      ...beyondChatStubs(),
       getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', machineRamGb: 16 })),
       getEvidenceReviewForMessage: vi.fn(async () => null),
       createEvidenceReview: vi.fn(async () => makeDetail({ conversationId: 'c1', messageId: 'm2' }))
@@ -210,7 +195,7 @@ describe('App — "Back to chat" after a failed attachment sent the user to Docu
     stubApi(
       chatScreenStubs({
         ...bridge.stubs,
-        ...appShellStubs(),
+        ...beyondChatStubs(),
         getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', machineRamGb: 16, ocrAvailable: true })),
         listConversations: vi.fn(async () => [scanChat]),
         listDocuments: vi.fn(async () => [scan]),

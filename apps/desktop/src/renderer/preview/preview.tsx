@@ -20,7 +20,7 @@ import { Transcript } from '../chat/Transcript'
 import { App } from '../App'
 import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
-import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../screens/ModelsScreen'
+import { ModelsScreen } from '../screens/ModelsScreen'
 import { SettingsScreen } from '../screens/SettingsScreen'
 import { TranslateScreen } from '../screens/TranslateScreen'
 import { LocalApiCard } from '../screens/settings/LocalApiCard'
@@ -130,25 +130,6 @@ const PREVIEW_MODELS: ModelInfo[] = [
   modelRow({ id: 'voice', displayName: 'Whisper Small multilingual', family: 'whisper', role: 'transcriber', sizeOnDiskGb: 0.49 })
 ]
 
-// PR #302 F2: the retained terminal-download panel. The result is derived from the screen's
-// module-scoped remembered job, so the capture seeds one FAILED job (with the model name it was
-// started for) instead of driving a download through the UI. Only the `models-download-failed`
-// case seeds it; every other case starts from the cleared state.
-if ((new URLSearchParams(location.search).get('case') ?? '') === 'models-download-failed') {
-  __resetModelsScreenMemoryForTests({
-    job: {
-      jobId: 'preview-failed-download',
-      modelId: 'qwen38-ud',
-      status: 'failed',
-      receivedBytes: 8_100_000_000,
-      totalBytes: 16_500_000_000,
-      unverified: false,
-      error: 'The connection was interrupted after 8.1 GB (network error).'
-    },
-    jobName: 'Qwen3.8 27B UD-Q4_K_M'
-  })
-}
-
 // ---- Mock window.api: a Proxy so any unlisted method resolves to a harmless default ------------
 const overrides: Record<string, unknown> = {
   // App-shell cases (`brand-home*`): the shell needs an unlocked workspace to render the
@@ -250,6 +231,23 @@ const overrides: Record<string, unknown> = {
   }),
   getPolicy: async () => null,
   getEngineStatus: async () => null,
+  // PR #302 F2: the retained terminal-download panel. The screen adopts one FAILED job the way a
+  // reloaded renderer does (#314) instead of driving a download through the UI, and names it from
+  // PREVIEW_MODELS. Only the `models-download-failed` case has one.
+  listDownloadJobs: async () =>
+    (new URLSearchParams(location.search).get('case') ?? '') === 'models-download-failed'
+      ? [
+          {
+            jobId: 'preview-failed-download',
+            modelId: 'qwen38-ud',
+            status: 'failed',
+            receivedBytes: 8_100_000_000,
+            totalBytes: 16_500_000_000,
+            unverified: false,
+            error: 'The connection was interrupted after 8.1 GB (network error).'
+          }
+        ]
+      : [],
   // #410: the OCR install row/dialog read this; null = no offer in the marketing preview.
   getOcrInstallStatus: async () => null,
   getRuntimeStatus: async () => {

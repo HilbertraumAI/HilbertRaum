@@ -437,7 +437,10 @@ AI Model screen uses the same distinction to explain why downloads are unavailab
 At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and, while offline,
 installs a defensive tripwire over `net.Socket.prototype.connect` in **all builds** (so a production
 regression that tried to phone home would still be recorded locally). While offline, any connection to
-a **remote** host is logged as a violation.
+a **remote** host from the main process is logged as a violation, by whichever route it reached a socket:
+`fetch`, `http.request`, `net.connect` and TLS alike. (Until #751 only TLS was seen: the others pass
+Node's normalized argument array, which the guard did not read, so their host came back empty and counted
+as loopback.) Child processes, worker threads and Chromium's own network stack are outside it (§3 below).
 
 **Loopback is not "network".** `127.0.0.0/8`, `::1`, and `localhost` are explicitly exempt — the dev
 renderer loads from `http://localhost` today and the Phase-10 `llama.cpp` sidecar binds `127.0.0.1`.

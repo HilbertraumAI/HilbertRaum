@@ -18,35 +18,27 @@ import net from 'node:net'
  * (audit M-S1; security-model.md "Detection-only, not enforcement"), so an over-match
  * here only ever costs an audit line, never an allowed remote connection. The IPv4 form
  * is anchored end-to-end (`/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/`) so a hostname like
- * `127.evil.com` / `127.0.0.1.evil.com` is NOT misclassified as loopback.
+ * `127.evil.com` / `127.0.0.1.evil.com` is NOT misclassified as loopback. IPv4-mapped loopback
+ * comes in two spellings: dotted, and the hex one the URL parser turns `[::ffff:127.0.0.1]` into.
  */
 export function isLoopbackHost(host?: string | null): boolean {
   if (!host) return true // net.connect() with no host defaults to localhost
   let h = host.trim().toLowerCase()
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1) // strip IPv6 brackets
   if (h === 'localhost' || h.endsWith('.localhost')) return true
-  if (h === '::1' || h === '::ffff:127.0.0.1') return true
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true
+  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true
+  if (/^(::ffff:)?127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true
+  if (/^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(h)) return true
   return false
 }
 
-export interface OutboundCheck {
-  host: string
-  violation: boolean
-}
-
 /**
- * Decide whether an outbound connection to `host` violates the offline posture.
- * A violation requires BOTH offline mode AND a remote (non-loopback) host.
+ * Extract the target host from the arguments of `net.Socket.prototype.connect`. `net.connect`,
+ * `http.request` and plain-http `fetch` hand over Node's normalized `[options, callback]` array
+ * (#751); a direct `socket.connect(...)` and TLS pass the options or the positional form.
  */
-export function checkOutboundHost(host: string | undefined | null, offline: boolean): OutboundCheck {
-  const loopback = isLoopbackHost(host)
-  return { host: host ?? '(default localhost)', violation: offline && !loopback }
-}
-
-/** Extract the target host from the arguments of `net.Socket.prototype.connect`. */
 function extractHost(args: unknown[]): string | undefined {
-  const first = args[0]
+  const first: unknown = Array.isArray(args[0]) ? args[0][0] : args[0]
   if (first && typeof first === 'object') {
     const opts = first as { host?: unknown; path?: unknown }
     if (typeof opts.path === 'string') return undefined // unix domain socket = local IPC
@@ -77,8 +69,8 @@ export function installOfflineNetworkGuard(opts: OfflineGuardOptions): () => voi
   const original = proto.connect
   proto.connect = function patchedConnect(this: unknown, ...args: unknown[]): unknown {
     try {
-      const { host, violation } = checkOutboundHost(extractHost(args), true)
-      if (violation) opts.onViolation?.(host)
+      const host = extractHost(args)
+      if (host && !isLoopbackHost(host)) opts.onViolation?.(host)
     } catch {
       /* a detector must never break the real connect */
     }

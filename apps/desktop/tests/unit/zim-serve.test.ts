@@ -2,15 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import {
   initBinaryVerification,
-  _resetBinaryVerificationForTests
 } from '../../src/main/services/binary-verifier'
 import { log } from '../../src/main/services/logging'
 import { KiwixServer } from '../../src/main/services/zim/serve'
+import { binaryWithMarker, verifierInert } from '../helpers/binary-fixtures'
 import { until } from '../helpers/hang-budget'
 import {
   BIND_RACE,
   ServeFakeChild,
-  binaryWithMarker,
   expectAbortError,
   failEarly,
   serveGate,
@@ -201,7 +200,7 @@ describe('KiwixServer', () => {
       expect(r1()[0]).not.toMatch(/[\\/]/)
     } finally {
       warn.mockRestore()
-      _resetBinaryVerificationForTests()
+      verifierInert()
     }
   })
 })

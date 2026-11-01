@@ -998,8 +998,8 @@ head's own weights + KV.
   offlineMode }` (effective = policy ∧ setting). **`buildPolicyStatus(configDir, allowNetworkSetting,
   onWarn?)`** → `PolicyStatus` (the `getPolicy()` IPC shape; `telemetryAllowed` hardcoded false).
 ✅ **`services/offlineGuard.ts`** — `isLoopbackHost(host)` (127.0.0.0/8, ::1, localhost exempt),
-  `checkOutboundHost(host, offline)` → `{ host, violation }`, `installOfflineNetworkGuard({ offline,
-  onViolation })` (wraps `net.Socket.prototype.connect`, logs remote attempts, **never blocks**,
+  `installOfflineNetworkGuard({ offline, onViolation })` (wraps `net.Socket.prototype.connect`, logs
+  remote attempts on every route, Node's normalized argument array included (#751), **never blocks**,
   returns an uninstaller; no-op when not offline), `assertOfflinePosture({ posture,
   log, warn, onViolation? })` (startup self-check; logs posture, installs the guard in ALL builds when offline).
 ✅ **IPC** `registerCoreIpc.ts`: `getPolicy` (`policy:get`) returns `buildPolicyStatus(...)`;
@@ -1118,15 +1118,14 @@ head's own weights + KV.
 
 ### Drive layout, scripts & packaging (Phase 11 live)
 ✅ **`services/drive.ts`** — the canonical, unit-tested reference for drive prep (the scripts mirror it):
-- `DRIVE_OS_DIRS = ['win','mac','linux']`, `DRIVE_LAYOUT_DIRS` (workspace, models/{chat,embeddings},
-  model-manifests, runtime/llama.cpp/{win,mac,linux}, logs, config, docs), `driveLayoutDirs(root)`.
+- `DRIVE_OS_DIRS = ['win','mac','linux']`, `DRIVE_LAYOUT_DIRS` (the list itself: see
+  [`drive-layout.md`](drive-layout.md); `script-drift` holds both prepare-drive scripts to it).
 - `buildDriveJson(opts) → DriveJson` (the `config/drive.json` marker, spec §6 shape);
-  `buildPolicyJson({dev?}) → PolicyJson` (snake_case; network always denied; commercial vs dev posture).
+  `buildPolicyJson({dev?}) → PolicyJson` (snake_case; `allow_model_downloads: true`, update checks off;
+  commercial vs dev posture). `script-drift` holds the scripts to both shapes; no app code writes them.
 - `verifyDriveModels(root, manifests) → ModelVerifyResult[]` (status `verified|unverified_placeholder|
   mismatch|missing|unsupported`, reusing `models.ts` `verifyChecksum`/`isRealSha256`);
   `buildChecksumsJson(root, manifests) → ChecksumsJson` (generate-mode capture of present-weight hashes).
-- `planPrepareDrive(root, manifests, opts) → PreparePlan` (dirs + config files + manifest copies +
-  weight destinations + `configWouldOverwrite`).
 ✅ **`scripts/`** (repo root, self-contained; no Node/npm needed to prep a drive):
 - `prepare-drive.{ps1,sh}` — `-Target`/`--target` (required), `-DryRun`/`--dry-run`, `-Force`/`--force`,
   `-Dev`/`--dev`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
@@ -1179,8 +1178,8 @@ head's own weights + KV.
   match = the CPU build) · `planRuntimeDownload(root, build, version) → {url, zipDest, extractTo,
   binaryPath, sha256, ...}` (escape-guarded) · `runtimeBinaryName(os)`.
 - `verifyDownloadedFile(path, expected) → {ok, actual, reason}` (placeholder/missing/mismatch are NOT a
-  pass) · `downloadToFile(url, dest, {fetchImpl?, onProgress?})` + `fetchAndVerify(task, deps)` (injected
-  fetch; mismatch deletes the partial + throws) · `formatAssetPlan(modelTasks, runtimePlan)`.
+  pass) · `downloadToFile(url, dest, {fetchImpl?, onProgress?})` (injected fetch) ·
+  `formatAssetPlan(modelTasks, runtimePlan)`.
 ✅ **`scripts/`** (self-contained, dual `.ps1`/`.sh`, OS-native downloader; `.ps1` pure ASCII):
 - `fetch-models.{ps1,sh}` — `-Target`/`--target` (req), `-Only`/`--only`, `-AcceptLicense`/
   `--accept-license`, `-DryRun`/`--dry-run`. Per `download`-block manifest: download (resume via

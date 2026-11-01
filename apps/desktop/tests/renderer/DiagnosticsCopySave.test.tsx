@@ -46,7 +46,7 @@ const benchmark: BenchmarkResult = {
     ms: 85_200,
     source: 'model_load',
     modelId: 'mock-chat-8b',
-    at: '2026-06-15T11:58:00Z'
+    at: '2026-06-15T11:58:00' // a local time: the copy prints its date, and a UTC instant is another day somewhere
   },
   ranAt: '2026-06-15T12:00:00Z',
   warnings: []

@@ -52,13 +52,14 @@ import {
 } from '../../src/main/services/assets'
 import type { FetchFn } from '../../src/main/services/assets'
 import {
-  _resetBinaryVerificationForTests,
   initBinaryVerification,
   verifyBinaryBeforeSpawn
 } from '../../src/main/services/binary-verifier'
 import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../src/main/ipc/registerEngineIpc'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
+import { verifierInert } from '../helpers/binary-fixtures'
+import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
@@ -120,8 +121,7 @@ function makeMultiFamilyDrive(): { rootPath: string; manifestsDir: string } {
 
 const WHISPER_BIN = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli'
 
-const okFetch = (async () =>
-  new Response(BODY, { status: 200, headers: { 'content-length': String(BODY.length) } })) as unknown as FetchFn
+const okFetch = bodyFetch(BODY)
 
 /** A fake extractor that drops the family-correct binary (keyed off the extract dir). */
 const familyExtract: ExtractFn = async (_archive, destDir) => {
@@ -585,7 +585,6 @@ describe('re-install invalidates the binary-verifier session cache (full-audit 2
       arch: HOST_ARCH,
       binaries: { [BIN_NAME]: createHash('sha256').update('binary').digest('hex') }
     })
-    _resetBinaryVerificationForTests()
     initBinaryVerification(false) // packaged build: enforce + session-cache the verdicts
     try {
       // The tamper is detected and the verdict lands in the session cache.
@@ -600,7 +599,7 @@ describe('re-install invalidates the binary-verifier session cache (full-audit 2
       // repair). replaceInstall now evicts the entry, so the next spawn re-hashes → ok.
       await expect(verifyBinaryBeforeSpawn(binPath)).resolves.toBe('ok')
     } finally {
-      _resetBinaryVerificationForTests()
+      verifierInert()
     }
   })
 })
@@ -732,13 +731,12 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     expect(marker.binaries).toEqual(Object.fromEntries(KIWIX_FILES.map((f) => [f, sha(`bytes of ${f}`)])))
 
     // BOTH spawn seams now verify against a recorded hash — no skip-legacy (R-1 closes).
-    _resetBinaryVerificationForTests()
     initBinaryVerification(false)
     try {
       await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_SERVE))).resolves.toBe('ok')
       await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_MANAGE))).resolves.toBe('ok')
     } finally {
-      _resetBinaryVerificationForTests()
+      verifierInert()
     }
     const after = engineStatus(rootPath, manifestsDir)
     expect(after.installed).toBe(true)
@@ -863,7 +861,6 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
       arch: HOST_ARCH,
       binaries: Object.fromEntries(KIWIX_FILES.map((f) => [f, sha(`bytes of ${f}`)]))
     })
-    _resetBinaryVerificationForTests()
     initBinaryVerification(false)
     try {
       await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_SERVE))).resolves.toBe('mismatch')
@@ -872,7 +869,7 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
       await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_SERVE))).resolves.toBe('ok')
       await expect(verifyBinaryBeforeSpawn(join(dir, KIWIX_MANAGE))).resolves.toBe('ok')
     } finally {
-      _resetBinaryVerificationForTests()
+      verifierInert()
     }
   })
 

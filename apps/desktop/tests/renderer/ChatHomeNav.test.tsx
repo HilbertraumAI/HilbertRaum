@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
+import { UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
 import { knowledgePack, WIKIPEDIA_EN_PACK } from '../helpers/knowledge-pack-fixtures'
+import { renderHome as renderScreen, stubHomeApi } from '../helpers/home-screen'
 import { stubApi } from '../helpers/renderer'
+import { STOPPED_RUNTIME, appStatus, preflightResult, runtimeStatus } from '../helpers/status'
 
 // Renderer tests for the chat screen's structural behaviors (Phase 25 layout, same
 // contracts underneath): deleting conversations through the row "⋯" menu + ConfirmDialog
@@ -333,7 +334,7 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
 
 describe('HomeScreen — readiness hub (Phase 26)', () => {
   function renderHome(
-    onNavigate: (s: string) => void,
+    onNavigate: Mock<(s: string) => void>,
     opts: {
       activeModelId?: string | null
       running?: boolean
@@ -344,43 +345,19 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
   ): void {
     const docCount = opts.docCount ?? 2
     if (opts.lang) window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, opts.lang)
-    stubApi({
-      getAppStatus: vi.fn(async () => ({
-        appName: 'x',
-        appVersion: '0',
-        offlineMode: true,
-        networkAllowed: false,
-        activeModelId: opts.activeModelId ?? null,
-        hardwareProfile: 'UNKNOWN' as const,
-        workspaceMode: 'plaintext_dev' as const,
-        workspaceReady: true,
-        machineRamGb: 16,
-        dictationAvailable: false,
-        ocrAvailable: false,
-        translationAvailable: false
-      })),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: opts.running ?? false,
-        modelId: opts.running ? (opts.activeModelId ?? 'm1') : null,
-        port: null,
-        healthy: opts.running ?? false,
-        message: ''
-      })),
+    stubHomeApi({
+      getAppStatus: vi.fn(async () => appStatus({ activeModelId: opts.activeModelId ?? null, machineRamGb: 16 })),
+      getRuntimeStatus: vi.fn(async () =>
+        opts.running
+          ? runtimeStatus({ modelId: opts.activeModelId ?? 'm1', port: null, message: '' })
+          : STOPPED_RUNTIME
+      ),
       listDocuments: vi.fn(async () =>
         Array.from({ length: docCount }, (_, i) => indexedDoc(`d${i + 1}`, `doc-${i + 1}.pdf`))
       ),
-      runPreflight: vi.fn(async () => ({
-        ok: (opts.problems ?? []).length === 0,
-        rootPath: '/drive',
-        writable: true,
-        freeBytes: 1024 * 1024 * 1024,
-        slowDriveWarning: null,
-        problems: opts.problems ?? []
-      }))
+      runPreflight: vi.fn(async () => preflightResult({ problems: opts.problems ?? [] }))
     })
-    render(
-      opts.lang ? <I18nProvider><HomeScreen onNavigate={onNavigate} /></I18nProvider> : <HomeScreen onNavigate={onNavigate} />
-    )
+    renderScreen({ onNavigate })
   }
 
   /** The loud filled primary buttons currently on screen (Button variant="primary"). */

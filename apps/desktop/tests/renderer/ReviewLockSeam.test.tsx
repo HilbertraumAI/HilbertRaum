@@ -10,16 +10,12 @@ import {
   resetReviewSessionForTests
 } from '../../src/renderer/lib/reviewSession'
 import {
-  DEFAULT_SETTINGS,
-  type AppStatus,
   type EvidenceReviewItemPatch,
-  type PolicyStatus,
-  type PreflightResult,
   type WorkspaceStateInfo
 } from '../../src/shared/types'
 
 import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
-import { makePolicyStatus } from '../helpers/status'
+import { appShellStubs } from '../helpers/app-shell'
 
 // EP-1 Phase 2 review FIX-3 — the review store's LOCK SEAM, pinned end-to-end through the
 // real `App.lockNow`. The wiring under test (App.tsx + lockPurge.ts):
@@ -42,7 +38,6 @@ const lockedState: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
-const offlinePolicy = makePolicyStatus()
 
 afterEach(() => {
   cleanup()
@@ -56,35 +51,14 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
     const updateEvidenceReviewItem = vi.fn(
       async (id: string, patch: EvidenceReviewItemPatch) => makeItem({ id, ...patch })
     )
-    stubReviewApi({
-      getWorkspaceState: vi.fn(async () => unlockedEncrypted),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
-      lockWorkspace,
-      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as unknown as AppStatus),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: false,
-        modelId: null,
-        port: null,
-        healthy: false,
-        message: 'Stopped'
-      })),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(
-        async () =>
-          ({
-            ok: true,
-            rootPath: '/d',
-            writable: true,
-            freeBytes: 1e9,
-            slowDriveWarning: null,
-            problems: []
-          }) as unknown as PreflightResult
-      ),
-      getEvidenceReview: vi.fn(async () => makeDetail()),
-      updateEvidenceReviewItem
-    })
+    stubReviewApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        lockWorkspace,
+        getEvidenceReview: vi.fn(async () => makeDetail()),
+        updateEvidenceReviewItem
+      })
+    )
 
     const user = userEvent.setup()
     render(<App />)
@@ -124,37 +98,16 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
 
   it('a failed pre-lock flush never blocks the lock (the security action wins)', async () => {
     const lockWorkspace = vi.fn(async () => lockedState)
-    stubReviewApi({
-      getWorkspaceState: vi.fn(async () => unlockedEncrypted),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
-      lockWorkspace,
-      getAppStatus: vi.fn(async () => ({ workspaceReady: true }) as unknown as AppStatus),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: false,
-        modelId: null,
-        port: null,
-        healthy: false,
-        message: 'Stopped'
-      })),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(
-        async () =>
-          ({
-            ok: true,
-            rootPath: '/d',
-            writable: true,
-            freeBytes: 1e9,
-            slowDriveWarning: null,
-            problems: []
-          }) as unknown as PreflightResult
-      ),
-      getEvidenceReview: vi.fn(async () => makeDetail()),
-      updateEvidenceReviewItem: vi.fn(async () => {
-        throw new Error('disk full')
+    stubReviewApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        lockWorkspace,
+        getEvidenceReview: vi.fn(async () => makeDetail()),
+        updateEvidenceReviewItem: vi.fn(async () => {
+          throw new Error('disk full')
+        })
       })
-    })
+    )
 
     const user = userEvent.setup()
     render(<App />)

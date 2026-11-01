@@ -3,12 +3,12 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  driveLayoutDirs,
+  DRIVE_LAYOUT_DIRS,
   buildDriveJson,
   buildPolicyJson,
   buildChecksumsJson,
-  verifyDriveModels,
-  planPrepareDrive
+  listSkillFolders,
+  verifyDriveModels
 } from '../../src/main/services/drive'
 import { resolvePaths } from '../../src/main/services/workspace'
 import { parsePolicy, STRICT_POLICY } from '../../src/main/services/policy'
@@ -18,11 +18,8 @@ import { sha256, validManifest, visionManifest, writeDriveFile } from '../helper
 
 describe('drive layout', () => {
   it('lays out the directories the code reads, with win/mac/linux sidecar dirs', () => {
-    const root = join(tmpdir(), 'hilbertraum-drive-x')
-    const dirs = driveLayoutDirs(root)
-    const rels = dirs.map((d) => d.slice(root.length + 1).replace(/\\/g, '/'))
     // In creation order. The sidecar OS dirs are win/mac/linux, the keys llamaOsDir resolves, NOT the spec's windows/macos/linux.
-    expect(rels).toEqual([
+    expect(DRIVE_LAYOUT_DIRS).toEqual([
       'workspace',
       'app-skills',
       'user-skills',
@@ -117,45 +114,16 @@ describe('config generators', () => {
   })
 })
 
-describe('planPrepareDrive (dry-run)', () => {
-  it('produces the full layout, config files, and weight destinations', () => {
-    const root = tempRoot('plan')
-    const manifests = [validManifest(), validManifest({ id: 'embed', role: 'embeddings', local_path: 'models/embeddings/e5.gguf' })]
-    const plan = planPrepareDrive(root, manifests, { createdAt: '2026-06-09T00:00:00Z' })
-
-    expect(plan.dirsToCreate).toEqual(driveLayoutDirs(root))
-    expect(plan.filesToWrite.map((f) => f.relPath)).toEqual(['config/drive.json', 'config/policy.json'])
-    expect(plan.manifestsToCopy.sort()).toEqual(['embed.yaml', 'qwen3-4b-instruct-q4.yaml'])
-    expect(plan.weightDestinations).toContain('models/chat/qwen3-4b-instruct-q4.gguf')
-    expect(plan.weightDestinations).toContain('models/embeddings/e5.gguf')
-    // No app-skills source supplied → nothing listed to copy (the scripts copy wholesale).
-    expect(plan.appSkillsToCopy).toEqual([])
-    expect(plan.configWouldOverwrite).toBe(false)
-    // Generated JSON parses + round-trips.
-    const drive = JSON.parse(plan.filesToWrite[0].contents)
-    expect(drive.drive_format_version).toBe(1)
-  })
-
-  it('flags an existing config as would-overwrite', () => {
-    const root = tempRoot('plan')
-    mkdirSync(join(root, 'config'), { recursive: true })
-    writeFileSync(join(root, 'config', 'drive.json'), '{}')
-    const plan = planPrepareDrive(root, [validManifest()])
-    expect(plan.configWouldOverwrite).toBe(true)
-  })
-
-  // S9: when the repo app-skills/ source is supplied, the plan lists its product skills to copy
-  // (a folder with a SKILL.md). A bare folder with no SKILL.md is not a skill and is skipped.
-  it('lists app skills to copy from the supplied app-skills source', () => {
-    const root = tempRoot('plan')
+describe('listSkillFolders', () => {
+  // A bare folder with no SKILL.md is not a skill: the sell gate must not count it as a shipped product skill.
+  it('lists the folders holding a SKILL.md, sorted, and skips the others', () => {
     const appSkillsDir = join(tempRoot('appskills'), 'app-skills')
-    for (const id of ['bank-statement', 'contract-review']) {
+    for (const id of ['contract-review', 'bank-statement']) {
       mkdirSync(join(appSkillsDir, id), { recursive: true })
       writeFileSync(join(appSkillsDir, id, 'SKILL.md'), `---\nid: ${id}\ntitle: ${id}\ndescription: d\nversion: 1.0.0\n---\nb`)
     }
     mkdirSync(join(appSkillsDir, 'not-a-skill'), { recursive: true }) // no SKILL.md → skipped
-    const plan = planPrepareDrive(root, [validManifest()], { appSkillsDir })
-    expect(plan.appSkillsToCopy).toEqual(['bank-statement', 'contract-review'])
+    expect(listSkillFolders(appSkillsDir)).toEqual(['bank-statement', 'contract-review'])
   })
 })
 

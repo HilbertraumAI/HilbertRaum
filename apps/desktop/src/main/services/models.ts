@@ -234,7 +234,7 @@ export function launchContextTokens(
  * a cancelled verification is a calm outcome (what finished is cached, the rest is simply
  * unchecked), an I/O failure is not.
  */
-export class HashAbortedError extends Error {
+class HashAbortedError extends Error {
   constructor(filePath?: string) {
     super(filePath ? `Hashing was cancelled: ${filePath}` : 'Hashing was cancelled')
     this.name = 'HashAbortedError'
@@ -242,7 +242,7 @@ export class HashAbortedError extends Error {
 }
 
 /** Is this the #420 cancellation, as opposed to a real hashing failure? */
-export function isHashAborted(err: unknown): boolean {
+function isHashAborted(err: unknown): boolean {
   return (
     err instanceof HashAbortedError || (err as { name?: string } | null)?.name === 'HashAbortedError'
   )
@@ -1427,8 +1427,6 @@ function toModelInfo(
 export interface BuildModelListOptions {
   manifestsDir: string
   rootPath: string
-  /** Nothing reads this since `machineRamGb` became required. It goes with its last callers, registerModelIpc and committed-catalog. */
-  profile: HardwareProfile
   developerMode: boolean
   /** Model id currently loaded in a running runtime, if any. */
   runningModelId?: string | null

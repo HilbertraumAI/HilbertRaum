@@ -44,7 +44,6 @@ import { registerDocTasksIpc } from '../../src/main/ipc/registerDocTasksIpc'
 import { DocTaskManager } from '../../src/main/services/doctasks'
 import { documentsDir } from '../../src/main/services/ingestion'
 import { DownloadManager } from '../../src/main/services/downloads'
-import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { appendMessage } from '../../src/main/services/chat'
@@ -75,6 +74,7 @@ import type {
   WorkspaceActionResult
 } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -254,12 +254,6 @@ async function pollUntil(check: () => Promise<boolean>, what: string): Promise<v
   }
 }
 
-const okFetch = (async () =>
-  new Response(BODY, {
-    status: 200,
-    headers: { 'content-length': String(BODY.length) }
-  })) as unknown as FetchFn
-
 beforeEach(() => {
   ipcState.handlers.clear()
   ipcState.saveDialog.canceled = true
@@ -311,7 +305,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     registerDownloadIpc(
       ctx,
       new DownloadManager({
-        fetchImpl: okFetch,
+        fetchImpl: bodyFetch(BODY),
         audit: (type, message, metadata) => ctx.audit?.(type, message, metadata)
       })
     )

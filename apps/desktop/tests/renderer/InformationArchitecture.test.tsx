@@ -5,7 +5,10 @@ import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { resolveNavTarget } from '../../src/renderer/navigation'
-import { DEFAULT_SETTINGS, type PolicyStatus, type WorkspaceStateInfo } from '../../src/shared/types'
+import type { PreloadApi } from '../../src/preload'
+import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { appShellStubs } from '../helpers/app-shell'
+import { modelsScreenStubs } from '../helpers/model-fixtures'
 import { stubApi } from '../helpers/renderer'
 import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
@@ -72,48 +75,18 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
 
 // ---- App shell -------------------------------------------------------------------
 
-const unlockedWorkspace: WorkspaceStateInfo = {
-  state: 'unlocked',
-  mode: 'plaintext_dev',
-  plaintextAllowed: true,
-  encryptionRequired: false
-}
-
-const offlinePolicy = makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })
-
-function stubAppShell(): void {
-  stubApi({
-    getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-    getPolicy: vi.fn(async () => offlinePolicy),
-    getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-    onRuntimeNotice: vi.fn(() => () => {}),
-    // Home (the default screen) readiness data:
-    getAppStatus: vi.fn(async () =>
-      appStatus({ appName: 'x', appVersion: '0', machineRamGb: 16 })
-    ),
-    getRuntimeStatus: vi.fn(async () => ({
-      running: false,
-      modelId: null,
-      port: null,
-      healthy: false,
-      message: 'Stopped'
-    })),
-    listDocuments: vi.fn(async () => []),
-    listModels: vi.fn(async () => []),
-    runPreflight: vi.fn(async () => ({
-      ok: true,
-      rootPath: '/drive',
-      writable: true,
-      freeBytes: 1024 * 1024 * 1024,
-      slowDriveWarning: null,
-      problems: []
-    })),
-    // Settings tabs (visited via the offline badge):
-    getDriveStatus: vi.fn(async () => driveStatus()),
-    getRuntimeInstall: vi.fn(async () => null),
-    getLogTail: vi.fn(async () => [])
-  })
-}
+const stubAppShell = (over: Partial<PreloadApi> = {}): void =>
+  stubApi(
+    appShellStubs({
+      ...modelsScreenStubs(),
+      getAppStatus: vi.fn(async () => appStatus({ appName: 'x', appVersion: '0', machineRamGb: 16 })),
+      // Settings tabs (visited via the offline badge):
+      getDriveStatus: vi.fn(async () => driveStatus()),
+      getRuntimeInstall: vi.fn(async () => null),
+      getLogTail: vi.fn(async () => []),
+      ...over
+    })
+  )
 
 describe('App shell: three rail groups, Home behind the brand mark (rail rework 2026-09-05)', () => {
   it('renders exactly Chat · Documents · Translate · Images ‖ AI Model · Performance ‖ Settings, with no Home, Skills, Privacy or Diagnostics items', async () => {
@@ -177,36 +150,11 @@ describe('App shell: three rail groups, Home behind the brand mark (rail rework 
     // The indicator reflects PolicyStatus.offlineMode (the EFFECTIVE state): downloads
     // allowed → open padlock + "Downloads on". (A policy that forces downloads off keeps
     // offlineMode=true, so the stubAppShell offline case above reads "Offline" honestly.)
-    stubApi({
-      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-      getPolicy: vi.fn(async () => ({ ...offlinePolicy, offlineMode: false })),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
+    stubAppShell({
+      getPolicy: vi.fn(async () => makePolicyStatus({ policyFilePresent: false, driveFilePresent: false, offlineMode: false })),
       getAppStatus: vi.fn(async () =>
-        appStatus({
-          appName: 'x',
-          appVersion: '0',
-          offlineMode: false,
-          networkAllowed: true,
-          machineRamGb: 16
-        })
-      ),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: false,
-        modelId: null,
-        port: null,
-        healthy: false,
-        message: 'Stopped'
-      })),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async () => ({
-        ok: true,
-        rootPath: '/drive',
-        writable: true,
-        freeBytes: 1024 * 1024 * 1024,
-        slowDriveWarning: null,
-        problems: []
-      }))
+        appStatus({ appName: 'x', appVersion: '0', offlineMode: false, networkAllowed: true, machineRamGb: 16 })
+      )
     })
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -221,11 +169,7 @@ describe('App shell: three rail groups, Home behind the brand mark (rail rework 
     // to a navigation-scoped read (the post-unlock start is fire-and-forget; the toggle
     // happens while the user stays on Settings), so App re-reads on focus + a slow interval.
     let running = true
-    stubApi({
-      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-      getPolicy: vi.fn(async () => offlinePolicy),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      onRuntimeNotice: vi.fn(() => () => {}),
+    stubAppShell({
       getAppStatus: vi.fn(async () =>
         appStatus({
           machineRamGb: 16,
@@ -240,23 +184,7 @@ describe('App shell: three rail groups, Home behind the brand mark (rail rework 
             lastPreemptedAt: null
           }
         })
-      ),
-      getRuntimeStatus: vi.fn(async () => ({
-        running: false,
-        modelId: null,
-        port: null,
-        healthy: false,
-        message: 'Stopped'
-      })),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async () => ({
-        ok: true,
-        rootPath: '/drive',
-        writable: true,
-        freeBytes: 1024 * 1024 * 1024,
-        slowDriveWarning: null,
-        problems: []
-      }))
+      )
     })
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -327,7 +255,7 @@ describe('SettingsScreen — tabs (Phase 26)', () => {
   function stubSettings(): void {
     stubApi({
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      getPolicy: vi.fn(async () => offlinePolicy),
+      getPolicy: vi.fn(async () => makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })),
       getDriveStatus: vi.fn(async () => driveStatus()),
       getAppStatus: vi.fn(async () => appStatus()),
       getRuntimeStatus: vi.fn(async () => ({

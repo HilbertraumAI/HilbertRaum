@@ -57,7 +57,7 @@ describe('prepare-drive default model set parity (DOC-N4)', () => {
 // whisper.cpp runtimes but NEVER the `ocr` family, so every DIY drive shipped with an empty
 // ocr/ dir and scanned-PDF/photo OCR was silently unavailable (open issue #59). Only
 // build-commercial-drive fetched it. There is no canonical TS plan for the with-assets fetch
-// CALL SET (drive.ts planPrepareDrive models layout/config/copies only — the with-assets
+// CALL SET (drive.ts holds the layout and the config shapes only — the with-assets
 // orchestration lives solely in the two shells, per docs/packaging.md), so this parity net
 // pins the invariant directly against the two scripts: both siblings' --with-assets block must
 // invoke fetch-runtime for the ocr family, or a Windows-vs-mac/linux drive drifts on OCR again.

@@ -18,16 +18,18 @@ import {
   type EngineRecheckResult,
   type EngineStatus,
   type ModelInfo,
-  type OcrInstallStatus,
   type PerformanceSnapshot,
-  type PreflightResult,
-  type RuntimeStatus,
-  type WorkspaceStateInfo
+  type RuntimeStatus
 } from '../../src/shared/types'
 import type { Translator } from '../../src/renderer/components/translator'
+import { appShellStubs } from '../helpers/app-shell'
+import { deferred } from '../helpers/deferred'
+import { stubHomeApi } from '../helpers/home-screen'
+import { ENGINE_INSTALLED, engineJob, modelsScreenStubs, stubModelsApi } from '../helpers/model-fixtures'
+import { laptopResult } from '../helpers/performance-screen'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
-import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
+import { STOPPED_RUNTIME, appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
 // #530: an engine program that is on the drive but that the OS loader refuses to start (Linux:
 // libgomp.so.1 missing; Windows: Visual C++ runtime / Smart App Control) is recorded as a session
@@ -70,16 +72,6 @@ function renderNotice(
       />
     </ToastProvider>
   )
-}
-
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
-  let resolve!: (v: T) => void
-  let reject!: (e: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-  return { promise, resolve, reject }
 }
 
 describe('EngineProblemNotice — banner reason copy (#530)', () => {
@@ -219,21 +211,6 @@ describe('EngineProblemNotice — German (#530)', () => {
 
 // ---- 5: ModelsScreen -------------------------------------------------------------------------
 
-const IDLE_ENGINE: EngineStatus = {
-  installed: true,
-  available: true,
-  version: null,
-  backend: null,
-  missingFamilies: []
-}
-const IDLE_RUNTIME: RuntimeStatus = {
-  running: false,
-  modelId: null,
-  startingModelId: null,
-  port: null,
-  healthy: false,
-  message: ''
-}
 /** #532: the speech model on the drive — the card the voice engine's hint sits on. */
 const SPEECH_MODEL: ModelInfo = {
   id: 'whisper-small',
@@ -251,14 +228,6 @@ const SPEECH_MODEL: ModelInfo = {
   state: 'installed',
   recommended: false
 }
-const NO_OCR_SOURCES: OcrInstallStatus = {
-  available: false,
-  languages: [],
-  totalBytes: 0,
-  sourceHost: null,
-  license: 'Apache-2.0'
-}
-
 describe('ModelsScreen — engine problem banner (#530)', () => {
   beforeEach(() => {
     __resetModelsScreenMemoryForTests()
@@ -278,16 +247,15 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
     let subscriber: (() => void) | null = null
     const recheckEngine = opts.recheckEngine ?? vi.fn(async (): Promise<EngineRecheckResult> => ({ problems: opts.problems() }))
     const gate = opts.policy ?? { allowModelDownloads: true, allowNetworkSetting: true }
-    stubApi({
+    stubModelsApi({
       listModels: vi.fn(async () => opts.models ?? []),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getPolicy: vi.fn(async () =>
         makePolicyStatus({ network: { allowModelDownloads: gate.allowModelDownloads }, allowNetworkSetting: gate.allowNetworkSetting })
       ),
       ...(opts.downloadEngine ? { downloadEngine: opts.downloadEngine } : {}),
       ...(opts.getEngineJob ? { getEngineJob: opts.getEngineJob } : {}),
       getAppStatus: vi.fn(async () => appStatus({ engineProblems: opts.problems() })),
-      getEngineStatus: vi.fn(async () => opts.engine ?? IDLE_ENGINE),
+      getEngineStatus: vi.fn(async () => opts.engine ?? ENGINE_INSTALLED),
       onEngineProblemsChanged: vi.fn((cb: () => void) => {
         subscriber = cb
         return () => {
@@ -295,10 +263,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
         }
       }),
       recheckEngine,
-      getOcrInstallStatus: vi.fn(async () => NO_OCR_SOURCES),
-      getRuntimeStatus: vi.fn(async () => opts.runtime ?? IDLE_RUNTIME),
-      onModelVerifyProgress: vi.fn(() => () => {}),
-      listDownloadJobs: vi.fn(async () => [])
+      getRuntimeStatus: vi.fn(async () => opts.runtime ?? STOPPED_RUNTIME)
     })
     return { push: () => subscriber?.(), recheckEngine }
   }
@@ -311,7 +276,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
     )
 
   it('hides the optional voice-engine banner while the chat engine cannot run (its copy says chat works)', async () => {
-    const voiceMissing: EngineStatus = { ...IDLE_ENGINE, missingFamilies: ['whisper_cpp'] }
+    const voiceMissing: EngineStatus = { ...ENGINE_INSTALLED, missingFamilies: ['whisper_cpp'] }
     stubModels({ problems: () => [LIBGOMP], engine: voiceMissing })
     const { unmount } = renderModels()
     expect(await screen.findByText(en('models.engineProblem.title'))).toBeInTheDocument()
@@ -326,7 +291,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
   it('drops the demo note while a REAL runtime answers (a cpu/ build beside a damaged main folder)', async () => {
     stubModels({
       problems: () => [LIBGOMP],
-      runtime: { ...IDLE_RUNTIME, running: true, modelId: 'm', backend: 'cpu', healthy: true }
+      runtime: { ...STOPPED_RUNTIME, running: true, modelId: 'm', backend: 'cpu', healthy: true }
     })
     renderModels()
     expect(await screen.findByText(en('models.engineProblem.title'))).toBeInTheDocument()
@@ -375,19 +340,9 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
   // hint) offer "Install … again" — the same job, gates and progress as the install banners.
   describe('Install the engine again (#532)', () => {
     const DAMAGED: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' }
-    const REPAIRABLE: EngineStatus = { ...IDLE_ENGINE, reinstallableFamilies: ['llama_cpp', 'whisper_cpp'] }
-    const job = (over: Partial<EngineDownloadJob>): EngineDownloadJob => ({
-      jobId: 'r1',
-      status: 'downloading',
-      receivedBytes: 50,
-      totalBytes: 100,
-      unverified: false,
-      binaryPath: null,
-      error: null,
-      families: ['llama_cpp'],
-      reinstall: true,
-      ...over
-    })
+    const REPAIRABLE: EngineStatus = { ...ENGINE_INSTALLED, reinstallableFamilies: ['llama_cpp', 'whisper_cpp'] }
+    const job = (over: Partial<EngineDownloadJob>): EngineDownloadJob =>
+      engineJob({ jobId: 'r1', receivedBytes: 50, totalBytes: 100, families: ['llama_cpp'], reinstall: true, ...over })
     const banner = (): HTMLElement =>
       screen.getByText(en('models.engineProblem.title')).closest('.banner') as HTMLElement
 
@@ -443,7 +398,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
     it.each<[string, EngineProblem, EngineStatus]>([
       ['a fresh copy that failed too (afterInstall)', { ...DAMAGED, afterInstall: true }, REPAIRABLE],
       ['a refusal a reinstall cannot fix (Windows security)', { ...DAMAGED, reason: 'blocked', exit: 'exit code 0xC0E90002' }, REPAIRABLE],
-      ['an engine the installer cannot fetch here (or an older main)', DAMAGED, IDLE_ENGINE]
+      ['an engine the installer cannot fetch here (or an older main)', DAMAGED, ENGINE_INSTALLED]
     ])('offers no reinstall for %s — only Check again', async (_label, problem, engine) => {
       stubModels({ problems: () => [problem], engine })
       renderModels()
@@ -458,7 +413,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       stubModels({
         problems: () => [{ ...DAMAGED, family: 'whisper_cpp' }],
         // The AI engine is missing at the same time: its install banner is on screen too.
-        engine: { ...IDLE_ENGINE, installed: false, missingFamilies: ['llama_cpp'], reinstallableFamilies: ['whisper_cpp'] },
+        engine: { ...ENGINE_INSTALLED, installed: false, missingFamilies: ['llama_cpp'], reinstallableFamilies: ['whisper_cpp'] },
         models: [SPEECH_MODEL],
         downloadEngine,
         getEngineJob: vi.fn(async () => job({ families: ['whisper_cpp'] }))
@@ -488,14 +443,9 @@ describe('HomeScreen — engine problem and demo runtime (#530)', () => {
     runtime: Partial<RuntimeStatus>
     onNavigate?: (t: string) => void
   }): void {
-    stubApi({
+    stubHomeApi({
       getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'qwen3-chat', engineProblems: opts.problems })),
-      listDocuments: vi.fn(async () => []),
-      runPreflight: vi.fn(async (): Promise<PreflightResult> => ({ rootPath: '/drive', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] })),
-      getRuntimeStatus: vi.fn(async () => ({ ...IDLE_RUNTIME, ...opts.runtime })),
-      getMovedDriveNotice: vi.fn(async () => null),
-      onPerformanceChanged: vi.fn(() => () => {}),
-      onEngineProblemsChanged: vi.fn(() => () => {})
+      getRuntimeStatus: vi.fn(async () => ({ ...STOPPED_RUNTIME, ...opts.runtime }))
     })
     render(<HomeScreen onNavigate={opts.onNavigate ?? vi.fn()} />)
   }
@@ -551,13 +501,6 @@ describe('App — runtime notice target (#530)', () => {
     __resetModelsScreenMemoryForTests()
   })
 
-  const unlocked: WorkspaceStateInfo = {
-    state: 'unlocked',
-    mode: 'plaintext_dev',
-    plaintextAllowed: true,
-    encryptionRequired: false
-  }
-
   function renderApp(opts: { problems?: () => EngineProblem[]; appStatusGate?: Promise<void> } = {}): {
     fire: (message: string, target?: 'models') => void
     push: () => void
@@ -566,10 +509,8 @@ describe('App — runtime notice target (#530)', () => {
     // Several components subscribe (App, Home, …): keep them all, as the real preload does.
     const engineSubscribers = new Set<() => void>()
     const status = (): AppStatus => ({ ...appStatus({ machineRamGb: 16 }), engineProblems: opts.problems?.() ?? [] })
-    stubApi({
-      getWorkspaceState: vi.fn(async () => unlocked),
-      getPolicy: vi.fn(async () => makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })),
-      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+    const shell = appShellStubs({
+      ...modelsScreenStubs(),
       onRuntimeNotice: vi.fn((cb: (message: string, target?: 'models') => void) => {
         subscriber = cb
         return () => {
@@ -589,18 +530,11 @@ describe('App — runtime notice target (#530)', () => {
             return status()
           })
         : vi.fn(async () => status()),
-      getRuntimeStatus: vi.fn(async () => IDLE_RUNTIME),
-      listDocuments: vi.fn(async () => []),
-      listModels: vi.fn(async () => []),
-      runPreflight: vi.fn(async (): Promise<PreflightResult> => ({ rootPath: '/drive', writable: true, freeBytes: 1e9, slowDriveWarning: null, problems: [] })),
-      getEngineStatus: vi.fn(async () => IDLE_ENGINE),
-      getOcrInstallStatus: vi.fn(async () => NO_OCR_SOURCES),
-      onModelVerifyProgress: vi.fn(() => () => {}),
-      listDownloadJobs: vi.fn(async () => []),
       getDriveStatus: vi.fn(async () => driveStatus()),
       getRuntimeInstall: vi.fn(async () => null),
       getLogTail: vi.fn(async () => [])
     })
+    stubApi(shell)
     render(<App />)
     return { fire: (message, target) => subscriber?.(message, target), push: () => engineSubscribers.forEach((cb) => cb()) }
   }
@@ -682,7 +616,7 @@ describe('Settings → Diagnostics — engine problem line (#530)', () => {
     stubApi({
       getAppStatus: vi.fn(async () => appStatus({ appVersion: '0.1.20', engineProblems: problems })),
       getDriveStatus: vi.fn(async () => driveStatus()),
-      getRuntimeStatus: vi.fn(async () => IDLE_RUNTIME),
+      getRuntimeStatus: vi.fn(async () => STOPPED_RUNTIME),
       getRuntimeInstall: vi.fn(async () => null),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getPerformance: vi.fn(async () => performanceSnapshot()),
@@ -752,22 +686,7 @@ describe('PerformanceScreen — graphics tile under an engine problem (#530)', (
   function stubPerformance(problems: EngineProblem[]): void {
     const snap: PerformanceSnapshot = {
       ...performanceSnapshot(),
-      current: {
-        os: 'linux',
-        arch: 'x64',
-        cpuModel: 'Intel Core i7-1260P',
-        cpuCores: 12,
-        ramGb: 15.7,
-        gpu: null,
-        gpuVramMb: null,
-        driveReadMbps: null,
-        driveWriteMbps: 312,
-        tokensPerSecond: 12,
-        profile: 'LITE',
-        recommendedModelId: null,
-        warnings: [],
-        ranAt: '2026-09-04T14:02:00Z'
-      } as PerformanceSnapshot['current'],
+      current: laptopResult({ recommendedModelId: null }),
       currentMachine: true,
       currentGpu: null,
       graphicsDevice: null
@@ -776,7 +695,7 @@ describe('PerformanceScreen — graphics tile under an engine problem (#530)', (
       getPerformance: vi.fn(async () => snap),
       listModels: vi.fn(async () => []),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      getRuntimeStatus: vi.fn(async () => IDLE_RUNTIME),
+      getRuntimeStatus: vi.fn(async () => STOPPED_RUNTIME),
       getAppStatus: vi.fn(async () => appStatus({ engineProblems: problems })),
       onBenchmarkProgress: vi.fn(() => () => {}),
       onPerformanceChanged: vi.fn(() => () => {}),

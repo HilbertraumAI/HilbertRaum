@@ -55,15 +55,17 @@ import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/
 import { IPC } from '../../src/shared/ipc'
 import { checksumCacheStats, primeChecksum } from '../../src/main/services/models'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
-import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
+import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, AppStatus, GpuDevice, ModelInfo, RuntimeStatus, WorkspaceStateInfo } from '../../src/shared/types'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
 import { reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { committingRuntime, sessionWorkspace, writeChatManifest } from '../helpers/performance-fixture'
+import { seededFreshDb } from '../helpers/seeded-db'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import {
@@ -75,11 +77,7 @@ import {
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const REPO_MANIFESTS = join(process.cwd(), '..', '..', 'model-manifests')
 
-function seededDb(): Db {
-  const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-coreipc-')), 'test.sqlite'))
-  seedSettings(db)
-  return db
-}
+const seededDb = (): Db => seededFreshDb('coreipc')
 
 function bogusConfigDir(): string {
   return join(tmpdir(), 'hilbertraum-no-such-config-dir')
@@ -953,26 +951,7 @@ describe('registerModelIpc', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ramgate-'))
     const manifestsDir = join(root, 'model-manifests')
     mkdirSync(manifestsDir, { recursive: true })
-    writeFileSync(
-      join(manifestsDir, 'huge.yaml'),
-      stringify({
-        id: 'huge-model',
-        display_name: 'Huge Model',
-        family: 'qwen3',
-        role: 'chat',
-        format: 'gguf',
-        runtime: 'llama_cpp',
-        license: 'apache-2.0',
-        size_on_disk_gb: 999,
-        recommended_min_ram_gb: 9999, // no real machine passes
-        recommended_ram_gb: 9999,
-        recommended_context_tokens: 4096,
-        local_path: 'models/chat/huge.gguf',
-        sha256: 'REPLACE_WITH_REAL_HASH',
-        recommended_profiles: ['PRO'],
-        license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
-      })
-    )
+    writeChatManifest(manifestsDir)
     mkdirSync(join(root, 'models', 'chat'), { recursive: true })
     writeFileSync(join(root, 'models', 'chat', 'huge.gguf'), 'weights') // present → installed (dev leniency)
 
@@ -1295,26 +1274,7 @@ describe('registerModelIpc', () => {
       const root = mkdtempSync(join(tmpdir(), 'hilbertraum-usemodel-ram-'))
       const manifestsDir = join(root, 'model-manifests')
       mkdirSync(manifestsDir, { recursive: true })
-      writeFileSync(
-        join(manifestsDir, 'huge.yaml'),
-        stringify({
-          id: 'huge-model',
-          display_name: 'Huge Model',
-          family: 'qwen3',
-          role: 'chat',
-          format: 'gguf',
-          runtime: 'llama_cpp',
-          license: 'apache-2.0',
-          size_on_disk_gb: 999,
-          recommended_min_ram_gb: 9999, // no real machine passes
-          recommended_ram_gb: 9999,
-          recommended_context_tokens: 4096,
-          local_path: 'models/chat/huge.gguf',
-          sha256: 'REPLACE_WITH_REAL_HASH',
-          recommended_profiles: ['PRO'],
-          license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
-        })
-      )
+      writeChatManifest(manifestsDir)
       mkdirSync(join(root, 'models', 'chat'), { recursive: true })
       writeFileSync(join(root, 'models', 'chat', 'huge.gguf'), 'weights') // present → installed (dev leniency)
       let started = false
@@ -1510,26 +1470,8 @@ describe('registerModelIpc', () => {
         gpuAutoDisabled: false,
         gpuProbe: { devices: [GTX_1070_TI], probedAt: new Date().toISOString() }
       })
-      // A minimal fake RuntimeManager that tracks its own COMMIT — `activeModelId()` returns the
-      // OLD model until `start()` resolves, exactly like the real `RuntimeManager.doStart` (it
-      // never touches `settings.activeModelId`, which is the whole point of Wave 8 ruling (a)).
-      let committedModelId: string | null = 'qwen3.5-9b-ud-q4kxl'
-      const runtime = {
-        activeModelId: () => committedModelId,
-        status: () => ({
-          running: committedModelId != null,
-          modelId: committedModelId,
-          port: null,
-          healthy: true,
-          message: committedModelId ? 'Running' : 'Stopped',
-          startingModelId: null,
-          starting: undefined
-        }),
-        start: async (opts: { modelId: string }) => {
-          committedModelId = opts.modelId
-          return { running: true, modelId: committedModelId, port: null, healthy: true, message: 'ok' }
-        }
-      }
+      // `activeModelId()` returns the OLD model until `start()` resolves.
+      const runtime = committingRuntime('qwen3.5-9b-ud-q4kxl')
       const pendingModelSwitches = createPendingModelSwitchCounter()
       // Mirrors main/index.ts's `createRerankerCallbacks` factory: read fresh, every call
       // (Wave 8 ruling (b)(Q) — no longer once per cold start).
@@ -1570,7 +1512,7 @@ describe('registerModelIpc', () => {
       // itself (between the RAM gate and the shutdown re-check), so by the time this resolves
       // the teardown is guaranteed complete — no fire-and-forget capture hack needed any more.
       await invoke(handlers, IPC.useModel, 'qwen3.5-4b-ud-q4kxl') // a REAL committed switch
-      expect(committedModelId).toBe('qwen3.5-4b-ud-q4kxl') // the runtime actually committed
+      expect(runtime.activeModelId()).toBe('qwen3.5-4b-ud-q4kxl') // the runtime actually committed
       expect(reranker.isLoaded()).toBe(false) // the teardown actually completed
       expect(pendingModelSwitches.count).toBe(0) // decremented, never stranded
 
@@ -1755,41 +1697,6 @@ describe('maybeAutoStartActiveModel', () => {
   // to keep the session served, the RAM gate is OS-only, and the GPU-settings reads degrade to
   // safe defaults while locked. So the hash resolved after the lock finished and spawned a full
   // llama-server while the app sat at the unlock gate.
-  //
-  // The stand-in mirrors the real controller's shape: a lock arms the latch first and closes the
-  // DB last; an unlock clears the latch and advances the session epoch.
-  function sessionWorkspace(): {
-    isUnlocked: () => boolean
-    isLocking: () => boolean
-    unlockEpoch: () => number
-    beginLock: () => void
-    completeLock: () => void
-    completeUnlock: () => void
-  } {
-    let unlocked = true
-    let locking = false
-    let epoch = 1
-    return {
-      isUnlocked: () => unlocked,
-      isLocking: () => locking,
-      unlockEpoch: () => epoch,
-      // The MID-TEARDOWN state, and the one the epoch cannot see: the latch is armed but the DB
-      // is still open, so `isUnlocked()` alone still says "go". This is the majority of the real
-      // lock window (seconds of awaited sidecar/stream/task teardown), not a transient.
-      beginLock: () => {
-        locking = true
-      },
-      completeLock: () => {
-        locking = true // armed as the lock handler's first act…
-        unlocked = false // …and the DB closes at the very end of its teardown
-      },
-      completeUnlock: () => {
-        locking = false
-        unlocked = true
-        epoch += 1
-      }
-    }
-  }
 
   /** Drive one legitimate auto-start to completion. Anything a previously-released start would
    *  have spawned was enqueued on this same path earlier, so it has landed by the time this

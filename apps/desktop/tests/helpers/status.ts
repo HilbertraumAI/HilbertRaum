@@ -5,6 +5,7 @@ import type {
   NetworkPolicy,
   PerformanceSnapshot,
   PolicyStatus,
+  PreflightResult,
   PrivacyPolicy,
   RuntimeStatus,
   WorkspacePolicy
@@ -44,6 +45,21 @@ export function appStatus(over: Partial<AppStatus> = {}): AppStatus {
  */
 export function runtimeStatus(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
   return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', warmedUp: true, ...over }
+}
+
+/** A healthy drive's launch preflight; override per test (`problems`, `slowDriveWarning`). */
+export function preflightResult(over: Partial<PreflightResult> = {}): PreflightResult {
+  return { rootPath: 'X:/drive', writable: true, freeBytes: null, slowDriveWarning: null, problems: [], ...over }
+}
+
+/** Nothing is running and nothing is starting; `warmedUp` stays absent. */
+export const STOPPED_RUNTIME: RuntimeStatus = {
+  running: false,
+  modelId: null,
+  startingModelId: null,
+  port: null,
+  healthy: false,
+  message: 'Stopped'
 }
 
 /** A complete DriveStatus for a plain dev checkout; override per test. */

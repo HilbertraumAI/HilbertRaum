@@ -34,7 +34,7 @@ vi.mock('node:os', async (importOriginal) => ({
 import { buildPerformanceSnapshot, runAndPersistBenchmark, tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
 import { pickerMemoryFor, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
-import { writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
+import { writeRuntimeMarker } from '../../src/main/services/assets'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
 import { discoverManifests, weightsMib } from '../../src/main/services/models'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
@@ -44,6 +44,7 @@ import { IPC } from '../../src/shared/ipc'
 import type { AppContext } from '../../src/main/services/context'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { AppSettings, EngineDownloadJob, GpuDevice, ModelInfo, SpeedSampleIdentity } from '../../src/shared/types'
+import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs, within } from '../helpers/hang-budget'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
@@ -460,8 +461,6 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
 describe('picker seams: the runtime installed after a benchmark refreshes the GPU probe (#323)', () => {
   const ARCHIVE = 'llama-server-release-archive-bytes'
   const ARCHIVE_SHA = createHash('sha256').update(ARCHIVE).digest('hex')
-  const okFetch = (async () =>
-    new Response(ARCHIVE, { status: 200, headers: { 'content-length': String(ARCHIVE.length) } })) as unknown as FetchFn
   /** Drops the family-correct binary (the platform is pinned to win32 by `pinPlatform`). */
   const dropBinary: ExtractFn = async (_archive, destDir) => {
     const name = destDir.includes('whisper.cpp') ? 'whisper-cli.exe' : llamaServerBinaryName()
@@ -502,7 +501,7 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     const ctx = f.ctx as unknown as { manifestsDir: string }
     ctx.manifestsDir = manifests
     ipcState.handlers.clear()
-    const manager = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: extract })
+    const manager = new EngineDownloadManager({ fetchImpl: bodyFetch(ARCHIVE), extractImpl: extract })
     // Fires once the job has settled, after any `onInstalled` listener ran.
     const settled = new Promise<EngineDownloadJob>((resolve) => manager.onSettled(resolve))
     registerEngineIpc(f.ctx, manager)

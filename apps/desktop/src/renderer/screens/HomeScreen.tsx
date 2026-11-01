@@ -38,7 +38,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   // §11.16: the knowledge packs for the fourth readiness row. Null = not known (still loading,
-  // an older bridge without the channel, or a failed read) — the row simply does not render.
+  // or a failed read) — the row simply does not render.
   const [packs, setPacks] = useState<KnowledgePack[] | null>(null)
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
   /** §5 item 22 (a): what the moved-drive check did this session, or null when nothing to say. */
@@ -57,15 +57,15 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       ?.listDocuments()
       .then((d) => active && setDocs(d ?? []))
       .catch(() => active && setDocs([]))
-    // §11.16: best-effort like the reads above — `Promise.resolve(...)` because an older preload
-    // (or a test harness that does not stub the channel) hands back `undefined`, and "could not
-    // ask" reads the same as "nothing to say": no row.
-    Promise.resolve(window.api?.listKnowledgePacks?.())
-      .then((p) => active && setPacks(Array.isArray(p) ? p : null))
+    // §11.16: best-effort like the reads above — "could not ask" reads the same as "nothing to
+    // say": no row.
+    window.api
+      ?.listKnowledgePacks()
+      .then((p) => active && setPacks(p))
       .catch(() => active && setPacks(null))
     // Friendly, non-blocking launch preflight (drive writable / space / speed).
     window.api
-      ?.runPreflight?.()
+      ?.runPreflight()
       .then((p) => active && setPreflight(p))
       .catch(() => active && setPreflight(null))
     return () => {
@@ -80,16 +80,15 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   // at clears it. A read failure leaves the notice absent, never a half-message.
   useEffect(() => {
     let active = true
-    // `Promise.resolve(...)` rather than a bare `.then`: an older preload (or a test harness
-    // that does not stub this one) hands back `undefined`, and the honest reading of "I could
-    // not ask" is the same as the honest reading of "nothing to report" — no notice.
+    // The honest reading of "I could not ask" is the same as that of "nothing to report": no notice.
     const read = (): void => {
-      Promise.resolve(window.api?.getMovedDriveNotice?.())
-        .then((n) => active && setMoved(n ?? null))
+      window.api
+        ?.getMovedDriveNotice()
+        .then((n) => active && setMoved(n))
         .catch(() => active && setMoved(null))
     }
     read()
-    const off = window.api?.onPerformanceChanged?.(read)
+    const off = window.api?.onPerformanceChanged(read)
     return () => {
       active = false
       off?.()

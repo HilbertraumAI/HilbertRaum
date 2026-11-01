@@ -5874,7 +5874,7 @@ placeholder parity and plural pairs), `tests/unit/display-map.test.ts`,
 ## Drive tooling & distribution (Phases 11–13)
 Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` mirror natively:
 - **`services/drive.ts`** — drive layout (`DRIVE_LAYOUT_DIRS`), `drive.json`/`policy.json`
-  generators, `verifyDriveModels`, `buildChecksumsJson`, the prepare-drive plan.
+  generators, `verifyDriveModels`, `buildChecksumsJson`.
 - **`services/assets.ts`** — the DIY asset loader logic: `planModelDownloads`, runtime-build
   selection, `verifyDownloadedFile`, injected-fetch download seam.
 - **`services/launcher.ts`** — `resolveDriveRootFromLauncher` (the per-OS launchers mirror it).
