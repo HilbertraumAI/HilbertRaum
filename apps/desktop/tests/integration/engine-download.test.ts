@@ -21,7 +21,7 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
 })
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml, stringify } from 'yaml'
@@ -56,10 +56,11 @@ import {
   verifyBinaryBeforeSpawn
 } from '../../src/main/services/binary-verifier'
 import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../src/main/ipc/registerEngineIpc'
+import { tMain } from '../../src/main/services/i18n'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { verifierInert } from '../helpers/binary-fixtures'
-import { bodyFetch } from '../helpers/download-fixtures'
+import { bodyFetch, runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
@@ -143,16 +144,6 @@ const nestingExtract: ExtractFn = async (_archive, destDir) => {
 }
 
 const ALLOW = { policyAllows: true, settingAllows: true }
-
-async function runToEnd(mgr: EngineDownloadManager, jobId: string): Promise<EngineDownloadJob> {
-  const start = Date.now()
-  for (;;) {
-    const job = mgr.get(jobId)
-    if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
-    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('engine job never finished')
-    await new Promise((r) => setTimeout(r, 5))
-  }
-}
 
 describe('engineStatus + host build selection', () => {
   it('reports not-installed but available when a host build exists and no binary is present', () => {
@@ -290,6 +281,27 @@ describe('EngineDownloadManager install flow', () => {
     expect(existsSync(runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS)))).toBe(false)
   })
 
+  it('fails by name when the archive vanishes before its verify: nothing extracted, no marker', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    let extracted = false
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async () => {
+        extracted = true
+      },
+      verifyImpl: async (path, sha) => {
+        await rm(path) // antivirus or a pulled drive, between the download and the hash
+        return verifyDownloadedFile(path, sha)
+      }
+    })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.status).toBe('failed')
+    expect(job.error).toBe(tMain('main.engine.fileMissing'))
+    expect(extracted).toBe(false)
+    expect(existsSync(runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS)))).toBe(false)
+  })
+
   it('fails and discards the archive on a checksum mismatch', async () => {
     const wrong = createHash('sha256').update('something-else').digest('hex')
     const { rootPath, manifestsDir } = makeDrive(wrong)
@@ -401,10 +413,6 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     }
     return { extractImpl, release }
   }
-  const settledJob = async (mgr: EngineDownloadManager, jobId: string): Promise<EngineDownloadJob> => {
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
-    return mgr.get(jobId)
-  }
 
   it('a cancel DURING extraction is honoured — tar stops, no marker write, install stays non-current', async () => {
     const { rootPath, manifestsDir } = makeDrive()
@@ -414,7 +422,7 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     await waitForStatus(mgr, started.jobId, 'extracting')
     mgr.cancel(started.jobId) // pre-fix: dropped — 'extracting' was not a cancellable state
     release()
-    expect((await settledJob(mgr, started.jobId)).status).toBe('cancelled')
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
     // Without a marker the install is not "current": the next install re-runs cleanly and the
     // pre-spawn verifier treats a binary that landed anyway as legacy.
     expect(existsSync(markerFor(rootPath))).toBe(false)
@@ -430,7 +438,7 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     await waitForStatus(mgr, started.jobId, 'extracting')
     mgr.cancel(started.jobId)
     release()
-    expect((await settledJob(mgr, started.jobId)).status).toBe('done')
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
     expect(existsSync(markerFor(rootPath))).toBe(true)
   })
 
@@ -560,12 +568,8 @@ describe('extraction bounds + concurrency (F-33)', () => {
     await expect(mgr.start({ rootPath, manifestsDir, gates: ALLOW })).rejects.toThrow(/already downloading/i)
     // Let the wedged extract finish so run() settles and the slot frees (no dangling promise).
     releaseExtract()
-    const freeBy = Date.now()
-    while (mgr.activeJob() !== null) {
-      if (Date.now() - freeBy > hangBudgetMs(5000)) throw new Error('slot never freed after run() settled')
-      await new Promise((r) => setTimeout(r, 5))
-    }
-    expect(mgr.get(started.jobId).status).toBe('cancelled')
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    expect(mgr.activeJob()).toBeNull()
   })
 })
 
@@ -829,17 +833,12 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     }
     mgr.cancel(started.jobId)
     release()
-    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
     // `status` flips to 'cancelled' the instant cancel() is called, but the gated extractor is
-    // still writing its files: wait for the run to SETTLE (the F-33 busy latch — `activeJob()`
-    // stays non-null until then) before the next install pre-cleans the same directory, and
-    // re-install through the SAME manager so its latch, not a second manager, orders the two.
-    // The master CI run after the merge caught exactly that race on ubuntu-22.x.
-    const settleStart = Date.now()
-    while (mgr.activeJob() !== null) {
-      if (Date.now() - settleStart > hangBudgetMs(5000)) throw new Error('the cancelled run never settled')
-      await new Promise((r) => setTimeout(r, 2))
-    }
+    // still writing its files: `runToEnd` waits for the run to SETTLE before the next install
+    // pre-cleans the same directory, and the re-install goes through the SAME manager so its
+    // latch, not a second manager, orders the two. The master CI run after the merge caught
+    // exactly that race on ubuntu-22.x.
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
     expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(false)
     const again = await runToEnd(
       mgr,

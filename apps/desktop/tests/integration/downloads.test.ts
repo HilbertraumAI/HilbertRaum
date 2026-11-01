@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DownloadManager, assertDownloadAllowed } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
+import { tMain } from '../../src/main/services/i18n'
 import { weightPath, mmprojPath, type HashStore } from '../../src/main/services/models'
 import {
   latestEffectiveRead,
@@ -58,6 +59,8 @@ afterEach(() => {
 
 /** The suffix is an on-disk contract (a kept .part resumes across versions), so it is spelled here, not imported. */
 const partOf = (dest: string): string => `${dest}.part`
+
+const BODY = 'hello-world-weights'
 
 async function cancelAndUnwind(mgr: DownloadManager, jobId: string): Promise<DownloadJob> {
   mgr.cancel(jobId)
@@ -190,6 +193,17 @@ describe('download gates', () => {
       {
         manifest: downloadManifest(),
         files: [['models/chat/qwen3-4b-instruct-q4.gguf', 'whatever-bytes']],
+        refusal: /cannot be verified/
+      }
+    ],
+    [
+      'a vision model with one verified file and one it cannot verify',
+      {
+        manifest: visionManifest(G, P, { mmprojSha256: 'REPLACE_WITH_REAL_HASH' }),
+        files: [
+          ['models/vision/vl.gguf', G],
+          ['models/vision/vl-mmproj.gguf', P]
+        ],
         refusal: /cannot be verified/
       }
     ]
@@ -910,6 +924,47 @@ describe('DownloadManager jobs', () => {
       expect(existsSync(dest)).toBe(false)
       expect(readFileSync(partOf(dest), 'utf8')).toBe(body)
       expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it.each<[string, { staged: boolean; fetchImpl: FetchFn }]>([
+      ['a fresh download', { staged: false, fetchImpl: bodyFetch(BODY) }],
+      ['a staged complete .part', { staged: true, fetchImpl: vi.fn() as unknown as FetchFn }]
+    ])('a .part that vanishes before the verify of %s fails by name', async (_title, row) => {
+      const m = verifiedManifest(BODY)
+      const root = tempRoot('downloads')
+      const dest = weightPath(root, m)
+      if (row.staged) writeDriveFile(root, `${m.localPath}.part`, BODY)
+      seams.verifyHook = async (real, ...args) => {
+        rmSync(args[0]) // antivirus or a pulled drive, between the last byte and the hash
+        return real(...args)
+      }
+      const audited: Array<{ type: string; reason: unknown }> = []
+      const mgr = new DownloadManager({
+        fetchImpl: row.fetchImpl,
+        audit: (type, _message, meta) => audited.push({ type, reason: meta.reason })
+      })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.status).toBe('failed')
+      expect(finished.error).toBe(tMain('main.download.fileMissing'))
+      expect(audited.at(-1)).toEqual({ type: 'model_download_failed', reason: 'file missing before verification' })
+      expect(existsSync(dest)).toBe(false)
+    })
+
+    // The clean restart truncates the `.part` when it gets as far as writing. A restart that fails
+    // first is what shows the delete: without it the next attempt hashes the same bad bytes again.
+    it('a corrupt complete .part stays gone when the clean restart fails', async () => {
+      const body = 'fresh-complete-weights'
+      const m = verifiedManifest(body)
+      const root = tempRoot('downloads')
+      const dest = weightPath(root, m)
+      writeDriveFile(root, `${m.localPath}.part`, 'X'.repeat(body.length))
+      const unavailable = (async () => new Response(null, { status: 503 })) as unknown as FetchFn
+      const mgr = new DownloadManager({ fetchImpl: unavailable })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      expect((await waitForTerminal(mgr, job.jobId)).status).toBe('failed')
+      expect(existsSync(partOf(dest))).toBe(false)
+      expect(existsSync(dest)).toBe(false)
     })
 
     it('a complete-but-CORRUPT .part is discarded and the download restarts clean', async () => {

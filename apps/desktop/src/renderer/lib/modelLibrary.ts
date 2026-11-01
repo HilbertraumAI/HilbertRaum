@@ -113,14 +113,11 @@ export function variantGroupFace(group: ModelVariantGroup): ModelInfo {
 
 /**
  * Render order for a group: the face first, then every OTHER member exactly once in its original
- * relative order. Never mutates `group.models` (the face is removed by index, so a group that
- * happens to hold the same object twice still renders both).
+ * relative order. Never mutates `group.models`. Expects a nonempty group, like `variantGroupFace`.
  */
 export function variantGroupOrder(group: ModelVariantGroup): ModelInfo[] {
-  if (group.models.length === 0) return []
   const face = variantGroupFace(group)
-  const faceIndex = group.models.indexOf(face)
-  return [face, ...group.models.filter((_, i) => i !== faceIndex)]
+  return [face, ...group.models.filter((m) => m !== face)]
 }
 
 export function matchesModelSearch(model: ModelInfo, query: string): boolean {

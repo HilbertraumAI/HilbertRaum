@@ -81,10 +81,9 @@ Sizes/RAM come from each manifest
 > 16–23 GB → Qwen3.5 9B, 24 GB → Qwen3.8 27B UD-Q4_K_M, ≥32 GB → Qwen3.8 27B UD-Q5_K_M**;
 > Granite, both MoEs, the three withdrawn Qwen3.8 static K-quants, and the superseded former
 > winners (Ministral, Gemma 4 12B, the Qwen3.6 pair — all still ranked and selectable) are never
-> the RAM-path auto-pick — nor the card-path one, which honors the same rank guard, except that a
-> very small card budget (below the smallest ranked model's threshold) can fall through to the
-> smallest RANK-0 model as the honest fit (`model-benchmarks.md` §6.6 rule 6; an owner-open
-> question, not a change made here). The "Auto-tier" column above is the declared
+> the RAM-path auto-pick — nor the card-path one, whose fallback takes ranked models only (owner
+> decision 2026-09-06, #326). A card too small for every ranked model keeps the RAM pick, which
+> partially offloads (`model-benchmarks.md` §6.6 rule 6). The "Auto-tier" column above is the declared
 > `recommended_profiles` (kept as-is); the live recommendation is `recommendation_rank` +
 > RAM-best-fit (or the card's free-memory-best-fit on a discrete GPU).
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
@@ -239,13 +238,15 @@ main + renderer). Validation collects **all** errors per file and is pure (no I/
 `id, display_name, family, role, format, runtime, license, size_on_disk_gb,
 recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_path, sha256` plus a
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
-no-RAM picker), `recommendation_rank` (integer, default 0; higher = preferred among models that fit
+no-RAM picker), `recommendation_rank` (a finite number, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
 `supports_thinking_mode` (below), `speculative_decoding` (below), `disable_prompt_cache` (below),
 a `download` block (below),
 `estimated_context_cache_gib` (number ≥ 0; the graphics-memory picker's per-model context-cache
 term, PR #308 §6.6 rule C — absent defaults to 0.5 GiB in code, so the field is set only for the
-seven models whose figure was actually measured), and — for a `role: vision`
+seven models whose figure was actually measured), `host_mapped_weights_mib` (number ≥ 0, #321; the
+weights that stay host-mapped on a full offload, which the same estimate subtracts — absent charges
+the whole file to the card), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
 vision role + mmproj projector" below), and an optional **`files:` list** (below, #310). Unknown
 extra keys (e.g. `supports_tools`, `dimensions`, `bundled_on_preconfigured_drive`) are ignored by
@@ -596,8 +597,9 @@ the download but leaves the model **UNVERIFIED** (checksum honesty — capture a
 header (best-effort — a server without range support restarts cleanly). A `.part` that is already
 COMPLETE (a cancel/crash during the verify, or a failed rename) is verified **in place** instead of
 re-requested — a match renames into place, a mismatch discards it for a clean restart (F-13,
-full-audit 2026-07-16; no HTTP 416 dead-end). On success the persisted
-checksum-cache entry for that path is invalidated so the fresh file is re-hashed. The offline
+full-audit 2026-07-16; no HTTP 416 dead-end). On success the checksum cache is primed with the
+hash the verify just computed, so the Models screen reports `installed` without hashing the file
+again; a placeholder-hash file has no real hash to keep, so its entry is invalidated. The offline
 guarantee is unchanged: no update checks, no catalog/browsing (only manifests already on the
 drive), no background anything.
 

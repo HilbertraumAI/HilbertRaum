@@ -61,6 +61,22 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
     expect(await verifyBinaryBeforeSpawn(bin2)).toBe('mismatch')
   })
 
+  it('an upper-case hash in the marker is the same hash, not a tamper', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeFileSync(bin, 'real-binary-bytes')
+    const recorded = (await sha256File(bin)).toUpperCase()
+    writeRuntimeMarker(dir, {
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64',
+      binaries: { [markerBinaryKey(dir, bin)]: recorded }
+    })
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
   it('packaged build, no marker on the drive → skip-legacy (un-upgraded drive still launches)', async () => {
     initBinaryVerification(false)
     const dir = tmp()
