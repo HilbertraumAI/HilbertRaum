@@ -1178,8 +1178,8 @@ head's own weights + KV.
   match = the CPU build) · `planRuntimeDownload(root, build, version) → {url, zipDest, extractTo,
   binaryPath, sha256, ...}` (escape-guarded) · `runtimeBinaryName(os)`.
 - `verifyDownloadedFile(path, expected) → {ok, actual, reason}` (placeholder/missing/mismatch are NOT a
-  pass) · `downloadToFile(url, dest, {fetchImpl?, onProgress?})` + `fetchAndVerify(task, deps)` (injected
-  fetch; mismatch deletes the partial + throws) · `formatAssetPlan(modelTasks, runtimePlan)`.
+  pass) · `downloadToFile(url, dest, {fetchImpl?, onProgress?})` (injected fetch) ·
+  `formatAssetPlan(modelTasks, runtimePlan)`.
 ✅ **`scripts/`** (self-contained, dual `.ps1`/`.sh`, OS-native downloader; `.ps1` pure ASCII):
 - `fetch-models.{ps1,sh}` — `-Target`/`--target` (req), `-Only`/`--only`, `-AcceptLicense`/
   `--accept-license`, `-DryRun`/`--dry-run`. Per `download`-block manifest: download (resume via

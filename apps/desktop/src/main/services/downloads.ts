@@ -169,9 +169,6 @@ export class DownloadManager {
         acceptLicense: opts.licenseAccepted,
         hashStore: opts.hashStore
       })
-      if (tasks.length === 0) {
-        throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
-      }
       // #196: the upstream publisher deleted the exact file this manifest pins. Checked BEFORE
       // the license gate (the planner orders them the same way) because no acknowledgement can
       // make a deleted file fetchable — and refused HERE, not only in the renderer, so the

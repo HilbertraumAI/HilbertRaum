@@ -708,7 +708,6 @@ describe('#310 multi-file install state (shard set)', () => {
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
-      profile: 'UNKNOWN',
       developerMode: false,
       machineRamGb: PINNED_RAM_GB,
       onProgress: (p) => events.push(p)
@@ -1089,13 +1088,12 @@ describe('buildModelList — RAM gate', () => {
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: tempRoot('root'),
-      profile: 'UNKNOWN',
       developerMode: true,
       machineRamGb: 16
     })
     const byId = Object.fromEntries(models.map((m) => [m.id, m]))
     expect(byId['fits'].insufficientRam).toBe(false)
-    expect(byId['fits'].recommended).toBe(true) // RAM best fit, despite UNKNOWN profile
+    expect(byId['fits'].recommended).toBe(true) // RAM best fit
     expect(byId['too-big'].insufficientRam).toBe(true)
     expect(byId['too-big'].recommended).toBe(false)
   })
@@ -1111,7 +1109,7 @@ describe('buildModelList — RAM gate', () => {
     const base = {
       manifestsDir: dir,
       rootPath: tempRoot('root'),
-      profile: 'UNKNOWN' as const,
+     
       developerMode: true,
       machineRamGb: 24
     }
@@ -1155,7 +1153,6 @@ describe('buildModelList — RT-3 lazy verification', () => {
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
-      profile: 'UNKNOWN',
       developerMode: false,
       machineRamGb: PINNED_RAM_GB,
       onlyVerifyModelId: null
@@ -1166,7 +1163,7 @@ describe('buildModelList — RT-3 lazy verification', () => {
 
   it('still serves a cached hash for an inactive model (honest checksum_failed)', async () => {
     const { dir, root } = twoModels()
-    const base = { manifestsDir: dir, rootPath: root, profile: 'UNKNOWN' as const, developerMode: false, machineRamGb: PINNED_RAM_GB }
+    const base = { manifestsDir: dir, rootPath: root, developerMode: false, machineRamGb: PINNED_RAM_GB }
     // Warm the cache for both (full pass), then plant a cached hash for 'b' that does not match its manifest:
     // the lazy pass must surface it for free, not report 'installed' on the skip-hash branch.
     await buildModelList(base)
@@ -1197,7 +1194,6 @@ describe('buildModelList — verification progress', () => {
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
-      profile: 'UNKNOWN',
       developerMode: false,
       machineRamGb: PINNED_RAM_GB,
       onProgress: (p) => events.push(p)
@@ -1228,7 +1224,7 @@ describe('buildModelList — verification progress', () => {
     const db = seededFreshDb('cached')
     const store = createSettingsHashStore(() => db, root)
 
-    const opts = { manifestsDir: dir, rootPath: root, profile: 'UNKNOWN' as const, developerMode: false, machineRamGb: PINNED_RAM_GB, hashStore: store }
+    const opts = { manifestsDir: dir, rootPath: root, developerMode: false, machineRamGb: PINNED_RAM_GB, hashStore: store }
     await buildModelList(opts) // warm the cache
     const events: ModelVerifyProgress[] = []
     await buildModelList({ ...opts, onProgress: (p) => events.push(p) })
@@ -1248,7 +1244,6 @@ describe('buildModelList — verification progress', () => {
     await buildModelList({
       manifestsDir: dir,
       rootPath: root,
-      profile: 'UNKNOWN',
       developerMode: true, // placeholder counts as installed, still not hashed
       machineRamGb: PINNED_RAM_GB,
       onProgress: (p) => events.push(p)
@@ -1439,7 +1434,6 @@ describe('cancellable verification (#420)', () => {
     const { models, manifestErrors } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
-      profile: 'UNKNOWN',
       developerMode: false,
       machineRamGb: PINNED_RAM_GB,
       signal: controller.signal,
@@ -1472,7 +1466,6 @@ describe('cancellable verification (#420)', () => {
     const { models, manifestErrors } = await buildModelList({
       manifestsDir: dir,
       rootPath: root,
-      profile: 'UNKNOWN',
       developerMode: false,
       machineRamGb: PINNED_RAM_GB,
       signal: controller.signal,
@@ -1493,7 +1486,6 @@ describe('cancellable verification (#420)', () => {
     await buildModelList({
       manifestsDir: dir,
       rootPath: root,
-      profile: 'UNKNOWN',
       developerMode: false,
       machineRamGb: PINNED_RAM_GB,
       runId: 'renderer-minted',

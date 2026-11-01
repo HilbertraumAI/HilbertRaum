@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
@@ -924,27 +924,6 @@ export async function downloadToFile(
     /* durability best-effort — the subsequent SHA verify still guards correctness on this run */
   }
   return { status: res.status, received, contentLength }
-}
-
-/**
- * Download a model weight and verify it against the manifest hash. On a verification
- * MISMATCH the partial file is removed and the call throws (mirrors the scripts'
- * delete-partial-and-fail behaviour). A placeholder hash downloads the file but reports
- * it unverified (never a silent pass). Returns the verify result.
- */
-export async function fetchAndVerify(
-  task: Pick<ModelDownloadTask, 'url' | 'dest' | 'expectedSha256'>,
-  deps: DownloadDeps = {}
-): Promise<VerifyResult> {
-  await downloadToFile(task.url, task.dest, deps)
-  const result = await verifyDownloadedFile(task.dest, task.expectedSha256)
-  if (result.reason === 'mismatch') {
-    await rm(task.dest, { force: true })
-    throw new Error(
-      `Checksum mismatch for ${task.url}: expected ${task.expectedSha256}, got ${result.actual}`
-    )
-  }
-  return result
 }
 
 /** Compute the SHA-256 of an in-memory buffer (used by tests + size sanity checks). */

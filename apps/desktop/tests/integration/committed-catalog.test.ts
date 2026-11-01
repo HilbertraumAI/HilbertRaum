@@ -634,7 +634,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-rulec-'))
     try {
       const star = async (extra: Partial<Parameters<typeof buildModelList>[0]>) => {
-        const { models } = await buildModelList({ manifestsDir, rootPath, profile: 'BALANCED', developerMode: false, machineRamGb: 32, ...extra })
+        const { models } = await buildModelList({ manifestsDir, rootPath, developerMode: false, machineRamGb: 32, ...extra })
         return models.find((m) => m.role === 'chat' && m.recommended)?.id
       }
       expect(await star({})).toBe('qwen3.8-27b-ud-q5km')
@@ -1422,7 +1422,6 @@ describe('committed catalog — variant grouping as the library renders it (PR #
       const { models } = await buildModelList({
         manifestsDir,
         rootPath,
-        profile: 'BALANCED',
         developerMode: false,
         machineRamGb: RAM_16_GB
       })

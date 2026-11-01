@@ -570,7 +570,6 @@ export function registerModelIpc(ctx: AppContext): void {
         const { models, manifestErrors } = await buildModelList({
           manifestsDir: ctx.manifestsDir,
           rootPath: ctx.paths.rootPath,
-          profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
           developerMode: developerLeniency(ctx, s),
           runningModelId: ctx.runtime.activeModelId(),
           hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),

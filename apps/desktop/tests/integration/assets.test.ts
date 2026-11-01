@@ -14,7 +14,6 @@ import {
   requiredInstallFiles,
   verifyDownloadedFile,
   downloadToFile,
-  fetchAndVerify,
   formatAssetPlan,
   runtimeBinaryName,
   readRuntimeMarker,
@@ -932,7 +931,7 @@ describe('verifyDownloadedFile', () => {
   })
 })
 
-describe('downloadToFile + fetchAndVerify (injected fetch — no real network)', () => {
+describe('downloadToFile (injected fetch — no real network)', () => {
   const fakeFetch = (body: string, ok = true): FetchFn =>
     (async () => new Response(ok ? body : null, { status: ok ? 200 : 404 })) as unknown as FetchFn
 
@@ -971,29 +970,6 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
     ).rejects.toThrow(/non-HTTPS/)
     // The guard fires BEFORE any fetch — nothing was requested in cleartext.
     expect(spy).not.toHaveBeenCalled()
-  })
-
-  it('fetchAndVerify passes for a matching real hash', async () => {
-    const root = tempDir('hilbertraum-dl-')
-    const dest = join(root, 'w.gguf')
-    const body = 'verified-bytes'
-    const res = await fetchAndVerify(
-      { url: 'https://example.test/w.gguf', dest, expectedSha256: sha256(body) },
-      { fetchImpl: fakeFetch(body) }
-    )
-    expect(res.ok).toBe(true)
-  })
-
-  it('fetchAndVerify deletes the partial and throws on a mismatch', async () => {
-    const root = tempDir('hilbertraum-dl-')
-    const dest = join(root, 'w.gguf')
-    await expect(
-      fetchAndVerify(
-        { url: 'https://example.test/w.gguf', dest, expectedSha256: 'a'.repeat(64) },
-        { fetchImpl: fakeFetch('not-the-expected-bytes') }
-      )
-    ).rejects.toThrow(/mismatch/)
-    expect(existsSync(dest)).toBe(false)
   })
 
   // D3 (vuln-scan-2026-06-21): redirects are followed MANUALLY and re-validated per hop, and the
