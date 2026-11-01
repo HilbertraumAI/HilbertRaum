@@ -21,12 +21,13 @@ import { DownloadManager } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings, updateSettings } from '../../src/main/services/settings'
+import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { DownloadJob } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
+import { deferred } from '../helpers/deferred'
 import { bodyFetch, hangingFetch, runUnwound } from '../helpers/download-fixtures'
 import { sha256 } from '../helpers/manifest-fixtures'
 
@@ -195,6 +196,31 @@ describe('downloadModel happy path (both gates open, injected fake fetch)', () =
     const dest = join(rootPath, 'models', 'chat', 'test-model-q4.gguf')
     expect(readFileSync(dest, 'utf8')).toBe(BODY)
     expect(existsSync(`${dest}.part`)).toBe(false)
+  })
+
+  // BE-2: the registered store reads the LIVE handle per call. A lock and unlock mid-download replace
+  // `ctx.db`, and a store frozen on the first handle would prime a database nothing reads again.
+  it('a finished download primes the checksum cache in the live settings DB, keyed drive-relative', async () => {
+    const { ctx, rootPath } = makeCtx({ allowNetwork: true })
+    const bytesArrive = deferred()
+    const body = bodyFetch(BODY)
+    const held: FetchFn = async (...args) => {
+      await bytesArrive.promise
+      return body(...args)
+    }
+    registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: held }))
+    const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
+
+    const reopened = openDatabase(join(rootPath, 'after-unlock.sqlite'))
+    openedDbs.push(reopened)
+    seedSettings(reopened)
+    ctx.db = reopened
+    bytesArrive.resolve()
+
+    expect((await waitForTerminal((result as DownloadJob).jobId)).status).toBe('done')
+    const cache = getSettings(reopened).checksumCache
+    expect(Object.keys(cache)).toEqual(['models/chat/test-model-q4.gguf'])
+    expect(cache['models/chat/test-model-q4.gguf']?.sha256).toBe(sha256(BODY))
   })
 
   it('cancelDownload routes the id: the job ends cancelled', async () => {

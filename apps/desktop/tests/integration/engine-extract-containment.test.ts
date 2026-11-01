@@ -20,9 +20,7 @@ import {
 import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
 import { runtimeMarkerPath } from '../../src/main/services/assets'
 import { tMain } from '../../src/main/services/i18n'
-import type { EngineDownloadJob } from '../../src/shared/types'
-import { bodyFetch } from '../helpers/download-fixtures'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { bodyFetch, runToEnd } from '../helpers/download-fixtures'
 
 // SEC-2 (full-audit 2026-07-12): the in-app engine extractor relies on the OS tar's implicit
 // refusal of `..` members; its residual soft spot was a SYMLINK member resolving outside the
@@ -102,6 +100,16 @@ describe('assertExtractedSymlinksContained (SEC-2)', () => {
     await expect(assertExtractedSymlinksContained(root)).rejects.toThrow(
       /escapes the install dir/
     )
+  })
+
+  // `relative` returns a bare '..' here, not a `..<sep>`-led path: the one escape the prefix test
+  // alone would miss. The link's parent is this row's own folder, never the shared tmpdir.
+  it('refuses a link to the EXACT parent of the install dir', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'hr-contain-parent-'))
+    const root = join(parent, 'install')
+    mkdirSync(root)
+    plantDirLink(parent, join(root, 'up'))
+    await expect(assertExtractedSymlinksContained(root)).rejects.toThrow(/escapes the install dir/)
   })
 
   // TQ-2 (full-audit 2026-07-12b): all tests above store ABSOLUTE targets to EXISTING dirs, so
@@ -194,16 +202,6 @@ function makeDrive(): { rootPath: string; manifestsDir: string } {
   })
   writeFileSync(join(manifestsDir, 'runtime-sources.yaml'), yaml)
   return { rootPath, manifestsDir }
-}
-
-async function runToEnd(mgr: EngineDownloadManager, jobId: string): Promise<EngineDownloadJob> {
-  const start = Date.now()
-  for (;;) {
-    const job = mgr.get(jobId)
-    if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
-    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('engine job never finished')
-    await new Promise((r) => setTimeout(r, 5))
-  }
 }
 
 describe('EngineDownloadManager refuses an archive planting an escaping link (SEC-2)', () => {

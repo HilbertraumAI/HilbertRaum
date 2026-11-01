@@ -133,8 +133,10 @@ export function verifiedManifest(body: string, overrides: Record<string, unknown
 /**
  * A vision manifest: language GGUF + mmproj projector, each hashed to the real hash of its body, each with a `download`
  * block. Replaces downloads.test's `visionManifest`, not models.test's placeholder-hash one, which has no `download`.
+ * `mmprojSha256` replaces the projector's hashes, for a model whose two files verify differently.
  */
-export function visionManifest(gguf: string, mmproj: string): ModelManifest {
+export function visionManifest(gguf: string, mmproj: string, o: { mmprojSha256?: string } = {}): ModelManifest {
+  const mmprojHash = o.mmprojSha256 ?? sha256(mmproj)
   return downloadManifest({
     role: 'vision',
     input_modalities: ['text', 'image'],
@@ -148,10 +150,10 @@ export function visionManifest(gguf: string, mmproj: string): ModelManifest {
     },
     mmproj: {
       local_path: 'models/vision/vl-mmproj.gguf',
-      sha256: sha256(mmproj),
+      sha256: mmprojHash,
       download: {
         url: 'https://example.test/vl-mmproj.gguf',
-        sha256: sha256(mmproj),
+        sha256: mmprojHash,
         size_bytes: mmproj.length,
         license_url: 'https://example.test/license'
       }
