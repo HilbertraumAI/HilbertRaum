@@ -22,7 +22,7 @@ import { openFreshDb } from '../helpers/db-fixtures'
 function drive(wrapped: ChatStreamRunFn): Promise<Message> {
   const signal = new AbortController().signal
   const noop = (): void => {}
-  return wrapped(signal, noop, noop, noop, noop)
+  return wrapped(signal, noop, noop, noop, noop, noop)
 }
 
 describe('withRegenerateGuard — CB-2 (a produced-nothing regenerate never loses the prior answer)', () => {
@@ -109,7 +109,7 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
     const wrapped = withRegenerateGuard(db, conv.id, true, async (sig) =>
       persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the fu' }, sig)
     )
-    await wrapped(abortedWith(endedEarlyAbortReason(cause)), noop, noop, noop, noop)
+    await wrapped(abortedWith(endedEarlyAbortReason(cause)), noop, noop, noop, noop, noop)
 
     const history = listMessages(db, conv.id)
     expect(history.map((m) => m.content)).toEqual(expected)
@@ -129,7 +129,7 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
     const wrapped = withRegenerateGuard(db, conv.id, true, async (sig) =>
       persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the fu' }, sig)
     )
-    const result = await wrapped(abortedWith(endedEarlyAbortReason('model')), noop, noop, noop, noop)
+    const result = await wrapped(abortedWith(endedEarlyAbortReason('model')), noop, noop, noop, noop, noop)
 
     expect(result.content).toBe('the fu')
     expect(listMessages(db, conv.id).map((m) => m.content)).toEqual(['q', 'the fu'])
@@ -149,7 +149,7 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
       await Promise.resolve()
       return saved
     })
-    const result = await wrapped(turn.signal, noop, noop, noop, noop)
+    const result = await wrapped(turn.signal, noop, noop, noop, noop, noop)
 
     expect(result.endedEarly).toBeUndefined()
     expect(listMessages(db, conv.id).map((m) => m.content)).toEqual(['q', 'the new answer'])
@@ -172,7 +172,7 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
       err.name = 'AbortError'
       throw err
     })
-    await expect(wrapped(signal, noop, noop, noop, noop)).rejects.toThrow('aborted')
+    await expect(wrapped(signal, noop, noop, noop, noop, noop)).rejects.toThrow('aborted')
 
     const history = listMessages(db, conv.id)
     expect(history.map((m) => m.id)).toEqual([history[0].id, original.id])
@@ -185,6 +185,7 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
       appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
       await withRegenerateGuard(db, conv.id, false, async () => emptyAssistantMessage(conv.id))(
         abortedWith(reason),
+        noop,
         noop,
         noop,
         noop,
@@ -210,7 +211,7 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
     const wrapped = withRegenerateGuard(db, conv.id, false, async () => {
       throw new Error('terminated')
     })
-    await expect(wrapped(new AbortController().signal, noop, noop, noop, noop)).rejects.toThrow('terminated')
+    await expect(wrapped(new AbortController().signal, noop, noop, noop, noop, noop)).rejects.toThrow('terminated')
 
     expect(listMessages(db, conv.id)[0].endedEarly).toBeUndefined()
   })

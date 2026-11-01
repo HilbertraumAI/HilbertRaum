@@ -12,6 +12,7 @@ import { EmbedderError } from '../../src/main/services/embeddings/errors'
 import { inFlightStreams, streamBuffers, streamSettled } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
 import { type Message } from '../../src/shared/types'
+import { deferred } from '../helpers/deferred'
 import { within } from '../helpers/hang-budget'
 
 // `assertChatStreamReady`'s guard preamble (unknown conversation, no runtime, doc-task
@@ -89,7 +90,7 @@ describe('withChatStream (M-A2)', () => {
       const { event, sent } = fakeEvent()
       await withChatStream(event, 'c1', 'label', async (_s, sendToken, _r, _c, _u, sendTimings) => {
         sendToken('hello')
-        sendTimings?.(timings)
+        sendTimings(timings)
         return msg('hello')
       })
       expect(sent.map((s) => s.channel)).toEqual(['chat:token:c1', 'chat:speed:c1', 'chat:done:c1'])
@@ -114,7 +115,7 @@ describe('withChatStream (M-A2)', () => {
         const { event, sent } = fakeEvent()
         await withChatStream(event, 'c1', 'label', async (_s, sendToken, _r, _c, _u, sendTimings) => {
           sendToken('hello')
-          sendTimings?.(timings)
+          sendTimings(timings)
           return msg('hello')
         })
         expect(seen).toHaveLength(1)
@@ -326,12 +327,14 @@ describe('withChatStream (M-A2)', () => {
   it('resolves cleanly (no chat:error) when a user Stop lands during the slot acquire (REL-3)', async () => {
     const { event, sent } = fakeEvent()
     let runFnReached = false
+    const parked = deferred()
     // acquireSlot parks until its threaded signal aborts, then rejects (what the arbiter does).
     const acquireSlot = (signal: AbortSignal): Promise<() => void> =>
       new Promise<() => void>((_resolve, reject) => {
         signal.addEventListener('abort', () => reject(new Error('Chat slot acquire aborted')), {
           once: true
         })
+        parked.resolve()
       })
     const promise = withChatStream(
       event,
@@ -343,7 +346,7 @@ describe('withChatStream (M-A2)', () => {
       },
       acquireSlot
     )
-    await new Promise((r) => setImmediate(r))
+    await within(parked.promise, 'the turn parking on the model slot')
     // Simulate Stop: abort the registered in-flight controller (what stopGeneration does).
     inFlightStreams.get('c1')!.abort()
     const result = await promise
@@ -381,12 +384,12 @@ describe('withChatStream (M-A2)', () => {
 
   it('resolves the settled promise even when the run throws (teardown never hangs) (R1)', async () => {
     const { event } = fakeEvent()
-    let settledResolved = false
+    let settled: Promise<void> | undefined
     await withChatStream(event, 'c1', 'label', async () => {
-      void streamSettled.get('c1')!.then(() => (settledResolved = true))
+      settled = streamSettled.get('c1')
       throw new Error('boom')
     }).catch(() => undefined)
-    await new Promise((r) => setImmediate(r))
-    expect(settledResolved).toBe(true) // resolved (never rejected) so allSettled can't hang teardown
+    // Resolved, never rejected, so allSettled can't hang teardown.
+    await within(settled!, 'the settle resolving after the run threw')
   })
 })

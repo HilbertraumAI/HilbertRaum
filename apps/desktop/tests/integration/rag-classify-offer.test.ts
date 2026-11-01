@@ -29,7 +29,7 @@ vi.mock('electron', () => ({
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
@@ -44,33 +44,11 @@ import { createPendingModelSwitchCounter } from '../../src/main/services/rag/dev
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
 import { runningManager } from '../helpers/chat-runtime-stub'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
-
-/** One indexed document with one chunk + mock embedding per section (retrieval context for `text`). */
-async function seedDocument(db: Db, embedder: MockEmbedder, title: string, text: string | string[]): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const sections = typeof text === 'string' ? [text] : text
-  const vectors = await embedder.embed(sections)
-  for (const [index, section] of sections.entries()) {
-    const chunkId = randomUUID()
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(chunkId, docId, index, section, title, section.split(/\s+/).length, now)
-    db.prepare(
-      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run(chunkId, embedder.id, encodeVector(vectors[index]), vectors[index].length, now)
-  }
-  return docId
-}
 
 /** Plant the extract-pass rows the coverage engine reads: one ok __scan__ marker per chunk plus
  *  typed records (the whole-doc-extract #54 planted-row precedent — the pass supplies this shape). */
@@ -194,7 +172,7 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('deterministic offer: an amount aggregation ask attaches the bank skill at ZERO model calls', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'statement.pdf', 'Zahlung 12,50 EUR an Acme.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', ['Zahlung 12,50 EUR an Acme.'])
     plantExtraction(db, docId, [{ type: 'amount', value: '12,50 EUR', normalized: '12.50' }])
     const rt = scriptedRuntime([])
 
@@ -216,7 +194,7 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('classifier offer (trigger a): a party aggregation ask runs ONE constrained call and offers with classifier provenance', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'contract.pdf', 'Vertrag zwischen Acme und Globex.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'contract.pdf', ['Vertrag zwischen Acme und Globex.'])
     plantExtraction(db, docId, [{ type: 'party', value: 'Acme', normalized: 'acme' }])
     const rt = scriptedRuntime(['{"skill":"app:invoice"}'])
 
@@ -238,7 +216,7 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('silent degrade: a prose reply (the mock-runtime class) yields the byte-identical answer with NO offer', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'contract.pdf', 'Vertrag zwischen Acme und Globex.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'contract.pdf', ['Vertrag zwischen Acme und Globex.'])
     plantExtraction(db, docId, [{ type: 'party', value: 'Acme', normalized: 'acme' }])
     const rt = scriptedRuntime(['I am a mock runtime and this is prose, not JSON.'])
 
@@ -258,7 +236,7 @@ describe('askDocuments — the #80 offer cascade', () => {
     // NO extract data → the aggregation ask falls back low-confidence to relevance (+ wholeDocHint,
     // #641: over more sections than one answer reads — `ragTopKFinal` keeps at most 6 of these 8).
     const sections = Array.from({ length: 8 }, (_, i) => `${AMOUNT_AGG_ASK} (Seite ${i + 1})`)
-    const docId = await seedDocument(db, embedder, 'statement.pdf', sections)
+    const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', sections)
     const rt = scriptedRuntime(['{"skill":"app:bank-statement"}', 'Here is a partial answer.'])
 
     const msg = await ask(db, workspacePath, rt, skillsDirs, AMOUNT_AGG_ASK, docId)
@@ -279,7 +257,7 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('the step-5 fallthrough NEVER classifies: an ordinary question makes exactly one (unconstrained) call', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'contract.pdf', ORDINARY_ASK)
+    const docId = await seedEmbeddedDoc(db, embedder, 'contract.pdf', [ORDINARY_ASK])
     plantExtraction(db, docId, [{ type: 'party', value: 'Acme', normalized: 'acme' }]) // extract data present — still no trigger
     const rt = scriptedRuntime(['The termination clause allows 30 days notice.'])
 
@@ -294,7 +272,7 @@ describe('askDocuments — the #80 offer cascade', () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     setSkillEnabled(db, 'app:bank-statement', false)
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'statement.pdf', 'Zahlung 12,50 EUR an Acme.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', ['Zahlung 12,50 EUR an Acme.'])
     plantExtraction(db, docId, [{ type: 'amount', value: '12,50 EUR', normalized: '12.50' }])
     const rt = scriptedRuntime(['{"skill":"none"}'])
 
@@ -312,7 +290,7 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('#135: accepting the offer replaces the prior answer with a skill-stamped re-run (no new offer)', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'statement.pdf', 'Zahlung 12,50 EUR an Acme.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', ['Zahlung 12,50 EUR an Acme.'])
     plantExtraction(db, docId, [{ type: 'amount', value: '12,50 EUR', normalized: '12.50' }])
     // Call 1 (the accept's classifier — the deterministic ask re-triggers classification with bank
     // excluded as the turn's own skill): declines, so the re-answer carries no fresh offer here.
@@ -355,7 +333,7 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('#132: accepting an offer for a since-disabled skill refuses and leaves the answer untouched', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'statement.pdf', 'Zahlung 12,50 EUR an Acme.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', ['Zahlung 12,50 EUR an Acme.'])
     plantExtraction(db, docId, [{ type: 'amount', value: '12,50 EUR', normalized: '12.50' }])
     const rt = scriptedRuntime([])
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
@@ -384,7 +362,7 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('the classifier enum excludes the skill that already shaped the turn', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'contract.pdf', 'Vertrag zwischen Acme und Globex.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'contract.pdf', ['Vertrag zwischen Acme und Globex.'])
     plantExtraction(db, docId, [{ type: 'party', value: 'Acme', normalized: 'acme' }])
     const rt = scriptedRuntime(['{"skill":"none"}'])
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
@@ -411,7 +389,7 @@ describe('askDocuments — the #133 engagement filter (real handlers)', () => {
     registerBuiltinSkillAnalysisHandlers()
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    const docId = await seedDocument(db, embedder, 'contract.pdf', 'Vertrag zwischen Acme und Globex.')
+    const docId = await seedEmbeddedDoc(db, embedder, 'contract.pdf', ['Vertrag zwischen Acme und Globex.'])
     plantExtraction(db, docId, [{ type: 'party', value: 'Acme', normalized: 'acme' }])
     const rt = scriptedRuntime(['{"skill":"none"}'])
 

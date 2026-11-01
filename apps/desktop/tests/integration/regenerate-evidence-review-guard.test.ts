@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 
 // AUD-01 — a "regenerate" turn must never destroy an evidence review.
 //
@@ -37,7 +36,7 @@ import { IPC } from '../../src/shared/ipc'
 import { t } from '../../src/shared/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import {
   appendMessage,
@@ -61,7 +60,9 @@ import { createPendingModelSwitchCounter } from '../../src/main/services/rag/dev
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
 import { runningManager } from '../helpers/chat-runtime-stub'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { failingRuntime } from '../helpers/scripted-runtime'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -70,32 +71,6 @@ const REFUSAL = t('en', 'main.chat.reviewBlocksRegenerate')
 
 const QUESTION = 'what are the payment terms'
 const PRIOR_ANSWER = 'The payment term is 30 days. [S1]'
-
-/** Seed one indexed document with a single chunk + its mock embedding, so retrieval finds
- *  context for `text` and the grounded path reaches the model. */
-async function seedDocument(
-  db: Db,
-  embedder: MockEmbedder,
-  title: string,
-  text: string
-): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const [vector] = await embedder.embed([text])
-  const chunkId = randomUUID()
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-     VALUES (?, ?, 0, ?, ?, NULL, NULL, ?, ?)`
-  ).run(chunkId, docId, text, title, text.split(/\s+/).length, now)
-  db.prepare(
-    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(chunkId, embedder.id, encodeVector(vector), vector.length, now)
-  return docId
-}
 
 /** A runtime that ANSWERS: the regenerate succeeds, so the destructive delete would stand. */
 function answeringRuntime(text: string): ModelRuntime {
@@ -106,22 +81,6 @@ function answeringRuntime(text: string): ModelRuntime {
     health: async () => ({ healthy: true, message: 'ok', port: 1 }),
     async *chatStream(_messages: ChatMessage[]): AsyncGenerator<string> {
       yield text
-    }
-  } as unknown as ModelRuntime
-}
-
-/** A runtime whose grounded generation fails with a NON-abort error before any token — the
- *  context-exceeded 400 that a regenerate (a full-history replay near the window) most reaches.
- *  This is the failure that triggers the restore path. */
-function throwingRuntime(): ModelRuntime {
-  return {
-    modelId: 'throwing',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
-    // eslint-disable-next-line require-yield
-    async *chatStream(_messages: ChatMessage[]): AsyncGenerator<string> {
-      throw new Error('Chat request failed: HTTP 400 exceed_context_size_error')
     }
   } as unknown as ModelRuntime
 }
@@ -157,7 +116,7 @@ async function seedDocumentsTurn(
   db: Db,
   embedder: MockEmbedder
 ): Promise<{ conversationId: string; answer: Message }> {
-  const docId = await seedDocument(db, embedder, 'contract.pdf', QUESTION)
+  const docId = await seedEmbeddedDoc(db, embedder, 'contract.pdf', [QUESTION])
   const conv = createConversation(db, {
     mode: 'documents',
     scope: { collectionIds: [], documentIds: [docId] }
@@ -262,7 +221,7 @@ async function invokeCatching(channel: string, ...args: unknown[]): Promise<Erro
 function drive(wrapped: ChatStreamRunFn): Promise<Message> {
   const signal = new AbortController().signal
   const noop = (): void => {}
-  return wrapped(signal, noop, noop, noop, noop)
+  return wrapped(signal, noop, noop, noop, noop, noop)
 }
 
 beforeEach(() => {
@@ -311,7 +270,7 @@ describe('regenerate vs. an evidence review — the documents "Answer without it
     const { conversationId, answer } = await seedDocumentsTurn(db, embedder)
     const seeded = seedReviewChain(db, answer.id)
 
-    registerRagIpc(makeCtx(db, workspacePath, throwingRuntime()))
+    registerRagIpc(makeCtx(db, workspacePath, failingRuntime()))
 
     const err = await invokeCatching(IPC.askDocuments, conversationId, '', null, true)
 

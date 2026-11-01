@@ -35,6 +35,7 @@ import { SKILL_GUARD_LINE, stripSkillFenceEcho } from '../../src/main/services/s
 import { DATA_END, GROUNDED_DATA_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { WIDE_WINDOW } from '../helpers/compaction-fixtures'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { docTaskWorld, importText } from '../helpers/doctask-fixtures'
@@ -933,7 +934,7 @@ describe('generateGroundedAnswer', () => {
     })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q2' })
 
-    const messages = buildGroundedChatMessages(db, conv.id, 'GROUNDED PROMPT')
+    const messages = buildGroundedChatMessages(db, conv.id, 'GROUNDED PROMPT', WIDE_WINDOW)
     expect(messages.at(-1)?.content).toBe('GROUNDED PROMPT')
     const assistantTurn = messages.find((m) => m.role === 'assistant')
     expect(assistantTurn?.content).toBe('Earlier cited answer [S1].')
@@ -951,7 +952,7 @@ describe('generateGroundedAnswer', () => {
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'current question' })
 
     const grounded = `GROUNDED BLOCK ${big}`
-    const full = buildGroundedChatMessages(db, conv.id, grounded) // no budget
+    const full = buildGroundedChatMessages(db, conv.id, grounded, WIDE_WINDOW) // room for the whole history
     const fitted = buildGroundedChatMessages(db, conv.id, grounded, 2048) // budgeted
 
     expect(fitted.length).toBeLessThan(full.length)

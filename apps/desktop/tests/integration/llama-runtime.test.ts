@@ -12,9 +12,9 @@ import {
   isRuntimeConnectionLostError,
   isRuntimeUnresponsiveError,
   LlamaRuntime,
-  readChatSSE,
   requestParamsForMode
 } from '../../src/main/services/runtime/llama'
+import { sseFrames } from '../helpers/fake-sidecar'
 import { within } from '../helpers/hang-budget'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { RuntimeStartOptions } from '../../src/main/services/runtime'
@@ -27,17 +27,6 @@ class FakeChild extends EventEmitter implements ChildProcessLike {
     queueMicrotask(() => this.emit('exit', 0, null))
     return true
   }
-}
-
-/** Build a web ReadableStream emitting the given SSE text frames. */
-function sseStream(frames: string[]): ReadableStream<Uint8Array> {
-  const enc = new TextEncoder()
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const f of frames) controller.enqueue(enc.encode(f))
-      controller.close()
-    }
-  })
 }
 
 // Fixture provenance (CODE-9/TQ-6, full-audit 2026-07-11): the SSE frames throughout this file are
@@ -65,7 +54,7 @@ function chatFetch(opts: {
     if (u.endsWith('/v1/chat/completions')) {
       opts.onChat?.(u, init)
       if (opts.chatOk === false) return { ok: false, status: 500, body: null } as unknown as Response
-      return { ok: true, status: 200, body: sseStream(opts.frames) } as unknown as Response
+      return { ok: true, status: 200, body: sseFrames(opts.frames) } as unknown as Response
     }
     throw new Error(`unexpected url ${u}`)
   }) as typeof fetch
@@ -647,20 +636,6 @@ describe('answer-depth mode → request mapping (D4)', () => {
     expect(reasoning.join('')).toBe('Let me think. Done.')
     expect(out.join('')).toBe('The answer.')
     await runtime.stop()
-  })
-
-  it('readChatSSE reports reasoning via the callback without breaking [DONE]/abort semantics', async () => {
-    const stream = sseStream([
-      reasoningChunk('r1'),
-      chatChunk('c1'),
-      'data: [DONE]\n\n',
-      reasoningChunk('IGNORED AFTER DONE')
-    ])
-    const reasoning: string[] = []
-    const out: string[] = []
-    for await (const t of readChatSSE(stream, undefined, (d) => reasoning.push(d))) out.push(t)
-    expect(reasoning).toEqual(['r1'])
-    expect(out).toEqual(['c1'])
   })
 
   it('CHAT_SERVER_ARGS precede ladder extraArgs (a rung can still force --device none)', async () => {

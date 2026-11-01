@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readChatSSE } from '../../src/main/services/runtime/llama'
+import { sseBody } from '../helpers/fake-sidecar'
 
 // SSE parser regression on a verbatim vision capture: the vision sidecar's streamed frames are
 // byte-identical to text chat, so `readChatSSE` parses them UNCHANGED — there is no
@@ -24,23 +25,6 @@ const FIXTURE = readFileSync(
   'utf8'
 )
 
-/** A `ReadableStream` over `text`, optionally chopped into `chunkSize`-byte frames. */
-function streamOf(text: string, chunkSize?: number): ReadableStream<Uint8Array> {
-  const bytes = new TextEncoder().encode(text)
-  let pos = 0
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (pos >= bytes.length) {
-        controller.close()
-        return
-      }
-      const end = chunkSize ? Math.min(pos + chunkSize, bytes.length) : bytes.length
-      controller.enqueue(bytes.slice(pos, end))
-      pos = end
-    }
-  })
-}
-
 async function collect(stream: ReadableStream<Uint8Array>): Promise<string> {
   let answer = ''
   for await (const delta of readChatSSE(stream)) answer += delta
@@ -49,7 +33,7 @@ async function collect(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 describe('readChatSSE on the vision SSE fixture', () => {
   it('reconstructs the full answer from the verbatim capture', async () => {
-    const answer = await collect(streamOf(FIXTURE))
+    const answer = await collect(sseBody(FIXTURE))
     expect(answer).toBe('This is a German invoice issued by Müller & Söhne GmbH, and it is in German.')
     // The capture is what the wire carried: b11146's fingerprint, the timings on the stop frame.
     expect(FIXTURE).toContain('"system_fingerprint":"b11146-7fe450e19"')
@@ -57,10 +41,10 @@ describe('readChatSSE on the vision SSE fixture', () => {
   })
 
   it('is byte-chunking invariant — splitting frames mid-UTF-8 yields the same answer', async () => {
-    const whole = await collect(streamOf(FIXTURE))
+    const whole = await collect(sseBody(FIXTURE))
     // One byte per read FORCES a frame boundary inside the multibyte ü/ö sequences; the
     // streaming TextDecoder must hold the partial bytes across reads, not emit U+FFFD.
-    const oneByte = await collect(streamOf(FIXTURE, 1))
+    const oneByte = await collect(sseBody(FIXTURE, 1))
     expect(oneByte).toBe(whole)
     expect(oneByte).not.toContain('�') // no replacement char ⇒ no mangled codepoint
     expect(oneByte).toContain('Müller & Söhne')

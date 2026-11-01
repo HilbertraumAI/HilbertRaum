@@ -38,6 +38,7 @@ import { log } from '../../src/main/services/logging'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import { legacyDbPath, openFreshDb } from '../helpers/db-fixtures'
 import {
+  WIDE_WINDOW,
   appendTurns,
   compactionRuntime,
   type CompactionRuntimeOptions,
@@ -232,7 +233,7 @@ describe('ensureCompacted — exchange-aligned region boundary (CODE-19)', () =>
 
     // Assembly: the synthetic ack survives (pre-fix it was silently replaced by the stale answer
     // to a summarized-away question) and alternation holds from the summary pair onward.
-    const built = buildChatMessages(db, conv.id)
+    const built = buildChatMessages(db, conv.id, WIDE_WINDOW)
     expect(built[2]).toEqual({ role: 'assistant', content: COMPACTION_SUMMARY_ACK })
     expect(built[3]?.role).toBe('user')
     for (let i = 2; i < built.length; i++) expect(built[i].role).not.toBe(built[i - 1].role)
@@ -404,7 +405,7 @@ describe('assembly after a checkpoint (§4.5 synthetic pair)', () => {
 
   it('keeps the leading system prompt byte-identical and injects the summary pair', () => {
     const { db, convId } = withCheckpoint()
-    const built = buildChatMessages(db, convId)
+    const built = buildChatMessages(db, convId, WIDE_WINDOW)
     expect(built[0]).toEqual({ role: 'system', content: buildSystemPrompt() })
     expect(built[1]).toEqual({
       role: 'user',
@@ -415,7 +416,7 @@ describe('assembly after a checkpoint (§4.5 synthetic pair)', () => {
 
   it('still fits the context window after compaction (L1 floor holds)', () => {
     const { db, convId } = withCheckpoint()
-    const all = buildChatMessages(db, convId)
+    const all = buildChatMessages(db, convId, WIDE_WINDOW)
     const window = 1300 // budget 276; the untrimmed assembly is ~463, so the L1 trim must run
     const budget = window - CHAT_RESPONSE_RESERVE_TOKENS
     expect(all.reduce((s, m) => s + messageTokens(m), 0)).toBeGreaterThan(budget) // the precondition (was false at 1500)

@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 
 // A "regenerate" turn must never silently destroy the result table of an answer it then puts BACK.
 //
@@ -38,7 +37,7 @@ vi.mock('electron', () => ({
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
-import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import {
   appendMessage,
@@ -55,10 +54,12 @@ import { withRegenerateGuard, type ChatStreamRunFn } from '../../src/main/ipc/ch
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
 import { runningManager } from '../helpers/chat-runtime-stub'
+import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { failingRuntime } from '../helpers/scripted-runtime'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -116,48 +117,6 @@ function totalResultTables(db: Db): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM result_tables').get() as unknown as { n: number }).n
 }
 
-/** Seed one indexed document with a single chunk + its mock embedding, so retrieval finds
- *  context for `text` and the grounded path reaches the model. */
-async function seedDocument(
-  db: Db,
-  embedder: MockEmbedder,
-  title: string,
-  text: string
-): Promise<string> {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
-  ).run(docId, title, now, now)
-  const [vector] = await embedder.embed([text])
-  const chunkId = randomUUID()
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-     VALUES (?, ?, 0, ?, ?, NULL, NULL, ?, ?)`
-  ).run(chunkId, docId, text, title, text.split(/\s+/).length, now)
-  db.prepare(
-    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(chunkId, embedder.id, encodeVector(vector), vector.length, now)
-  return docId
-}
-
-/** A runtime whose grounded generation fails with a NON-abort error before any token — the
- *  context-exceeded 400 that a regenerate (a full-history replay near the window) most reaches.
- *  This is the failure that triggers the restore leg. */
-function throwingRuntime(): ModelRuntime {
-  return {
-    modelId: 'throwing',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
-    // eslint-disable-next-line require-yield
-    async *chatStream(_messages: ChatMessage[]): AsyncGenerator<string> {
-      throw new Error('Chat request failed: HTTP 400 exceed_context_size_error')
-    }
-  } as unknown as ModelRuntime
-}
-
 function freshDb(): { db: Db; workspacePath: string } {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-regentable-'))
   const db = openDatabase(join(root, 'test.sqlite'))
@@ -189,7 +148,7 @@ async function seedDocumentsTurnWithTable(
   db: Db,
   embedder: MockEmbedder
 ): Promise<{ conversationId: string; answer: Message }> {
-  const docId = await seedDocument(db, embedder, 'statement.pdf', QUESTION)
+  const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', [QUESTION])
   const conv = createConversation(db, {
     mode: 'documents',
     scope: { collectionIds: [], documentIds: [docId] }
@@ -238,7 +197,7 @@ function seedChatTurnWithTable(db: Db): { conversationId: string; answer: Messag
 function drive(wrapped: ChatStreamRunFn): Promise<Message> {
   const signal = new AbortController().signal
   const noop = (): void => {}
-  return wrapped(signal, noop, noop, noop, noop)
+  return wrapped(signal, noop, noop, noop, noop, noop)
 }
 
 beforeEach(() => {
@@ -254,7 +213,7 @@ describe('regenerate restore legs — the answer comes back WITH its result tabl
     const before = rawResultTables(db, answer.id)
     expect(before).toHaveLength(1)
 
-    registerRagIpc(makeCtx(db, workspacePath, throwingRuntime()))
+    registerRagIpc(makeCtx(db, workspacePath, failingRuntime()))
 
     await expect(
       invoke(handlers, IPC.askDocuments, conversationId, QUESTION, null, /* regenerate */ true)

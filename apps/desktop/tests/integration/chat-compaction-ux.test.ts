@@ -15,7 +15,7 @@ import {
 } from '../../src/main/services/chat'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { openFreshDb } from '../helpers/db-fixtures'
-import { appendTurns, compactionRuntime } from '../helpers/compaction-fixtures'
+import { WIDE_WINDOW, appendTurns, compactionRuntime } from '../helpers/compaction-fixtures'
 import { recordingRuntime } from '../helpers/scripted-runtime'
 
 // Phase 2 UX (context-compaction plan §5.1/§5.3/§5.4): the resting context-usage read, the
@@ -103,7 +103,7 @@ describe('chatCompactionEnabled toggle (§5.4) — false reproduces L1-only beha
     })
 
     // Enabled (default): the synthetic summary pair is injected and only post-checkpoint turns replay.
-    const enabled = buildChatMessages(db, conv.id)
+    const enabled = buildChatMessages(db, conv.id, WIDE_WINDOW)
     expect(enabled.some((m) => m.content.includes('CHECKPOINTMARKER'))).toBe(true)
     expect(enabled.some((m) => m.content.startsWith(COMPACTION_SUMMARY_INTRO))).toBe(true)
     const enabledTurns = enabled.filter((m) => m.role !== 'system')
@@ -112,13 +112,13 @@ describe('chatCompactionEnabled toggle (§5.4) — false reproduces L1-only beha
 
     // CB-6: an explicit `compactionOn` wins over the stored setting (still on here), so the prompt follows the turn's
     // one settings read even if the toggle flips mid-turn.
-    const threadedOff = buildChatMessages(db, conv.id, undefined, undefined, false)
+    const threadedOff = buildChatMessages(db, conv.id, WIDE_WINDOW, undefined, false)
     expect(threadedOff.some((m) => m.content.includes('CHECKPOINTMARKER'))).toBe(false)
     expect(threadedOff.filter((m) => m.role !== 'system').length).toBe(turns.length)
 
     // Disabled: no summary pair, FULL history replays — byte-identical to the pre-feature app.
     updateSettings(db, { chatCompactionEnabled: false })
-    const disabled = buildChatMessages(db, conv.id)
+    const disabled = buildChatMessages(db, conv.id, WIDE_WINDOW)
     expect(disabled.some((m) => m.content.includes('CHECKPOINTMARKER'))).toBe(false)
     expect(disabled.filter((m) => m.role !== 'system').length).toBe(turns.length)
   })

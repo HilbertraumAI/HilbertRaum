@@ -261,7 +261,7 @@ export function projectOnlyDocumentIds(db: Db, collectionId: string): string[] {
  * Library destination + the no-recorded-intent fallback of `fileFromPendingDestination`
  * (Phase C), so an options-less import still lands in Library and "Library == all" holds.
  */
-export function fileIntoLibraryIfUnfiled(db: Db, documentId: string): void {
+function fileIntoLibraryIfUnfiled(db: Db, documentId: string): void {
   const existing = db
     .prepare('SELECT 1 FROM document_collections WHERE document_id = ? LIMIT 1')
     .get(documentId) as unknown as { 1: number } | undefined

@@ -35,7 +35,7 @@ export const KEEP_RECENT_TURNS = 6
 /** Don't summarize unless at least this many turns sit older than the protected tail. */
 export const MIN_COMPACTABLE_TURNS = 6
 /** Output cap for the summary (dense, bounded — the §4.8 prompt targets ~500 words). */
-export const SUMMARY_MAX_TOKENS = 700
+const SUMMARY_MAX_TOKENS = 700
 /** Low temperature: a summary should be faithful and stable, not creative. */
 const SUMMARY_TEMPERATURE = 0.2
 

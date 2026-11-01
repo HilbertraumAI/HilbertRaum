@@ -1332,7 +1332,7 @@ export function deleteConversation(db: Db, conversationId: string): boolean {
 }
 
 /** Most message hits one search returns (across all conversations). */
-export const SEARCH_DEFAULT_LIMIT = 40
+const SEARCH_DEFAULT_LIMIT = 40
 
 /** snippet() context: tokens shown around the matched term(s). */
 const SNIPPET_CONTEXT_TOKENS = 12
@@ -1641,14 +1641,13 @@ export function fitMessagesToContext(messages: ChatMessage[], contextTokens: num
 }
 
 /**
- * Build the runtime message list: system prompt + persisted history in order. When
- * `contextTokens` is given, the history is trimmed to fit the model context
- * (`fitMessagesToContext`); omitted ⇒ the full history (the pure builder, for tests).
+ * Build the runtime message list: system prompt + persisted history in order, trimmed to fit
+ * the model context (`fitMessagesToContext`).
  */
 export function buildChatMessages(
   db: Db,
   conversationId: string,
-  contextTokens?: number,
+  contextTokens: number,
   skillFence?: string | null,
   // The §5.4 compaction toggle. Defaults to a fresh read so every existing caller is byte-identical;
   // `generateAssistantMessage` threads its single per-turn `getSettings` read through here (CB-6) so
@@ -1672,8 +1671,7 @@ export function buildChatMessages(
       content: turn.role === 'assistant' ? stripThinkBlocks(turn.content) : turn.content
     })
   }
-  const collapsed = collapseToAlternating(messages)
-  return contextTokens == null ? collapsed : fitMessagesToContext(collapsed, contextTokens)
+  return fitMessagesToContext(collapseToAlternating(messages), contextTokens)
 }
 
 /**

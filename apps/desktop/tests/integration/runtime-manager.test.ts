@@ -23,6 +23,7 @@ import { performShutdown } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 import type { GpuDevice } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
+import { sseBody } from '../helpers/fake-sidecar'
 import { manualSource, type ManualSource } from '../helpers/manual-stream'
 import { hangBudgetMs, until, within } from '../helpers/hang-budget'
 
@@ -306,13 +307,7 @@ function crashHarness() {
     if (!child || child.exited) throw new Error('connect ECONNREFUSED (llama-server is gone)')
     if (u.pathname === '/health') return { ok: true, status: 200 } as Response
     if (u.pathname === '/v1/chat/completions') {
-      const sse = 'data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n'
-      const body = new ReadableStream<Uint8Array>({
-        start(c) {
-          c.enqueue(new TextEncoder().encode(sse))
-          c.close()
-        }
-      })
+      const body = sseBody('data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n')
       return { ok: true, status: 200, body } as unknown as Response
     }
     throw new Error(`unexpected url ${u.pathname}`)

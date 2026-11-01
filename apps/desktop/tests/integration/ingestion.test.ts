@@ -14,6 +14,7 @@ import {
   extractDocumentPreviewPage,
   getDocument,
   listDocuments,
+  listDocumentsByIds,
   reconcileStuckDocuments,
   expandPaths,
   expandPathsBoundedAsync,
@@ -31,7 +32,7 @@ import { DocxParser } from '../../src/main/services/ingestion/parsers/docx'
 import type { DocumentInfo, DocumentOrigin, GeneratedProvenance } from '../../src/shared/types'
 import { makePdf, makeDocx, makeDocxFromBody } from '../helpers/fixtures'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
-import { documentIdsInCollection } from '../helpers/doc-fixtures'
+import { documentIdsInCollection, seedMixedCorpus } from '../helpers/doc-fixtures'
 import { countPrepares } from '../helpers/db-spy'
 
 // `save-export.ts` (the export side of the F-22/F-10 round-trip tests below) imports electron at module
@@ -571,6 +572,29 @@ describe('reconcileStuckDocuments', () => {
     expect(n).toBe(1)
     expect(status(stuck.id)).toBe('failed')
     expect(status(live.id)).toBe('embedding') // spared (updated after the cutoff)
+  })
+})
+
+describe('listDocumentsByIds', () => {
+  /** Order-insensitive membership compare (the grouped-join row order is unspecified). */
+  function sortedCollections(docs: Array<{ collections?: Array<{ id: string }> }>): unknown {
+    return docs.map((d) => ({ ...d, collections: [...(d.collections ?? [])].sort((a, b) => a.id.localeCompare(b.id)) }))
+  }
+
+  it('listDocumentsByIds is result-identical to the old filter-over-listDocuments path (CODE-21 equivalence)', () => {
+    const db = freshDb()
+    seedMixedCorpus(db)
+    const ids = ['att-a', 'att-b', 'att-c', 'att-d', 'att-missing']
+    const targeted = listDocumentsByIds(db, 'active-model', ids)
+    const wanted = new Set(ids)
+    const filtered = listDocuments(db, 'active-model').filter((d) => wanted.has(d.id))
+    expect(sortedCollections(targeted)).toEqual(sortedCollections(filtered))
+    // Teeth: the comparison covered real rows and every branch we seeded.
+    expect(targeted.map((d) => d.id)).toEqual(['att-c', 'att-b', 'att-a']) // newest first; deleted+missing dropped
+    expect(targeted.find((d) => d.id === 'att-a')?.staleEmbeddings).toBe(false)
+    expect(targeted.find((d) => d.id === 'att-b')?.staleEmbeddings).toBe(true)
+    expect(targeted.find((d) => d.id === 'att-a')?.collections).toHaveLength(2)
+    expect(listDocumentsByIds(db, 'active-model', [])).toEqual([])
   })
 })
 

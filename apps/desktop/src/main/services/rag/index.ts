@@ -1488,7 +1488,7 @@ export function buildGroundedChatMessages(
   db: Db,
   conversationId: string,
   groundedUserContent: string,
-  contextTokens?: number,
+  contextTokens: number,
   // W3: the grounded-DATA mode overrides this with `GROUNDED_DATA_SYSTEM_PROMPT` (no `[Sn]` citation rule);
   // defaulted so every existing caller (relevance / whole-doc / compare) stays byte-identical.
   systemPrompt: string = GROUNDED_SYSTEM_PROMPT
@@ -1520,11 +1520,10 @@ export function buildGroundedChatMessages(
   }
   // Drop orphan user turns from earlier failed answers so the roles still alternate
   // (a non-alternating history makes some chat templates raise — an HTTP 500).
-  const collapsed = collapseToAlternating(messages)
   // Trim older history to the model context (the grounded turn carries the retrieved
   // chunk block, so its prior turns are what overflow). The grounded turn is the final
-  // message, which fitMessagesToContext always keeps. Omitted ⇒ full history (pure builder).
-  return contextTokens == null ? collapsed : fitMessagesToContext(collapsed, contextTokens)
+  // message, which fitMessagesToContext always keeps.
+  return fitMessagesToContext(collapseToAlternating(messages), contextTokens)
 }
 
 /**

@@ -8,6 +8,7 @@ import { formatAnswerSpeed } from '../../src/renderer/chat/answerSpeed'
 import { fmt1 } from '../../src/renderer/lib/format'
 import { t } from '../../src/shared/i18n'
 import type { Message } from '../../src/shared/types'
+import { sseBody } from '../helpers/fake-sidecar'
 
 // #290/#291 — the REAL wire shape of llama-server's `timings` on a streamed chat completion,
 // captured from the pinned b9849 on the #291 reporter's rig (issue #298, 2026-09-04). This
@@ -17,23 +18,6 @@ import type { Message } from '../../src/shared/types'
 // Re-capture on every runtime pin bump (TS-3(a)).
 
 const FIXTURE = readFileSync(join(__dirname, '../fixtures/chat-sse-timings-b9849.txt'), 'utf8')
-
-/** A `ReadableStream` over `text`, optionally chopped into `chunkSize`-byte frames. */
-function streamOf(text: string, chunkSize?: number): ReadableStream<Uint8Array> {
-  const bytes = new TextEncoder().encode(text)
-  let pos = 0
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (pos >= bytes.length) {
-        controller.close()
-        return
-      }
-      const end = chunkSize ? Math.min(pos + chunkSize, bytes.length) : bytes.length
-      controller.enqueue(bytes.slice(pos, end))
-      pos = end
-    }
-  })
-}
 
 async function run(stream: ReadableStream<Uint8Array>): Promise<{
   answer: string
@@ -60,7 +44,7 @@ describe('readChatSSE on the captured b9849 timings transcript (#298)', () => {
   })
 
   it('yields the last delta and hands the finish reason + the server timings up once', async () => {
-    const { answer, finishes } = await run(streamOf(FIXTURE))
+    const { answer, finishes } = await run(sseBody(FIXTURE))
     expect(answer).toBe('.')
     expect(finishes).toHaveLength(1)
     expect(finishes[0].reason).toBe('stop')
@@ -78,7 +62,7 @@ describe('readChatSSE on the captured b9849 timings transcript (#298)', () => {
 
   it('parses identically when the transcript arrives in small frames split mid-JSON', async () => {
     for (const size of [7, 64, 333]) {
-      const { answer, finishes } = await run(streamOf(FIXTURE, size))
+      const { answer, finishes } = await run(sseBody(FIXTURE, size))
       expect(answer).toBe('.')
       expect(finishes).toHaveLength(1)
       expect(finishes[0].timings?.predicted_per_second).toBeCloseTo(29.46, 2)
@@ -86,7 +70,7 @@ describe('readChatSSE on the captured b9849 timings transcript (#298)', () => {
   })
 
   it('reports the decode figure the Diagnostics probe and the speed line would show', async () => {
-    const { finishes } = await run(streamOf(FIXTURE))
+    const { finishes } = await run(sseBody(FIXTURE))
     const tm = finishes[0].timings!
     // The figures the app shows, through production: the speed payload, the chat line and the Performance screen.
     const reply: Message = { id: 'a1', conversationId: 'c1', role: 'assistant', content: '.', createdAt: '2026-09-04T00:00:00Z', tokenCount: null }
@@ -115,7 +99,7 @@ describe('readChatSSE on the b11146 re-capture (#512)', () => {
 
   it('hands the finish reason + timings up once, whole or split mid-JSON', async () => {
     for (const size of [undefined, 7, 64, 333]) {
-      const { answer, finishes } = await run(streamOf(FIXTURE_B11146, size))
+      const { answer, finishes } = await run(sseBody(FIXTURE_B11146, size))
       expect(answer).toBe('.')
       expect(finishes).toHaveLength(1)
       expect(finishes[0].reason).toBe('stop')

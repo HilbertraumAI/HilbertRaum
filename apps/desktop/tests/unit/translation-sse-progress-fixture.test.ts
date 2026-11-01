@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readCompletionSSE } from '../../src/main/services/translation/completion'
 import { isRuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
+import { sidecarBody } from '../helpers/fake-sidecar'
 
 // #605 — the REAL wire shape of the translation sidecar's native `/completion` stream with `return_progress`, captured on
 // the pinned b11146 (and the previous pin b9849) with TranslationRuntime's request body and the translation argv, 512-token
@@ -48,13 +49,7 @@ function frames(text: string): Array<{ at: number; frame: Frame }> {
  */
 async function replay(text: string, untilMs: number) {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-  const enc = new TextEncoder()
-  let controller!: ReadableStreamDefaultController<Uint8Array>
-  const body = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c
-    }
-  })
+  const { body, write } = sidecarBody()
   const out: string[] = []
   let outcome: unknown = 'pending'
   void (async () => {
@@ -68,7 +63,7 @@ async function replay(text: string, untilMs: number) {
     if (at > untilMs) break
     await vi.advanceTimersByTimeAsync(at - now)
     now = at
-    controller.enqueue(enc.encode(bytes))
+    write(bytes)
   }
   await vi.advanceTimersByTimeAsync(untilMs - now)
   return { out, outcome: () => outcome, advance: (ms: number) => vi.advanceTimersByTimeAsync(ms) }
