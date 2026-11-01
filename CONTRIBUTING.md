@@ -149,13 +149,14 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   only that keyword.
 - **Shared skills, chat and RAG test setup lives in `tests/helpers/`** — `db-fixtures` (temp roots, fresh DBs,
   `openRawDb` / `legacyDbPath` for a file an older schema wrote), `doc-fixtures` (`seedEmbeddedDoc` takes pages,
-  sections, a foreign embedding model, `fully_chunked` and `origin_json`), `skill-fixtures` (SKILL.md packages,
+  sections, a foreign embedding model, `fully_chunked` and `origin_json`; `seedReadyTree` for a one-level ready deep
+  index; `seedMixedCorpus` for the document listings), `skill-fixtures` (SKILL.md packages,
   skill dirs), `skill-contexts`, `audit-capture`, `db-spy` (`countPrepares`, and `capturePrepares` to EXPLAIN the
   statement production prepares), `scripted-runtime` (incl. `failingRuntime`), `compaction-fixtures`
-  (`compactionRuntime`, `appendTurns`), `skills-world` (the skills-IPC and RAG-ask contexts; the importing file
+  (`compactionRuntime`, `appendTurns`, `WIDE_WINDOW`), `skills-world` (the skills-IPC and RAG-ask contexts; the importing file
   must `vi.mock('electron', …)`) and `chat-fixtures`. Extend them rather than copying setup into a new suite; keep
-  a local copy only where it deliberately differs. The chat and RAG suites carried six copies of `seedDocument`
-  and three of the compaction runtime.
+  a local copy only where it deliberately differs. The chat and RAG suites carried ten copies of `seedDocument`,
+  which stored a word count where production stores `approxTokenCount`, and three of the compaction runtime.
 - **Pin the bound that ships, not a shorter test-only one.** `RuntimeManager` once took timing
   options only tests passed: they proved a 50 ms teardown bound and a 0 or 60,000 ms probe TTL while
   5 s and 10 s shipped, and a probe test passed with the start's probe time never recorded. Drive
@@ -178,9 +179,11 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **The llama-server sidecar fakes live in `tests/helpers/fake-sidecar.ts`**, shared by the
   embedder, reranker, vision and translation suites: `FakeChild`, `GatedChild` (holds its exit
   until `releaseExit()`), `exitingChild` (writes stderr and dies before it is healthy), `fakeSpawn`
-  (a fresh child per spawn), `sseBody`, `fakeIdleClock` and `loadingSidecar` (`/health` answers
+  (a fresh child per spawn), the SSE bodies, `fakeIdleClock` and `loadingSidecar` (`/health` answers
   503 until loaded; a hanging probe would hide a mutation that cancels the start). Extend the
-  helper instead of declaring another child class in a suite.
+  helper instead of declaring another child class in a suite. The bodies differ in where the chunk boundaries
+  fall, which is what a framing row is about: `sseBody` (one chunk, or `chunkSize`-byte pieces that can split a frame
+  or a UTF-8 character), `sseFrames` (each entry one chunk), `sidecarBody` (written by hand, stays open).
 - **A fake event must reach a live listener.** `LlamaServer` stops hearing a child once its own
   teardown has started, so the vision and translation rows "a late crash does not clobber the newer
   instance" emitted an `exit` nothing listened to, and stayed green with the runtimes' "is this
