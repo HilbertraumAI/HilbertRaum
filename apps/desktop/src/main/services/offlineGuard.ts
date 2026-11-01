@@ -30,23 +30,13 @@ export function isLoopbackHost(host?: string | null): boolean {
   return false
 }
 
-export interface OutboundCheck {
-  host: string
-  violation: boolean
-}
-
 /**
- * Decide whether an outbound connection to `host` violates the offline posture.
- * A violation requires BOTH offline mode AND a remote (non-loopback) host.
+ * Extract the target host from the arguments of `net.Socket.prototype.connect`. `net.connect`,
+ * `http.request` and plain-http `fetch` hand over Node's normalized `[options, callback]` array
+ * (#751); a direct `socket.connect(...)` and TLS pass the options or the positional form.
  */
-export function checkOutboundHost(host: string | undefined | null, offline: boolean): OutboundCheck {
-  const loopback = isLoopbackHost(host)
-  return { host: host ?? '(default localhost)', violation: offline && !loopback }
-}
-
-/** Extract the target host from the arguments of `net.Socket.prototype.connect`. */
 function extractHost(args: unknown[]): string | undefined {
-  const first = args[0]
+  const first: unknown = Array.isArray(args[0]) ? args[0][0] : args[0]
   if (first && typeof first === 'object') {
     const opts = first as { host?: unknown; path?: unknown }
     if (typeof opts.path === 'string') return undefined // unix domain socket = local IPC
@@ -77,8 +67,8 @@ export function installOfflineNetworkGuard(opts: OfflineGuardOptions): () => voi
   const original = proto.connect
   proto.connect = function patchedConnect(this: unknown, ...args: unknown[]): unknown {
     try {
-      const { host, violation } = checkOutboundHost(extractHost(args), true)
-      if (violation) opts.onViolation?.(host)
+      const host = extractHost(args)
+      if (host && !isLoopbackHost(host)) opts.onViolation?.(host)
     } catch {
       /* a detector must never break the real connect */
     }

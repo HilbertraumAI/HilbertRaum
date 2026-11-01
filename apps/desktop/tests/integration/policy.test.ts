@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import type { EventEmitter } from 'node:events'
 import { writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -327,6 +328,7 @@ describe('offline self-check', () => {
     expect(isLoopbackHost('::1')).toBe(true)
     expect(isLoopbackHost('[::1]')).toBe(true)
     expect(isLoopbackHost('127.0.0.53')).toBe(true)
+    expect(isLoopbackHost('app.localhost')).toBe(true)
     expect(isLoopbackHost(undefined)).toBe(true)
     expect(isLoopbackHost('')).toBe(true)
   })
@@ -336,13 +338,14 @@ describe('offline self-check', () => {
     expect(isLoopbackHost('127.evil.com')).toBe(false)
     expect(isLoopbackHost('127.0.0.1.evil.com')).toBe(false)
     expect(isLoopbackHost('127.0.0.1.example.org')).toBe(false)
+    expect(isLoopbackHost('notlocalhost')).toBe(false)
     // Genuine IPv4 loopback addresses still match.
     expect(isLoopbackHost('127.0.0.1')).toBe(true)
     expect(isLoopbackHost('127.255.255.255')).toBe(true)
   })
 
-  // The argument forms the guard parses, driven at `Socket.prototype.connect`. `net.connect`, `http.request` and plain-http
-  // `fetch` reach it with Node's normalized array instead, which the guard does not read: this table says nothing about them.
+  // The argument forms a direct `socket.connect(...)` and TLS use, driven at `Socket.prototype.connect`. Node's normalized
+  // array, which `net.connect`, `http.request` and plain-http `fetch` hand over, is the next table's.
   it.each<[string, unknown[], string | null]>([
     ['positional, remote host', [443, 'example.com'], 'example.com'],
     ['positional, remote IP literal', [443, '93.184.216.34'], '93.184.216.34'],
@@ -369,6 +372,43 @@ describe('offline self-check', () => {
       uninstall()
     }
     expect(net.Socket.prototype.connect).toBe(base) // the uninstaller put back what it wrapped
+    if (flagged === null) {
+      expect(onViolation).not.toHaveBeenCalled()
+    } else {
+      expect(onViolation).toHaveBeenCalledOnce()
+      expect(onViolation).toHaveBeenCalledWith(flagged)
+    }
+  })
+
+  // #751: the public routes, not a hand-written array, so a Node upgrade that changes what they pass goes red here. The stub
+  // fails each socket on the next tick: nothing leaves the machine and nothing is left waiting for a connection.
+  const failed = (e: EventEmitter): Promise<void> => new Promise((resolve) => e.once('error', () => resolve()))
+  const ignored = (): void => undefined
+  it.each<[string, () => Promise<void>, string | null]>([
+    ['net.connect({ host })', () => failed(net.connect({ host: 'example.com', port: 80 })), 'example.com'],
+    ['net.connect(port, host)', () => failed(net.connect(80, 'example.com')), 'example.com'],
+    ['http.request', () => failed(http.request({ host: 'example.com', port: 80 }).end()), 'example.com'],
+    ['plain-http fetch', () => fetch('http://example.com/').then(ignored, ignored), 'example.com'],
+    ['https.request', () => failed(https.request({ host: 'example.com', port: 443 }).end()), 'example.com'],
+    ['https fetch', () => fetch('https://example.com/').then(ignored, ignored), 'example.com'],
+    ['net.connect, loopback', () => failed(net.connect({ host: '127.0.0.1', port: 1 })), null],
+    ['http.request, localhost', () => failed(http.request({ host: 'localhost', port: 1 }).end()), null],
+    ['plain-http fetch, loopback', () => fetch('http://127.0.0.1:8080/').then(ignored, ignored), null],
+    ['net.connect, port only', () => failed(net.connect(1)), null],
+    ['net.connect, a socket path wins over host', () => failed(net.connect({ path: '/tmp/s', host: 'example.com' } as net.NetConnectOpts)), null]
+  ])('installOfflineNetworkGuard sees through every route to a socket: %s', async (_label, route, flagged) => {
+    const onViolation = vi.fn()
+    const stub = vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) {
+      process.nextTick(() => this.destroy(new Error('no network in tests')))
+      return this
+    })
+    const uninstall = installOfflineNetworkGuard({ offline: true, onViolation })
+    try {
+      await route()
+    } finally {
+      uninstall()
+    }
+    expect(stub).toHaveBeenCalledOnce() // logged, not blocked, and a socket really was asked for
     if (flagged === null) {
       expect(onViolation).not.toHaveBeenCalled()
     } else {
