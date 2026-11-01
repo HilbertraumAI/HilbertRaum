@@ -26,6 +26,7 @@ import {
   machineKey,
   nextStartMemory,
   nextStartMemoryFor,
+  nextStartUsesGpu,
   otherMachines,
   placementVerdict,
   recordAnswerSpeed,
@@ -962,7 +963,8 @@ function buildPlacement(
   manifests: ModelManifest[],
   recommendedModelId: string | null
 ): PerformanceSnapshot['placement'] {
-  // The class and the card are the NEXT start's (GPU off / auto-disabled → cpu, no card); the
+  // The class and the card are the NEXT start's (GPU off / auto-disabled → no card, and class `cpu`
+  // everywhere but Apple Silicon); the
   // observed placement below is what the LAST start did, and it counts only while the current
   // configuration would repeat it (`matchesConfig` below — a forced-CPU configuration admits
   // no GPU record; the record itself is kept and travels as `observedMismatch`).
@@ -1034,9 +1036,9 @@ function buildPlacement(
   // Liveness comes from each service's own handle; whisper is a CLI that runs only while
   // transcribing.
   //
-  // CAPABILITY IS NOT EXECUTION (PR #303 audit DR1): the class is the NEXT start's — `cpu`
-  // with no usable card AND when the GPU is switched off or auto-disabled — so a row goes to
-  // the card only under a card class; chat says 'cpu' as well when the matching observed start
+  // CAPABILITY IS NOT EXECUTION (PR #303 audit DR1): a row goes to the card only when the NEXT
+  // start will use it (`nextStartUsesGpu`: not with no usable card, not when the GPU is switched
+  // off or auto-disabled); chat says 'cpu' as well when the matching observed start
   // landed on the CPU backend, translation when its sidecar's posture is the forced
   // `--device none` (`deviceStatus().device === 'cpu'`, the session fallback latch) or its last
   // start's load log put no buffer on a graphics device (`gpuBuffers === false`, #671).
@@ -1044,7 +1046,7 @@ function buildPlacement(
   const embeddingsManifest = settings.activeEmbeddingModelId
     ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
     : byRole('embeddings')
-  const cardEligible = memoryClass !== 'cpu'
+  const cardEligible = nextStartUsesGpu(memory)
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
   // #671: a start whose own load log put no buffer on a graphics device ran on the processor, and
@@ -1124,13 +1126,13 @@ function buildPlacement(
     }
   ]
   const rows = allRows.filter((r) => r.role === 'chat' || r.modelId != null)
-  // The verdict is asked for the EFFECTIVE class: the next start's (already `cpu` when the
-  // configuration forces the processor — the RAM estimate, "Will run on the processor", never
-  // "Should fit in graphics memory" for a card the start would not use, DR1), and `cpu` for a
-  // matching start OBSERVED on the CPU backend (the ladder fell through under 'auto'), which is
-  // judged against RAM too, as its row says. The profile bump's gate (`gpuUsefulForProfile`, all
-  // devices) is unchanged (G4).
-  const effectiveClass: MemoryClass = observed?.backend === 'cpu' ? 'cpu' : memoryClass
+  // The verdict is asked for the EFFECTIVE class: the next start's, and `cpu` when the
+  // configuration forces the processor (the RAM estimate, "Will run on the processor", never
+  // "Should fit in graphics memory" for a card the start would not use, DR1; Apple Silicon keeps
+  // its class there, #746) or for a matching start OBSERVED on the CPU backend (the ladder fell
+  // through under 'auto'), which is judged against RAM too, as its row says. The profile bump's
+  // gate (`gpuUsefulForProfile`, all devices) is unchanged (G4).
+  const effectiveClass: MemoryClass = cardEligible && observed?.backend !== 'cpu' ? memoryClass : 'cpu'
   const verdict = placementVerdict({
     memoryClass: effectiveClass,
     ramMb,

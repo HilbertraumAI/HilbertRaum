@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { initPerf, perfMark, perfMs } from '../../src/main/services/perf'
+import { initPerf, perfEnabled, perfMark, perfMs } from '../../src/main/services/perf'
 
 // Opt-in perf mark log (services/perf.ts). The invariants that matter:
 // 1. With HILBERTRAUM_PERF_LOG unset, nothing ever touches disk (the default-user
@@ -74,6 +74,31 @@ describe('perf mark log', () => {
       .map((l) => l.split(' ')[2])
     // The pre-init marks flushed first, then the live append.
     expect(events).toEqual(['pre_init_a', 'pre_init_b', 'post_init'])
+  })
+
+  it('keeps the newest 200 marks fired before initPerf, dropping the oldest', async () => {
+    // A launcher that sets the variable on a build whose init never runs must not grow without bound.
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', '1')
+    vi.resetModules()
+    const fresh = await import('../../src/main/services/perf')
+    for (let i = 0; i < 205; i++) fresh.perfMark(`pre_init_${i}`)
+    fresh.initPerf(dir)
+    const events = readFileSync(join(dir, 'perf.log'), 'utf8')
+      .trimEnd()
+      .split('\n')
+      .map((l) => l.split(' ')[2])
+    expect(events).toHaveLength(200)
+    expect(events[0]).toBe('pre_init_5')
+    expect(events.at(-1)).toBe('pre_init_204')
+  })
+
+  it.each([
+    [undefined, false],
+    ['true', false],
+    ['1', true]
+  ])('perfEnabled answers the marks’ own switch: %s → %s', (value, enabled) => {
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', value)
+    expect(perfEnabled()).toBe(enabled)
   })
 
   it('never throws on un-serialisable field values', () => {

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // The Performance screen's push model (PR #303 audit remediation P3, owner decisions G2/G6;
 // benchmark.md "Performance screen" → "Data path"):
@@ -14,7 +18,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 //    restore's push is first-benchmark-scheduler's), chat-runtime transitions, resident-sidecar
 //    transitions, and the settings keys the snapshot reads. The GPU probe write and "Try GPU
 //    again"'s flag-clear push are owned by performance-gpu.test.ts "the probe write", which
-//    asserts each push's value (#656).
+//    asserts each push's value (#656); the translation and vision runtimes' own flips by their
+//    suites, `initBackend`'s subscriptions by answer-speed-wiring.test.ts (#747);
+//  - the `performance_get` mark, through the script that reads it (#333).
 
 const electronState = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => any>(),
@@ -44,6 +50,7 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { notifyPerformanceChanged, setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
+import { initPerf } from '../../src/main/services/perf'
 import { latestAnswerSpeed } from '../../src/main/services/performance'
 import { latestEffectiveRead, recordChecksumRead } from '../../src/main/services/read-speed'
 import { RuntimeManager } from '../../src/main/services/runtime'
@@ -52,19 +59,23 @@ import { recordModelPlacement } from '../../src/main/services/runtime/placement'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { VisionService, type VisionAnalyzer, type VisionStreamEmitter } from '../../src/main/services/vision'
 import { EVENTS, IPC } from '../../src/shared/ipc'
-import type { BenchmarkProgressStep, ImageAnalyzeRequest, VisionStatus } from '../../src/shared/types'
+import type { AppSettings, BenchmarkProgressStep, ImageAnalyzeRequest, PerformanceSnapshot, VisionStatus } from '../../src/shared/types'
 import { modelPlacement } from '../helpers/benchmark-records'
 import { fakeSpawn } from '../helpers/fake-sidecar'
 import { invoke, makeEvent } from '../helpers/ipc'
+import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 import {
+  CARDS,
   CATALOG_MANIFESTS,
   closePerformanceFixture,
   ctxWith,
   firstBenchmarkNow,
   freshRoot,
+  hereKey,
   hereResult,
   loadSample,
   performanceChangedSpy,
+  pinPlatform,
   seededDb
 } from '../helpers/performance-fixture'
 
@@ -401,15 +412,71 @@ describe('settings keys the snapshot reads', () => {
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('a settings patch touching a snapshot key pushes; one that does not stays silent', async () => {
+  describe('through settings:update', () => {
+    pinPlatform('win32', 'x64') // the `gpuMode` row reads the class, which reads the platform
+
+    const embeddings = (id: string): Record<string, unknown> => rawManifest({ id, role: 'embeddings', local_path: `models/embeddings/${id}.gguf` })
+    /** A card machine whose active model is outside the catalog, so its context is the settings default. */
+    function snapshotInputs() {
+      const { ctx, db } = here()
+      ctx.manifestsDir = manifestsDirWith(embeddings('first-embedder'), embeddings('second-embedder'))
+      updateSettings(db, { activeModelId: 'some-model', gpuProbe: { devices: [CARDS.RTX_3090], probedAt: '2026-09-05T00:00:00Z', machineKey: hereKey() } })
+      registerCoreIpc(ctx)
+      return ctx
+    }
+    const context = (s: PerformanceSnapshot): unknown => s.placement.model?.contextTokens
+
+    // Each row reads the figure the key moves: a key that stops feeding the snapshot fails here, so
+    // this is no copy of PERFORMANCE_SETTINGS_KEYS.
+    it.each<[keyof AppSettings, Partial<AppSettings>, (s: PerformanceSnapshot) => unknown]>([
+      ['activeModelId', { activeModelId: 'another-model' }, (s) => s.placement.model?.id],
+      ['activeEmbeddingModelId', { activeEmbeddingModelId: 'second-embedder' }, (s) => s.placement.models.find((r) => r.role === 'embeddings')?.modelId],
+      ['contextTokens', { contextTokens: 2048 }, context],
+      ['contextTokensOverride', { contextTokensOverride: 16_384 }, context],
+      ['gpuMode', { gpuMode: 'off' }, (s) => s.placement.memoryClass]
+    ])('%s moves the snapshot, and the patch pushes after the write', async (_key, patch, figure) => {
+      const ctx = snapshotInputs()
+      const before = figure(buildPerformanceSnapshot(ctx))
+      const spy = performanceChangedSpy(() => figure(buildPerformanceSnapshot(ctx)))
+      await invoke(electronState.handlers, IPC.updateSettings, patch)
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(spy.mock.results[0].value).not.toEqual(before)
+    })
+
+    it('a patch of anything else stays silent: the screen has no interest in the language', async () => {
+      snapshotInputs()
+      const spy = performanceChangedSpy()
+      await invoke(electronState.handlers, IPC.updateSettings, { uiLanguage: 'en' })
+      expect(spy).not.toHaveBeenCalled()
+    })
+  })
+})
+
+// #333: the figure `scripts/measure-manifest-read.mjs --log` reports is the time a renderer waits on
+// `performance:get`, split by the `discover_manifests` line right before it. The script pairs the two
+// on adjacency alone, so the row reads the log with the script.
+describe('the performance_get mark', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('each read leaves its mark right behind its manifest scan, in the shape the --log script reads', async () => {
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', '1')
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-perf-mark-'))
+    dirs.push(dir)
+    initPerf(dir)
     const { ctx } = here()
-    registerCoreIpc(ctx)
-    const spy = performanceChangedSpy()
-    await invoke(electronState.handlers, IPC.updateSettings, { contextTokensOverride: 8192 })
-    expect(spy).toHaveBeenCalledTimes(1)
-    await invoke(electronState.handlers, IPC.updateSettings, { gpuMode: 'off' })
-    expect(spy).toHaveBeenCalledTimes(2)
-    await invoke(electronState.handlers, IPC.updateSettings, { uiLanguage: 'en' })
-    expect(spy).toHaveBeenCalledTimes(2)
+    ctx.manifestsDir = CATALOG_MANIFESTS
+    registerBenchmarkIpc(ctx)
+
+    await invoke(electronState.handlers, IPC.getPerformance)
+    await invoke(electronState.handlers, IPC.getPerformance)
+
+    const script = join(__dirname, '..', '..', '..', '..', 'scripts', 'measure-manifest-read.mjs')
+    const report = execFileSync(process.execPath, ['--no-warnings', script, '--log', join(dir, 'perf.log')], { encoding: 'utf8' })
+    expect(report).toContain('2 performance_get · 0 scans by other callers')
+    expect(report).toContain('of which: manifest scan')
   })
 })

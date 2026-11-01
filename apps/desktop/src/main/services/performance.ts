@@ -127,8 +127,8 @@ export interface NextStartMemory {
   memoryClass: MemoryClass
   /**
    * The budget device (`selectBudgetDevice`) on a `discrete` machine; the Metal pool's device
-   * (the largest one listed) on `unified`; null on `cpu` — including when a card IS present
-   * but the next start will not use it (GPU off, auto-disabled).
+   * (the largest one listed) on `unified`; null on `cpu`, and null whenever a device IS present
+   * but the next start will not use it (GPU off, auto-disabled), on `unified` too (#746).
    */
   device: GpuDevice | null
   /**
@@ -137,7 +137,8 @@ export interface NextStartMemory {
    * `cpu` class that merely has no usable card — the ladder may still put layers on an iGPU or
    * a small card under 'auto', so an observed GPU start there is evidence the row keeps
    * (`buildPlacement`'s configuration match reads this, PR #303 P4/P5 over a second read of
-   * the flags).
+   * the flags). On Apple Silicon it stands beside the `unified` class (#746): the memory is one
+   * pool either way. "Does the next start use the GPU?" is `nextStartUsesGpu`, never the class.
    */
   cpuForced: boolean
 }
@@ -145,9 +146,10 @@ export interface NextStartMemory {
 /**
  * How this computer's memory is organised for the NEXT model start (PR #308 audit, decisions
  * 6 and 9): Apple Silicon (darwin + arm64) is one unified pool; with the GPU switched off in
- * Settings or auto-disabled after a crash the ladder skips every GPU rung, so the next start
- * runs from RAM whatever the probe lists (class `cpu`, no device); otherwise a usable discrete
- * card — the budget device — has its own memory, and everything else runs from RAM.
+ * Settings or auto-disabled after a crash the ladder skips every GPU rung, on any platform, so
+ * the next start runs from RAM whatever the probe lists (no device, and class `cpu` everywhere
+ * but on that pool, #746); otherwise a usable discrete card — the budget device — has its own
+ * memory, and everything else runs from RAM.
  *
  * This is the ONE place class and device are decided; `probeAndPersistGpu`, `listModels`,
  * `buildPlacement` and the graphics tile all read it, so the Performance screen and the Models
@@ -158,7 +160,9 @@ export interface NextStartMemory {
  */
 export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
   const { platform, arch, devices, gpuMode, gpuAutoDisabled } = input
+  const cpuForced = gpuMode === 'off' || gpuAutoDisabled
   if (platform === 'darwin' && arch === 'arm64') {
+    if (cpuForced) return { memoryClass: 'unified', device: null, cpuForced: true }
     // One Metal device is the pool itself; the gate below (a "not integrated" name check)
     // does not apply to it, so name the largest device listed, without the gate.
     let pool: GpuDevice | null = null
@@ -167,9 +171,17 @@ export function nextStartMemory(input: NextStartMemoryInput): NextStartMemory {
     }
     return { memoryClass: 'unified', device: pool, cpuForced: false }
   }
-  if (gpuMode === 'off' || gpuAutoDisabled) return { memoryClass: 'cpu', device: null, cpuForced: true }
+  if (cpuForced) return { memoryClass: 'cpu', device: null, cpuForced: true }
   const device = selectBudgetDevice(devices)
   return device ? { memoryClass: 'discrete', device, cpuForced: false } : { memoryClass: 'cpu', device: null, cpuForced: false }
+}
+
+/**
+ * Will the next start use a graphics device? The class alone does not say: it describes how the
+ * memory is organised, and Apple Silicon stays `unified` when the flags force the processor (#746).
+ */
+export function nextStartUsesGpu(next: NextStartMemory): boolean {
+  return next.memoryClass !== 'cpu' && !next.cpuForced
 }
 
 /**
@@ -283,9 +295,9 @@ export interface PlacementVerdictInput {
  * budget with `ESTIMATE_HEADROOM` (unchanged); a model larger than that is 'too_large'.
  * `needMb` on an estimate is always the weights alone (the copy says the cache is measured).
  *
- * `memoryClass` is the EFFECTIVE class of the NEXT start (`nextStartMemory`: already `cpu` when
- * the configuration forces the processor — `gpuMode: 'off'`, `gpuAutoDisabled` — and passed as
- * `cpu` by `buildPlacement` when the matching observed start landed on the CPU backend), so the
+ * `memoryClass` is the EFFECTIVE class of the NEXT start (`nextStartMemory`'s, passed as `cpu` by
+ * `buildPlacement` when the configuration forces the processor — `gpuMode: 'off'`,
+ * `gpuAutoDisabled` — or the matching observed start landed on the CPU backend), so the
  * estimate never promises the card a start would not use (PR #303 audit DR1). `gpuName` names
  * the budget device so the observed free/working figures are attributed to it (DR2).
  */

@@ -269,6 +269,68 @@ describe('VisionRuntime — start + analyze', () => {
 // (hold the soft-teardown window open). This races the exact guard branches the design comments
 // emphasize: removing a guard (`this.starting`/`inFlight`, the synchronous `this.server = null`,
 // the `stop()` await of `idleTeardownPromise`, the `unref`) reddens a test here.
+// PR #303 P3: what moves the Performance screen's "loaded now" pill. VisionService forwarding the
+// flip is performance-notify's; these are the flips themselves, on the real runtime.
+describe('VisionRuntime — residency transitions', () => {
+  /** An analyzed-once runtime, and what a listener read of `isLoaded()` at each flip. */
+  async function residentRuntime(spawn: ReturnType<typeof fakeSpawn>['spawn']) {
+    const { clock, state } = fakeIdleClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: visionFetch().fetchImpl, idleClock: clock })
+    const loaded: boolean[] = []
+    rt.onResidencyChange(() => loaded.push(rt.isLoaded()))
+    await rt.analyze(analyzeOpts)
+    return { rt, loaded, idle: state }
+  }
+
+  it('a cold start reads loaded and the idle teardown reads gone; a stop with nothing resident says nothing', async () => {
+    const { rt, loaded, idle } = await residentRuntime(fakeSpawn().spawn)
+    expect(loaded).toEqual([true])
+    idle.fire!()
+    expect(loaded).toEqual([true, false])
+    await rt.stop()
+    expect(loaded).toEqual([true, false])
+  })
+
+  it('stop() reads gone before the kill is awaited', async () => {
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
+    const { rt, loaded } = await residentRuntime(spawn)
+    let settled = false
+    const stopping = rt.stop().then(() => {
+      settled = true
+    })
+    await until(() => loaded.length === 2, 'the flip')
+    expect(loaded).toEqual([true, false])
+    expect(settled).toBe(false)
+    children[0].releaseExit()
+    await stopping
+  })
+
+  it('an unexpected exit reads gone', async () => {
+    const { spawn, children } = fakeSpawn()
+    const { rt, loaded } = await residentRuntime(spawn)
+    children[0].crash(134)
+    await until(() => loaded.length === 2, 'the flip')
+    expect(loaded).toEqual([true, false])
+    await rt.stop()
+  })
+
+  it('a throwing listener never breaks the start, and an unsubscribed one hears nothing more', async () => {
+    const { clock, state } = fakeIdleClock()
+    const rt = new VisionRuntime({ ...base, spawn: fakeSpawn().spawn, fetchImpl: visionFetch().fetchImpl, idleClock: clock })
+    rt.onResidencyChange(() => {
+      throw new Error('listener exploded')
+    })
+    const heard = vi.fn()
+    const off = rt.onResidencyChange(heard)
+    await expect(rt.analyze(analyzeOpts)).resolves.toBe(FIXTURE_ANSWER)
+    expect(heard).toHaveBeenCalledTimes(1)
+    off()
+    state.fire!()
+    expect(heard).toHaveBeenCalledTimes(1)
+    await rt.stop()
+  })
+})
+
 describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / TEST-2)', () => {
   const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 

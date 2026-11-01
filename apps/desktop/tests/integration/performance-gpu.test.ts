@@ -721,6 +721,46 @@ describe('capability is not execution (DR1)', () => {
   })
 })
 
+// #746: the class never read the flags on a Mac, and the rest of the snapshot took the class for
+// "the next start uses the GPU", while the ladder skips rung 1 on any platform under those flags.
+// Pinned, not run on a Mac: the real-hardware check is #332's.
+describe('Apple Silicon: the GPU flags (#746)', () => {
+  pinPlatform('darwin', 'arm64')
+  const M2: GpuDevice = { id: 'Metal0', name: 'Apple M2 Pro', totalMb: 21_845, freeMb: 20_000 }
+  const onMetal = (flags: Partial<AppSettings> = {}) =>
+    cardMachine({ placement: {}, settings: { gpuProbe: probe([M2], hereKey()), ...flags } })
+
+  it('GPU on: a start measured on Metal counts, and the row and the device say so', () => {
+    const { placement: p, ctx } = onMetal()
+    expect(p.memoryClass).toBe('unified')
+    expect(p.observed?.backend).toBe('gpu')
+    expect(p.observedMismatch).toBeNull()
+    expect(p.verdict).toMatchObject({ kind: 'gpu', estimated: false })
+    expect(rowOf(p, 'chat').device).toBe('gpu')
+    expect(p.vramMb).toBe(M2.totalMb)
+    expect(buildPerformanceSnapshot(ctx).currentGpu?.name).toBe(M2.name)
+  })
+
+  it.each([
+    ["gpuMode 'off'", { gpuMode: 'off' as const }],
+    ['gpuAutoDisabled', { gpuAutoDisabled: true }]
+  ])('%s: the stored Metal record stops counting, the rows and the verdict go to the processor, and the pool stays unified', (_name, flags) => {
+    const { placement: p, ctx } = onMetal(flags)
+    // The memory is one pool either way: the tile keeps saying so.
+    expect(p.memoryClass).toBe('unified')
+    expect(p.observed).toBeNull()
+    expect(p.observedMismatch?.backend).toBe('gpu')
+    expect(rowOf(p, 'chat').device).toBe('cpu')
+    expect(rowOf(p, 'translation')).toMatchObject({ device: 'cpu', gpuLayers: null, totalLayers: null })
+    expect(p.verdict).toMatchObject({ kind: 'cpu', estimated: true, budgetMb: p.ramMb })
+    // Nothing names a device the start will not use: Diagnostics reads `currentGpu` as "available".
+    const snap = buildPerformanceSnapshot(ctx)
+    expect(p.vramMb).toBeNull()
+    expect(snap.currentGpu).toBeNull()
+    expect(snap.graphicsDevice).toBeNull()
+  })
+})
+
 describe('free/compute attribution to the selected device (DR2)', () => {
   const irisRow = { label: 'Vulkan0', name: IRIS.name, totalMb: 16_384, freeMb: 15_000, computeMb: 300 }
   const rtxRow = { label: 'Vulkan1', name: RTX.name, totalMb: 24_576, freeMb: 2703, computeMb: 2860 }
@@ -783,6 +823,25 @@ describe('"Try GPU again" and the session latches (#182, #372)', () => {
     } finally {
       // module state: never leak into a later case (the speculative one too, if tryGpuAgain threw)
       clearModelLoadLatches()
+      clearSpeculativeSuppression()
+    }
+  })
+
+  it('re-arms the speculative latch BEFORE it re-probes, so a start landing during the probe gets the fast path', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    withLlamaBinary(root)
+    suppressSpeculative('m')
+    const atProbe: boolean[] = []
+    try {
+      await tryGpuAgain(ctxWith(root, db, {
+        probeGpu: fakeGpuProbe(async () => {
+          atProbe.push(isSpeculativeSuppressed('m'))
+          return [RTX]
+        })
+      }))
+      expect(atProbe).toEqual([false])
+    } finally {
       clearSpeculativeSuppression()
     }
   })

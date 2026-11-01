@@ -92,9 +92,9 @@ const UNKNOWN = '–'
 // Defence in depth against a malformed persisted record (PR #303 audit H1). `getSettings`
 // validates every benchmark record now, so the snapshot should never carry one — but the
 // formatters below are the LAST thing between a stored blob and the screen, and
-// `toLocaleString` on `undefined` throws, which took the whole screen down (there is no error
-// boundary above it). A missing/NaN figure reads as the tiles' unknown dash instead, so one
-// bad row can only ever cost its own value.
+// `toLocaleString` on `undefined` throws, which took the whole screen down (App.tsx's
+// ErrorBoundary would catch it now, at the cost of the screen). A missing/NaN figure reads as
+// the tiles' unknown dash instead, so one bad row can only ever cost its own value.
 
 function fmt1Safe(n: number | null | undefined, lang: UiLanguage): string {
   return typeof n === 'number' && Number.isFinite(n) ? fmt1(n, lang) : UNKNOWN
@@ -303,7 +303,8 @@ function buildReport(
   }
   lines.push(`${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`)
   lines.push(`${t('diag.bench.lastRun')}: ${fmtDateTime(bench.ranAt, lang)}`)
-  for (const w of bench.warnings) lines.push(`- ${localizeServerCopy(t, w)}`)
+  // `?? []` is the H1 defence above: a throw here would lose the report inside the click (#746).
+  for (const w of bench.warnings ?? []) lines.push(`- ${localizeServerCopy(t, w)}`)
   return lines.join('\n')
 }
 
@@ -577,13 +578,16 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
    * other run — the first-run path, the moved-drive check, another window — the list could never
    * advance, and one was observed frozen on step 1 for a whole 13.7 s check (#331 leg 2).
    *
-   * `doneSteps.length > 0` is the second term rather than `ownActionInFlight` alone because the
-   * flag is cleared in the action's `finally`, one snapshot read BEFORE `backendRunning` catches
-   * up — without it the list would blink to the background line at the tail of our own run. A
+   * The second term exists rather than `ownActionInFlight` alone because the flag is cleared in
+   * the action's `finally`, one snapshot read BEFORE `backendRunning` catches up — without it the
+   * list would blink to the background line at the tail of our own run. It stops at
+   * `backendRunning` because the tail ends there (#746): `doneSteps` outlives the run, and left
+   * alone it kept the list on the idle card, with a step that never reported still "in progress"
+   * (the speed leg of every check with no model up, whatever step a failed run stopped at). A
    * foreign run cannot fake the term: it delivers no steps, and `applySnapshot` clears whatever
    * an earlier own run left as the span is taken.
    */
-  const showOwnSteps = ownActionInFlight || doneSteps.length > 0
+  const showOwnSteps = ownActionInFlight || (backendRunning && doneSteps.length > 0)
 
   // Keyboard focus across the busy swap (HW3; design-guidelines §6). The busy branch renders a
   // DIFFERENT subtree — the steps list plus a disabled "Running…" button — so the action button
@@ -953,7 +957,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           ))}
         </div>
         <div className="perf-models-summary">
-          {p.memoryClass !== 'cpu' && vram && chatRow && trRow && anyOnCard && (
+          {/* Both card lines need a card: `discrete`, never the Metal pool, whose device also fills
+              `vramMb` (#746) and whose memory the line below counts once, as one pool (#332). */}
+          {p.memoryClass === 'discrete' && vram && chatRow && trRow && anyOnCard && (
             <div className="perf-models-summary-line">
               <span>
                 {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}
@@ -977,7 +983,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               #495 follow-up: gated on RESIDENCY (`loaded`) too, not posture alone — the reranker
               is lazily started, so an ordinary fresh GPU-postured session with nothing resident
               yet must not claim a card line for a model that isn't actually there. */}
-          {p.memoryClass !== 'cpu' && vram && rerankerRow && rerankerRow.device === 'gpu' && rerankerRow.loaded && (
+          {p.memoryClass === 'discrete' && vram && rerankerRow && rerankerRow.device === 'gpu' && rerankerRow.loaded && (
             <div className="perf-models-summary-line">
               <span>{t('perf.models.cardReranker', { reranker: gbOf(rerankerRow.sizeOnDiskGb), vram })}</span>
               {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}

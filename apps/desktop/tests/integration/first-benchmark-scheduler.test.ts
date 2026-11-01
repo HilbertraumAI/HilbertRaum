@@ -62,6 +62,7 @@ import {
   BenchmarkBusyError,
   movedDriveNotice,
   prepareFirstBenchmark,
+  registerBenchmarkIpc,
   runAndPersistBenchmark,
   scheduleFirstBenchmark
 } from '../../src/main/ipc/registerBenchmarkIpc'
@@ -517,6 +518,35 @@ describe('movedDriveNotice: what the moved-drive check did (§5 item 22 (a))', (
     // not global state leaking across workspaces.
     const other = seededDb(freshRoot())
     expect(movedDriveNotice(ctxWith(root, other))).toBeNull()
+  })
+
+  it('is session-scoped on one handle too: a lock and a re-unlock retire it', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const foreign = result()
+    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, hereResult()] })
+    const workspace = sessionWorkspace()
+    const ctx = ctxWith(root, db, { workspace })
+    prepareFirstBenchmark(ctx)
+    expect(movedDriveNotice(ctx)).toMatchObject({ kind: 'restored' })
+
+    workspace.completeLock()
+    workspace.completeUnlock()
+    expect(movedDriveNotice(ctx)).toBeNull()
+  })
+
+  it('the channel Home reads carries the notice', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const foreign = result()
+    const known = hereResult()
+    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
+    const ctx = ctxWith(root, db)
+    registerBenchmarkIpc(ctx)
+    expect((await invoke(handlers, IPC.getMovedDriveNotice)).result).toBeNull()
+
+    prepareFirstBenchmark(ctx)
+    expect((await invoke(handlers, IPC.getMovedDriveNotice)).result).toEqual({ kind: 'restored', ranAt: known.ranAt })
   })
 })
 

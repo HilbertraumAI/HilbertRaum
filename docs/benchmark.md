@@ -21,9 +21,11 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    a failure falls back to `''` / `0` and never throws.
 2. **GPU** ([`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
    the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
-   (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws; every
-   failure resolves `[]`, but a probe that hits the bound answers `null` (unknown) and is neither
-   cached nor persisted, #380) and
+   (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws; a clean
+   run that lists nothing answers `[]`, as does a binary that fails its integrity check, and
+   anything that is not an answer — a probe that hits the bound, #380, is refused by the OS loader,
+   #530, crashes or cannot be spawned, #653 — answers `null` (unknown), neither cached nor
+   persisted) and
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful, totalMb,
    budgetMb, memoryClass }` — `name`, `totalMb` and `budgetMb` describe ONE device, the BUDGET
    device `nextStartMemory` selects for the next start (the largest usable card by the
@@ -46,7 +48,8 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    refresh that could not see it, so the Models badge, the benchmark and the tile agree; an empty
    stamped result re-stamps no old device, so #303's "never re-stamp old devices as local" holds
    either way, and the foreign-machine case is covered by the stamp). **The one exception (#380,
-   2026-09-08):** a probe that TIMED OUT is not an answer but the absence of one, so it writes
+   2026-09-08; widened by #530 and #653):** a probe that gave no answer (timed out, refused by
+   the OS loader, crashed, not spawned) is the absence of one, so it writes
    nothing and pushes nothing — the stored stamped probe stands until the next start, the next
    check or "Try GPU again" — and the summary injected into that run is built from what this
    machine already has on record (`eligibleDevicesFor`), so decision 6's real requirement (the ★,
@@ -189,7 +192,7 @@ crash — it is RAM-best-fit (`recommendModelIdByRam`: the largest model whose c
 fits, ties on `recommendation_rank`). The profile-based `recommendModelId(manifests, profile,
 'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). With the committed
 manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`,
-8 GB → `qwen3.5-4b-ud-q4kxl`, 12–20 GB → `qwen3.5-9b-ud-q4kxl`, 24 GB → `qwen3.8-27b-ud-q4km`, 32 GB
+8 GB → `qwen3.5-4b-ud-q4kxl`, 12–16 GB → `qwen3.5-9b-ud-q4kxl`, 20 GB → `qwen3.8-27b-ud-q4km`, 24 GB
 and up → `qwen3.8-27b-ud-q5km` (§6.6's 30-point grid; the 6, 8, 12 and 24 GB points were verified
 on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — while the 20 GB point and the
 Gemma 12B / MoE estimate bands remain predicted, no such card being available); by RAM:
@@ -454,8 +457,8 @@ other machine falls off the cap.
 
 **The machine fingerprint** (`machineKey`) is OS, arch, CPU model, core count and RAM rounded to
 whole GB (`os.totalmem()` drifts by a few MB between boots of one machine; the Models screen
-rounds the same way). A result with no usable identity (an empty `cpuModel`, `ramGb` of 0, or a
-blob persisted before these fields were reliably filled) has a **null key**: it is never filed in
+rounds the same way). A result with no usable identity (an empty `os`, `arch` or `cpuModel`, `ramGb`
+of 0, or a blob persisted before these fields were reliably filled) has a **null key**: it is never filed in
 the history and never counts as "another computer", so an old workspace keeps behaving as before.
 
 **The moved-drive check** lives in `prepareFirstBenchmark` (`ipc/registerBenchmarkIpc.ts`), the
@@ -478,7 +481,7 @@ machine, newest first, length capped; the 256 KB serialized cap applies to the l
 branches used to be SILENT, and they are different facts that must not share a message: a restore
 re-measures **nothing**, so the figures the user is about to read are as old as the restored
 result; a new computer has a measurement already under way. `MovedDriveNotice`
-(`benchmark:movedDriveNotice`) carries the distinction to Home:
+(`benchmark:moved-drive-notice`) carries the distinction to Home:
 
 | kind | set by | Home says | offers the check? |
 |---|---|---|---|
@@ -656,9 +659,8 @@ screen answers the user's question in plain words. Four cards:
 **This computer.** One verdict sentence ("Runs \<model\> at about \<n\> tokens per second.
    Model starts from this drive are fast/slow.") and four tiles, each with a rating WORD, never a
    colour alone: Speed (decode tokens/s, the measured model and date; "Approximate" on a
-   chunk-basis result), Memory (RAM, the profile as the pill, the model the RAM fits together with
-   the context it launches with: the user's `contextTokensOverride` or the model's recommended
-   window, plus CPU), Graphics memory (`BenchmarkResult.gpuVramMb` with `gpu`: ONE device's
+   chunk-basis result), Memory (RAM, the profile as the pill, the CPU; which model fits, and the
+   context it launches with, is the "Your model" row below), Graphics memory (`BenchmarkResult.gpuVramMb` with `gpu`: ONE device's
    memory and name, recorded at benchmark time so the history rows carry it too — the **budget
    device** for the next start, `nextStartMemory` below; since the PR #308 audit `BenchmarkResult.gpu`
    / `gpuVramMb` and `PerformanceSnapshot.currentGpu` all name that device, never the first device
@@ -735,6 +737,8 @@ wrapper `memoryClassOf` was removed in #656): `discrete` = a usable graphics car
 `unified` = Apple Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
 `recommendedMaxWorkingSetSize` when the load log printed it, else 75 % of RAM (the Memory tile is
 labelled "Unified memory" and the graphics tile is hidden); `cpu` = no usable card, budget = RAM.
+The summary under "Models on this computer" prints a card line only on `discrete`: the Metal
+device fills `placement.vramMb` too, and that pool is counted once, by the memory line (#746, #332).
 **Which card — one eligible source** (PR #308 audit decision 9, merged with PR #303 audit M8,
 owner decisions G3/G4): the class, the VRAM budget (`placement.vramMb`), the picker budget, the
 device the copy names and the observed free/working figures all come from the ELIGIBLE
@@ -777,11 +781,15 @@ hardware** (decision 6, with #303's DR1): with the GPU switched off in Settings 
 or auto-disabled after a crash (`gpuAutoDisabled`) the ladder skips every GPU rung, so the class
 is `cpu` for the next start (`nextStartMemory` says so as `cpuForced`), the budget is RAM and the
 ★ is the RAM pick, whatever the probe lists; the probe itself is still persisted (Diagnostics
-lists the card, "Try GPU again" re-arms it). The verdict is asked for that EFFECTIVE class — `cpu`
-as well when the matching observed start landed on the CPU backend — so the estimate reads "Will
-run on the processor from RAM", never "Should fit in graphics memory" for a card the start would
-not use; the resident rows follow the same class (chat and translation say 'cpu' under it,
-translation also when its sidecar runs `--device none`). A placement OBSERVED on the card is kept
+lists the card, "Try GPU again" re-arms it). **Apple Silicon keeps its class (#746):** the flags
+stop the ladder there too, but the memory is one pool either way, so the class stays `unified` (the
+tile, the RAM pick) while `cpuForced` is set and `device` is null; `buildPlacement` and the speed
+sample ask `nextStartUsesGpu`, never the class. Pinned with the platform set to darwin/arm64
+(`performance-gpu`, `picker-seams`); no real Mac has run it (#332). The verdict is asked for that EFFECTIVE class — `cpu` when the configuration
+forces the processor, and when the matching observed start landed on the CPU backend — so the
+estimate reads "Will run on the processor from RAM", never "Should fit in graphics memory" for a
+card the start would not use; the resident rows follow the same class (chat and translation say
+'cpu' under it, translation also when its sidecar runs `--device none`). A placement OBSERVED on the card is kept
 (a settings change never restarts a running model) but no longer counts for the row once the
 configuration forces the processor: it travels as `placement.observedMismatch` and the row shows
 the weights-only estimate for the RAM start the settings now ask for (the configuration match
@@ -1022,8 +1030,8 @@ locked); the moved-drive restore, the upgrade seed and the new-machine backfill 
 `prepareFirstBenchmark`; every GPU probe write (`probeAndPersistGpu`: a completed probe, incl.
 an empty device list, so "Try GPU again" pushes through it, and the EMPTY probe persisted when the
 probe cannot run or threw — PR #308 decision 6 — so the tile and the ★ drop a stale card at once;
-a probe that TIMED OUT writes and pushes NOTHING, because it is unknown rather than an answer and
-the stored probe stands (#380, 2026-09-08);
+a probe that gave no answer writes and pushes NOTHING, because it is unknown rather than an answer and
+the stored probe stands (#380, 2026-09-08; #530, #653);
 and, since issue #323 (2026-09-06), the refresh a completed chat-engine install triggers:
 `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall`, which re-runs the
 same `probeAndPersistGpu` — cache invalidated first, the same admission / unlock-epoch checks —
@@ -1111,22 +1119,32 @@ it SUCCEEDED, so back-filling would claim a skipped drive probe had passed. (3) 
 late-join case properly and stays the option if per-step detail for automatic runs is ever
 wanted; it was not worth a shared-shape change plus a push per step for a case nobody reported.
 
-**As built.** `showOwnSteps = ownActionInFlight || doneSteps.length > 0` gates the items; any
-other held span renders one `<li>` carrying `perf.running.background` ("Checking this computer in
-the background." / "Dieser Computer wird im Hintergrund geprüft."). Three things that look
-incidental and are not:
+**As built.** `showOwnSteps = ownActionInFlight || (backendRunning && doneSteps.length > 0)` gates
+the items; any other held span renders one `<li>` carrying `perf.running.background` ("Checking
+this computer in the background." / "Dieser Computer wird im Hintergrund geprüft."). Three things
+that look incidental and are not:
 
 - The line goes **inside** the always-mounted `.perf-steps` live region of #437, not beside it.
   An empty region would have left the automatic check silent to a screen reader — a regression
   against #437 rather than a neutral subtraction. Inside it, the line is a text change in a region
   that was already there, which is what makes it audible. It carries no live-region role of its
   own (#436).
-- `doneSteps.length > 0` is the second term because `ownActionInFlight` is cleared in the action's
-  `finally`, one snapshot read BEFORE `backendRunning` catches up; on the flag alone the region
-  would blink to the background line at the tail of the user's own run.
+- The second term exists because `ownActionInFlight` is cleared in the action's `finally`, one
+  snapshot read BEFORE `backendRunning` catches up; on the flag alone the region would blink to
+  the background line at the tail of the user's own run. It stops at `backendRunning` because that
+  is where the tail ends (#746, below).
 - A foreign run cannot fake that term: it delivers no steps, and `applySnapshot` clears whatever
   an earlier own run left as the span is taken — which is what makes `doneSteps` a sound "these
   steps are MINE" marker.
+
+**#746: the list ends with the run.** As first built the term was `doneSteps.length > 0` alone,
+and `doneSteps` outlives the run, so the region was only empty on an idle card when a run had
+delivered no step. Every check with no model up left "Generation speed (no model running,
+skipped): in progress" with `aria-current="step"` (L3: main sends `system`, `drive`, `done`,
+real app, master 58b0ca3e), and a failed run left "Drive speed: in progress" beside its banner.
+The term now reads the backend, so the list goes with the idle read. `doneSteps` keeps its state
+until the next run or foreign span clears it, hidden; the L3 rule stands, so `done` still marks
+no step finished. Pinned by `PerformanceScreen.test.tsx` "the step list ends with the run (#746)".
 
 **The IPC contract is unchanged** — steps still go to the requesting window only. This is a
 renderer-side decision about what to DRAW for a run that has none. Pinned by
