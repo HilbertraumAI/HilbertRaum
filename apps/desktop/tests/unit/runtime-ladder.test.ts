@@ -30,6 +30,7 @@ import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar
 import type { EngineProblem, GpuDevice } from '../../src/shared/types'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 import { deferred, ladderHarness } from '../helpers/ladder-harness'
+import { CARDS } from '../helpers/gpu-fixtures'
 import { until } from '../helpers/hang-budget'
 
 // Phase 15 start ladder (architecture.md GPU record §5.2). Zero binaries, zero GPUs:
@@ -830,7 +831,7 @@ describe('MTP speculative decoding (#182)', () => {
   /** #473: the b11146 capture of the hybrid desktop (list-devices-b11146-vulkan-rtx3080ti.txt) —
    *  the UHD 770 reports shared system RAM as free, far above the discrete card's figure. */
   const UHD_770: GpuDevice = { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
-  const RTX_HYBRID: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 }
+  const RTX_HYBRID = CARDS.RTX_3080_TI
   /** 9 GiB of weights need 12,800 MiB: the RTX's 11,316 cannot hold them, the iGPU's 48,060 "could". */
   const NINE_GIB = 9 * 1024 * 1024 * 1024
 

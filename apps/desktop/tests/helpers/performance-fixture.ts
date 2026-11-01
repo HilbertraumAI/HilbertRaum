@@ -22,11 +22,12 @@ import type { AppContext } from '../../src/main/services/context'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import type { BenchmarkResult, GpuDevice } from '../../src/shared/types'
 import { benchmarkResult } from './benchmark-records'
-import { stoppedStatus } from './chat-runtime-stub'
+import { START_READS, stoppedStatus } from './chat-runtime-stub'
 import { ANY_SENDER } from './ipc'
 import { rawManifest, writeManifest } from './manifest-fixtures'
 
-export { committingRuntime, stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
+export { committingRuntime, START_READS, stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
+export { CARDS, CATALOG_MANIFESTS } from './gpu-fixtures'
 
 // Shared fixture for the Performance-screen main-side tests (performance-ipc,
 // performance-persistence, performance-notify, performance-gpu, performance-schema,
@@ -118,7 +119,7 @@ export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}
     trustedSenders: { ...ANY_SENDER },
     // No binary on this root: the GPU probe resolves to "no devices" and never blocks.
     probeGpu: undefined,
-    runtime: { occupancy: new ModelOccupancy(), active: () => null, status: stoppedStatus },
+    runtime: { occupancy: new ModelOccupancy(), active: () => null, status: stoppedStatus, ...START_READS },
     isDev: true,
     // #477: pendingModelSwitches is required — startModelRuntime's committed-switch branch
     // calls it unconditionally now (no more `?.`/`??` fallback). `over` can still replace it.
@@ -162,9 +163,6 @@ export function hereResult(over: Partial<BenchmarkResult> = {}): BenchmarkResult
     ...over
   })
 }
-
-/** The repo's committed `model-manifests/`, absolute. */
-export const CATALOG_MANIFESTS: string = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 /** THIS host's `machineKey` (null when detection fails). */
 export function hereKey(): string | null {
@@ -273,22 +271,6 @@ export function sessionWorkspace(): {
  */
 export function firstBenchmarkNow(ctx: AppContext): Promise<FirstBenchmarkOutcome> {
   return scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())
-}
-
-/**
- * The four measured cards, as the probe lists them (MiB). Figures only: a row whose outcome turns on
- * a figure these do not hold keeps its own literal, and says so. Spread to vary one:
- * `{ ...CARDS.RTX_3090, freeMb: 4096 }`.
- */
-export const CARDS: Record<'RTX_3080_TI' | 'RTX_3090' | 'GTX_1070_TI' | 'RTX_3060_LAPTOP', GpuDevice> = {
-  // tests/fixtures/list-devices-b11146-vulkan-rtx3080ti.txt; model-benchmarks.md, the hardware table, leg 3.
-  RTX_3080_TI: { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 },
-  // tests/fixtures/placement-b9849-partial-62of66-mtp.txt; model-benchmarks.md, the hardware table, leg 7.
-  RTX_3090: { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 23575 },
-  // model-benchmarks.md, the hardware table, leg 2. The b11146 captures of this card read 7,484-7,490 free.
-  GTX_1070_TI: { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7504 },
-  // tests/fixtures/placement-b9849-partial-18of33-np4.txt; leg 4. Vulkan1: that laptop lists its iGPU first.
-  RTX_3060_LAPTOP: { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
 }
 
 /**

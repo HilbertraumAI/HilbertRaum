@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { join } from 'node:path'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import {
   cpuRequestCeilingFor,
@@ -7,10 +6,11 @@ import {
   snapshotRerankerOccupancy,
   createPendingModelSwitchCounter
 } from '../../src/main/services/rag/device-posture'
-import { DEFAULT_SETTINGS, type GpuDevice } from '../../src/shared/types'
+import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import type { RerankerDevice } from '../../src/main/services/rag/rerank-profile'
 import { isEngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { committingRuntime } from '../helpers/chat-runtime-stub'
+import { CARDS, CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 import { until } from '../helpers/hang-budget'
 import { FakeChild, GatedChild, exitingChild, fakeSpawn, loadingSidecar } from '../helpers/fake-sidecar'
 
@@ -585,13 +585,11 @@ describe('Wave 8 ruling (d): Reranker.devicePosture()', () => {
 // and the Wave 8 analysis): {totalMb: 8273, freeMb: 7504}. qwen3.5-9b-ud-q4kxl needs ~7284.1 MiB
 // (remainder 219.9 < the 2808.2 MiB floor) => posture 'cpu'. qwen3.5-4b-ud-q4kxl needs ~3837.4 MiB
 // (remainder 3666.6 >= the floor) => posture 'gpu'.
-const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
-const GTX_1070_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7504 }
 const GTX_SETTINGS = {
   ...DEFAULT_SETTINGS,
   gpuMode: 'auto' as const,
   gpuAutoDisabled: false,
-  gpuProbe: { devices: [GTX_1070_TI], probedAt: new Date().toISOString() }
+  gpuProbe: { devices: [CARDS.GTX_1070_TI], probedAt: new Date().toISOString() }
 }
 const NINE_B = 'qwen3.5-9b-ud-q4kxl'
 const FOUR_B = 'qwen3.5-4b-ud-q4kxl'
@@ -604,7 +602,7 @@ const gtxPosture =
     pending: ReturnType<typeof createPendingModelSwitchCounter>
   ) =>
   (): RerankerDevice =>
-    resolveRerankerDevicePosture(GTX_SETTINGS, MANIFESTS_DIR, snapshotRerankerOccupancy(runtime, pending, () => null))
+    resolveRerankerDevicePosture(GTX_SETTINGS, CATALOG_MANIFESTS, snapshotRerankerOccupancy(runtime, pending, () => null))
 
 describe("Wave 8 scenarios S4, S5 (option B', the analysis §4)", () => {
   it('S4: 9B -> 4B; the FIRST ask after the commit restarts Q on the GPU', async () => {

@@ -11,11 +11,11 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { join } from 'node:path'
 import { resolveAskCandidateScope } from '../../src/main/ipc/registerRagIpc'
 import { resolveRerankerDevicePosture, type RerankerOccupancySnapshot } from '../../src/main/services/rag/device-posture'
 import { GPU_RERANK_SCOPE } from '../../src/main/services/rag/rerank-profile'
 import { DEFAULT_SETTINGS, type AppSettings, type GpuDevice } from '../../src/shared/types'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 
 // B12 (scoped Opus review, step 4-4): `resolveAskCandidateScope` and its one production call
 // site (this ask's `externalArm` wiring) had no test in the diff — a dropped `candidateScope`
@@ -33,10 +33,16 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
 // itself exercise B′/T passes explicitly (an omitted/optional parameter would silently readmit
 // the pre-Wave-8 "trust the setting" behaviour — NF-1, the Wave 8 analysis).
 function noOccupancy(committedModelId: string | null = null): RerankerOccupancySnapshot {
-  return { committedModelId, chatStartBusy: false, translationOccupied: false }
+  return {
+    committedModelId,
+    chatStartBusy: false,
+    translationOccupied: false,
+    committedContextTokens: null,
+    committedBackend: null,
+    chatStartRequested: false
+  }
 }
 
-const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 const COMMITTED_4B = 'qwen3.5-4b-ud-q4kxl'
 /** The measurement machine's card (RTX 3080 Ti): provable headroom beside the 4B, so the wide scope resolves. */
 function bigCard(overrides: Partial<AppSettings> = {}): AppSettings {
@@ -55,9 +61,9 @@ describe('resolveAskCandidateScope (registerRagIpc.ts)', () => {
   it('rerankerAvailable: false -> "capped" even where the same settings resolve the wide scope with a reranker (the B7/B12 danger: a dropped or inverted rerankerAvailable must never widen the pool with no cross-encoder)', () => {
     const occupancy = noOccupancy(COMMITTED_4B)
     // Positive control: with a reranker the measurement machine resolves the wide scope.
-    expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, occupancy)).toBe(GPU_RERANK_SCOPE)
+    expect(resolveAskCandidateScope(bigCard(), true, CATALOG_MANIFESTS, occupancy)).toBe(GPU_RERANK_SCOPE)
     for (const s of [bigCard(), bigCard({ ragRerankWideScope: true })]) {
-      expect(resolveAskCandidateScope(s, false, MANIFESTS_DIR, occupancy)).toBe('capped')
+      expect(resolveAskCandidateScope(s, false, CATALOG_MANIFESTS, occupancy)).toBe('capped')
     }
   })
 
@@ -66,14 +72,14 @@ describe('resolveAskCandidateScope (registerRagIpc.ts)', () => {
   // down to "capped" on the fixture that otherwise resolves the wide scope.
   it('a chat start in flight/pending, a translation occupant, or a demoted reranker (#495) forces the scope down to "capped" even on the measurement machine\'s own GPU fixture', () => {
     const neutral = noOccupancy(COMMITTED_4B)
-    expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, neutral)).toBe(GPU_RERANK_SCOPE) // sanity
+    expect(resolveAskCandidateScope(bigCard(), true, CATALOG_MANIFESTS, neutral)).toBe(GPU_RERANK_SCOPE) // sanity
     const overrides: Array<[string, Partial<RerankerOccupancySnapshot>]> = [
       ['chatStartBusy', { chatStartBusy: true }],
       ['translationOccupied', { translationOccupied: true }],
       ['rerankerDemoted', { rerankerDemoted: true }]
     ]
     for (const [label, o] of overrides) {
-      expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, { ...neutral, ...o }), label).toBe('capped')
+      expect(resolveAskCandidateScope(bigCard(), true, CATALOG_MANIFESTS, { ...neutral, ...o }), label).toBe('capped')
     }
   })
 })
@@ -112,8 +118,8 @@ describe('resolveAskCandidateScope and the shared posture helper resolve the sam
     const occupancy = noOccupancy(COMMITTED_4B)
 
     // "Drive main/index.ts's seam" -- the shared helper IS that seam's core logic post-fix.
-    const posture1 = resolveRerankerDevicePosture(bigCard(), MANIFESTS_DIR, occupancy)
-    const posture2 = resolveRerankerDevicePosture(smallCard, MANIFESTS_DIR, occupancy)
+    const posture1 = resolveRerankerDevicePosture(bigCard(), CATALOG_MANIFESTS, occupancy)
+    const posture2 = resolveRerankerDevicePosture(smallCard, CATALOG_MANIFESTS, occupancy)
     expect(posture1).toBe('gpu')
     expect(posture2).toBe('cpu')
 
@@ -124,7 +130,7 @@ describe('resolveAskCandidateScope and the shared posture helper resolve the sam
     // posture inline instead of delegating to the shared helper (or forgets to wire
     // manifestsDir/occupancy through) would make one of these two assertions disagree with the
     // posture computed above.
-    expect(resolveAskCandidateScope(bigCard(), true, MANIFESTS_DIR, occupancy)).toBe(GPU_RERANK_SCOPE)
-    expect(resolveAskCandidateScope(smallCard, true, MANIFESTS_DIR, occupancy)).toBe('capped')
+    expect(resolveAskCandidateScope(bigCard(), true, CATALOG_MANIFESTS, occupancy)).toBe(GPU_RERANK_SCOPE)
+    expect(resolveAskCandidateScope(smallCard, true, CATALOG_MANIFESTS, occupancy)).toBe('capped')
   })
 })

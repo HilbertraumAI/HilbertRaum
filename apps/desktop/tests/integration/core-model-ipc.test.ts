@@ -58,13 +58,13 @@ import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../
 import type { Db } from '../../src/main/services/db'
 import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import type { AppSettings, AppStatus, GpuDevice, ModelInfo, RuntimeStatus, WorkspaceStateInfo } from '../../src/shared/types'
+import type { AppSettings, AppStatus, ModelInfo, RuntimeStatus, WorkspaceStateInfo } from '../../src/shared/types'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
 import { reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
-import { committingRuntime, sessionWorkspace, writeChatManifest } from '../helpers/performance-fixture'
+import { CARDS, CATALOG_MANIFESTS, committingRuntime, sessionWorkspace, START_READS, writeChatManifest } from '../helpers/performance-fixture'
 import { seededFreshDb } from '../helpers/seeded-db'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
@@ -75,7 +75,6 @@ import {
 } from '../../src/main/services/rag/device-posture'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-const REPO_MANIFESTS = join(process.cwd(), '..', '..', 'model-manifests')
 
 const seededDb = (): Db => seededFreshDb('coreipc')
 
@@ -432,7 +431,7 @@ describe('registerModelIpc', () => {
   it('lists the committed manifests and reports their state', async () => {
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: false,
       runtime: { activeModelId: () => null }
@@ -564,6 +563,7 @@ describe('registerModelIpc', () => {
         paths: { rootPath: root, configPath: bogusConfigDir() },
         isDev: false,
         runtime: {
+          ...START_READS,
           start: async () => ({ running: true, modelId: 'beta', port: null, healthy: true, message: 'ok' }),
           activeModelId: () => null
         }
@@ -698,10 +698,10 @@ describe('registerModelIpc', () => {
   it('startRuntime throws on an unknown model id', async () => {
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: false,
-      runtime: { start: async () => ({}), activeModelId: () => null }
+      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model')).rejects.toThrow(
@@ -718,12 +718,13 @@ describe('registerModelIpc', () => {
     updateSettings(db, { developerMode: true }) // explicit opt-in (default is now false, M10)
     const ctx = {
       db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       // A drive whose policy permits unverified models — leniency now needs both a
       // developer AND a permitting policy (M-4 fail-closed neutralizes M-6).
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
       isDev: false,
       runtime: {
+        ...START_READS,
         start: async (o: unknown) => {
           startedWith = o
           return { running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }
@@ -745,10 +746,11 @@ describe('registerModelIpc', () => {
     updateSettings(db, { developerMode: true })
     const ctx = {
       db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
       isDev: false,
       runtime: {
+        ...START_READS,
         start: async (o: Record<string, unknown>) => {
           started.push(o)
           return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
@@ -805,6 +807,7 @@ describe('registerModelIpc', () => {
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
       isDev: false,
       runtime: {
+        ...START_READS,
         start: async (o: Record<string, unknown>) => {
           started.push(o)
           return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
@@ -832,10 +835,11 @@ describe('registerModelIpc', () => {
     updateSettings(db, { developerMode: true })
     const ctx = {
       db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
       isDev: false,
       runtime: {
+        ...START_READS,
         start: async (o: Record<string, unknown>) => {
           started.push(o)
           return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
@@ -859,10 +863,10 @@ describe('registerModelIpc', () => {
     updateSettings(db, { developerMode: true })
     const ctx = {
       db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(), // missing config dir → no policy.json
       isDev: false,
-      runtime: { start: async () => ({}), activeModelId: () => null }
+      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
@@ -874,10 +878,11 @@ describe('registerModelIpc', () => {
     let started = false
     const ctx = {
       db: seededDb(), // developerMode defaults to FALSE (M10)
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: {
+        ...START_READS,
         start: async () => {
           started = true
           return { running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }
@@ -893,10 +898,10 @@ describe('registerModelIpc', () => {
   it('startRuntime refuses a missing model for a non-developer', async () => {
     const ctx = {
       db: seededDb(), // developerMode defaults to false
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: false,
-      runtime: { start: async () => ({}), activeModelId: () => null }
+      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
@@ -919,10 +924,10 @@ describe('registerModelIpc', () => {
     updateSettings(db, { developerMode: true })
     const ctx = {
       db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath },
       isDev: true,
-      runtime: { start: async () => ({}), activeModelId: () => null }
+      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
@@ -933,10 +938,10 @@ describe('registerModelIpc', () => {
   it('startRuntime rejects an embeddings model (the chat runtime loads chat models only)', async () => {
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
-      runtime: { start: async () => ({}), activeModelId: () => null }
+      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
@@ -960,7 +965,7 @@ describe('registerModelIpc', () => {
       manifestsDir,
       paths: { rootPath: root, configPath: bogusConfigDir() },
       isDev: true,
-      runtime: { start: async () => ({}), activeModelId: () => null }
+      runtime: { ...START_READS, start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     reg(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'huge-model')).rejects.toThrow(
@@ -980,7 +985,7 @@ describe('registerModelIpc', () => {
     }
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: { status: () => ({ ...status }), activeModelId: () => status.modelId }
@@ -996,7 +1001,7 @@ describe('registerModelIpc', () => {
     const stopped = { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: { status: () => ({ ...stopped }), activeModelId: () => null }
@@ -1023,7 +1028,7 @@ describe('registerModelIpc', () => {
     updateSettings(db, { gpuAutoDisabled: true })
     const ctx = {
       db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: { status: () => ({ ...running }), activeModelId: () => running.modelId }
@@ -1035,7 +1040,7 @@ describe('registerModelIpc', () => {
     const stopped = { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
     const ctx2 = {
       db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: { status: () => ({ ...stopped }), activeModelId: () => null }
@@ -1060,7 +1065,7 @@ describe('registerModelIpc', () => {
     let current = loading(4e9)
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: { status: () => structuredClone(current), activeModelId: () => null }
@@ -1089,7 +1094,7 @@ describe('registerModelIpc', () => {
   it('verifyModel reports the fresh install state and throws on an unknown id', async () => {
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: { activeModelId: () => null }
@@ -1103,7 +1108,7 @@ describe('registerModelIpc', () => {
   it('verifyModel re-arms the #372 unloadable-model latch for THAT model only (a re-verified file is a new file)', async () => {
     const ctx = {
       db: seededDb(),
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: noWeightPaths(),
       isDev: true,
       runtime: { activeModelId: () => null }
@@ -1186,6 +1191,7 @@ describe('registerModelIpc', () => {
         paths: { rootPath: root, configPath: bogusConfigDir() },
         isDev: true,
         runtime: {
+          ...START_READS,
           start: async (o: Record<string, unknown>) => {
             started.push(o)
             return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
@@ -1215,11 +1221,12 @@ describe('registerModelIpc', () => {
       const audited: string[] = []
       const ctx = {
         db,
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         paths: noWeightPaths(),
         isDev: true, // dev leniency → the missing-weights chat model mock-starts
         audit: (kind: string) => audited.push(kind),
         runtime: {
+          ...START_READS,
           start: async () => {
             started = true
             return { running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }
@@ -1240,11 +1247,12 @@ describe('registerModelIpc', () => {
       let aborted = false
       const ctx = {
         db: seededDb(),
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         paths: noWeightPaths(),
         isDev: true,
         docTasks: { abortActiveBuild: () => { aborted = true } },
         runtime: {
+          ...START_READS,
           start: async () => ({ running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }),
           activeModelId: () => null
         }
@@ -1258,10 +1266,10 @@ describe('registerModelIpc', () => {
       let started = false
       const ctx = {
         db: seededDb(), // developerMode defaults to false → no mock fallback
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         paths: noWeightPaths(),
         isDev: false,
-        runtime: { start: async () => { started = true; return {} }, activeModelId: () => null }
+        runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
       await expect(invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')).rejects.toThrow(
@@ -1283,7 +1291,7 @@ describe('registerModelIpc', () => {
         manifestsDir,
         paths: { rootPath: root, configPath: bogusConfigDir() },
         isDev: true,
-        runtime: { start: async () => { started = true; return {} }, activeModelId: () => null }
+        runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
       await expect(invoke(handlers, IPC.useModel, 'huge-model')).rejects.toThrow(
@@ -1297,10 +1305,10 @@ describe('registerModelIpc', () => {
       const db = seededDb()
       const ctx = {
         db,
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         paths: noWeightPaths(),
         isDev: true,
-        runtime: { start: async () => { started = true; return {} }, activeModelId: () => null }
+        runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
       await expect(invoke(handlers, IPC.useModel, 'multilingual-e5-small-q8')).rejects.toThrow(
@@ -1324,7 +1332,7 @@ describe('registerModelIpc', () => {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
         db: seededDb(),
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         reranker: { id: 'fake', rerank: async () => [], suspend }
       } as unknown as AppContext
       reg(ctx)
@@ -1338,7 +1346,7 @@ describe('registerModelIpc', () => {
       updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
       const ctx = {
         db,
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         reranker: { id: 'fake', rerank: async () => [], suspend }
       } as unknown as AppContext
       reg(ctx)
@@ -1354,7 +1362,7 @@ describe('registerModelIpc', () => {
       const db = seededDb()
       const ctx = {
         db,
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         reranker: { id: 'fake', rerank: async () => [], suspend }
       } as unknown as AppContext
       reg(ctx)
@@ -1368,11 +1376,12 @@ describe('registerModelIpc', () => {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
         db: seededDb(),
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         paths: noWeightPaths(),
         isDev: true,
         reranker: { id: 'fake', rerank: async () => [], suspend },
         runtime: {
+          ...START_READS,
           start: async () => ({ running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }),
           // Wave 8 ruling (a): nothing committed yet, and this fake never updates after
           // `start()` -- so the pending-switch check ALSO sees a genuine switch (null -> the
@@ -1391,11 +1400,12 @@ describe('registerModelIpc', () => {
       updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
       const ctx = {
         db,
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         paths: noWeightPaths(),
         isDev: true,
         reranker: { id: 'fake', rerank: async () => [], suspend },
         runtime: {
+          ...START_READS,
           start: async () => ({ running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }),
           // Wave 8 ruling (a): the runtime already has this SAME model committed, so the
           // pending-switch check also sees no flip -- the fake must say so for the fixture's
@@ -1459,16 +1469,10 @@ describe('registerModelIpc', () => {
       }) as typeof fetch
 
       const db = seededDb()
-      const GTX_1070_TI: GpuDevice = {
-        id: 'Vulkan0',
-        name: 'NVIDIA GeForce GTX 1070 Ti',
-        totalMb: 8273,
-        freeMb: 7504
-      }
       updateSettings(db, {
         gpuMode: 'auto',
         gpuAutoDisabled: false,
-        gpuProbe: { devices: [GTX_1070_TI], probedAt: new Date().toISOString() }
+        gpuProbe: { devices: [CARDS.GTX_1070_TI], probedAt: new Date().toISOString() }
       })
       // `activeModelId()` returns the OLD model until `start()` resolves.
       const runtime = committingRuntime('qwen3.5-9b-ud-q4kxl')
@@ -1478,7 +1482,7 @@ describe('registerModelIpc', () => {
       const devicePosture = vi.fn(() =>
         resolveRerankerDevicePosture(
           getSettings(db),
-          REPO_MANIFESTS,
+          CATALOG_MANIFESTS,
           snapshotRerankerOccupancy(runtime, pendingModelSwitches, () => null)
         )
       )
@@ -1494,7 +1498,7 @@ describe('registerModelIpc', () => {
       })
       const ctx = {
         db,
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         reranker,
         runtime,
         pendingModelSwitches,
@@ -1549,7 +1553,7 @@ describe('registerModelIpc', () => {
       updateSettings(db, { developerMode: true })
       const ctx = {
         db,
-        manifestsDir: REPO_MANIFESTS,
+        manifestsDir: CATALOG_MANIFESTS,
         // The missing-weights developer start (mock fallback) — no multi-GB hash in a test.
         paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
         isDev: false,
@@ -1622,11 +1626,12 @@ describe('maybeAutoStartActiveModel', () => {
   }): AppContext {
     return {
       db: opts.db,
-      manifestsDir: REPO_MANIFESTS,
+      manifestsDir: CATALOG_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: bogusConfigDir() },
       isDev: true, // developer leniency → the missing-weights model may start (mock fallback)
       workspace: opts.workspace ?? { isUnlocked: () => opts.unlocked !== false },
       runtime: {
+        ...START_READS,
         start: async () => {
           opts.onStart?.()
           return { running: true, modelId: 'x', port: null, healthy: true, message: 'ok' }

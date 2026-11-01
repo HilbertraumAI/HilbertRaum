@@ -43,6 +43,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
+import { runningManager } from '../helpers/chat-runtime-stub'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -148,7 +149,7 @@ function makeCtx(
       return db
     },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
+    runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,
     ocrEngine: undefined,

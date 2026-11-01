@@ -1,6 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The graphics figures of the Performance screen come from ONE eligible source (PR #303 audit
 // M8 / N1 / DR1 / DR2 / DR5, owner decisions G3 / G4):
@@ -32,6 +30,12 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
+// 32 GB: a BALANCED machine, one step up with a useful card (the profile rows below expect literals).
+vi.mock('node:os', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:os')>()),
+  totalmem: () => 32 * 1024 ** 3
+}))
+
 import {
   buildPerformanceSnapshot,
   probeAndPersistGpu,
@@ -39,13 +43,11 @@ import {
   tryGpuAgain
 } from '../../src/main/ipc/registerBenchmarkIpc'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
-import { classifyProfile, detectSystem } from '../../src/main/services/benchmark'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
-import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
+import { resetPerformanceForTests } from '../../src/main/services/performance'
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
-import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import {
   clearModelLoadLatches,
@@ -56,7 +58,6 @@ import {
   suppressSpeculative
 } from '../../src/main/services/runtime/factory'
 import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
-import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type {
   AppSettings,
@@ -68,31 +69,31 @@ import type {
   RuntimeStatus,
   TranslationDeviceStatus
 } from '../../src/shared/types'
+import { modelPlacement } from '../helpers/benchmark-records'
+import { deferred } from '../helpers/deferred'
 import {
+  CARDS,
+  CATALOG_MANIFESTS,
   closePerformanceFixture,
   ctxWith,
+  fakeGpuProbe,
   freshRoot,
+  hereKey,
   hereResult,
   performanceChangedSpy,
+  pinPlatform,
   result,
-  seededDb
+  seededDb,
+  withLlamaBinary
 } from '../helpers/performance-fixture'
+import { runtimeStatus } from '../helpers/status'
 
 // #656: pinned, not inherited from the host. The memory class reads process.platform /
 // process.arch, and every probe here is a Vulkan Windows/Linux machine: on an Apple Silicon host
 // the class is `unified` and its device the LARGEST one listed, so a hybrid fixture would name
 // its iGPU there. The placeholder binary below is named for the same pinned platform. Apple
 // Silicon's own branch is pinned in performance.test.ts (`nextStartMemory`); see also #332.
-const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch')
-beforeAll(() => {
-  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
-  Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
-})
-afterAll(() => {
-  if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
-  if (archDescriptor) Object.defineProperty(process, 'arch', archDescriptor)
-})
+pinPlatform('win32', 'x64')
 
 beforeEach(() => {
   resetPerformanceForTests()
@@ -113,13 +114,10 @@ const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb
 // A real hybrid laptop (2026-09-07): the iGPU listed first, the "6 GB" card at 5,994 MiB on Vulkan.
 // That was under the old 6,144 gate; since #321 lowered it to 5,120 the card IS the budget device.
 const RADEON_IGPU: GpuDevice = { id: 'Vulkan0', name: 'AMD Radeon(TM) Graphics', totalMb: 8886, freeMb: 8441 }
-const RTX3060L: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
+const RTX3060L = CARDS.RTX_3060_LAPTOP
 const PROBED_AT = '2026-09-05T00:00:00Z'
 const FOREIGN_KEY = 'linux|x64|Some Other CPU|32|64'
 const CHAT = 'qwen3.5-9b-ud-q4kxl'
-const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
-
-const here = (): string | null => machineKey(detectSystem())
 
 /** A persisted probe: unstamped (legacy) when `stamp` is omitted, else stamped with it. */
 function probe(devices: GpuDevice[], stamp?: string | null): GpuProbeResult {
@@ -131,30 +129,6 @@ function legacyResult(gpu: string | null = null): BenchmarkResult {
   const r = hereResult({ gpu })
   delete r.gpuVramMb
   return r
-}
-
-/** A placeholder llama-server so `probeAndPersistGpu` resolves a binary; the injected probe never spawns it. */
-function withBinary(root: string): void {
-  const dir = llamaServerDir(root)
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, llamaServerBinaryName()), '')
-}
-
-/** `null` from `impl` is the kill-timeout's UNKNOWN answer (#380), not "no device". */
-function fakeProbe(impl: () => Promise<GpuDevice[] | null>): CachedGpuProbe {
-  return Object.assign((_bin: string) => impl(), { invalidate: () => undefined })
-}
-
-function runningStatus(modelId: string): RuntimeStatus {
-  return { running: true, modelId, port: 1, healthy: true, message: 'Running', backend: 'gpu' }
-}
-
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((res) => {
-    resolve = res
-  })
-  return { promise, resolve }
 }
 
 describe('one eligible source: the selected device (M8.2)', () => {
@@ -268,22 +242,22 @@ describe('one eligible source: the selected device (M8.2)', () => {
   it('the benchmark records the selected device as one pair; the profile bump follows ALL devices (G4)', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
+    withLlamaBinary(root)
 
-    const hybrid = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeProbe(async () => [IRIS, RTX]) }))
+    const hybrid = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => [IRIS, RTX]) }))
     expect(hybrid.gpu).toBe(RTX.name)
     expect(hybrid.gpuVramMb).toBe(RTX.totalMb)
-    expect(hybrid.profile).toBe(classifyProfile(hybrid.ramGb, { gpuUseful: true }))
+    expect(hybrid.profile).toBe('PRO')
     // The probe write is stamped with this machine.
-    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
+    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: hereKey() })
 
-    const igpu = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeProbe(async () => [IRIS]) }))
+    const igpu = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => [IRIS]) }))
     // No budget device: the record names no card (the next start runs from RAM) and it bumps nothing.
     expect(igpu.gpu).toBeNull()
     expect(igpu.gpuVramMb).toBeNull()
-    expect(igpu.profile).toBe(classifyProfile(igpu.ramGb, { gpuUseful: false }))
+    expect(igpu.profile).toBe('BALANCED')
 
-    const none = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeProbe(async () => []) }))
+    const none = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => []) }))
     expect(none.gpu).toBeNull()
     expect(none.gpuVramMb).toBeNull()
   })
@@ -326,15 +300,15 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     const db = seededDb(root)
     const foreign = probe([RTX], FOREIGN_KEY)
     updateSettings(db, { gpuProbe: foreign, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
-    const probeFn = vi.fn(async () => [IRIS])
+    const probeGpu = fakeGpuProbe([IRIS])
     const spy = performanceChangedSpy(flagsAndProbe(db))
 
-    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(probeFn) }))
+    await tryGpuAgain(ctxWith(root, db, { probeGpu }))
 
-    expect(probeFn).not.toHaveBeenCalled()
+    expect(probeGpu).not.toHaveBeenCalled()
     const written = getSettings(db).gpuProbe!
     expect(written.devices).toEqual([])
-    expect(written.machineKey).toBe(here())
+    expect(written.machineKey).toBe(hereKey())
     expect(Number.isNaN(new Date(written.probedAt).getTime())).toBe(false)
     expect(spy.mock.results.map((r) => r.value)).toEqual([
       { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign },
@@ -345,16 +319,16 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
   it('a rejecting probe: the same EMPTY stamped probe replaces the old devices (the old ones are never re-stamped as local) — the flag clear pushes first, the write pushes again (A-D1)', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
+    withLlamaBinary(root)
     const foreign = probe([RTX], FOREIGN_KEY)
     updateSettings(db, { gpuProbe: foreign, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
     const spy = performanceChangedSpy(flagsAndProbe(db))
 
-    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => { throw new Error('driver wedged') }) }))
+    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => { throw new Error('driver wedged') }) }))
 
     const written = getSettings(db).gpuProbe!
     expect(written.devices).toEqual([])
-    expect(written.machineKey).toBe(here())
+    expect(written.machineKey).toBe(hereKey())
     expect(spy.mock.results.map((r) => r.value)).toEqual([
       { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: foreign },
       { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: written }
@@ -364,15 +338,15 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
   it('an EMPTY result replaces the old devices with the current, stamped, empty probe — and pushes', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
+    withLlamaBinary(root)
     updateSettings(db, { gpuProbe: probe([RTX], FOREIGN_KEY) })
     const spy = performanceChangedSpy(() => getSettings(db).gpuProbe)
 
-    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => []) }))
+    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => []) }))
 
     const written = getSettings(db).gpuProbe!
     expect(written.devices).toEqual([])
-    expect(written.machineKey).toBe(here())
+    expect(written.machineKey).toBe(hereKey())
     expect(Number.isNaN(new Date(written.probedAt).getTime())).toBe(false)
     // Pushed after the flag clear (the old probe still in place) and again after the write (A-D1).
     expect(spy.mock.results.map((r) => r.value)).toEqual([probe([RTX], FOREIGN_KEY), written])
@@ -394,10 +368,10 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
   ])('"Try GPU again": the first push re-arms this machine’s card on the screen even when the probe cannot run — %s (A-D1)', async (_label, binary, probeImpl) => {
     const root = freshRoot()
     const db = seededDb(root)
-    const before = probe([RTX], here())
+    const before = probe([RTX], hereKey())
     updateSettings(db, { gpuProbe: before, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
-    if (binary) withBinary(root)
-    const ctx = ctxWith(root, db, { probeGpu: fakeProbe(probeImpl) })
+    if (binary) withLlamaBinary(root)
+    const ctx = ctxWith(root, db, { probeGpu: fakeGpuProbe(probeImpl) })
     const chatDevice = (): string => buildPerformanceSnapshot(ctx).placement.models.find((r) => r.role === 'chat')!.device
     expect(chatDevice()).toBe('cpu') // the auto-disable forces the processor before the button
     const spy = performanceChangedSpy(() => ({ gpuAutoDisabled: getSettings(db).gpuAutoDisabled, chat: chatDevice() }))
@@ -408,38 +382,36 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
       { gpuAutoDisabled: false, chat: 'gpu' },
       { gpuAutoDisabled: false, chat: 'cpu' }
     ])
-    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [], machineKey: here() })
+    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [], machineKey: hereKey() })
   })
 
   it('a probe-only refresh drops the cached answer first, then writes the devices stamped with this machine and pushes', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
+    withLlamaBinary(root)
     const spy = performanceChangedSpy()
-    const impl = vi.fn(async () => [IRIS, RTX])
-    const probeGpu = fakeProbe(impl)
-    const invalidate = vi.spyOn(probeGpu, 'invalidate')
+    const probeGpu = fakeGpuProbe([IRIS, RTX])
 
     const settings = await tryGpuAgain(ctxWith(root, db, { probeGpu }))
 
     // "Try GPU again" is never answered from the session cache: invalidate() precedes the re-probe.
-    expect(invalidate).toHaveBeenCalledTimes(1)
-    expect(invalidate.mock.invocationCallOrder[0]).toBeLessThan(impl.mock.invocationCallOrder[0])
-    expect(settings.gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
+    expect(probeGpu.invalidate).toHaveBeenCalledTimes(1)
+    expect(probeGpu.invalidate.mock.invocationCallOrder[0]).toBeLessThan(probeGpu.calls.mock.invocationCallOrder[0])
+    expect(settings.gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: hereKey() })
     expect(spy).toHaveBeenCalledTimes(2) // the flag clear, then the write (A-D1)
   })
 
   it('a probe that resolves after the workspace locked writes nothing', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
+    withLlamaBinary(root)
     const before = probe([RTX], FOREIGN_KEY)
     updateSettings(db, { gpuProbe: before })
     let unlocked = true
     const pending = deferred<GpuDevice[]>()
     const ctx = ctxWith(root, db, {
       workspace: { isUnlocked: () => unlocked, isLocking: () => false },
-      probeGpu: fakeProbe(() => pending.promise)
+      probeGpu: fakeGpuProbe(() => pending.promise)
     })
     const spy = performanceChangedSpy()
 
@@ -455,14 +427,14 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
   it('a probe that outlives its workspace session (a lock AND a re-unlock) writes nothing', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
+    withLlamaBinary(root)
     const before = probe([RTX], FOREIGN_KEY)
     updateSettings(db, { gpuProbe: before })
     let epoch = 3
     const pending = deferred<GpuDevice[]>()
     const ctx = ctxWith(root, db, {
       workspace: { isUnlocked: () => true, isLocking: () => false, unlockEpoch: () => epoch },
-      probeGpu: fakeProbe(() => pending.promise)
+      probeGpu: fakeGpuProbe(() => pending.promise)
     })
     const spy = performanceChangedSpy()
 
@@ -476,11 +448,11 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
 
     // The control: the same session, the same probe → written.
     const again = deferred<GpuDevice[]>()
-    ctx.probeGpu = fakeProbe(() => again.promise)
+    ctx.probeGpu = fakeGpuProbe(() => again.promise)
     const run2 = tryGpuAgain(ctx)
     again.resolve([IRIS, RTX])
     await run2
-    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
+    expect(getSettings(db).gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: hereKey() })
     expect(spy).toHaveBeenCalledTimes(3) // + the flag clear and the write
   })
 
@@ -491,12 +463,12 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
   it('a TIMED-OUT probe on a machine with a stamped card: nothing is written, the stored probe stands', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
-    const before = probe([RTX], here())
+    withLlamaBinary(root)
+    const before = probe([RTX], hereKey())
     updateSettings(db, { gpuProbe: before, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
     const spy = performanceChangedSpy(flagsAndProbe(db))
 
-    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => null) }))
+    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => null) }))
 
     expect(getSettings(db).gpuProbe).toEqual(before)
     // ONE push: the flag clear (A-D1). An unknown probe writes nothing, so it pushes nothing.
@@ -510,15 +482,15 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     // probe they agree on the RECORD instead of on an empty answer nobody measured.
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
-    const before = probe([RTX], here())
+    withLlamaBinary(root)
+    const before = probe([RTX], hereKey())
     updateSettings(db, { gpuProbe: before })
 
-    const result = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeProbe(async () => null) }))
+    const result = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => null) }))
 
     expect(result.gpu).toBe(RTX.name)
     expect(result.gpuVramMb).toBe(RTX.totalMb)
-    expect(result.profile).toBe(classifyProfile(result.ramGb, { gpuUseful: true }))
+    expect(result.profile).toBe('PRO')
     expect(getSettings(db).gpuProbe).toEqual(before)
   })
 
@@ -527,11 +499,11 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     // local, it only declines to overwrite what is stored.
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
+    withLlamaBinary(root)
     const before = probe([RTX], FOREIGN_KEY)
     updateSettings(db, { gpuProbe: before, lastBenchmark: legacyResult() })
 
-    return tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => null) })).then(() => {
+    return tryGpuAgain(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => null) })).then(() => {
       expect(getSettings(db).gpuProbe).toEqual(before)
       expect(buildPerformanceSnapshot(ctxWith(root, db)).currentGpu).toBeNull()
     })
@@ -540,14 +512,14 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
   it('a probe that gives NO answer after the workspace locked: no write, no push, an empty summary, and no false "probe failed" warning (#656)', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    withBinary(root)
-    const before = probe([RTX], here())
+    withLlamaBinary(root)
+    const before = probe([RTX], hereKey())
     updateSettings(db, { gpuProbe: before })
     let unlocked = true
     const pending = deferred<GpuDevice[] | null>()
     const ctx = ctxWith(root, db, {
       workspace: { isUnlocked: () => unlocked, isLocking: () => false },
-      probeGpu: fakeProbe(() => pending.promise)
+      probeGpu: fakeGpuProbe(() => pending.promise)
     })
     // As in production, the database is out of reach once the lock completed.
     Object.defineProperty(ctx, 'db', {
@@ -588,14 +560,14 @@ function cardMachine(over: {
   resetModelPlacementForTests()
   const root = freshRoot()
   const db = seededDb(root)
-  updateSettings(db, { lastBenchmark: hereResult(), activeModelId: CHAT, gpuProbe: probe([RTX], here()), ...over.settings })
+  updateSettings(db, { lastBenchmark: hereResult(), activeModelId: CHAT, gpuProbe: probe([RTX], hereKey()), ...over.settings })
   const ctx = ctxWith(root, db, {
     reranker: over.reranker,
-    manifestsDir: MANIFESTS,
+    manifestsDir: CATALOG_MANIFESTS,
     runtime: {
       occupancy: new ModelOccupancy(),
       active: () => ({ modelId: CHAT }),
-      status: () => over.status ?? runningStatus(CHAT)
+      status: () => over.status ?? runtimeStatus({ modelId: CHAT, backend: 'gpu' })
     },
     translator: {
       deviceStatus: () =>
@@ -606,11 +578,7 @@ function cardMachine(over: {
     // The launch context the snapshot resolves for the active model: a placement must carry it
     // to count as observed (the measured-evidence rule).
     const contextTokens = buildPerformanceSnapshot(ctx).placement.model?.contextTokens ?? 0
-    recordModelPlacement({
-      modelId: CHAT, contextTokens, backend: 'gpu', gpuLayers: 41, totalLayers: 41,
-      gpuModelMb: 5500, cpuModelMb: 400, gpuKvMb: 640, cpuKvMb: null, metalMaxWorkingSetMb: null,
-      machineKey: here(), at: '2026-09-05T01:00:00Z', ...over.placement
-    })
+    recordModelPlacement(modelPlacement({ modelId: CHAT, contextTokens, machineKey: hereKey(), ...over.placement }))
   }
   return { placement: buildPerformanceSnapshot(ctx).placement, db, ctx }
 }
@@ -743,7 +711,7 @@ describe('capability is not execution (DR1)', () => {
   it('no usable card, GPU on: both rows say cpu and nothing counts as on the card', () => {
     // An integrated-only probe under 'auto' is a cpu CLASS without a forced configuration (`cpuForced`
     // false) — the rows still stay off the card (DR1).
-    const none = cardMachine({ settings: { gpuProbe: probe([IRIS], here()) } })
+    const none = cardMachine({ settings: { gpuProbe: probe([IRIS], hereKey()) } })
     expect(none.placement.memoryClass).toBe('cpu')
     expect(rowOf(none.placement, 'chat').device).toBe('cpu')
     // #671: a row that says processor claims no layers on the card, whatever the sidecar printed
@@ -761,15 +729,17 @@ describe('free/compute attribution to the selected device (DR2)', () => {
   function withLog(devices: ModelPlacement['devices'], probed: GpuDevice[]): PerformanceSnapshot['placement'] {
     const root = freshRoot()
     const db = seededDb(root)
-    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'some-model', gpuProbe: probe(probed, here()) })
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'some-model', gpuProbe: probe(probed, hereKey()) })
     const contextTokens = getSettings(db).contextTokens
-    recordModelPlacement({
-      modelId: 'some-model', contextTokens, backend: 'gpu', gpuLayers: 62, totalLayers: 66,
-      gpuModelMb: 17_600, cpuModelMb: 1750, gpuKvMb: 512, cpuKvMb: null, metalMaxWorkingSetMb: null,
-      // The legacy summary fields say what the FIRST row and the SUM would: the iGPU's free memory.
-      gpuFreeAtStartMb: 15_000, gpuComputeMb: 3160, devices,
-      machineKey: here(), at: '2026-09-05T01:00:00Z'
-    })
+    recordModelPlacement(
+      modelPlacement({
+        modelId: 'some-model', contextTokens, gpuLayers: 62, totalLayers: 66,
+        gpuModelMb: 17_600, cpuModelMb: 1750, gpuKvMb: 512,
+        // The legacy summary fields say what the FIRST row and the SUM would: the iGPU's free memory.
+        gpuFreeAtStartMb: 15_000, gpuComputeMb: 3160, devices,
+        machineKey: hereKey()
+      })
+    )
     return buildPerformanceSnapshot(ctxWith(root, db)).placement
   }
 
@@ -807,7 +777,7 @@ describe('"Try GPU again" and the session latches (#182, #372)', () => {
     suppressSpeculative('m')
     latchModelLoad('m', 'unknown model architecture')
     try {
-      await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => [RTX]) }))
+      await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeGpuProbe(async () => [RTX]) }))
       expect(isSpeculativeSuppressed('m')).toBe(false)
       expect(modelLoadLatchReason('m')).toBe('unknown model architecture')
     } finally {

@@ -44,6 +44,9 @@ const FOUR_B = 'qwen3.5-4b-ud-q4kxl'
 const NINE_B = 'qwen3.5-9b-ud-q4kxl'
 const NO_OCCUPANCY: Omit<RerankerOccupancySnapshot, 'committedModelId'> = {
   chatStartBusy: false,
+  committedContextTokens: null,
+  committedBackend: null,
+  chatStartRequested: false,
   translationOccupied: false
 }
 
@@ -155,14 +158,7 @@ describe('Wave 8 ruling (a): the pending-switch counter', () => {
     const root = freshRoot()
     const manifestsDir = join(root, 'model-manifests')
     mkdirSync(manifestsDir, { recursive: true })
-    writeChatManifest(manifestsDir, {
-      id: 'huge-model',
-      display_name: 'Huge Model',
-      size_on_disk_gb: 999,
-      recommended_min_ram_gb: 9999, // no real machine passes
-      recommended_ram_gb: 9999,
-      local_path: 'models/chat/huge.gguf'
-    })
+    writeChatManifest(manifestsDir)
     mkdirSync(join(root, 'models', 'chat'), { recursive: true })
     writeFileSync(join(root, 'models', 'chat', 'huge.gguf'), 'weights')
     const ctx = ctxWith(root, seededDb(root), {

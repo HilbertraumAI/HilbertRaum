@@ -405,6 +405,8 @@ describe('German render smokes (Phase 40)', () => {
       ] as unknown as ModelInfo[]),
       getRuntimeStatus: vi.fn(async () => runningStatus),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+      getAppStatus: vi.fn(async () => appStatus()),
+      onEngineProblemsChanged: vi.fn(() => () => {}),
       onPerformanceChanged: vi.fn(() => () => {}),
       onBenchmarkProgress: vi.fn(() => () => {})
     })

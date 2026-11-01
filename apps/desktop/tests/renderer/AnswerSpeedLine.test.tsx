@@ -3,7 +3,6 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { formatAnswerSpeed } from '../../src/renderer/chat/answerSpeed'
 import { t, type UiLanguage } from '../../src/shared/i18n'
-import type { PreloadApi } from '../../src/preload'
 import type { Message } from '../../src/shared/types'
 import type { AnswerSpeed } from '../../src/shared/ipc'
 import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
@@ -79,8 +78,7 @@ describe('Transcript speed line (#290)', () => {
   })
 })
 
-// The wiring no other suite fires: `onAnswerSpeed` → ChatScreen's session map → the line. `fakeChatStream`
-// has no speed channel yet, so the listener is captured here, in the same shape.
+// The wiring no other suite fires: `onAnswerSpeed` → ChatScreen's session map → the line.
 describe('ChatScreen speed wiring (#290)', () => {
   it('the chat:speed payload shows the line for this session; a remount over the same history shows none', async () => {
     vi.useFakeTimers()
@@ -89,16 +87,9 @@ describe('ChatScreen speed wiring (#290)', () => {
       const reply = deferred<Message>()
       const answer = assistantMsg('a2', 'An answer.')
       let history: Message[] = []
-      const speedListener: { current: ((s: AnswerSpeed) => void) | null } = { current: null }
       stubApi(
         chatScreenStubs({
           ...stream.stubs,
-          onAnswerSpeed: vi.fn<PreloadApi['onAnswerSpeed']>((_id, cb) => {
-            speedListener.current = cb
-            return () => {
-              speedListener.current = null
-            }
-          }),
           listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
           listMessages: vi.fn(async () => history),
           sendChatMessage: vi.fn(() => reply.promise)
@@ -112,9 +103,8 @@ describe('ChatScreen speed wiring (#290)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
       await flushFakeTimers()
       expect(stream.subscribed()).toBe(true)
-      expect(speedListener.current).not.toBeNull()
       // Main sends the payload right before `done`, keyed to the persisted message.
-      act(() => speedListener.current?.({ messageId: 'a2', tokensPerSecond: 42, ttftMs: 1_800, tokens: 615 }))
+      stream.answerSpeed({ messageId: 'a2', tokensPerSecond: 42, ttftMs: 1_800, tokens: 615 })
       history = [userMsg('u1', 'the question'), answer]
       await act(async () => {
         reply.resolve(answer)

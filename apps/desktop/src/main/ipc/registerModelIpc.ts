@@ -161,12 +161,11 @@ function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
 export async function startModelRuntime(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
   // #599: "starting" counts from the request — the weight check below takes minutes on a freshly
   // copied drive, and a refusal in that window must say "is starting", not "start one first".
-  // Optional call: bare boundary-fake runtimes in tests omit it.
-  const release = ctx.runtime.beginStartRequest?.()
+  const release = ctx.runtime.beginStartRequest()
   try {
     return await startModelRuntimeNow(ctx, modelId)
   } finally {
-    release?.()
+    release()
   }
 }
 
@@ -275,8 +274,7 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // latch before touching the runtime, so a background auto-start racing `performShutdown`
   // never enqueues a fresh start after the teardown's stop. `RuntimeManager.start()`
   // re-checks too; this earlier check just fails the auto-start cheaply and clearly.
-  // Optional call: bare boundary-fake runtimes in tests omit it (the `warmedUp?.()` idiom).
-  if (ctx.runtime.isShutdown?.()) {
+  if (ctx.runtime.isShutdown()) {
     throw new Error('The app is quitting — the model start was abandoned')
   }
   // AUD-03: the same re-check for the LOCK path, which had no equivalent of the quit latch. The

@@ -104,6 +104,20 @@ describe('normalizeBenchmarkResult — the legacy profile-only blob (G3)', () =>
 // `arch: ''` and keyed as `'||x|0|16'` — a phantom the history filed and kept forever, because
 // `detectSystem` always reports a real platform and arch, so no living computer could produce
 // that key to match or replace it.
+describe('machineKey', () => {
+  it('fingerprints OS, arch, CPU model, cores and ROUNDED RAM', () => {
+    expect(machineKey(complete())).toBe('win32|x64|Intel Core i7-1260P|12|16')
+    // totalmem drifts by a few MB between boots of the same machine, so the key is the same.
+    expect(machineKey(complete({ ramGb: 15.9 }))).toBe(machineKey(complete({ ramGb: 16.2 })))
+    expect(machineKey(complete({ cpuCores: 8 }))).not.toBe(machineKey(complete()))
+  })
+
+  it('is null for a result with no usable identity (old blobs, failed detection)', () => {
+    expect(machineKey(null)).toBeNull()
+    expect(machineKey({ profile: 'BALANCED' } as unknown as BenchmarkResult)).toBeNull()
+  })
+})
+
 describe('hasMachineIdentity — every field a real detection fills, or none (B-G1)', () => {
   it('a record without os/arch has no identity: machineKey null, dropped from history, kept as an unkeyed current record', () => {
     const half = { ranAt: '2026-09-05T00:00:00Z', cpuModel: 'x', ramGb: 16 }

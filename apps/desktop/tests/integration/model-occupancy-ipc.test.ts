@@ -53,6 +53,7 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seedStoredTextDoc } from '../helpers/doc-fixtures'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 import { killableRuntime } from '../helpers/killable-runtime'
 import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
 
@@ -60,21 +61,10 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 
 const tempDir = (): string => tempRoot('occ-ipc')
 
-function fakeRuntime(): ModelRuntime {
-  return {
-    modelId: 'm',
-    async start() {},
-    async stop() {},
-    async health() {
-      return { healthy: true, message: '', port: null }
-    },
-    async *chatStream() {
-      yield '[]'
-    }
-  }
-}
+/** A locate pass's empty reply, finished normally: `'length'` would read as a cut-off window. */
+const chatRuntime = (): ModelRuntime => stubChatRuntime({ modelId: 'm', chunks: ['[]'], finish: 'stop' })
 
-async function startedManager(factory: RuntimeFactory = () => fakeRuntime()): Promise<RuntimeManager> {
+async function startedManager(factory: RuntimeFactory = () => chatRuntime()): Promise<RuntimeManager> {
   const mgr = new RuntimeManager(factory)
   await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
   return mgr
@@ -411,7 +401,7 @@ describe('startSkillRun while a model is starting (#620)', () => {
     let loaded!: () => void
     const loading = new Promise<void>((r) => (loaded = r))
     const h = await makeHarness(skillId, [tool], 'Anna Berger lives at Lindenweg 4 in Freiburg.', {
-      runtimeFactory: (opts) => ({ ...fakeRuntime(), start: () => (opts.modelId === 'm2' ? loading : Promise.resolve()) })
+      runtimeFactory: (opts) => ({ ...chatRuntime(), start: () => (opts.modelId === 'm2' ? loading : Promise.resolve()) })
     })
     await h.runtime.stop()
     const starting = h.runtime.start({ modelId: 'm2', modelPath: '/m2.gguf', contextTokens: 2048 })

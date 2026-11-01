@@ -31,6 +31,7 @@ import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
 import type { Collection, Conversation, DocumentInfo, ImportJob, ImportJobStatus, Message } from '../../src/shared/types'
+import { runningManager } from '../helpers/chat-runtime-stub'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -61,7 +62,7 @@ function makeHarness(): Harness {
       documentCipher: () => null,
       beginDocumentWork: () => () => {}
     },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
+    runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,
     docTasks: {

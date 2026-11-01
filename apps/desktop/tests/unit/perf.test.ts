@@ -13,20 +13,18 @@ import { initPerf, perfMark, perfMs } from '../../src/main/services/perf'
 
 describe('perf mark log', () => {
   let dir: string
-  const savedEnv = process.env.HILBERTRAUM_PERF_LOG
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'hr-perf-'))
   })
 
   afterEach(() => {
-    if (savedEnv === undefined) delete process.env.HILBERTRAUM_PERF_LOG
-    else process.env.HILBERTRAUM_PERF_LOG = savedEnv
+    vi.unstubAllEnvs()
     rmSync(dir, { recursive: true, force: true })
   })
 
   it('is a full no-op when the env var is unset', () => {
-    delete process.env.HILBERTRAUM_PERF_LOG
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', undefined)
     initPerf(dir)
     perfMark('app_ready')
     perfMark('unlock_done', { totalMs: 12 })
@@ -34,14 +32,14 @@ describe('perf mark log', () => {
   })
 
   it('is a full no-op for values other than exactly "1"', () => {
-    process.env.HILBERTRAUM_PERF_LOG = 'true'
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', 'true')
     initPerf(dir)
     perfMark('app_ready')
     expect(existsSync(join(dir, 'perf.log'))).toBe(false)
   })
 
   it('appends parseable lines with a wall clock, a monotonic column, and json fields', () => {
-    process.env.HILBERTRAUM_PERF_LOG = '1'
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', '1')
     initPerf(dir)
     perfMark('unlock_done', { totalMs: 42, dbBytes: null, cacheHit: true })
     perfMark('bare_event')
@@ -60,7 +58,7 @@ describe('perf mark log', () => {
   })
 
   it('buffers marks fired before initPerf and flushes them on init, in order', async () => {
-    process.env.HILBERTRAUM_PERF_LOG = '1'
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', '1')
     // A fresh module instance simulates the real pre-init window (app_ready fires
     // before initBackend reaches initPerf); the static import above is already bound
     // to a directory by the earlier tests.
@@ -79,7 +77,7 @@ describe('perf mark log', () => {
   })
 
   it('never throws on un-serialisable field values', () => {
-    process.env.HILBERTRAUM_PERF_LOG = '1'
+    vi.stubEnv('HILBERTRAUM_PERF_LOG', '1')
     initPerf(dir)
     const circular: Record<string, unknown> = {}
     circular.self = circular

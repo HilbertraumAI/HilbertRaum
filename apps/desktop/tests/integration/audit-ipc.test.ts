@@ -73,6 +73,7 @@ import type {
   Message,
   WorkspaceActionResult
 } from '../../src/shared/types'
+import { START_READS } from '../helpers/chat-runtime-stub'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -210,6 +211,7 @@ function makeHarness(): Harness {
       beginDocumentWork: () => () => {}
     },
     runtime: {
+      ...START_READS,
       active: () => runtime,
       activeModelId: () => runtime.modelId,
       start: async () => ({

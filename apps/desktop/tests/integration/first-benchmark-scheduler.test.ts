@@ -98,6 +98,7 @@ import { deferred } from '../helpers/deferred'
 import { until, within } from '../helpers/hang-budget'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import {
+  CARDS,
   CATALOG_MANIFESTS,
   closePerformanceFixture,
   ctxWith,
@@ -128,7 +129,6 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 
 const here = hereKey
 /** The card of the #330 round trip — the one the probe was too slow to enumerate. */
-const RTX_DEVICE: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** One macrotask hop — room for a wrong implementation to (wrongly) start I/O before an assert. */
 const hop = (): Promise<void> => new Promise((r) => setImmediate(r))
 async function hops(n: number): Promise<void> {
@@ -146,6 +146,7 @@ interface FakeRuntime {
   activeModelId: () => string | null
   status: () => RuntimeStatus
   isShutdown: () => boolean
+  beginStartRequest: () => () => void
   start: (opts: RuntimeStartOptions) => Promise<RuntimeStatus>
   stop: () => Promise<void>
   startCalls: number
@@ -196,6 +197,7 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
           }
         : { ...stoppedStatus(), message: starting ? 'Starting' : 'Stopped', startingModelId: starting },
     isShutdown: () => shutdown,
+    beginStartRequest: () => () => {},
     startCalls: 0,
     start: async (o) => {
       rt.startCalls += 1
@@ -1184,12 +1186,12 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(rt.startCalls).toBe(0)
     expect(events).toEqual([])
 
-    pending.resolve([RTX_DEVICE])
+    pending.resolve([CARDS.RTX_3080_TI])
     await rt.startReached
     expect(autoStartSpy).toHaveBeenCalledTimes(1)
 
     // The probe's stamped write — and its push — precede the start the ladder will label.
-    expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [RTX_DEVICE], machineKey: here() })
+    expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [CARDS.RTX_3080_TI], machineKey: here() })
     expect(events).toEqual(['performance:changed', 'runtime.start'])
     rt.finishStart()
     ctrl.lock()

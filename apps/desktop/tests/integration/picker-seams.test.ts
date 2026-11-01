@@ -60,6 +60,7 @@ import {
   pinPlatform,
   seededDb,
   stoppedStatus,
+  stubChatRuntime,
   withLlamaBinary
 } from '../helpers/performance-fixture'
 
@@ -618,19 +619,7 @@ describe('picker seams: the speed sample carries the identity it was measured un
 
   /** A fake ACTIVE chat runtime on the card: streams a few chunks so the speed leg reads something. */
   function runtimeOnCard(modelId: string): ModelRuntime {
-    return {
-      modelId,
-      backend: 'gpu',
-      contextWindow: () => 8192,
-      async start() {},
-      async stop() {},
-      async health() {
-        return { healthy: true, message: '', port: null }
-      },
-      async *chatStream() {
-        for (const chunk of ['one', 'two', 'three', 'four']) yield chunk
-      }
-    }
+    return { ...stubChatRuntime({ modelId, chunks: ['one', 'two', 'three', 'four'] }), backend: 'gpu', contextWindow: () => 8192 }
   }
 
   /** A saved 3 tok/s crawl on the 4B (the card pick), measured on the 8 GiB card — or a LEGACY one without identity. */

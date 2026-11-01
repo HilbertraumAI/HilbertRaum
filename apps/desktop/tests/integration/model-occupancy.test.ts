@@ -26,6 +26,7 @@ import { SKILL_TOOL_DESCRIPTORS } from '../../src/shared/skill-tools'
 import { t } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import type { OccupancyLane } from '../../src/main/services/runtime/occupancy'
+import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 
 // Issues #185/#186 — the shared model-occupancy span (architecture.md "Model occupancy —
 // design record"). Both issues were the same defect seen from two sides: the local-API wave's
@@ -41,23 +42,12 @@ import type { OccupancyLane } from '../../src/main/services/runtime/occupancy'
 
 const opts = { modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 }
 
-/** A minimal runtime whose `chatStream` yields `tokens` — enough for the gate to see a pull. */
-function fakeRuntime(tokens: string[] = ['hi']): ModelRuntime {
-  return {
-    modelId: 'm',
-    async start() {},
-    async stop() {},
-    async health() {
-      return { healthy: true, message: '', port: null }
-    },
-    async *chatStream() {
-      for (const token of tokens) yield token
-    }
-  }
-}
+/** A runtime whose `chatStream` yields `tokens` and ends normally — enough for the gate to see a pull. */
+const chatRuntime = (tokens: string[] = ['hi']): ModelRuntime =>
+  stubChatRuntime({ modelId: 'm', chunks: tokens, finish: 'stop' })
 
 /** A started manager, so `active()` is non-null and `isExternallyBusy` is not fail-closed. */
-async function startedManager(runtime: ModelRuntime = fakeRuntime()): Promise<RuntimeManager> {
+async function startedManager(runtime: ModelRuntime = chatRuntime()): Promise<RuntimeManager> {
   const mgr = new RuntimeManager(() => runtime)
   await mgr.start(opts)
   return mgr
@@ -264,7 +254,7 @@ describe('DocTaskManager vs the occupancy spans', () => {
     docId = queued.id
   })
 
-  function makeManager(occ: ModelOccupancy, runtime: ModelRuntime | null = fakeRuntime()): DocTaskManager {
+  function makeManager(occ: ModelOccupancy, runtime: ModelRuntime | null = chatRuntime()): DocTaskManager {
     return new DocTaskManager({
       getDb: () => db,
       getRuntime: () => runtime,
@@ -325,7 +315,7 @@ describe('DocTaskManager vs the occupancy spans', () => {
     // Sample occupancy from INSIDE the model call — the point of the span is that it covers the
     // whole dispatch, including the local work between two generations.
     const sampling: ModelRuntime = {
-      ...fakeRuntime(),
+      ...chatRuntime(),
       async *chatStream() {
         seen.push(occ.held('doc-task'))
         yield 'a summary of the document'
@@ -352,7 +342,7 @@ describe('DocTaskManager vs the occupancy spans', () => {
   it('an unwired occupancy dep leaves the manager byte-identical (partial test deps)', () => {
     const manager = new DocTaskManager({
       getDb: () => db,
-      getRuntime: () => fakeRuntime(),
+      getRuntime: () => chatRuntime(),
       getTranslator: () => null,
       isChatStreaming: () => false,
       getContextTokens: () => 4096,
@@ -372,7 +362,7 @@ describe('the benchmark refuses to measure a contended model (#185)', () => {
   it('skips the speed probe entirely when the model is already busy', async () => {
     let calls = 0
     const runtime: ModelRuntime = {
-      ...fakeRuntime(),
+      ...chatRuntime(),
       async *chatStream() {
         calls++
         yield 'x'
@@ -391,7 +381,7 @@ describe('the benchmark refuses to measure a contended model (#185)', () => {
   it('DISCARDS a reading that becomes contended mid-probe', async () => {
     let busy = false
     const runtime: ModelRuntime = {
-      ...fakeRuntime(),
+      ...chatRuntime(),
       async *chatStream() {
         yield 'one'
         busy = true // a chat turn starts while the 64-token probe streams
@@ -416,7 +406,7 @@ describe('the benchmark refuses to measure a contended model (#185)', () => {
     const result = await runBenchmark({
       workspacePath: workspacePath(),
       manifests: [],
-      runtime: fakeRuntime(),
+      runtime: chatRuntime(),
       modelBusy: () => true
     })
     expect(result.tokensPerSecond).toBeNull()
@@ -439,7 +429,7 @@ describe('the benchmark refuses to measure a contended model (#185)', () => {
     const result = await runBenchmark({
       workspacePath: workspacePath(),
       manifests: [],
-      runtime: fakeRuntime(['a', 'b', 'c'])
+      runtime: chatRuntime(['a', 'b', 'c'])
     })
     expect(result.tokensPerSecond).not.toBeNull()
     expect(result.warnings).not.toContain(t('en', 'main.benchmark.warnSpeedSkipped'))

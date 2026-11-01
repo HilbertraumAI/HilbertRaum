@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest'
-import { join } from 'node:path'
 import {
   CPU_HI_MIN_THREADS,
   GPU_RERANK_SCOPE,
@@ -13,6 +12,7 @@ import {
 import { discoverManifests, estimateGraphicsNeedMib, graphicsBudgetMib } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
 import type { GpuDevice } from '../../src/shared/types'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 
 // Phase 4 PR-B (step 4-4, Wave 4 ruling (a)). `resolveRerankProfile`/`rerankScopeFor`/
 // `rerankerDeviceFor` are the ONE pure decision the per-ask candidate-scope wiring
@@ -36,9 +36,8 @@ const IRIS_XE: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics'
 // step 4-5 (ruling (d), B2): the shipped manifests the headroom gate's fixtures are measured
 // against — the SAME files `main/index.ts`'s `rerankerDevicePosture` seam resolves at runtime,
 // loaded here (never hand-duplicated) so a manifest edit is caught by drift, not silently missed.
-const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 function manifestById(id: string): ModelManifest {
-  const found = discoverManifests(MANIFESTS_DIR)
+  const found = discoverManifests(CATALOG_MANIFESTS)
     .manifests.map((m) => m.manifest)
     .find((m) => m.id === id)
   if (!found) throw new Error(`missing manifest ${id}`)
