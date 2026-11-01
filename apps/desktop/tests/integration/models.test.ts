@@ -1103,7 +1103,6 @@ describe('buildModelList — RAM gate', () => {
     const base = {
       manifestsDir: dir,
       rootPath: tempRoot('root'),
-     
       developerMode: true,
       machineRamGb: 24
     }

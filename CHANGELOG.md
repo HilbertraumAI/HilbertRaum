@@ -33,6 +33,11 @@ from its first public `1.0.0` release onward.
   the chat model off the graphics card, or tell the engine to reach other computers. The engines
   now start with HilbertRaum's own settings only. On Linux and macOS a system-wide
   `/etc/llama.cpp/config.ini` still applies (#730).
+- **The offline safeguard now notices every kind of connection.** While HilbertRaum is offline it
+  records any attempt to reach another computer in your Activity log. It only ever saw encrypted
+  (HTTPS) connections, so an unencrypted attempt would have gone unrecorded. It sees those too now.
+  Nothing in the app makes such a connection while offline; this closes a gap in the safeguard itself
+  (#751).
 
 ## [0.1.64] — 2026-10-28
 
