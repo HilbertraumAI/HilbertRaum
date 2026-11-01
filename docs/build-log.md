@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-01 — the closed 2026-10-13 #654/#655/#658 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-01 (preamble budget, making room for the #749 entry). Its record is unchanged:
+"Engine load failures" §9. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#654 / #655 / #658 — a refused engine that runs again stops failing everything it latched; a whisper-cli Windows refuses at spawn is "can't run" (`fix/654-655-658-engine-verdict`).**
+#655: the verdict kept only its LAST reporting program (on a Kit, `cpu/`), so a healthy main-build start never cleared it: the 4B ran on the GPU under the banner. The store keeps every reporter
+(`cpu/` clears only as the latest, a review fix). #654: that clear re-armed no consumer, so imports kept failing; a `started` drop now re-arms them and restarts a demo-mode chat model (owner calls;
+`gone` excluded). #658: a synchronous `spawn EPERM` is classified like the `'error'` event; a cancelled or stopped call spawns nothing. Real app (scratch roots): master failed 4/4 legs, the fix passed
+4/4 (#658 via a deny-execute ACL; SAC is off). Record: "Engine load failures" §9. Open: a chat on the `cpu/` net stays there after the heal (#670: above)._
+
 ## 2026-10-27 — the closed 2026-10-13 #656 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-27 (preamble budget, making room for the #716 entry). Its record is unchanged:

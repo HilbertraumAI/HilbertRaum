@@ -1,8 +1,7 @@
 // The speed and read thresholds the main services AND the Performance screen rate figures by
 // (PR #303 audit N3: the screen used to re-declare all three, a drift waiting to happen). One
-// definition each, shared and pure; the services re-export them under their historical names
-// (`SLOW_PICK_TOKENS_PER_SECOND` in models.ts, `VERY_LOW_TOKENS_PER_SECOND` and
-// `SLOW_EFFECTIVE_READ_MBPS` in benchmark.ts) so every existing import site is unchanged.
+// definition each, shared and pure; two stay under their historical names in the services
+// (`SLOW_PICK_TOKENS_PER_SECOND` in models.ts, `SLOW_EFFECTIVE_READ_MBPS` in benchmark.ts).
 
 /**
  * A decode speed STRICTLY below this reads "Slow" — the picker's #95 step-down gate

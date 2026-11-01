@@ -43,7 +43,7 @@ import { updateSettings } from '../../src/main/services/settings'
 import { log } from '../../src/main/services/logging'
 import { bodyFetch } from '../helpers/download-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
-import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
+import { closePerformanceFixture, ctxWith, freshRoot, seededDb, START_READS } from '../helpers/performance-fixture'
 import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
 
 const handlers = ipcState.handlers as IpcHandlers
@@ -110,6 +110,7 @@ interface Drive {
  */
 function demoRuntime(): { status: () => RuntimeStatus; activeModelId: () => string; stop: Mock; start: Mock } {
   return {
+    ...START_READS,
     activeModelId: () => 'chat-test',
     status: () => ({ running: true, modelId: 'chat-test', backend: 'mock', startingModelId: null, port: null, healthy: true, message: 'Running' }),
     stop: vi.fn(async () => undefined),
@@ -641,6 +642,7 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
         ? { running: true, modelId: 'chat-test', backend: 'gpu', startingModelId: null, port: 1, healthy: true, message: 'Running' }
         : { running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: 'Stopped' }
     return {
+      ...START_READS,
       status,
       activeModelId: () => (running ? 'chat-test' : null),
       stop: vi.fn(async () => {

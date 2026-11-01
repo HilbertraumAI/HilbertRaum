@@ -91,7 +91,7 @@ function committedChatShareMib(manifestsDir: string | null, occupancy: RerankerO
   const manifest = findManifestById(manifestsDir, occupancy.committedModelId)
   if (!manifest) return null
   if (occupancy.committedBackend === 'cpu') return 0
-  return chatGraphicsShareMib(manifest, occupancy.committedContextTokens ?? null, latestModelPlacement())
+  return chatGraphicsShareMib(manifest, occupancy.committedContextTokens, latestModelPlacement())
 }
 
 /**
@@ -160,9 +160,9 @@ export function createTranslationHeadroom(
 
 /**
  * Wave 8 ruling (a) — the occupancy inputs `resolveRerankerDevicePosture` reads instead of
- * `settings.activeModelId`. Three fields are REQUIRED: an omitted one is a compile error, not a
- * silent "no occupancy" default — the analysis's own finding (F16) is that an optional wire is
- * how a posture input silently goes missing. The optional fields below say why each is optional.
+ * `settings.activeModelId`. Every field but one is REQUIRED: an omitted one is a compile error, not
+ * a silent "no occupancy" default — the analysis's own finding (F16) is that an optional wire is
+ * how a posture input silently goes missing. `rerankerDemoted` says why it is the exception.
  */
 export interface RerankerOccupancySnapshot {
   /**
@@ -187,26 +187,25 @@ export interface RerankerOccupancySnapshot {
    * #495 follow-up: true once the reranker's own session
    * GPU-fallback latch is armed (`Reranker.gpuDemoted()` — a pure field read, never
    * `devicePosture()`, which would recurse for the sidecar's own posture callback below).
-   * OPTIONAL, unlike the three above: `snapshotRerankerOccupancy`'s existing 3-argument
-   * call sites (predating this field, several inside frozen test fixtures) must keep resolving
-   * an omitted field to "not known to be demoted" rather than a compile error. The one
-   * production reader that can actually see the latch is `registerRagIpc.ts`'s ask site, which
-   * sets it explicitly from `ctx.reranker?.gpuDemoted?.()`.
+   * OPTIONAL: `snapshotRerankerOccupancy` cannot read the latch, so its callers without a reranker
+   * in reach (the sidecar's own posture, the translation gate) resolve an omitted field to "not
+   * known to be demoted". The one production reader that can actually see the latch is
+   * `registerRagIpc.ts`'s ask site, which sets it explicitly from `ctx.reranker?.gpuDemoted?.()`.
    */
   rerankerDemoted?: boolean
   /**
    * #473 ruling 3: the committed runtime's launched context window (`contextWindow()`) and the
-   * backend it landed on. OPTIONAL like `rerankerDemoted`: an omitted field reads as today's
-   * behaviour (an unscaled estimate on the card), never as a smaller share.
+   * backend it landed on. Null when no runtime reports one: an unscaled estimate on the card,
+   * never a smaller share.
    */
-  committedContextTokens?: number | null
-  committedBackend?: 'gpu' | 'cpu' | null
+  committedContextTokens: number | null
+  committedBackend: 'gpu' | 'cpu' | null
   /**
    * #473: a chat start is requested but not yet in the manager (#599's pre-start window — the
    * weight check). Read by the TRANSLATION gate only, so a translation cold start does not load
    * onto the card moments before the chat start takes it back; the reranker's posture is unchanged.
    */
-  chatStartRequested?: boolean
+  chatStartRequested: boolean
 }
 
 /**
@@ -278,8 +277,8 @@ export function cpuRequestCeilingFor(settings: AppSettings | null): number {
  * calls this ONCE and threads both returned callbacks into `composeServices`.
  */
 export interface RerankerCallbackDeps {
-  /** The chat runtime manager — only the two read-only methods the posture needs. */
-  runtimeManager: Pick<RuntimeManager, 'activeModelId' | 'status'> & Partial<Pick<RuntimeManager, 'active'>>
+  /** The chat runtime manager — only the three read-only methods the posture needs. */
+  runtimeManager: Pick<RuntimeManager, 'activeModelId' | 'status' | 'active'>
   /** Wave 8 ruling (a)'s pending-switch counter — shared with `registerModelIpc.ts`. */
   pendingModelSwitches: PendingModelSwitchCounter
   /**
@@ -316,28 +315,21 @@ export function createRerankerCallbacks(deps: RerankerCallbackDeps): {
  * (the sidecar's own posture seam) and `registerRagIpc.ts`'s ask-site call to
  * `resolveAskCandidateScope` (`:262`-area) build the occupancy snapshot the SAME way — never two
  * independent re-derivations that could drift.
- *
- * `status` is read defensively (`?.()`): the real `RuntimeManager` always has it, but many
- * pre-existing test fixtures across the suite build a minimal fake runtime (just
- * `activeModelId`/`active`/`start`) that predates this occupancy read — those fixtures test
- * behaviour this step does not touch, and requiring every one of them to grow a `status()` stub
- * would be churn with no behavioural point. A fake without it reads as "no chat start in
- * flight", the same as today's behaviour for those tests.
  */
 export function snapshotRerankerOccupancy(
-  runtimeManager: Pick<RuntimeManager, 'activeModelId'> & Partial<Pick<RuntimeManager, 'status' | 'active'>>,
+  runtimeManager: Pick<RuntimeManager, 'activeModelId' | 'status' | 'active'>,
   pendingModelSwitches: PendingModelSwitchCounter,
   getTranslator: () => Translator | null
 ): RerankerOccupancySnapshot {
-  const startingModelId = runtimeManager.status?.().startingModelId ?? null
-  const active = runtimeManager.active?.() ?? null
+  const status = runtimeManager.status()
+  const active = runtimeManager.active()
   return {
     committedModelId: runtimeManager.activeModelId(),
-    chatStartBusy: startingModelId != null || pendingModelSwitches.count > 0,
+    chatStartBusy: status.startingModelId != null || pendingModelSwitches.count > 0,
     translationOccupied: getTranslator()?.gpuOccupied?.() ?? false,
     committedContextTokens: active?.contextWindow?.() ?? null,
     committedBackend: active?.backend === 'gpu' || active?.backend === 'cpu' ? active.backend : null,
-    chatStartRequested: runtimeManager.status?.().startRequested === true
+    chatStartRequested: status.startRequested === true
   }
 }
 

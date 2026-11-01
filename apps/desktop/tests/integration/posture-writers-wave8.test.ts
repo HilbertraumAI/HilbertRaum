@@ -18,14 +18,14 @@ import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   resolveRerankerDevicePosture,
   snapshotRerankerOccupancy,
-  createPendingModelSwitchCounter,
-  type RerankerOccupancySnapshot
+  createPendingModelSwitchCounter
 } from '../../src/main/services/rag/device-posture'
 import { tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
 import { startModelRuntime } from '../../src/main/ipc/registerModelIpc'
 import type { AppContext } from '../../src/main/services/context'
 import type { AppSettings } from '../../src/shared/types'
 import { deferred } from '../helpers/deferred'
+import { idleOccupancy } from '../helpers/gpu-fixtures'
 import {
   CARDS,
   CATALOG_MANIFESTS,
@@ -42,10 +42,6 @@ import { runtimeStatus } from '../helpers/status'
 
 const FOUR_B = 'qwen3.5-4b-ud-q4kxl'
 const NINE_B = 'qwen3.5-9b-ud-q4kxl'
-const NO_OCCUPANCY: Omit<RerankerOccupancySnapshot, 'committedModelId'> = {
-  chatStartBusy: false,
-  translationOccupied: false
-}
 
 afterEach(closePerformanceFixture)
 
@@ -71,9 +67,9 @@ describe('Wave 8: posture-input writers -- the NEXT resolution reflects the writ
   ])('%s flips the next resolved posture from gpu to cpu', (_label, patch) => {
     const db = freshDb()
     updateSettings(db, { gpuMode: 'auto', gpuAutoDisabled: false, gpuProbe: { devices: [CARDS.RTX_3080_TI], probedAt: new Date().toISOString() } })
-    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, { committedModelId: FOUR_B, ...NO_OCCUPANCY })).toBe('gpu')
+    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, idleOccupancy({ committedModelId: FOUR_B }))).toBe('gpu')
     updateSettings(db, patch)
-    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, { committedModelId: FOUR_B, ...NO_OCCUPANCY })).toBe('cpu')
+    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, idleOccupancy({ committedModelId: FOUR_B }))).toBe('cpu')
   })
 
   it('gpuProbe via probeAndPersistGpu (tryGpuAgain, one of its four triggers) -- carries NO suspend, and the NEXT resolution still reflects it', async () => {
@@ -81,11 +77,11 @@ describe('Wave 8: posture-input writers -- the NEXT resolution reflects the writ
     withLlamaBinary(root)
     const db = seededDb(root)
     updateSettings(db, { gpuAutoDisabled: true, gpuProbe: { devices: [], probedAt: '2020-01-01T00:00:00Z' } })
-    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, { committedModelId: FOUR_B, ...NO_OCCUPANCY })).toBe('cpu')
+    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, idleOccupancy({ committedModelId: FOUR_B }))).toBe('cpu')
     const suspend = vi.fn(async () => undefined)
     const ctx = ctxWith(root, db, { probeGpu: fakeGpuProbe([CARDS.RTX_3080_TI]), reranker: { suspend } })
     await tryGpuAgain(ctx) // clears gpuAutoDisabled AND persists a fresh RTX probe -- no suspend call anywhere in this path
-    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, { committedModelId: FOUR_B, ...NO_OCCUPANCY })).toBe('gpu')
+    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, idleOccupancy({ committedModelId: FOUR_B }))).toBe('gpu')
     expect(suspend).not.toHaveBeenCalled()
   })
 
@@ -103,7 +99,7 @@ describe('Wave 8 ruling (a): absent inputs mean cpu -- never a fallback to the s
   it('a null committed model means cpu, even with provable headroom on record', () => {
     const db = freshDb()
     updateSettings(db, { gpuMode: 'auto', gpuAutoDisabled: false, gpuProbe: { devices: [CARDS.RTX_3080_TI], probedAt: new Date().toISOString() } })
-    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, { committedModelId: null, ...NO_OCCUPANCY })).toBe('cpu')
+    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, idleOccupancy())).toBe('cpu')
   })
 
   it('settings.activeModelId is NEVER consulted -- a stale/mismatched setting changes nothing', () => {
@@ -118,7 +114,7 @@ describe('Wave 8 ruling (a): absent inputs mean cpu -- never a fallback to the s
       activeModelId: NINE_B // the SETTING says the 9B (posture would be cpu if this were read)
     })
     // The COMMITTED model is the 4B -- the posture must follow IT, not the stale setting.
-    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, { committedModelId: FOUR_B, ...NO_OCCUPANCY })).toBe('gpu')
+    expect(resolveRerankerDevicePosture(getSettings(db), CATALOG_MANIFESTS, idleOccupancy({ committedModelId: FOUR_B }))).toBe('gpu')
   })
 })
 
@@ -155,14 +151,7 @@ describe('Wave 8 ruling (a): the pending-switch counter', () => {
     const root = freshRoot()
     const manifestsDir = join(root, 'model-manifests')
     mkdirSync(manifestsDir, { recursive: true })
-    writeChatManifest(manifestsDir, {
-      id: 'huge-model',
-      display_name: 'Huge Model',
-      size_on_disk_gb: 999,
-      recommended_min_ram_gb: 9999, // no real machine passes
-      recommended_ram_gb: 9999,
-      local_path: 'models/chat/huge.gguf'
-    })
+    writeChatManifest(manifestsDir)
     mkdirSync(join(root, 'models', 'chat'), { recursive: true })
     writeFileSync(join(root, 'models', 'chat', 'huge.gguf'), 'weights')
     const ctx = ctxWith(root, seededDb(root), {

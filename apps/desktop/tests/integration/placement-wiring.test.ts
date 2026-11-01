@@ -53,10 +53,11 @@ import {
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { getSettings } from '../../src/main/services/settings'
 import type { RuntimeStartOptions } from '../../src/main/services/runtime'
-import type { GpuDevice, ModelPlacement } from '../../src/shared/types'
+import type { ModelPlacement } from '../../src/shared/types'
 import { ladderHarness } from '../helpers/ladder-harness'
 import { until } from '../helpers/hang-budget'
 import {
+  CARDS,
   closePerformanceFixture,
   ctxWith,
   freshRoot,
@@ -66,7 +67,7 @@ import {
 
 const opts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 4096 }
 
-const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
+const RTX = CARDS.RTX_3060_LAPTOP
 
 const fixture = (name: string): string => readFileSync(join(__dirname, '..', 'fixtures', name), 'utf8')
 

@@ -33,17 +33,11 @@ import { SLOW_READ_MBPS, VERY_LOW_TOKENS_PER_SECOND } from '../../shared/perform
 // no network, no telemetry, no child_process. Every measurement is independently
 // resilient: a failed step yields a null value + a friendly warning, never a throw.
 
-/**
- * Tokens/sec strictly below this count as "very low" and downgrade the profile one step (spec
- * §11.3). Defined in `shared/performance-rules.ts` since the PR #303 audit (N3) so the
- * Performance screen rates by the same figures; re-exported here unchanged.
- */
-export { VERY_LOW_TOKENS_PER_SECOND }
 /** Drive WRITE throughput below this (MB/s) earns a non-blocking "slow drive" warning
  *  (spec §11.3). Calibrated against the fsync-bound write leg of the 8 MB probe; kept as
  *  the secondary check for genuinely broken media after #110 re-keyed the primary
  *  warning to the honest effective READ figure below. */
-export const SLOW_DRIVE_MBPS = 30
+const SLOW_DRIVE_MBPS = 30
 /**
  * Effective READ throughput below this (MB/s) earns the slow-read warning (#110). The
  * felt cost of a slow drive is read-bound: every model start reads the whole GGUF at
@@ -221,7 +215,7 @@ export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpe
  * ~20 tokens, and a 20-token decode window is dominated by per-request overhead. Thinking is off
  * (balanced default), so no reasoning tokens inflate the window.
  */
-export const BENCHMARK_PROMPT = 'Write a short paragraph about privacy.'
+const BENCHMARK_PROMPT = 'Write a short paragraph about privacy.'
 /** The `max_tokens` cap the probe sends — the decode window the figure is measured over. */
 export const BENCHMARK_TOKEN_TARGET = 64
 

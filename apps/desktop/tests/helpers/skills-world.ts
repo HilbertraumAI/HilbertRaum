@@ -14,6 +14,7 @@ import { createPendingModelSwitchCounter } from '../../src/main/services/rag/dev
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import { seedSettings } from '../../src/main/services/settings'
 import { createSkillRegistry, type SkillRegistry } from '../../src/main/services/skills/registry'
+import { runningManager } from './chat-runtime-stub'
 import { tempRoot } from './db-fixtures'
 import { ANY_SENDER } from './ipc'
 
@@ -106,7 +107,7 @@ export function makeRagAskContext(
       return w.db
     },
     workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
+    runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,
     ocrEngine: undefined,

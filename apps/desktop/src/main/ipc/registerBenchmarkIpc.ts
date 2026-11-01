@@ -544,17 +544,21 @@ function setMovedDriveNotice(db: Db, epoch: number | undefined, notice: MovedDri
 }
 
 /**
- * What the scheduled measurement's outcome means for the notice. Only a `new-machine` decision
+ * How a measurement ends once its start settled: what `runMeasurementOnceSettled` can return. A
+ * deferral, a repeat scheduling and a decision with nothing owed all end before that point, so the
+ * notice standing then stays as it is ("a check is running" is still true for a deferral).
+ */
+type SettledBenchmarkOutcome = Exclude<FirstBenchmarkOutcome, 'not-needed' | 'skipped-attempted' | 'deferred'>
+
+/**
+ * What the measurement's terminal outcome means for the notice. Only a `new-machine` decision
  * ever reaches this with a `measuring` notice standing.
  *   - the result landed (`ran`), or one for this computer was saved meanwhile → nothing to say;
- *   - `deferred` → a continuation is still pending, so "a check is running" stays TRUE;
- *   - `skipped-attempted` → a second scheduling in the same session; the first one's state stands;
  *   - anything else (busy, failed, locked, quitting) → no check ran and none will this session,
  *     so the notice must stop claiming one is running and offer the check instead.
  */
-function settleMovedDriveNotice(ctx: AppContext, decision: FirstBenchmarkDecision, outcome: FirstBenchmarkOutcome): void {
+function settleMovedDriveNotice(ctx: AppContext, decision: FirstBenchmarkDecision, outcome: SettledBenchmarkOutcome): void {
   if (decision.run !== 'new-machine') return
-  if (outcome === 'deferred' || outcome === 'skipped-attempted') return
   let db: Db
   try {
     db = ctx.db
@@ -784,7 +788,7 @@ async function runAfterSettled(
  * running" after the run was skipped as busy, failed, or found the workspace locked. The push
  * is what makes an already-open Home correct itself without a remount.
  */
-async function runOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision): Promise<FirstBenchmarkOutcome> {
+async function runOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision): Promise<SettledBenchmarkOutcome> {
   const before = movedDriveMemo?.notice ?? null
   const outcome = await runMeasurementOnceSettled(ctx, decision)
   settleMovedDriveNotice(ctx, decision, outcome)
@@ -798,7 +802,7 @@ async function runOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision)
 }
 
 /** The settlement re-checks, then the run. Never throws. */
-async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision): Promise<FirstBenchmarkOutcome> {
+async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision): Promise<SettledBenchmarkOutcome> {
   const label = decision.run === 'first-run' ? 'First-run benchmark' : 'New-computer benchmark'
   try {
     // The same three guards `startModelRuntime` applies after its long pre-start window
@@ -812,7 +816,7 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
       log.info(`${label} skipped: the workspace was locked and re-opened meanwhile (the new session re-checks)`)
       return 'skipped-epoch'
     }
-    if (ctx.runtime.isShutdown?.()) {
+    if (ctx.runtime.isShutdown()) {
       log.info(`${label} skipped: the app is quitting`)
       return 'skipped-shutdown'
     }
@@ -864,7 +868,7 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
  * the final say on the next start).
  */
 export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
-  ctx.probeGpu?.invalidate?.()
+  ctx.probeGpu?.invalidate()
   clearSpeculativeSuppression()
   updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null })
   // The cleared flags are snapshot inputs of their own (`cpuOnly` → the resident rows, the
@@ -907,7 +911,7 @@ export async function refreshGpuProbeAfterRuntimeInstall(ctx: AppContext): Promi
     const eligible = eligibleGpuProbe(getSettings(ctx.db).gpuProbe, machineKey(detectSystem()))
     if (eligible && eligible.devices.length > 0) return false
     log.info('Chat engine installed: refreshing the GPU probe for this computer')
-    ctx.probeGpu?.invalidate?.()
+    ctx.probeGpu?.invalidate()
     await probeAndPersistGpu(ctx)
     return true
   } catch (err) {

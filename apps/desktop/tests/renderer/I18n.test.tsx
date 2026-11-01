@@ -11,6 +11,7 @@ import {
   useT
 } from '../../src/renderer/i18n'
 import { DEFAULT_SETTINGS, type AppSettings, type WorkspaceStateInfo } from '../../src/shared/types'
+import { appShellStubs } from '../helpers/app-shell'
 import { stubApi } from '../helpers/renderer'
 
 // Phase 39 — renderer language resolution (i18n record §3.2, D-L2/D-L3): the pre-unlock
@@ -49,7 +50,7 @@ describe('resolvePreUnlockLanguage', () => {
 
 describe('pre-unlock gate language (App + WorkspaceGate)', () => {
   it('renders the locked gate in English with no stored state', async () => {
-    stubApi({ getWorkspaceState: vi.fn(async () => LOCKED) })
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
     render(<App />)
     expect(
       await screen.findByRole('heading', { name: 'Unlock your workspace' })
@@ -59,7 +60,7 @@ describe('pre-unlock gate language (App + WorkspaceGate)', () => {
 
   it('renders the locked gate in German when the mirror says de (German render smoke)', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    stubApi({ getWorkspaceState: vi.fn(async () => LOCKED) })
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
     render(<App />)
     expect(
       await screen.findByRole('heading', { name: 'Arbeitsbereich entsperren' })

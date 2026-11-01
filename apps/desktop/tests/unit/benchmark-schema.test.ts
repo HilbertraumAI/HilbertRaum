@@ -99,6 +99,20 @@ describe('normalizeBenchmarkResult — the legacy profile-only blob (G3)', () =>
   })
 })
 
+describe('machineKey', () => {
+  it('fingerprints OS, arch, CPU model, cores and ROUNDED RAM', () => {
+    expect(machineKey(complete())).toBe('win32|x64|Intel Core i7-1260P|12|16')
+    // totalmem drifts by a few MB between boots of the same machine, so the key is the same.
+    expect(machineKey(complete({ ramGb: 15.9 }))).toBe(machineKey(complete({ ramGb: 16.2 })))
+    expect(machineKey(complete({ cpuCores: 8 }))).not.toBe(machineKey(complete()))
+  })
+
+  it('is null for a result with no usable identity (old blobs, failed detection)', () => {
+    expect(machineKey(null)).toBeNull()
+    expect(machineKey({ profile: 'BALANCED' } as unknown as BenchmarkResult)).toBeNull()
+  })
+})
+
 // B-G1 (PR #303 audit remediation): identity is all-or-nothing. `hasMachineIdentity` used to
 // ask only for `cpuModel` + `ramGb`, so a record with no `os`/`arch` normalized to `os: ''`,
 // `arch: ''` and keyed as `'||x|0|16'` — a phantom the history filed and kept forever, because

@@ -245,8 +245,8 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `db-fixtures` so that the skills suites do not load `services/settings`.
 - **Home, AI Model and the whole App start from shared stubs**: `stubHomeApi` and `renderHome`
   (`tests/helpers/home-screen.tsx`), `stubModelsApi` and `modelsScreenStubs` (`model-fixtures.ts`), `appShellStubs`
-  (`app-shell.ts`). Those screens' own reads no longer tolerate a missing channel, because the preload ships inside
-  the app. The hooks they use still do (`useOcrInstall`, `useEngineProblems`).
+  (`app-shell.ts`). Those screens' own reads and `useEngineProblems` no longer tolerate a missing channel, because the
+  preload ships inside the app. `useOcrInstall` still does.
 - **A screen error boundary can hide a missing stub.** With that tolerance gone, Home crashed under AppLock and
   ReviewLockSeam, and both stayed green: the boundary caught it and their rows read only the nav rail. In a full-App
   suite, use `appShellStubs` and read the run's `stubApi: unmocked` warnings. A suite that adds a screen's reads to
@@ -269,10 +269,15 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   overrides that way, so a renamed bridge method still compiled. `installPerformance` takes
   `Partial<PreloadApi>`. The same suite's mounts called two unstubbed methods in all 107 tests.
 - **The benchmark and Performance fixtures** are `tests/helpers/performance-fixture.ts` (main side:
-  `fakeGpuProbe`, `withLlamaBinary`, `committingRuntime`, `firstBenchmarkNow`, `CARDS`), `chat-runtime-stub.ts`
-  (`stubChatRuntime`, no IPC registrars, so a service suite needs no `electron` mock), `benchmark-records.ts`
-  (pure record builders, safe in jsdom) and `performance-screen.tsx` (the screen's `installPerformance`,
-  `startOwnRun`, `copiedReport`). `deferred` is `tests/helpers/deferred.ts`.
+  `fakeGpuProbe`, `withLlamaBinary`, `firstBenchmarkNow`), `chat-runtime-stub.ts` (`stubChatRuntime`, `committingRuntime`,
+  `runningManager`, `START_READS`) and `gpu-fixtures.ts` (`CARDS`, `CATALOG_MANIFESTS`, `idleOccupancy`), which load no IPC registrar, so
+  a service suite needs no `electron` mock, `benchmark-records.ts` (pure record builders, safe in jsdom) and
+  `performance-screen.tsx` (the screen's `installPerformance`, `startOwnRun`, `copiedReport`). `deferred` is
+  `tests/helpers/deferred.ts`.
+- **A fake missing a member can fail inside a catch-all.** With `startModelRuntime`'s `?.` gone, a bare fake's `TypeError`
+  lands in `maybeAutoStartActiveModel`'s catch or the benchmark's `'failed'` outcome, and a "does not start" or
+  "reports failed" row stays green for the wrong reason. After removing a tolerance, compare the run's
+  `is not a function` count with master's, and list the tests that reach the read without the member.
 - **`seededDb` opens the root's one file.** Two `seededDb(root)` calls on one root are two handles on the
   same data, so first-benchmark-scheduler's "legacy blob" cases ran against the earlier case's history.
   Give a case that needs its own workspace its own `freshRoot()`.

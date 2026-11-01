@@ -28,6 +28,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { ModelRuntime } from '../../src/main/services/runtime'
+import { runningManager } from '../helpers/chat-runtime-stub'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -52,7 +53,7 @@ function makeCtx(db: Db, workspacePath: string, runtime: ModelRuntime): AppConte
       return db
     },
     workspace: { isUnlocked: () => true, documentCipher: () => null },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
+    runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,
     ocrEngine: undefined,

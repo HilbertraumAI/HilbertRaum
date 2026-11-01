@@ -13,7 +13,6 @@ import {
   resetPerformanceForTests,
   upsertHistory
 } from '../../src/main/services/performance'
-import { join } from 'node:path'
 import { discoverManifests, fitsGraphicsMemory, weightsMib } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
 import {
@@ -24,8 +23,8 @@ import {
   type PlacementVerdict,
   type ResidentModelRow
 } from '../../src/shared/types'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 
-const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 // The Performance screen's model (benchmark.md "History per machine"): one result per
 // computer, keyed by a fingerprint that survives a reboot (rounded RAM) and that an OLD
@@ -51,22 +50,6 @@ function result(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
     ...over
   }
 }
-
-describe('machineKey', () => {
-  it('fingerprints OS, arch, CPU model, cores and ROUNDED RAM', () => {
-    expect(machineKey(result())).toBe('linux|x64|Intel Core i7-1260P|12|16')
-    // totalmem drifts by a few MB between boots of the same machine, so the key is the same.
-    expect(machineKey(result({ ramGb: 15.9 }))).toBe(machineKey(result({ ramGb: 16.2 })))
-    expect(machineKey(result({ cpuCores: 8 }))).not.toBe(machineKey(result()))
-  })
-
-  it('is null for a result with no usable identity (old blobs, failed detection)', () => {
-    expect(machineKey(null)).toBeNull()
-    expect(machineKey({ profile: 'BALANCED' } as unknown as BenchmarkResult)).toBeNull()
-    expect(machineKey(result({ cpuModel: '' }))).toBeNull()
-    expect(machineKey(result({ ramGb: 0 }))).toBeNull()
-  })
-})
 
 describe('upsertHistory', () => {
   it('replaces the entry for the same machine, newest first, keeps other machines', () => {
@@ -144,7 +127,6 @@ describe('answer-speed latch', () => {
 
 // ---- "Your model" (benchmark.md): memory class, budget, verdict ----
 
-const RTX = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 20_000 }
 
 describe('memoryBudgetMb', () => {
   it('budgets: VRAM for discrete, Metal working set (else 75% of RAM) for unified, RAM for cpu', () => {
@@ -299,7 +281,7 @@ describe('placementVerdict', () => {
   })
 
   describe('the discrete pre-start estimate IS the picker\'s fit (PR #308 audit §4.1 / A9 inverted)', () => {
-    const catalog = discoverManifests(MANIFESTS).manifests.map((m) => m.manifest).filter((m) => m.role === 'chat')
+    const catalog = discoverManifests(CATALOG_MANIFESTS).manifests.map((m) => m.manifest).filter((m) => m.role === 'chat')
     const byId = (id: string): ModelManifest => {
       const m = catalog.find((x) => x.id === id)
       if (!m) throw new Error(`missing manifest ${id}`)

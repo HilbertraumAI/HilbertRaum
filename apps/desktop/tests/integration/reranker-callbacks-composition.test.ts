@@ -12,8 +12,9 @@ import {
 } from '../../src/main/services/rag/device-posture'
 import { resolveAskCandidateScope } from '../../src/main/ipc/registerRagIpc'
 import type { Translator } from '../../src/main/services/translation'
-import { DEFAULT_SETTINGS, type AppSettings, type GpuDevice } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
+import { CARDS, CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 
 // Wave 8 ruling (b)(G)/NF-1 (step 4-8, the Wave 8 analysis's finding that a composition test
 // through `compose-services.ts` -> `reranker/factory.ts` alone cannot see an omission at
@@ -39,7 +40,7 @@ describe('Wave 8 NF-1: the required-wiring type-level proof', () => {
 
   it('createRerankerCallbacks refuses a call missing any of its four required dependencies', () => {
     const base: RerankerCallbackDeps = {
-      runtimeManager: { activeModelId: () => null, status: () => ({ startingModelId: null }) as any },
+      runtimeManager: { activeModelId: () => null, active: () => null, status: () => ({ startingModelId: null }) as any },
       pendingModelSwitches: createPendingModelSwitchCounter(),
       getTranslator: () => null,
       getSettings: () => null,
@@ -164,15 +165,13 @@ describe('Wave 8: the wired callbacks actually reach the sidecar (functional, no
 // {totalMb: 8273, freeMb: 7504}. qwen3.5-4b-ud-q4kxl needs ~3837.4 MiB (remainder 3666.6 MiB >=
 // the 2808.2 MiB floor) => posture 'gpu' with NO occupancy — the "otherwise resolves gpu" baseline
 // C4 asks for.
-const GTX_1070_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 7504 }
 const GTX_SETTINGS: AppSettings = {
   ...DEFAULT_SETTINGS,
   gpuMode: 'auto',
   gpuAutoDisabled: false,
-  gpuProbe: { devices: [GTX_1070_TI], probedAt: new Date().toISOString() }
+  gpuProbe: { devices: [CARDS.GTX_1070_TI], probedAt: new Date().toISOString() }
 }
 const FOUR_B = 'qwen3.5-4b-ud-q4kxl'
-const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 const BARE_TRANSLATOR: Translator = {
   modelId: 'translategemma-x',
@@ -183,11 +182,11 @@ const BARE_TRANSLATOR: Translator = {
 
 function callbacksWith(getTranslator: () => Translator | null): ReturnType<typeof createRerankerCallbacks> {
   const deps: RerankerCallbackDeps = {
-    runtimeManager: { activeModelId: () => FOUR_B, status: () => ({ startingModelId: null }) as any },
+    runtimeManager: { activeModelId: () => FOUR_B, active: () => null, status: () => ({ startingModelId: null }) as any },
     pendingModelSwitches: createPendingModelSwitchCounter(),
     getTranslator,
     getSettings: () => GTX_SETTINGS,
-    manifestsDir: MANIFESTS_DIR
+    manifestsDir: CATALOG_MANIFESTS
   }
   return createRerankerCallbacks(deps)
 }

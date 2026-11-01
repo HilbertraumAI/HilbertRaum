@@ -40,7 +40,8 @@ function stubShell(settings: AppSettings = DEFAULT_SETTINGS): void {
     getPolicy: vi.fn(async () => offlinePolicy),
     getAppStatus: vi.fn(async () => appStatus()),
     getSettings: vi.fn(async () => settings),
-    onRuntimeNotice: vi.fn(() => () => {})
+    onRuntimeNotice: vi.fn(() => () => {}),
+    onEngineProblemsChanged: vi.fn(() => () => {})
   })
 }
 

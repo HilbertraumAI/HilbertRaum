@@ -78,6 +78,7 @@ import { createQueuedDocument, documentsDir, processDocument } from '../../src/m
 import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { performShutdown } from '../../src/main/shutdown'
 import { t } from '../../src/shared/i18n'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { startModelRuntime } from '../../src/main/ipc/registerModelIpc'
@@ -88,9 +89,6 @@ import { createConversation, listMessages } from '../../src/main/services/chat'
 import { updateSettings } from '../../src/main/services/settings'
 import type { LocalApiServer } from '../../src/main/services/local-api/server'
 import type { Message } from '../../src/shared/types'
-
-/** The repo's manifest tree, so the REAL `startModelRuntime` install gate runs (#344 leg). */
-const REPO_MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
@@ -295,7 +293,8 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     },
     translator,
     ocrEngine: opts.ocrEngine ?? null,
-    manifestsDir: opts.chatEngine ? REPO_MANIFESTS : null,
+    // The repo's manifest tree, so the REAL `startModelRuntime` install gate runs (#344 leg).
+    manifestsDir: opts.chatEngine ? CATALOG_MANIFESTS : null,
     isDev: opts.chatEngine !== undefined,
     // #477: pendingModelSwitches is required — startModelRuntime's committed-switch branch
     // (the #344 harness drives a real one below) calls it unconditionally now.
