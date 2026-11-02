@@ -37,16 +37,16 @@ from its first public `1.0.0` release onward.
   it records in your Activity log when the app's main process tries to reach another computer. It
   only ever saw encrypted (HTTPS) attempts, so an unencrypted one would have gone unrecorded. Nothing
   in the app makes such a connection while offline; this closes a gap in the safeguard itself (#751).
-- **Cancelling a model download now stops it straight away.** Cancelling during the final check let
-  that check run on for minutes on a slow drive. It now stops at once, and the file stays ready to
-  pick up again. Starting a download in the moment after a cancel is refused rather than writing to
-  the same file twice; try again a moment later (#752).
+- **You can cancel a model download during its final check.** The Cancel button was greyed out for
+  the whole check, which takes minutes on a slow drive. It now works and stops the check at once,
+  and the file stays ready to pick up again. Starting a download in the moment after a cancel is
+  refused rather than writing to the same file twice; try again a moment later (#752).
 - **A failed model download says what really happened.** A problem on the drive now reads as one,
-  with no file paths in the message, and the app no longer promises to resume a part it has already
-  thrown away. The Activity log records the kind of failure, not the file's path (#752).
-- **An AI engine that fails its safety check no longer looks installed.** If an engine archive tries
-  to reach outside its own folder, the app refuses it. Its files stayed behind and the engine read
-  as installed; they are now removed, and the app offers the download again (#752).
+  with no file paths in the message, and the app only promises to resume when there is something to
+  resume from. The Activity log records the kind of failure, not the file's path (#752).
+- **An AI engine that fails to install no longer looks installed.** If an engine archive failed its
+  safety check, could not be unpacked or was incomplete, its files stayed behind and the engine read
+  as installed. They are now removed, and the app offers the download again (#752).
 - **A model start no longer fails with "Hashing was cancelled".** Cancelling Check all model files
   just as a model started could fail that start (#752).
 

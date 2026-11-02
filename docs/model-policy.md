@@ -1007,7 +1007,8 @@ a **real** `mmproj.download.sha256` must equal a **real** `mmproj.sha256` (same 
 plan would install a model that cannot start)`) and the other way round (`"download" is required
 when "mmproj" declares one (…)`). The planner fetches only the blocks that exist, so half of them is
 a clean multi-GB download of a model that stays `missing`. A refused manifest is skipped with a log
-line, so a hand-made manifest that relies on a hand-placed projector leaves out both blocks. Install state
+line, so a hand-made manifest that relies on a hand-placed projector leaves out both blocks. The
+`fetch-models` scripts do not apply this rule: they still fetch the GGUF of such a manifest. Install state
 (`services/models.ts`) requires **every** declared file — the GGUF, the mmproj, and any `files:`
 entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
 treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)

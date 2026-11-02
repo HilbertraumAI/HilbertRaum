@@ -1044,6 +1044,7 @@ export class EngineDownloadManager {
           extractTo: plan.extractTo,
           missing: missingFiles.map((p) => basename(p))
         })
+        await this.clearFailedInstall(plan)
         return 'failed'
       }
       if (plan.os !== 'win') {
@@ -1106,36 +1107,47 @@ export class EngineDownloadManager {
     // Remove the previous install before extracting so two builds never mix — but keep the
     // just-downloaded archive and the `cpu/` safety-net subdir (audit fix: the cpu→vulkan
     // upgrade path; a stale root binary would otherwise satisfy the flatten guard).
-    const archiveName = basename(plan.zipDest)
-    const clearInstall = async (): Promise<void> => {
-      for (const entry of await readdir(plan.extractTo)) {
-        if (entry === archiveName || entry === 'cpu') continue
-        await rm(join(plan.extractTo, entry), { recursive: true, force: true })
-      }
-    }
-    await clearInstall()
+    await this.clearInstall(plan)
 
     const extract = this.deps.extractImpl ?? extractWithTar
-    await extract(plan.zipDest, plan.extractTo, signal)
-    await this.flattenNestedBinary(plan)
-
-    // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already
-    // refuses `..` members and the archive hash is verified before extraction, but a
-    // SYMLINK member pointing outside the install dir extracts fine and would be followed
-    // by any later read/write through it. Sweep the FINAL layout (after flatten, so a
-    // relative link is checked where it will actually live) and refuse the install if any
-    // link escapes. Legitimate engine archives carry no escaping links, so this changes
-    // nothing for a good archive. Refused means nothing is installed (#752): the old copy is
-    // already gone, and an untrusted binary left here reads as installed, with no marker to
-    // say otherwise. `rm` unlinks a remaining link, never its target.
     try {
+      await extract(plan.zipDest, plan.extractTo, signal)
+      await this.flattenNestedBinary(plan)
+
+      // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already
+      // refuses `..` members and the archive hash is verified before extraction, but a
+      // SYMLINK member pointing outside the install dir extracts fine and would be followed
+      // by any later read/write through it. Sweep the FINAL layout (after flatten, so a
+      // relative link is checked where it will actually live) and refuse the install if any
+      // link escapes. Legitimate engine archives carry no escaping links, so this changes
+      // nothing for a good archive.
       await assertExtractedSymlinksContained(plan.extractTo)
     } catch (err) {
-      await clearInstall().catch((clearErr: unknown) => {
-        this.deps.log?.('Could not clear a refused engine install', { error: String(clearErr) })
-      })
+      // A cancel kills tar here too; that half-extracted folder is #530's to report (see
+      // `replaceInstall`). Anything else clears: a tar that failed never reached the sweep.
+      if (!signal?.aborted) await this.clearFailedInstall(plan)
       throw err
     }
+  }
+
+  /** Empty the install dir, keeping the just-downloaded archive and the `cpu/` net. */
+  private async clearInstall(plan: RuntimeDownloadPlan): Promise<void> {
+    const archiveName = basename(plan.zipDest)
+    for (const entry of await readdir(plan.extractTo)) {
+      if (entry === archiveName || entry === 'cpu') continue
+      await rm(join(plan.extractTo, entry), { recursive: true, force: true })
+    }
+  }
+
+  /**
+   * A failed install leaves nothing installed (#752). The old copy is already gone, and a binary
+   * left here with no marker reads as installed and passes the verifier as `skip-legacy`. `rm`
+   * unlinks a link it meets, never its target. Best-effort: the failure itself is what gets reported.
+   */
+  private async clearFailedInstall(plan: RuntimeDownloadPlan): Promise<void> {
+    await this.clearInstall(plan).catch((err: unknown) => {
+      this.deps.log?.('Could not clear a failed engine install', { error: String(err) })
+    })
   }
 
   /**

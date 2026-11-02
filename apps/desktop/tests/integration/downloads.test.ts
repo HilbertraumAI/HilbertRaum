@@ -34,8 +34,21 @@ type VerifyHook = (real: VerifyFn, ...args: Parameters<VerifyFn>) => ReturnType<
 
 const seams = vi.hoisted(() => ({
   downloadCaps: [] as Array<number | undefined>,
-  verifyHook: null as VerifyHook | null
+  verifyHook: null as VerifyHook | null,
+  /** Runs before each real `rm`: a row holds the delete of a bad `.part`, or faults it. */
+  rmHook: null as (() => Promise<void>) | null
 }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('node:fs/promises')>()
+  const mocked = {
+    ...orig,
+    rm: async (...args: Parameters<typeof orig.rm>) => {
+      await seams.rmHook?.()
+      return orig.rm(...args)
+    }
+  }
+  return { ...mocked, default: mocked }
+})
 vi.mock('../../src/main/services/assets', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../src/main/services/assets')>()
   return {
@@ -51,6 +64,7 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
 
 afterEach(() => {
   seams.verifyHook = null
+  seams.rmHook = null
 })
 
 // Phase 18 — the in-app model downloader (architecture.md "In-app model downloader"). Everything
@@ -917,7 +931,8 @@ describe('DownloadManager jobs', () => {
     })
 
     it.each<[string, Record<string, string>]>([
-      ['a drive error code, which names no path of its own', { code: 'ENOSPC' }],
+      ['a full drive, which names no path of its own', { code: 'ENOSPC' }],
+      ['a file past the drive format limit', { code: 'EFBIG' }],
       ['any other errno that names a path', { code: 'UNKNOWN', path: 'D:\\models\\w.gguf.part' }]
     ])('%s reads as the drive', async (_title, fields) => {
       const m = verifiedManifest(BODY)
@@ -934,22 +949,62 @@ describe('DownloadManager jobs', () => {
     it('a connection that drops keeps the resume promise, which is true there, and audits no URL', async () => {
       const m = verifiedManifest(BODY)
       const root = tempRoot('downloads')
-      const droppedAfterFirstChunk: FetchFn = async () =>
+      // The drop waits for the chunk to arrive: an error right behind it discards it, and the `.part` stays empty.
+      let drop: (err: Error) => void = () => undefined
+      const droppable: FetchFn = async () =>
         new Response(
           new ReadableStream({
-            pull(c) {
+            start(c) {
               c.enqueue(new TextEncoder().encode('hello-'))
-              c.error(new Error('connection reset'))
+              drop = (err) => c.error(err)
             }
           }),
           { status: 200 }
         )
-      const { mgr, reasons } = auditingManager(droppedAfterFirstChunk)
+      const { mgr, reasons } = auditingManager(droppable)
       const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      await until(() => mgr.get(job.jobId).receivedBytes > 0, 'the first chunk')
+      drop(new Error('connection reset'))
       const finished = await waitForTerminal(mgr, job.jobId)
       expect(finished.error).toBe(tMain('main.download.interrupted', { reason: 'connection reset' }))
       expect(reasons.at(-1)).toBe('network')
-      expect(existsSync(partOf(weightPath(root, m)))).toBe(true)
+      expect(readFileSync(partOf(weightPath(root, m)), 'utf8')).toBe('hello-')
+    })
+
+    it('a request that fails before its first byte promises nothing: there is no part to keep', async () => {
+      const m = verifiedManifest(BODY)
+      const root = tempRoot('downloads')
+      const offline: FetchFn = async () => {
+        throw new Error('fetch failed')
+      }
+      const { mgr, reasons } = auditingManager(offline)
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.error).toBe(tMain('main.download.httpFailed', { reason: 'fetch failed' }))
+      expect(reasons.at(-1)).toBe('network')
+      expect(existsSync(partOf(weightPath(root, m)))).toBe(false)
+    })
+
+    // Thrown from the catch that handles the mismatch, this left the job at `downloading` for good.
+    it('a misaligned resume whose .part cannot be deleted fails by the drive, and is not stranded', async () => {
+      const m = verifiedManifest(BODY)
+      const root = tempRoot('downloads')
+      const dest = weightPath(root, m)
+      writeDriveFile(root, `${m.localPath}.part`, 'hello-')
+      const misaligned = (async () =>
+        new Response(BODY, {
+          status: 206,
+          headers: { 'content-length': String(BODY.length), 'content-range': `bytes 0-${BODY.length - 1}/${BODY.length}` }
+        })) as unknown as FetchFn
+      seams.rmHook = async () => {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      }
+      const { mgr, reasons } = auditingManager(misaligned)
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      const finished = await waitForTerminal(mgr, job.jobId)
+      expect(finished.error).toBe(tMain('main.download.writeFailed'))
+      expect(reasons.at(-1)).toBe('write')
+      expect(readFileSync(partOf(dest), 'utf8')).toBe('hello-')
     })
   })
 
@@ -1055,6 +1110,32 @@ describe('DownloadManager jobs', () => {
       expect(mgr.get(job.jobId).status).toBe('cancelled')
       expect(existsSync(dest)).toBe(false)
       expect(readFileSync(partOf(dest), 'utf8')).toBe(body)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    // The restart passes through this delete with a live job: 'downloading' used to overwrite the
+    // cancel, and the aborted fetch then read as a failed download.
+    it('a cancel during the delete of a corrupt complete .part stands', async () => {
+      const m = verifiedManifest(BODY)
+      const root = tempRoot('downloads')
+      writeDriveFile(root, `${m.localPath}.part`, 'x'.repeat(BODY.length))
+      const reached = deferred()
+      const held = deferred()
+      seams.rmHook = async () => {
+        reached.resolve()
+        await held.promise
+      }
+      const fetchSpy = vi.fn()
+      const audited: string[] = []
+      const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, audit: (type) => audited.push(type) })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      await within(reached.promise, 'the bad .part being deleted')
+      mgr.cancel(job.jobId)
+      held.resolve()
+      const settled = await runToEnd(mgr, job.jobId)
+      expect(settled.status).toBe('cancelled')
+      expect(settled.error).toBeNull()
+      expect(audited).toEqual(['model_download_started'])
       expect(fetchSpy).not.toHaveBeenCalled()
     })
 

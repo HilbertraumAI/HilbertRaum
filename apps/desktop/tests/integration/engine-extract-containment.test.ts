@@ -237,6 +237,30 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     expect(existsSync(join(outside, 'keep.txt'))).toBe(true) // …and neither link was followed
   })
 
+  // A tar that fails after writing never reaches the sweep, so its files and links would otherwise stay.
+  it('a tar that fails past the binary leaves nothing installed either, and no link (#752)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const outside = mkdtempSync(join(tmpdir(), 'hr-contain-victim-'))
+    writeFileSync(join(outside, 'keep.txt'), 'x')
+    const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const failingExtract: ExtractFn = async (_archive, destDir) => {
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      plantDirLink(outside, join(destDir, 'evil'))
+      throw new Error('tar exited with code 1')
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: failingExtract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: { policyAllows: true, settingAllows: true }
+    })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.error).toBe(tMain('main.engine.extractFailed'))
+    expect(readdirSync(extractTo)).toEqual([])
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+    expect(existsSync(join(outside, 'keep.txt'))).toBe(true)
+  })
+
   it('a clean archive through the same flow still installs (no false positive)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     const cleanExtract: ExtractFn = async (_archive, destDir) => {

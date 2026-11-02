@@ -406,6 +406,12 @@ export class DownloadManager {
     // caps that at a single retry (`allowResume` false → no Range → 200 restart / fresh fetch).
     let allowResume = true
     for (;;) {
+      // A clean restart comes back here past the awaited delete of the bad `.part`. A cancel in
+      // that await must stand: 'downloading' below would overwrite it (#752).
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        return false
+      }
       try {
         // Best-effort Range resume: a kept `.part` (cancelled/crashed earlier attempt)
         // becomes the prefix. The server decides — 206 appends, 200 restarts cleanly.
@@ -533,7 +539,7 @@ export class DownloadManager {
             return settled === 'done'
           } catch (settleErr) {
             job.status = 'failed'
-            job.error = friendlyDownloadError(settleErr)
+            job.error = friendlyDownloadError(settleErr, hasPartBytes(part))
             this.deps.log?.('Model download failed settling a complete partial', {
               modelId: job.modelId,
               error: String(settleErr)
@@ -549,19 +555,26 @@ export class DownloadManager {
         // A misaligned 206 resume (the server served a slice starting at the wrong byte): the on-disk
         // `.part` can't be safely continued, so discard it — the NEXT attempt restarts from scratch
         // rather than re-appending onto a poisoned prefix (BUG dl-size-cap-2026-07-03 hardening).
+        // A delete that fails (an AV lock) is the failure to report: thrown from this catch it
+        // would strand the job at 'downloading', the class the 416 branch above guards (#752).
+        let failure: unknown = err
         if (err instanceof ResumeOffsetMismatchError) {
-          await rm(part, { force: true })
-          this.deps.log?.('Model download resume offset mismatch — partial discarded for a clean restart', {
-            modelId: job.modelId
-          })
+          try {
+            await rm(part, { force: true })
+            this.deps.log?.('Model download resume offset mismatch — partial discarded for a clean restart', {
+              modelId: job.modelId
+            })
+          } catch (rmErr) {
+            failure = rmErr
+          }
         }
         job.status = 'failed'
-        job.error = friendlyDownloadError(err)
-        this.deps.log?.('Model download failed', { modelId: job.modelId, error: String(err) })
+        job.error = friendlyDownloadError(failure, hasPartBytes(part))
+        this.deps.log?.('Model download failed', { modelId: job.modelId, error: String(failure) })
         this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
           modelId: job.modelId,
           jobId: job.jobId,
-          reason: failureReason(err)
+          reason: failureReason(failure)
         })
         return false
       }
@@ -709,18 +722,27 @@ function sumSizes(tasks: ModelDownloadTask[]): number | null {
   return total
 }
 
+/** Is anything on the drive for the next start to resume from? */
+function hasPartBytes(part: string): boolean {
+  try {
+    return statSync(part).size > 0
+  } catch {
+    return false
+  }
+}
+
 /**
- * Map a low-level fetch/stream error to spec §11.4-toned copy (never blame, stay plain). The two
- * early returns are the failures `main.download.interrupted` would misdescribe (#752): an errno's
- * message names the drive path and the `.part` may be gone, and a misaligned resume has already
- * deleted the `.part` that copy promises to keep.
+ * Map a low-level fetch/stream error to spec §11.4-toned copy (never blame, stay plain). Only a
+ * failure with bytes on the drive may say `main.download.interrupted`, which promises to keep them
+ * (#752): an errno's message names the drive path and its `.part` may be gone, a misaligned resume
+ * has just deleted the `.part`, and a request that failed before its first byte kept nothing.
  */
-function friendlyDownloadError(err: unknown): string {
+function friendlyDownloadError(err: unknown, partKept: boolean): string {
   if (err instanceof ResumeOffsetMismatchError) return tMain('main.download.resumeDiscarded')
   if (isDiskError(err)) return tMain('main.download.writeFailed')
   const raw = err instanceof Error ? err.message : String(err)
   if (/HTTP \d+/.test(raw)) {
     return tMain('main.download.httpFailed', { reason: raw.replace(/^Download failed: /, '') })
   }
-  return tMain('main.download.interrupted', { reason: raw })
+  return tMain(partKept ? 'main.download.interrupted' : 'main.download.httpFailed', { reason: raw })
 }

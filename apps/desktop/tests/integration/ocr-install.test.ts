@@ -140,7 +140,7 @@ const correctBytesFetch: FetchFn = (async (url: unknown) => {
   return new Response(body, { status: 200, headers: { 'content-length': String(body.length) } })
 }) as unknown as FetchFn
 
-/** One chunk, then a body error carrying a drive error code. `isDiskError` reads only `.code`, and a real ENOSPC
+/** One chunk, then a body error carrying a drive error code. `isDiskError` reads `.code` (or `.path`), and a real ENOSPC
  *  arrives from the write stream through the same `fail(err)` in `downloadToFile`. The chunk means the `.part`
  *  exists, so the cleanup the test asserts is real. */
 function diskFullFetch(): FetchFn {

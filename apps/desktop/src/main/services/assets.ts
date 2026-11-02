@@ -574,7 +574,20 @@ export async function verifyDownloadedFile(
 export type FetchFn = typeof fetch
 
 /** Filesystem error codes: a download that failed on these failed on the DRIVE, not the network. */
-const DISK_ERROR_CODES = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EBUSY', 'EIO', 'ENOENT', 'EISDIR', 'ENOTDIR'])
+const DISK_ERROR_CODES = new Set([
+  'EACCES',
+  'EPERM',
+  'EROFS',
+  'ENOSPC',
+  'EDQUOT',
+  'EFBIG',
+  'EBUSY',
+  'EIO',
+  'ENODEV',
+  'ENOENT',
+  'EISDIR',
+  'ENOTDIR'
+])
 
 /** Did this failure happen on the drive? An errno that names a path did, whatever its code (#752). */
 export function isDiskError(err: unknown): boolean {

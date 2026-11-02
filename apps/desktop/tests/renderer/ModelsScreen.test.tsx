@@ -1151,6 +1151,30 @@ describe('ModelsScreen — search, tasks and model variants', () => {
     expect(screen.queryByRole('region', { name: 'Current model download' })).not.toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
   })
+
+  // The check takes minutes on a USB stick. Main has honoured a cancel there since BE-4, but this
+  // button stayed disabled, so nobody could ask (#752).
+  it('a download can be cancelled during its final check', async () => {
+    const user = userEvent.setup()
+    const verifying = model({ id: 'verifying-download', displayName: 'Verifying Q4' })
+    let currentJob: DownloadJob = {
+      jobId: 'verifying-job', modelId: verifying.id, status: 'verifying',
+      receivedBytes: 1000, totalBytes: 1000, unverified: false, error: null
+    }
+    stub({ models: [verifying], downloadModel: vi.fn(async () => currentJob),
+      getDownloadJob: vi.fn(async () => currentJob) })
+    const cancel = vi.fn(async () => {
+      currentJob = { ...currentJob, status: 'cancelled' }
+      return currentJob
+    })
+    window.api.cancelDownload = cancel
+    render(<ModelsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    const progress = within(screen.getByRole('region', { name: 'Current model download' }))
+    await user.click(progress.getByRole('button', { name: 'Cancel download' }))
+    expect(cancel).toHaveBeenCalledWith('verifying-job')
+  })
 })
 
 describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
