@@ -41,8 +41,10 @@ import { parse } from 'yaml'
  */
 export const RENDERER_BUNDLED_DEV_DEPS = []
 
-/** Minimatch-style files glob -> coarse RegExp (same rules as packaging.test.ts). */
-function globToRegExp(glob) {
+// Minimatch-style files glob -> coarse RegExp: two stars and a slash match any directory prefix, two stars anything, a
+// single star one path segment. Enough for the node_modules shapes in electron-builder.yml, not a full minimatch, and
+// packaging.test.ts refuses any other shape. tests/helpers/globs.ts re-exports this one.
+export function globToRegExp(glob) {
   return new RegExp(
     '^' +
       glob
