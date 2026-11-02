@@ -15,13 +15,17 @@
 # License gate (spec §13): a model whose license_review.status != 'approved' is refused
 # unless --accept-license is passed; the license + license_url are printed first.
 #
+# --bundled fetches only the models a preconfigured Kit ships preloaded
+# (bundled_on_preconfigured_drive: true, #766); build-commercial-drive passes it.
+#
 # Usage:
-#   scripts/fetch-models.sh --target /Volumes/HILBERTRAUM [--only <id>] \
+#   scripts/fetch-models.sh --target /Volumes/HILBERTRAUM [--only <id>] [--bundled] \
 #       [--accept-license] [--dry-run]
 set -euo pipefail
 
 TARGET=""
 ONLY=""
+BUNDLED=0
 ACCEPT_LICENSE=0
 DRY_RUN=0
 while [[ $# -gt 0 ]]; do
@@ -30,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --target=*) TARGET="${1#*=}"; shift ;;
     --only) ONLY="${2:-}"; shift 2 ;;
     --only=*) ONLY="${1#*=}"; shift ;;
+    --bundled) BUNDLED=1; shift ;;
     --accept-license) ACCEPT_LICENSE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -263,6 +268,10 @@ for mf in "${MANIFEST_FILES[@]}"; do
 
   [[ -z "$url" || -z "$local_path" ]] && continue       # no download block → skip
   [[ -n "$ONLY" && "$id" != "$ONLY" ]] && continue
+  # One grep, and only under --bundled: under Git Bash every fork counts.
+  if [[ $BUNDLED -eq 1 ]] && ! grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$mf"; then
+    continue
+  fi
   planned=$((planned + 1))
 
   dest="$TARGET/$local_path"
@@ -362,6 +371,11 @@ done
 
 echo
 printf 'Planned %d | fetched %d | skipped %d\n' "$planned" "$fetched" "$skipped"
+# A Kit with nothing to preload fails at step 2, not after the builder's runtime downloads (#766).
+if [[ $BUNDLED -eq 1 && $planned -eq 0 ]]; then
+  echo "No bundled model (bundled_on_preconfigured_drive: true) with a download block: a Kit has nothing to preload." >&2
+  exit 1
+fi
 if [[ $had_failure -eq 1 ]]; then
   echo "One or more models failed to download/verify (or were license-blocked)." >&2
   exit 1

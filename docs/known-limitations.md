@@ -711,11 +711,8 @@ password recovery — are documented in
 - **Settings lacks the spec §10.6 Models/Performance/About sections** (Models has its own screen;
   Diagnostics shows version/runtime/model info).
 - **No `sample-contract.pdf` fixture** for the canonical spec §17 demo script.
-- **Manifest fields `supports_tools` / `bundled_on_preconfigured_drive` are unused**
-  (`supports_thinking_mode` is load-bearing — it gates the Deep answer mode).
-  In particular the bundled flag's intent (don't preload the big models on a commercial drive) is
-  unimplemented — the pipeline fetches every downloadable weight in the catalog (now 8 chat + E5 +
-  reranker + transcriber); curate with `fetch-models --only <id>`.
+- **Manifest field `supports_tools` is unused** (`supports_thinking_mode` is load-bearing — it
+  gates the Deep answer mode; `bundled_on_preconfigured_drive` picks what a Kit preloads, #766).
 - **In-app downloader accepted edges** (the downloader shipped — architecture.md
   "In-app model downloader"):
   - **The startup offline tripwire is not re-evaluated mid-session.** Toggling `allowNetwork` on

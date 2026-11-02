@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-02 — the closed 2026-10-13 #662 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-02 (preamble budget, making room for the #766 entry). Its record is unchanged:
+`rag-design.md` §17 "#662". Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#662 — Wikipedia's license line leaves the article text but stays visible; German navigation boxes are dropped (`fix/662-wikipedia-license-navbox`).** mwoffliner's
+`div.zim-footer` (1,322/1,500 German Wikipedia pages) arrived as the last section's text, and 197 `navileiste` boxes (62,839 words) as lists of related titles. Now the license line is
+`ZimArticle.notice` → `PackArticle.notice`, shown after the article and closing a saved copy as `## License`; `navileiste` / `erweiterte-navigationsleiste` / `erw-nav-leiste` are exact
+furniture tokens. Owner calls as recommended. 2,672 pages: the fix reads exactly master's words minus those elements on 2,672/2,672; 13 other archives byte-identical. Real app: notice 3/3, saved
+copy's license only under `License`. Record: `rag-design.md` §17 "#662". Acceptance read 2026-10-27 (master, with #673's): all six floors pass. Open: #673 (Normdaten & co.; fixed, above); #663 merged first (PR #675)._
+
 ## 2026-11-01 — the closed 2026-10-13 #627 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-01 (preamble budget, making room for the #753 entry). Its record is unchanged:
