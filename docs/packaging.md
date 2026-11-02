@@ -541,9 +541,9 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | Script | Purpose |
 |---|---|
 | `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
-| `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
+| `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-Bundled`/`--bundled` for the Kit's bundled set only (#766); `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), `kiwix_tools` (optional; the knowledge-pack tools — `kiwix-serve`/`kiwix-manage`/`kiwix-search` plus, on Windows, the five ICU DLLs; never part of `--with-assets`, only fetched by an explicit `--family kiwix_tools`, #339 P8-3), or `ocr` (the language files + the `osd` page-orientation data, #538). The DRIVE's `runtime-sources.yaml` wins over the repo's, so on a drive whose manifests predate a pin bump it re-installs the OLD pin; since #516 it prints a **Note** when the two pin different versions. **To move a drive to the repo's pin:** re-run `prepare-drive` on it (it overwrites `model-manifests/` and leaves `config/` alone unless `-Force`), then `fetch-runtime` (plus `-Backend cpu` for the safety net and `-Family whisper_cpp`). The app offers the same update in-app (AI Model screen, #516; `architecture.md` "In-app engine updates"). |
-| `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
+| `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. `-Strict`/`--strict` fails unless every manifest's weight is VERIFIED; `-Kit`/`--kit` is the same gate over what a Kit ships (the bundled set + any model with a file on the drive; the rest is listed as `CATALOG`, #766). |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
 | `release-issues-section.sh` | Not drive prep: `.github/workflows/release.yml` runs it while building a tag and appends its output to the release notes. It emits an "Issues resolved" section — the ISSUES closed by the PRs merged since the last **published** release (the same baseline GitHub's own generated "What's Changed" uses, so the two agree), resolved via each commit's associated PRs + `closingIssuesReferences` rather than by parsing "(#N)" out of subjects (which would miss true merge commits). Read-only `gh` API calls, so it is locally testable: `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`. Best-effort by design — a failure is downgraded to a workflow warning, so release notes can never block a release build. |
 | `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt`/`dist/version` present but the platform binary missing or zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently; on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`, which also runs the script from a scratch copy against a stub electron package. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
@@ -688,7 +688,8 @@ sellable?" verdict comes from **calling** `assertCommercialDrive` itself (both i
 prepare-drive  --force            # commercial policy (encrypted, plaintext off, no phone-home)
                                   # + the root license/attribution notices (LICENSE,
                                   # THIRD-PARTY-NOTICES.md, DRIVE-NOTICES.md — LIC-1)
-fetch-models   --accept-license   # verified weights (a SOLD drive needs an approved, redistributable license — spec §13)
+fetch-models   --bundled          # the bundled set's verified weights (#766; a preloaded weight needs an approved,
+                                  # redistributable license — spec §13); every other manifest is the in-app catalog
 fetch-runtime                     # verified llama.cpp sidecar builds: per OS the default (Vulkan/Metal)
                                   # + the pure-CPU safety net on win/linux
 [--kiwix-source-dir <dir>]        # OPTIONAL, un-numbered (#339 P8-4): install the kiwix-tools
@@ -699,7 +700,8 @@ package + sign + notarize         # MANUAL — secrets never in the repo (pass -
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json
 final check: THE canonical gate — node apps/desktop/out/tools/assert-commercial-drive.mjs (built by npm run build)
-             commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied) + all weights VERIFIED
+             commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied)
+             + every shipped weight VERIFIED and approved, at least one model bundled (#766)
              + runtime install markers match the pin AND record a matching binary hash (#234)
              + exactly one app artifact + the launcher per declared platform (--platforms; #233)
              + no user data
@@ -729,6 +731,26 @@ requires the artifact + launcher for each and none for any other. Every `fetch-r
 `--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
 is re-fetched instead of skipped, and the marker records the binary hash only after a verified archive.
 
+**What a Kit ships: its bundled set, with the rest as an in-app catalog (#766, owner call
+2026-11-02).** A Kit preloads only the manifests flagged `bundled_on_preconfigured_drive: true`:
+today Qwen3 4B Instruct (chat), multilingual E5 small (embeddings) and Whisper small (transcriber),
+3.2 GB together. Every other manifest stays on the drive as the catalog the buyer downloads from
+in-app, behind the app's own license gate (TranslateGemma's acknowledgement checkbox among them).
+Before #766 the flag was advisory: step 2 fetched every downloadable weight (310 GB over 31
+manifests), and the gate demanded every manifest VERIFIED and `approved`, so no Kit could pass while
+the catalog held TranslateGemma's deliberately `pending` review. The rule, the same in
+`assertCommercialDrive` and in the native pre-flight (`verify-models --kit`): a model **ships** when
+it is bundled or has any file on the drive (its weight, projector or an extra file: a half-installed
+preload is still a shipped model). Every shipped model must be VERIFIED with its review `approved`,
+and at least one model must be bundled. A model with no file on the drive is catalog, listed and not
+checked. The native license pre-flight looks at the weight file only; a model with just its projector
+or an extra file on the drive fails the weight check and the canonical gate instead. A non-bundled
+model with an open review and its weight on the drive (a drive built before #766) is reported with
+the fix, which is deleting the weight rather than approving the review. `fetch-models --bundled`
+exits 1 when it plans nothing, so a lost flag stops step 2 before the runtime downloads. The committed
+set is pinned in `committed-catalog.test.ts`, where each member must be approved, with real hashes
+and a live source.
+
 **The corresponding-source bundle (a preloaded Kit only, #339 P8-4).** `-KiwixSourceDir` /
 `--kiwix-source-dir <archive dir>` is an OPTIONAL, un-numbered step that runs right after the OCR
 fetch: it points at a maintainer-local directory holding the five pinned kiwix-tools copyleft
@@ -747,7 +769,7 @@ a non-empty `SOURCES.md` beside it.
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
-but update-checks + telemetry are denied) **and** that **every weight is VERIFIED** **and**
+but update-checks + telemetry are denied) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
 that **no user data is present** (spec §12.2) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
 declared platform has exactly one app artifact of the version being built plus its launcher** (#233)

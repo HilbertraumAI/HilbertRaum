@@ -984,7 +984,8 @@ Reranker ≈ **1.3 GB RSS** when active (F16 1.16 GB + ctx 2048); worst case alo
 4B chat (~2.6 GB) + E5 (~0.35 GB) + Electron (~1 GB) ≈ 5.3 GB — workable because the
 reranker is lazy, CPU-pinned, and opt-in by provisioning — it IS in the DIY `prepare-drive
 --with-assets` default fetch set, but is flagged `bundled_on_preconfigured_drive: false`
-(advisory/unused in code) so a sold/commercial preconfigured drive does not ship it; manifest
+so a sold/commercial preconfigured drive does not preload it and lists it for in-app download
+instead (#766); manifest
 `recommended_min_ram_gb: 6`, profiles LITE/BALANCED/PRO). CPU latency bounded by the
 candidate cap (≤ 2×topKInitial) + the per-field approx-token truncation (§12.4).
 

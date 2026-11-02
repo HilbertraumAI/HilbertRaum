@@ -126,6 +126,13 @@ export interface ModelManifest {
    */
   supportsThinkingMode: boolean
   /**
+   * Whether a preconfigured Kit ships this model preloaded (`bundled_on_preconfigured_drive`,
+   * #766). The Kit builder fetches only these, and the sell gate requires each one present and
+   * VERIFIED; every other manifest on a Kit is its in-app download catalog. Optional in YAML,
+   * defaulting to false. The app does not read it at runtime.
+   */
+  bundledOnPreconfiguredDrive: boolean
+  /**
    * Opt-in speculative decoding for this chat model (`speculative_decoding`, issue #182).
    * Absent = off, which is what every manifest that does not name it gets. Declaring it
    * asserts that the WEIGHT carries the draft head; the runtime still gates the actual flag
@@ -398,6 +405,17 @@ export function validateManifest(raw: unknown): ValidationResult {
       errors.push('"supports_thinking_mode" must be a boolean when present')
     } else {
       supportsThinkingMode = stm
+    }
+  }
+
+  // Optional Kit flag (#766): must be a boolean when present.
+  let bundledOnPreconfiguredDrive = false
+  const bundled = raw['bundled_on_preconfigured_drive']
+  if (bundled !== undefined) {
+    if (typeof bundled !== 'boolean') {
+      errors.push('"bundled_on_preconfigured_drive" must be a boolean when present')
+    } else {
+      bundledOnPreconfiguredDrive = bundled
     }
   }
 
@@ -703,6 +721,7 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendedRamGb,
       recommendedContextTokens,
       supportsThinkingMode,
+      bundledOnPreconfiguredDrive,
       ...(speculativeDecoding ? { speculativeDecoding } : {}),
       ...(disablePromptCache ? { disablePromptCache: true } : {}),
       localPath,

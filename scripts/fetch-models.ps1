@@ -27,6 +27,10 @@
 .PARAMETER Only
   Fetch only the model with this id.
 
+.PARAMETER Bundled
+  Fetch only the models a preconfigured Kit ships preloaded
+  (bundled_on_preconfigured_drive: true, #766). build-commercial-drive passes it.
+
 .PARAMETER AcceptLicense
   Accept the model license(s) and bypass the not-approved license gate.
 
@@ -41,6 +45,7 @@
 param(
   [Parameter(Mandatory = $true)] [string] $Target,
   [string] $Only,
+  [switch] $Bundled,
   [switch] $AcceptLicense,
   [switch] $DryRun
 )
@@ -309,9 +314,11 @@ foreach ($mf in $manifestFiles) {
   # status (assets.ts is the source of truth; script-execution.test.ts runs both twins). Note values
   # must not contain ' #' -- Get-ManifestField strips inline YAML comments.
   $withdrawn = Get-ManifestField $text 'withdrawn'
+  $isBundled = (Get-ManifestField $text 'bundled_on_preconfigured_drive') -eq 'true'
 
   if (-not $url -or -not $localPath) { continue }      # no download block -> skip
   if ($Only -and $id -ne $Only) { continue }
+  if ($Bundled -and -not $isBundled) { continue }
   $planned++
 
   $dest = Join-Path $Target ($localPath -replace '/', [IO.Path]::DirectorySeparatorChar)
@@ -396,6 +403,11 @@ foreach ($mf in $manifestFiles) {
 
 Write-Host ''
 Write-Host ("Planned {0} | fetched {1} | skipped {2}" -f $planned, $fetched, $skipped) -ForegroundColor Cyan
+# A Kit with nothing to preload fails at step 2, not after the builder's runtime downloads (#766).
+if ($Bundled -and $planned -eq 0) {
+  Write-Host 'No bundled model (bundled_on_preconfigured_drive: true) with a download block: a Kit has nothing to preload.' -ForegroundColor Red
+  exit 1
+}
 if ($hadFailure) {
   Write-Host 'One or more models failed to download/verify (or were license-blocked).' -ForegroundColor Red
   exit 1

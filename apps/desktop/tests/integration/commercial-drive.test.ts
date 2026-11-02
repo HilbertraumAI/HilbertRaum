@@ -69,10 +69,11 @@ function provisionExtractedApp(root: string, version: string): void {
   )
 }
 
-/** A sold drive's weights passed review, which the shared factory's pending default would fail. */
+/** A sold drive's weights: bundled, and past the review the shared factory's pending default would fail. */
 const asManifest = (overrides: Record<string, unknown> = {}): ModelManifest =>
   validManifest({
     license_review: { status: 'approved', reviewed_by: 'legal', reviewed_at: '2026-06-09', notes: '' },
+    bundled_on_preconfigured_drive: true,
     ...overrides
   })
 
@@ -124,8 +125,8 @@ describe('planCommercialDrive', () => {
     // Only the package (sign/notarize) step is manual.
     expect(steps.find((s) => s.id === 'package')!.manual).toBe(true)
     expect(steps.filter((s) => s.manual).map((s) => s.id)).toEqual(['package'])
-    // --accept-license is threaded into fetch-models.
-    expect(steps.find((s) => s.id === 'fetch-models')!.command).toContain('--accept-license')
+    // fetch-models fetches only the bundled set (#766), with --accept-license threaded in.
+    expect(steps.find((s) => s.id === 'fetch-models')!.command).toBe('fetch-models --target E:\\ --bundled --accept-license')
   })
 
   it('omits --accept-license when not set and targets the requested OS for packaging', () => {
@@ -650,13 +651,70 @@ describe('assertCommercialDrive', () => {
     expect(res.modelResults[0].localPath).toBe('models/vision/vlm-mmproj.gguf')
   })
 
-  it('fails when there are no weights to verify (a sold drive ships weights pre-loaded)', async () => {
-    const root = tempDir('hilbertraum-commercial-noweights-')
-    writePolicy(root, buildPolicyJson())
-    const res = await assertCommercialDrive(root, [])
-    expect(res.ok).toBe(false)
-    expect(res.checks.weightsVerified).toBe(false)
-    expect(res.problems.some((p) => /no model weights/i.test(p))).toBe(true)
+  // #766 (owner call 2026-11-02): a Kit ships its bundled set plus any model with a file on the drive. Every other manifest
+  // is the in-app download catalog, which needs neither a file nor the redistribution review.
+  describe('the bundled set and the in-app catalog (#766)', () => {
+    const PENDING = { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
+    /** A catalog manifest: not bundled, review open, placeholder hash, as most of the committed catalog is to a Kit. */
+    const catalog = (o: Record<string, unknown> = {}): ModelManifest =>
+      asManifest({ id: 'catalog', local_path: 'models/chat/catalog.gguf', bundled_on_preconfigured_drive: false, license_review: PENDING, ...o })
+
+    /** A drive that passes every other check, holding one verified bundled chat weight beside `extra`'s manifests. */
+    async function gate(extra: (root: string) => ModelManifest[], bundledChat = true) {
+      const root = tempDir('hilbertraum-commercial-catalog-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      provisionApp(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      const shipped = bundledChat ? chat : { ...chat, bundledOnPreconfiguredDrive: false }
+      return assertCommercialDrive(root, [shipped, ...extra(root)], null, null, null, kit())
+    }
+
+    it('a catalog model with no file on the drive passes, placeholder hash and open review included', async () => {
+      const res = await gate(() => [catalog()])
+      expect(res.problems).toEqual([])
+      expect(res.ok).toBe(true)
+      // The catalog is not a failed weight: the detail lists only what the Kit ships.
+      expect(res.modelResults.map((r) => [r.id, r.status])).toEqual([['chat', 'verified']])
+    })
+
+    it('a catalog model whose weight is on the drive ships, so its review must be approved', async () => {
+      const res = await gate((root) => [catalog({ sha256: writeDriveFile(root, 'models/chat/catalog.gguf', 'catalog') })])
+      expect(res.checks.weightsVerified).toBe(true)
+      expect(res.checks.licensesApproved).toBe(false)
+      expect(res.problems).toEqual([
+        'model "catalog" license_review.status is "pending" — a sold drive requires an approved review (spec §13); ' +
+          '--accept-license does not override this. It is not bundled and ships only because a file of it is on the ' +
+          'drive: delete that, and the Kit lists the model for in-app download instead'
+      ])
+      expect(res.modelResults.map((r) => r.id)).toEqual(['chat', 'catalog'])
+    })
+
+    it('a catalog model with only its projector on the drive is a half-installed preload', async () => {
+      const res = await gate((root) => [
+        catalog({ mmproj: { local_path: 'models/chat/catalog-mmproj.gguf', sha256: writeDriveFile(root, 'models/chat/catalog-mmproj.gguf', 'proj') } })
+      ])
+      expect(res.checks.weightsVerified).toBe(false)
+      expect(res.checks.licensesApproved).toBe(false)
+      expect(res.problems.some((p) => p.startsWith('weight "catalog" is not VERIFIED (status: missing'))).toBe(true)
+    })
+
+    it('a bundled model that is not on the drive fails', async () => {
+      const res = await gate(() => [asManifest({ id: 'bundled', local_path: 'models/chat/bundled.gguf', sha256: 'a'.repeat(64) })])
+      expect(res.checks.weightsVerified).toBe(false)
+      expect(res.checks.licensesApproved).toBe(true)
+      expect(res.problems).toEqual(['weight "bundled" is not VERIFIED (status: missing — models/chat/bundled.gguf)'])
+    })
+
+    it('no bundled model fails, even when every weight on the drive verifies and is approved', async () => {
+      const res = await gate(() => [], false)
+      expect(res.checks.weightsVerified).toBe(false)
+      expect(res.checks.licensesApproved).toBe(true)
+      expect(res.problems).toEqual([
+        'no bundled model (bundled_on_preconfigured_drive: true): a sold drive ships its bundled set pre-loaded'
+      ])
+    })
   })
 
   it('fails when user data is present (a sold drive must ship empty)', async () => {

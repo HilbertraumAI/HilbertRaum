@@ -3,7 +3,7 @@
 #
 # The master pipeline that ties Phase 11 + Phase 12 + signing together. Runs, in order:
 #   1. prepare-drive  --force            # commercial policy (encrypted, network denied)
-#   2. fetch-models   --accept-license   # verified weights
+#   2. fetch-models   --bundled          # the bundled set's verified weights (#766)
 #   3. fetch-runtime  --os win|mac|linux # verified llama.cpp sidecar for EVERY shipped OS
 #   4. package + sign + notarize         # MANUAL (secrets never in the repo)
 #   5. copy launcher + portable app + user docs onto the drive root
@@ -129,9 +129,11 @@ PREP=(--target "$TARGET" --force)
 [[ $DRY_RUN -eq 1 ]] && PREP+=(--dry-run)
 bash "$SCRIPT_DIR/prepare-drive.sh" "${PREP[@]}"
 
-# --- 2. Download + verify the model weights ----------------------------------------
-step 2 "Download + verify the model weights"
-MODELS=(--target "$TARGET")
+# --- 2. Download + verify the bundled model weights --------------------------------
+# A Kit preloads only its bundled set (bundled_on_preconfigured_drive: true, #766). Every
+# other manifest stays on the drive as the in-app download catalog.
+step 2 "Download + verify the bundled model weights"
+MODELS=(--target "$TARGET" --bundled)
 [[ $ACCEPT_LICENSE -eq 1 ]] && MODELS+=(--accept-license)
 [[ $DRY_RUN -eq 1 ]] && MODELS+=(--dry-run)
 bash "$SCRIPT_DIR/fetch-models.sh" "${MODELS[@]}"
@@ -285,17 +287,30 @@ if [[ -d "$TARGET/user-skills" ]]; then
 fi
 # License gate (assertCommercialDrive parity, spec 13): every shipped model's
 # license_review.status must be 'approved'. --accept-license is download-time acceptance,
-# NEVER a substitute for the redistribution review a sold drive needs.
+# NEVER a substitute for the redistribution review a sold drive needs. A model ships when
+# it is bundled or its weight is on the drive (#766); every other manifest is the in-app
+# download catalog, where the model's own license gate applies. A model with only its
+# projector or an extra file on the drive fails the weight gate below and the canonical one.
 if [[ $DRY_RUN -eq 0 ]]; then
   DRIVE_MANIFESTS="$TARGET/model-manifests"
   if [[ -d "$DRIVE_MANIFESTS" ]]; then
+    mf_field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
     while IFS= read -r mf; do
       [[ -n "$mf" ]] || continue
       # Only model manifests (runtime-sources.yaml has no local_path).
-      grep -q '^[[:space:]]*local_path[[:space:]]*:' "$mf" || continue
-      review_status="$(sed -n 's/^[[:space:]]*status[[:space:]]*:[[:space:]]*//p' "$mf" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
+      mf_local="$(mf_field "$mf" local_path)"
+      [[ -n "$mf_local" ]] || continue
+      mf_bundled=0
+      grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$mf" && mf_bundled=1
+      if [[ $mf_bundled -eq 0 && ! -f "$TARGET/$mf_local" ]]; then
+        continue
+      fi
+      review_status="$(mf_field "$mf" status)"
       if [[ "$review_status" != "approved" ]]; then
-        PROBLEMS+=("license_review not approved: $(basename "$mf") (status: ${review_status:-missing})")
+        # A drive built before #766 carries such a weight; the fix is deleting it, not the review.
+        mf_hint=""
+        [[ $mf_bundled -eq 0 ]] && mf_hint=" — not bundled, its weight is on the drive: delete $mf_local to list it for in-app download"
+        PROBLEMS+=("license_review not approved: $(basename "$mf") (status: ${review_status:-missing})$mf_hint")
       fi
     done < <(find "$DRIVE_MANIFESTS" \( -name '*.yaml' -o -name '*.yml' \) -type f | sort)
   else
@@ -377,13 +392,17 @@ fi
 # be present with a matching sha256 (plain files — the hash IS the install state).
 if [[ $DRY_RUN -eq 0 && -f "$TARGET/model-manifests/runtime-sources.yaml" ]]; then
   ocr_top=""; ocr_lang=""; ocr_sha=""; ocr_dest=""
+  # The loop below calls this between a match and its BASH_REMATCH read, so it must not run
+  # a `=~` of its own: that clobbers the caller's capture, and `set -u` ends the script on
+  # the second OCR file (#765). Hence grep for the hash test, and the hash from stdin: by
+  # filename, a backslash path (git-bash on Windows) prints "\<hash>" and never matches.
   check_ocr_file() {
     [[ -z "$ocr_lang" ]] && return 0
     if [[ ! -f "$TARGET/$ocr_dest" ]]; then
       PROBLEMS+=("ocr: $ocr_dest missing (run fetch-runtime --family ocr)")
-    elif [[ "$ocr_sha" =~ ^[a-f0-9]{64}$ ]]; then
-      if command -v sha256sum >/dev/null 2>&1; then ocr_actual="$(sha256sum "$TARGET/$ocr_dest" | awk '{print $1}')"
-      else ocr_actual="$(shasum -a 256 "$TARGET/$ocr_dest" | awk '{print $1}')"; fi
+    elif printf '%s\n' "$ocr_sha" | grep -Eq '^[a-f0-9]{64}$'; then
+      if command -v sha256sum >/dev/null 2>&1; then ocr_actual="$(sha256sum < "$TARGET/$ocr_dest" | awk '{print $1}')"
+      else ocr_actual="$(shasum -a 256 < "$TARGET/$ocr_dest" | awk '{print $1}')"; fi
       if [[ "$ocr_actual" != "$ocr_sha" ]]; then
         PROBLEMS+=("ocr: $ocr_dest checksum mismatch (re-run fetch-runtime --family ocr)")
       fi
@@ -411,11 +430,12 @@ if [[ $DRY_RUN -eq 0 && -f "$TARGET/model-manifests/runtime-sources.yaml" ]]; th
   done < "$TARGET/model-manifests/runtime-sources.yaml"
   check_ocr_file
 fi
-# Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated — not a
-# manual "confirm it yourself" instruction. UNVERIFIED/MISSING/MISMATCH all fail here.
+# Weight gate (assertCommercialDrive parity): every weight the Kit ships VERIFIED, at least
+# one model bundled (#766), automated — not a manual "confirm it yourself" instruction.
+# UNVERIFIED/MISSING/MISMATCH all fail here.
 if [[ $DRY_RUN -eq 0 ]]; then
-  if ! bash "$SCRIPT_DIR/verify-models.sh" --target "$TARGET" --strict; then
-    PROBLEMS+=("weights: not every weight is VERIFIED (strict verify failed)")
+  if ! bash "$SCRIPT_DIR/verify-models.sh" --target "$TARGET" --kit; then
+    PROBLEMS+=("weights: verify-models --kit failed (a shipped weight is not VERIFIED, or no model is bundled)")
   fi
 fi
 [[ $DRY_RUN -eq 1 ]] && echo "  (dry run: weight verification skipped; the canonical gate still runs)"

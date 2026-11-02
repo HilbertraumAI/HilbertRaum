@@ -71,17 +71,18 @@ describe('validateManifest', () => {
     expect(res.manifest?.recommendedProfiles).toEqual([])
   })
 
-  // Phase 20: supports_thinking_mode is now load-bearing (it gates the Deep answer mode).
-  it('parses supports_thinking_mode, defaulting to false when omitted', () => {
-    expect(validateManifest(rawManifest({ supports_thinking_mode: true })).manifest?.supportsThinkingMode).toBe(true)
-    expect(validateManifest(rawManifest({ supports_thinking_mode: false })).manifest?.supportsThinkingMode).toBe(false)
-    expect(validateManifest(rawManifest()).manifest?.supportsThinkingMode).toBe(false)
-  })
-
-  it('rejects a non-boolean supports_thinking_mode', () => {
-    const res = validateManifest(rawManifest({ supports_thinking_mode: 'yes' }))
+  // Phase 20: supports_thinking_mode gates the Deep answer mode. #766: bundled_on_preconfigured_drive picks what a Kit
+  // preloads and the sell gate requires.
+  it.each([
+    ['supports_thinking_mode', 'supportsThinkingMode'],
+    ['bundled_on_preconfigured_drive', 'bundledOnPreconfiguredDrive']
+  ] as const)('parses %s, defaulting to false when omitted, and rejects a non-boolean', (key, field) => {
+    expect(validateManifest(rawManifest({ [key]: true })).manifest?.[field]).toBe(true)
+    expect(validateManifest(rawManifest({ [key]: false })).manifest?.[field]).toBe(false)
+    expect(validateManifest(rawManifest()).manifest?.[field]).toBe(false)
+    const res = validateManifest(rawManifest({ [key]: 'yes' }))
     expect(res.ok).toBe(false)
-    expect(res.errors.some((e) => e.includes('supports_thinking_mode'))).toBe(true)
+    expect(res.errors.some((e) => e.includes(key))).toBe(true)
   })
 
   it('rejects a non-numeric recommendation_rank (the field moves a recommendation)', () => {

@@ -549,6 +549,11 @@ reasoning surface, and it disappears once the persisted reply lands.
 `getRuntimeStatus` handler for the running model only) → the composer offers Deep only when
 true (stale Deep choices coerce to Balanced at send). `askDocuments` never passes a mode —
 document answers always run balanced (deep-grounded = wave 2).
+✅ **Kit bundled set (#766):** manifest `bundled_on_preconfigured_drive` →
+`ModelManifest.bundledOnPreconfiguredDrive` (optional boolean, default false; a non-boolean is a
+validation error). Read only by the sell gate (`assertCommercialDrive`) and, flat, by the scripts
+(`fetch-models --bundled`, `verify-models --kit`, the builder's license pre-flight). The app never
+reads it at runtime.
 ✅ **Speculative decoding (#182):** manifest `speculative_decoding` (closed enum, today only
 `mtp`, chat role only) → `ModelManifest.speculativeDecoding` → `RuntimeStartOptions
 .speculativeDecoding` (supplied by `startModelRuntime`, explicit `null` when absent) → the start
@@ -1139,9 +1144,12 @@ head's own weights + KV.
 - `prepare-drive.{ps1,sh}` — `-Target`/`--target` (required), `-DryRun`/`--dry-run`, `-Force`/`--force`,
   `-Dev`/`--dev`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
   `config/{drive,policy}.json`. Idempotent; config only (re)written with `--force`.
-- `verify-models.{ps1,sh}` — `-Target`/`--target`, `-Generate`/`--generate`. Flat-YAML line-parses the
+- `verify-models.{ps1,sh}` — `-Target`/`--target`, `-Generate`/`--generate`, `-Strict`/`--strict`,
+  `-Kit`/`--kit`. Flat-YAML line-parses the
   manifests, SHA-256s present weights, prints `VERIFIED/UNVERIFIED/MISMATCH/MISSING/UNSUPPORTED`,
-  **exit 1 on a real-hash mismatch**; `--generate` writes `config/checksums.json`. Reads a `files:`
+  **exit 1 on a real-hash mismatch**; `--generate` writes `config/checksums.json`. `--strict` exits 1
+  unless every manifest's files are VERIFIED; `--kit` (#766) applies that only to the models a Kit
+  ships (bundled, or any file on the drive), prints `CATALOG` for the rest, and needs ≥ 1 bundled. Reads a `files:`
   list the same way (#310): the primary is unlabeled, the mmproj projector keeps its own
   `(mmproj)` label, and each `files:` entry is verified with a positional `(file N/M)` label;
   `--generate` emits one `checksums.json` entry per declared file. The `files:` block must be
@@ -1192,8 +1200,9 @@ head's own weights + KV.
   `isDiskError(err)` · `failureReason(err)` (a content-free label for a failed download, never its
   message) · `formatAssetPlan(modelTasks, runtimePlan)`.
 ✅ **`scripts/`** (self-contained, dual `.ps1`/`.sh`, OS-native downloader; `.ps1` pure ASCII):
-- `fetch-models.{ps1,sh}` — `-Target`/`--target` (req), `-Only`/`--only`, `-AcceptLicense`/
-  `--accept-license`, `-DryRun`/`--dry-run`. Per `download`-block manifest: download (resume via
+- `fetch-models.{ps1,sh}` — `-Target`/`--target` (req), `-Only`/`--only`, `-Bundled`/`--bundled`
+  (the Kit bundled set only, exit 1 when it plans none, #766), `-AcceptLicense`/`--accept-license`,
+  `-DryRun`/`--dry-run`. Per `download`-block manifest: download (resume via
   `curl -C -`/`aria2c`) → SHA-256-verify vs the manifest → mismatch deletes partial + **exit 1**;
   placeholder → *UNVERIFIED*; present+verified → skip. License gate before the first fetch.
 - `fetch-runtime.{ps1,sh}` — `-Target`/`--target` (req), `-Os/-Arch/-Backend` overrides, `-DryRun`.

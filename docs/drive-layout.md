@@ -177,13 +177,15 @@ drive is the same flow as building it, run again from a machine with the repo:
 1. `prepare-drive --target <drive> --force` refreshes `model-manifests/` + the bundled docs +
    `config/{drive,policy}.json` (the workspace and weights are untouched).
 2. `fetch-models` / `fetch-runtime` download anything new (present + verified files are skipped).
+   On a Kit, `fetch-models --bundled`: plain `fetch-models` would preload the whole catalog (#766).
 3. **Delete every prior app artifact** at the drive root — `HilbertRaum-<old>-portable.exe`,
    `HilbertRaum-<old>.AppImage`, `HilbertRaum-<old>-mac-arm64.app.zip` — and any extracted
    `HilbertRaum.app`, and only then copy the new build (and launchers) in. Two app versions on
    one drive must never run: an older build beside a newer one can destroy the workspace, so the
    launchers refuse to start while more than one is present and name what to delete (#235).
    Start the app and verify the version shown under Settings → Diagnostics ("App version").
-4. `verify-models --target <drive> --strict` confirms every weight still verifies.
+4. `verify-models --target <drive> --strict` confirms every weight still verifies; on a Kit,
+   `--kit` checks what it ships and leaves the in-app catalog alone (#766).
 
 The user's `workspace/` (and its encrypted data) is never modified by an update.
 

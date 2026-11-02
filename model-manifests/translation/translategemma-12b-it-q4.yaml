@@ -72,9 +72,10 @@ recommended_profiles: []
 # The O1 review is CLOSED and the in-app path APPROVED (notes below), but `status`
 # DELIBERATELY stays `pending`: in this schema `approved` is the REDISTRIBUTION review a
 # sold drive needs — assertCommercialDrive AND the build-commercial-drive scripts require
-# `approved` for EVERY manifest on the drive, and `bundled_on_preconfigured_drive` is
-# advisory/unused, so `pending` is the only mechanical guard keeping this model off a
-# sellable drive until the flow-down checklist is implemented. Flipping to `approved`
+# `approved` for every model a Kit ships (bundled, or any file on the drive, #766). This one
+# is not bundled, so a Kit lists it for in-app download, and `pending` is the mechanical
+# guard that refuses a drive with its weight preloaded until the flow-down checklist is
+# implemented. Flipping to `approved`
 # would ALSO drop the in-app license-acknowledgement checkbox (ModelDownloadInfo
 # .licenseApproved → needsAck), which the compliance posture leans on. Flip only together
 # with the flow-down artifacts + a license-class acknowledgement gate.

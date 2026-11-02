@@ -147,6 +147,9 @@ const manifestYaml = (fields: { id: string; localPath: string; sha256: string; s
     ''
   ].join('\n')
 
+/** The `extra` line that puts a manifest in the Kit's bundled set (#766). */
+const BUNDLED = 'bundled_on_preconfigured_drive: true'
+
 const APP_VERSION = (JSON.parse(repoText('apps', 'desktop', 'package.json')) as { version: string }).version
 const SELLABLE_BUILDS = [
   { family: 'llama_cpp', version: 'b9585', os: 'win', arch: 'x64', backend: 'vulkan', dir: 'runtime/llama.cpp/win', bin: 'llama-server.exe' },
@@ -157,7 +160,7 @@ const SELLABLE_BUILDS = [
   { family: 'whisper_cpp', version: 'v1.8.6', os: 'win', arch: 'x64', backend: 'cpu', dir: 'runtime/whisper.cpp/win', bin: 'whisper-cli.exe' }
 ]
 
-/** A drive that passes every check for win-x64, with one weight and no ocr: block, so a row can flip one input. */
+/** A drive that passes every check for win-x64, with one bundled weight and no ocr: block, so a row can flip one input. */
 function sellableDrive(): string {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-sellable-'))
   const yaml: string[] = []
@@ -188,7 +191,7 @@ function sellableDrive(): string {
   writeDriveFile(
     root,
     'model-manifests/drive-model.yaml',
-    manifestYaml({ id: 'drive-model', localPath: 'models/chat/drive-model.gguf', sha256: weight })
+    manifestYaml({ id: 'drive-model', localPath: 'models/chat/drive-model.gguf', sha256: weight }, [BUNDLED])
   )
   writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
@@ -206,6 +209,21 @@ function patchPolicy(root: string, section: string, key: string, value: boolean)
   policy[section][key] = value
   writeFileSync(file, JSON.stringify(policy, null, 2))
 }
+
+/** OCR files whose bytes are their own language code, each pinned to that real hash. */
+const ocrFilesBlock = (langs: string[]): string =>
+  [
+    'ocr:',
+    '  version: 4.0.0_best_int',
+    '  files:',
+    ...langs.flatMap((lang) => [
+      `    - lang: ${lang}`,
+      `      url: https://example.invalid/${lang}.traineddata.gz`,
+      `      sha256: ${sha256(lang)}`,
+      `      dest: ocr/${lang}.traineddata.gz`
+    ]),
+    ''
+  ].join('\n')
 
 /** One OCR file. It stays the last block of the yaml, as it is in the committed one. */
 const ocrBlock = (sha: string): string =>
@@ -619,6 +637,26 @@ for (const leg of SCRIPT_LEGS) {
           }
         ],
         [
+          '--bundled plans only the Kit bundled set (#766)',
+          {
+            manifests: [fetchable('a-model'), fetchable('b-model', { extra: [BUNDLED] })],
+            extra: [f('Bundled')],
+            status: 0,
+            contains: ['fetch  b-model', 'Planned 1'],
+            absent: ['fetch  a-model']
+          }
+        ],
+        [
+          '--bundled with nothing bundled fails at once (#766)',
+          {
+            manifests: [fetchable('a-model')],
+            extra: [f('Bundled')],
+            status: 1,
+            contains: ['Planned 0', 'No bundled model (bundled_on_preconfigured_drive: true) with a download block'],
+            absent: ['fetch  a-model']
+          }
+        ],
+        [
           'a present verified weight is skipped with no license prompt',
           {
             manifests: [fetchable('v-model', { status: 'pending', sha: sha256('bytes') })],
@@ -820,11 +858,17 @@ for (const leg of SCRIPT_LEGS) {
       })
 
       // The positive behind the two ocr flips below: a pre-flight that called every OCR file a mismatch would pass both.
-      // Not on Git Bash, where a backslash target reads any OCR file as a mismatch.
-      it.skipIf(!toolBuilt || (leg.ext === 'sh' && process.platform === 'win32'))('one ocr file with the pinned bytes reaches SELLABLE', () => {
+      // The sh pre-flight also died with no verdict on the second file, or on a key after the block (#765); and on Git
+      // Bash it hashed by filename, so a backslash target read every file as a mismatch.
+      it.skipIf(!toolBuilt).each<[string, string[], string]>([
+        ['one ocr file', ['deu'], ''],
+        ['two ocr files', ['deu', 'eng'], ''],
+        ['the committed three, osd included', ['deu', 'eng', 'osd'], ''],
+        ['an ocr file followed by another top-level key', ['deu'], 'future_family:\n  version: 1\n']
+      ])('%s with the pinned bytes reach SELLABLE', (_title, langs, after) => {
         const root = sellableDrive()
-        appendOcr(root)
-        writeDriveFile(root, 'ocr/deu.traineddata.gz', 'deu')
+        appendFileSync(join(root, 'model-manifests', 'runtime-sources.yaml'), ocrFilesBlock(langs) + after)
+        for (const lang of langs) writeDriveFile(root, `ocr/${lang}.traineddata.gz`, lang)
         const r = verify(root)
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
@@ -847,7 +891,10 @@ for (const leg of SCRIPT_LEGS) {
             writeDriveFile(
               root,
               'model-manifests/drive-model.yaml',
-              manifestYaml({ id: 'drive-model', localPath: 'models/chat/drive-model.gguf', sha256: sha256('weight bytes'), status: 'pending' })
+              manifestYaml(
+                { id: 'drive-model', localPath: 'models/chat/drive-model.gguf', sha256: sha256('weight bytes'), status: 'pending' },
+                [BUNDLED]
+              )
             ),
           'license_review not approved: drive-model'
         ],
@@ -865,7 +912,6 @@ for (const leg of SCRIPT_LEGS) {
           'runtime: runtime/whisper.cpp/win marker does not match the pinned'
         ],
         ['a missing ocr file', appendOcr, 'ocr: ocr/deu.traineddata.gz missing'],
-        // On Git Bash a backslash target reads ANY OCR file as a mismatch, so ubuntu and macOS are this row's honest sh legs.
         [
           'an ocr file with the wrong bytes',
           (root) => {
@@ -874,7 +920,7 @@ for (const leg of SCRIPT_LEGS) {
           },
           'ocr: ocr/deu.traineddata.gz checksum mismatch'
         ],
-        ['a changed weight', (root) => writeDriveFile(root, 'models/chat/drive-model.gguf', 'other'), 'weights: not every weight is VERIFIED (strict verify failed)']
+        ['a changed weight', (root) => writeDriveFile(root, 'models/chat/drive-model.gguf', 'other'), `weights: verify-models ${f('Kit')} failed`]
       ]
 
       // Four spaces: the native list. The tool's own list has two.
@@ -886,6 +932,82 @@ for (const leg of SCRIPT_LEGS) {
         expect(r.status, out).toBe(1)
         expect(out).toContain('NOT SELLABLE')
         expect(out).toContain(`    - ${line}`)
+        expect(out).not.toContain('SELLABLE: canonical gate passed')
+      })
+
+      // #766: a Kit ships its bundled set plus any model with a file on the drive, and lists every other manifest for in-app
+      // download. The pre-flight and the canonical gate both leave a catalog model alone, and both refuse a drive that ships
+      // something unverified or unreviewed, or bundles nothing.
+      const addManifest = (root: string, id: string, o: { sha?: string; status?: string; extra?: string[] } = {}): void => {
+        writeDriveFile(
+          root,
+          `model-manifests/${id}.yaml`,
+          manifestYaml({ id, localPath: `models/chat/${id}.gguf`, sha256: o.sha ?? PLACEHOLDER, status: o.status }, o.extra)
+        )
+      }
+
+      it.skipIf(!toolBuilt)('a catalog model with no file on the drive is listed, not verified, and the drive stays SELLABLE (#766)', () => {
+        const root = sellableDrive()
+        addManifest(root, 'catalog-model', { status: 'pending' })
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toMatch(/CATALOG\s+catalog-model/)
+        expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+      })
+
+      const kitWeights = `    - weights: verify-models ${f('Kit')} failed`
+      const shipped: Array<[string, (root: string) => void, string[]]> = [
+        [
+          'a catalog model whose weight is on the drive, with an open review',
+          (root) => addManifest(root, 'catalog-model', { status: 'pending', sha: writeDriveFile(root, 'models/chat/catalog-model.gguf', 'c') }),
+          [
+            '    - license_review not approved: catalog-model',
+            'not bundled, its weight is on the drive: delete models/chat/catalog-model.gguf to list it for in-app download',
+            'model "catalog-model" license_review.status is "pending"',
+            'It is not bundled and ships only because a file of it is on the drive'
+          ]
+        ],
+        [
+          'a catalog model with only its projector on the drive',
+          (root) =>
+            addManifest(root, 'proj-model', {
+              extra: ['mmproj:', '  local_path: models/chat/proj-model-mmproj.gguf', `  sha256: ${writeDriveFile(root, 'models/chat/proj-model-mmproj.gguf', 'p')}`]
+            }),
+          [kitWeights, 'weight "proj-model" is not VERIFIED (status: missing']
+        ],
+        [
+          'a catalog model with only an extra file on the drive',
+          (root) =>
+            addManifest(root, 'shard-model', {
+              extra: ['files:', '  - local_path: models/chat/shard-model-2.gguf', `    sha256: ${writeDriveFile(root, 'models/chat/shard-model-2.gguf', 's')}`]
+            }),
+          [kitWeights, 'weight "shard-model" is not VERIFIED (status: missing']
+        ],
+        [
+          'a bundled model missing from the drive',
+          (root) => addManifest(root, 'bundled-model', { sha: REAL_SHA, extra: [BUNDLED] }),
+          [kitWeights, 'weight "bundled-model" is not VERIFIED (status: missing']
+        ],
+        [
+          'no bundled model, though the one weight on the drive verifies',
+          (root) =>
+            writeDriveFile(
+              root,
+              'model-manifests/drive-model.yaml',
+              manifestYaml({ id: 'drive-model', localPath: 'models/chat/drive-model.gguf', sha256: sha256('weight bytes') })
+            ),
+          ['KIT: no bundled model', kitWeights, 'no bundled model (bundled_on_preconfigured_drive: true)']
+        ]
+      ]
+
+      it.skipIf(!toolBuilt).each(shipped)('%s: NOT SELLABLE from both gates (#766)', (_title, edit, lines) => {
+        const root = sellableDrive()
+        edit(root)
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        for (const line of lines) expect(out).toContain(line)
         expect(out).not.toContain('SELLABLE: canonical gate passed')
       })
 

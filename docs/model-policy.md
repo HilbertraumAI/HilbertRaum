@@ -39,7 +39,7 @@
 | Chat (Gemma 26B-A4B) | Gemma 4 26B-A4B Instruct QAT Q4_0 MoE | ~14.4 GB | 20 GB | — (rank 2) | **Gemma 4 QAT wave; rank 2 since the 2026-08-03 ratification (§9.3).** MoE, ~3.8B active (8 of 128 experts): EM parity with the then-24 GB pick Qwen3.6 27B Q4, ZERO audited hallucinations, ~4× its decode speed at 2.5 GB less disk — F1 .3307 vs .3523 kept the Qwen the pick, so this is the ranked runner-up / MoE speed alternative (never the auto-pick; the 24 GB tier has since moved on to `qwen3.8-27b-ud-q4km`, §9.5). Supersedes the `gemma-4-26b-q4` local-test stub for distribution. All §9.1 legs PASSED 2026-07-30 (in-app peak RSS 14.28 GiB, vulkan). |
 | Chat (Gemma 31B) | Gemma 4 31B Instruct QAT Q4_0 | ~17.7 GB | 24 GB | — (rank 0) | **Gemma 4 QAT wave; eval ratified 2026-08-03 (§9.3): DO NOT PROMOTE — the issue-#82 drop condition met** (ties the 26B-A4B within .003 F1 at 4.2–6× slower decode, +3.3 GB disk). Stays a selectable opt-in — the Apache-2.0 dense quality ceiling for 32 GB GPU boxes. All §9.1 legs PASSED 2026-07-30 incl. the first load smoke. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
-| Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
+| Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** preloaded on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, so a Kit lists it for in-app download) | Retrieval-quality pass over document search — search works fully without it |
 | Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation; whisper.cpp GGML; MIT. Since #504 its manifest also requires the Silero VAD v5.1.2 model (~0.9 MB, MIT) — voice-activity detection before a dictation is decoded |
 | Vision (optional) | Qwen2.5-VL 3B Instruct Q4 + f16 mmproj | ~3.27 GB (2 files) | 12 GB | in the `--with-assets` default set (2026-07-01); **not** auto-recommended in-app (`recommended_profiles: []`, rank 0) — availability-driven, used on demand by the Images screen | Image understanding — the Images screen (Phases V1–V5). Two files: GGUF + the `mmproj` projector. CPU-pinned; ~4.6 GB peak RSS. **Co-resident with a 12B chat ⇒ >16 GB (PROD-1)** — see "The vision role" below. Apache-2.0 |
 
@@ -240,7 +240,8 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
 no-RAM picker), `recommendation_rank` (a finite number, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
-`supports_thinking_mode` (below), `speculative_decoding` (below), `disable_prompt_cache` (below),
+`supports_thinking_mode` (below), `bundled_on_preconfigured_drive` (below),
+`speculative_decoding` (below), `disable_prompt_cache` (below),
 a `download` block (below),
 `estimated_context_cache_gib` (number ≥ 0; the graphics-memory picker's per-model context-cache
 term, PR #308 §6.6 rule C — absent defaults to 0.5 GiB in code, so the field is set only for the
@@ -249,8 +250,7 @@ weights that stay host-mapped on a full offload, which the same estimate subtrac
 the whole file to the card), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
 vision role + mmproj projector" below), and an optional **`files:` list** (below, #310). Unknown
-extra keys (e.g. `supports_tools`, `dimensions`, `bundled_on_preconfigured_drive`) are ignored by
-the validator.
+extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
 
 - **`files`** (optional, #310) declares the ADDITIONAL required files of this model's weight
   beyond `local_path`/`sha256`, which stay mandatory and PRIMARY — shard 1, the file
@@ -299,6 +299,12 @@ the validator.
 - **`runtime`/`format`**: the supported pairs are `llama_cpp`/`gguf` (chat, embeddings, reranker,
   vision) and `whisper_cpp`/`ggml` (the transcriber); any other runtime/format pair yields the
   `unsupported` state.
+- **`bundled_on_preconfigured_drive`** (optional boolean, default `false`, #766) puts the model in
+  the set a preconfigured Kit preloads. `build-commercial-drive` fetches only these
+  (`fetch-models --bundled`), and the sell gate requires each one present, VERIFIED and `approved`.
+  Every other manifest on a Kit is the in-app download catalog. The app does not read the flag at
+  runtime. The bundled set today: `qwen3-4b-instruct-q4`, `multilingual-e5-small-q8`,
+  `whisper-small-multilingual`. Rules and history: packaging.md "What a Kit ships".
 - **`supports_thinking_mode`** (optional boolean, default `false`) is **load-bearing**:
   it declares that the model's chat template implements the `enable_thinking`
   switch (Qwen3-style native reasoning). The chat UI offers the **Deep** answer mode only for
@@ -1126,11 +1132,12 @@ preloading remains a separate open review** — preloading *is* redistribution, 
 four-point flow-down checklist before any drive bundles this model: a copy of the Gemma Terms on
 the drive, the verbatim Gemma NOTICE line, an enforceable use-restriction clause in the sale terms,
 and the quantization-provenance notice. **The manifest's `license_review.status` deliberately stays
-`pending`**: in the manifest schema `approved` expresses the *redistribution* review — the sell gate
-(`assertCommercialDrive` + the `build-commercial-drive` scripts) requires `approved` for **every**
-manifest on the drive while `bundled_on_preconfigured_drive` is advisory/unused, so the `pending`
-status is the only mechanical guard keeping the model off a sellable drive; flipping it would also
-remove the in-app acknowledgement checkbox (`ModelDownloadInfo.licenseApproved`). It flips to
+`pending`**: in the manifest schema `approved` expresses the *redistribution* review. Since #766 the
+sell gate (`assertCommercialDrive` + the `build-commercial-drive` scripts) requires `approved` for
+every model a Kit **ships** (bundled, or with any file on the drive), and lists the rest as the
+in-app catalog. TranslateGemma is not bundled, so a Kit carries it as catalog, and the `pending`
+status is the mechanical guard that refuses any drive with its weight preloaded. Flipping it would
+also remove the in-app acknowledgement checkbox (`ModelDownloadInfo.licenseApproved`). It flips to
 `approved` only together with the flow-down artifacts and a license-class acknowledgement gate.
 **Third-party quantizer provenance:** the GGUF is a community requant (mradermacher) inheriting the
 Gemma license — the same established-quantizer posture as the unsloth entries; the hash is pinned
