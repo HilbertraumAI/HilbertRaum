@@ -10,7 +10,7 @@ rem
 rem  "Start HilbertRaum.cmd" /check  names the app it would start and starts
 rem  nothing (a support tool -- see docs\troubleshooting.md).
 rem
-rem  Mirrors apps/desktop/src/main/services/launcher.ts resolveDriveRootFromLauncher.
+rem  tests/integration/launcher-execution.test.ts runs this file.
 rem ============================================================================
 setlocal enableextensions
 

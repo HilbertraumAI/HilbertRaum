@@ -556,8 +556,8 @@ NOT in `assets.ts`**: it lives only in `scripts/prepare-drive.ps1`
 (`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
 **between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
 does not change which models `--with-assets` fetches (a parity test,
-`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match and that both
-fetch the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match, that every id is a committed manifest `--with-assets` can fetch,
+and that both fetch the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
@@ -650,8 +650,7 @@ zip), naming the files to delete and never deleting anything themselves (#235); 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
 > **its own location every launch** (`%~dp0` / `dirname "$0"`), so the same drive works on a second
 > laptop with a different letter/mount and continues the **same encrypted workspace** (success
-> criterion #10). The canonical, unit-tested reference is
-> `apps/desktop/src/main/services/launcher.ts` `resolveDriveRootFromLauncher`; the scripts mirror it.
+> criterion #10). `tests/integration/launcher-execution.test.ts` runs each launcher in a scratch root.
 >
 > **Autorun is dead.** Windows disabled `autorun.inf` from removable drives, so the app **cannot**
 > auto-launch on plug-in (and must not try — it looks like malware). The drive opens a file window and
@@ -1333,6 +1332,7 @@ default build and `--backend cpu`) to refresh the binary before these harnesses 
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `resident-cache-real` | `HILBERTRAUM_RESIDENT_REAL` (the drive root) | real E5 vectors stored through the production codec on the drive: the resident cache's cold build, its warm scan, and a full `searchText` query (a real E5 query embed + the scan) |
 | `resident-cache-bench` | `RUN_RESIDENT_BENCH=1` | the resident vector cache's warm scan against the uncached scan, on synthetic unit vectors (mock only, no sidecar) |
+| `script-execution` `-DryRun` pipeline | `HILBERTRAUM_SCRIPT_DRY_RUN` | the whole builder, dry, on both shells, reaching the canonical verdict on an empty target (needs `npm run build`; ~30 s per leg) |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
 | `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |

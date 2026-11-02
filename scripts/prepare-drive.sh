@@ -13,8 +13,8 @@
 # fast the default set is small but complete for the core features: the default chat model
 # (Ministral 3 8B), the embeddings model, the reranker, the Whisper transcriber model, and
 # the Qwen2.5-VL image-description model (GGUF + mmproj), PLUS both sidecar runtimes
-# (llama.cpp + whisper.cpp) and the OCR language files (deu/eng traineddata for scanned-PDF
-# and photo text recognition, Phase 38 — OS-independent, ~4 MB). The user downloads any
+# (llama.cpp + whisper.cpp) and the OCR language files (deu/eng traineddata plus the osd
+# orientation data, for scanned-PDF and photo text recognition, Phase 38 — OS-independent, ~8 MB). The user downloads any
 # other models (larger chat models) from inside the app. Pass --all-models to fetch every
 # model instead (the sidecar runtimes + OCR files are fetched either way). The OPTIONAL
 # knowledge-pack tools (kiwix-tools, #339 P8-3) are never fetched here — run

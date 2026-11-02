@@ -298,7 +298,7 @@ foreach ($mf in $manifestFiles) {
   $localPath = Get-ManifestField $text 'local_path'
   $sha = (Get-ManifestField $text 'sha256'); if ($sha) { $sha = $sha.ToLower() }
   $url = Get-ManifestField $text 'url'
-  # Optional (24 of the committed manifests carry it) -- used only to tell a complete-but-wrong
+  # Optional (30 of the committed manifests carry it) -- used only to tell a complete-but-wrong
   # file apart from a resumable partial in Invoke-HandleFile.
   $sizeBytes = Get-ManifestField $text 'size_bytes'
   $license = Get-ManifestField $text 'license'
@@ -306,7 +306,7 @@ foreach ($mf in $manifestFiles) {
   $reviewStatus = Get-ManifestField $text 'status'
   # Optional download.withdrawn (issue 196): the publisher deleted the exact file this manifest
   # pins, so the URL above is known-dead. Mirrors planModelDownloads' 'source-withdrawn' task
-  # status (assets.ts is the source of truth; script-drift.test.ts pins both twins). Note values
+  # status (assets.ts is the source of truth; script-execution.test.ts runs both twins). Note values
   # must not contain ' #' -- Get-ManifestField strips inline YAML comments.
   $withdrawn = Get-ManifestField $text 'withdrawn'
 

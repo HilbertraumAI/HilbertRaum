@@ -488,8 +488,8 @@ Rules and behaviour:
   user a doomed multi-GB request). The network-gate banner does not fire for a model that is
   unfetchable for reasons that have nothing to do with the drive's policy.
 - **Fetch scripts**: `fetch-models.{ps1,sh}` print a loud `SKIP … upstream source withdrawn` line
-  and continue — one retired file must not fail a whole drive build. Both twins are pinned against
-  the TS behaviour by `script-drift.test.ts`. Their flat-YAML parser strips inline comments at
+  and continue — one retired file must not fail a whole drive build. `script-execution.test.ts`
+  runs the skip on both twins. Their flat-YAML parser strips inline comments at
   `" #"`, so **a withdrawal note must not contain `" #"`** (write "issue 196", not "issue #196") —
   also asserted in CI.
 - **Ranking**: a withdrawn manifest carries `recommendation_rank: 0` — selectable, never

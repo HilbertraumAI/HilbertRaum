@@ -17,7 +17,7 @@
 #  "Start HilbertRaum.command" --check  names the app it would start and starts
 #  nothing (a support tool -- see docs/troubleshooting.md).
 #
-#  Mirrors apps/desktop/src/main/services/launcher.ts resolveDriveRootFromLauncher.
+#  tests/integration/launcher-execution.test.ts runs this file.
 # ============================================================================
 set -euo pipefail
 

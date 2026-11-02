@@ -5885,7 +5885,6 @@ Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` m
   generators, `verifyDriveModels`, `buildChecksumsJson`.
 - **`services/assets.ts`** — the DIY asset loader logic: `planModelDownloads`, runtime-build
   selection, `verifyDownloadedFile`, injected-fetch download seam.
-- **`services/launcher.ts`** — `resolveDriveRootFromLauncher` (the per-OS launchers mirror it).
 - **`services/preflight.ts`** — the friendly, non-blocking first-run drive check (`runPreflight` IPC).
 - **`services/commercial-drive.ts`** — `planCommercialDrive` + `assertCommercialDrive`, the "is this
   drive sellable?" gate (commercial policy, weights VERIFIED, license reviews APPROVED, no user data).
@@ -13077,7 +13076,7 @@ cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build g
 | `services/audit.ts` | §8 `runtime_events`, 7.11 local-only activity record |
 | `services/security/` + `services/workspace-vault.ts` | 3.5 encryption, 7.9 workspace modes |
 | `services/drive.ts` + `services/assets.ts` | §6 drive layout, §12 packaging |
-| `services/launcher.ts` + `services/preflight.ts` | §6 launchers, §11.4 first-run check |
+| `services/preflight.ts` | §11.4 first-run check |
 | `services/commercial-drive.ts` | §12.2 sellable-drive gate, §13 license reviews |
 | `services/context.ts` | §9 DI service context (`ctx`) wiring all services together |
 | `services/compose-services.ts` | composes/constructs the service graph at startup |

@@ -1127,7 +1127,7 @@ head's own weights + KV.
 
 ### Drive layout, scripts & packaging (Phase 11 live)
 ✅ **`services/drive.ts`** — the canonical, unit-tested reference for drive prep (the scripts mirror it):
-- `DRIVE_OS_DIRS = ['win','mac','linux']`, `DRIVE_LAYOUT_DIRS` (the list itself: see
+- `DRIVE_LAYOUT_DIRS` (the list itself: see
   [`drive-layout.md`](drive-layout.md); `script-drift` holds both prepare-drive scripts to it).
 - `buildDriveJson(opts) → DriveJson` (the `config/drive.json` marker, spec §6 shape);
   `buildPolicyJson({dev?}) → PolicyJson` (snake_case; `allow_model_downloads: true`, update checks off;
@@ -1291,16 +1291,12 @@ head's own weights + KV.
   site — extend the sentinel test when adding events.
 
 ### Plug-and-play distribution (Phase 13 live)
-✅ **`services/launcher.ts`** — `resolveDriveRootFromLauncher(launcherPath, flavor?: 'win32'|'posix'|
-  'auto')` → the drive root (the launcher's own directory; pure path math, no fs). Handles Windows
-  drive-letter + POSIX/macOS paths; throws on empty/relative. **No hardcoded path** — the canonical
-  reference the launcher scripts mirror.
 ✅ **`launchers/`** (repo templates copied to the drive root by the pipeline) — `Start
   HilbertRaum.cmd` (`%~dp0` → set `HILBERTRAUM_DRIVE_ROOT` → spawn `HilbertRaum-*-portable.exe`), `Start
   HilbertRaum.command` (macOS, exec the `.app` binary with the env exported), `start-hilbertraum.sh`
   (Linux, next to the AppImage), `READ ME FIRST.txt` (friendly first-run + SmartScreen/
   Gatekeeper "Run anyway" copy).
-✅ **`services/preflight.ts`** — `runPreflight({ rootPath, measureSpeed?, minFreeBytes? }) →
+✅ **`services/preflight.ts`** — `runPreflight({ rootPath, measureSpeed? }) →
   PreflightResult { rootPath, writable, freeBytes, slowDriveWarning, problems[] }` (spec §11.4 tone;
   non-blocking). Reuses `buildDriveStatus` + `measureDriveSpeed`/`buildWarnings`. `LOW_FREE_SPACE_BYTES
   = 2 GB`. `PreflightResult` lives in `shared/types.ts`. IPC `runPreflight` (`preflight:run`) in
@@ -1321,8 +1317,8 @@ head's own weights + KV.
 ✅ **Packaging/signing** — `electron-builder.yml` `win.signtoolOptions` + `mac.notarize`/
   `hardenedRuntime`/`gatekeeperAssess:false`/`entitlements: build/entitlements.mac.plist`; secrets are
   env-driven + git-ignored. The green gate does NOT sign (it never runs electron-builder).
-✅ **Tests** — `tests/integration/launcher.test.ts` (11: `resolveDriveRootFromLauncher` Win/POSIX/auto/
-  empty/relative; `runPreflight` ok/slow/read-only/low-space/unmeasurable with an injected speed fn) +
+✅ **Tests** — `tests/integration/preflight.test.ts` (ok/slow/read-only/low-space at the shipped floor/
+  unmeasurable) + `tests/integration/launcher-execution.test.ts` +
   `tests/integration/commercial-drive.test.ts` (8: ordered plan + manual package + `--accept-license`
   threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
   placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**

@@ -133,7 +133,7 @@ HILBERTRAUM/
 > **Launchers.** The `Start HilbertRaum.*` files sit at the drive root beside the
 > portable app and set `HILBERTRAUM_DRIVE_ROOT` from **their own location** every launch — never a hardcoded
 > drive letter — so the same drive continues the same encrypted workspace on any laptop (success
-> criterion #10). The canonical resolver is `services/launcher.ts` `resolveDriveRootFromLauncher`.
+> criterion #10). `tests/integration/launcher-execution.test.ts` runs each launcher in a scratch root.
 > A **commercial (sellable) drive** ships `policy.json` in the commercial posture (encryption required,
 > plaintext off, models must verify, no phone-home — model downloads are a permitted user action, but
 > update-checks + telemetry are denied) and contains **no user data** — built + asserted
