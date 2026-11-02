@@ -555,11 +555,26 @@ export function validateManifest(raw: unknown): ValidationResult {
   if (roleRaw === 'vision' && mmproj === undefined) {
     errors.push('"mmproj" projector block is required when role is "vision"')
   }
+  // #752: all-or-nothing, the rule `files:` follows below. The planner fetches only the blocks
+  // that exist, so half of them is a clean multi-GB download of a model that stays `missing`.
+  const hasTopDownload = raw['download'] !== undefined
+  if (isObject(mp)) {
+    const hasProjectorDownload = mp['download'] !== undefined
+    if (hasTopDownload && !hasProjectorDownload) {
+      errors.push(
+        '"mmproj.download" is required when the model declares a top-level "download" (a partial download plan would install a model that cannot start)'
+      )
+    }
+    if (hasProjectorDownload && !hasTopDownload) {
+      errors.push(
+        '"download" is required when "mmproj" declares one (a partial download plan would install a model that cannot start)'
+      )
+    }
+  }
 
   // Optional ADDITIONAL required files (#310): the rest of a multi-file weight, each with its
   // own path + hash (+ optional source). Validated only when present, so every single-file
   // manifest — the whole committed catalog today — validates byte-identically without it.
-  const hasTopDownload = raw['download'] !== undefined
   let files: RequiredFileSpec[] | undefined
   const rawFiles = raw['files']
   if (rawFiles !== undefined) {

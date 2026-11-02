@@ -1038,12 +1038,13 @@ export class EngineDownloadManager {
       const requiredFiles = requiredInstallFiles(plan)
       const missingFiles = requiredFiles.filter((p) => !existsSync(p))
       if (missingFiles.length > 0) {
-        job.status = 'failed'
-        job.error = tMain('main.engine.binaryMissing')
         this.deps.log?.('Engine extraction finished but required files are missing', {
           extractTo: plan.extractTo,
           missing: missingFiles.map((p) => basename(p))
         })
+        await this.clearFailedInstall(plan)
+        job.status = 'failed'
+        job.error = tMain('main.engine.binaryMissing')
         return 'failed'
       }
       if (plan.os !== 'win') {
@@ -1089,6 +1090,8 @@ export class EngineDownloadManager {
         await rm(plan.zipDest, { force: true })
         return 'aborted'
       }
+      // Before the status flips: the renderer refreshes once, on the terminal status.
+      await this.clearFailedInstall(plan)
       job.status = 'failed'
       job.error = friendlyEngineError(err)
       this.deps.log?.('Engine download failed', { error: String(err) })
@@ -1106,10 +1109,8 @@ export class EngineDownloadManager {
     // Remove the previous install before extracting so two builds never mix — but keep the
     // just-downloaded archive and the `cpu/` safety-net subdir (audit fix: the cpu→vulkan
     // upgrade path; a stale root binary would otherwise satisfy the flatten guard).
-    const archiveName = basename(plan.zipDest)
-    for (const entry of await readdir(plan.extractTo)) {
-      if (entry === archiveName || entry === 'cpu') continue
-      await rm(join(plan.extractTo, entry), { recursive: true, force: true })
+    for (const entry of await this.installEntries(plan)) {
+      await rm(entry, { recursive: true, force: true })
     }
 
     const extract = this.deps.extractImpl ?? extractWithTar
@@ -1122,8 +1123,39 @@ export class EngineDownloadManager {
     // by any later read/write through it. Sweep the FINAL layout (after flatten, so a
     // relative link is checked where it will actually live) and refuse the install if any
     // link escapes. Legitimate engine archives carry no escaping links, so this changes
-    // nothing for a good archive.
-    await assertExtractedSymlinksContained(plan.extractTo)
+    // nothing for a good archive. A refusal clears here, ahead of `replaceInstall`'s catch:
+    // a cancel that happened to land in this window must not keep a refused archive (#752).
+    try {
+      await assertExtractedSymlinksContained(plan.extractTo)
+    } catch (err) {
+      await this.clearFailedInstall(plan)
+      throw err
+    }
+  }
+
+  /** What a clean of the install dir removes: all but the archive and the real `cpu/` net. */
+  private async installEntries(plan: RuntimeDownloadPlan): Promise<string[]> {
+    const archiveName = basename(plan.zipDest)
+    const entries = await readdir(plan.extractTo, { withFileTypes: true })
+    return entries
+      .filter((e) => e.name !== archiveName && !(e.name === 'cpu' && e.isDirectory()))
+      .map((e) => join(plan.extractTo, e.name))
+  }
+
+  /**
+   * A failed install leaves nothing installed (#752). The old copy is already gone, and a binary
+   * left here with no marker reads as installed and passes the verifier as `skip-legacy`. A cancel
+   * of a running tar does not come here: that half-extracted folder is #530's to report. `rm`
+   * unlinks a link it meets, never its target. Best-effort, one entry at a time: the failure
+   * itself is what gets reported, and one locked file must not spare the binary sorted after it.
+   */
+  private async clearFailedInstall(plan: RuntimeDownloadPlan): Promise<void> {
+    const entries = await this.installEntries(plan).catch(() => [])
+    for (const entry of entries) {
+      await rm(entry, { recursive: true, force: true }).catch((err: unknown) => {
+        this.deps.log?.('Could not clear a failed engine install', { error: String(err) })
+      })
+    }
   }
 
   /**
@@ -1151,7 +1183,7 @@ export class EngineDownloadManager {
  * `extractTo`. Lexical resolution via `readlink` (not `realpath`) so a BROKEN escaping
  * link is still caught, and no recursion THROUGH links (a link dirent is never a
  * directory dirent, so link cycles cannot loop the walk). The offending link is removed
- * best-effort before throwing — the next install's pre-clean removes the rest.
+ * best-effort before throwing — `install()` then clears the rest (`clearFailedInstall`).
  * Exported for tests.
  */
 export async function assertExtractedSymlinksContained(extractTo: string): Promise<void> {

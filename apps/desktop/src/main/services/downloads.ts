@@ -8,6 +8,9 @@ import { isUnresolvedDownloadResult } from '../../shared/downloads'
 import {
   planModelDownloads,
   downloadToFile,
+  failureReason,
+  flushToDevice,
+  isDiskError,
   modelWeightMaxBytes,
   verifyDownloadedFile,
   ResumeOffsetMismatchError,
@@ -125,6 +128,11 @@ const MAX_TERMINAL_JOBS = 20
  */
 export class DownloadManager {
   private jobs = new Map<string, DownloadJob>()
+  /**
+   * Held until `run()` has settled, not until the job reads terminal (#752, F-33 in the sibling
+   * managers). `cancel()` flips the status at once, but the run can still be closing its stream
+   * on the `.part`; a second start in that window would write to the same file.
+   */
   private active: { jobId: string; controller: AbortController } | null = null
   /** #314: terminal results the renderer dismissed. Session-only like `jobs`, and pruned
    *  alongside it so the set stays bounded by MAX_TERMINAL_JOBS. */
@@ -263,7 +271,8 @@ export class DownloadManager {
     const live = this.activeJob()
     const out: DownloadJob[] = []
     for (const job of this.jobs.values()) {
-      if (job.jobId === live) {
+      // A cancelled job can still hold the run while it unwinds; it is not the user's problem.
+      if (job.jobId === live && job.status !== 'cancelled') {
         out.push({ ...job })
         continue
       }
@@ -288,7 +297,8 @@ export class DownloadManager {
    * Cancelling a job that already reached a terminal state is a no-op. `verifying` is a
    * cancellable state too (BE-4, full-audit 2026-07-10): the SHA-256 over a multi-GB weight
    * on USB takes minutes, and a dropped cancel there let a two-file job start its next file.
-   * `runOne` re-checks the abort signal after the verify returns, before any rename.
+   * The abort stops the hash itself (#752), so the run settles at once instead of minutes later;
+   * `runOne` re-checks the signal after the verify returns, before any rename.
    */
   cancel(jobId: string): DownloadJob {
     const job = this.jobs.get(jobId)
@@ -318,13 +328,9 @@ export class DownloadManager {
     }
   }
 
-  /** The currently running job id, or null. */
+  /** The job whose run has not settled yet, or null. A cancelled job stays here until it has. */
   activeJob(): string | null {
-    if (!this.active) return null
-    const job = this.jobs.get(this.active.jobId)
-    if (!job) return null
-    const live = job.status === 'queued' || job.status === 'downloading' || job.status === 'verifying'
-    return live ? job.jobId : null
+    return this.active?.jobId ?? null
   }
 
   /**
@@ -400,6 +406,12 @@ export class DownloadManager {
     // caps that at a single retry (`allowResume` false → no Range → 200 restart / fresh fetch).
     let allowResume = true
     for (;;) {
+      // A clean restart comes back here past the awaited delete of the bad `.part`. A cancel in
+      // that await must stand: 'downloading' below would overwrite it (#752).
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        return false
+      }
       try {
         // Best-effort Range resume: a kept `.part` (cancelled/crashed earlier attempt)
         // becomes the prefix. The server decides — 206 appends, 200 restarts cleanly.
@@ -456,7 +468,7 @@ export class DownloadManager {
         if (controller.signal.aborted) return false // keep the .part for resume
 
         job.status = 'verifying'
-        const verify = await this.verifyPart(part, task, job)
+        const verify = await this.verifyPart(part, task, job, controller.signal)
         // BE-4 (full-audit 2026-07-10): honour a cancel that landed DURING the hash — before
         // acting on the verify result. Same contract as a mid-download cancel: the `.part` is
         // kept for resume, nothing is renamed into place, and a two-file job stops here. The
@@ -472,28 +484,16 @@ export class DownloadManager {
         if (verify.reason === 'mismatch') {
           // Verify-before-trust: the partial is deleted, the job fails loudly.
           await rm(part, { force: true })
-          job.status = 'failed'
-          job.error = tMain('main.download.checksumMismatch')
           this.deps.log?.('Model download checksum mismatch — partial deleted', {
             modelId: job.modelId,
             expected: task.expectedSha256,
             actual: verify.actual
           })
-          this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
-            modelId: job.modelId,
-            jobId: job.jobId,
-            reason: 'checksum mismatch — file discarded'
-          })
+          this.failJob(job, tMain('main.download.checksumMismatch'), 'checksum mismatch — file discarded')
           return false
         }
         if (verify.reason === 'missing') {
-          job.status = 'failed'
-          job.error = tMain('main.download.fileMissing')
-          this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
-            modelId: job.modelId,
-            jobId: job.jobId,
-            reason: 'file missing before verification'
-          })
+          this.failJob(job, tMain('main.download.fileMissing'), 'file missing before verification')
           return false
         }
 
@@ -526,57 +526,68 @@ export class DownloadManager {
             }
             return settled === 'done'
           } catch (settleErr) {
-            job.status = 'failed'
-            job.error = friendlyDownloadError(settleErr)
+            if (controller.signal.aborted) return false // a stopped hash, not a failure (#752)
             this.deps.log?.('Model download failed settling a complete partial', {
               modelId: job.modelId,
               error: String(settleErr)
             })
-            this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
-              modelId: job.modelId,
-              jobId: job.jobId,
-              reason: String(settleErr).slice(0, 300)
-            })
+            this.failJob(job, friendlyDownloadError(settleErr, hasPartBytes(part)), failureReason(settleErr))
             return false
           }
         }
         // A misaligned 206 resume (the server served a slice starting at the wrong byte): the on-disk
         // `.part` can't be safely continued, so discard it — the NEXT attempt restarts from scratch
         // rather than re-appending onto a poisoned prefix (BUG dl-size-cap-2026-07-03 hardening).
+        // A delete that fails (an AV lock) is the failure to report: thrown from this catch it
+        // would strand the job at 'downloading', the class the 416 branch above guards (#752).
+        let failure: unknown = err
         if (err instanceof ResumeOffsetMismatchError) {
-          await rm(part, { force: true })
-          this.deps.log?.('Model download resume offset mismatch — partial discarded for a clean restart', {
-            modelId: job.modelId
-          })
+          try {
+            await rm(part, { force: true })
+            this.deps.log?.('Model download resume offset mismatch — partial discarded for a clean restart', {
+              modelId: job.modelId
+            })
+          } catch (rmErr) {
+            failure = rmErr
+          }
         }
-        job.status = 'failed'
-        job.error = friendlyDownloadError(err)
-        this.deps.log?.('Model download failed', { modelId: job.modelId, error: String(err) })
-        this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
-          modelId: job.modelId,
-          jobId: job.jobId,
-          reason: String(err).slice(0, 300)
-        })
+        this.deps.log?.('Model download failed', { modelId: job.modelId, error: String(failure) })
+        this.failJob(job, friendlyDownloadError(failure, hasPartBytes(part)), failureReason(failure))
         return false
       }
     }
   }
 
   /**
+   * The one way a job fails, by the OCR manager's rule: a cancel that landed during an awaited
+   * delete stands (#752). The renderer stopped polling on that `cancelled`, so a late `failed`
+   * would turn up later as a failure the user never saw. `reason` is the audit record's, a label.
+   */
+  private failJob(job: DownloadJob, error: string, reason: string): void {
+    if (job.status === 'cancelled') return
+    job.status = 'failed'
+    job.error = error
+    this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+      modelId: job.modelId,
+      jobId: job.jobId,
+      reason
+    })
+  }
+
+  /**
    * The verify-after-download hash (#106): a real multi-GB model-weight hash that
    * bypasses `sha256FileCached` (it hashes the staged `.part`, then `finishVerifiedFile`
    * primes the cache). `verifyDownloadedFile` carries the instrumentation itself; this
-   * wrapper only supplies the model label.
+   * wrapper only supplies the model label. A cancel stops the hash, which rejects (#752): both
+   * of `runOne`'s catches read that as the cancel it is.
    */
   private async verifyPart(
     part: string,
     task: ModelDownloadTask,
-    job: DownloadJob
+    job: DownloadJob,
+    signal: AbortSignal
   ): Promise<VerifyResult> {
-    return verifyDownloadedFile(part, task.expectedSha256, {
-      modelId: job.modelId,
-      file: 'download'
-    })
+    return verifyDownloadedFile(part, task.expectedSha256, { modelId: job.modelId, file: 'download' }, signal)
   }
 
   /**
@@ -600,7 +611,7 @@ export class DownloadManager {
     this.deps.log?.('Completed .part found — verifying in place instead of resuming (F-13)', {
       modelId: job.modelId
     })
-    const verify = await this.verifyPart(part, task, job)
+    const verify = await this.verifyPart(part, task, job, controller.signal)
     // Honour a cancel that landed DURING the hash — keep the `.part` (BE-4 resume contract).
     if (controller.signal.aborted) {
       job.status = 'cancelled'
@@ -610,13 +621,7 @@ export class DownloadManager {
       return 'cancelled'
     }
     if (verify.reason === 'missing') {
-      job.status = 'failed'
-      job.error = tMain('main.download.fileMissing')
-      this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
-        modelId: job.modelId,
-        jobId: job.jobId,
-        reason: 'file missing before verification'
-      })
+      this.failJob(job, tMain('main.download.fileMissing'), 'file missing before verification')
       return 'failed'
     }
     if (verify.reason === 'mismatch') {
@@ -630,7 +635,10 @@ export class DownloadManager {
       })
       return 'restart'
     }
-    // ok (verified) or placeholder (cannot verify): the bytes are complete either way.
+    // ok (verified) or placeholder (cannot verify): the bytes are complete either way. The hash
+    // read them through the page cache, so it says nothing about the device, and a stream that
+    // ended on failure never reached `downloadToFile`'s flush (#752, F-34).
+    flushToDevice(part)
     this.finishVerifiedFile(job, task, hashStore, baseBytes, verify)
     return 'done'
   }
@@ -692,10 +700,26 @@ function sumSizes(tasks: ModelDownloadTask[]): number | null {
   return total
 }
 
-/** Map a low-level fetch/stream error to spec §11.4-toned copy (never blame, stay plain). */
-function friendlyDownloadError(err: unknown): string {
+/** Is anything on the drive for the next start to resume from? */
+function hasPartBytes(part: string): boolean {
+  try {
+    return statSync(part).size > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Map a low-level fetch/stream error to spec §11.4-toned copy (never blame, stay plain). Only a
+ * failure with bytes on the drive may say `main.download.interrupted`, which promises to keep them
+ * (#752): an errno's message names the drive path and its `.part` may be gone, a misaligned resume
+ * has just deleted the `.part`, and a request that failed before its first byte kept nothing.
+ */
+function friendlyDownloadError(err: unknown, partKept: boolean): string {
+  if (err instanceof ResumeOffsetMismatchError) return tMain('main.download.resumeDiscarded')
+  if (isDiskError(err)) return tMain('main.download.writeFailed')
   const raw = err instanceof Error ? err.message : String(err)
-  if (/HTTP \d+/.test(raw)) {
+  if (/HTTP \d+/.test(raw) || !partKept) {
     return tMain('main.download.httpFailed', { reason: raw.replace(/^Download failed: /, '') })
   }
   return tMain('main.download.interrupted', { reason: raw })

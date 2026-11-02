@@ -954,18 +954,24 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           />
           <Button
             size="sm"
-            disabled={mine.status === 'verifying'}
             // Surface a cancel rejection as a friendly error instead of an unhandled
             // promise rejection (audit FE-2). SH-6 (#149): the resolved state writes the
             // module-scoped rememberedJob DIRECTLY (the state effect can't run after an
             // unmount, so a remount used to briefly resume polling a cancelled job) and
-            // both setters take the FE-4 mounted guard.
+            // both setters take the FE-4 mounted guard. Main treats `verifying` as a
+            // cancellable state and stops the hash (BE-4, #752), so no disable here.
             onClick={() =>
               window.api
                 .cancelDownload(mine.jobId)
                 .then((next) => {
                   rememberedJob = next
-                  if (mountedRef.current) setJob(next)
+                  if (!mountedRef.current) return
+                  setJob(next)
+                  // Too late to cancel: the check finished since the last poll. This snapshot
+                  // stops the poll, so the poll's own refresh of the cards never runs.
+                  if (next.status !== 'cancelled') {
+                    void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
+                  }
                 })
                 .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
             }

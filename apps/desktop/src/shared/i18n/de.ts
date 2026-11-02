@@ -2774,6 +2774,12 @@ export const de: Record<keyof typeof en, string> = {
   'main.download.interrupted':
     'Der Download wurde unterbrochen ({reason}). Der fertige Teil bleibt erhalten — beim ' +
     'nächsten Start wird dort weitergemacht.',
+  'main.download.writeFailed':
+    'Die Modelldatei konnte nicht auf diesem Laufwerk gespeichert werden. Prüfe, ob es voll ' +
+    'oder schreibgeschützt ist, und versuch es dann erneut.',
+  'main.download.resumeDiscarded':
+    'Der Server hat den falschen Teil der Datei geschickt, deshalb wurde der bisherige ' +
+    'Download verworfen. Beim nächsten Start beginnt er von vorn.',
   'main.engine.alreadyRunning': 'Die KI-Engine wird bereits heruntergeladen.',
   'main.engine.noSources':
     'Auf diesem Laufwerk wurden keine Engine-Quellen gefunden (runtime-sources.yaml fehlt).',

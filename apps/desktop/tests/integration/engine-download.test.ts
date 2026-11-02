@@ -61,7 +61,8 @@ import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { verifierInert } from '../helpers/binary-fixtures'
 import { bodyFetch, runToEnd } from '../helpers/download-fixtures'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { deferred } from '../helpers/deferred'
+import { hangBudgetMs, within } from '../helpers/hang-budget'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
 // In-app engine (llama.cpp sidecar) downloader: the gates (a closed gate never reaches the
@@ -426,6 +427,26 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     // Without a marker the install is not "current": the next install re-runs cleanly and the
     // pre-spawn verifier treats a binary that landed anyway as legacy.
     expect(existsSync(markerFor(rootPath))).toBe(false)
+  })
+
+  // Unlike a tar that fails by itself (#752): the user stopped this one, and #530's "files damaged"
+  // report plus the #532 reinstall are its documented way back.
+  it('a cancelled extraction leaves the half-extracted folder as it is', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const reached = deferred()
+    const extractImpl: ExtractFn = (_archive, destDir, signal) =>
+      new Promise((_resolve, reject) => {
+        void writeFile(join(destDir, BIN_NAME), 'half').then(() => {
+          signal?.addEventListener('abort', () => reject(new Error('tar extraction cancelled')))
+          reached.resolve()
+        })
+      })
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await within(reached.promise, 'the extraction writing its first file')
+    mgr.cancel(started.jobId)
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    expect(readFileSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME), 'utf8')).toBe('half')
   })
 
   it('a cancel that arrives after the files are complete finishes the install and records it (#516)', async () => {
@@ -795,6 +816,8 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
       expect(job.status).toBe('failed')
       expect(job.error).toMatch(/engine/i)
       expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(false)
+      // A half bundle stays nowhere: its executables would read as installed, with no marker (#752).
+      expect(readdirSync(KIWIX_DIR(rootPath))).toEqual([])
       // Still installable: the next request runs again rather than "already installed".
       const again = await installKiwix(rootPath, manifestsDir)
       expect(again.status).toBe('done')

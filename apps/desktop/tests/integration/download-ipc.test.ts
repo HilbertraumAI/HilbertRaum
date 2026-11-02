@@ -28,7 +28,7 @@ import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import { deferred } from '../helpers/deferred'
-import { bodyFetch, hangingFetch, runUnwound } from '../helpers/download-fixtures'
+import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { sha256 } from '../helpers/manifest-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -116,7 +116,7 @@ function makeCtx(opts: {
   return { ctx, db, rootPath: drive.rootPath }
 }
 
-/** Accepts `cancelled`, which flips before the run ends: a row that cancelled also awaits `runUnwound` before it finishes. */
+/** Accepts `cancelled`, which flips before the run ends: a row that cancelled also awaits `runToEnd` before it finishes. */
 async function waitForTerminal(jobId: string): Promise<DownloadJob> {
   const start = Date.now()
   for (;;) {
@@ -234,7 +234,7 @@ describe('downloadModel happy path (both gates open, injected fake fetch)', () =
     expect((cancelled as DownloadJob).status).toBe('cancelled')
     const finished = await waitForTerminal(job.jobId)
     expect(finished.status).toBe('cancelled')
-    await runUnwound(manager)
+    await runToEnd(manager, job.jobId)
   })
 })
 
@@ -280,7 +280,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     expect(['queued', 'downloading', 'verifying']).toContain(listed[0].status)
 
     await invoke(handlers, IPC.cancelDownload, started.jobId)
-    await runUnwound(manager)
+    await runToEnd(manager, started.jobId)
   })
 
   it('lists a failed job with its error, so the reloaded screen can name the failure', async () => {
@@ -332,7 +332,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     const started = result as DownloadJob
     await invoke(handlers, IPC.cancelDownload, started.jobId)
     expect((await waitForTerminal(started.jobId)).status).toBe('cancelled')
-    await runUnwound(manager)
+    await runToEnd(manager, started.jobId)
     expect(await list()).toEqual([])
   })
 

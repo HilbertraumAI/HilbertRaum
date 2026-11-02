@@ -533,11 +533,14 @@ export interface VerifyResult {
  * excluded from the #108 effective-read sampling at the recording site — and, since #392,
  * from the warmed-path set too: `filePath` here is the staged `.part`, which is renamed away
  * once it verifies, so remembering it would key the set on a path no model ever loads from.
+ *
+ * `signal` (#752) stops the hash, which then rejects (see `sha256File`).
  */
 export async function verifyDownloadedFile(
   filePath: string,
   expectedSha256: string,
-  label: ChecksumLabel = { modelId: null, file: 'download' }
+  label: ChecksumLabel = { modelId: null, file: 'download' },
+  signal?: AbortSignal
 ): Promise<VerifyResult> {
   if (!existsSync(filePath)) return { ok: false, actual: null, reason: 'missing' }
   let bytes: number | null = null
@@ -557,7 +560,7 @@ export async function verifyDownloadedFile(
   )
   let actual: string
   try {
-    actual = await sha256File(filePath)
+    actual = await sha256File(filePath, undefined, signal)
     instrumentation.end(true)
   } catch (err) {
     instrumentation.end(false)
@@ -569,6 +572,45 @@ export async function verifyDownloadedFile(
 }
 
 export type FetchFn = typeof fetch
+
+/** Filesystem error codes: a download that failed on these failed on the DRIVE, not the network. */
+const DISK_ERROR_CODES = new Set([
+  'EACCES',
+  'EPERM',
+  'EROFS',
+  'ENOSPC',
+  'EDQUOT',
+  'EFBIG',
+  'EBUSY',
+  'EIO',
+  'ENODEV',
+  'ENOENT',
+  'EISDIR',
+  'ENOTDIR'
+])
+
+/** Did this failure happen on the drive? An errno that names a path did, whatever its code (#752). */
+export function isDiskError(err: unknown): boolean {
+  const { code, path } = (err ?? {}) as NodeJS.ErrnoException
+  return typeof path === 'string' || (typeof code === 'string' && DISK_ERROR_CODES.has(code))
+}
+
+/**
+ * A content-free label for a download failure (never the message: it carries the URL, and an
+ * errno's carries the drive path). This is what a job's audit record may say about it.
+ */
+export function failureReason(err: unknown): string {
+  const message = err instanceof Error ? err.message : ''
+  if (err instanceof Error && err.name === 'AbortError') return 'aborted'
+  if (isDiskError(err)) return 'write'
+  if (err instanceof ResumeOffsetMismatchError) return 'resume-offset'
+  if (/size cap/.test(message)) return 'size-cap'
+  const http = /HTTP (\d{3})/.exec(message)
+  if (http) return `http-${http[1]}`
+  if (/redirect/i.test(message)) return 'redirect'
+  if (/Refusing/.test(message)) return 'refused-url'
+  return 'network'
+}
 
 /**
  * A `Range` resume whose server 206 `Content-Range` does not START at the byte we asked to continue
@@ -905,25 +947,33 @@ export async function downloadToFile(
     nodeStream.pipe(out)
   })
   // F-34 / CODE-10: the write stream flushed to the OS on 'finish', but neither 'finish' nor the
-  // auto-close fsyncs to the DEVICE. On the app's primary medium (an exFAT USB stick — the #51
-  // hard-unplug habit is explicitly anticipated) a power cut / unplug shortly after completion can
-  // persist the caller's later renameSync + (size,mtime) checksum-cache prime while trailing data
-  // blocks are still only in the page cache — a torn weight the primed cache then reports verified
-  // without re-hashing. Flush the file to the device BEFORE returning (the caller renames only
-  // after this resolves), matching the writeVaultDescriptor/logging.ts fsync-before-rename standard.
-  // Open r+ (write-capable so Windows FlushFileBuffers succeeds; a read handle's would ERROR_ACCESS_
-  // DENIED); best-effort — a flush fault must never fail an otherwise-complete, verified download.
+  // auto-close fsyncs to the DEVICE. Flush BEFORE returning: the caller renames only after this
+  // resolves.
+  flushToDevice(dest)
+  return { status: res.status, received, contentLength }
+}
+
+/**
+ * Flush a staged file to the DEVICE before the caller renames it into place. On the app's primary
+ * medium (an exFAT USB stick — the #51 hard-unplug habit is explicitly anticipated) a power cut /
+ * unplug shortly after completion can persist the later renameSync + (size,mtime) checksum-cache
+ * prime while trailing data blocks are still only in the page cache — a torn weight the primed
+ * cache then reports verified without re-hashing. Matches the writeVaultDescriptor/logging.ts
+ * fsync-before-rename standard. Open r+ (write-capable so Windows FlushFileBuffers succeeds; a read
+ * handle's would ERROR_ACCESS_DENIED); best-effort — a flush fault must never fail an
+ * otherwise-complete, verified download.
+ */
+export function flushToDevice(path: string): void {
   try {
-    const fd = openSync(dest, 'r+')
+    const fd = openSync(path, 'r+')
     try {
       fsyncSync(fd)
     } finally {
       closeSync(fd)
     }
   } catch {
-    /* durability best-effort — the subsequent SHA verify still guards correctness on this run */
+    /* durability best-effort — the SHA verify still guards correctness on this run */
   }
-  return { status: res.status, received, contentLength }
 }
 
 /** Compute the SHA-256 of an in-memory buffer (used by tests + size sanity checks). */

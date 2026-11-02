@@ -1,11 +1,26 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 // Same mock as engine-download.test.ts: the manager never touches electron; this only makes
 // `registerEngineIpc.ts` (whose module top imports ipcMain) importable transitively.
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }
 }))
+// One file the installer's clean-up cannot delete, the way an antivirus scan holds a fresh DLL.
+const seams = vi.hoisted(() => ({ rmRefuses: null as string | null }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('node:fs/promises')>()
+  const mocked = {
+    ...orig,
+    rm: async (...args: Parameters<typeof orig.rm>) => {
+      if (seams.rmRefuses && String(args[0]).endsWith(seams.rmRefuses)) {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      }
+      return orig.rm(...args)
+    }
+  }
+  return { ...mocked, default: mocked }
+})
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +28,7 @@ import { stringify } from 'yaml'
 import {
   EngineDownloadManager,
   assertExtractedSymlinksContained,
+  engineStatus,
   hostRuntimeArch,
   hostRuntimeOs,
   type ExtractFn
@@ -28,6 +44,10 @@ import { bodyFetch, runToEnd } from '../helpers/download-fixtures'
 // any link escapes. These tests drive the sweep directly (crafted directory states — Windows
 // junctions, which need no privilege, or posix symlinks) and once end-to-end through the
 // manager with an injected escaping extractor.
+
+afterEach(() => {
+  seams.rmRefuses = null
+})
 
 /** Create a directory-flavored link that works unprivileged on every OS. */
 function plantDirLink(target: string, linkPath: string): void {
@@ -205,14 +225,18 @@ function makeDrive(): { rootPath: string; manifestsDir: string } {
 }
 
 describe('EngineDownloadManager refuses an archive planting an escaping link (SEC-2)', () => {
-  it('the job fails and no install marker is written', async () => {
+  it('the job fails and nothing of the refused archive stays installed (#752)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     const outside = mkdtempSync(join(tmpdir(), 'hr-contain-victim-'))
     writeFileSync(join(outside, 'keep.txt'), 'x')
     const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const cpuNet = join(extractTo, 'cpu', BIN_NAME)
+    mkdirSync(join(extractTo, 'cpu'), { recursive: true })
+    writeFileSync(cpuNet, 'safety net')
     const escapingExtract: ExtractFn = async (_archive, destDir) => {
       await writeFile(join(destDir, BIN_NAME), 'binary')
       plantDirLink(outside, join(destDir, 'evil'))
+      plantDirLink(outside, join(destDir, 'evil-too')) // the sweep stops at the first, so the clear-up meets this one
     }
     const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: escapingExtract })
     const started = await mgr.start({
@@ -224,9 +248,114 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     expect(job.status).toBe('failed')
     expect(job.error).toBe(tMain('main.engine.extractFailed'))
     expect(existsSync(runtimeMarkerPath(extractTo))).toBe(false)
-    // The extracted binary itself stays behind with no marker, so this row does not claim a clean install dir.
-    expect(existsSync(join(extractTo, 'evil'))).toBe(false) // the sweep removed the offender…
-    expect(existsSync(join(outside, 'keep.txt'))).toBe(true) // …without following the link
+    // A binary left behind with no marker read as installed, and the verifier let it through as `skip-legacy`.
+    expect(existsSync(join(extractTo, BIN_NAME))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+    expect(readdirSync(extractTo)).toEqual(['cpu']) // the safety net is not this archive's to remove…
+    expect(readFileSync(cpuNet, 'utf8')).toBe('safety net')
+    expect(existsSync(join(outside, 'keep.txt'))).toBe(true) // …and neither link was followed
+  })
+
+  // A tar that fails after writing never reaches the sweep, so its files and links would otherwise stay.
+  it('a tar that fails past the binary leaves nothing installed either, and no link (#752)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const outside = mkdtempSync(join(tmpdir(), 'hr-contain-victim-'))
+    writeFileSync(join(outside, 'keep.txt'), 'x')
+    const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const failingExtract: ExtractFn = async (_archive, destDir) => {
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      plantDirLink(outside, join(destDir, 'evil'))
+      throw new Error('tar exited with code 1')
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: failingExtract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: { policyAllows: true, settingAllows: true }
+    })
+    const job = await runToEnd(mgr, started.jobId)
+    expect(job.error).toBe(tMain('main.engine.extractFailed'))
+    expect(readdirSync(extractTo)).toEqual([])
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+    expect(existsSync(join(outside, 'keep.txt'))).toBe(true)
+  })
+
+  // A cancel keeps a half-extracted folder for #530, but a cancel landing on a refusal keeps nothing.
+  it('a cancel that lands while the archive is being refused does not save it (#752)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const outside = mkdtempSync(join(tmpdir(), 'hr-contain-victim-'))
+    const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const box: { mgr?: EngineDownloadManager; jobId?: string } = {}
+    const cancelledExtract: ExtractFn = async (_archive, destDir) => {
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      plantDirLink(outside, join(destDir, 'evil'))
+      box.mgr!.cancel(box.jobId!) // tar has exited: the sweep still runs
+    }
+    box.mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: cancelledExtract })
+    const started = await box.mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: { policyAllows: true, settingAllows: true }
+    })
+    box.jobId = started.jobId
+    expect((await runToEnd(box.mgr, started.jobId)).status).toBe('cancelled')
+    expect(readdirSync(extractTo)).toEqual([])
+  })
+
+  // Past `install()` too: the archive unpacked, and the install still failed.
+  it('a marker that cannot be written leaves nothing installed (#752)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const blockedMarker: ExtractFn = async (_archive, destDir) => {
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      mkdirSync(runtimeMarkerPath(destDir)) // a real errno on every OS
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: blockedMarker })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: { policyAllows: true, settingAllows: true }
+    })
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('failed')
+    expect(readdirSync(extractTo)).toEqual([])
+  })
+
+  it('one file that cannot be deleted does not spare the binary after it (#752)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const LOCKED = '0-locked.dll' // sorts ahead of the binary
+    const failingExtract: ExtractFn = async (_archive, destDir) => {
+      await writeFile(join(destDir, LOCKED), 'scanned by the antivirus')
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      seams.rmRefuses = LOCKED
+      throw new Error('tar exited with code 1')
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: failingExtract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: { policyAllows: true, settingAllows: true }
+    })
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('failed')
+    expect(readdirSync(extractTo)).toEqual([LOCKED])
+  })
+
+  it('a link posing as the cpu/ net is not kept for its name (#752)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const outside = mkdtempSync(join(tmpdir(), 'hr-contain-victim-'))
+    const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const postingExtract: ExtractFn = async (_archive, destDir) => {
+      plantDirLink(outside, join(destDir, 'a-evil'))
+      plantDirLink(outside, join(destDir, 'cpu'))
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: postingExtract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: { policyAllows: true, settingAllows: true }
+    })
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('failed')
+    expect(readdirSync(extractTo)).toEqual([])
   })
 
   it('a clean archive through the same flow still installs (no false positive)', async () => {

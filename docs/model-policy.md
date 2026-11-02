@@ -429,7 +429,7 @@ Rules (validated in `shared/manifest.ts`):
 The same shape (and the same rules) apply to `mmproj.download` and, since #310, to a
 `files[N].download` block — each declares its own source and is validated against that file's own
 `sha256`. A model's `download` blocks are all-or-nothing: see "Manifest fields (required)" above
-for the `files:` rule.
+for the `files:` rule, and the validator rules under the vision role for `mmproj` (#752).
 
 `size_bytes` feeds the progress bar AND the in-app downloader's disk-fill body cap
 (`modelWeightMaxBytes`). The cap is **drift-tolerant** — `size_bytes` grown by a comfortable headroom
@@ -1001,7 +1001,14 @@ download:
 
 Validator rules (added in `shared/manifest.ts`): `mmproj` is **required iff `role: vision`**;
 `mmproj.local_path` non-empty; `mmproj.sha256` a real lower-case hash or `REPLACE_WITH_REAL_HASH`;
-a **real** `mmproj.download.sha256` must equal a **real** `mmproj.sha256` (same file). Install state
+a **real** `mmproj.download.sha256` must equal a **real** `mmproj.sha256` (same file);
+**download all-or-nothing** (#752): a top-level `download` needs an `mmproj.download`
+(`"mmproj.download" is required when the model declares a top-level "download" (a partial download
+plan would install a model that cannot start)`) and the other way round (`"download" is required
+when "mmproj" declares one (…)`). The planner fetches only the blocks that exist, so half of them is
+a clean multi-GB download of a model that stays `missing`. A refused manifest is skipped with a log
+line, so a hand-made manifest that relies on a hand-placed projector leaves out both blocks. The
+`fetch-models` scripts do not apply this rule: they still fetch the GGUF of such a manifest. Install state
 (`services/models.ts`) requires **every** declared file — the GGUF, the mmproj, and any `files:`
 entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
 treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)

@@ -14,6 +14,8 @@ import type {
 import { validateRuntimeSources, type OcrSources } from '../../shared/runtime-sources'
 import {
   downloadToFile,
+  failureReason,
+  isDiskError,
   planOcrDownloads,
   verifyDownloadedFile,
   type FetchFn,
@@ -258,27 +260,6 @@ const LIVE: ReadonlySet<OcrInstallJob['status']> = new Set([
 ])
 
 const MAX_TERMINAL_JOBS = 10
-
-/** Filesystem error codes: a download that failed on these failed on the DRIVE, not the network. */
-const DISK_ERROR_CODES = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EBUSY', 'EIO', 'ENOENT', 'EISDIR', 'ENOTDIR'])
-
-function isDiskError(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException | null)?.code
-  return typeof code === 'string' && DISK_ERROR_CODES.has(code)
-}
-
-/** A content-free label for a download failure (never the message — it carries the URL). */
-function failureReason(err: unknown): string {
-  const message = err instanceof Error ? err.message : ''
-  if (err instanceof Error && err.name === 'AbortError') return 'aborted'
-  if (isDiskError(err)) return 'write'
-  if (/size cap/.test(message)) return 'size-cap'
-  const http = /HTTP (\d{3})/.exec(message)
-  if (http) return `http-${http[1]}`
-  if (/redirect/i.test(message)) return 'redirect'
-  if (/Refusing/.test(message)) return 'refused-url'
-  return 'network'
-}
 
 /**
  * Owns the in-app OCR install job (#410). One at a time; a single job fetches every pinned

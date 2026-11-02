@@ -901,6 +901,15 @@ describe('verifyDownloadedFile', () => {
     expect(res.reason).toBe('placeholder')
   })
 
+  it('rejects when its signal stops the hash, rather than give a verdict (#752)', async () => {
+    const root = tempDir('hilbertraum-verify-')
+    const file = join(root, 'w.gguf')
+    writeFileSync(file, 'abc')
+    await expect(
+      verifyDownloadedFile(file, sha256('abc'), undefined, AbortSignal.abort())
+    ).rejects.toThrow(/cancelled/i)
+  })
+
   it('reports a missing file', async () => {
     const root = tempDir('hilbertraum-verify-')
     const res = await verifyDownloadedFile(join(root, 'gone.gguf'), sha256('abc'))

@@ -1328,7 +1328,7 @@ describe('cancellable verification (#420)', () => {
     await expect(
       verifyChecksum(file, bigFileSha(), undefined, () => controller.abort(), undefined, controller.signal)
     ).rejects.toThrow(/cancelled/i)
-    // The caller rejects first; the read's own catch closes the pair after it. Verifying again before that close joins the dying read.
+    // The caller rejects first; the read's own catch closes the pair after it.
     await until(() => doneMarks(readLog).length > 0, 'the cancelled read closing')
     expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
     expect(checksumCacheStats.computed).toBe(before)
@@ -1390,6 +1390,22 @@ describe('cancellable verification (#420)', () => {
     await until(() => doneMarks(readLog).length > 0, 'the abandoned read closing')
     expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
     expect(checksumCacheStats.computed).toBe(before)
+  })
+
+  // The stream closes some ticks after the abort. A caller landing in that gap used to join the
+  // dying read and reject, which from the §7.4 start gate fails a model start with "Hashing was cancelled".
+  it('a caller arriving after every waiter left gets its own read, not the abandoned one (#752)', async () => {
+    const file = bigFile()
+    const expected = bigFileSha()
+    const before = checksumCacheStats.computed
+    const controller = new AbortController()
+    const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
+    controller.abort()
+    const gate = verifyChecksum(file, expected)
+
+    await expect(screen).rejects.toThrow(/cancelled/i)
+    expect((await gate).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1)
   })
 
   // ---- the persistence guarantees a cancelled hash must leave alone -------------------

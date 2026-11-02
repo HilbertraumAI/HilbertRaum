@@ -1000,7 +1000,8 @@ head's own weights + KV.
   **`loadPolicy(configDir, onWarn?, opts?)`** → `{ policy, policyFilePresent, driveFilePresent,
   allowNetworkByDefault }` (reads optional `policy.json` + `drive.json`; with no usable
   `policy.json`, `opts.isDev: false`, a packaged build, takes `STRICT_POLICY` on a provisioned dir and
-  `STANDALONE_POLICY` on an unprovisioned one).
+  `STANDALONE_POLICY` on an unprovisioned one). The result is cached per config dir; each warning is
+  told once, to the first reader that passes `onWarn`, whichever read found it (#752).
 - **`resolveNetwork(policy, allowNetworkSetting)`** → `{ networkAllowedByPolicy, networkAllowed,
   offlineMode }` (effective = policy ∧ setting). **`buildPolicyStatus(configDir, allowNetworkSetting,
   onWarn?, opts?)`** → `PolicyStatus` (the `getPolicy()` IPC shape; `telemetryAllowed` hardcoded false).
@@ -1184,9 +1185,11 @@ head's own weights + KV.
 - `selectRuntimeBuild(sources, {os, arch, backend?}) → RuntimeBuild | null` (default = first os/arch
   match = the CPU build) · `planRuntimeDownload(root, build, version) → {url, zipDest, extractTo,
   binaryPath, sha256, ...}` (escape-guarded) · `runtimeBinaryName(os)`.
-- `verifyDownloadedFile(path, expected) → {ok, actual, reason}` (placeholder/missing/mismatch are NOT a
-  pass) · `downloadToFile(url, dest, {fetchImpl?, onProgress?})` (injected fetch) ·
-  `formatAssetPlan(modelTasks, runtimePlan)`.
+- `verifyDownloadedFile(path, expected, label?, signal?) → {ok, actual, reason}` (placeholder/missing/
+  mismatch are NOT a pass; an aborted `signal` rejects, #752) · `downloadToFile(url, dest, {fetchImpl?,
+  onProgress?})` (injected fetch) · `flushToDevice(path)` (best-effort fsync before a rename) ·
+  `isDiskError(err)` · `failureReason(err)` (a content-free label for a failed download, never its
+  message) · `formatAssetPlan(modelTasks, runtimePlan)`.
 ✅ **`scripts/`** (self-contained, dual `.ps1`/`.sh`, OS-native downloader; `.ps1` pure ASCII):
 - `fetch-models.{ps1,sh}` — `-Target`/`--target` (req), `-Only`/`--only`, `-AcceptLicense`/
   `--accept-license`, `-DryRun`/`--dry-run`. Per `download`-block manifest: download (resume via
@@ -1224,7 +1227,8 @@ head's own weights + KV.
   `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
   `DownloadManager({ fetchImpl?, log?, audit?, onModelInstalled? })` with `start({rootPath, manifest,
   gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
-  (keeps the `.part`), `activeJob()`, and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`.
+  (keeps the `.part`), `activeJob()` (held until the run settles, so a cancelled job stays there until
+  it has, #752), and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`.
   `list()` returns snapshots of the active job (if any) plus every retained terminal job that is
   still UNRESOLVED and not dismissed, in creation order — never a verified `done`, never a
   `cancelled` one. `dismiss(jobId)` records the id (unknown ids are a no-op) so `list()` stops
