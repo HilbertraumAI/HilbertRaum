@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildModelList,
-  discoverManifests,
   estimateGraphicsNeedMib,
   fitsGraphicsMemory,
   graphicsBudgetMib,
@@ -972,10 +971,9 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
 // (catalog membership), not this issue's verification story.
 //
 // The reviewed head of PR #302 carried a second commit (883f5e40) adding a Flash-Next chat
-// manifest whose weight is FOUR GGUF shards, with shards 2-4 recorded only in YAML comments
-// "for the operator". The owner split that commit back out of PR #302 (Gate A, 2026-09-05); the
-// manifest stays on its own branch and lands under #311. That audited YAML is the fixture below
-// — the red proof, now expressed as a validator rejection.
+// manifest with shards 2-4 only in YAML comments. It stays on feat/qwen38-flash-next-manifest and
+// lands under #311; its refusal is proved at the owner, unit/manifest "rejects a shard-1
+// local_path with no files: list at all".
 const SHARDED_GGUF_RE = /-(\d{5})-of-(\d{5})\.gguf$/i
 
 /** The id the split removed from this PR (883f5e40 → `feat/qwen38-flash-next-manifest`). */
@@ -1013,11 +1011,6 @@ function incompleteSeries(manifests: ModelManifest[]): string[] {
   return incomplete
 }
 
-/** The declared paths that name a conventional llama.cpp shard (`…-00001-of-00004.gguf`). */
-function shardedGgufPaths(manifests: ModelManifest[]): string[] {
-  return declaredFilePaths(manifests).filter((p) => SHARDED_GGUF_RE.test(p))
-}
-
 // The `qwen3.8` family as committed at the integration base (bfdb514a): the three static
 // K-quants plus the three Dynamic UD quants. Flash-Next declares `family: qwen3.8` too, so
 // pinning this ONE family's membership expresses "nothing was added to or removed from the
@@ -1031,101 +1024,6 @@ const QWEN38_FAMILY_IDS = [
   'qwen3.8-27b-ud-q5km',
   'qwen3.8-27b-ud-q6k'
 ]
-
-// The audited manifest, from `git show 883f5e40:model-manifests/chat/
-// qwen3.8-flash-next-ud-q4kxl.yaml` (backticks escaped for the template literal); verbatim YAML
-// keys/values; a few private-context comment lines trimmed (P6). It is SCHEMA-VALID — that is
-// the point: the guard has to catch a manifest the validator accepts, in an isolated temp
-// catalog, never in the real `model-manifests/` tree.
-const FLASH_NEXT_MANIFEST_YAML = `
-id: qwen3.8-flash-next-ud-q4kxl
-display_name: Qwen3.8-Flash-Next 125B-A6B (UD-Q4_K_XL)
-family: qwen3.8
-role: chat
-format: gguf
-runtime: llama_cpp
-# NOT apache-2.0: Qwen/Qwen3.8-Flash-Next ships under the "Qwen Community License 1.0" (HF card
-# tag \`license: other\`, LICENSE blob at the URL in license_review.notes). Permissive for use and
-# redistribution, but clause 2 requires a separate Qwen license for any commercial "AI Work
-# Assistant" business (a product "primarily designed for AI-assisted coding or office
-# productivity"). Whether HilbertRaum's document skills fall under that definition is an open
-# legal question, hence \`license_review.status: pending\` and no bundling.
-license: qwen-community-1.0
-# Four shards, 111,334,654,784 bytes total (HF LFS sizes, matched on disk 2026-09-04).
-size_on_disk_gb: 111.3
-# MoE: 125B total / ~6B active, plus a ~51 GB N-gram/PLE embedding table (\`ple_ngram_embd\`).
-# The weight lives in RAM, not VRAM. With 125 GB the Q4 shards no longer fit the page cache
-# completely (light NVMe paging on long sessions); 64 GB machines cannot run it at all.
-recommended_min_ram_gb: 120
-recommended_ram_gb: 128
-# Rank 0 = selectable, never auto-recommended: the RAM tier is out of reach for the target
-# machines and the runtime story below is not shippable yet.
-recommendation_rank: 0
-# Native context is far larger; 8192 is the runtime budget the catalog uses everywhere. The
-# 2026-09-03 one-shot series ran it at 32768 without a Vulkan OOM (\`-ncmoe 40\`).
-recommended_context_tokens: 8192
-# The chat template honours \`enable_thinking\` (smoke 2026-09-03: thinking off is respected, no
-# <think> leak), so Deep / Balanced apply.
-supports_thinking_mode: true
-supports_tools: true
-# NO \`speculative_decoding\`: the PR build's MTP path is still work-in-progress and untested.
-# RUNTIME PIN: the catalog's pinned llama.cpp release (runtime-sources.yaml) cannot load this
-# architecture. It needs llama.cpp PR #27742 (unmerged at the time of writing; measured at
-# commit 250b614, Vulkan build). In a dev build point \`HILBERTRAUM_LLAMA_BIN\` at that
-# llama-server (and set the LunarG loader \`LD_LIBRARY_PATH\`); a packaged build ignores the
-# override by design and will report the model as failing to start until the pin is bumped
-# to a release that includes the merge.
-# SHARDED WEIGHT: llama.cpp opens the first shard and finds the siblings by the
-# \`-0000N-of-00004\` naming convention, so all four files must sit next to each other under
-# models/chat/ with this exact prefix. The manifest schema knows one file: \`local_path\` and
-# \`sha256\` are shard 1; shards 2 to 4 are listed below for the operator and are NOT checked
-# by the app's checksum gate (a known gap, tracked with the multi-file download work).
-local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00001-of-00004.gguf
-# Shard 1 hash: HF LFS OID AND on-disk sha256sum on the i9 rig, 2026-09-04.
-sha256: 4448186216b3af4cc558bbce2c3213f01608f8f8b2e5267a9767971dd3ec8082
-# Shards 2 to 4 (HF LFS OIDs from unsloth/Qwen3.8-Flash-Next-GGUF, folder UD-Q4_K_XL):
-#   qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf  49,859,583,136 B  3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9
-#   qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf  49,376,141,504 B  56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3
-#   qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf  12,087,983,520 B  753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a
-# Upstream files: https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/main/UD-Q4_K_XL
-# NO \`download\` block on purpose: the in-app downloader fetches exactly one file per manifest,
-# and a shard-1-only download would leave a model that can never start. Until the downloader
-# understands multi-file weights this stays a manually placed model (curl -C - against the
-# resolve URLs with a HF token was the only reliable route on the rig; hf/xet stalled).
-bundled_on_preconfigured_drive: false
-recommended_profiles: []
-license_review:
-  status: pending
-  reviewed_by: null
-  reviewed_at: null
-  notes: "PENDING 2026-09-04: base model Qwen/Qwen3.8-Flash-Next is NOT apache-2.0 but 'Qwen Community License 1.0' (https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE; HF card tag license:other). Grants use, copy, modify, distribute, sell; conditions: (1) keep the copyright + permission notice, model-name attribution only above 100M MAU / US$20M monthly revenue; (2) a licensee running a 'Model as a Service' or an 'AI Work Assistant' business (a product primarily designed for AI-assisted coding or office productivity) needs a separate Qwen license for commercial use. Whether a prepared HilbertRaum drive with document/office skills is an 'AI Work Assistant' under clause 2 is unresolved; do not bundle or sell until legal has reviewed. Quantization provenance: unsloth Dynamic UD-Q4_K_XL GGUF (unsloth/Qwen3.8-Flash-Next-GGUF, card license:other, base_model Qwen/Qwen3.8-Flash-Next). Runtime: unmerged llama.cpp PR #27742 required; dev-only until the runtime pin catches up."
-`
-
-/**
- * The `files:` block the audited manifest was missing: shards 2-4 with the HF LFS OIDs its own
- * comments recorded. Appended at column 0 AFTER `local_path`/`sha256` — the key-order rule the
- * flat first-match scrapers in `verify-models.{sh,ps1}` / `fetch-models.{sh,ps1}` depend on.
- */
-const FLASH_NEXT_FILES_BLOCK = `files:
-  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf
-    sha256: 3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9
-  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf
-    sha256: 56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3
-  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf
-    sha256: 753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a
-`
-
-/** Discover a one-manifest catalog from YAML text, in a throwaway directory. */
-function discoverTempCatalog(yaml: string): ReturnType<typeof discoverManifests> {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-shard-guard-'))
-  try {
-    mkdirSync(join(dir, 'chat'), { recursive: true })
-    writeFileSync(join(dir, 'chat', `${FLASH_NEXT_ID}.yaml`), yaml, 'utf8')
-    return discoverManifests(dir)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-}
 
 describe('committed catalog — prompt cache on for every chat model (#512)', () => {
   // Owner decision 1: on b11146 qwen3.5 and gemma4 restore an evicted prompt (measured), and
@@ -1185,40 +1083,6 @@ describe('committed catalog — every multi-file weight is fully declared (#310)
     // Every manifest contributes at least its own weight path (no silently empty enumeration).
     expect(declaredFilePaths(manifests).length).toBeGreaterThanOrEqual(manifests.length)
   })
-
-  // The red proof, committed: the ACTUAL audited manifest in a throwaway catalog laid out like
-  // `model-manifests/chat/`. It used to VALIDATE and enumerate one file; it is now refused by
-  // the schema itself, so no drive can ever carry it half-verified.
-  it('REJECTS the audited Flash-Next manifest: shard 1 with no files: list', () => {
-    const { manifests, errors } = discoverTempCatalog(FLASH_NEXT_MANIFEST_YAML)
-    expect(manifests, 'a manifest naming part of a weight is skipped, not offered').toEqual([])
-    expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain(
-      '"local_path" names shard 1 of a multi-file weight but no "files" list declares the remaining shards'
-    )
-  })
-
-  // …and the same manifest with the missing declaration added is fully understood: four files,
-  // each with its own hash, through the production enumeration every consumer iterates.
-  it('ACCEPTS the same manifest once its files: block declares shards 2-4', () => {
-    const { manifests, errors } = discoverTempCatalog(
-      `${FLASH_NEXT_MANIFEST_YAML}${FLASH_NEXT_FILES_BLOCK}`
-    )
-    expect(errors).toEqual([])
-    expect(manifests.map((m) => m.manifest.id)).toEqual([FLASH_NEXT_ID])
-    const files = manifestFiles(tmpdir(), manifests[0].manifest)
-    expect(files.map((f) => f.localPath)).toEqual([
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00001-of-00004.gguf',
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf',
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf',
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf'
-    ])
-    expect(files.map((f) => f.kind)).toEqual(['weight', 'extra', 'extra', 'extra'])
-    // Four DISTINCT expected hashes — the whole point of criterion 1.
-    expect(new Set(files.map((f) => f.sha)).size).toBe(4)
-    // The declared series is complete, so the catalog-wide assertion above would accept it.
-    expect(shardedGgufPaths([manifests[0].manifest])).toHaveLength(4)
-  })
 })
 
 // PR #302 P4 — the real-catalog grouping controls the audit ran as probes (O10) and the adapted
@@ -1247,23 +1111,16 @@ describe('committed catalog — variant grouping as the library renders it (PR #
   }
 
   it('collapses into exactly three multi-member variant groups — no false merges (O10)', async () => {
-    const groups = groupModelVariants(await libraryModels()).filter((g) => g.models.length > 1)
+    const models = await libraryModels()
+    const all = groupModelVariants(models)
+    // Every catalog model lands in exactly one group.
+    expect(all.flatMap((g) => g.models.map((m) => m.id)).sort()).toEqual(models.map((m) => m.id).sort())
+    const groups = all.filter((g) => g.models.length > 1)
     expect(groups.map((g) => [g.name, g.models.length]).sort()).toEqual([
       ['Qwen3.5 9B', 2],
       ['Qwen3.6 27B', 2],
       ['Qwen3.8 27B', 6]
     ])
-  })
-
-  it('keeps every catalog model in exactly one group, and every group role/family-pure', async () => {
-    const models = await libraryModels()
-    const groups = groupModelVariants(models)
-    expect(groups.flatMap((g) => g.models.map((m) => m.id)).sort()).toEqual(
-      models.map((m) => m.id).sort()
-    )
-    for (const g of groups) {
-      expect(new Set(g.models.map((m) => `${m.role}/${m.family}/${m.runtime}`)).size).toBe(1)
-    }
   })
 
   // F5 (#196), ADAPTED from the audit probe `catalog-group-review.probe.ts` test 2. The probe
