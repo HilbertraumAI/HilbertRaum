@@ -377,13 +377,17 @@ fi
 # be present with a matching sha256 (plain files — the hash IS the install state).
 if [[ $DRY_RUN -eq 0 && -f "$TARGET/model-manifests/runtime-sources.yaml" ]]; then
   ocr_top=""; ocr_lang=""; ocr_sha=""; ocr_dest=""
+  # The loop below calls this between a match and its BASH_REMATCH read, so it must not run
+  # a `=~` of its own: that clobbers the caller's capture, and `set -u` ends the script on
+  # the second OCR file (#765). Hence grep for the hash test, and the hash from stdin: by
+  # filename, a backslash path (git-bash on Windows) prints "\<hash>" and never matches.
   check_ocr_file() {
     [[ -z "$ocr_lang" ]] && return 0
     if [[ ! -f "$TARGET/$ocr_dest" ]]; then
       PROBLEMS+=("ocr: $ocr_dest missing (run fetch-runtime --family ocr)")
-    elif [[ "$ocr_sha" =~ ^[a-f0-9]{64}$ ]]; then
-      if command -v sha256sum >/dev/null 2>&1; then ocr_actual="$(sha256sum "$TARGET/$ocr_dest" | awk '{print $1}')"
-      else ocr_actual="$(shasum -a 256 "$TARGET/$ocr_dest" | awk '{print $1}')"; fi
+    elif printf '%s\n' "$ocr_sha" | grep -Eq '^[a-f0-9]{64}$'; then
+      if command -v sha256sum >/dev/null 2>&1; then ocr_actual="$(sha256sum < "$TARGET/$ocr_dest" | awk '{print $1}')"
+      else ocr_actual="$(shasum -a 256 < "$TARGET/$ocr_dest" | awk '{print $1}')"; fi
       if [[ "$ocr_actual" != "$ocr_sha" ]]; then
         PROBLEMS+=("ocr: $ocr_dest checksum mismatch (re-run fetch-runtime --family ocr)")
       fi
