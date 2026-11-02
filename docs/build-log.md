@@ -32,6 +32,10 @@
 Retired from `BUILD_STATE.md` on 2026-11-01 (preamble budget, making room for the #753 entry). Its record is unchanged:
 `rag-design.md` §17 "#627". Citations of that entry now resolve here. Text below is byte-identical to what was removed.
 
+_2026-10-13 — **#663 — knowledge packs decode HTML 4.01's named entities (`fix/663-named-entities`).** `decodeEntities` knew 19 names, so zimit pages delivered `we&rsquo;ll` (1,680
+on 15 htdp.org pages; `&raquo;` on every PEP). Now HTML 4.01's 252 + `apos` (owner call: curated, not HTML5's 2,231); a name may carry digits (`&sup2;`); a `Map`, not an object (`&toString;`
+decoded to function source). 2,672 pages: German Wikipedia + 9 archives byte-identical, 0 undecoded left on the other 5; real app 8 → 0. Record: `rag-design.md` §17 "#663".
+The 2026-10-27 master read covers it (all six floors pass). Open: HTML5-only names stay verbatim._
 _2026-10-13 — **#627 — a crawled site's footer and menu stay out of a knowledge pack; code keeps its indentation (`fix/627-zim-footer-code-indent`).** Every gobyexample page
 delivered its `<p class="footer">`; 0 of 1,720 / 0 of 38 indented code lines survived (gobyexample's code is all in table cells). Now a `p`/`div`/`section` whose class has an
 exact furniture token is dropped — the issue's `\b` draft also hit Wikipedia's `zim-footer` (1,322/1,500 pages) and Read the Docs' article wrappers, refused — and `<pre>`
