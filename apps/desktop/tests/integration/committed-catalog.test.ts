@@ -176,7 +176,8 @@ describe('committed catalog — rules over every manifest', () => {
         license: doc.license,
         license_url: download.license_url,
         status: review.status,
-        withdrawn: download.withdrawn
+        withdrawn: download.withdrawn,
+        bundled_on_preconfigured_drive: doc.bundled_on_preconfigured_drive
       }
       for (const [key, value] of Object.entries(parsed)) {
         expect(flatField(text, key), `${path}: ${key}`).toBe(String(value ?? ''))
@@ -856,6 +857,31 @@ describe('committed catalog — the single-manifest roles (TQ-2)', () => {
     ])
     // Fetched with the weight: dictation needs both, and the wrapper finds this one by its name.
     expect(whisper!.files?.[0].download, 'the VAD file has a source').toBeDefined()
+  })
+})
+
+// #766 (owner call 2026-11-02): a preconfigured Kit preloads its bundled set and lists every other manifest for in-app
+// download. The set is an owner decision, so its ids are literals. The builder fetches only these and the sell gate needs
+// each one VERIFIED and approved, so a bundled manifest with no source, a withdrawn one, a placeholder hash or an open
+// review makes every Kit build fail.
+describe('committed catalog — the Kit bundled set (#766)', () => {
+  it('bundles chat, embeddings and the transcriber, each one fetchable, verifiable and approved', () => {
+    const bundled = committedManifests().filter((m) => m.bundledOnPreconfiguredDrive)
+    expect(bundled.map((m) => m.id).sort()).toEqual([
+      'multilingual-e5-small-q8',
+      'qwen3-4b-instruct-q4',
+      'whisper-small-multilingual'
+    ])
+    for (const m of bundled) {
+      expect(m.licenseReview.status, `${m.id} license review`).toBe('approved')
+      for (const f of manifestFiles(tmpdir(), m)) expect(isRealSha256(f.sha), `${f.localPath} real sha256`).toBe(true)
+      // Every file's own source: fetch-models skips a model whose projector or extra file is withdrawn too.
+      const sources = [m.download, ...(m.mmproj ? [m.mmproj.download] : []), ...(m.files ?? []).map((f) => f.download)]
+      for (const d of sources) {
+        expect(d, `${m.id}: a file with no download`).toBeDefined()
+        expect(d?.withdrawn, `${m.id}: a withdrawn source`).toBeUndefined()
+      }
+    }
   })
 })
 

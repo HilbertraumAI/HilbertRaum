@@ -7,7 +7,7 @@
   The master pipeline that ties Phase 11 + Phase 12 + signing together. Runs, in order:
 
     1. prepare-drive  -Force          # commercial policy (encrypted, network denied)
-    2. fetch-models   -AcceptLicense  # verified weights
+    2. fetch-models   -Bundled        # the bundled set's verified weights (#766)
     3. fetch-runtime  -Os win|mac|linux  # verified llama.cpp sidecar for EVERY shipped OS
     4. package + sign + notarize      # MANUAL (secrets never in the repo) -- see below
     5. copy launcher + portable app + user docs onto the drive root
@@ -145,9 +145,11 @@ $prep = @{ Target = $Target; Force = $true }
 if ($DryRun) { $prep.DryRun = $true }
 Run 'prepare-drive.ps1' $prep
 
-# --- 2. Download + verify the model weights ----------------------------------------
-Step 2 'Download + verify the model weights'
-$models = @{ Target = $Target }
+# --- 2. Download + verify the bundled model weights --------------------------------
+# A Kit preloads only its bundled set (bundled_on_preconfigured_drive: true, #766). Every
+# other manifest stays on the drive as the in-app download catalog.
+Step 2 'Download + verify the bundled model weights'
+$models = @{ Target = $Target; Bundled = $true }
 if ($AcceptLicense) { $models.AcceptLicense = $true }
 if ($DryRun) { $models.DryRun = $true }
 Run 'fetch-models.ps1' $models
@@ -306,7 +308,10 @@ if (Test-Path $userSkillsDir) {
 }
 # License gate (assertCommercialDrive parity, spec 13): every shipped model's
 # license_review.status must be 'approved'. -AcceptLicense is download-time acceptance,
-# NEVER a substitute for the redistribution review a sold drive needs.
+# NEVER a substitute for the redistribution review a sold drive needs. A model ships when
+# it is bundled or its weight is on the drive (#766); every other manifest is the in-app
+# download catalog, where the model's own license gate applies. A model with only its
+# projector or an extra file on the drive fails the weight gate below and the canonical one.
 if (-not $DryRun) {
   $driveManifests = Join-Path $Target 'model-manifests'
   if (Test-Path $driveManifests) {
@@ -314,13 +319,18 @@ if (-not $DryRun) {
     foreach ($mf in $mfFiles) {
       $text = Get-Content -Path $mf.FullName -Raw
       # Only model manifests (runtime-sources.yaml has no local_path).
-      if ($text -notmatch '(?m)^\s*local_path\s*:') { continue }
+      if (-not ($text -match '(?m)^\s*local_path\s*:\s*(.+?)\s*$')) { continue }
+      $mfLocal = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
+      $mfBundled = ($text -match '(?m)^\s*bundled_on_preconfigured_drive\s*:\s*true\b')
+      if (-not $mfBundled -and -not (Test-Path -LiteralPath (Join-Path $Target ($mfLocal -replace '/', [IO.Path]::DirectorySeparatorChar)))) { continue }
       $reviewStatus = $null
       if ($text -match '(?m)^\s*status\s*:\s*(.+?)\s*$') {
         $reviewStatus = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
       }
       if ($reviewStatus -ne 'approved') {
-        $problems += "license_review not approved: $($mf.BaseName) (status: $(if ($reviewStatus) { $reviewStatus } else { 'missing' }))"
+        # A drive built before #766 carries such a weight; the fix is deleting it, not the review.
+        $mfHint = if ($mfBundled) { '' } else { " -- not bundled, its weight is on the drive: delete $mfLocal to list it for in-app download" }
+        $problems += "license_review not approved: $($mf.BaseName) (status: $(if ($reviewStatus) { $reviewStatus } else { 'missing' }))$mfHint"
       }
     }
   } else {
@@ -430,12 +440,13 @@ if (-not $DryRun) {
     }
   }
 }
-# Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated -- not a
-# manual "confirm it yourself" instruction. UNVERIFIED/MISSING/MISMATCH all fail here.
+# Weight gate (assertCommercialDrive parity): every weight the Kit ships VERIFIED, at least
+# one model bundled (#766), automated -- not a manual "confirm it yourself" instruction.
+# UNVERIFIED/MISSING/MISMATCH all fail here.
 if (-not $DryRun) {
   $global:LASTEXITCODE = 0
-  & (Join-Path $PSScriptRoot 'verify-models.ps1') -Target $Target -Strict
-  if ($LASTEXITCODE -ne 0) { $problems += 'weights: not every weight is VERIFIED (strict verify failed)' }
+  & (Join-Path $PSScriptRoot 'verify-models.ps1') -Target $Target -Kit
+  if ($LASTEXITCODE -ne 0) { $problems += 'weights: verify-models -Kit failed (a shipped weight is not VERIFIED, or no model is bundled)' }
 }
 if ($DryRun) { Write-Host '  (dry run: weight verification skipped; the canonical gate still runs)' }
 # Canonical gate (#233, #234): the verdict is assertCommercialDrive()'s, run through the

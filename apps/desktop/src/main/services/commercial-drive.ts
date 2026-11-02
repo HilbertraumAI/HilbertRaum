@@ -21,7 +21,7 @@ import {
   type RuntimeDownloadPlan,
   type SidecarFamilySpec
 } from './assets'
-import { sha256File } from './models'
+import { manifestFiles, sha256File } from './models'
 import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './drive'
 
 // Commercial-drive pipeline + final posture assertion (spec §12.2).
@@ -144,13 +144,14 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
     },
     {
       id: 'fetch-models',
-      title: 'Download + verify the model weights',
-      command: `fetch-models --target ${target}${acceptFlag}`,
+      title: 'Download + verify the bundled model weights',
+      command: `fetch-models --target ${target} --bundled${acceptFlag}`,
       manual: false,
       description:
-        'Fetch each weight from its manifest download URL, SHA-256-verify before it counts ' +
-        'as installed. A sold drive needs a redistribution-permitting license whose ' +
-        'license_review.status is approved (spec §13).'
+        'Fetch the weights of the bundled set (bundled_on_preconfigured_drive, #766) from their ' +
+        'manifest download URLs, SHA-256-verified before they count as installed. Every other ' +
+        'manifest stays on the drive as the in-app download catalog. A preloaded weight needs a ' +
+        'redistribution-permitting license whose license_review.status is approved (spec §13).'
     },
     {
       id: 'fetch-runtime',
@@ -213,8 +214,9 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
       manual: false,
       description:
         'Automated gate: commercial policy (encryption required, plaintext off, models must ' +
-        'verify, network denied), all weights VERIFIED, every license_review APPROVED ' +
-        '(spec §13 — not overridable by --accept-license), NO user data present, and the ' +
+        'verify, network denied), every bundled weight and every weight on the drive VERIFIED, ' +
+        'the license_review of each such model APPROVED (spec §13 — not overridable by ' +
+        '--accept-license), NO user data present, and the ' +
         'root license/attribution artifacts (LICENSE, THIRD-PARTY-NOTICES.md, ' +
         'DRIVE-NOTICES.md) present and non-empty (LIC-1).'
     }
@@ -361,12 +363,18 @@ export interface CommercialAssertion {
      *  downloads are an explicit, user-initiated, per-download-confirmed action and are
      *  PERMITTED on a sold drive, so they do not count as a network violation here. */
     networkDenied: boolean
-    /** Every shipped weight is present + SHA-256 VERIFIED (no placeholder/mismatch/missing). */
+    /**
+     * At least one model is bundled, and every model the drive SHIPS is present + SHA-256
+     * VERIFIED (no placeholder/mismatch/missing file). A model ships when it is bundled
+     * (`bundled_on_preconfigured_drive`) or has any file on the drive (#766). A model with no
+     * file on the drive is the in-app download catalog and is not checked here.
+     */
     weightsVerified: boolean
     /**
-     * Every shipped model's `license_review.status` is `approved` (spec §13). NOT
-     * overridable by `--accept-license` — that flag is a user's license acceptance at
-     * download time, not a substitute for the redistribution review a SOLD drive needs.
+     * Every model the drive ships has `license_review.status` `approved` (spec §13): preloading
+     * is redistribution. NOT overridable by `--accept-license` — that flag is a user's license
+     * acceptance at download time, not a substitute for the review a SOLD drive needs. A
+     * catalog-only model is not preloaded, so its own in-app license gate applies instead (#766).
      */
     licensesApproved: boolean
     /** No user data present (a sold drive ships empty — spec §12.2). */
@@ -443,7 +451,7 @@ export interface CommercialAssertion {
     /** The launcher file of every declared platform is present + non-empty at the root. */
     launchersPresent: boolean
   }
-  /** The per-weight verification detail (for surfacing which weight failed). */
+  /** The per-weight verification detail of every model the Kit ships (for surfacing which failed). */
   modelResults: ModelVerifyResult[]
 }
 
@@ -479,8 +487,8 @@ function userDataArtifacts(rootPath: string): string[] {
 
 /**
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
- * (the commercial posture) + `verifyDriveModels` (all weights VERIFIED) and checks the
- * drive carries no user data. When `runtimeSources` (the yaml pin) is passed, each pinned
+ * (the commercial posture) + `verifyDriveModels` (every weight the Kit ships VERIFIED, at
+ * least one model bundled, #766) and checks the drive carries no user data. When `runtimeSources` (the yaml pin) is passed, each pinned
  * build's `.hilbertraum-runtime.json` install marker must also match (version + backend)
  * and record the binary's hash. `opts` declares the platforms the kit is sold for and the
  * app version: one artifact + launcher per platform is required (#233); without `opts`
@@ -528,31 +536,44 @@ export async function assertCommercialDrive(
     problems.push('policy.json allows telemetry (must always be off)')
   }
 
-  // --- Weights all VERIFIED (reuse verifyDriveModels) ---
-  const modelResults = await verifyDriveModels(rootPath, manifests)
-  const weightsVerified =
-    modelResults.length > 0 && modelResults.every((r) => r.status === 'verified')
-  for (const r of modelResults) {
-    if (r.status !== 'verified') {
-      problems.push(`weight "${r.id}" is not VERIFIED (status: ${r.status} — ${r.localPath})`)
-    }
-  }
-  if (modelResults.length === 0) {
-    problems.push('no model weights to verify (a sold drive ships weights pre-loaded)')
-  }
+  // --- What the Kit ships (#766, owner call 2026-11-02) ---
+  // A Kit preloads its BUNDLED set and lists every other manifest for in-app download. A model
+  // ships when it is bundled or has ANY file on the drive: a half-installed or unverifiable
+  // preload is a shipped model too. A model with no file on the drive is the catalog, where its
+  // own license gate applies at download time.
+  const bundled = new Set(manifests.filter((m) => m.bundledOnPreconfiguredDrive).map((m) => m.id))
+  const shipped = manifests.filter(
+    (m) => bundled.has(m.id) || manifestFiles(rootPath, m).some((f) => existsSync(f.path))
+  )
 
-  // --- License reviews all APPROVED (spec §13) ---
+  // --- Every shipped weight VERIFIED (reuse verifyDriveModels) ---
+  const modelResults = await verifyDriveModels(rootPath, shipped)
+  const unverified = modelResults.filter((r) => r.status !== 'verified')
+  for (const r of unverified) {
+    problems.push(`weight "${r.id}" is not VERIFIED (status: ${r.status} — ${r.localPath})`)
+  }
+  if (bundled.size === 0) {
+    problems.push(
+      'no bundled model (bundled_on_preconfigured_drive: true): a sold drive ships its bundled set pre-loaded'
+    )
+  }
+  const weightsVerified = bundled.size > 0 && unverified.length === 0
+
+  // --- License reviews APPROVED for every shipped model (spec §13) ---
   // `--accept-license` lets a builder download a weight; it must never count as the
   // redistribution review. A sold drive ships only models whose review is `approved`.
-  const licensesApproved =
-    manifests.length > 0 && manifests.every((m) => m.licenseReview.status === 'approved')
-  for (const m of manifests) {
-    if (m.licenseReview.status !== 'approved') {
-      problems.push(
-        `model "${m.id}" license_review.status is "${m.licenseReview.status}" — a sold drive ` +
-          'requires an approved review (spec §13); --accept-license does not override this'
-      )
-    }
+  const unapproved = shipped.filter((m) => m.licenseReview.status !== 'approved')
+  const licensesApproved = manifests.length > 0 && unapproved.length === 0
+  for (const m of unapproved) {
+    problems.push(
+      `model "${m.id}" license_review.status is "${m.licenseReview.status}" — a sold drive ` +
+        'requires an approved review (spec §13); --accept-license does not override this' +
+        // A drive built before #766 carries such a weight; the fix is deleting it, not the review.
+        (bundled.has(m.id)
+          ? ''
+          : '. It is not bundled and ships only because a file of it is on the drive: delete that, ' +
+            'and the Kit lists the model for in-app download instead')
+    )
   }
 
   // --- No user data (spec §12.2) ---

@@ -9,21 +9,28 @@
 #
 # --generate writes <target>/config/checksums.json from the present weights.
 # --strict   ship gate: exit 1 unless every manifest weight is VERIFIED (and >= 1
-#            exists) — mirrors commercial-drive.ts assertCommercialDrive.
+#            exists).
+# --kit      the Kit ship gate, --strict over what a preconfigured Kit ships (#766): every
+#            bundled model (bundled_on_preconfigured_drive: true, >= 1 of them) and every
+#            model with any file on the drive. A model with no file on the drive is the in-app
+#            download catalog, listed as CATALOG and not verified. Mirrors commercial-drive.ts
+#            assertCommercialDrive.
 #
 # Usage:
-#   scripts/verify-models.sh --target /Volumes/HILBERTRAUM [--generate] [--strict]
+#   scripts/verify-models.sh --target /Volumes/HILBERTRAUM [--generate] [--strict | --kit]
 set -euo pipefail
 
 TARGET=""
 GENERATE=0
 STRICT=0
+KIT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2 ;;
     --target=*) TARGET="${1#*=}"; shift ;;
     --generate) GENERATE=1; shift ;;
     --strict) STRICT=1; shift ;;
+    --kit) KIT=1; STRICT=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -109,9 +116,27 @@ supported_format_for() {
   esac
 }
 
+# Whether a manifest is in the Kit's bundled set (#766). One grep, not `field`'s five processes:
+# under Git Bash every fork counts, and --kit asks this of every manifest.
+is_bundled() { grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$1"; }
+
+# Whether ANY file of a model is on the drive: its weight, its projector, or an extra file of a
+# multi-file weight (#766). Args: local_path mmproj_local files_block.
+any_file_present() {
+  local f_local
+  [[ -f "$TARGET/$1" ]] && return 0
+  [[ -n "$2" && -f "$TARGET/$2" ]] && return 0
+  [[ -z "$3" ]] && return 1
+  while IFS=$'\t' read -r f_local _ _ _; do
+    [[ -n "$f_local" && -f "$TARGET/$(clean_value "$f_local")" ]] && return 0
+  done < <(files_member_records "$3")
+  return 1
+}
+
 had_mismatch=0
 total_weights=0
 verified_weights=0
+bundled_models=0
 
 # Verify ONE file (the GGUF, or a vision model's mmproj projector) against its expected hash,
 # updating the counters. Mirrors services/models.ts verifyChecksum + drive.ts verifyDriveModels.
@@ -167,6 +192,17 @@ for mf in "${MANIFEST_FILES[@]}"; do
   if [[ -n "$files_block" ]]; then
     file_count="$(files_member_records "$files_block" | grep -c '^' || true)"
     total_files=$((1 + file_count))
+  fi
+
+  # --kit (#766): a model ships when it is bundled or has any file on the drive. Every other
+  # manifest is the in-app download catalog, where the app's own download gates apply.
+  if [[ $KIT -eq 1 ]]; then
+    if is_bundled "$mf"; then
+      bundled_models=$((bundled_models + 1))
+    elif ! any_file_present "$local_path" "$mmproj_local" "$files_block"; then
+      printf '  %-12s %s\n' "CATALOG" "$id"
+      continue
+    fi
   fi
 
   if [[ "$format" != "$(supported_format_for "$runtime")" ]]; then
@@ -250,6 +286,10 @@ fi
 # --strict = the sellable posture (assertCommercialDrive parity): every weight must
 # be VERIFIED against a REAL manifest hash, and there must be at least one weight.
 if [[ $STRICT -eq 1 ]]; then
+  if [[ $KIT -eq 1 && $bundled_models -eq 0 ]]; then
+    echo "KIT: no bundled model (bundled_on_preconfigured_drive: true) — a Kit ships its bundled set preloaded." >&2
+    exit 1
+  fi
   if [[ $total_weights -eq 0 ]]; then
     echo "STRICT: no model manifests with a local_path found — nothing to verify." >&2
     exit 1

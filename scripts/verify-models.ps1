@@ -26,19 +26,27 @@
 
 .PARAMETER Strict
   Ship gate: exit 1 unless every manifest weight is VERIFIED (MISSING/UNVERIFIED/
-  MISMATCH/UNSUPPORTED all fail) and at least one weight exists. Mirrors
+  MISMATCH/UNSUPPORTED all fail) and at least one weight exists.
+
+.PARAMETER Kit
+  The Kit ship gate, -Strict over what a preconfigured Kit ships (#766): every bundled
+  model (bundled_on_preconfigured_drive: true, at least one of them) and every model with
+  any file on the drive. A model with no file on the drive is the in-app download catalog,
+  listed as CATALOG and not verified. Implies -Strict. Mirrors
   services/commercial-drive.ts assertCommercialDrive's weightsVerified check.
 
 .EXAMPLE
   .\scripts\verify-models.ps1 -Target E:\
   .\scripts\verify-models.ps1 -Target E:\ -Generate
   .\scripts\verify-models.ps1 -Target E:\ -Strict
+  .\scripts\verify-models.ps1 -Target E:\ -Kit
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string] $Target,
   [switch] $Generate,
-  [switch] $Strict
+  [switch] $Strict,
+  [switch] $Kit
 )
 
 $ErrorActionPreference = 'Stop'
@@ -170,6 +178,7 @@ $manifestFiles = Get-ChildItem -Path $ManifestsDir -Recurse -Include *.yaml, *.y
   Where-Object { $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml') }
 $results = @()
 $hadMismatch = $false
+$bundledModels = 0
 
 foreach ($mf in $manifestFiles) {
   $text = Get-Content -Path $mf.FullName -Raw
@@ -191,6 +200,26 @@ foreach ($mf in $manifestFiles) {
   # file (mmproj is reported separately and does not count towards M).
   $fileMembers = Get-FilesMembers (Get-FilesBlock $text)
   $totalFiles = 1 + $fileMembers.Count
+
+  # -Kit (#766): a model ships when it is bundled or has any file on the drive. Every other
+  # manifest is the in-app download catalog, where the app's own download gates apply.
+  if ($Kit) {
+    if ((Get-ManifestField $text 'bundled_on_preconfigured_drive') -eq 'true') {
+      $bundledModels++
+    } else {
+      $paths = @($localPath)
+      if ($mmprojLocal) { $paths += $mmprojLocal }
+      foreach ($member in $fileMembers) {
+        $fLocal = Get-ManifestField $member 'local_path'
+        if ($fLocal) { $paths += $fLocal }
+      }
+      $present = @($paths | Where-Object { Test-Path -LiteralPath (Join-Path $Target ($_ -replace '/', [IO.Path]::DirectorySeparatorChar)) })
+      if ($present.Count -eq 0) {
+        Write-Host ("  {0,-12} {1}" -f 'CATALOG', $id) -ForegroundColor Gray
+        continue
+      }
+    }
+  }
 
   if ($SupportedRuntimeFormats[$runtime] -ne $format) {
     Write-WeightResult $id '' 'UNSUPPORTED'
@@ -266,7 +295,11 @@ if ($hadMismatch) {
 
 # -Strict = the sellable posture (assertCommercialDrive parity): every weight must be
 # VERIFIED against a REAL manifest hash, and there must be at least one weight.
-if ($Strict) {
+if ($Strict -or $Kit) {
+  if ($Kit -and $bundledModels -eq 0) {
+    Write-Host 'KIT: no bundled model (bundled_on_preconfigured_drive: true) - a Kit ships its bundled set preloaded.' -ForegroundColor Red
+    exit 1
+  }
   $resultsArr = @($results)
   $notVerified = @($resultsArr | Where-Object { $_.status -ne 'VERIFIED' })
   if ($resultsArr.Count -eq 0) {
