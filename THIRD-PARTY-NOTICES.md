@@ -63,8 +63,8 @@ node scripts/generate-third-party-notices.mjs
 @radix-ui/react-visually-hidden@1.2.5
 @radix-ui/rect@1.1.2
 @streamdown/math@1.0.3
-@tanstack/react-virtual@3.14.21
-@tanstack/virtual-core@3.19.6
+@tanstack/react-virtual@3.14.22
+@tanstack/virtual-core@3.19.7
 @types/debug@4.1.13
 @types/estree@1.0.9
 @types/estree-jsx@1.0.5
@@ -1365,7 +1365,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### @tanstack/react-virtual@3.14.21
+### @tanstack/react-virtual@3.14.22
 
 - License: MIT
 - Author: Tanner Linsley
@@ -1397,7 +1397,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### @tanstack/virtual-core@3.19.6
+### @tanstack/virtual-core@3.19.7
 
 - License: MIT
 - Author: Tanner Linsley
