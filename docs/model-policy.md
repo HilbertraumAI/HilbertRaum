@@ -1013,7 +1013,8 @@ line, so a hand-made manifest that relies on a hand-placed projector leaves out 
 entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
 treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)
 applies to `local_path`, not to `mmproj.local_path` — a sharded projector is not (yet) a case the
-validator enforces (the committed-catalog test covers it, see `docs/architecture.md`).
+validator enforces (the committed-catalog row "declares no shard-pattern path whose sibling series is
+incomplete" covers it, and a control shows it firing).
 
 **RAM tiering (PROD-1).** Min RAM is **12 GB** for the model alone (~4.6 GB peak RSS), but the
 honest co-residency bar is higher: vision + a 12B chat (~7 GB) + the E5 embedder = three

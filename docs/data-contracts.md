@@ -576,8 +576,9 @@ the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.t
 the cache the runtime allocates at the model's recommended window under the app's launch (ubatch
 2048, and — since the 2026-09-07 `-np 1` decision on issue #319 — **ONE server slot**, not b9849's
 four unified ones). Carried by exactly the seven decision models (Gemma 4 12B 2.4, 26B-A4B **0.8**,
-E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**; pinned in
-`committed-catalog.test.ts`); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
+E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**) plus TranslateGemma's measured
+0.75 for its sidecar's headroom gate (#473); all eight are pinned in `committed-catalog.test.ts`; the
+GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
 Six are DERIVED from the launch config; the 26B-A4B's is MEASURED off its first hardware start
 (#412, 2026-09-08 — the derived 1.5 it replaced was 2.02× the 760.00 MiB the start logged).
 ✅ **Host-mapped weight share (#321, owner decision 2026-09-07):** manifest
@@ -595,8 +596,8 @@ PARTIAL offload inflates that line with the layers that did not fit — the 9B l
 33/33 but 824.31 at 31/33). Carried by the five models started for #318 (E2B 2,152.50, 9B 545.62,
 Gemma 12B 787.50, 27B UD-Q4 682.03, UD-Q5 682.03) and, since the #391 hardware round of 2026-09-08,
 by the last two as well (4B 497.31 off a 33/33 start, MoE 26B 577.50 off a 31/31 one). Those seven,
-pinned in `committed-catalog.test.ts`, include all five rank-3 models, so **every model rule C can
-ever star carries a measured figure**. They are NOT every ranked manifest: 8 of the 15 carry none
+plus TranslateGemma's 787.69 (#473), are pinned in `committed-catalog.test.ts`; the seven include all
+five rank-3 models, so **every model rule C can ever star carries a measured figure**. They are NOT every ranked manifest: 8 of the 15 carry none
 and keep the whole file as their base — the "absent" branch below is a live case, reached by the
 "Your model" estimate for a model the user installs by hand, not merely a rule for future
 manifests. The
@@ -768,7 +769,7 @@ head's own weights + KV.
   (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
   `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on
   `nextStartMemory`'s device. `weightsMib(m)` is the shared unrounded GB → MiB conversion the
-  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the seven
+  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the eight
   cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
