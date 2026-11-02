@@ -994,14 +994,16 @@ head's own weights + KV.
 - **Types** (in `shared/types.ts`): `PrivacyPolicy` (`network`/`workspace`/`models`),
   `NetworkPolicy`/`WorkspacePolicy`/`ModelsPolicy`, `PolicyStatus`. `DEFAULT_POLICY` lives in
   `policy.ts` (main-only).
-- **`parsePolicy(contents, onWarn?)`** → `PrivacyPolicy` merged over `DEFAULT_POLICY`; malformed JSON
-  → defaults + warn. **`mergePolicyObject(base, raw)`** maps snake_case JSON → camelCase, taking a
-  field only when it is a real boolean. **`loadPolicy(configDir, onWarn?)`** → `{ policy,
-  policyFilePresent, driveFilePresent, allowNetworkByDefault }` (reads optional `policy.json` +
-  `drive.json`).
+- **`parsePolicy(contents, onWarn?, base?)`** → `PrivacyPolicy` merged over `base` (default
+  `DEFAULT_POLICY`); malformed JSON → `base` + warn. The private `mergePolicyObject(base, raw)` maps
+  snake_case JSON → camelCase, taking a field only when it is a real boolean.
+  **`loadPolicy(configDir, onWarn?, opts?)`** → `{ policy, policyFilePresent, driveFilePresent,
+  allowNetworkByDefault }` (reads optional `policy.json` + `drive.json`; with no usable
+  `policy.json`, `opts.isDev: false`, a packaged build, takes `STRICT_POLICY` on a provisioned dir and
+  `STANDALONE_POLICY` on an unprovisioned one).
 - **`resolveNetwork(policy, allowNetworkSetting)`** → `{ networkAllowedByPolicy, networkAllowed,
   offlineMode }` (effective = policy ∧ setting). **`buildPolicyStatus(configDir, allowNetworkSetting,
-  onWarn?)`** → `PolicyStatus` (the `getPolicy()` IPC shape; `telemetryAllowed` hardcoded false).
+  onWarn?, opts?)`** → `PolicyStatus` (the `getPolicy()` IPC shape; `telemetryAllowed` hardcoded false).
 ✅ **`services/offlineGuard.ts`** — `isLoopbackHost(host)` (127.0.0.0/8, ::1, localhost exempt),
   `installOfflineNetworkGuard({ offline, onViolation })` (wraps `net.Socket.prototype.connect`, logs
   remote attempts on every route, Node's normalized argument array included (#751), **never blocks**,
@@ -1228,9 +1230,9 @@ head's own weights + KV.
   `cancelled` one. `dismiss(jobId)` records the id (unknown ids are a no-op) so `list()` stops
   offering it; `pruneTerminalJobs()` drops a pruned job's dismissal record with it, so the set
   stays bounded by `MAX_TERMINAL_JOBS`. One live job at a time; `.part` → verify → rename;
-  mismatch deletes the partial; success invalidates the checksum-cache entry OF THAT FILE — a
-  multi-file model (#310 `files:`, or a vision mmproj) invalidates each file's entry independently
-  as its own task completes. A COMPLETE `.part`
+  mismatch deletes the partial; success primes the checksum cache with the hash OF THAT FILE (a
+  placeholder-hash file has its entry invalidated instead) — a multi-file model (#310 `files:`, or a
+  vision mmproj) updates each file's entry independently as its own task completes. A COMPLETE `.part`
   (cancel/crash during verify, failed rename) is verified in place rather than Range-resumed —
   match renames, mismatch discards + clean restart (F-13, full-audit 2026-07-16).
 ✅ **`ResolvedModel.requiredPaths: string[]`** (#310, `services/resolve-model.ts`) — every file a

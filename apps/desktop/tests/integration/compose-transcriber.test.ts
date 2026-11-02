@@ -233,9 +233,11 @@ describe('engineFamilyHasHostBuild (#527)', () => {
   it('follows the platform it is asked about — the shipped v1.8.6-era shape (win only)', () => {
     const { manifestsDir } = tempDrive()
     writeRuntimeSources(manifestsDir, 'win')
-    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'win32', 'x64')).toBe(true)
-    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'linux', 'x64')).toBe(false)
-    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'darwin', 'arm64')).toBe(false)
+    // The fixture's own arch, so only the OS separates these three: a hard-coded x64 failed on an arm64 host.
+    const arch = hostRuntimeArch()
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'win32', arch)).toBe(true)
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'linux', arch)).toBe(false)
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'darwin', arch)).toBe(false)
   })
 })
 

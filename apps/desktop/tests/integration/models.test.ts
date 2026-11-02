@@ -428,6 +428,28 @@ describe('persistent checksum cache (settings hash store)', () => {
     expect(checksumCacheStats.computed).toBe(before) // served from the relative-keyed entry — no re-hash
   })
 
+  // No weight path reaches this today (`safeDrivePath` guards them), so the fallback only has to
+  // keep a path it cannot make relative intact, instead of minting a `../`-led key.
+  const keepsAbsoluteKey = (pathIn: (root: string) => string): void => {
+    const { store, db, root } = makeStore()
+    const path = pathIn(root)
+    store.set(path, { size: 1, mtimeMs: 2, actual: 'abcd' })
+    expect(Object.keys(getSettings(db).checksumCache)).toEqual([path])
+    expect(store.get(path)).toEqual({ size: 1, mtimeMs: 2, actual: 'abcd' })
+    store.delete(path)
+    expect(getSettings(db).checksumCache).toEqual({})
+  }
+
+  it.each<[string, (root: string) => string]>([
+    ['outside the drive root', (root) => join(root, '..', 'elsewhere.gguf')],
+    ['the drive root itself', (root) => root]
+  ])('a path %s stays keyed by its absolute path', (_title, pathIn) => keepsAbsoluteKey(pathIn))
+
+  // Only across Windows volumes does `relative` answer with an absolute path.
+  it.runIf(process.platform === 'win32')('a path on another volume stays keyed by its absolute path', () =>
+    keepsAbsoluteKey(() => 'Z:\\elsewhere\\w.gguf')
+  )
+
   it('lazily migrates a legacy ABSOLUTE-key entry to the relative key on read (drops the orphan)', () => {
     const db = seededFreshDb('cache')
     const root = tempRoot('drive')

@@ -33,7 +33,7 @@ import { tMain } from '../../src/main/services/i18n'
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
-import { hangingFetch } from '../helpers/download-fixtures'
+import { hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs, until } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import type { OcrInstallJob, OcrInstallStatus, OcrRefreshOutcome } from '../../src/shared/types'
@@ -158,20 +158,6 @@ function diskFullFetch(): FetchFn {
     })
     return new Response(stream, { status: 200 })
   }) as unknown as FetchFn
-}
-
-/**
- * Poll a job to a terminal status AND wait for its `run()` to fully SETTLE (the F-33 busy-latch
- * precedent, engine-download.test.ts): `cancel()` flips `status` to 'cancelled' SYNCHRONOUSLY,
- * before the in-flight `run()` has actually reached its `aborted()` cleanup (the `.part` removal)
- * — `activeJob()` stays non-null until that background work finishes. Without this, a test that
- * cancels and immediately asserts the `.part` is gone races the manager's own cleanup.
- */
-const TERMINAL: ReadonlySet<OcrInstallJob['status']> = new Set(['done', 'failed', 'cancelled'])
-
-async function runToEnd(mgr: OcrInstallManager, jobId: string): Promise<OcrInstallJob> {
-  await until(() => TERMINAL.has(mgr.get(jobId).status) && mgr.activeJob() !== jobId, 'the OCR install job settling')
-  return mgr.get(jobId)
 }
 
 async function waitForStatus(
@@ -580,8 +566,7 @@ describe('job lifecycle (#410)', () => {
     const cancelled = mgr.cancel(job.jobId)
     expect(cancelled.status).toBe('cancelled')
     releaseActivate()
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
-    const finalJob = mgr.get(job.jobId)
+    const finalJob = await runToEnd(mgr, job.jobId)
     expect(finalJob.status).toBe('cancelled')
     expect(finalJob.outcome).toBeNull()
   })
@@ -633,7 +618,7 @@ describe('single-flight (#410)', () => {
     mgr.cancel(job.jobId)
     await expect(mgr.start(startOpts(root, manifests))).rejects.toThrow(tMain('main.ocr.alreadyRunning'))
     releaseActivate()
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    await runToEnd(mgr, job.jobId)
     // Every file landed before 'activating' is ever reached, so a fresh start finds nothing to fetch.
     await expect(mgr.start(startOpts(root, manifests))).rejects.toThrow(tMain('main.ocr.alreadyInstalled'))
   })

@@ -111,7 +111,9 @@ jobs:
         with: { name: win-runtime, path: llama-runtime-win-x64.zip, if-no-files-found: error }
 
   build-mac:
-    runs-on: macos-14 # arm64 (Apple Silicon)
+    # arm64 (Apple Silicon). Same pinned label as ci.yml's macos leg. macos-14 was retired on
+    # 2026-11-02 (actions/runner-images#13518).
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

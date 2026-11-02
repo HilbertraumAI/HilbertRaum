@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   availableFamilies,
   groupModelVariants,
+  matchesLibraryView,
   modelVariantName,
   variantGroupFace,
   variantGroupOrder,
@@ -241,6 +242,13 @@ describe('variantGroupOrder — face first, then every other variant exactly onc
       model('Lead Q6_K', { download: OBTAINABLE })
     ])
     expect(variantGroupOrder(g).map((m) => m.displayName)).toEqual(['Lead Q4_K_M', 'Lead Q6_K'])
+  })
+})
+
+describe('matchesLibraryView (#313)', () => {
+  it('"On this drive" lists a damaged model, which is repairable, and no absent one', () => {
+    expect(matchesLibraryView(model('Damaged', { state: 'checksum_failed' }), 'installed')).toBe(true)
+    expect(matchesLibraryView(model('Absent', { state: 'missing' }), 'installed')).toBe(false)
   })
 })
 

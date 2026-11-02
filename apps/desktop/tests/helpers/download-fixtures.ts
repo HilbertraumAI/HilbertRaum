@@ -17,6 +17,23 @@ export async function runUnwound(mgr: DownloadManager): Promise<void> {
   await until(() => (mgr as unknown as { active: unknown }).active === null, 'the cancelled run settling')
 }
 
+const TERMINAL: ReadonlySet<string> = new Set(['done', 'failed', 'cancelled'])
+
+/**
+ * Polls an engine or OCR job to a terminal status AND until its run has settled. `cancel()` flips the status synchronously,
+ * so a status alone says nothing about the run behind it: a row reading the drive straight after would pass with the
+ * manager's own abort checks deleted. `activeJob()` stays held until the run settles (F-33), which is what this waits for.
+ * Replaces `runToEnd` (engine-download, engine-extract-containment, ocr-install). `DownloadManager` has no such latch:
+ * see `runUnwound`.
+ */
+export async function runToEnd<J extends { status: string }>(
+  mgr: { get(jobId: string): J; activeJob(): string | null },
+  jobId: string
+): Promise<J> {
+  await until(() => TERMINAL.has(mgr.get(jobId).status) && mgr.activeJob() !== jobId, 'the job settling')
+  return mgr.get(jobId)
+}
+
 /**
  * Answers every request with `body` (200 + content-length). Ignores Range and the signal: `rangeFetch` and `hangingFetch`
  * are those. Replaces download-ipc's `okFetch` and fsync durability's `bodyFetch`.

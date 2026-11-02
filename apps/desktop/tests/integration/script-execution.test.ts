@@ -11,8 +11,9 @@ import { buildChecksumsJson, type ChecksumsJson } from '../../src/main/services/
 
 // Executes the drive-builder scripts (#233, #234) — unlike script-drift.test.ts, which is
 // text-only by charter. Every case is OFFLINE and deterministic: the fetch-runtime cases
-// stop before any download (placeholder hash refused, or the install skipped), and the
-// builder cases run only its verify-only gate or its up-front refusal. The .ps1 leg runs
+// stop before any download (placeholder hash refused, or the install skipped), the
+// builder cases run only its verify-only gate or its up-front refusal, and prepare-drive
+// runs without its assets flag, so it fetches nothing. The .ps1 leg runs
 // on Windows, the .sh leg elsewhere (CI runs `npm test` on both).
 
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
@@ -166,6 +167,32 @@ for (const leg of LEGS) {
     const builder = `build-commercial-drive.${leg.ext}`
     const fetcher = `fetch-runtime.${leg.ext}`
     const f = leg.flag
+
+    // The drive's policy is the drive owner's to edit, so a re-run must leave it alone unless told
+    // otherwise. build-commercial-drive passes the flag on purpose; every other caller must not need to.
+    describe('prepare-drive keeps an existing config', () => {
+      it('skips an edited config file on a re-run and rewrites it only with the force flag', () => {
+        const preparer = `prepare-drive.${leg.ext}`
+        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-prep-'))
+        const configFile = (name: string): string => join(root, 'config', name)
+        const first = leg.run(preparer, [f('Target'), root])
+        expect(first.status, text(first)).toBe(0)
+        const files = ['drive.json', 'policy.json']
+        for (const name of files) writeFileSync(configFile(name), '{"edited":true}')
+
+        const again = leg.run(preparer, [f('Target'), root])
+        expect(again.status, text(again)).toBe(0)
+        for (const name of files) {
+          expect(readFileSync(configFile(name), 'utf8')).toBe('{"edited":true}')
+          expect(text(again)).toContain(`skip config/${name}`)
+        }
+
+        const forced = leg.run(preparer, [f('Target'), root, f('Force')])
+        expect(forced.status, text(forced)).toBe(0)
+        expect(JSON.parse(readFileSync(configFile('drive.json'), 'utf8')).product).toBe('HilbertRaum')
+        expect(JSON.parse(readFileSync(configFile('policy.json'), 'utf8')).workspace.encryption_required).toBe(true)
+      })
+    })
 
     describe('build-commercial-drive verify-only gate (#233)', () => {
       it.skipIf(!toolBuilt)('runs the canonical gate offline and prints NOT SELLABLE for an empty target', () => {

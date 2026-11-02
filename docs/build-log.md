@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-01 — the closed 2026-10-13 #627 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-01 (preamble budget, making room for the #753 entry). Its record is unchanged:
+`rag-design.md` §17 "#627". Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#627 — a crawled site's footer and menu stay out of a knowledge pack; code keeps its indentation (`fix/627-zim-footer-code-indent`).** Every gobyexample page
+delivered its `<p class="footer">`; 0 of 1,720 / 0 of 38 indented code lines survived (gobyexample's code is all in table cells). Now a `p`/`div`/`section` whose class has an
+exact furniture token is dropped — the issue's `\b` draft also hit Wikipedia's `zim-footer` (1,322/1,500 pages) and Read the Docs' article wrappers, refused — and `<pre>`
+whitespace rides placeholders through the tidy in prose and kept tables; caps count visible characters. Owner calls as recommended. 2,672 pages from 15 archives: words change
+only on gobyexample (footer) and lesscss (menu), `work`/`slices` identical, 0 word changes on 1,500 German Wikipedia pages; real app: footer 2/2 → 0, indented lines 0 → 8/8/38.
+Record: `rag-design.md` §17 "#627". Acceptance read: Stage A identical (949 + 1,024 articles, 0 word changes). Open: #662 (Wikipedia license line, nav boxes); #663 (entities)._
+
 ## 2026-11-01 — the closed 2026-10-13 #653 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-01 (preamble budget, making room for the #747 entry). Its record is unchanged:
