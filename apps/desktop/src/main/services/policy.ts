@@ -242,8 +242,18 @@ export interface LoadedPolicy {
 interface PolicyCacheEntry {
   sig: string
   loaded: LoadedPolicy
+  /**
+   * Warnings from this read that no caller has heard yet (#752). The read that fills the cache may
+   * pass no `onWarn`, and every later reader hits the cache, so each warning is held for the first
+   * reader that can hear it, and told once: the 4 s status poll must not repeat it in the log.
+   */
+  unheard: string[]
 }
 const policyCache = new Map<string, PolicyCacheEntry>()
+
+function tellUnheard(entry: PolicyCacheEntry, onWarn?: (msg: string) => void): void {
+  if (onWarn) entry.unheard.splice(0).forEach((msg) => onWarn(msg))
+}
 
 /** `(mtimeMs, size)` of a file, or `absent` if it is missing/unstatable (F-30 cache key part). */
 function fileSignature(path: string): string {
@@ -270,7 +280,10 @@ export function loadPolicy(
   const drivePath = join(configDir, 'drive.json')
   const sig = `${opts.isDev === false ? 0 : 1}|${fileSignature(policyPath)}|${fileSignature(drivePath)}`
   const cached = policyCache.get(configDir)
-  if (cached && cached.sig === sig) return cached.loaded
+  if (cached && cached.sig === sig) {
+    tellUnheard(cached, onWarn)
+    return cached.loaded
+  }
 
   // Fail-closed base for a packaged build (M-4): a missing/malformed/unreadable
   // policy.json degrades to STRICT_POLICY, not the dev-friendly DEFAULT_POLICY.
@@ -285,13 +298,14 @@ export function loadPolicy(
   let policyFilePresent = false
   let driveFilePresent = false
   let allowNetworkByDefault = false
+  const unheard: string[] = []
 
   if (existsSync(policyPath)) {
     try {
-      policy = parsePolicy(readFileSync(policyPath, 'utf8'), onWarn, base)
+      policy = parsePolicy(readFileSync(policyPath, 'utf8'), (msg) => unheard.push(msg), base)
       policyFilePresent = true
     } catch (err) {
-      onWarn?.(`Could not read policy.json (${err instanceof Error ? err.message : String(err)})`)
+      unheard.push(`Could not read policy.json (${err instanceof Error ? err.message : String(err)})`)
       // An unreadable file is treated like a malformed one — keep the (possibly strict) base.
       policy = base
     }
@@ -303,12 +317,14 @@ export function loadPolicy(
       allowNetworkByDefault = bool(drive.allow_network_by_default, false)
       driveFilePresent = true
     } catch (err) {
-      onWarn?.(`Ignoring malformed drive.json (${err instanceof Error ? err.message : String(err)})`)
+      unheard.push(`Ignoring malformed drive.json (${err instanceof Error ? err.message : String(err)})`)
     }
   }
 
   const loaded: LoadedPolicy = { policy, policyFilePresent, driveFilePresent, allowNetworkByDefault }
-  policyCache.set(configDir, { sig, loaded })
+  const entry: PolicyCacheEntry = { sig, loaded, unheard }
+  policyCache.set(configDir, entry)
+  tellUnheard(entry, onWarn)
   return loaded
 }
 

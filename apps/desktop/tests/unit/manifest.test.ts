@@ -410,9 +410,13 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
     expect(res.errors.some((e) => e.includes('"mmproj"'))).toBe(true)
   })
 
+  /** The GGUF's own source: the two blocks are all-or-nothing, so every projector-source row needs it. */
+  const WEIGHT_DOWNLOAD = { url: 'https://x/weight.gguf', sha256: 'REPLACE_WITH_REAL_HASH' }
+
   it('accepts an mmproj.download block and validates its https url', () => {
     const res = validateManifest(
       visionRaw({
+        download: WEIGHT_DOWNLOAD,
         mmproj: mmprojBlock({
           download: {
             url: 'https://huggingface.co/ggml-org/x/resolve/main/mmproj-f16.gguf?download=true',
@@ -426,9 +430,29 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
     expect(res.manifest?.mmproj?.download?.sizeBytes).toBe(1338428128)
   })
 
+  // Half the blocks is a clean multi-GB download of a model that stays `missing` (#752): the planner
+  // fetches only what is declared. A hand-made manifest finds out here, not after the download.
+  it.each<[string, Record<string, unknown>, RegExp]>([
+    [
+      'the GGUF has a source and the projector has none',
+      { download: WEIGHT_DOWNLOAD },
+      /"mmproj\.download" is required when the model declares a top-level "download"/
+    ],
+    [
+      'the projector has a source and the GGUF has none',
+      { mmproj: mmprojBlock({ download: { url: 'https://x/y.gguf', sha256: 'REPLACE_WITH_REAL_HASH' } }) },
+      /"download" is required when "mmproj" declares one/
+    ]
+  ])('rejects a vision manifest where %s', (_title, overrides, message) => {
+    const res = validateManifest(visionRaw(overrides))
+    expect(res.ok).toBe(false)
+    expect(res.errors.join('\n')).toMatch(message)
+  })
+
   it('rejects a non-https mmproj.download.url (L-2)', () => {
     const res = validateManifest(
       visionRaw({
+        download: WEIGHT_DOWNLOAD,
         mmproj: mmprojBlock({ download: { url: 'http://x/y.gguf', sha256: 'REPLACE_WITH_REAL_HASH' } })
       })
     )
@@ -439,6 +463,7 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
   it('rejects a real mmproj.download.sha256 that differs from a real mmproj.sha256', () => {
     const res = validateManifest(
       visionRaw({
+        download: WEIGHT_DOWNLOAD,
         mmproj: mmprojBlock({
           sha256: 'a'.repeat(64),
           download: { url: 'https://x/y.gguf', sha256: 'b'.repeat(64) }
@@ -453,6 +478,7 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
     const hash = 'd'.repeat(64)
     const res = validateManifest(
       visionRaw({
+        download: WEIGHT_DOWNLOAD,
         mmproj: mmprojBlock({ sha256: hash, download: { url: 'https://x/y.gguf', sha256: hash } })
       })
     )

@@ -2797,6 +2797,12 @@ export const en = {
   'main.download.interrupted':
     'The download was interrupted ({reason}). The finished part is kept — ' +
     'starting it again will resume where it stopped.',
+  'main.download.writeFailed':
+    'The model file could not be saved to this drive. Check that it is not full or ' +
+    'write-protected, then try again.',
+  'main.download.resumeDiscarded':
+    'The server sent the wrong part of the file, so the partial download was discarded. ' +
+    'Starting it again will begin from the start.',
   'main.engine.alreadyRunning': 'The AI engine is already downloading.',
   'main.engine.noSources': 'No engine sources were found on this drive (runtime-sources.yaml is missing).',
   'main.engine.noHostBuild': 'No AI-engine build is available for this computer.',

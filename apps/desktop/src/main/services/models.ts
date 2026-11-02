@@ -260,9 +260,9 @@ function isHashAborted(err: unknown): boolean {
  * destroys the stream WITH an error: a bare `stream.destroy()` emits `close` and no
  * `error`, so a naive abort would leave every awaiting caller waiting forever. The `close`
  * handler is the belt to that braces — a close arriving without `end` or `error` still
- * settles. The parameter is OPTIONAL and trailing: every other caller (the ship-time gates,
- * the asset/binary/drive/ingestion verifiers, the download manager) is untouched and stays
- * uncancellable by construction.
+ * settles. The parameter is OPTIONAL and trailing: every caller that does not pass one (the
+ * ship-time gates, the asset/binary/drive/ingestion verifiers) stays uncancellable by
+ * construction. The model download passes its job's signal (#752).
  */
 export function sha256File(
   filePath: string,
@@ -443,7 +443,12 @@ interface InFlightHash {
    * a cancelled Models-screen pass that happened to join the same file.
    */
   waiters: Set<object>
-  /** Abort the shared physical read (only ever called with an empty `waiters`). */
+  /**
+   * Abort the shared physical read (only ever called with an empty `waiters`). The entry leaves
+   * `inFlightHashes` here, not when the stream closes (#752): a caller arriving in between would
+   * join a read nobody wants any more and reject, which is the collateral damage the rule above
+   * rules out. That caller starts its own read instead.
+   */
   abort: () => void
 }
 
@@ -679,7 +684,10 @@ async function sha256FileCached(
     size: st.size,
     mtimeMs: st.mtimeMs,
     waiters: new Set<object>(),
-    abort: () => controller.abort()
+    abort: () => {
+      if (inFlightHashes.get(filePath) === entry) inFlightHashes.delete(filePath)
+      controller.abort()
+    }
   }
   // The instrumentation, the `computed` counter and both cache writes now live INSIDE the
   // run, because the run outlives its leader: a leader that cancels while a joiner is still

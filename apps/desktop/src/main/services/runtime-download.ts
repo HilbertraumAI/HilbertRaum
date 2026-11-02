@@ -1107,10 +1107,13 @@ export class EngineDownloadManager {
     // just-downloaded archive and the `cpu/` safety-net subdir (audit fix: the cpu→vulkan
     // upgrade path; a stale root binary would otherwise satisfy the flatten guard).
     const archiveName = basename(plan.zipDest)
-    for (const entry of await readdir(plan.extractTo)) {
-      if (entry === archiveName || entry === 'cpu') continue
-      await rm(join(plan.extractTo, entry), { recursive: true, force: true })
+    const clearInstall = async (): Promise<void> => {
+      for (const entry of await readdir(plan.extractTo)) {
+        if (entry === archiveName || entry === 'cpu') continue
+        await rm(join(plan.extractTo, entry), { recursive: true, force: true })
+      }
     }
+    await clearInstall()
 
     const extract = this.deps.extractImpl ?? extractWithTar
     await extract(plan.zipDest, plan.extractTo, signal)
@@ -1122,8 +1125,17 @@ export class EngineDownloadManager {
     // by any later read/write through it. Sweep the FINAL layout (after flatten, so a
     // relative link is checked where it will actually live) and refuse the install if any
     // link escapes. Legitimate engine archives carry no escaping links, so this changes
-    // nothing for a good archive.
-    await assertExtractedSymlinksContained(plan.extractTo)
+    // nothing for a good archive. Refused means nothing is installed (#752): the old copy is
+    // already gone, and an untrusted binary left here reads as installed, with no marker to
+    // say otherwise. `rm` unlinks a remaining link, never its target.
+    try {
+      await assertExtractedSymlinksContained(plan.extractTo)
+    } catch (err) {
+      await clearInstall().catch((clearErr: unknown) => {
+        this.deps.log?.('Could not clear a refused engine install', { error: String(clearErr) })
+      })
+      throw err
+    }
   }
 
   /**
@@ -1151,7 +1163,7 @@ export class EngineDownloadManager {
  * `extractTo`. Lexical resolution via `readlink` (not `realpath`) so a BROKEN escaping
  * link is still caught, and no recursion THROUGH links (a link dirent is never a
  * directory dirent, so link cycles cannot loop the walk). The offending link is removed
- * best-effort before throwing — the next install's pre-clean removes the rest.
+ * best-effort before throwing — `install()` then clears the rest.
  * Exported for tests.
  */
 export async function assertExtractedSymlinksContained(extractTo: string): Promise<void> {

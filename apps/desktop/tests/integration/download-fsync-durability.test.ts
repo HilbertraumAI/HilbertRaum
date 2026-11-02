@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { openSync, fsyncSync, readFileSync, renameSync } from 'node:fs'
 import { bodyFetch, OPEN_GATES } from '../helpers/download-fixtures'
-import { verifiedManifest } from '../helpers/manifest-fixtures'
+import { verifiedManifest, writeDriveFile } from '../helpers/manifest-fixtures'
 import { tempRoot } from '../helpers/db-fixtures'
+import type { FetchFn } from '../../src/main/services/assets'
 
 // F-34 (full-audit 2026-07-16) — a WIRING pin with teeth, in the CODE-10 spirit of
 // workspace-vault-durability.test.ts: it drives the REAL model downloader and asserts the
@@ -48,6 +49,26 @@ async function waitForTerminal(mgr: InstanceType<typeof DownloadManager>, jobId:
   }
 }
 
+function expectFsyncBeforeRename(part: string, dest: string): void {
+  // Every write-capable fd opened for the `.part` (the fsync target)…
+  const partFds = spies.openSync.mock.calls
+    .map((args, i) => ({ path: String(args[0]), flags: args[1], fd: spies.openSync.mock.results[i]?.value as number }))
+    .filter((c) => c.path === part && c.flags === 'r+')
+    .map((c) => c.fd)
+  expect(partFds.length).toBeGreaterThan(0)
+
+  // …must be fsynced BEFORE the atomic rename lands it under the final weight path
+  // (TEETH: delete downloadToFile's fsync → no `.part` fsync precedes the rename → red).
+  const renameIdx = spies.renameSync.mock.calls.findIndex(([from, to]) => from === part && to === dest)
+  expect(renameIdx).toBeGreaterThanOrEqual(0)
+  const renameOrder = spies.renameSync.mock.invocationCallOrder[renameIdx]
+  const fsyncOrders = spies.fsyncSync.mock.calls
+    .map((args, i) => ({ fd: args[0], order: spies.fsyncSync.mock.invocationCallOrder[i] }))
+    .filter((c) => partFds.includes(c.fd as number))
+  expect(fsyncOrders.length).toBeGreaterThan(0)
+  expect(Math.min(...fsyncOrders.map((c) => c.order))).toBeLessThan(renameOrder)
+}
+
 describe('download durability — fsync-before-rename wiring (F-34, CODE-10)', () => {
   it('fsyncs the completed .part to the device BEFORE renaming it into place', async () => {
     const body = 'the-language-gguf-weight-bytes'
@@ -65,23 +86,30 @@ describe('download durability — fsync-before-rename wiring (F-34, CODE-10)', (
     const finished = await waitForTerminal(mgr, job.jobId)
     expect(finished.status).toBe('done')
 
-    // Every write-capable fd opened for the `.part` (the fsync target)…
-    const partFds = spies.openSync.mock.calls
-      .map((args, i) => ({ path: String(args[0]), flags: args[1], fd: spies.openSync.mock.results[i]?.value as number }))
-      .filter((c) => c.path === part && c.flags === 'r+')
-      .map((c) => c.fd)
-    expect(partFds.length).toBeGreaterThan(0)
+    expectFsyncBeforeRename(part, dest)
+  })
 
-    // …must be fsynced BEFORE the atomic rename lands it under the final weight path
-    // (TEETH: delete downloadToFile's fsync → no `.part` fsync precedes the rename → red).
-    const renameIdx = spies.renameSync.mock.calls.findIndex(([from, to]) => from === part && to === dest)
-    expect(renameIdx).toBeGreaterThanOrEqual(0)
-    const renameOrder = spies.renameSync.mock.invocationCallOrder[renameIdx]
-    const fsyncOrders = spies.fsyncSync.mock.calls
-      .map((args, i) => ({ fd: args[0], order: spies.fsyncSync.mock.invocationCallOrder[i] }))
-      .filter((c) => partFds.includes(c.fd as number))
-    expect(fsyncOrders.length).toBeGreaterThan(0)
-    expect(Math.min(...fsyncOrders.map((c) => c.order))).toBeLessThan(renameOrder)
+  // #752: a `.part` can reach the settle without passing `downloadToFile`'s flush: a stream that
+  // ended on failure after the last byte, then a start. The hash reads the page cache, so it passes.
+  it('fsyncs a staged complete .part the same way, with no download to do it', async () => {
+    const body = 'the-language-gguf-weight-bytes'
+    const m = verifiedManifest(body)
+    const root = tempRoot('dl-fsync')
+    const dest = weightPath(root, m)
+    const part = `${dest}.part`
+    writeDriveFile(root, `${m.localPath}.part`, body)
+
+    spies.openSync.mockClear()
+    spies.fsyncSync.mockClear()
+    spies.renameSync.mockClear()
+
+    const fetchSpy = vi.fn()
+    const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+    expect(fetchSpy).not.toHaveBeenCalled()
+
+    expectFsyncBeforeRename(part, dest)
   })
 
   it('a flush fault is best-effort: the download still lands', async () => {

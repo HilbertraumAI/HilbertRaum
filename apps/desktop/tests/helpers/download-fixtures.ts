@@ -2,29 +2,19 @@
 // imports from the services and no `node:fs`, so it is safe beside downloads.test's `vi.mock` of assets and beside a
 // `vi.mock('node:fs')`.
 import type { FetchFn } from '../../src/main/services/assets'
-import type { DownloadGates, DownloadManager } from '../../src/main/services/downloads'
+import type { DownloadGates } from '../../src/main/services/downloads'
 import { until } from './hang-budget'
 
 /** Both network gates open. Replaces the suites' local `OPEN`. A closed-gate row spells its own gates. */
 export const OPEN_GATES: DownloadGates = { policyAllows: true, settingAllows: true }
 
-/**
- * For a job the row cancelled: its status flips at once and `activeJob()` reads null with it, so neither says the run has
- * ended. `start()` clears `active` in the run's `finally`, past every await of the run: an awaited delete of the `.part`
- * lands before this returns. Narrow private read: the manager has no public run-settled signal.
- */
-export async function runUnwound(mgr: DownloadManager): Promise<void> {
-  await until(() => (mgr as unknown as { active: unknown }).active === null, 'the cancelled run settling')
-}
-
 const TERMINAL: ReadonlySet<string> = new Set(['done', 'failed', 'cancelled'])
 
 /**
- * Polls an engine or OCR job to a terminal status AND until its run has settled. `cancel()` flips the status synchronously,
- * so a status alone says nothing about the run behind it: a row reading the drive straight after would pass with the
- * manager's own abort checks deleted. `activeJob()` stays held until the run settles (F-33), which is what this waits for.
- * Replaces `runToEnd` (engine-download, engine-extract-containment, ocr-install). `DownloadManager` has no such latch:
- * see `runUnwound`.
+ * Polls a job to a terminal status AND until its run has settled. `cancel()` flips the status synchronously, so a status
+ * alone says nothing about the run behind it: a row reading the drive straight after would pass with the manager's own
+ * abort checks deleted. All three managers keep `activeJob()` held until the run settles (F-33, #752), which is what this
+ * waits for. Replaces `runToEnd` (engine-download, engine-extract-containment, ocr-install) and `runUnwound`.
  */
 export async function runToEnd<J extends { status: string }>(
   mgr: { get(jobId: string): J; activeJob(): string | null },

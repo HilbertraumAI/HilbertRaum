@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }
 }))
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +13,7 @@ import { stringify } from 'yaml'
 import {
   EngineDownloadManager,
   assertExtractedSymlinksContained,
+  engineStatus,
   hostRuntimeArch,
   hostRuntimeOs,
   type ExtractFn
@@ -205,14 +206,18 @@ function makeDrive(): { rootPath: string; manifestsDir: string } {
 }
 
 describe('EngineDownloadManager refuses an archive planting an escaping link (SEC-2)', () => {
-  it('the job fails and no install marker is written', async () => {
+  it('the job fails and nothing of the refused archive stays installed (#752)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     const outside = mkdtempSync(join(tmpdir(), 'hr-contain-victim-'))
     writeFileSync(join(outside, 'keep.txt'), 'x')
     const extractTo = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    const cpuNet = join(extractTo, 'cpu', BIN_NAME)
+    mkdirSync(join(extractTo, 'cpu'), { recursive: true })
+    writeFileSync(cpuNet, 'safety net')
     const escapingExtract: ExtractFn = async (_archive, destDir) => {
       await writeFile(join(destDir, BIN_NAME), 'binary')
       plantDirLink(outside, join(destDir, 'evil'))
+      plantDirLink(outside, join(destDir, 'evil-too')) // the sweep stops at the first, so the clear-up meets this one
     }
     const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: escapingExtract })
     const started = await mgr.start({
@@ -224,9 +229,12 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     expect(job.status).toBe('failed')
     expect(job.error).toBe(tMain('main.engine.extractFailed'))
     expect(existsSync(runtimeMarkerPath(extractTo))).toBe(false)
-    // The extracted binary itself stays behind with no marker, so this row does not claim a clean install dir.
-    expect(existsSync(join(extractTo, 'evil'))).toBe(false) // the sweep removed the offender…
-    expect(existsSync(join(outside, 'keep.txt'))).toBe(true) // …without following the link
+    // A binary left behind with no marker read as installed, and the verifier let it through as `skip-legacy`.
+    expect(existsSync(join(extractTo, BIN_NAME))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+    expect(readdirSync(extractTo)).toEqual(['cpu']) // the safety net is not this archive's to remove…
+    expect(readFileSync(cpuNet, 'utf8')).toBe('safety net')
+    expect(existsSync(join(outside, 'keep.txt'))).toBe(true) // …and neither link was followed
   })
 
   it('a clean archive through the same flow still installs (no false positive)', async () => {

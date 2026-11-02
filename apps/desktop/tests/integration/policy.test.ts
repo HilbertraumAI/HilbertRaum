@@ -155,6 +155,29 @@ describe('loadPolicy', () => {
     expect(warn).toHaveBeenCalled()
   })
 
+  // The model IPC reads with no `onWarn`. If it read first, the cache hid the warning from every
+  // later reader, and nothing in the log said why the policy had degraded.
+  it('a warning the first reader could not hear goes to the next reader that can, and only once (#752)', () => {
+    const cfg = configDir({ policy: 'nonsense{' })
+    const warn = vi.fn()
+    loadPolicy(cfg)
+    loadPolicy(cfg, warn)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('malformed policy.json'))
+    loadPolicy(cfg, warn) // the status poll, every 4 s for a whole translation
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a warning told on the read that found it is not told again', () => {
+    const cfg = configDir({ policy: 'nonsense{' })
+    const first = vi.fn()
+    const second = vi.fn()
+    loadPolicy(cfg, first)
+    loadPolicy(cfg, second)
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).not.toHaveBeenCalled()
+  })
+
   // M-4: a packaged build must FAIL CLOSED to the strict commercial posture, not the
   // dev-friendly default, when policy.json is missing/malformed/partial. Since issue #93
   // the fail-closed scope is a PROVISIONED config dir — one carrying policy.json (even
