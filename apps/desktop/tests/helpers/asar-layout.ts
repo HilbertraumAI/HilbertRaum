@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 /**
  * The `node_modules` layout that electron-builder 26 writes into `app.asar` (#548).
@@ -38,7 +39,7 @@ export interface LockPackage {
 export type LockPackages = Record<string, LockPackage>
 
 /** Node's resolution over lockfile paths: the nearest `node_modules/<name>` above `fromPath`. */
-export function resolveLockPath(packages: LockPackages, fromPath: string, name: string): string | null {
+function resolveLockPath(packages: LockPackages, fromPath: string, name: string): string | null {
   let p = fromPath
   for (;;) {
     const cand = (p ? p + '/' : '') + 'node_modules/' + name
@@ -83,6 +84,11 @@ function builderRequire(): NodeJS.Require {
   const appRequire = createRequire(join(__dirname, '..', '..', 'package.json'))
   const builder = createRequire(appRequire.resolve('electron-builder/package.json'))
   return createRequire(builder.resolve('app-builder-lib/package.json'))
+}
+
+/** A file of the installed app-builder-lib. Throws when it is gone: a moved file must fail the gate that reads it, not skip it. */
+export function builderFile(...rel: string[]): string {
+  return readFileSync(join(dirname(builderRequire().resolve('./package.json')), ...rel), 'utf8')
 }
 
 /** `@s/b@1.2.3` → name + version, as electron-builder's `parseNameVersion` splits it. */

@@ -1,126 +1,30 @@
 import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { parse } from 'yaml'
 // The glob → RegExp translation is shared with asar-unpack-closure.test.ts (#232).
 import { globToRegExp } from '../helpers/globs'
 import {
   asarPackageDirs,
-  lockId,
+  builderFile,
   packedNodeModules,
-  resolveLockPath,
   type LockPackages,
   type PackedPackage
 } from '../helpers/asar-layout'
+import { builderConfig, DESKTOP_ROOT, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
+import { KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
 
 // L18 (audit-2026-06-13): @napi-rs/canvas is an OPTIONAL transitive dep of pdfjs-dist —
 // a platform-specific native `.node` (Skia) the app's code never imports (pdf.js tries to at its
-// first import and does without it: pdf-parser-packaged.test.ts runs the parser that way, #685). With
-// `includeSubNodeModules: true`, electron-builder would otherwise follow the hoisted
-// dependency tree and bundle the win32 `.node` into app.asar, breaking the pure-JS /
+// first import and does without it: pdf-parser-packaged.test.ts runs the parser that way, #685).
+// electron-builder's collector would otherwise pack the win32 `.node` into app.asar, breaking the pure-JS /
 // cross-OS portable posture (a Windows binary shipped on a macOS/Linux drive). The
 // exclusion is invisible until release packaging, so guard it here in the green gate.
 
-const BUILDER_YML = join(__dirname, '..', '..', 'electron-builder.yml')
-const LOCKFILE = join(__dirname, '..', '..', '..', '..', 'package-lock.json')
-
-interface BuilderConfig {
-  files?: string[]
-  asarUnpack?: string[]
-  includeSubNodeModules?: boolean
-  productName?: string
-  executableName?: string
-  win?: { executableName?: string }
-  mac?: { executableName?: string }
-  linux?: { executableName?: string }
-  portable?: { executableName?: string; artifactName?: string }
-  // Deliberately loose: a YAML scalar like `43.0` parses as a NUMBER, and the DEP-4 parity
-  // test below must be able to CATCH that mistake rather than be typed out of it.
-  electronVersion?: string | number
-  electronFuses?: Record<string, unknown>
-  asar?: unknown
-  disableAsarIntegrity?: unknown
-}
-
-function loadBuilderConfig(): BuilderConfig {
-  return parse(readFileSync(BUILDER_YML, 'utf8')) as BuilderConfig
-}
-
-/**
- * Walk the production dependency graph of apps/desktop over package-lock entries (npm's
- * node_modules resolution). It answers WHICH packages ship; WHERE electron-builder puts them is
- * `packedNodeModules` (#548).
- */
-function prodClosure(packages: LockPackages): Set<string> {
-  const rootDeps = packages['apps/desktop']?.dependencies ?? {}
-  const seen = new Set<string>()
-  const queue: string[] = []
-  for (const d of Object.keys(rootDeps)) {
-    const r = resolveLockPath(packages, 'apps/desktop', d)
-    if (r) queue.push(r)
-  }
-  while (queue.length > 0) {
-    const cur = queue.pop()!
-    if (seen.has(cur)) continue
-    seen.add(cur)
-    const entry = packages[cur]
-    const deps = { ...entry.dependencies, ...entry.optionalDependencies }
-    // Keep the mirror with scripts/lib/shipped-packages.mjs exact: that walk folds
-    // NON-OPTIONAL peerDependencies (TQ-3, full-audit 2026-07-12b), so this copy must too,
-    // or the two closures silently disagree about what ships.
-    for (const d of Object.keys(entry.peerDependencies ?? {})) {
-      if (!entry.peerDependenciesMeta?.[d]?.optional) deps[d] = d
-    }
-    for (const d of Object.keys(deps)) {
-      const r = resolveLockPath(packages, cur, d)
-      if (r && !seen.has(r)) queue.push(r)
-    }
-  }
-  return seen
-}
-
-/** Lockfile paths → their `name@version` identities (several copies may share one). */
-function idsOf(packages: LockPackages, lockPaths: Set<string>): Set<string> {
-  return new Set([...lockPaths].map((p) => lockId(packages, p)))
-}
-
 describe('electron-builder packaging excludes the @napi-rs/canvas native binary (L18)', () => {
-  it('has a files glob that negates every @napi-rs/canvas variant', () => {
-    const cfg = loadBuilderConfig()
-    expect(Array.isArray(cfg.files)).toBe(true)
-    const files = cfg.files ?? []
-
-    // The exclusion must be a negation glob ("!...") that matches the canvas package
-    // and all its per-platform siblings (@napi-rs/canvas-win32-x64-msvc, -darwin-*, …).
-    const exclusion = files.find(
-      (f) => f.startsWith('!') && /@napi-rs\/canvas/.test(f)
-    )
-    expect(exclusion, 'expected a "!**/@napi-rs/canvas*/**"-style exclusion in files').toBeTruthy()
-    expect(exclusion).toContain('@napi-rs/canvas')
-    // A trailing `*` after `canvas` so the platform-suffixed packages are caught too.
-    expect(exclusion).toMatch(/@napi-rs\/canvas\*/)
-  })
-
   it('the exclusion glob actually matches the platform-specific native package paths', () => {
-    const cfg = loadBuilderConfig()
-    const exclusion = (cfg.files ?? []).find(
-      (f) => f.startsWith('!') && /@napi-rs\/canvas/.test(f)
-    )!
-    // Translate the (minimatch-style) glob to a coarse RegExp and prove it covers the
-    // real hoisted paths electron-builder would walk.
-    const body = exclusion.slice(1) // drop the leading "!"
-    const rx = new RegExp(
-      '^' +
-        body
-          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-          // `**/` matches zero or more leading path segments (minimatch globstar)…
-          .replace(/\*\*\//g, '(?:.*/)?')
-          // …a bare `**` matches anything…
-          .replace(/\*\*/g, '.*')
-          // …and a single `*` matches within one segment.
-          .replace(/(?<!\.)\*/g, '[^/]*') +
-        '$'
-    )
+    const exclusion = (builderConfig().files ?? []).find((f) => f.startsWith('!') && /@napi-rs\/canvas/.test(f))
+    expect(exclusion, 'expected a "!**/@napi-rs/canvas*/**"-style exclusion in files').toBeTruthy()
+    const rx = globToRegExp(exclusion!.slice(1))
     for (const p of [
       'node_modules/@napi-rs/canvas/index.js',
       'node_modules/@napi-rs/canvas-win32-x64-msvc/skia.win32-x64-msvc.node',
@@ -137,7 +41,7 @@ describe('electron-builder packaging excludes the @napi-rs/canvas native binary 
 // it are Liberation 1.07.4 under GPL v2 with a physical-product clause (pdfjs-dist 6.3
 // corrected their notice from OFL). Starting to load standard fonts means revisiting both.
 describe('electron-builder packaging excludes pdfjs-dist standard fonts', () => {
-  const exclusion = (loadBuilderConfig().files ?? []).find(
+  const exclusion = (builderConfig().files ?? []).find(
     (f) => f.startsWith('!') && f.includes('pdfjs-dist/standard_fonts')
   )
 
@@ -173,7 +77,7 @@ describe('electron-builder packaging excludes pdfjs-dist standard fonts', () => 
         }
       }
     }
-    walk(join(__dirname, '..', '..', 'src'))
+    walk(join(DESKTOP_ROOT, 'src'))
     expect(offenders).toEqual([])
   })
 })
@@ -187,8 +91,7 @@ describe('electron-builder packaging excludes pdfjs-dist standard fonts', () => 
 // so that is decided rather than inherited. The DEP-3 negation block is in git history.
 describe('mermaid stays out of the production graph (streamdown 2.6, #550)', () => {
   it('no mermaid package is reachable from apps/desktop', () => {
-    const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
-    const names = [...prodClosure(lock.packages)].map((p) => p.replace(/^.*node_modules\//, ''))
+    const names = packedNodeModules(lockPackages()).map((p) => p.dest.replace(/^.*node_modules\//, ''))
     expect(names).toContain('streamdown') // the walk does reach the chat renderer
     expect(names.filter((n) => n === 'mermaid' || n.startsWith('@mermaid-js/'))).toEqual([])
   })
@@ -202,11 +105,10 @@ describe('mermaid stays out of the production graph (streamdown 2.6, #550)', () 
 // one, except the deliberate L18 canvas exclusion (an optional native dep the app never imports).
 describe('files negations never remove a package the app needs (#548)', () => {
   it('no negation but the canvas one covers a package where electron-builder packs it', () => {
-    const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
-    const negations = (loadBuilderConfig().files ?? [])
+    const negations = (builderConfig().files ?? [])
       .filter((f) => f.startsWith('!') && !f.includes('@napi-rs/canvas'))
       .map((f) => globToRegExp(f.slice(1)))
-    const removed = packedNodeModules(lock.packages).filter((p) =>
+    const removed = packedNodeModules(lockPackages()).filter((p) =>
       negations.some((rx) => rx.test(p.dest + '/x.js'))
     )
     expect(
@@ -214,13 +116,32 @@ describe('files negations never remove a package the app needs (#548)', () => {
       'these packages are needed by the production graph but excluded from app.asar — remove their negation'
     ).toEqual([])
   })
+
+  // The row above probes a package's top directory, so a negation of one of its sub-paths escapes it.
+  it('files is exactly the app bundle, package.json and the four negations', () => {
+    expect(builderConfig().files).toEqual([
+      'out/**/*',
+      '!out/preview/**',
+      '!out/tools/**',
+      'package.json',
+      '!**/node_modules/@napi-rs/canvas*/**',
+      '!**/node_modules/pdfjs-dist/standard_fonts/**'
+    ])
+  })
+
+  it('every files and asarUnpack glob has a shape the coarse translator reads', () => {
+    const cfg = builderConfig()
+    const globs = [...(cfg.files ?? []), ...(cfg.asarUnpack ?? [])]
+    expect(globs.length).toBeGreaterThan(0)
+    // Braces come out as literals, ? stays a regex quantifier and a trailing `.*` keeps a raw dot-star: such a negation
+    // would be a silent no-op in the notices and in these gates, though electron-builder would honour it.
+    expect(globs.filter((g) => /[{}?[\]()]|\.\*/.test(g))).toEqual([])
+  })
 })
 
 // #548: the layout model itself. The two fixtures are the shapes that decide where a nested
 // package lands; the last check compares the model with a real build when one is pointed at.
 describe('the app.asar layout model (#548)', () => {
-  const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
-
   it('hoists a nested package to the top when only a dev package held that slot (the tinyexec escape)', () => {
     // The pre-#536 shape: vitest 3's tinyexec 0.3 held the top-level slot, so @antfu/install-pkg's
     // 1.2.4 sat nested under the negated `@antfu/` in the lockfile.
@@ -255,24 +176,31 @@ describe('the app.asar layout model (#548)', () => {
     expect(dests['marked@16.4.2']).toBe('node_modules/mermaid/node_modules/marked')
   })
 
-  it('places only packages of the production graph', () => {
-    const all = idsOf(lock.packages, prodClosure(lock.packages))
-    const packed = packedNodeModules(lock.packages)
-    expect(packed.length).toBeGreaterThan(200)
-    expect(packed.filter((p) => !all.has(p.id)).map((p) => p.id)).toEqual([])
+  it('breaks a tie in npm child order, whatever order the lockfile lists the dependencies (marked 17 over mermaid 16)', () => {
+    // One dependent each, the #550 shape: the hoister takes the first child it meets, so `.sort(byNpmOrder)` decides.
+    const packages: LockPackages = {
+      'apps/desktop': { name: 'app', dependencies: { streamdown: '^1.0.0' } },
+      'node_modules/streamdown': { version: '1.0.0', dependencies: { mermaid: '^1.0.0', marked: '^17.0.0' } },
+      'node_modules/marked': { version: '17.0.6' },
+      'node_modules/mermaid': { version: '1.0.0', dependencies: { marked: '^16.0.0' } },
+      'node_modules/mermaid/node_modules/marked': { version: '16.4.2' }
+    }
+    const dests = Object.fromEntries(packedNodeModules(packages).map((p) => [p.id, p.dest]))
+    expect(dests['marked@17.0.6']).toBe('node_modules/marked')
+    expect(dests['marked@16.4.2']).toBe('node_modules/mermaid/node_modules/marked')
   })
 
   // Run it after a package build:
   // HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts
   const packedAsar = process.env.HILBERTRAUM_PACKED_ASAR
   it.skipIf(!packedAsar)('names exactly the package directories of a real app.asar', () => {
-    const negations = (loadBuilderConfig().files ?? [])
+    const negations = (builderConfig().files ?? [])
       .filter((f) => f.startsWith('!'))
       .map((f) => globToRegExp(f.slice(1)))
-    const predicted = packedNodeModules(lock.packages)
+    const predicted = packedNodeModules(lockPackages())
       .map((p) => p.dest)
       .filter((dest) => !negations.some((rx) => rx.test(dest + '/x.js')))
-    expect(asarPackageDirs(resolve(__dirname, '..', '..', packedAsar!))).toEqual(
+    expect(asarPackageDirs(resolve(DESKTOP_ROOT, packedAsar!))).toEqual(
       [...new Set(predicted)].sort()
     )
   })
@@ -287,7 +215,7 @@ describe('the app.asar layout model (#548)', () => {
 // while leaving the real out/main|preload|renderer bundles packaged.
 describe('electron-builder packaging excludes the dev-only preview harness (CODE-1)', () => {
   it('negates out/preview and only out/preview', () => {
-    const files = loadBuilderConfig().files ?? []
+    const files = builderConfig().files ?? []
     const exclusion = files.find((f) => f.startsWith('!') && f.includes('out/preview'))
     expect(exclusion, 'expected a "!out/preview/**" exclusion in files').toBeTruthy()
     const rx = globToRegExp(exclusion!.slice(1))
@@ -300,15 +228,28 @@ describe('electron-builder packaging excludes the dev-only preview harness (CODE
   })
 })
 
+// #233: out/tools/ holds the drive builders' gate tool, a build-machine tool run with plain node. `npm run build` writes it,
+// and release.yml then runs `package:win` on the same tree.
+describe('electron-builder packaging excludes the drive builders\' gate tool (#233)', () => {
+  it('negates out/tools and only out/tools', () => {
+    const exclusion = (builderConfig().files ?? []).find((f) => f.startsWith('!') && f.includes('out/tools'))
+    expect(exclusion, 'expected a "!out/tools/**" exclusion in files').toBeTruthy()
+    const rx = globToRegExp(exclusion!.slice(1))
+    expect(rx.test('out/tools/assert-commercial-drive.mjs')).toBe(true)
+    for (const p of ['out/main/index.mjs', 'out/preload/index.mjs', 'out/renderer/index.html']) {
+      expect(rx.test(p), `exclusion must NOT match the shipped bundle path ${p}`).toBe(false)
+    }
+  })
+})
+
 // TQ-4 (full-audit 2026-07-12b, §48 LIC-1 follow-up): the desktop package.json `license` field
 // is what electron-builder stamps into the artifact metadata; it must never drift from the
 // repo-root GPL-3.0-or-later declaration (LICENSE file + root package.json).
 describe('desktop package license matches the repo license (TQ-4)', () => {
   it('apps/desktop and root package.json both declare GPL-3.0-or-later', () => {
-    const read = (p: string): { license?: string } =>
-      JSON.parse(readFileSync(p, 'utf8')) as { license?: string }
-    expect(read(join(__dirname, '..', '..', 'package.json')).license).toBe('GPL-3.0-or-later')
-    expect(read(join(LOCKFILE, '..', 'package.json')).license).toBe('GPL-3.0-or-later')
+    const license = (...rel: string[]): unknown => (JSON.parse(repoText(...rel)) as { license?: string }).license
+    expect(license('apps', 'desktop', 'package.json')).toBe('GPL-3.0-or-later')
+    expect(license('package.json')).toBe('GPL-3.0-or-later')
   })
 })
 
@@ -320,23 +261,16 @@ describe('desktop package license matches the repo license (TQ-4)', () => {
 // gate — the failure only surfaces when someone runs `npm run package`, never in typecheck/test.
 describe('electron-builder pins a path-safe executableName (PR #30)', () => {
   it('sets a top-level executableName equal to productName', () => {
-    const cfg = loadBuilderConfig()
+    const cfg = builderConfig()
     expect(cfg.productName, 'productName present').toBe('HilbertRaum')
     expect(cfg.executableName, 'executableName present and matches productName').toBe(
       cfg.productName
     )
-  })
-
-  it('the executableName contains no path-unsafe characters (the "@" that broke the build)', () => {
-    const name = loadBuilderConfig().executableName ?? ''
-    // No '@' / '/' / '\\' / whitespace / other filename-hostile chars — a plain safe basename.
-    expect(name.length).toBeGreaterThan(0)
-    expect(name).not.toContain('@')
-    expect(name).toMatch(/^[A-Za-z0-9._-]+$/)
+    expect(cfg.executableName).toMatch(/^[A-Za-z0-9._-]+$/)
   })
 
   it('no per-platform section overrides executableName with a conflicting value', () => {
-    const cfg = loadBuilderConfig()
+    const cfg = builderConfig()
     for (const section of ['win', 'mac', 'linux', 'portable'] as const) {
       const override = cfg[section]?.executableName
       // A platform may repeat the same name, but must never disagree with the top-level pin.
@@ -345,6 +279,25 @@ describe('electron-builder pins a path-safe executableName (PR #30)', () => {
           cfg.executableName
         )
       }
+    }
+  })
+
+  it('the portable artifact name is the one the launcher, the sell gate and the release upload expect', () => {
+    const pattern = builderConfig().portable?.artifactName ?? ''
+    expect(pattern.replace('${version}', '9.9.9')).toBe(KIT_PLATFORM_SPECS['win-x64'].artifact('9.9.9'))
+    const glob = pattern.replace('${version}', '*')
+    expect(repoText('launchers', 'Start HilbertRaum.cmd')).toContain(glob)
+    expect(repoText('.github', 'workflows', 'release.yml')).toContain(`apps/desktop/release/${glob}`)
+  })
+
+  it('the release jobs\' targets and the mac entitlements file stay what those jobs build on', () => {
+    const cfg = builderConfig()
+    expect(cfg.win?.target).toEqual(['portable'])
+    expect(cfg.mac?.target).toEqual(['dir'])
+    expect(cfg.linux?.target).toEqual(['AppImage'])
+    expect(cfg.npmRebuild).toBe(false)
+    for (const key of ['entitlements', 'entitlementsInherit']) {
+      expect(existsSync(join(DESKTOP_ROOT, String(cfg.mac?.[key]))), key).toBe(true)
     }
   })
 })
@@ -366,19 +319,16 @@ describe('electron-builder pins a path-safe executableName (PR #30)', () => {
 describe('electron-builder.yml electronVersion tracks the electron devDependency (DEP-1 §5 #1)', () => {
   /** The version the lockfile pins for the hoisted root `node_modules/electron`. */
   function lockedElectronVersion(): string {
-    const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as {
-      packages: Record<string, { version?: string }>
-    }
-    const entry = lock.packages['node_modules/electron']
+    const entry = lockPackages()['node_modules/electron']
     expect(entry?.version, 'package-lock.json pins node_modules/electron').toBeTruthy()
     return entry!.version!
   }
 
   /** The `^x.y.z` range declared in apps/desktop/package.json devDependencies. */
   function declaredElectronRange(): string {
-    const pkg = JSON.parse(
-      readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')
-    ) as { devDependencies?: Record<string, string> }
+    const pkg = JSON.parse(repoText('apps', 'desktop', 'package.json')) as {
+      devDependencies?: Record<string, string>
+    }
     const range = pkg.devDependencies?.electron
     expect(range, 'apps/desktop declares an electron devDependency').toBeTruthy()
     return range!
@@ -390,18 +340,10 @@ describe('electron-builder.yml electronVersion tracks the electron devDependency
     return [Number(m![1]), Number(m![2]), Number(m![3])]
   }
 
-  it('electronVersion is a plain three-part version STRING, not a YAML number', () => {
-    const raw = loadBuilderConfig().electronVersion
-    // `electronVersion: 43.0` is valid YAML and parses to the number 43 — electron-builder
-    // would then look for a nonexistent "43" release. Two dots keep it a string; assert that.
-    expect(typeof raw, 'electronVersion must be quoted/dotted enough to stay a string').toBe(
-      'string'
-    )
-    expect(String(raw)).toMatch(/^\d+\.\d+\.\d+$/)
-  })
-
   it('electronVersion EQUALS the electron version pinned in package-lock.json', () => {
-    const pinned = String(loadBuilderConfig().electronVersion)
+    // `electronVersion: 43.0` is valid YAML and parses to the number 43 — electron-builder
+    // would then look for a nonexistent "43" release. Two dots keep it a string; no String() here.
+    const pinned = builderConfig().electronVersion
     expect(
       pinned,
       'electron-builder.yml packages this exact runtime — if it disagrees with the lockfile, ' +
@@ -415,31 +357,22 @@ describe('electron-builder.yml electronVersion tracks the electron devDependency
     // If the range form ever changes, fail loudly rather than silently stop checking.
     expect(caret, `electron devDependency "${range}" is a plain caret range`).not.toBeNull()
     const [fMaj, fMin, fPat] = parse3(caret![1])
-    const [pMaj, pMin, pPat] = parse3(String(loadBuilderConfig().electronVersion))
+    const [pMaj, pMin, pPat] = parse3(String(builderConfig().electronVersion))
     expect(pMaj, 'same major as the declared floor').toBe(fMaj)
     const atOrAbove =
       pMin > fMin || (pMin === fMin && pPat >= fPat)
     expect(atOrAbove, `${pMaj}.${pMin}.${pPat} is at or above the ${caret![1]} floor`).toBe(true)
   })
 
-  it('the INSTALLED electron agrees too, when node_modules is present', () => {
-    let installed: string | null = null
-    try {
-      installed = (
-        JSON.parse(
-          readFileSync(
-            join(LOCKFILE, '..', 'node_modules', 'electron', 'package.json'),
-            'utf8'
-          )
-        ) as { version: string }
-      ).version
-    } catch {
-      // No electron installed (slimmed/lint-only context) — the lockfile assertions above
-      // are the load-bearing ones; nothing to compare against here.
-      return
+  it('the INSTALLED electron agrees too, when node_modules is present', (ctx) => {
+    const manifest = join(REPO_ROOT, 'node_modules', 'electron', 'package.json')
+    if (!existsSync(manifest)) {
+      expect(process.env.CI, 'CI runs npm ci, so electron is installed at the repo root').toBeFalsy()
+      ctx.skip()
     }
-    expect(installed, 'a stale node_modules would package a runtime nobody tested').toBe(
-      String(loadBuilderConfig().electronVersion)
+    const { version } = JSON.parse(readFileSync(manifest, 'utf8')) as { version: string }
+    expect(version, 'a stale node_modules would package a runtime nobody tested').toBe(
+      String(builderConfig().electronVersion)
     )
   })
 })
@@ -449,27 +382,18 @@ describe('electron-builder.yml electronVersion tracks the electron devDependency
 // hence the exact pin and one mapping check per option. Measured, with the reasons, in
 // docs/architecture.md "Electron fuses — design record (#562)"; the built exe's wire is re-checked
 // by hand (docs/packaging.md "Electron fuses").
-const FUSE_OPTIONS: ReadonlyArray<readonly [yamlKey: string, fuse: string]> = [
-  ['runAsNode', 'RunAsNode'],
-  ['enableNodeOptionsEnvironmentVariable', 'EnableNodeOptionsEnvironmentVariable'],
-  ['enableNodeCliInspectArguments', 'EnableNodeCliInspectArguments'],
-  ['enableEmbeddedAsarIntegrityValidation', 'EnableEmbeddedAsarIntegrityValidation'],
-  ['onlyLoadAppFromAsar', 'OnlyLoadAppFromAsar'],
-  ['grantFileProtocolExtraPrivileges', 'GrantFileProtocolExtraPrivileges']
+const FUSE_OPTIONS: ReadonlyArray<readonly [yamlKey: string, fuse: string, wireAt: number]> = [
+  ['runAsNode', 'RunAsNode', 0],
+  ['enableNodeOptionsEnvironmentVariable', 'EnableNodeOptionsEnvironmentVariable', 2],
+  ['enableNodeCliInspectArguments', 'EnableNodeCliInspectArguments', 3],
+  ['enableEmbeddedAsarIntegrityValidation', 'EnableEmbeddedAsarIntegrityValidation', 4],
+  ['onlyLoadAppFromAsar', 'OnlyLoadAppFromAsar', 5],
+  ['grantFileProtocolExtraPrivileges', 'GrantFileProtocolExtraPrivileges', 7]
 ]
-
-/** A file of the installed electron-builder, or null in a slimmed context without it. */
-function builderSource(...rel: string[]): string | null {
-  try {
-    return readFileSync(join(LOCKFILE, '..', 'node_modules', 'app-builder-lib', 'out', ...rel), 'utf8')
-  } catch {
-    return null
-  }
-}
 
 describe('electron-builder.yml electronFuses (#560, #562)', () => {
   it('pins the fuse set exactly', () => {
-    expect(loadBuilderConfig().electronFuses).toEqual({
+    expect(builderConfig().electronFuses).toEqual({
       // #562: ELECTRON_RUN_AS_NODE and --inspect no longer reach the main process.
       runAsNode: false,
       enableNodeCliInspectArguments: false,
@@ -485,16 +409,25 @@ describe('electron-builder.yml electronFuses (#560, #562)', () => {
     })
   })
 
+  it('verify-mac-build.sh expects the wire electronFuses sets', () => {
+    const wire = /^EXPECTED_WIRE="(\d{9})"$/m.exec(repoText('scripts', 'verify-mac-build.sh'))?.[1] ?? ''
+    const fuses = builderConfig().electronFuses ?? {}
+    expect(FUSE_OPTIONS.map(([, , at]) => wire[at])).toEqual(FUSE_OPTIONS.map(([key]) => (fuses[key] ? '1' : '0')))
+  })
+
   it('keeps what the integrity fuses need: an asar, and the header hash electron-builder writes', () => {
-    const cfg = loadBuilderConfig()
+    const cfg = builderConfig()
     // onlyLoadAppFromAsar loads nothing but app.asar; without the hash the binary refuses to start.
     expect(cfg.asar).toBe(true)
     expect(cfg.disableAsarIntegrity).toBeUndefined()
   })
 
   it('the installed electron-builder still maps every option to its fuse (a rename would be a silent no-op)', () => {
-    const src = builderSource('platformPackager.js')
-    if (src === null) return // no electron-builder installed — the yml pin above still holds
+    const src = builderFile('out', 'platformPackager.js')
+    expect(
+      [...FUSE_OPTIONS.map(([key]) => key), 'resetAdHocDarwinSignature'].sort(),
+      'a new yml fuse needs a row in FUSE_OPTIONS'
+    ).toEqual(Object.keys(builderConfig().electronFuses ?? {}).sort())
     for (const [key, fuse] of FUSE_OPTIONS) {
       const assignment = String.raw`config\[FuseV1Options\.` + fuse + String.raw`\]\s*=\s*fuses\.` + key + String.raw`\b`
       expect(src, key).toMatch(new RegExp(assignment))
@@ -503,11 +436,10 @@ describe('electron-builder.yml electronFuses (#560, #562)', () => {
   })
 
   it('the installed electron-builder still computes the asar hash and writes it where Electron reads it', () => {
-    const packager = builderSource('platformPackager.js')
-    const framework = builderSource('electron', 'ElectronFramework.js')
-    const mac = builderSource('electron', 'electronMac.js')
-    const win = builderSource('electron', 'electronWin.js')
-    if (packager === null || framework === null || mac === null || win === null) return
+    const packager = builderFile('out', 'platformPackager.js')
+    const framework = builderFile('out', 'electron', 'ElectronFramework.js')
+    const mac = builderFile('out', 'electron', 'electronMac.js')
+    const win = builderFile('out', 'electron', 'electronWin.js')
     expect(packager).toMatch(/asarIntegrity\s*=\s*await \(0, integrity_1\.computeData\)/)
     // Windows: the exe's INTEGRITY/ELECTRONASAR resource; macOS: Info.plist ElectronAsarIntegrity.
     expect(framework).toMatch(/addWinAsarIntegrity\)\(executable, options\.asarIntegrity\)/)
