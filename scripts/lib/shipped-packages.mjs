@@ -39,7 +39,7 @@ import { parse } from 'yaml'
  * is EMPTY. If a devDependency ever starts being imported by shipped code, add it here
  * (name only; the installed version is resolved from the lockfile) and regenerate.
  */
-export const RENDERER_BUNDLED_DEV_DEPS = []
+const RENDERER_BUNDLED_DEV_DEPS = []
 
 // Minimatch-style files glob -> coarse RegExp: two stars and a slash match any directory prefix, two stars anything, a
 // single star one path segment. Enough for the node_modules shapes in electron-builder.yml, not a full minimatch, and

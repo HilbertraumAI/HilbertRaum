@@ -9,7 +9,6 @@ export interface ShippedPackage {
   /** the lockfile entry's license id, for a package not installed on this host */
   lockLicense: string | null
 }
-export declare const RENDERER_BUNDLED_DEV_DEPS: string[]
 export declare function globToRegExp(glob: string): RegExp
 export declare function builderFileNegations(repoRoot: string): RegExp[]
 export declare function computeShippedPackages(repoRoot: string): ShippedPackage[]
