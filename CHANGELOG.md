@@ -37,6 +37,25 @@ from its first public `1.0.0` release onward.
   it records in your Activity log when the app's main process tries to reach another computer. It
   only ever saw encrypted (HTTPS) attempts, so an unencrypted one would have gone unrecorded. Nothing
   in the app makes such a connection while offline; this closes a gap in the safeguard itself (#751).
+- **Cancelling a model download now stops it straight away.** Cancelling during the final check let
+  that check run on for minutes on a slow drive. It now stops at once, and the file stays ready to
+  pick up again. Starting a download in the moment after a cancel is refused rather than writing to
+  the same file twice; try again a moment later (#752).
+- **A failed model download says what really happened.** A problem on the drive now reads as one,
+  with no file paths in the message, and the app no longer promises to resume a part it has already
+  thrown away. The Activity log records the kind of failure, not the file's path (#752).
+- **An AI engine that fails its safety check no longer looks installed.** If an engine archive tries
+  to reach outside its own folder, the app refuses it. Its files stayed behind and the engine read
+  as installed; they are now removed, and the app offers the download again (#752).
+- **A model start no longer fails with "Hashing was cancelled".** Cancelling Check all model files
+  just as a model started could fail that start (#752).
+
+### Changed
+
+- **Hand-written vision model manifests must give a download source for both files or neither.** A
+  manifest with a source for only one of them never produced a working model, even after a clean
+  download of several gigabytes. Such a manifest is now skipped, with a line in the log. The vision
+  model that ships with the app is not affected (#752).
 
 ## [0.1.64] — 2026-10-28
 
