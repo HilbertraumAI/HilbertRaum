@@ -20,7 +20,7 @@ import { isSupportedRuntimeFormat, manifestFiles, sha256File, verifyChecksum } f
 // `services/runtime/sidecar.ts` `llamaOsDir` actually resolves — NOT windows/macos/linux).
 
 /** Sidecar OS sub-directory keys under `runtime/llama.cpp/` — must match `llamaOsDir`. */
-export const DRIVE_OS_DIRS = ['win', 'mac', 'linux'] as const
+const DRIVE_OS_DIRS = ['win', 'mac', 'linux'] as const
 
 /** Drive layout format version stamped into `drive.json`. */
 export const DRIVE_FORMAT_VERSION = 1
@@ -158,9 +158,6 @@ export interface DriveJson {
 
 export interface DriveJsonOptions {
   createdAt?: string
-  edition?: string
-  /** drive.json `allow_network_by_default` (informational; loadPolicy reads it). */
-  allowNetworkByDefault?: boolean
 }
 
 /** Build `config/drive.json` — the marker `resolvePaths` keys off (spec §6 example). */
@@ -169,11 +166,11 @@ export function buildDriveJson(opts: DriveJsonOptions = {}): DriveJson {
     product: 'HilbertRaum',
     drive_format_version: DRIVE_FORMAT_VERSION,
     created_at: opts.createdAt ?? new Date().toISOString(),
-    edition: opts.edition ?? 'lite',
+    edition: 'lite',
     offline_by_default: true,
     models_dir: 'models',
     workspace_dir: 'workspace',
-    allow_network_by_default: opts.allowNetworkByDefault ?? false
+    allow_network_by_default: false
   }
 }
 
@@ -261,13 +258,6 @@ export interface ModelVerifyResult {
   actual: string | null
   sizeBytes: number | null
 }
-
-/** The §7.4 (runtime → format) support table lives in `models.ts` (the canonical source
- *  `computeInstallState` uses). Re-exported so the drift test (audit M-A1) asserts the
- *  `verify-models.{ps1,sh}` gate literals against the SAME pairs the app verifies — a
- *  bundled whisper weight (ggml/whisper_cpp) must verify by SHA-256 on every path, never
- *  be falsely reported UNSUPPORTED (which would fail the ship gate). */
-export { SUPPORTED_RUNTIME_FORMATS } from './models'
 
 /**
  * Verify each manifest's weight against its `sha256`, mirroring `services/models.ts`

@@ -124,7 +124,7 @@ function readDriveInputs(root: string): DriveInputs {
   return { manifests, runtime, whisper, ocr, kiwix, problems, summary }
 }
 
-export async function main(argv: string[], out: (line: string) => void = console.log): Promise<number> {
+async function main(argv: string[]): Promise<number> {
   const args = parseArgs(argv)
   if (typeof args === 'string') {
     console.error(args)
@@ -146,19 +146,19 @@ export async function main(argv: string[], out: (line: string) => void = console
   const problems = [...inputs.problems, ...result.problems]
   const ok = problems.length === 0
   if (args.json) {
-    out(JSON.stringify({ ok, problems, checks: result.checks }))
+    console.log(JSON.stringify({ ok, problems, checks: result.checks }))
     return ok ? 0 : 1
   }
-  out(`assert-commercial-drive: ${args.target}`)
-  out(`  platforms: ${args.platforms.join(', ')} | app version: ${args.appVersion}`)
-  for (const s of inputs.summary) out(`  ${s}`)
-  for (const [name, value] of Object.entries(result.checks)) out(`  ${value ? 'ok  ' : 'FAIL'} ${name}`)
+  console.log(`assert-commercial-drive: ${args.target}`)
+  console.log(`  platforms: ${args.platforms.join(', ')} | app version: ${args.appVersion}`)
+  for (const s of inputs.summary) console.log(`  ${s}`)
+  for (const [name, value] of Object.entries(result.checks)) console.log(`  ${value ? 'ok  ' : 'FAIL'} ${name}`)
   if (ok) {
-    out(`SELLABLE: every check passed (${Object.keys(result.checks).length} checks).`)
+    console.log(`SELLABLE: every check passed (${Object.keys(result.checks).length} checks).`)
     return 0
   }
-  out('NOT SELLABLE:')
-  for (const p of problems) out(`  - ${p}`)
+  console.log('NOT SELLABLE:')
+  for (const p of problems) console.log(`  - ${p}`)
   return 1
 }
 
