@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,7 +11,7 @@ import {
   OFL_1_1_LICENSE
 } from '../../../../scripts/lib/extra-notices.mjs'
 import { packedNodeModules } from '../helpers/asar-layout'
-import { builderConfig, DESKTOP_ROOT, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
+import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
 
 // LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~224 npm packages
 // (app.asar production closure + the Vite-inlined renderer libs, which are a subset of it) —
@@ -207,20 +207,13 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     const importRx =
       /^(?:import|export)\s[^'"`;=(]*?\sfrom\s+['"]([^'"./][^'"]*)['"]|^import\s+['"]([^'"./][^'"]*)['"]|\bimport\(\s*['"]([^'"./][^'"]*)['"]\s*\)|\brequire\(\s*['"]([^'"./][^'"]*)['"]\s*\)/gm
     const seen = new Set<string>()
-    const walk = (dir: string): void => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const p = join(dir, e.name)
-        if (e.isDirectory()) walk(p)
-        else if (/\.tsx?$/.test(e.name) && !e.name.endsWith('.d.ts')) {
-          for (const m of readFileSync(p, 'utf8').matchAll(importRx)) {
-            const spec = m[1] ?? m[2] ?? m[3] ?? m[4]
-            if (spec.startsWith('node:') || spec.startsWith('@shared/') || spec.startsWith('@renderer/')) continue
-            seen.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0])
-          }
-        }
+    for (const p of filesUnder(join(DESKTOP_ROOT, 'src'), /(?<!\.d)\.tsx?$/)) {
+      for (const m of readFileSync(p, 'utf8').matchAll(importRx)) {
+        const spec = m[1] ?? m[2] ?? m[3] ?? m[4]
+        if (spec.startsWith('node:') || spec.startsWith('@shared/') || spec.startsWith('@renderer/')) continue
+        seen.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0])
       }
     }
-    walk(join(DESKTOP_ROOT, 'src'))
     expect(seen).toContain('react') // the walk read the source
     expect([...seen].filter((p) => !allowed.has(p))).toEqual([])
   })

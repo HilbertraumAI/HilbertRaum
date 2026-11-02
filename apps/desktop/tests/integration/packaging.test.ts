@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 // The glob → RegExp translation is shared with asar-unpack-closure.test.ts (#232).
 import { globToRegExp } from '../helpers/globs'
@@ -10,7 +10,7 @@ import {
   type LockPackages,
   type PackedPackage
 } from '../helpers/asar-layout'
-import { builderConfig, DESKTOP_ROOT, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
+import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
 import { KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
 
 // L18 (audit-2026-06-13): @napi-rs/canvas is an OPTIONAL transitive dep of pdfjs-dist —
@@ -67,18 +67,8 @@ describe('electron-builder packaging excludes pdfjs-dist standard fonts', () => 
   })
 
   it('the app never points pdf.js at standard fonts (the exclusion is only safe while so)', () => {
-    const offenders: string[] = []
-    const walk = (dir: string): void => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const p = join(dir, e.name)
-        if (e.isDirectory()) walk(p)
-        else if (/\.(ts|tsx|mjs|js|html)$/.test(e.name) && /standardFontDataUrl|standard_fonts/.test(readFileSync(p, 'utf8'))) {
-          offenders.push(p)
-        }
-      }
-    }
-    walk(join(DESKTOP_ROOT, 'src'))
-    expect(offenders).toEqual([])
+    const source = filesUnder(join(DESKTOP_ROOT, 'src'), /\.(ts|tsx|mjs|js|html)$/)
+    expect(source.filter((p) => /standardFontDataUrl|standard_fonts/.test(readFileSync(p, 'utf8')))).toEqual([])
   })
 })
 

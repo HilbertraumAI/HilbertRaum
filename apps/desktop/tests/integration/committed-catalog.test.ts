@@ -88,8 +88,10 @@ const CHAT_FACTS: Record<string, ChatFacts> = {
 }
 
 describe('committed catalog — chat manifest facts (owner decisions)', () => {
+  const byId = new Map(committedManifests().map((m) => [m.id, m]))
+
   it.each(Object.entries(CHAT_FACTS))('%s holds its committed facts', (id, facts) => {
-    const m = committedManifests().find((x) => x.id === id)
+    const m = byId.get(id)
     expect(m, 'manifest present').toBeDefined()
     expect({
       family: m!.family,

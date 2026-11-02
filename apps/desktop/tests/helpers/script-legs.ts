@@ -32,12 +32,6 @@ export function extractScriptArray(src: string, header: string): string[] {
   return entries
 }
 
-export interface ScriptRunOptions {
-  timeoutMs?: number
-  env?: NodeJS.ProcessEnv
-  cwd?: string
-}
-
 export interface ScriptLeg {
   name: string
   skip: boolean
@@ -45,7 +39,7 @@ export interface ScriptLeg {
   /** A flag in this leg's spelling: `flag('DryRun')` is `-DryRun` or `--dry-run`. */
   flag(name: string): string
   /** Runs `scripts/<script>`. */
-  run(script: string, args: string[], opts?: ScriptRunOptions): SpawnSyncReturns<string>
+  run(script: string, args: string[], opts?: { timeoutMs?: number }): SpawnSyncReturns<string>
 }
 
 /**
@@ -54,7 +48,7 @@ export interface ScriptLeg {
  * autoload and every hashing script dies with CommandNotFoundException. Replace it, case-insensitively as Windows env names
  * are, with 5.1's own default module path, which is what any user's machine gives the script.
  */
-function powershellEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+function powershellEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(process.env)) if (!/^psmodulepath$/i.test(k)) env[k] = v
   const sysRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
@@ -64,7 +58,7 @@ function powershellEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   ]
     .filter((p): p is string => p !== null)
     .join(';')
-  return { ...env, ...extra }
+  return env
 }
 
 /** Git Bash on a Windows dev box can run the bash legs too: HILBERTRAUM_SCRIPT_SH_LEG=1. */
@@ -80,13 +74,7 @@ export const SCRIPT_LEGS: ScriptLeg[] = [
       spawnSync(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(SCRIPTS, script), ...args],
-        {
-          encoding: 'utf8',
-          timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS,
-          windowsHide: true,
-          env: powershellEnv(opts.env),
-          cwd: opts.cwd
-        }
+        { encoding: 'utf8', timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS, windowsHide: true, env: powershellEnv() }
       )
   },
   {
@@ -95,12 +83,7 @@ export const SCRIPT_LEGS: ScriptLeg[] = [
     ext: 'sh',
     flag: (n) => `--${n.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()}`,
     run: (script, args, opts = {}) =>
-      spawnSync('bash', [join(SCRIPTS, script), ...args], {
-        encoding: 'utf8',
-        timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS,
-        env: { ...process.env, ...opts.env },
-        cwd: opts.cwd
-      })
+      spawnSync('bash', [join(SCRIPTS, script), ...args], { encoding: 'utf8', timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS })
   }
 ]
 

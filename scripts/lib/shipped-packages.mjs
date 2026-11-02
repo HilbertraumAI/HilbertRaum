@@ -28,16 +28,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 
-/**
- * Renderer-bundled libraries that are devDependencies (would ship via the Vite bundle
- * WITHOUT being in the production closure). Derived 2026-07-12 by scanning every bare
- * import in apps/desktop/src/renderer + src/shared + src/main + src/preload: every
- * runtime import resolves to a production `dependency` of apps/desktop, so this list
- * is EMPTY. If a devDependency ever starts being imported by shipped code, add it here
- * (name only; the installed version is resolved from the lockfile) and regenerate.
- * third-party-notices.test.ts "shipped source imports only…" fails when that happens.
- */
-const RENDERER_BUNDLED_DEV_DEPS = []
+// Only the production closure ships. The renderer bundle inlines whatever it imports, so a devDependency imported by
+// shipped code would reach users with no notice: such a package must become a production dependency of apps/desktop.
+// third-party-notices.test.ts "shipped source imports only…" fails until it has.
 
 // Minimatch-style files glob -> coarse RegExp: two stars and a slash match any directory prefix, two stars anything, a
 // single star one path segment. Enough for the node_modules shapes in electron-builder.yml, not a full minimatch, and
@@ -139,14 +132,6 @@ export function computeShippedPackages(repoRoot) {
     // (probe with a representative file path, as packaging.test.ts does).
     (p) => !negations.some((rx) => rx.test(p + '/x.js'))
   )
-
-  for (const name of RENDERER_BUNDLED_DEV_DEPS) {
-    const direct = `node_modules/${name}`
-    const nested = `apps/desktop/node_modules/${name}`
-    const found = lock.packages[nested] ? nested : lock.packages[direct] ? direct : null
-    if (!found) throw new Error(`RENDERER_BUNDLED_DEV_DEPS entry not in lockfile: ${name}`)
-    shippedPaths.push(found)
-  }
 
   const byId = new Map()
   for (const p of shippedPaths) {

@@ -285,7 +285,8 @@ it.runIf(process.env.CI)('the canonical gate tool is built on CI, so a skipped g
   expect(existsSync(GATE_TOOL)).toBe(true)
 })
 
-it.runIf(process.platform === 'darwin')('bash on PATH is the stock 3.2 the sh leg claims to run under (#753)', () => {
+// CI only: a desk Mac may well have a newer bash first on PATH, and nothing is wrong with that.
+it.runIf(process.env.CI && process.platform === 'darwin')('bash on PATH is the stock 3.2 the sh leg claims to run under (#753)', () => {
   expect(spawnSync('bash', ['--version'], { encoding: 'utf8' }).stdout).toMatch(/^GNU bash, version 3\.2\./)
 })
 
@@ -816,6 +817,18 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
         expect(out).toContain('SELLABLE: every check passed')
         expect(out).not.toContain('NOT SELLABLE')
+      })
+
+      // The positive behind the two ocr flips below: a pre-flight that called every OCR file a mismatch would pass both.
+      // Not on Git Bash, where a backslash target reads any OCR file as a mismatch.
+      it.skipIf(!toolBuilt || (leg.ext === 'sh' && process.platform === 'win32'))('one ocr file with the pinned bytes reaches SELLABLE', () => {
+        const root = sellableDrive()
+        appendOcr(root)
+        writeDriveFile(root, 'ocr/deu.traineddata.gz', 'deu')
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
       })
 
       const flips: Array<[string, (root: string) => void, string]> = [

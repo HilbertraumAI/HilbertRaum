@@ -41,12 +41,19 @@ export function lockPackages(): LockPackages {
   return (JSON.parse(repoText('package-lock.json')) as { packages: LockPackages }).packages
 }
 
-function yamlFiles(dir: string): string[] {
+function walk(dir: string, name: RegExp): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name)
-    if (entry.isDirectory()) return yamlFiles(path)
-    return /\.ya?ml$/i.test(entry.name) ? [path] : []
+    if (entry.isDirectory()) return walk(path, name)
+    return name.test(entry.name) ? [path] : []
   })
+}
+
+/** Every file under `dir` whose name matches. Throws on zero, so a scan over the tree cannot pass on nothing. */
+export function filesUnder(dir: string, name: RegExp): string[] {
+  const files = walk(dir, name)
+  if (files.length === 0) throw new Error(`no file matching ${name} under ${dir}`)
+  return files
 }
 
 /**
@@ -54,7 +61,7 @@ function yamlFiles(dir: string): string[] {
  * `local_path`, which leaves `runtime-sources.yaml` out). Throws on zero, so a rule row over the list cannot pass on nothing.
  */
 export function modelManifestDocs(): Array<{ path: string; text: string; doc: Record<string, unknown> }> {
-  const docs = yamlFiles(join(REPO_ROOT, 'model-manifests'))
+  const docs = filesUnder(join(REPO_ROOT, 'model-manifests'), /\.ya?ml$/i)
     .sort()
     .map((path) => {
       const text = readFileSync(path, 'utf8')

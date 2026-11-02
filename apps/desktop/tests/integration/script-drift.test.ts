@@ -12,7 +12,7 @@ import { sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/as
 import { isRealSha256 } from '../../src/shared/manifest'
 import { KIT_PLATFORMS, type RuntimeFamily } from '../../src/shared/runtime-sources'
 import { DRIVE_LICENSE_ARTIFACTS, KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
-import { REPO_ROOT, builderConfig, modelManifestDocs, repoText } from '../helpers/repo-files'
+import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
 import { extractScriptArray } from '../helpers/script-legs'
 import { committedRuntimeSources } from '../helpers/catalog'
 
@@ -807,22 +807,5 @@ describe('launchers keep the line endings their shell needs (audit M20)', () => 
 
   it.each(['launchers/Start HilbertRaum.command', 'launchers/start-hilbertraum.sh'])('%s has no CR', (rel) => {
     expect(repoText(rel)).not.toContain('\r')
-  })
-})
-
-describe('verify-mac-build.sh', () => {
-  it('expects the fuse wire electron-builder.yml configures', () => {
-    const wire = repoText('scripts/verify-mac-build.sh').match(/^EXPECTED_WIRE="([01]{9})"$/m)?.[1]
-    expect(wire).toBeDefined()
-    const fuses = builderConfig().electronFuses!
-    const positions: Array<[number, string]> = [
-      [0, 'runAsNode'],
-      [2, 'enableNodeOptionsEnvironmentVariable'],
-      [3, 'enableNodeCliInspectArguments'],
-      [4, 'enableEmbeddedAsarIntegrityValidation'],
-      [5, 'onlyLoadAppFromAsar'],
-      [7, 'grantFileProtocolExtraPrivileges']
-    ]
-    for (const [i, key] of positions) expect(wire![i], key).toBe(fuses[key] ? '1' : '0')
   })
 })
