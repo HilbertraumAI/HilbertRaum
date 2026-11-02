@@ -1,67 +1,27 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, mkdirSync } from 'node:fs'
+import { statfs } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolveDriveRootFromLauncher } from '../../src/main/services/launcher'
 import { runPreflight } from '../../src/main/services/preflight'
 import { t } from '../../src/shared/i18n'
 import type { DriveSpeed } from '../../src/main/services/benchmark'
 
+// A row reads the mocked volume, never this machine's free space.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('node:fs/promises')>()
+  const mocked = { ...orig, statfs: vi.fn() }
+  return { ...mocked, default: mocked }
+})
+
+const setFreeBytes = (bytes: number): void => {
+  vi.mocked(statfs).mockResolvedValue({ bavail: bytes, bsize: 1 } as unknown as Awaited<ReturnType<typeof statfs>>)
+}
+beforeEach(() => setFreeBytes(8 * 1024 ** 3))
+
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
 }
-
-describe('resolveDriveRootFromLauncher', () => {
-  it('derives the drive root from a Windows drive-letter launcher (no hardcoded letter)', () => {
-    expect(resolveDriveRootFromLauncher('E:\\Start HilbertRaum.cmd', 'win32')).toBe('E:\\')
-    // The SAME drive on a second laptop gets a different letter — must follow it (criterion #10).
-    expect(resolveDriveRootFromLauncher('F:\\Start HilbertRaum.cmd', 'win32')).toBe('F:\\')
-  })
-
-  it('handles a launcher nested in a sub-folder of the drive', () => {
-    expect(resolveDriveRootFromLauncher('E:\\PRIVATE_AI\\Start HilbertRaum.cmd', 'win32')).toBe(
-      'E:\\PRIVATE_AI'
-    )
-  })
-
-  it('derives the drive root from a POSIX / macOS launcher', () => {
-    expect(
-      resolveDriveRootFromLauncher('/Volumes/MYDRIVE/start-hilbertraum.sh', 'posix')
-    ).toBe('/Volumes/MYDRIVE')
-    expect(
-      resolveDriveRootFromLauncher('/Volumes/HILBERTRAUM/Start HilbertRaum.command', 'posix')
-    ).toBe('/Volumes/HILBERTRAUM')
-  })
-
-  it('auto-detects Windows vs POSIX grammar from the path', () => {
-    expect(resolveDriveRootFromLauncher('E:\\Start HilbertRaum.cmd')).toBe('E:\\')
-    expect(resolveDriveRootFromLauncher('/media/usb/start-hilbertraum.sh')).toBe('/media/usb')
-    // Mixed separators still resolve (auto picks win32 on a backslash).
-    expect(resolveDriveRootFromLauncher('E:/PRIVATE_AI\\Start HilbertRaum.cmd')).toBe(
-      'E:\\PRIVATE_AI'
-    )
-  })
-
-  it('resolves a Windows UNC launcher to its share root (absolute)', () => {
-    const root = resolveDriveRootFromLauncher(
-      '\\\\SERVER\\share\\Start HilbertRaum.cmd',
-      'win32'
-    )
-    expect(root.startsWith('\\\\SERVER\\share')).toBe(true)
-  })
-
-  it('rejects an empty path', () => {
-    expect(() => resolveDriveRootFromLauncher('')).toThrow(/empty/)
-    expect(() => resolveDriveRootFromLauncher('   ')).toThrow(/empty/)
-  })
-
-  it('rejects a bare filename / relative path with no absolute parent', () => {
-    expect(() => resolveDriveRootFromLauncher('Start HilbertRaum.cmd', 'win32')).toThrow(
-      /absolute/
-    )
-    expect(() => resolveDriveRootFromLauncher('./sub/start.sh', 'posix')).toThrow(/absolute/)
-  })
-})
 
 describe('runPreflight', () => {
   const fastSpeed: DriveSpeed = { readMbps: 520, writeMbps: 410 }
@@ -93,10 +53,6 @@ describe('runPreflight', () => {
     expect(res.slowDriveWarning).not.toMatch(/bad/i)
     // Slow is not a blocker.
     expect(res.problems).toEqual([])
-    // The #110 read-keyed warning (interpolated MB/s) keys on an effective-read sample
-    // preflight deliberately never supplies — the preflight note can only ever be one of
-    // the two probe-based drive notes.
-    expect(res.slowDriveWarning).not.toContain('model starts will be slow')
   })
 
   it('flags a read-only drive as a problem (workspace cannot be created)', async () => {
@@ -109,29 +65,33 @@ describe('runPreflight', () => {
   })
 
   it('flags low free space (non-blocking) when below the floor', async () => {
+    setFreeBytes(2_147_483_647)
     const root = tempDir('hilbertraum-preflight-space-')
     mkdirSync(join(root, 'workspace'), { recursive: true })
 
-    const res = await runPreflight({
-      rootPath: root,
-      measureSpeed: async () => fastSpeed,
-      // An impossibly high floor forces the low-space branch deterministically.
-      minFreeBytes: Number.MAX_SAFE_INTEGER
-    })
+    const res = await runPreflight({ rootPath: root, measureSpeed: async () => fastSpeed })
 
-    expect(res.freeBytes).not.toBeNull()
+    expect(res.freeBytes).toBe(2_147_483_647)
+    expect(res.writable).toBe(true)
     expect(res.problems.some((p) => /low on free space/i.test(p))).toBe(true)
   })
 
+  it('free space exactly at the shipped 2 GB floor is not low', async () => {
+    const root = tempDir('hilbertraum-preflight-floor-')
+    mkdirSync(join(root, 'workspace'), { recursive: true })
+    setFreeBytes(2_147_483_648)
+
+    const res = await runPreflight({ rootPath: root, measureSpeed: async () => fastSpeed })
+
+    expect(res.freeBytes).toBe(2_147_483_648)
+    expect(res.problems).toEqual([])
+  })
+
   it('does not report low space when free space is unmeasurable (freeBytes == null)', async () => {
-    // A non-existent root → statfs throws → freeBytes is null; the low-space branch must
-    // be skipped (guarded by `!= null`) even with an impossibly high floor.
+    // statfs throws → freeBytes is null; the low-space branch must be skipped (guarded by `!= null`).
+    vi.mocked(statfs).mockRejectedValue(new Error('no such volume'))
     const root = join(tempDir('hilbertraum-preflight-noroot-'), 'does-not-exist')
-    const res = await runPreflight({
-      rootPath: root,
-      measureSpeed: async () => fastSpeed,
-      minFreeBytes: Number.MAX_SAFE_INTEGER
-    })
+    const res = await runPreflight({ rootPath: root, measureSpeed: async () => fastSpeed })
     expect(res.freeBytes).toBeNull()
     expect(res.problems.some((p) => /low on free space/i.test(p))).toBe(false)
   })

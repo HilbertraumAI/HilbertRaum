@@ -17,7 +17,7 @@ export type { PreflightResult }
 // function is injectable so the test suite stays deterministic + makes zero I/O surprises.
 
 /** Below this free space we surface a gentle low-space note (not a hard block). */
-export const LOW_FREE_SPACE_BYTES = 2 * 1024 * 1024 * 1024 // 2 GB
+const LOW_FREE_SPACE_BYTES = 2 * 1024 * 1024 * 1024 // 2 GB
 
 export interface PreflightDeps {
   /** The drive root (the launcher's resolved `HILBERTRAUM_DRIVE_ROOT`). */
@@ -27,8 +27,6 @@ export interface PreflightDeps {
    * fake so the suite never does real disk I/O and the no-network guarantee is obvious.
    */
   measureSpeed?: (workspacePath: string) => Promise<DriveSpeed>
-  /** Free-space floor for the low-space note (defaults to LOW_FREE_SPACE_BYTES). */
-  minFreeBytes?: number
 }
 
 /**
@@ -38,7 +36,6 @@ export interface PreflightDeps {
  * preflight itself.
  */
 export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult> {
-  const minFree = deps.minFreeBytes ?? LOW_FREE_SPACE_BYTES
   const measure = deps.measureSpeed ?? measureDriveSpeed
 
   // Reuse the workspace path resolution + drive status (writable + free space + OS/arch).
@@ -72,7 +69,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   if (!status.writable) {
     problems.push(tMain('main.preflight.readOnly'))
   }
-  if (status.freeBytes != null && status.freeBytes < minFree) {
+  if (status.freeBytes != null && status.freeBytes < LOW_FREE_SPACE_BYTES) {
     problems.push(tMain('main.preflight.lowSpace'))
   }
 
