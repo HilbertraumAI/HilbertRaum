@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parse } from 'yaml'
+import { parse, stringify } from 'yaml'
 import { buildDriveNotices } from '../../../../scripts/lib/drive-notices.mjs'
+import { modelManifestDocs, REPO_ROOT, repoText } from '../helpers/repo-files'
 
 // LIC-1 (full-audit 2026-07-12b): DRIVE-NOTICES.md is the drive-root license/attribution
 // file for everything a prepared drive carries OUTSIDE the packaged app — the llama.cpp /
@@ -18,19 +20,37 @@ import { buildDriveNotices } from '../../../../scripts/lib/drive-notices.mjs'
 //    own walk, so a generator bug that silently drops a manifest fails HERE, not just in
 //    the byte-compare).
 
-const REPO_ROOT = join(__dirname, '..', '..', '..', '..')
 const NOTICES = join(REPO_ROOT, 'DRIVE-NOTICES.md')
 const REGEN = 'run `node scripts/generate-drive-notices.mjs` and commit the result'
 
-/** Recursively list *.yaml/*.yml under dir (independent of the generator's walk). */
-function walkYaml(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...walkYaml(p))
-    else if (/\.ya?ml$/i.test(entry.name)) out.push(p)
+interface NoticesFixture {
+  sources: Record<string, Record<string, unknown>>
+  manifests: Record<string, Record<string, unknown>>
+}
+
+const noticesFixture = (): NoticesFixture => ({
+  sources: {
+    kiwix_tools: {
+      version: '1',
+      source_bundle: { dir: 'runtime/kiwix-tools/source', files: [{ name: 'a.tar.xz', sha256: 'abc' }] }
+    },
+    llama_cpp: { version: 'b1' },
+    ocr: { version: '1' },
+    whisper_cpp: { version: 'v1' }
+  },
+  manifests: { alpha: { id: 'alpha', display_name: 'Alpha', license: 'apache-2.0', local_path: 'models/chat/alpha.gguf' } }
+})
+
+/** The builder over a scratch repo: the real pinned license texts, the fixture's yaml. */
+function buildFrom(f: NoticesFixture): string {
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-drive-notices-'))
+  cpSync(join(REPO_ROOT, 'licenses'), join(root, 'licenses'), { recursive: true })
+  mkdirSync(join(root, 'model-manifests', 'chat'), { recursive: true })
+  writeFileSync(join(root, 'model-manifests', 'runtime-sources.yaml'), stringify(f.sources))
+  for (const [name, doc] of Object.entries(f.manifests)) {
+    writeFileSync(join(root, 'model-manifests', 'chat', `${name}.yaml`), stringify(doc))
   }
-  return out
+  return buildDriveNotices(root)
 }
 
 describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
@@ -51,9 +71,10 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
   })
 
   it('covers every runtime family pinned in runtime-sources.yaml', () => {
-    const sources = parse(
-      readFileSync(join(REPO_ROOT, 'model-manifests', 'runtime-sources.yaml'), 'utf8')
-    ) as Record<string, { version?: string }>
+    const sources = parse(repoText('model-manifests', 'runtime-sources.yaml')) as Record<
+      string,
+      { version?: string }
+    >
     const families = Object.keys(sources)
     expect(families.length).toBeGreaterThanOrEqual(4) // llama_cpp + whisper_cpp + ocr + kiwix_tools today
     const text = readFileSync(NOTICES, 'utf8')
@@ -67,10 +88,8 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
 
   it('carries an attribution line for EVERY model manifest (all roles)', () => {
     const text = readFileSync(NOTICES, 'utf8')
-    const manifests = walkYaml(join(REPO_ROOT, 'model-manifests'))
-      .map((p) => parse(readFileSync(p, 'utf8')) as Record<string, unknown>)
-      .filter((m) => m && typeof m === 'object' && 'local_path' in m) // skip runtime-sources.yaml
-    expect(manifests.length).toBeGreaterThanOrEqual(15) // the catalog today; grows only
+    const manifests = modelManifestDocs().map(({ doc }) => doc)
+    expect(manifests.length).toBeGreaterThanOrEqual(34) // the catalog today; grows only
     for (const m of manifests) {
       expect(
         text.includes(`model: ${m.id} ${m.license}`),
@@ -124,5 +143,64 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
     expect(text).toContain('7fa374f4714b23c43afa3fb406d7e21c483d77e8218895e1408e2f037969b6ea')
     expect(text).toContain('30d3518172084f310dab86d262b512718a7f9a13635aaa1a188e61dc26b2288c')
     expect(text).toContain('f0b1547b5a42a6c0f724e8e1c1cb5ce9c4c35fb495e7d780b9930d35011ceb4c')
+  })
+
+  it('names each copyleft component at the version the source bundle pins', () => {
+    const { kiwix_tools } = parse(repoText('model-manifests', 'runtime-sources.yaml')) as {
+      kiwix_tools: { source_bundle: { files: Array<{ component: string; version: string }> } }
+    }
+    const heading: Record<string, string> = {
+      'kiwix-tools': '### kiwix-tools',
+      libkiwix: '#### libkiwix',
+      libzim: '#### libzim',
+      'xapian-core': '#### Xapian',
+      libmicrohttpd: '#### libmicrohttpd'
+    }
+    const files = kiwix_tools.source_bundle.files
+    expect(files.map((f) => f.component)).toEqual(Object.keys(heading))
+    const text = readFileSync(NOTICES, 'utf8')
+    for (const f of files) expect(text, f.component).toContain(`${heading[f.component]} ${f.version} — `)
+    expect(text).toContain('Five of the components above are copyleft')
+  })
+})
+
+describe('buildDriveNotices refuses to write an incomplete file (LIC-1)', () => {
+  it('builds the fixture, and a weight shard needs no pinned line (the positive behind the refusals)', () => {
+    const f = noticesFixture()
+    f.manifests.alpha.files = [{ local_path: 'models/chat/alpha-00002-of-00003.gguf' }]
+    const text = buildFrom(f)
+    expect(text).toContain('model: alpha apache-2.0')
+    expect(text).not.toContain('also ships `models/chat/alpha-00002')
+  })
+
+  it.each<[string, (f: NoticesFixture) => void, string]>([
+    ['a new runtime family', (f) => { f.sources.fifth = { version: '1' } }, 'runtime-sources.yaml families changed'],
+    ['a family with no version', (f) => { delete f.sources.ocr.version }, 'family ocr has no version'],
+    [
+      'no source bundle for the copyleft binaries',
+      (f) => { delete f.sources.kiwix_tools.source_bundle },
+      'kiwix_tools.source_bundle is missing or malformed'
+    ],
+    [
+      'an empty source bundle',
+      (f) => { f.sources.kiwix_tools.source_bundle = { dir: 'x', files: [] } },
+      'kiwix_tools.source_bundle is missing or malformed'
+    ],
+    ['a manifest with no display name', (f) => { delete f.manifests.alpha.display_name }, 'lacks id/display_name/license'],
+    ['no model manifests', (f) => { f.manifests = {} }, 'no model manifests found'],
+    [
+      'an MIT weight with no pinned copyright line',
+      (f) => { f.manifests.alpha.license = 'mit' },
+      'no pinned upstream copyright line'
+    ],
+    [
+      'an extra file with no pinned attribution',
+      (f) => { f.manifests.alpha.files = [{ local_path: 'models/chat/alpha-vad.bin' }] },
+      'has no pinned attribution'
+    ]
+  ])('refuses %s', (_title, edit, message) => {
+    const f = noticesFixture()
+    edit(f)
+    expect(() => buildFrom(f)).toThrow(message)
   })
 })
