@@ -239,6 +239,16 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `activeJob()` held until the run settles, and `runToEnd` in `tests/helpers/download-fixtures.ts` waits
   on that: a poll of the status alone let the engine's cancel-during-the-hash row pass with both of its
   guards deleted (#753).
+- **A row over the committed catalog proves only what the catalog can reach.** A guard no committed input reaches gets an
+  altered copy of the catalog in the row, or stays with its synthetic owner.
+- **Committed files and the two script legs** have shared readers: `tests/helpers/repo-files.ts` (`REPO_ROOT`, `repoText`,
+  `builderConfig`, `lockPackages`, `modelManifestDocs`, no `src/main` import), `catalog.ts` (`committedManifests`,
+  `committedRuntimeSources`) and `script-legs.ts` (`SCRIPT_LEGS`, `extractScriptArray`). The list readers throw on nothing, so
+  a rule row cannot pass on an empty walk. `extractScriptArray` closes on a line that is exactly `)`: a parser that stopped at
+  the first `)` compared one default model of five, on a parenthesis in a comment, from the day it was written.
+- **The bash legs on a Windows desk** need `C:\Program Files\Git\bin` first on `PATH` and `HILBERTRAUM_SCRIPT_SH_LEG=1`: from
+  PowerShell, plain `bash` is WSL's and fails every `.sh` row. Run those suites on their own. Git Bash's forks are slow under
+  load, and inside a full run the builder's gate row can reach the 60 s child kill. No CI leg runs them that way.
 - **Prove a cache hit with a swap behind the cache, not a counter.** Rewrite the file with the same size
   and mtime: a stale value proves no read, and it needs no probe in production (`policy.test.ts`, F-30).
   Keep a changed-signature row beside it, or a cache that never re-reads passes.
@@ -259,7 +269,7 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **A date a screen prints takes a local time in the fixture, with no `Z`.** `2026-08-14T09:00:00Z` is the 13th at
   UTC−11 and `2026-06-15T11:58:00Z` the 16th at UTC+14, and no UTC instant is one calendar day everywhere. To check a
   suite, run it with `$env:TZ='Pacific/Pago_Pago'` and with `'Pacific/Kiritimati'`.
-- **A row that reads the host pins it.** No CI leg runs tests on macOS, and RAM differs per host.
+- **A row that reads the host pins it.** CI runs Windows, Linux and macOS, and RAM differs per host.
   Two performance rows would fail on Apple Silicon while docs/benchmark.md said they held "on every
   host", and a recommended-context row would fail under 8 GB. Pin with `pinPlatform`
   (`tests/helpers/performance-fixture.ts`) and a hoisted `vi.mock('node:os')` for RAM, and expect a

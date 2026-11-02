@@ -2,12 +2,15 @@
 // or run both. This is the shell half of those suites: the two legs, and the array parser the twin rows compare with.
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { join } from 'node:path'
+import { testBudgetMs } from './hang-budget'
 import { REPO_ROOT } from './repo-files'
 
 const SCRIPTS = join(REPO_ROOT, 'scripts')
 
-// The child is killed before vitest's own budget expires, so a hung script fails with its output attached.
-const CHILD_TIMEOUT_MS = 60_000
+// The child is killed before vitest's own budget expires, so a hung script fails with its output attached. A child timeout is
+// invisible to `testTimeout`, so it widens on CI by hand: at a flat 60 s a starved windows runner killed scripts that take 2 s
+// (#458, the `status: null` runs of the builder's gate row).
+const CHILD_TIMEOUT_MS = testBudgetMs(60_000)
 
 /**
  * The entries of a script array: `$Dirs = @(` or `DIRS=(`, to the first line that is exactly `)`. Comments, quotes and commas
