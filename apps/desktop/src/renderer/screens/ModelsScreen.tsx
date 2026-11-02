@@ -965,7 +965,13 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
                 .cancelDownload(mine.jobId)
                 .then((next) => {
                   rememberedJob = next
-                  if (mountedRef.current) setJob(next)
+                  if (!mountedRef.current) return
+                  setJob(next)
+                  // Too late to cancel: the check finished since the last poll. This snapshot
+                  // stops the poll, so the poll's own refresh of the cards never runs.
+                  if (next.status !== 'cancelled') {
+                    void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
+                  }
                 })
                 .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
             }

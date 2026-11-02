@@ -971,17 +971,29 @@ describe('DownloadManager jobs', () => {
       expect(readFileSync(partOf(weightPath(root, m)), 'utf8')).toBe('hello-')
     })
 
-    it('a request that fails before its first byte promises nothing: there is no part to keep', async () => {
+    it.each<[string, FetchFn, string, string]>([
+      [
+        'no connection',
+        async () => {
+          throw new Error('fetch failed')
+        },
+        'fetch failed',
+        'network'
+      ],
+      [
+        'a redirect to nowhere',
+        async () => new Response(null, { status: 302 }),
+        'redirect with no Location for https://example.test/qwen3-4b.gguf',
+        'redirect'
+      ]
+    ])('a request that ends before its first byte promises nothing, there being no part to keep: %s', async (_title, fetchImpl, reason, label) => {
       const m = verifiedManifest(BODY)
       const root = tempRoot('downloads')
-      const offline: FetchFn = async () => {
-        throw new Error('fetch failed')
-      }
-      const { mgr, reasons } = auditingManager(offline)
+      const { mgr, reasons } = auditingManager(fetchImpl)
       const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       const finished = await waitForTerminal(mgr, job.jobId)
-      expect(finished.error).toBe(tMain('main.download.httpFailed', { reason: 'fetch failed' }))
-      expect(reasons.at(-1)).toBe('network')
+      expect(finished.error).toBe(tMain('main.download.httpFailed', { reason }))
+      expect(reasons.at(-1)).toBe(label)
       expect(existsSync(partOf(weightPath(root, m)))).toBe(false)
     })
 
@@ -1113,21 +1125,35 @@ describe('DownloadManager jobs', () => {
       expect(fetchSpy).not.toHaveBeenCalled()
     })
 
-    // The restart passes through this delete with a live job: 'downloading' used to overwrite the
-    // cancel, and the aborted fetch then read as a failed download.
-    it('a cancel during the delete of a corrupt complete .part stands', async () => {
+    // A cancel in any of these deletes used to be overwritten: by 'downloading' on the clean restart,
+    // by 'failed' on the other two. The renderer stopped polling on `cancelled`, so a late `failed`
+    // turned up in the reloaded screen and the audit log as a failure the user never had.
+    it.each<[string, { staged: string | null; fetchImpl: FetchFn }]>([
+      ['the restart past a corrupt complete .part', { staged: 'x'.repeat(BODY.length), fetchImpl: vi.fn() as unknown as FetchFn }],
+      [
+        'a misaligned resume',
+        {
+          staged: 'hello-',
+          fetchImpl: (async () =>
+            new Response(BODY, {
+              status: 206,
+              headers: { 'content-length': String(BODY.length), 'content-range': `bytes 0-${BODY.length - 1}/${BODY.length}` }
+            })) as unknown as FetchFn
+        }
+      ],
+      ['a checksum mismatch', { staged: null, fetchImpl: rangeFetch('tampered-bytes').fetch }]
+    ])('a cancel during the delete of a bad .part stands: %s', async (_title, row) => {
       const m = verifiedManifest(BODY)
       const root = tempRoot('downloads')
-      writeDriveFile(root, `${m.localPath}.part`, 'x'.repeat(BODY.length))
+      if (row.staged != null) writeDriveFile(root, `${m.localPath}.part`, row.staged)
       const reached = deferred()
       const held = deferred()
       seams.rmHook = async () => {
         reached.resolve()
         await held.promise
       }
-      const fetchSpy = vi.fn()
       const audited: string[] = []
-      const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, audit: (type) => audited.push(type) })
+      const mgr = new DownloadManager({ fetchImpl: row.fetchImpl, audit: (type) => audited.push(type) })
       const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       await within(reached.promise, 'the bad .part being deleted')
       mgr.cancel(job.jobId)
@@ -1136,7 +1162,6 @@ describe('DownloadManager jobs', () => {
       expect(settled.status).toBe('cancelled')
       expect(settled.error).toBeNull()
       expect(audited).toEqual(['model_download_started'])
-      expect(fetchSpy).not.toHaveBeenCalled()
     })
 
     // The two ways in differ in what catches the stopped hash: the 416 route's settle sits in its
@@ -1159,7 +1184,12 @@ describe('DownloadManager jobs', () => {
       writeDriveFile(root, `${m.localPath}.part`, BODY)
       const hashing = hashUntilStopped()
       const audited: string[] = []
-      const mgr = new DownloadManager({ fetchImpl: row.fetchImpl, audit: (type) => audited.push(type) })
+      const logged: string[] = []
+      const mgr = new DownloadManager({
+        fetchImpl: row.fetchImpl,
+        audit: (type) => audited.push(type),
+        log: (message) => logged.push(message)
+      })
       const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
       await within(hashing, 'the complete .part verify starting')
       mgr.cancel(job.jobId)
@@ -1167,6 +1197,7 @@ describe('DownloadManager jobs', () => {
       expect(settled.status).toBe('cancelled')
       expect(settled.error).toBeNull()
       expect(audited).toEqual(['model_download_started'])
+      expect(logged.filter((message) => /failed/.test(message))).toEqual([]) // a cancel is not a failure in app.log either
       expect(existsSync(dest)).toBe(false)
       expect(readFileSync(partOf(dest), 'utf8')).toBe(BODY)
     })

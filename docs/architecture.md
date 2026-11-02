@@ -5619,13 +5619,14 @@ cites it as "In-app engine updates"._
       Windows it could also hold a file the pre-clean was about to delete.
     - The gate covers every job, so it closes CODE-13's registered "a start races the pre-clean"
       residual for first installs and #532 reinstalls too.
-  - **A failed install leaves nothing installed** (#752). A SEC-2 refusal, a tar that fails, a flatten
-    fault or a completeness failure all come after the old copy is gone, so each clears the install
-    the way the pre-clean does, `cpu/` kept. Left behind, a binary read as installed with no marker,
-    and the verifier passed it as `skip-legacy`. A tar that failed also never reached the sweep, so
-    its links stayed. A user's cancel is the exception: see below. The residual: a refused archive
-    that wrote into `cpu/` is not undone, since the net is kept whole; reaching it takes a tampered
-    `runtime-sources.yaml`, which can name any archive anyway.
+  - **A failed install leaves nothing installed** (#752). Every failure of `replaceInstall` comes after
+    the old copy started to go, so each clears the install the way the pre-clean does, one entry at a
+    time and before the status flips, `cpu/` kept when it is a real directory. Left behind, a binary
+    read as installed with no marker, and the verifier passed it as `skip-legacy`. A tar that failed
+    also never reached the sweep, so its links stayed. A user's cancel of a running tar is the
+    exception (see below), but not one that lands on a SEC-2 refusal: that clears too. The residual: a
+    refused archive that wrote into `cpu/` is not undone, since the net is kept whole; reaching it
+    takes a tampered `runtime-sources.yaml`, which can name any archive anyway.
   - **A job that stops part-way still reports what it replaced** (review fix). If the main build was
     swapped and a later step (the `cpu/` net, the voice engine) failed or was cancelled, `onInstalled`
     fires for the replaced families, so the new binary's consumers are re-armed and the probe
@@ -5931,7 +5932,10 @@ state — including `verifying`, where the SHA-256 over a multi-GB weight on USB
 minutes: the abort stops the hash itself (#752), nothing is renamed into place, and a two-file
 (vision) job stops before its next file (full-audit 2026-07-10 BE-4; previously a cancel
 there was silently dropped). The card's Cancel stays enabled there, as the engine card's does: it
-was disabled until #752, so BE-4 was out of the user's reach. `activeJob()` stays held until the run has settled, as in the
+was disabled until #752, so BE-4 was out of the user's reach. A click that arrives after the check
+finished gets the terminal job back and refreshes the cards itself, since that snapshot stops the
+poll that would have. A cancel stands against every later failure, by the OCR manager's rule
+(`failJob`). `activeJob()` stays held until the run has settled, as in the
 engine and OCR managers (#752), so a start in the moment after a cancel is refused rather than
 put a second writer on the `.part`; stopping the hash is what keeps that moment short, since a
 latch alone would have refused every restart for the rest of the hash. A complete `.part` that
