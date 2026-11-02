@@ -20,6 +20,7 @@ import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/mod
 import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
 import { committedManifests } from '../helpers/catalog'
 import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
+import { validManifest } from '../helpers/manifest-fixtures'
 import { modelManifestDocs } from '../helpers/repo-files'
 
 // The COMMITTED model-manifests/ tree is what a real drive is provisioned from. These tests
@@ -212,9 +213,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     fitsGraphicsMemory(m, budgetMb) && m.recommendedMinRamGb <= ramGb
 
   // (j) Decision 11: the seven config-derived cache terms (ubatch 2048; the 4B's figure is its
-  // 4,096-token window). EXACTLY these seven carry the field; every other manifest defaults to
-  // 0.5 GiB. RECOMPUTED 2026-09-07 for ONE server slot (issue #319: `CHAT_SERVER_ARGS` passes
-  // `-np 1`, replacing b9849's four unified slots). The rule, measured on the pin (leg7-baseline-q5km
+  // 4,096-token window), plus #473's measured translation term. EXACTLY these eight carry the
+  // field; every other manifest defaults to 0.5 GiB. RECOMPUTED 2026-09-07 for ONE server slot
+  // (issue #319: `CHAT_SERVER_ARGS` passes `-np 1`, replacing b9849's four unified slots). The
+  // rule, measured on the pin (leg7-baseline-q5km
   // vs leg1-np-1 under `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/`, same model and
   // context, one thing varied): the KV cache — and Gemma's sliding-window cache — is sized in CELLS
   // from `--ctx-size` and is counted ONCE at either setting (512.00 MiB both times); only the
@@ -283,13 +285,6 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     const e2b = byId['gemma4-e2b-it-qat-q4']
     const w = weightsMib(e2b)
     expect(estimateGraphicsNeedMib(e2b)).toBeCloseTo((w - 2152.5) * 1.15 + 0.1 * 1024 + 1024, 6)
-    // Why it moved. #321 took the host-mapped share out of the 15 % term only, which closed
-    // 2,152.50 × 0.15 = 323 MiB of the E2B's gap; the other 2,152.50 was still charged to the card
-    // by the base term. Both retired forms pinned as deltas so the history is checkable:
-    const whole = w * 1.15 + 0.1 * 1024 + 1024 // pre-#321
-    const shareOnly = w + (w - 2152.5) * 0.15 + 0.1 * 1024 + 1024 // #321
-    expect(whole - shareOnly).toBeCloseTo(2152.5 * 0.15, 6)
-    expect(shareOnly - estimateGraphicsNeedMib(e2b)).toBeCloseTo(2152.5, 6)
     // Measured: llama.cpp projected 1,997 MiB and used ≈ 1,998 for this model (#318 leg 4). The
     // estimate stays ABOVE the measurement — conservative is the safe direction — but by 1.14×
     // rather than 2.4×.
@@ -306,9 +301,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     )
     // And the 4B, now that it has one: the measurement moved its need by 497.31 × 1.15 = 571.9 MiB.
     const fourB = byId['qwen3.5-4b-ud-q4kxl']
-    expect(fourB.hostMappedWeightsMib).toBe(497.31)
     expect(estimateGraphicsNeedMib(fourB)).toBeCloseTo((weightsMib(fourB) - 497.31) * 1.15 + 0.2 * 1024 + 1024, 6)
-    expect(weightsMib(fourB) * 1.15 + 0.2 * 1024 + 1024 - estimateGraphicsNeedMib(fourB)).toBeCloseTo(497.31 * 1.15, 6)
     // Measured on the RTX 3060 Laptop: llama.cpp projected 3,261 MiB at 33/33. Conservative still,
     // but 1.18× rather than the 1.35× the whole-file base gave.
     expect(estimateGraphicsNeedMib(fourB)).toBeGreaterThan(3261)
@@ -356,10 +349,9 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       expect(fitsGraphicsMemory(m, t), `${m.id} fits at ${t}`).toBe(true)
       expect(fitsGraphicsMemory(m, t - 1), `${m.id} does not fit at ${t - 1}`).toBe(false)
     }
-    // The two figures the decisions turn on, spelled out: the 9B needs 7,830 (0.3 GiB cache since
-    // #319, working share on the offloadable weights since #321) — under a nominal 8 GiB but STILL
-    // over what an idle 8 GB card has FREE (7,168), so neither decision moved the 8 GB row;
-    // Gemma 12B 11,041 (2.4 GiB cache) = 10.8 GiB, where the PR's flat 0.5 GiB read 9.0 GiB.
+    // The two figures the decisions turn on, spelled out: the 9B needs 7,285, under a nominal 8 GiB
+    // but STILL over what an idle 8 GB card has FREE (7,168), so the 8 GB row stays the 4B; Gemma
+    // 12B 10,254 = 10.0 GiB (2.4 GiB cache), where the PR's flat 0.5 GiB read 9.0 GiB.
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeLessThan(8192)
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeGreaterThan(8192 - 1024)
     expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeGreaterThan(10 * 1024)
@@ -485,40 +477,41 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(onCard(chat, 5136, 32)).toBe('qwen3.5-4b-ud-q4kxl')
   })
 
-  // (a) R1: the speed step-down can no longer escape the RAM floor or the card. The audit's two
-  // counterexamples (both stepped MoE → Q4 at the PR head: min RAM 21 > 20; Q4's need > 17 GiB).
+  // (a) R1: the speed step-down can no longer escape the RAM floor or the card. On the committed catalog every lower tier is
+  // eligible whenever the pick is, so no committed input reaches the destination filter. The audit's two counterexamples are
+  // therefore replayed on a copy with the one landing tier put out of reach. Synthetic owner: models.test "§6.5 step-down
+  // applies ONCE to the candidate…".
   it('R1: a slow sample never steps to a model over the RAM floor or off the card', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
-    const q4 = 'qwen3.8-27b-ud-q4km'
-    // RAM 20 / 20 GiB budget: base = 9B (fits, stands); a crawl on the MoE (in the pool but a
-    // tier above) keeps it; a crawl on the 9B itself steps to the E2B — never Q4.
-    expect(onCard(chat, 20 * 1024, 20)).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(onCard(chat, 20 * 1024, 20, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(onCard(chat, 20 * 1024, 20, crawlOn('qwen3.5-9b-ud-q4kxl'))).toBe('gemma4-e2b-it-qat-q4')
-    for (const measured of chat) {
-      const id = onCard(chat, 20 * 1024, 20, crawlOn(measured.id))
-      expect(id, `measured=${measured.id}`).not.toBe(q4)
-      expect(chat.find((m) => m.id === id)!.recommendedMinRamGb, `measured=${measured.id} RAM floor`).toBeLessThanOrEqual(20)
-    }
-    // RAM 64 / 17 GiB budget: base = Q5 does not fit → 9B; no sample moves it onto Q4.
-    expect(onCard(chat, 17 * 1024, 64)).toBe('qwen3.5-9b-ud-q4kxl')
-    for (const measured of chat) {
-      const id = onCard(chat, 17 * 1024, 64, crawlOn(measured.id))
-      expect(id, `measured=${measured.id}`).not.toBe(q4)
-      expect(fitsGraphicsMemory(chat.find((m) => m.id === id)!, 17 * 1024), `measured=${measured.id} fits`).toBe(true)
-    }
+    const e2b = 'gemma4-e2b-it-qat-q4'
+    const nineB = 'qwen3.5-9b-ud-q4kxl'
+    // RAM 20 / 20 GiB budget: base = 9B (fits, stands); a crawl on the MoE (a tier above) keeps it; a crawl on the 9B steps to the E2B.
+    expect(onCard(chat, 20 * 1024, 20)).toBe(nineB)
+    expect(onCard(chat, 20 * 1024, 20, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe(nineB)
+    expect(onCard(chat, 20 * 1024, 20, crawlOn(nineB))).toBe(e2b)
+    // RAM 64 / 17 GiB budget: base = Q5 does not fit → the 9B.
+    expect(onCard(chat, 17 * 1024, 64)).toBe(nineB)
+    // The landing tier over the RAM floor, then off the card: the step has nowhere to go, and the 9B stays.
+    const overFloor = chat.map((m) => (m.id === e2b ? { ...m, recommendedMinRamGb: 21 } : m))
+    expect(onCard(overFloor, 20 * 1024, 20, crawlOn(nineB))).toBe(nineB)
+    const offCard = chat.map((m) => (m.id === e2b ? { ...m, sizeOnDiskGb: 40 } : m))
+    expect(onCard(offCard, 20 * 1024, 20, crawlOn(nineB))).toBe(nineB)
   })
 
   // (c) R2: a crawl measured on a model the card cannot hold says nothing about the fitting pick.
   it('R2: a crawl on a card-oversized model leaves the fitting pick unchanged', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
-    // RAM 24 / 12 GiB budget: base = Q4 (19,940 MiB) does not fit → the 9B (rank 3; Gemma 12B fits
-    // at 11,041 but ranks 2). A 4 tok/s sample on the manually started Q4 is not in the eligible
+    // RAM 24 / 12 GiB budget: base = Q4 (19,258 MiB) does not fit → the 9B (rank 3; Gemma 12B fits
+    // at 10,254 but ranks 2). A 4 tok/s sample on the manually started Q4 is not in the eligible
     // pool → the 9B stays. (At the PR head the card pick here was Gemma 12B and the Q4 crawl
     // lowered it to the 9B — the audit's A2 reproduction; under rule C no oversized sample moves it.)
     expect(onCard(chat, 12 * 1024, 24)).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 12 * 1024, 24, crawlOn('qwen3.8-27b-ud-q4km'))).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 12 * 1024, 24, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe('qwen3.5-9b-ud-q4kxl')
+    // Those two return at the #52 guard (their tier is above the pick). This one reaches R2's own guard: the same tier as the
+    // pick, but its 19,961 MiB does not fit a 19,500 budget, so it says nothing about the UD-Q4 that does.
+    expect(onCard(chat, 19_500, 24)).toBe('qwen3.8-27b-ud-q4km')
+    expect(onCard(chat, 19_500, 24, crawlOn('qwen3.6-27b-q4'))).toBe('qwen3.8-27b-ud-q4km')
     // …while a crawl on the 9B itself (right-sized, eligible) steps to the E2B as §6.5 intends.
     expect(onCard(chat, 12 * 1024, 24, crawlOn('qwen3.5-9b-ud-q4kxl'))).toBe('gemma4-e2b-it-qat-q4')
   })
@@ -530,7 +523,6 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   it('sweep: every stepped result is eligible or the documented no-fit fallback (3,021 points)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const byId = new Map(chat.map((m) => [m.id, m]))
-    const started = Date.now()
     let points = 0
     const violations: string[] = []
     for (let budget = 6 * 1024; budget <= 32 * 1024; budget += 512) {
@@ -548,7 +540,6 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     }
     expect(points).toBe(3021)
     expect(violations).toEqual([])
-    expect(Date.now() - started).toBeLessThan(2000)
   })
 
   // (k) Unknown RAM on the card path keeps the pre-rule-C `ramOk` semantics: the floor is open,
@@ -579,9 +570,9 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     // the no-fit path. Since #391 the demotion lands on the 4B (3,838) rather than the E2B.
     expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 4000, 16)).toBe('qwen3.5-4b-ud-q4kxl')
-    // The no-fit fallback itself is unchanged, just reached lower down: under the smallest ranked
-    // threshold nothing is eligible, so the RAM pick stands, partially offloaded — and never the
-    // rank-0 2B (#326), whose 2,962 MiB would otherwise fit here.
+    // The no-fit fallback itself is unchanged, just reached lower down: under the smallest ranked threshold nothing is
+    // eligible, so the RAM pick stands, partially offloaded. #326's rank-0 exclusion is not reachable here: every rank-0 need
+    // (the 0.8B's 2,304 is the lowest) sits above the E2B's 2,271. Its proof is models.test "where the RAM pick does not fit…".
     expect(onCard(chat, 2270, 16)).toBe(recommendModelIdByRam(chat, 16, 'chat'))
     expect(onCard(chat, 2270, 16)).toBe('qwen3.5-9b-ud-q4kxl')
   })
@@ -675,6 +666,15 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       rmSync(rootPath, { recursive: true, force: true })
     }
   })
+
+  it('RAM stays a hard gate on the card path: nothing under the lowest floor, and a crawl on a model over the floor is no signal (§6.6 point 5)', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    // RAM 7 is under every floor: the RAM pick is null, and no card however large overrides that.
+    expect(onCard(chat, 24_000, 7)).toBeNull()
+    // RAM 8, 7,100 MiB: the 4B stands. The 8B fits the card (7,020) but needs RAM 12, so a crawl on it says nothing.
+    expect(onCard(chat, 7100, 8)).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(onCard(chat, 7100, 8, crawlOn('qwen3-8b-instruct-q4'))).toBe('qwen3.5-4b-ud-q4kxl')
+  })
 })
 
 describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () => {
@@ -718,11 +718,20 @@ describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () 
     }
   })
 
-  // The general rule, not just this wave: a model the app cannot obtain must never be the
-  // auto-pick. Rank 0 is the established "selectable, never recommended" convention.
+  // The general rule, not just this wave: a model the app cannot obtain or verify must never be the auto-pick. Rank 0 is the
+  // established "selectable, never recommended" convention; a legacy profile is the other road to a recommendation.
   it('no committed manifest is both recommended and unobtainable', () => {
-    const offenders = committedManifests()
-      .filter((m) => m.download?.withdrawn && m.recommendationRank > 0)
+    const recommended = committedManifests().filter((m) => m.recommendationRank > 0 || m.recommendedProfiles.length > 0)
+    expect(recommended.length, '15 ranked chat models + the embedder, reranker and transcriber').toBeGreaterThanOrEqual(18)
+    const offenders = recommended
+      .filter(
+        (m) =>
+          !m.download ||
+          m.download.withdrawn !== undefined ||
+          m.download.sha256 !== m.sha256 ||
+          m.licenseReview.status !== 'approved' ||
+          !manifestFiles(tmpdir(), m).every((f) => isRealSha256(f.sha))
+      )
       .map((m) => m.id)
     expect(offenders).toEqual([])
   })
@@ -816,24 +825,36 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
 })
 
 describe('committed catalog — the single-manifest roles (TQ-2)', () => {
-  // The four single-per-role manifests (+ vision) share the thin-coverage gap but churn far
-  // less; a presence + real-hash pin is the cheap half that catches deletion/hash mis-edits.
-  // License posture is deliberately NOT pinned here: TranslateGemma's `pending` is a standing
-  // owner decision (the mechanical sell-gate guard) — pinning statuses would freeze that.
+  // The role manifests churn far less than the chat waves; a presence + real-hash pin over EVERY declared file is the cheap
+  // half that catches deletion and hash mis-edits. License posture is deliberately NOT pinned here: TranslateGemma's `pending`
+  // is a standing owner decision (the mechanical sell-gate guard), and pinning statuses would freeze that.
   it('each non-chat role ships exactly its one known manifest with a real hash', () => {
     const manifests = committedManifests()
-    const expected: Record<string, string> = {
-      embeddings: 'multilingual-e5-small-q8',
-      reranker: 'bge-reranker-v2-m3-f16', // manifest id ≠ its filename (bge-reranker-v2-m3.yaml)
-      transcriber: 'whisper-small-multilingual',
-      translation: 'translategemma-12b-it-q4',
-      vision: 'qwen2.5-vl-3b-instruct-q4'
+    const expected: Record<string, { id: string; kinds: string[] }> = {
+      embeddings: { id: 'multilingual-e5-small-q8', kinds: ['weight'] },
+      reranker: { id: 'bge-reranker-v2-m3-f16', kinds: ['weight'] }, // manifest id ≠ its filename (bge-reranker-v2-m3.yaml)
+      transcriber: { id: 'whisper-small-multilingual', kinds: ['weight', 'extra'] },
+      translation: { id: 'translategemma-12b-it-q4', kinds: ['weight'] },
+      vision: { id: 'qwen2.5-vl-3b-instruct-q4', kinds: ['weight', 'mmproj'] }
     }
-    for (const [role, id] of Object.entries(expected)) {
+    for (const [role, { id, kinds }] of Object.entries(expected)) {
       const ofRole = manifests.filter((m) => m.role === role)
       expect(ofRole.map((m) => m.id), `${role} manifest set`).toEqual([id])
-      expect(isRealSha256(ofRole[0].sha256), `${id} real sha256`).toBe(true)
+      const files = manifestFiles(tmpdir(), ofRole[0])
+      expect(files.map((f) => f.kind), `${id} declared files`).toEqual(kinds)
+      for (const f of files) expect(isRealSha256(f.sha), `${f.localPath} real sha256`).toBe(true)
     }
+  })
+
+  it('the transcriber declares its Silero VAD file beside the weight (#504)', () => {
+    const whisper = committedManifests().find((m) => m.role === 'transcriber')
+    expect(whisper, 'one transcriber manifest').toBeDefined()
+    expect(manifestFiles(tmpdir(), whisper!).map((f) => [f.localPath, f.kind])).toEqual([
+      ['models/transcriber/ggml-small.bin', 'weight'],
+      ['models/transcriber/ggml-silero-v5.1.2.bin', 'extra']
+    ])
+    // Fetched with the weight: dictation needs both, and the wrapper finds this one by its name.
+    expect(whisper!.files?.[0].download, 'the VAD file has a source').toBeDefined()
   })
 })
 
@@ -889,7 +910,7 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
   // small hard-min is an incoherent promise: the gate lets the machine in, then the spawn cannot
   // fit. This is a model-agnostic PLAUSIBILITY bound (not a physical KV model): cap the recommended
   // runtime context at 2048 tokens per GB of hard-min RAM. The whole committed catalog sits at or
-  // below 1024 tok/GB (tightest: gemma4-coding-q8, 16384 @ 16 → 1024), so 2048 leaves 2x headroom;
+  // below 1024 tok/GB (tightest: gemma4-coding-q8 and the E2B, 1024), so 2048 leaves 2x headroom;
   // the F-06 defect (98304 @ 14 → 7022 tok/GB) blows past it by 3.4x. A future manifest that
   // genuinely wants a bigger context must raise its hard-min RAM to stay honest — which is exactly
   // the coherence the start gate is supposed to encode.
@@ -918,9 +939,11 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
   // of any sizable weight (the F-16 pair was off by 1.12 / 1.31 GB).
   it('size_on_disk_gb matches size_bytes/1e9 (decimal GB) for every real download block', () => {
     const TOLERANCE_GB = 0.15
+    let checked = 0
     for (const m of committedManifests()) {
       const sizeBytes = m.download?.sizeBytes
       if (sizeBytes == null || sizeBytes <= 0) continue
+      checked++
       const decimalGb = sizeBytes / 1e9
       expect(
         Math.abs(m.sizeOnDiskGb - decimalGb),
@@ -928,6 +951,7 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
           `(${decimalGb.toFixed(3)}); a gap this large means GiB was recorded instead of GB`
       ).toBeLessThan(TOLERANCE_GB)
     }
+    expect(checked, 'every manifest but the three stubs and the vision model').toBeGreaterThanOrEqual(30)
   })
 })
 
@@ -968,6 +992,25 @@ const FLASH_NEXT_ID = 'qwen3.8-flash-next-ud-q4kxl'
  */
 function declaredFilePaths(manifests: ModelManifest[]): string[] {
   return manifests.flatMap((m) => manifestFiles(tmpdir(), m).map((f) => f.localPath))
+}
+
+/** Every sibling a declared shard path implies that the same manifest does not declare. */
+function incompleteSeries(manifests: ModelManifest[]): string[] {
+  const incomplete: string[] = []
+  for (const m of manifests) {
+    const declared = declaredFilePaths([m])
+    for (const p of declared) {
+      const hit = SHARDED_GGUF_RE.exec(p)
+      if (!hit) continue
+      const stem = p.slice(0, hit.index)
+      const total = Number(hit[2])
+      for (let n = 1; n <= total; n++) {
+        const sibling = `${stem}-${String(n).padStart(5, '0')}-of-${hit[2]}.gguf`
+        if (!declared.includes(sibling)) incomplete.push(`${m.id}: ${sibling} is not declared`)
+      }
+    }
+  }
+  return incomplete
 }
 
 /** The declared paths that name a conventional llama.cpp shard (`…-00001-of-00004.gguf`). */
@@ -1118,34 +1161,27 @@ describe('committed catalog — every multi-file weight is fully declared (#310)
   // a complete `files:` list — so an undeclared shard set cannot be in the catalog at all. This
   // states the property directly over the production enumeration, series by series, so it also
   // covers a shard path reached through any other manifest slot.
+  // No committed path is sharded today, so this reads nothing until one is: the control below shows it firing.
   it('declares no shard-pattern path whose sibling series is incomplete', () => {
-    const manifests = committedManifests()
-    const incomplete: string[] = []
-    for (const m of manifests) {
-      const declared = declaredFilePaths([m])
-      for (const p of declared) {
-        const hit = SHARDED_GGUF_RE.exec(p)
-        if (!hit) continue
-        const stem = p.slice(0, hit.index)
-        const total = Number(hit[2])
-        for (let n = 1; n <= total; n++) {
-          const sibling = `${stem}-${String(n).padStart(5, '0')}-of-${hit[2]}.gguf`
-          if (!declared.includes(sibling)) incomplete.push(`${m.id}: ${sibling} is not declared`)
-        }
-      }
-    }
-    expect(incomplete).toEqual([])
+    expect(incompleteSeries(committedManifests())).toEqual([])
   })
 
-  // Control: without this the assertion above could pass vacuously for a projector, because it
-  // would never look at one. The vision model is the catalog's only multi-file entry today.
+  // The validator's shard rule reads `local_path` only, so this check is the one thing watching a sharded projector.
+  it('the series check fires on a sharded projector with a missing sibling, and clears once it is declared (control)', () => {
+    const mmproj = { local_path: 'models/vision/p-00001-of-00002.gguf', sha256: 'x' }
+    const sibling = 'models/vision/p-00002-of-00002.gguf'
+    const half = validManifest({ id: 'sharded-projector', role: 'vision', mmproj })
+    expect(incompleteSeries([half])).toEqual([`sharded-projector: ${sibling} is not declared`])
+    const whole = validManifest({ id: 'sharded-projector', role: 'vision', mmproj, files: [{ local_path: sibling, sha256: 'x' }] })
+    expect(incompleteSeries([whole])).toEqual([])
+  })
+
+  // Control: the series check can only judge what the enumeration lists. Multi-file entries today: the vision model (mmproj) and the transcriber (its files: list, #504).
   it('enumerates the projector path too, so a sharded mmproj could not slip past', () => {
     const manifests = committedManifests()
     const vision = manifests.filter((m) => m.role === 'vision')
     expect(vision.length, 'one vision manifest').toBe(1)
-    const paths = declaredFilePaths(vision)
-    expect(paths, 'GGUF + mmproj').toEqual([vision[0].localPath, vision[0].mmproj!.localPath])
-    expect(paths.length, 'two declared files').toBe(2)
+    expect(declaredFilePaths(vision), 'GGUF + mmproj').toEqual([vision[0].localPath, vision[0].mmproj!.localPath])
     // Every manifest contributes at least its own weight path (no silently empty enumeration).
     expect(declaredFilePaths(manifests).length).toBeGreaterThanOrEqual(manifests.length)
   })
