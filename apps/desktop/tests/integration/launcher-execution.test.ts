@@ -36,7 +36,8 @@ function scratchRoot(launcher: string): string {
 
 /** An exec-able stand-in that records the two variables a launcher must hand the app. */
 function stubApp(path: string, record: string): void {
-  writeFileSync(path, `#!/usr/bin/env bash\nprintf '%s\\n%s\\n' "$HILBERTRAUM_DRIVE_ROOT" "$HILBERTRAUM_MANIFESTS_DIR" > "$(dirname "$0")/${record}"\n`)
+  // /bin/bash, not env: a launcher that wipes the environment must fail on the recorded values, not on "bash not found".
+  writeFileSync(path, `#!/bin/bash\nprintf '%s\\n%s\\n' "$HILBERTRAUM_DRIVE_ROOT" "$HILBERTRAUM_MANIFESTS_DIR" > "$(dirname "$0")/${record}"\n`)
   chmodSync(path, 0o755)
 }
 

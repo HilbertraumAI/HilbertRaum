@@ -45,7 +45,7 @@ function yamlFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name)
     if (entry.isDirectory()) return yamlFiles(path)
-    return /\.ya?ml$/.test(entry.name) ? [path] : []
+    return /\.ya?ml$/i.test(entry.name) ? [path] : []
   })
 }
 

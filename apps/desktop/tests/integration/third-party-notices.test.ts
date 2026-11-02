@@ -214,7 +214,7 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
         else if (/\.tsx?$/.test(e.name) && !e.name.endsWith('.d.ts')) {
           for (const m of readFileSync(p, 'utf8').matchAll(importRx)) {
             const spec = m[1] ?? m[2] ?? m[3] ?? m[4]
-            if (spec.startsWith('node:') || spec.startsWith('@shared/')) continue
+            if (spec.startsWith('node:') || spec.startsWith('@shared/') || spec.startsWith('@renderer/')) continue
             seen.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0])
           }
         }

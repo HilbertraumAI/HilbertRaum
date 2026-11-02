@@ -938,11 +938,13 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
   // of any sizable weight (the F-16 pair was off by 1.12 / 1.31 GB).
   it('size_on_disk_gb matches size_bytes/1e9 (decimal GB) for every real download block', () => {
     const TOLERANCE_GB = 0.15
-    let checked = 0
+    const unsized: string[] = []
     for (const m of committedManifests()) {
       const sizeBytes = m.download?.sizeBytes
-      if (sizeBytes == null || sizeBytes <= 0) continue
-      checked++
+      if (sizeBytes == null || sizeBytes <= 0) {
+        if (m.download) unsized.push(m.id)
+        continue
+      }
       const decimalGb = sizeBytes / 1e9
       expect(
         Math.abs(m.sizeOnDiskGb - decimalGb),
@@ -950,7 +952,8 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
           `(${decimalGb.toFixed(3)}); a gap this large means GiB was recorded instead of GB`
       ).toBeLessThan(TOLERANCE_GB)
     }
-    expect(checked, 'every manifest but the three stubs and the vision model').toBeGreaterThanOrEqual(30)
+    // An exact list: a floor would let a later manifest drop its size_bytes once a new one had been added.
+    expect(unsized).toEqual(['qwen2.5-vl-3b-instruct-q4'])
   })
 })
 

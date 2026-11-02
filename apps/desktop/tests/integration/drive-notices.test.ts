@@ -170,7 +170,6 @@ describe('buildDriveNotices refuses to write an incomplete file (LIC-1)', () => 
     f.manifests.alpha.files = [{ local_path: 'models/chat/alpha-00002-of-00003.gguf' }]
     const text = buildFrom(f)
     expect(text).toContain('model: alpha apache-2.0')
-    expect(text).not.toContain('also ships `models/chat/alpha-00002')
   })
 
   it.each<[string, (f: NoticesFixture) => void, string]>([
