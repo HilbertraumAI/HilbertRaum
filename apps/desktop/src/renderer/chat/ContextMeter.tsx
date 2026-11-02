@@ -13,12 +13,14 @@ import { useT } from '../i18n'
 // approximate); the bar + number cap at 100%. During a turn the parent feeds a LIVE usage so both
 // climb as the answer streams.
 //
-// Tone is visual only: calm < 75%, amber 75–90%, near-full ≥ 90%. At/above the amber threshold the
+// Tone is visual only: calm < 75%, amber 75–89%, near-full ≥ 90%. At/above the amber threshold the
 // tooltip adds the "older messages will be summarized" line (the actual compaction trigger is 0.85,
 // but the heads-up rides the visible amber band — guidelines: warn before, not at, the cliff).
+// #742: the bands read the percent the meter SHOWS, not the raw ratio — at 0.746 the label said "75%"
+// in the calm tone with no heads-up, and at 0.896 "90%" stayed amber.
 
-const AMBER_AT = 0.75
-const NEAR_FULL_AT = 0.9
+const AMBER_PCT = 75
+const NEAR_FULL_PCT = 90
 
 /** "8000" → "8k", "6400" → "6.4k" (DE "6,4k"), "512" → "512" — compact token counts for the
  *  tooltip. Locale-aware via `toLocaleString(lang)` like the sibling formatters (M-U5;
@@ -40,9 +42,8 @@ export function ContextMeter({ usage }: { usage: ContextUsage }): JSX.Element | 
   const { t, lang } = useT()
   const { usedTokens, window } = usage
   if (!(window > 0)) return null
-  const ratio = usedTokens / window
-  const pct = Math.min(100, Math.max(0, Math.round(ratio * 100)))
-  const tone = ratio >= NEAR_FULL_AT ? 'near-full' : ratio >= AMBER_AT ? 'amber' : 'calm'
+  const pct = Math.min(100, Math.max(0, Math.round((usedTokens / window) * 100)))
+  const tone = pct >= NEAR_FULL_PCT ? 'near-full' : pct >= AMBER_PCT ? 'amber' : 'calm'
 
   // The short visible name ("Memory" / "Speicher") — also the meter's accessible name (aria-label).
   const label = t('chat.context.label')
@@ -53,7 +54,7 @@ export function ContextMeter({ usage }: { usage: ContextUsage }): JSX.Element | 
     used: fmtTokens(usedTokens, lang),
     window: fmtTokens(window, lang)
   })
-  if (ratio >= AMBER_AT) tooltip += ` ${t('chat.context.willSummarize')}`
+  if (pct >= AMBER_PCT) tooltip += ` ${t('chat.context.willSummarize')}`
 
   return (
     <span

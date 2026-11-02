@@ -851,6 +851,7 @@ export function ChatScreen({
     }
     const tick = async (): Promise<void> => {
       let snap: Awaited<ReturnType<NonNullable<typeof window.api.getActiveStream>>> = null
+      let readFailed = false
       try {
         snap = await window.api.getActiveStream!(activeId)
         pollFailures = 0
@@ -858,6 +859,7 @@ export function ChatScreen({
         pollFailures += 1
         if (pollFailures < STREAM_RECOVER_FAILURE_BUDGET) return // transient — keep the bubble, retry
         snap = null // sustained failure: best-effort finish below rather than a wedged composer
+        readFailed = true
       }
       if (cancelled || activeIdRef.current !== activeId) return
       if (snap) {
@@ -875,7 +877,9 @@ export function ChatScreen({
         const was = recoveringRef.current
         recoveringRef.current = false
         setRecovering(false)
-        setIdleCheckedId(activeId) // #613: nothing in flight here — "Send again" may show
+        // #613: nothing in flight here — "Send again" may show. #742: not after the sustained failure,
+        // which unlocks the composer (CH-4) but learned nothing: main may still be writing this answer.
+        if (!readFailed) setIdleCheckedId(activeId)
         if (was) {
           // Completed: pull the persisted final reply and clear the live bubble.
           void window.api
@@ -1833,8 +1837,12 @@ export function ChatScreen({
       if (activeIdRef.current === convId) void refreshContextInfo(convId)
       // M-U2: confirm a user-requested stop so a truncated reply is not mistaken for a
       // complete one. Only when looking at THIS conversation (a background stream's toast
-      // would be confusing) and only if no error already explained the early end.
-      if (stopped.current && activeIdRef.current === convId) showToast(t('chat.stopped'))
+      // would be confusing) and only if no error already explained the early end (#742: the
+      // condition never read it). A stopped send RESOLVES — main keeps the partial, and turns any
+      // rejection after the abort into a resolve (chat-stream.ts REL-3) — so a failed send here is
+      // a real failure that beat the Stop to main, and its banner is the explanation. A refresh
+      // that throws after the send came back does not count: the stop did end that answer.
+      if (stopped.current && sendSucceeded && activeIdRef.current === convId) showToast(t('chat.stopped'))
       stopped.current = false
     }
     return userTurnPersisted
@@ -2311,10 +2319,14 @@ export function ChatScreen({
     }
   }
 
+  // #742: the states `attachFiles` turns a file away in — an answer is being written, or a file is still
+  // being added (CR-3's one pending import). The paperclip is disabled / withheld then; a drag is refused.
+  const attachBusy = busyStreaming || pendingImport != null
+
   function onDrop(e: DragEvent): void {
     e.preventDefault()
     setDragOver(false)
-    if (busyStreaming) return
+    if (attachBusy) return // backstop: onDragOver refuses a busy drag, so it never drops
     const hadFiles = (e.dataTransfer?.files?.length ?? 0) > 0
     const paths = pathsFromDrop(e)
     if (paths.length > 0) {
@@ -2330,8 +2342,17 @@ export function ChatScreen({
     // preventDefault marks this a valid drop target; the copy cursor reads "add", not "move".
     if (e.dataTransfer?.types?.includes('Files')) {
       e.preventDefault()
+      // #742: a busy chat used to show the copy cursor and then drop the file without a word. It still
+      // claims the drag (left alone, Chromium would try to open the file as a page, which the navigation
+      // guard silently blocks) but answers 'none': the OS shows its no-drop cursor and a release ends
+      // the drag with no drop, like the disabled paperclip.
+      if (attachBusy) {
+        e.dataTransfer.dropEffect = 'none'
+        setDragOver(false)
+        return
+      }
       e.dataTransfer.dropEffect = 'copy'
-      if (!busyStreaming) setDragOver(true)
+      setDragOver(true)
     }
   }
 

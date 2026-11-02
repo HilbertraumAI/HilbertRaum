@@ -2456,13 +2456,16 @@ English (R12).
   `buildChatMessages` over `effectiveContextWindow` (falls back to `settings.contextTokens` with no
   runtime) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
   renderer refreshes on conversation switch + after each completed turn. `renderer/chat/ContextMeter.tsx`
-  is a thin composer-footer bar: calm <75% / amber 75–90% / near-full ≥90%, tooltip "Context: 6.4k / 8k
-  tokens (approximate)" + a will-summarize line in the amber band. **Labelled approximate** (it reflects
+  is a thin composer-footer gauge: calm <75% / amber 75–89% / near-full ≥90% of the percent it shows
+  (#742: the bands read the raw ratio before, so 74.6% showed "75%" calm and without the heads-up). Since
+  D69 (design-guidelines §11.9) it is a `role="meter"` labelled "Memory", its tooltip "Memory for this
+  conversation: 45% full (about 6.4k of 8k tokens)." + a will-summarize line in the amber band; the
+  pre-D69 "Context: 6.4k / 8k tokens" progressbar is gone. **Labelled approximate** (it reflects
   the over-counting estimate — honesty over false precision). **Deviation (documented):** §5.1 offered the
   usage on `STREAM.done` OR a resting IPC; chose the resting IPC for BOTH surfaces (the renderer awaits the
   invoke + re-reads history and never consumes `onDone`; `done` is the locked `Message` contract — left
   untouched). **Enhanced 2026-07-01 (§15.7):** the bar now carries an **always-visible %** (aria-hidden;
-  the progressbar's `aria-valuetext` still reads the tokens) and updates **live** while an answer streams —
+  the meter's `aria-valuetext` still reads the tokens) and updates **live** while an answer streams —
   `ChatScreen` derives `liveUsage` = the resting read + the in-flight user turn estimate + a running
   `estimateLiveTokens(streamText)`, then reconciles to the authoritative resting read in the stream
   `finally` (the try-side refresh moved there so a partial/stopped reply also settles, with no double-count).
@@ -2537,7 +2540,7 @@ independent fixes:
   truthfully high (English reads slightly high — accepted; the meter is labelled approximate and warns
   before the cliff). All token-math tests are structural/comparative, so the change is regression-safe.
 - **Live meter % (§15.5).** `ContextMeter` gains an always-visible percentage (aria-hidden — the
-  progressbar `aria-valuetext` still reads the tokens); `ChatScreen`'s `liveUsage` adds the in-flight user
+  `aria-valuetext` still reads the tokens; a `role="meter"` since D69); `ChatScreen`'s `liveUsage` adds the in-flight user
   turn + a running `estimateLiveTokens(streamText)` on top of the resting read so the bar + number climb as
   the answer streams, then reconciles to the authoritative resting read in the stream `finally` (moved there
   from the try so a stopped/failed turn also settles; `liveUserTokens` cleared first, and seeded 0 on a

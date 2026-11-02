@@ -21,10 +21,12 @@ import {
   listMessages,
   maybeSetTitleFromFirstMessage,
   messageTokens,
+  persistAssistantMessage,
   restoreMessage,
   stripThinkBlocks,
   writeCheckpoint
 } from '../../src/main/services/chat'
+import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { ChatStreamError } from '../../src/main/services/runtime/llama'
 import { getSkill, reconcileSkills } from '../../src/main/services/skills/registry'
@@ -465,6 +467,25 @@ describe('message "ended early" persistence (#600)', () => {
     const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a' })
     db.prepare('UPDATE messages SET ended_early = ? WHERE id = ?').run('some-future-cause', msg.id)
     expect(listMessages(db, conv.id).at(-1)?.endedEarly).toBeUndefined()
+  })
+
+  // #742: a finish reason reaches the caller only from a stream that ran to its end, so a reply flagged
+  // truncated was cut by the ceiling before any abort. A Stop landing after that changed nothing: the row
+  // keeps "Reply cut off" alone, never both notes.
+  it('a stop that lands on a reply already cut at the ceiling leaves it a truncation, not also "stopped" (#742)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const stop = new AbortController()
+    stop.abort(endedEarlyAbortReason('user'))
+    const persist = (content: string, truncated?: boolean) =>
+      persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content, truncated }, stop.signal)
+    const read = (id: string) => listMessages(db, conv.id).find((m) => m.id === id)
+
+    const cut = read(persist('cut at the ceiling', true).id)
+    expect(cut?.truncated).toBe(true)
+    expect(cut?.endedEarly).toBeUndefined()
+    // Control: the same stopped turn marks a partial the ceiling did not cut.
+    expect(read(persist('a partial').id)?.endedEarly).toBe('user')
   })
 })
 

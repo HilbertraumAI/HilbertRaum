@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { screen, cleanup, fireEvent, act } from '@testing-library/react'
 import type { ActiveStreamSnapshot, Conversation, Message } from '../../src/shared/types'
+import type { PreloadApi } from '../../src/preload'
 import { STREAM_RECOVER_FAILURE_BUDGET, STREAM_RECOVER_POLL_MS } from '../../src/renderer/lib/polling'
 import { t } from '../../src/shared/i18n'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
@@ -203,20 +204,23 @@ describe('ChatScreen — stream recovery (T-1)', () => {
 // in-flight check (getActiveStream) flips `recovering`. "Send again" must wait for that check: a click
 // in the gap collides with the live turn ("already being generated") over a reply that is working fine.
 describe('ChatScreen — "Send again" waits for the in-flight check (#613)', () => {
+  const sendAgain = (): HTMLElement | null => screen.queryByRole('button', { name: /Send again/ })
+  /** A fresh mount on a conversation whose last message is a question, main listing it as streaming. */
+  const stubUnansweredRemount = (getActiveStream: PreloadApi['getActiveStream']): void =>
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
+        listMessages: vi.fn(async () => [userMsg('u1', 'the question')]),
+        listActiveStreamConversations: vi.fn(async () => ['c1']),
+        getActiveStream
+      })
+    )
+
   it('shows nothing under the question until the check says no reply is being written', async () => {
     vi.useFakeTimers()
     try {
       const check = deferred<ActiveStreamSnapshot | null>()
-      const getActiveStream = vi.fn(() => check.promise)
-      stubApi(
-        chatScreenStubs({
-          listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
-          listMessages: vi.fn(async () => [userMsg('u1', 'the question')]),
-          listActiveStreamConversations: vi.fn(async () => ['c1']),
-          getActiveStream
-        })
-      )
-      const sendAgain = (): HTMLElement | null => screen.queryByRole('button', { name: /Send again/ })
+      stubUnansweredRemount(vi.fn(() => check.promise))
 
       renderChatScreen()
       await flushFakeTimers()
@@ -226,6 +230,33 @@ describe('ChatScreen — "Send again" waits for the in-flight check (#613)', () 
       await act(async () => check.resolve(null))
       await flushFakeTimers()
       expect(sendAgain()).toBeInTheDocument() // nothing in flight: the question really has no answer
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #742: CH-4's sustained-failure fallback unlocks the composer so it never wedges, but it learned
+  // nothing — main may still be writing this answer, and a click would meet its "already being generated"
+  // refusal. Only a check that answered opens the gate.
+  it('never shows it when the check keeps failing (#742)', async () => {
+    vi.useFakeTimers()
+    try {
+      const getActiveStream = vi.fn(async (): Promise<ActiveStreamSnapshot | null> => {
+        throw new Error('ipc hiccup')
+      })
+      stubUnansweredRemount(getActiveStream)
+
+      renderChatScreen()
+      await flushFakeTimers()
+      expect(screen.getByText('the question')).toBeInTheDocument()
+      for (let i = 0; i < STREAM_RECOVER_FAILURE_BUDGET + 1; i++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(STREAM_RECOVER_POLL_MS)
+        })
+      }
+      // The fallback ran: the poll gave up at the budget and stopped.
+      expect(getActiveStream).toHaveBeenCalledTimes(STREAM_RECOVER_FAILURE_BUDGET)
+      expect(sendAgain()).toBeNull()
     } finally {
       vi.useRealTimers()
     }

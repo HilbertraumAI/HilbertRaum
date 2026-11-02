@@ -471,7 +471,8 @@ carried verbatim through the regenerate delete/restore snapshot (`DeletedMessage
 surfaced as `Message.endedEarly`: `'model'` = the user stopped or switched the chat model mid-turn
 (#600), `'user'` = the chat's Stop button, `'lock'` = "Lock now" or quit (both #612). On an assistant
 row the partial was cut ("Reply stopped"; stamped by `persistAssistantMessage` from the turn's abort
-reason, `endedEarlyCause` in `chat/ended-early.ts` — a bare abort carries no cause); on a
+reason, `endedEarlyCause` in `chat/ended-early.ts` — a bare abort carries no cause — and never on a
+row with `truncated` set, #742: the two flags do not share a row); on a
 user row the question got no answer (`markUnansweredQuestion`, last visible row only). Its OWN column,
 never a `truncated_cause` value — an older app reads an unknown cause as "raise the context size" and
 ignores this column. Unknown values read back as undefined; carried verbatim through `DeletedMessage`.
