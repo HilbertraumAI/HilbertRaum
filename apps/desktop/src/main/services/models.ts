@@ -1160,7 +1160,7 @@ export const VRAM_WORKING_SHARE = 0.15
 /**
  * The context-cache term for a manifest that carries no `estimated_context_cache_gib`, GiB
  * (8k tokens on a 27B measured 0.5 under an earlier launch; decision 11 makes the figure
- * per-model — the seven decision models carry config-derived values, everything else defaults).
+ * per-model — eight manifests carry their own figure, everything else defaults).
  */
 export const VRAM_DEFAULT_CONTEXT_CACHE_GIB = 0.5
 /**

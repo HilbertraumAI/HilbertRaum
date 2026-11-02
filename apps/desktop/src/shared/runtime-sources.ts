@@ -321,11 +321,9 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
   // name on mac), unique, non-empty when present.
   const optionalRaw = block['optional']
   let optional: boolean | undefined
-  let familyKeysOk = true
   if (optionalRaw !== undefined) {
     if (typeof optionalRaw !== 'boolean') {
       errors.push(`"${prefix}.optional" must be true or false when present`)
-      familyKeysOk = false
     } else optional = optionalRaw
   }
   const executablesRaw = block['executables']
@@ -333,7 +331,6 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
   if (executablesRaw !== undefined) {
     if (!Array.isArray(executablesRaw) || executablesRaw.length === 0) {
       errors.push(`"${prefix}.executables" must be a non-empty list of unique names when present`)
-      familyKeysOk = false
     } else {
       executablesRaw.forEach((e, i) => {
         if (
@@ -346,22 +343,19 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
           errors.push(
             `"${prefix}.executables[${i}]" must be a plain executable base name with no path separator or extension`
           )
-          familyKeysOk = false
           return
         }
         if (executables.includes(e)) {
           errors.push(`"${prefix}.executables" must be a non-empty list of unique names when present`)
-          familyKeysOk = false
           return
         }
         executables.push(e)
       })
     }
   }
-  // #339 P8-4: the corresponding-source bundle. All-or-nothing like `executables`: a malformed
-  // compliance pin fails the whole file loudly rather than silently dropping the record.
+  // #339 P8-4: the corresponding-source bundle. A malformed compliance pin fails the whole file
+  // loudly rather than silently dropping the record.
   const sourceBundle = validateSourceBundle(block['source_bundle'], `${prefix}.source_bundle`, errors)
-  if (sourceBundle === null) familyKeysOk = false
 
   const buildsRaw = block['builds']
   const builds: RuntimeBuild[] = []
@@ -473,7 +467,7 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
     seen.add(key)
   }
 
-  if (typeof version !== 'string' || version.trim() === '' || builds.length === 0 || !familyKeysOk) return null
+  if (typeof version !== 'string' || version.trim() === '' || builds.length === 0) return null
   return {
     version: version.trim(),
     builds,
@@ -639,6 +633,3 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
     ...(ocr ? { ocr } : {})
   }
 }
-
-/** Re-exported so callers can warn on placeholder zip hashes (mirrors models.ts use). */
-export { isRealSha256 }

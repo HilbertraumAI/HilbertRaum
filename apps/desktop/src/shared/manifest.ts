@@ -573,8 +573,8 @@ export function validateManifest(raw: unknown): ValidationResult {
   }
 
   // Optional ADDITIONAL required files (#310): the rest of a multi-file weight, each with its
-  // own path + hash (+ optional source). Validated only when present, so every single-file
-  // manifest — the whole committed catalog today — validates byte-identically without it.
+  // own path + hash (+ optional source). Validated only when present, so a single-file
+  // manifest validates byte-identically without it.
   let files: RequiredFileSpec[] | undefined
   const rawFiles = raw['files']
   if (rawFiles !== undefined) {
