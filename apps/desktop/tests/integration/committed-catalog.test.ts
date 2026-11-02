@@ -9,7 +9,6 @@ import {
   fitsGraphicsMemory,
   graphicsBudgetMib,
   manifestFiles,
-  resolveManifestsDir,
   recommendChatModelId,
   recommendModelIdByRam,
   weightsMib
@@ -18,19 +17,13 @@ import { isRealSha256, type ModelManifest } from '../../src/shared/manifest'
 import type { ModelInfo } from '../../src/shared/types'
 import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
 import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
+import { committedManifests } from '../helpers/catalog'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 
 // The COMMITTED model-manifests/ tree is what a real drive is provisioned from. These tests
 // assert invariants directly against the on-disk catalog (mirrors the committed
 // runtime-sources.yaml tests in assets.test.ts) — so a malformed or mis-promoted manifest
 // fails CI, not a user's drive.
-function committedManifests(): ModelManifest[] {
-  const dir = resolveManifestsDir(process.cwd())
-  if (!dir) throw new Error('could not locate model-manifests from the repo')
-  const { manifests, errors } = discoverManifests(dir)
-  // Every committed manifest must validate cleanly (no skipped/erroring files).
-  expect(errors).toEqual([])
-  return manifests.map((m) => m.manifest)
-}
 
 // The Qwen3.5 Unsloth wave (model-policy.md "Qwen3.5 Unsloth wave"): the 4B incumbent plus the
 // 9B / 27B / 35B-A3B additions, and the later fast-tier 2B / 0.8B (issue #48 closed the test
@@ -624,12 +617,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
         recommendModelIdByRam(chat, ram, 'chat', slow)
       )
     }
-    const manifestsDir = resolveManifestsDir(process.cwd())
-    if (!manifestsDir) throw new Error('could not locate model-manifests from the repo')
     const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-rulec-'))
     try {
       const star = async (extra: Partial<Parameters<typeof buildModelList>[0]>) => {
-        const { models } = await buildModelList({ manifestsDir, rootPath, developerMode: false, machineRamGb: 32, ...extra })
+        const { models } = await buildModelList({ manifestsDir: CATALOG_MANIFESTS, rootPath, developerMode: false, machineRamGb: 32, ...extra })
         return models.find((m) => m.role === 'chat' && m.recommended)?.id
       }
       expect(await star({})).toBe('qwen3.8-27b-ud-q5km')
@@ -1410,12 +1401,10 @@ describe('committed catalog — variant grouping as the library renders it (PR #
   const RAM_16_GB = 16
 
   async function libraryModels(): Promise<ModelInfo[]> {
-    const manifestsDir = resolveManifestsDir(process.cwd())
-    if (!manifestsDir) throw new Error('could not locate model-manifests from the repo')
     const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-group-'))
     try {
       const { models } = await buildModelList({
-        manifestsDir,
+        manifestsDir: CATALOG_MANIFESTS,
         rootPath,
         developerMode: false,
         machineRamGb: RAM_16_GB
