@@ -5,16 +5,13 @@
 // so the notices file and the gate can never disagree about what "shipped" means.
 //
 // What ships (see apps/desktop/electron-builder.yml + docs/packaging.md):
-//   app.asar = the production dependency closure of apps/desktop (electron-builder's
-//   collector walks package-lock.json exactly like npm's node_modules resolution),
+//   app.asar = the production dependency closure of apps/desktop (this walk follows npm's
+//   node_modules resolution over package-lock.json; electron-builder's collector reads
+//   `npm list` and re-hoists, see #548 below),
 //   MINUS the `files:` negation globs in electron-builder.yml (the @napi-rs/canvas
 //   native optional dep, pdfjs-dist's standard fonts). The Vite-compiled
 //   renderer/main bundles inline a SUBSET of those same production dependencies
 //   (react, katex, streamdown, …), so the closure already covers them.
-//
-// The closure walk mirrors prodClosure() in apps/desktop/tests/integration/
-// packaging.test.ts (which keeps the yml negations honest against the lockfile);
-// if you change the resolution semantics here, check that test's copy too.
 //
 // The negations are matched against lockfile paths here, but electron-builder applies them to
 // the RE-HOISTED layout it packs, where a nested package can move to the top level (#548).
@@ -31,18 +28,14 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 
-/**
- * Renderer-bundled libraries that are devDependencies (would ship via the Vite bundle
- * WITHOUT being in the production closure). Derived 2026-07-12 by scanning every bare
- * import in apps/desktop/src/renderer + src/shared + src/main + src/preload: every
- * runtime import resolves to a production `dependency` of apps/desktop, so this list
- * is EMPTY. If a devDependency ever starts being imported by shipped code, add it here
- * (name only; the installed version is resolved from the lockfile) and regenerate.
- */
-export const RENDERER_BUNDLED_DEV_DEPS = []
+// Only the production closure ships. The renderer bundle inlines whatever it imports, so a devDependency imported by
+// shipped code would reach users with no notice: such a package must become a production dependency of apps/desktop.
+// third-party-notices.test.ts "shipped source imports only…" fails until it has.
 
-/** Minimatch-style files glob -> coarse RegExp (same rules as packaging.test.ts). */
-function globToRegExp(glob) {
+// Minimatch-style files glob -> coarse RegExp: two stars and a slash match any directory prefix, two stars anything, a
+// single star one path segment. Enough for the node_modules shapes in electron-builder.yml, not a full minimatch, and
+// packaging.test.ts refuses any other shape. tests/helpers/globs.ts re-exports this one.
+export function globToRegExp(glob) {
   return new RegExp(
     '^' +
       glob
@@ -69,8 +62,8 @@ export function builderFileNegations(repoRoot) {
 }
 
 /**
- * Walk the production dependency graph of apps/desktop over package-lock entries,
- * exactly like electron-builder's collector (npm node_modules resolution).
+ * Walk the production dependency graph of apps/desktop over package-lock entries
+ * (npm's node_modules resolution).
  * Returns the set of lockfile paths ("node_modules/foo", "node_modules/katex/node_modules/commander", …).
  */
 function prodClosure(packages) {
@@ -100,10 +93,12 @@ function prodClosure(packages) {
     seen.add(cur)
     const entry = packages[cur]
     const deps = { ...entry.dependencies, ...entry.optionalDependencies }
-    // TQ-3 (full-audit 2026-07-12b): fold NON-OPTIONAL peerDependencies into the walk —
-    // npm 7+ auto-installs them and electron-builder ships them, so skipping them could
-    // let a future dep's required peer ship un-noticed with every gate green. Peers
-    // flagged optional in peerDependenciesMeta are NOT auto-installed and stay out.
+    // TQ-3 (full-audit 2026-07-12b): fold NON-OPTIONAL peerDependencies into the walk:
+    // npm 7+ auto-installs them. electron-builder's collector does not follow peer edges
+    // (it reads `_dependencies`, which `npm list` fills from dependencies +
+    // optionalDependencies), so a package reached only as a peer is listed here and not
+    // packed, and third-party-notices.test.ts "names exactly the packages…" goes red.
+    // Peers flagged optional in peerDependenciesMeta are NOT auto-installed and stay out.
     // Verified 2026-07-12: every required peer of the current shipped set is already in
     // the closure, so this changes nothing today (regeneration stays byte-identical).
     for (const d of Object.keys(entry.peerDependencies ?? {})) {
@@ -137,14 +132,6 @@ export function computeShippedPackages(repoRoot) {
     // (probe with a representative file path, as packaging.test.ts does).
     (p) => !negations.some((rx) => rx.test(p + '/x.js'))
   )
-
-  for (const name of RENDERER_BUNDLED_DEV_DEPS) {
-    const direct = `node_modules/${name}`
-    const nested = `apps/desktop/node_modules/${name}`
-    const found = lock.packages[nested] ? nested : lock.packages[direct] ? direct : null
-    if (!found) throw new Error(`RENDERER_BUNDLED_DEV_DEPS entry not in lockfile: ${name}`)
-    shippedPaths.push(found)
-  }
 
   const byId = new Map()
   for (const p of shippedPaths) {

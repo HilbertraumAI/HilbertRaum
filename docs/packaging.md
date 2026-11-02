@@ -546,7 +546,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
 | `release-issues-section.sh` | Not drive prep: `.github/workflows/release.yml` runs it while building a tag and appends its output to the release notes. It emits an "Issues resolved" section — the ISSUES closed by the PRs merged since the last **published** release (the same baseline GitHub's own generated "What's Changed" uses, so the two agree), resolved via each commit's associated PRs + `closingIssuesReferences` rather than by parsing "(#N)" out of subjects (which would miss true merge commits). Read-only `gh` API calls, so it is locally testable: `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`. Best-effort by design — a failure is downgraded to a workflow warning, so release notes can never block a release build. |
-| `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt`/`dist/version` present but the platform binary missing or zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently; on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
+| `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt`/`dist/version` present but the platform binary missing or zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently; on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`, which also runs the script from a scratch copy against a stub electron package. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
 | `verify-mac-build.sh` + `lib/packaged-app-probe.mjs` | Not drive prep, not CI: the owner-run check of a packaged build (#560, #562). On a Mac the shell script builds (or takes) the `.app`, checks the fuse wire, the signature, the entitlements and the `app.asar` integrity hash, exercises the fuses, then launches the app and runs the probe; on Windows and Linux the probe runs alone against a packaged build started with `--remote-debugging-port` on a scratch drive root. "Verifying a packaged build on macOS" below. |
 
 The asset **download / verify / plan** logic is mirrored from the unit-tested
@@ -556,8 +556,8 @@ NOT in `assets.ts`**: it lives only in `scripts/prepare-drive.ps1`
 (`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
 **between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
 does not change which models `--with-assets` fetches (a parity test,
-`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match and that both
-fetch the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match, that every id is a committed manifest `--with-assets` can fetch,
+and that both fetch the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
@@ -650,8 +650,7 @@ zip), naming the files to delete and never deleting anything themselves (#235); 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
 > **its own location every launch** (`%~dp0` / `dirname "$0"`), so the same drive works on a second
 > laptop with a different letter/mount and continues the **same encrypted workspace** (success
-> criterion #10). The canonical, unit-tested reference is
-> `apps/desktop/src/main/services/launcher.ts` `resolveDriveRootFromLauncher`; the scripts mirror it.
+> criterion #10). `tests/integration/launcher-execution.test.ts` runs each launcher in a scratch root.
 >
 > **Autorun is dead.** Windows disabled `autorun.inf` from removable drives, so the app **cannot**
 > auto-launch on plug-in (and must not try — it looks like malware). The drive opens a file window and
@@ -1188,6 +1187,11 @@ run one real-model session covering:
    `scripts/verify-mac-build.sh` on a Mac, and on Windows and Linux start the packaged build with
    `--remote-debugging-port` on a scratch drive root and run `scripts/lib/packaged-app-probe.mjs`
    against it (next section).
+11. **The `app.asar` layout model against a real archive (#548).** No CI job reads a real archive, so this is the only
+   check of `tests/helpers/asar-layout.ts`. From `apps/desktop`, on a `npm run package:win` of the tagged commit:
+   `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`
+   (PowerShell: set `$env:HILBERTRAUM_PACKED_ASAR` first). `names exactly the package directories of a real app.asar` must
+   run, not skip, and pass. Run it too after any electron-builder bump.
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 
@@ -1328,6 +1332,7 @@ default build and `--backend cpu`) to refresh the binary before these harnesses 
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `resident-cache-real` | `HILBERTRAUM_RESIDENT_REAL` (the drive root) | real E5 vectors stored through the production codec on the drive: the resident cache's cold build, its warm scan, and a full `searchText` query (a real E5 query embed + the scan) |
 | `resident-cache-bench` | `RUN_RESIDENT_BENCH=1` | the resident vector cache's warm scan against the uncached scan, on synthetic unit vectors (mock only, no sidecar) |
+| `script-execution` `-DryRun` pipeline | `HILBERTRAUM_SCRIPT_DRY_RUN` | the whole builder, dry, on both shells, reaching the canonical verdict on an empty target (needs `npm run build`; ~30 s per leg) |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
 | `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |

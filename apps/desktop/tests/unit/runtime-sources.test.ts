@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { parse } from 'yaml'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
+import { committedRuntimeSources } from '../helpers/catalog'
 
 function build(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -65,10 +63,13 @@ describe('validateRuntimeSources', () => {
   })
 
   it('reports a build missing required fields', () => {
-    const res = validateRuntimeSources(sources({ builds: [build({ url: '', extract_to: '' })] }))
+    const res = validateRuntimeSources(
+      sources({ builds: [build({ url: '', extract_to: '', arch: '', backend: '', sha256: '' })] })
+    )
     expect(res.ok).toBe(false)
-    expect(res.errors.some((e) => e.includes('url'))).toBe(true)
-    expect(res.errors.some((e) => e.includes('extract_to'))).toBe(true)
+    for (const field of ['url', 'extract_to', 'arch', 'backend', 'sha256']) {
+      expect(res.errors.some((e) => e.includes(`builds[0].${field}`)), field).toBe(true)
+    }
   })
 
   // SEC-4 (full-audit-2026-06-29-followup, Phase 8): extract_to is a drive-relative
@@ -88,14 +89,11 @@ describe('validateRuntimeSources', () => {
   })
 
   it('rejects an absolute or drive-letter extract_to', () => {
-    expect(validateRuntimeSources(sources({ builds: [build({ extract_to: '/etc/evil' })] })).ok).toBe(false)
-    expect(validateRuntimeSources(sources({ builds: [build({ extract_to: 'C:\\Windows' })] })).ok).toBe(false)
-  })
-
-  it('still accepts a normal drive-relative extract_to', () => {
-    const res = validateRuntimeSources(sources({ builds: [build({ extract_to: 'runtime/llama.cpp/win' })] }))
-    expect(res.ok).toBe(true)
-    expect(res.sources?.builds[0].extractTo).toBe('runtime/llama.cpp/win')
+    for (const extract_to of ['/etc/evil', 'C:\\Windows', '\\\\server\\share']) {
+      const res = validateRuntimeSources(sources({ builds: [build({ extract_to })] }))
+      expect(res.ok, extract_to).toBe(false)
+      expect(res.errors.some((e) => e.includes('extract_to') && e.includes('drive-relative')), extract_to).toBe(true)
+    }
   })
 
   it('accepts multiple builds across OSes', () => {
@@ -138,6 +136,31 @@ describe('validateRuntimeSources', () => {
     )
     expect(res.ok).toBe(true)
     expect(res.sources?.builds.map((b) => b.backend)).toEqual(['vulkan', 'cpu'])
+  })
+
+  // The forward-compatibility rule (validateRuntimeSources' doc comment): an older app parses a newer drive's file unchanged.
+  it('ignores unknown keys at every level, so an older app can read a newer drive', () => {
+    const res = validateRuntimeSources({
+      future_family: { version: 'x', builds: 'not even a list' },
+      llama_cpp: { version: 'b9196', future_key: true, builds: [build({ future_key: 1 })] }
+    })
+    expect(res.errors).toEqual([])
+    expect(res.ok).toBe(true)
+    expect(Object.keys(res.families ?? {})).toEqual(['llama_cpp'])
+  })
+
+  it('rejects a non-mapping whisper_cpp or ocr block, and a non-mapping build or ocr file', () => {
+    const cases: Array<[string, unknown, string]> = [
+      ['whisper_cpp', { ...sources(), whisper_cpp: 'x' }, '"whisper_cpp" must be a mapping'],
+      ['ocr', { ...sources(), ocr: 'x' }, '"ocr" must be a mapping'],
+      ['a build', sources({ builds: ['x'] }), 'llama_cpp.builds[0] must be a mapping'],
+      ['an ocr file', { ...sources(), ocr: { version: 'v', files: ['x'] } }, 'ocr.files[0] must be a mapping']
+    ]
+    for (const [what, raw, message] of cases) {
+      const res = validateRuntimeSources(raw)
+      expect(res.ok, what).toBe(false)
+      expect(res.errors.some((e) => e.includes(message)), `${what}: ${res.errors.join(' | ')}`).toBe(true)
+    }
   })
 
   // ---- Phase 36: the optional whisper_cpp second family ------------------------------
@@ -225,6 +248,7 @@ describe('validateRuntimeSources', () => {
     expect(missing.ok).toBe(false)
     expect(missing.errors.some((e) => e.includes('ocr.files[0].url'))).toBe(true)
     expect(missing.errors.some((e) => e.includes('ocr.files[0].dest'))).toBe(true)
+    expect(missing.errors.some((e) => e.includes('ocr.files[0].sha256'))).toBe(true)
 
     const duplicate = validateRuntimeSources({
       ...sources(),
@@ -245,6 +269,18 @@ describe('validateRuntimeSources', () => {
     })
     expect(escaping.ok).toBe(false)
     expect(escaping.errors.some((e) => e.includes('ocr.files[0].dest'))).toBe(true)
+
+    const file = { lang: 'deu', url: 'https://x/f.gz', sha256: 'h', dest: 'ocr/a.gz' }
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ version: 'v', files: [{ ...file, lang: 'de' }] }, 'ocr.files[0].lang'],
+      [{ files: [file] }, '"ocr.version"'],
+      [{ version: 'v', files: [] }, '"ocr.files"']
+    ]
+    for (const [ocr, message] of cases) {
+      const res = validateRuntimeSources({ ...sources(), ocr })
+      expect(res.ok, message).toBe(false)
+      expect(res.errors.some((e) => e.includes(message)), message).toBe(true)
+    }
   })
 
   // The download layer already refuses cleartext at fetch time; the parser now refuses it at
@@ -372,6 +408,7 @@ describe('validateRuntimeSources', () => {
       })
       // Absent = nothing to carry (the llama / whisper shape); an older app ignores the key.
       expect(validateRuntimeSources({ ...base(), kiwix_tools: { version: '3.8.1', builds: [kiwixBuild] } }).families?.kiwix_tools?.sourceBundle).toBeUndefined()
+      expect(withBundle({ dir: 'runtime/kiwix-tools/source', recipe_commit: '0123abc', files: [bundleFile()] }).families?.kiwix_tools?.sourceBundle?.recipeCommit).toBe('0123abc')
 
       const rejected: Array<[string, unknown, RegExp]> = [
         ['a placeholder hash', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ sha256: 'PLACEHOLDER' })] }, /sha256.*placeholder cannot discharge/],
@@ -385,12 +422,13 @@ describe('validateRuntimeSources', () => {
         ['a bad size', { dir: 'runtime/kiwix-tools/source', files: [bundleFile({ size_bytes: -1 })] }, /files\[0\]\.size_bytes/],
         ['an empty files list', { dir: 'runtime/kiwix-tools/source', files: [] }, /source_bundle\.files/],
         ['a cleartext recipe_url', { dir: 'runtime/kiwix-tools/source', recipe_url: 'http://x.test', files: [bundleFile()] }, /recipe_url/],
+        ['an empty recipe_commit', { dir: 'runtime/kiwix-tools/source', recipe_commit: ' ', files: [bundleFile()] }, /recipe_commit/],
+        ['a non-mapping file', { dir: 'runtime/kiwix-tools/source', files: ['x'] }, /files\[0\]" must be a mapping/],
         ['a non-mapping block', 'runtime/kiwix-tools/source', /must be a mapping/]
       ]
       for (const [what, bundle, message] of rejected) {
         const res = withBundle(bundle)
         expect(res.ok, what).toBe(false)
-        expect(res.families?.kiwix_tools, what).toBeUndefined() // all-or-nothing, like executables
         expect(res.errors.some((e) => message.test(e)), `${what}: ${res.errors.join(' | ')}`).toBe(true)
       }
     })
@@ -440,13 +478,17 @@ describe('validateRuntimeSources', () => {
     })
   })
 
-  it('every entry of the shipped runtime-sources.yaml still validates', () => {
-    const file = join(__dirname, '..', '..', '..', '..', 'model-manifests', 'runtime-sources.yaml')
-    const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
-    expect(res.errors).toEqual([])
-    expect(res.ok).toBe(true)
-    // #339 P8-1: the shipped kiwix_tools block is optional with all four pinned builds.
-    expect(res.families?.kiwix_tools?.optional).toBe(true)
-    expect(res.families?.kiwix_tools?.builds).toHaveLength(4)
+  // A half-finished pin bump: the install marker would name the new version over an old binary, and fetch only checks the
+  // stale hash it was given.
+  it('every shipped runtime URL carries its pinned version', () => {
+    const res = committedRuntimeSources()
+    const families = Object.entries(res.families ?? {})
+    expect(families.map(([family]) => family).sort()).toEqual(['kiwix_tools', 'llama_cpp', 'whisper_cpp'])
+    for (const [family, block] of families) {
+      for (const b of block!.builds) expect(b.url, family).toContain(block!.version)
+    }
+    expect(res.ocr!.files.length).toBeGreaterThan(0)
+    for (const f of res.ocr!.files) expect(f.url, f.lang).toContain(res.ocr!.version)
+    for (const f of res.families!.kiwix_tools!.sourceBundle!.files) expect(f.url, f.name).toContain(f.version)
   })
 })

@@ -859,7 +859,7 @@ password recovery — are documented in
   collision self-heals; a losing-twice race fails just that one call (the next retries). The startup
   error is diagnosable via the captured stderr tail.
 - The shell scripts re-implement logic whose canonical source is TypeScript (`drive.ts`,
-  `assets.ts`, `commercial-drive.ts`, `launcher.ts`). Parity is maintained by convention + review,
+  `assets.ts`, `commercial-drive.ts`). Parity is maintained by convention + review,
   not code generation — see the rule in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Docs copied onto a prepared drive (user-guide, troubleshooting) contain repo-relative links that
   do not resolve when read from the drive.

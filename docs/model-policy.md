@@ -488,8 +488,8 @@ Rules and behaviour:
   user a doomed multi-GB request). The network-gate banner does not fire for a model that is
   unfetchable for reasons that have nothing to do with the drive's policy.
 - **Fetch scripts**: `fetch-models.{ps1,sh}` print a loud `SKIP … upstream source withdrawn` line
-  and continue — one retired file must not fail a whole drive build. Both twins are pinned against
-  the TS behaviour by `script-drift.test.ts`. Their flat-YAML parser strips inline comments at
+  and continue — one retired file must not fail a whole drive build. `script-execution.test.ts`
+  runs the skip on both twins. Their flat-YAML parser strips inline comments at
   `" #"`, so **a withdrawal note must not contain `" #"`** (write "issue 196", not "issue #196") —
   also asserted in CI.
 - **Ranking**: a withdrawn manifest carries `recommendation_rank: 0` — selectable, never
@@ -1013,7 +1013,8 @@ line, so a hand-made manifest that relies on a hand-placed projector leaves out 
 entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
 treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)
 applies to `local_path`, not to `mmproj.local_path` — a sharded projector is not (yet) a case the
-validator enforces (the committed-catalog test covers it, see `docs/architecture.md`).
+validator enforces (the committed-catalog row "declares no shard-pattern path whose sibling series is
+incomplete" covers it, and a control shows it firing).
 
 **RAM tiering (PROD-1).** Min RAM is **12 GB** for the model alone (~4.6 GB peak RSS), but the
 honest co-residency bar is higher: vision + a 12B chat (~7 GB) + the E5 embedder = three

@@ -249,7 +249,7 @@ for mf in "${MANIFEST_FILES[@]}"; do
   local_path="$(field "$mf" local_path)"
   sha="$(field "$mf" sha256 | tr '[:upper:]' '[:lower:]')"
   url="$(field "$mf" url)"
-  # Optional (24 of the committed manifests carry it) — used only to tell a complete-but-wrong
+  # Optional (30 of the committed manifests carry it) — used only to tell a complete-but-wrong
   # file apart from a resumable partial in handle_file.
   size_bytes="$(field "$mf" size_bytes)"
   license="$(field "$mf" license)"
@@ -257,7 +257,7 @@ for mf in "${MANIFEST_FILES[@]}"; do
   review_status="$(field "$mf" status)"
   # Optional `download.withdrawn` (issue 196): the publisher deleted the exact file this
   # manifest pins, so the URL above is known-dead. Mirrors planModelDownloads' 'source-
-  # withdrawn' task status (assets.ts is the source of truth; script-drift.test.ts pins both
+  # withdrawn' task status (assets.ts is the source of truth; script-execution.test.ts runs both
   # twins). Note values must not contain " #" — `field` strips inline YAML comments.
   withdrawn="$(field "$mf" withdrawn)"
 

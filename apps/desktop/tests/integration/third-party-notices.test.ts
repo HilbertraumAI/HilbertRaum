@@ -1,16 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { builtinModules } from 'node:module'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parse } from 'yaml'
+import { stringify } from 'yaml'
+import { builderFileNegations, computeShippedPackages } from '../../../../scripts/lib/shipped-packages.mjs'
 import {
-  builderFileNegations,
-  computeShippedPackages,
-  RENDERER_BUNDLED_DEV_DEPS
-} from '../../../../scripts/lib/shipped-packages.mjs'
-import { KNOWN_EXTRA_NOTICES, LEPTONICA_LICENSE } from '../../../../scripts/lib/extra-notices.mjs'
-import { packedNodeModules, type LockPackages } from '../helpers/asar-layout'
+  KNOWN_EXTRA_NOTICES,
+  LEPTONICA_LICENSE,
+  OFL_1_1_LICENSE
+} from '../../../../scripts/lib/extra-notices.mjs'
+import { packedNodeModules } from '../helpers/asar-layout'
+import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
 
-// LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~226 npm packages
+// LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~224 npm packages
 // (app.asar production closure + the Vite-inlined renderer libs, which are a subset of it) —
 // pdfjs-dist and tesseract.js are Apache-2.0 (NOTICE-preservation on redistribution), KaTeX
 // ships SIL-OFL-1.1 fonts, and MIT/BSD/ISC all require keeping the copyright notice. The
@@ -20,7 +23,6 @@ import { packedNodeModules, type LockPackages } from '../helpers/asar-layout'
 // (the same computation the generator uses — scripts/lib/shipped-packages.mjs), so any
 // dependency change fails the gate until the file is regenerated.
 
-const REPO_ROOT = join(__dirname, '..', '..', '..', '..')
 const NOTICES = join(REPO_ROOT, 'THIRD-PARTY-NOTICES.md')
 const REGEN = 'run `node scripts/generate-third-party-notices.mjs` and commit the result'
 
@@ -28,7 +30,7 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
   it('exists, is non-trivial, and is byte-clean (LF-only, no NUL, no BOM)', () => {
     expect(existsSync(NOTICES), `THIRD-PARTY-NOTICES.md missing — ${REGEN}`).toBe(true)
     const raw = readFileSync(NOTICES)
-    expect(raw.byteLength).toBeGreaterThan(100 * 1024) // 226 license texts ≈ 400 KB
+    expect(raw.byteLength).toBeGreaterThan(100 * 1024) // 224 license texts ≈ 400 KB
     expect(raw.includes(0), 'literal NUL byte in THIRD-PARTY-NOTICES.md').toBe(false)
     expect(raw.includes(0x0d), 'CR line ending in THIRD-PARTY-NOTICES.md').toBe(false)
     expect(raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf, 'UTF-8 BOM').toBe(false)
@@ -50,16 +52,11 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
   // electron-builder applies the negations to the RE-HOISTED layout it packs. Before #536 the two
   // disagreed: app.asar carried tinyexec 1.2.4, which the notices left out with the mermaid chain.
   it('names exactly the packages electron-builder packs into app.asar (#548)', () => {
-    const lock = JSON.parse(readFileSync(join(REPO_ROOT, 'package-lock.json'), 'utf8')) as {
-      packages: LockPackages
-    }
     const negations = builderFileNegations(REPO_ROOT)
-    const packed = packedNodeModules(lock.packages)
+    const packed = packedNodeModules(lockPackages())
       .filter((p) => !negations.some((rx) => rx.test(p.dest + '/x.js')))
       .map((p) => p.id)
-    const noticed = computeShippedPackages(REPO_ROOT)
-      .filter((p) => !RENDERER_BUNDLED_DEV_DEPS.includes(p.name))
-      .map((p) => `${p.name}@${p.version}`)
+    const noticed = computeShippedPackages(REPO_ROOT).map((p) => `${p.name}@${p.version}`)
     expect(noticed.sort(), 'the notices and app.asar disagree about what ships').toEqual(
       [...new Set(packed)].sort()
     )
@@ -73,6 +70,12 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(missing.map((p) => `${p.name}@${p.version}`), `sections missing — ${REGEN}`).toEqual(
       []
     )
+    expect(text, 'a package with no license text (LIC-3): pin it in KNOWN_EXTRA_NOTICES').not.toContain(
+      'No license file is distributed inside this package'
+    )
+    expect(text, 'a section written from lockfile metadata on a host that lacks the package').not.toContain(
+      'could not be reproduced here'
+    )
   })
 
   it('carries the SIL OFL 1.1 notice for the KaTeX fonts while katex ships', () => {
@@ -82,6 +85,7 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(text).toContain('KaTeX fonts')
     expect(text).toContain('SIL Open Font License, Version 1.1')
     expect(text).toContain('SIL OPEN FONT LICENSE Version 1.1')
+    expect(text.includes(OFL_1_1_LICENSE), `verbatim OFL 1.1 text missing — ${REGEN}`).toBe(true)
   })
 
   // LIC-3 (full-audit 2026-07-12b): six shipped packages publish no license file in
@@ -118,26 +122,17 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
   })
 
   it('every non-optional peer of a shipped package is itself shipped (full-audit 2026-07-12b TQ-3)', () => {
-    // The freshness gate above recomputes the shipped set via the SAME lib as the generator
-    // (scripts/lib/shipped-packages.mjs), so a closure-computation bug — e.g. the TQ-3 peer
-    // fold regressing — would pass both sides. This assertion is the independent belt: it
-    // re-derives the peer requirement straight from the lockfile entries of the shipped set
-    // and checks against shipped package NAMES (npm 7+ auto-installs required peers and
-    // electron-builder ships them, so a missing one would ship un-noticed).
-    const lock = JSON.parse(readFileSync(join(REPO_ROOT, 'package-lock.json'), 'utf8')) as {
-      packages: Record<
-        string,
-        {
-          peerDependencies?: Record<string, string>
-          peerDependenciesMeta?: Record<string, { optional?: boolean }>
-        }
-      >
-    }
+    // The freshness gate above recomputes the shipped set through the generator's own lib, so a bug in that walk passes both
+    // sides. This row re-reads each required peer from the shipped set's lockfile entries and checks it against shipped NAMES.
+    // On today's tree every required peer is also a normal dependency (56 edges, none peer-only), so this fires on a negated
+    // peer; the fold itself is proved by the fixture row below. electron-builder's collector follows dependencies +
+    // optionalDependencies only, so a pure peer would be noticed but not packed: `names exactly the packages…` goes red.
+    const lock = lockPackages()
     const shipped = computeShippedPackages(REPO_ROOT)
     const shippedNames = new Set(shipped.map((p) => p.name))
     const missing: string[] = []
     for (const p of shipped) {
-      const entry = lock.packages[p.lockPath]
+      const entry = lock[p.lockPath]
       for (const peer of Object.keys(entry?.peerDependencies ?? {})) {
         if (entry.peerDependenciesMeta?.[peer]?.optional) continue
         if (!shippedNames.has(peer)) missing.push(`${p.name}@${p.version} → peer ${peer}`)
@@ -150,28 +145,90 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     ).toEqual([])
   })
 
-  it('electron-builder ships the file beside app.asar via extraResources', () => {
-    const cfg = parse(
-      readFileSync(join(__dirname, '..', '..', 'electron-builder.yml'), 'utf8')
-    ) as { extraResources?: Array<{ from?: string; to?: string }> }
-    const entry = (cfg.extraResources ?? []).find((e) =>
-      (e.from ?? '').includes('THIRD-PARTY-NOTICES.md')
+  it('computes the shipped set: required peers in, optional peers and negated packages out, one entry per name@version, code-unit order', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-shipped-'))
+    mkdirSync(join(root, 'apps', 'desktop'), { recursive: true })
+    writeFileSync(
+      join(root, 'apps', 'desktop', 'electron-builder.yml'),
+      stringify({ files: ['out/**/*', '!**/node_modules/negated/**'] })
     )
-    expect(entry, 'extraResources entry for THIRD-PARTY-NOTICES.md missing').toBeTruthy()
-    expect(entry!.from).toBe('../../THIRD-PARTY-NOTICES.md')
-    expect(entry!.to).toBe('THIRD-PARTY-NOTICES.md')
+    writeFileSync(
+      join(root, 'package-lock.json'),
+      JSON.stringify({
+        packages: {
+          'apps/desktop': { name: 'app', dependencies: { alpha: '*', Zeta: '*', negated: '*' } },
+          'node_modules/alpha': {
+            version: '1.0.0',
+            license: 'MIT',
+            dependencies: { dup: '*', multi: '*' },
+            optionalDependencies: { maybe: '*' },
+            peerDependencies: { 'req-peer': '*', 'opt-peer': '*' },
+            peerDependenciesMeta: { 'opt-peer': { optional: true } }
+          },
+          'node_modules/Zeta': { version: '1.0.0', dependencies: { dup: '*', multi: '*' } },
+          'node_modules/dup': { version: '4.0.0' },
+          'node_modules/Zeta/node_modules/dup': { version: '4.0.0' },
+          'node_modules/multi': { version: '1.0.0' },
+          'node_modules/Zeta/node_modules/multi': { version: '2.0.0' },
+          'node_modules/maybe': { version: '1.1.0' },
+          'node_modules/req-peer': { version: '2.0.0' },
+          'node_modules/opt-peer': { version: '3.0.0' },
+          'node_modules/negated': { version: '9.0.0' }
+        }
+      })
+    )
+    const shipped = computeShippedPackages(root)
+    expect(shipped.map((p) => `${p.name}@${p.version}`)).toEqual([
+      'Zeta@1.0.0',
+      'alpha@1.0.0',
+      'dup@4.0.0',
+      'maybe@1.1.0',
+      'multi@1.0.0',
+      'multi@2.0.0',
+      'req-peer@2.0.0'
+    ])
+    expect(shipped.find((p) => p.name === 'alpha')?.lockLicense).toBe('MIT')
+    expect(shipped.find((p) => p.name === 'dup')?.lockLicense).toBeNull()
+  })
+
+  // DEP-6: a license file inside a path the build excludes does not ship, so the generator skips it (`shipsFile`).
+  it('reproduces no license of a file the build excludes, and keeps its siblings (DEP-6)', () => {
+    const text = readFileSync(NOTICES, 'utf8')
+    expect(text).not.toContain('standard_fonts/')
+    expect(text).toContain('#### `cmaps/LICENSE`')
+  })
+
+  // The renderer bundle inlines whatever it imports, so a devDependency import would ship with no notice.
+  it('shipped source imports only production dependencies, electron and Node builtins', () => {
+    const { dependencies } = JSON.parse(repoText('apps', 'desktop', 'package.json')) as {
+      dependencies: Record<string, string>
+    }
+    const allowed = new Set([...Object.keys(dependencies), 'electron', ...builtinModules])
+    const importRx =
+      /^(?:import|export)\s[^'"`;=(]*?\sfrom\s+['"]([^'"./][^'"]*)['"]|^import\s+['"]([^'"./][^'"]*)['"]|\bimport\(\s*['"]([^'"./][^'"]*)['"]\s*\)|\brequire\(\s*['"]([^'"./][^'"]*)['"]\s*\)/gm
+    const seen = new Set<string>()
+    for (const p of filesUnder(join(DESKTOP_ROOT, 'src'), /(?<!\.d)\.tsx?$/)) {
+      for (const m of readFileSync(p, 'utf8').matchAll(importRx)) {
+        const spec = m[1] ?? m[2] ?? m[3] ?? m[4]
+        if (spec.startsWith('node:') || spec.startsWith('@shared/') || spec.startsWith('@renderer/')) continue
+        seen.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0])
+      }
+    }
+    expect(seen).toContain('react') // the walk read the source
+    expect([...seen].filter((p) => !allowed.has(p))).toEqual([])
   })
 
   // LIC-2 (full-audit 2026-07-12b): the artifact must also carry the project's OWN
   // GPL-3.0-or-later text — the root LICENSE is outside the apps/desktop build context,
   // so without this extraResources entry the packaged app ships the GPL only as the
   // package.json SPDX string.
-  it('electron-builder ships the project LICENSE beside app.asar as LICENSE.txt', () => {
-    const cfg = parse(
-      readFileSync(join(__dirname, '..', '..', 'electron-builder.yml'), 'utf8')
-    ) as { extraResources?: Array<{ from?: string; to?: string }> }
-    const entry = (cfg.extraResources ?? []).find((e) => e.from === '../../LICENSE')
-    expect(entry, 'extraResources entry for the project LICENSE missing').toBeTruthy()
-    expect(entry!.to).toBe('LICENSE.txt')
+  it('electron-builder ships exactly the manifests, the notices and the license beside app.asar', () => {
+    const resources = builderConfig().extraResources as Array<{ from: string; to: string }>
+    expect(resources).toEqual([
+      { from: '../../model-manifests', to: 'model-manifests' },
+      { from: '../../THIRD-PARTY-NOTICES.md', to: 'THIRD-PARTY-NOTICES.md' },
+      { from: '../../LICENSE', to: 'LICENSE.txt' }
+    ])
+    for (const { from } of resources) expect(existsSync(join(DESKTOP_ROOT, from)), from).toBe(true)
   })
 })

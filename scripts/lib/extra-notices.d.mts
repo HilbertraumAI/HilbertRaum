@@ -9,3 +9,4 @@ export interface ExtraNotice {
 }
 export declare const KNOWN_EXTRA_NOTICES: Record<string, ExtraNotice>
 export declare const LEPTONICA_LICENSE: string
+export declare const OFL_1_1_LICENSE: string

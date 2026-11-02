@@ -681,7 +681,7 @@ consumer machine.
    `ubatch 2048`; the 4B's figure is its own 4,096-token window); every other manifest defaults to
    0.5 GiB in code (the field is absent, not stored as 0.5). **Recomputed 2026-09-07 for ONE server
    slot** (issue #319: `CHAT_SERVER_ARGS` passes `-np 1` — the amendment below). Pinned in
-   `committed-catalog.test.ts` ("pins the seven `estimated_context_cache_gib` values, and that no
+   `committed-catalog.test.ts` ("pins the eight `estimated_context_cache_gib` values, and that no
    other manifest carries the field"); each manifest carries its own arithmetic in a YAML comment:
 
    | model | `estimated_context_cache_gib` | was (4 slots) | why it moved, or did not |

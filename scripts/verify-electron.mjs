@@ -48,7 +48,7 @@ import path from 'node:path';
 const TAG = '[verify-electron]';
 
 /** Electron >= 42 removed the postinstall; the binary arrives lazily on first bin invocation. */
-export const LAZY_DOWNLOAD_MAJOR = 42;
+const LAZY_DOWNLOAD_MAJOR = 42;
 
 /**
  * Classify an installed electron package directory.

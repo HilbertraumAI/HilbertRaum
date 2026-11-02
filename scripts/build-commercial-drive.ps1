@@ -187,7 +187,7 @@ Run 'fetch-runtime.ps1' $ocrAssets
 
 # --- Kiwix-tools corresponding-source bundle (#339 P8-4) ---------------------------
 # UN-NUMBERED: sits between the runtime sidecars above and packaging below, but is not
-# one of the seven planCommercialDrive step ids (commercial-drive.test.ts pins those).
+# one of the nine planCommercialDrive step ids (commercial-drive.test.ts pins those).
 # SOURCE FIRST: the bundle is installed + re-verified BEFORE the kiwix_tools binaries are
 # fetched, so a failed/aborted install can never leave binaries on the drive without their
 # complete corresponding source. Omitted -KiwixSourceDir = this Kit ships no kiwix-tools at

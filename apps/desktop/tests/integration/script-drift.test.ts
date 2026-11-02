@@ -1,18 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { parse as parseYaml } from 'yaml'
 import {
   DRIVE_LAYOUT_DIRS,
   DRIVE_FORMAT_VERSION,
   buildDriveJson,
-  buildPolicyJson,
-  SUPPORTED_RUNTIME_FORMATS
+  buildPolicyJson
 } from '../../src/main/services/drive'
+import { SUPPORTED_RUNTIME_FORMATS } from '../../src/main/services/models'
+import { sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
 import { isRealSha256 } from '../../src/shared/manifest'
-import { KIT_PLATFORMS, validateRuntimeSources } from '../../src/shared/runtime-sources'
-import { DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
+import { KIT_PLATFORMS, type RuntimeFamily } from '../../src/shared/runtime-sources'
+import { DRIVE_LICENSE_ARTIFACTS, KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
+import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
+import { extractScriptArray } from '../helpers/script-legs'
+import { committedRuntimeSources } from '../helpers/catalog'
 
 // Drift guard (audit H5 / M-A1). The drive layout, the format version, and the runtime
 // build matrix have a single canonical source of truth in TypeScript / `runtime-sources.yaml`,
@@ -23,31 +25,14 @@ import { DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-driv
 // "succeeds". This test mechanically extracts the script literals and asserts they match the
 // canonical TS. Pure string parsing — no shell execution — so it runs in CI where only Node exists.
 
-const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-const read = (rel: string): string => readFileSync(join(REPO_ROOT, rel), 'utf8')
-
-/** Pull the entries of a script array literal that opens at `header` and ends at `close`. */
-function extractArray(src: string, header: string, close: string): string[] {
-  const start = src.indexOf(header)
-  expect(start, `array header ${JSON.stringify(header)} not found`).toBeGreaterThanOrEqual(0)
-  const end = src.indexOf(close, start + header.length)
-  expect(end, `array close ${JSON.stringify(close)} not found after ${header}`).toBeGreaterThan(start)
-  const body = src.slice(start + header.length, end)
-  return body
-    .split('\n')
-    .map((l) => l.replace(/#.*$/, '').trim()) // strip comments + whitespace
-    .map((l) => l.replace(/[,'"]/g, '').trim()) // strip quotes/commas (ps1 + sh both)
-    .filter((l) => l.length > 0)
-}
-
 describe('TS ↔ shell-script drift (drive layout)', () => {
   it('prepare-drive.ps1 $Dirs matches DRIVE_LAYOUT_DIRS', () => {
-    const dirs = extractArray(read('scripts/prepare-drive.ps1'), '$Dirs = @(', ')')
+    const dirs = extractScriptArray(repoText('scripts/prepare-drive.ps1'), '$Dirs = @(')
     expect(dirs).toEqual([...DRIVE_LAYOUT_DIRS])
   })
 
   it('prepare-drive.sh DIRS matches DRIVE_LAYOUT_DIRS', () => {
-    const dirs = extractArray(read('scripts/prepare-drive.sh'), 'DIRS=(', ')')
+    const dirs = extractScriptArray(repoText('scripts/prepare-drive.sh'), 'DIRS=(')
     expect(dirs).toEqual([...DRIVE_LAYOUT_DIRS])
   })
 
@@ -58,7 +43,7 @@ describe('TS ↔ shell-script drift (drive layout)', () => {
       'scripts/verify-models.ps1',
       'scripts/verify-models.sh'
     ]) {
-      const src = read(rel)
+      const src = repoText(rel)
       const matches = [...src.matchAll(/drive_format_version["']?\s*[=:]\s*(\d+)/g)]
       expect(matches.length, `${rel}: expected at least one drive_format_version literal`).toBeGreaterThan(0)
       for (const m of matches) {
@@ -80,8 +65,7 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
   // `includeOptional: true` is how the "the builders skip exactly the optional families"
   // test below still keeps that carve-out honest.
   function canonicalBuilds(opts: { includeOptional?: boolean } = {}): Set<string> {
-    const parsed = validateRuntimeSources(parseYaml(read('model-manifests/runtime-sources.yaml')))
-    expect(parsed.errors, `runtime-sources.yaml must validate: ${parsed.errors.join('; ')}`).toEqual([])
+    const parsed = committedRuntimeSources()
     const set = new Set<string>()
     for (const [family, block] of Object.entries(parsed.families ?? {})) {
       if (block!.optional && !opts.includeOptional) continue
@@ -92,8 +76,7 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
 
   /** The families runtime-sources.yaml marks `optional: true` today. */
   function optionalFamilies(): Set<string> {
-    const parsed = validateRuntimeSources(parseYaml(read('model-manifests/runtime-sources.yaml')))
-    expect(parsed.errors, `runtime-sources.yaml must validate: ${parsed.errors.join('; ')}`).toEqual([])
+    const parsed = committedRuntimeSources()
     const set = new Set<string>()
     for (const [family, block] of Object.entries(parsed.families ?? {})) {
       if (block!.optional) set.add(family)
@@ -103,7 +86,7 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
 
   /** ps1 rows: `@{ family = 'llama_cpp'; dir = '…'; backend = 'vulkan'; bin = '…' }` */
   function ps1Matrix(): { family: string; dir: string; backend: string; bin: string }[] {
-    const src = read('scripts/build-commercial-drive.ps1')
+    const src = repoText('scripts/build-commercial-drive.ps1')
     const rows = [
       ...src.matchAll(
         /family\s*=\s*'([^']+)'\s*;\s*dir\s*=\s*'([^']+)'\s*;\s*backend\s*=\s*'([^']+)'\s*;\s*bin\s*=\s*'([^']+)'/g
@@ -117,17 +100,14 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
    *  SHORT form (`llama`/`whisper`) because the loop only uses it to pick $LLAMA_VERSION vs
    *  $WHISPER_VERSION — map it back onto the canonical family name before comparing. */
   function shMatrix(): { family: string; dir: string; backend: string; bin: string }[] {
-    const src = read('scripts/build-commercial-drive.sh')
+    const src = repoText('scripts/build-commercial-drive.sh')
     const start = src.indexOf('for rt_entry in')
     expect(start, 'the runtime-assert matrix loop in build-commercial-drive.sh not found').toBeGreaterThanOrEqual(0)
     const end = src.indexOf('; do', start)
     expect(end, 'the runtime-assert matrix loop in build-commercial-drive.sh is not closed').toBeGreaterThan(start)
     const rows = [...src.slice(start, end).matchAll(/"([^"|]+)\|([^"|]+)\|([^"|]+)\|([^"|]+)"/g)]
     expect(rows.length, 'expected the runtime-assert matrix rows in build-commercial-drive.sh').toBeGreaterThan(0)
-    // `kiwix` is pre-registered (#339 P8-1) even though the drive builders don't yet emit a
-    // matrix row for it (that lands in P8-3) — so P8-3 only has to add rows here, never touch
-    // this mapping.
-    const FAMILIES: Record<string, string> = { llama: 'llama_cpp', whisper: 'whisper_cpp', kiwix: 'kiwix_tools' }
+    const FAMILIES: Record<string, string> = { llama: 'llama_cpp', whisper: 'whisper_cpp' }
     return rows.map((m) => {
       const family = FAMILIES[m[1]]
       expect(
@@ -145,21 +125,25 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
   })
 
   // AUD-20: the `.sh` twin re-spells the SAME matrix as its own hard-coded literals and was
-  // unguarded — only the .ps1 was checked. A drive built on mac/linux therefore gated its
-  // "is this drive sellable?" runtime assertion against a matrix that could silently fall behind
-  // runtime-sources.yaml: a build dropped from the loop is never verified, so a drive missing
-  // that sidecar (or carrying a stale-backend one) still passes the gate and ships as SELLABLE.
+  // unguarded — only the .ps1 was checked. Since #233 the verdict is the canonical gate's, so a
+  // matrix that falls behind runtime-sources.yaml now means a false NOT SELLABLE, or a build the
+  // native pre-flight silently skips.
   it('build-commercial-drive.sh assertion matrix matches runtime-sources.yaml', () => {
     const scriptSet = new Set(shMatrix().map((r) => `${r.family}|${r.backend}|${r.dir}`))
     expect(scriptSet).toEqual(canonicalBuilds())
   })
 
-  // The yaml pins (family, backend, extract_to) but NOT the binary name, so the two scripts are
-  // each other's only check on that column — and a wrong `bin` means the gate looks for a file
-  // that never exists (drive always rejected) or, worse, one that always exists (gate blind).
+  // The yaml pins (family, backend, extract_to) but NOT the binary name: SIDECAR_FAMILY_SPECS does.
+  // A wrong `bin` means the gate looks for a file that never exists (drive always rejected) or,
+  // worse, one that always exists (gate blind).
   it('both build-commercial-drive twins agree on the per-directory runtime binary name', () => {
     const asMap = (rows: { dir: string; bin: string }[]): Record<string, string> =>
       Object.fromEntries(rows.map((r) => [r.dir, r.bin]))
+    for (const r of [...ps1Matrix(), ...shMatrix()]) {
+      const spec = sidecarFamilySpec(r.family as RuntimeFamily)
+      expect(spec, `no SIDECAR_FAMILY_SPECS entry for ${r.family}`).toBeDefined()
+      expect(r.bin, `${r.family} ${r.dir}`).toBe(sidecarBinaryName(spec!.binaryBase, r.dir.includes('/win') ? 'win' : 'linux'))
+    }
     expect(asMap(shMatrix())).toEqual(asMap(ps1Matrix()))
   })
 
@@ -192,13 +176,12 @@ describe('TS ↔ shell-script drift (runtime build matrix)', () => {
 // is hand-added to the expected set since it never appears in `parsed.families`.
 describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)', () => {
   function yamlBuildFamilies(): string[] {
-    const parsed = validateRuntimeSources(parseYaml(read('model-manifests/runtime-sources.yaml')))
-    expect(parsed.errors, `runtime-sources.yaml must validate: ${parsed.errors.join('; ')}`).toEqual([])
+    const parsed = committedRuntimeSources()
     return Object.keys(parsed.families ?? {}).sort()
   }
 
   it('fetch-runtime.ps1 -Family ValidateSet matches the yaml build families + ocr', () => {
-    const src = read('scripts/fetch-runtime.ps1')
+    const src = repoText('scripts/fetch-runtime.ps1')
     const m = src.match(/\[ValidateSet\(([^)]+)\)\]/)
     expect(m, 'fetch-runtime.ps1 -Family ValidateSet not found').not.toBeNull()
     const families = m![1]
@@ -209,7 +192,7 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
   })
 
   it('fetch-runtime.sh --family case allow-list matches the yaml build families + ocr', () => {
-    const src = read('scripts/fetch-runtime.sh')
+    const src = repoText('scripts/fetch-runtime.sh')
     const m = src.match(/case "\$FAMILY" in\n\s*([A-Za-z0-9_|]+)\)/)
     expect(m, 'fetch-runtime.sh --family case allow-list not found').not.toBeNull()
     const families = m![1].split('|').sort()
@@ -223,26 +206,29 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
 // the three Kit platforms with EXPLICIT archs. Both re-spell the platform list as literals —
 // the same drift risk as every other matrix in this file.
 describe('TS ↔ shell-script drift (kiwix source bundle, #339 P8-4)', () => {
-  it.each(['scripts/build-commercial-drive.ps1', 'scripts/build-commercial-drive.sh'])(
-    '%s invokes install-kiwix-source-bundle.mjs',
-    (rel) => {
-      expect(read(rel)).toContain('install-kiwix-source-bundle.mjs')
-    }
-  )
+  it.each([
+    ['scripts/build-commercial-drive.ps1', '& $kiwixNodeCmd.Source @kiwixInstallArgs', "Family = 'kiwix_tools'"],
+    ['scripts/build-commercial-drive.sh', 'node "${KIWIX_INSTALL_ARGS[@]}"', '--family kiwix_tools']
+  ])('%s invokes install-kiwix-source-bundle.mjs before any kiwix_tools fetch', (rel, call, fetch) => {
+    const code = codeLines(rel).map((l) => l.text)
+    const callAt = code.findIndex((l) => l.includes(call))
+    expect(callAt, `${rel}: the install call is gone`).toBeGreaterThanOrEqual(0)
+    expect(code.findIndex((l) => l.includes(fetch)), 'SOURCE FIRST').toBeGreaterThan(callAt)
+  })
 
   it('build-commercial-drive.ps1 declares $KiwixSourceDir', () => {
-    expect(read('scripts/build-commercial-drive.ps1')).toMatch(/\[string\]\s*\$KiwixSourceDir/)
+    expect(repoText('scripts/build-commercial-drive.ps1')).toMatch(/\[string\]\s*\$KiwixSourceDir/)
   })
 
   it('build-commercial-drive.sh handles --kiwix-source-dir', () => {
-    const src = read('scripts/build-commercial-drive.sh')
+    const src = repoText('scripts/build-commercial-drive.sh')
     expect(src).toContain('--kiwix-source-dir)')
     expect(src).toContain('KIWIX_SOURCE_DIR')
   })
 
   /** ps1: `@{ Os = 'win'; Arch = 'x64' }` rows inside the kiwix fetch loop. */
   function ps1KiwixPlatforms(): Set<string> {
-    const src = read('scripts/build-commercial-drive.ps1')
+    const src = repoText('scripts/build-commercial-drive.ps1')
     const rows = [...src.matchAll(/Os\s*=\s*'([^']+)'\s*;\s*Arch\s*=\s*'([^']+)'/g)]
     expect(rows.length, 'expected the kiwix fetch platform rows in build-commercial-drive.ps1').toBeGreaterThan(0)
     return new Set(rows.map((m) => `${m[1]}|${m[2]}`))
@@ -250,7 +236,7 @@ describe('TS ↔ shell-script drift (kiwix source bundle, #339 P8-4)', () => {
 
   /** sh: `for kiwix_entry in "win|x64" "mac|arm64" "linux|x64"; do` list. */
   function shKiwixPlatforms(): Set<string> {
-    const src = read('scripts/build-commercial-drive.sh')
+    const src = repoText('scripts/build-commercial-drive.sh')
     const start = src.indexOf('for kiwix_entry in')
     expect(start, 'the kiwix fetch platform loop in build-commercial-drive.sh not found').toBeGreaterThanOrEqual(0)
     const end = src.indexOf('; do', start)
@@ -261,7 +247,9 @@ describe('TS ↔ shell-script drift (kiwix source bundle, #339 P8-4)', () => {
   }
 
   it('both twins fetch the same three kiwix_tools platform pairs', () => {
-    expect(shKiwixPlatforms()).toEqual(ps1KiwixPlatforms())
+    const canonical = new Set(KIT_PLATFORMS.map((p) => p.replace('-', '|')))
+    expect(ps1KiwixPlatforms()).toEqual(canonical)
+    expect(shKiwixPlatforms()).toEqual(canonical)
   })
 })
 
@@ -273,12 +261,12 @@ describe('TS ↔ shell-script drift (kiwix source bundle, #339 P8-4)', () => {
 // passes a non-compliant drive).
 describe('TS ↔ shell-script drift (drive license artifacts, LIC-1)', () => {
   it.each([
-    ['scripts/prepare-drive.ps1', '$LicenseArtifacts = @(', ')'],
-    ['scripts/prepare-drive.sh', 'LICENSE_ARTIFACTS=(', ')'],
-    ['scripts/build-commercial-drive.ps1', '$LicenseArtifacts = @(', ')'],
-    ['scripts/build-commercial-drive.sh', 'LICENSE_ARTIFACTS=(', ')']
-  ])('%s spells exactly the canonical artifact list', (rel, header, close) => {
-    expect(extractArray(read(rel), header, close)).toEqual([...DRIVE_LICENSE_ARTIFACTS])
+    ['scripts/prepare-drive.ps1', '$LicenseArtifacts = @('],
+    ['scripts/prepare-drive.sh', 'LICENSE_ARTIFACTS=('],
+    ['scripts/build-commercial-drive.ps1', '$LicenseArtifacts = @('],
+    ['scripts/build-commercial-drive.sh', 'LICENSE_ARTIFACTS=(']
+  ])('%s spells exactly the canonical artifact list', (rel, header) => {
+    expect(extractScriptArray(repoText(rel), header)).toEqual([...DRIVE_LICENSE_ARTIFACTS])
   })
 })
 
@@ -396,24 +384,24 @@ function parsePsBlock(body: string, dev: boolean): Record<string, unknown> {
 
 describe('TS ↔ shell-script drift (config payloads)', () => {
   it('prepare-drive.sh drive.json matches buildDriveJson()', () => {
-    const parsed = stripCreatedAt(parseShJson(read('scripts/prepare-drive.sh'), 'DRIVE_JSON', false))
+    const parsed = stripCreatedAt(parseShJson(repoText('scripts/prepare-drive.sh'), 'DRIVE_JSON', false))
     expect(parsed).toEqual(stripCreatedAt(buildDriveJson()))
   })
 
   it('prepare-drive.ps1 $DriveJson matches buildDriveJson()', () => {
-    const parsed = stripCreatedAt(parsePsOrdered(read('scripts/prepare-drive.ps1'), '$DriveJson', false))
+    const parsed = stripCreatedAt(parsePsOrdered(repoText('scripts/prepare-drive.ps1'), '$DriveJson', false))
     expect(parsed).toEqual(stripCreatedAt(buildDriveJson()))
   })
 
   // policy.json varies by --dev: assert BOTH editions in both scripts.
   for (const dev of [false, true]) {
     it(`prepare-drive.sh policy.json matches buildPolicyJson({dev:${dev}})`, () => {
-      const parsed = parseShJson(read('scripts/prepare-drive.sh'), 'POLICY_JSON', dev)
+      const parsed = parseShJson(repoText('scripts/prepare-drive.sh'), 'POLICY_JSON', dev)
       expect(parsed).toEqual(buildPolicyJson({ dev }))
     })
 
     it(`prepare-drive.ps1 $PolicyJson matches buildPolicyJson({dev:${dev}})`, () => {
-      const parsed = parsePsOrdered(read('scripts/prepare-drive.ps1'), '$PolicyJson', dev)
+      const parsed = parsePsOrdered(repoText('scripts/prepare-drive.ps1'), '$PolicyJson', dev)
       expect(parsed).toEqual(buildPolicyJson({ dev }))
     })
   }
@@ -421,7 +409,7 @@ describe('TS ↔ shell-script drift (config payloads)', () => {
 
 // --- verify-models.{ps1,sh} sha256 + supported-runtime/format gates (audit M-A1) ----
 // These mirror manifest.ts `isRealSha256` and the canonical (runtime → format) support
-// table SUPPORTED_RUNTIME_FORMATS (models.ts, re-exported via drive.ts). A drift here
+// table SUPPORTED_RUNTIME_FORMATS (models.ts). A drift here
 // mislabels weights (a placeholder passing as real, or a loadable format like the bundled
 // ggml/whisper_cpp transcriber rejected as "unsupported"). We extract the gate literals
 // and assert them against the canonical (runtime|format) pairs.
@@ -437,8 +425,8 @@ function canonicalRuntimeFormatPairs(): Set<string> {
 
 describe('TS ↔ shell-script drift (verify-models gates)', () => {
   it('both verify scripts use the same real-sha256 regex, matching isRealSha256', () => {
-    const ps = read('scripts/verify-models.ps1').match(/-match\s+'(\^\[a-f0-9\]\{64\}\$)'/)
-    const sh = read('scripts/verify-models.sh').match(/=~\s+(\^\[a-f0-9\]\{64\}\$)/)
+    const ps = repoText('scripts/verify-models.ps1').match(/-match\s+'(\^\[a-f0-9\]\{64\}\$)'/)
+    const sh = repoText('scripts/verify-models.sh').match(/=~\s+(\^\[a-f0-9\]\{64\}\$)/)
     expect(ps, 'verify-models.ps1 real-sha regex not found').not.toBeNull()
     expect(sh, 'verify-models.sh real-sha regex not found').not.toBeNull()
     expect(ps![1]).toBe(sh![1])
@@ -455,8 +443,21 @@ describe('TS ↔ shell-script drift (verify-models gates)', () => {
     for (const p of probes) expect(re.test(p), `regex vs isRealSha256 on ${p}`).toBe(isRealSha256(p))
   })
 
+  it.each([
+    ['scripts/fetch-models.ps1', 1],
+    ['scripts/fetch-models.sh', 1],
+    ['scripts/fetch-runtime.ps1', 2],
+    ['scripts/fetch-runtime.sh', 1],
+    ['scripts/build-commercial-drive.ps1', 1],
+    ['scripts/build-commercial-drive.sh', 1]
+  ])('%s spells the real-sha256 regex exactly as verify-models does', (rel, sites) => {
+    const code = codeLines(rel).map((l) => l.text).join('\n')
+    const found = [...code.matchAll(/\^\[[^\]]+\]\{\d+\}\$/g)].map((m) => m[0])
+    expect(found).toEqual(Array<string>(sites).fill('^[a-f0-9]{64}$'))
+  })
+
   it('verify-models.ps1 runtime/format gate matches SUPPORTED_RUNTIME_FORMATS', () => {
-    const src = read('scripts/verify-models.ps1')
+    const src = repoText('scripts/verify-models.ps1')
     // $SupportedRuntimeFormats = [ordered]@{ 'llama_cpp' = 'gguf'; ...; 'whisper_cpp' = 'ggml' }
     const start = src.indexOf('$SupportedRuntimeFormats = [ordered]@{')
     expect(start, 'ps1 $SupportedRuntimeFormats table not found').toBeGreaterThanOrEqual(0)
@@ -470,7 +471,7 @@ describe('TS ↔ shell-script drift (verify-models gates)', () => {
   })
 
   it('verify-models.sh runtime/format gate matches SUPPORTED_RUNTIME_FORMATS', () => {
-    const src = read('scripts/verify-models.sh')
+    const src = repoText('scripts/verify-models.sh')
     // supported_format_for() { case "$1" in llama_cpp|llama.cpp) printf 'gguf' ;; whisper_cpp) printf 'ggml' ;; esac }
     const start = src.indexOf('supported_format_for() {')
     expect(start, 'sh supported_format_for() not found').toBeGreaterThanOrEqual(0)
@@ -494,7 +495,7 @@ describe('TS ↔ shell-script drift (verify-models gates)', () => {
 
 /** Source lines with pure-comment lines dropped (`#` after optional leading whitespace). */
 function codeLines(rel: string): { n: number; text: string }[] {
-  return read(rel)
+  return repoText(rel)
     .split('\n')
     .map((text, i) => ({ n: i + 1, text }))
     .filter(({ text }) => !text.trim().startsWith('#'))
@@ -509,8 +510,8 @@ describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', 
   // (c) the exception propagated OUT of a parent script's `& .\child.ps1` call and killed the
   // parent too. The fix is `Write-Host -ForegroundColor Red` plus an explicit `exit`.
   //
-  // build-commercial-drive.ps1 is deliberately NOT in this list: it still has two
-  // `Write-Error …; exit 1` pairs whose exit CODE is already 1, so the terminating behaviour is
+  // build-commercial-drive.ps1 is deliberately NOT in this list: its `Run` helper still has one
+  // `Write-Error …; exit 1` pair whose exit CODE is already 1, so the terminating behaviour is
   // currently harmless there. It carries the same hazard and should be converted, but that is a
   // separate change — adding it here now would redden on an untouched file.
   const PROVISIONING_PS1 = [
@@ -547,7 +548,7 @@ describe('fetch-models — the mismatch re-download deletes only when resume can
   // call), the size comparison must appear BEFORE the first delete, which is only true while
   // the delete is nested inside the guard.
   it('fetch-models.ps1 compares the on-disk size before its first Remove-Item', () => {
-    const src = read('scripts/fetch-models.ps1')
+    const src = repoText('scripts/fetch-models.ps1')
     const region = src.indexOf("$state -eq 'mismatch' -and $expectedSize -match")
     expect(region, 'the size-guarded mismatch branch in fetch-models.ps1 not found').toBeGreaterThanOrEqual(0)
     const download = src.indexOf('Invoke-Download', region)
@@ -561,7 +562,7 @@ describe('fetch-models — the mismatch re-download deletes only when resume can
   })
 
   it('fetch-models.sh compares the on-disk size before its first rm -f', () => {
-    const src = read('scripts/fetch-models.sh')
+    const src = repoText('scripts/fetch-models.sh')
     const region = src.indexOf('"$state" == mismatch && "$expected_size" =~')
     expect(region, 'the size-guarded mismatch branch in fetch-models.sh not found').toBeGreaterThanOrEqual(0)
     const download = src.indexOf('if ! download ', region)
@@ -615,47 +616,12 @@ describe('fetch-models — the mismatch re-download deletes only when resume can
 })
 
 describe('fetch-models — a withdrawn upstream source is skipped, never requested (issue #196)', () => {
-  // `assets.ts` (planModelDownloads → 'source-withdrawn') is the source of truth; the two
-  // self-contained scripts re-implement it for machines with no Node. If a twin loses the check,
-  // a drive build spends its retry budget on a URL the manifest already knows is dead — and
-  // reports a download FAILURE for a model nobody can fetch any more.
-  //
-  // Asserted structurally per twin: the `withdrawn` field is read from the manifest, and the
-  // skip branch appears BEFORE the license gate (the planner orders them the same way — no
-  // acknowledgement can bring a deleted file back) and before the download call.
-  it('fetch-models.sh reads download.withdrawn and skips ahead of the license gate', () => {
-    const src = read('scripts/fetch-models.sh')
-    const read_ = src.indexOf('withdrawn="$(field "$mf" withdrawn)"')
-    const skip = src.indexOf('-n "$withdrawn"')
-    const licenseGate = src.indexOf('$ACCEPT_LICENSE -eq 0')
-    const fetchCall = src.indexOf('handle_file "$id" ""')
-    expect(read_, 'fetch-models.sh no longer reads download.withdrawn').toBeGreaterThanOrEqual(0)
-    expect(skip, 'fetch-models.sh no longer branches on a withdrawn source').toBeGreaterThan(read_)
-    expect(skip, 'the withdrawn skip must precede the license gate').toBeLessThan(licenseGate)
-    expect(skip, 'the withdrawn skip must precede the download call').toBeLessThan(fetchCall)
-  })
-
-  it('fetch-models.ps1 reads download.withdrawn and skips ahead of the license gate', () => {
-    const src = read('scripts/fetch-models.ps1')
-    const read_ = src.indexOf("$withdrawn = Get-ManifestField $text 'withdrawn'")
-    const skip = src.indexOf('$needsFetch -and $withdrawn')
-    const licenseGate = src.indexOf('-not $AcceptLicense')
-    const fetchCall = src.indexOf("Invoke-HandleFile $id ''")
-    expect(read_, 'fetch-models.ps1 no longer reads download.withdrawn').toBeGreaterThanOrEqual(0)
-    expect(skip, 'fetch-models.ps1 no longer branches on a withdrawn source').toBeGreaterThan(read_)
-    expect(skip, 'the withdrawn skip must precede the license gate').toBeLessThan(licenseGate)
-    expect(skip, 'the withdrawn skip must precede the download call').toBeLessThan(fetchCall)
-  })
-
   // Both twins parse flat YAML and strip an inline comment at " #", so a note containing one
   // would reach the operator truncated mid-sentence. Pinned on the committed manifests because
   // that is where a maintainer writes the next note.
   it('no committed manifest hides part of its withdrawal note behind a " #"', () => {
-    const dir = join(REPO_ROOT, 'model-manifests', 'chat')
-    const notes = readdirSync(dir)
-      .filter((f) => f.endsWith('.yaml'))
-      .map((f) => parseYaml(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>)
-      .map((m) => (m.download as Record<string, unknown> | undefined)?.withdrawn)
+    const notes = modelManifestDocs()
+      .map((m) => (m.doc.download as Record<string, unknown> | undefined)?.withdrawn)
       .filter((n): n is string => typeof n === 'string')
     expect(notes.length, 'expected the issue-#196 notes').toBeGreaterThan(0)
     for (const n of notes) expect(n, 'truncated by the scripts\' inline-comment strip').not.toContain(' #')
@@ -675,7 +641,7 @@ describe('fetch-runtime — the OCR re-fetch delete is deliberately UNCONDITIONA
     ['scripts/fetch-runtime.ps1', 'Remove-Item'],
     ['scripts/fetch-runtime.sh', 'rm -f']
   ])('%s deletes the mismatching OCR file with no size test in between', (rel, deleteToken) => {
-    const src = read(rel)
+    const src = repoText(rel)
     const msg = src.indexOf('present but hash differs')
     expect(msg, `${rel}: the OCR hash-mismatch branch not found`).toBeGreaterThanOrEqual(0)
     const del = src.indexOf(deleteToken, msg)
@@ -701,23 +667,27 @@ describe('one commercial gate — builder + fetch-runtime literals (#233, #234)'
   const GATE_TOOL = 'apps/desktop/out/tools/assert-commercial-drive.mjs'
 
   it.each([
-    ['scripts/build-commercial-drive.ps1', '$KitPlatforms = @(', ')'],
-    ['scripts/build-commercial-drive.sh', 'KIT_PLATFORMS=(', ')']
-  ])('%s spells exactly the canonical KitPlatform list', (rel, header, close) => {
-    expect(extractArray(read(rel), header, close)).toEqual([...KIT_PLATFORMS])
+    ['scripts/build-commercial-drive.ps1', '$KitPlatforms = @('],
+    ['scripts/build-commercial-drive.sh', 'KIT_PLATFORMS=(']
+  ])('%s spells exactly the canonical KitPlatform list', (rel, header) => {
+    expect(extractScriptArray(repoText(rel), header)).toEqual([...KIT_PLATFORMS])
   })
 
-  it.each(['scripts/build-commercial-drive.ps1', 'scripts/build-commercial-drive.sh'])(
-    '%s invokes the built canonical gate and prints SELLABLE only from its result',
-    (rel) => {
-      const code = codeLines(rel).map((l) => l.text)
-      expect(code.some((l) => l.includes(GATE_TOOL))).toBe(true)
-      // The word SELLABLE (as a verdict) appears on exactly two code lines: the NOT SELLABLE
-      // branch and the SELLABLE branch — no third place can print a verdict.
-      const verdicts = code.filter((l) => /SELLABLE:/.test(l) && !/NOT SELLABLE/.test(l))
-      expect(verdicts).toHaveLength(1)
-    }
-  )
+  it.each([
+    ['scripts/build-commercial-drive.ps1', '& $nodeCmd.Source $gateTool', '$problems.Count -gt 0'],
+    ['scripts/build-commercial-drive.sh', 'node "$GATE_TOOL"', '${#PROBLEMS[@]} -gt 0']
+  ])('%s invokes the built canonical gate and prints SELLABLE only from its result', (rel, call, guard) => {
+    const code = codeLines(rel).map((l) => l.text)
+    expect(code.some((l) => l.includes(GATE_TOOL))).toBe(true)
+    // One SELLABLE line, after the gate ran and after the guard that exits on any problem.
+    const callAt = code.findIndex((l) => l.includes(call))
+    const guardAt = code.findIndex((l) => l.includes(guard))
+    const verdicts = code.flatMap((l, i) => (/SELLABLE:/.test(l) && !/NOT SELLABLE/.test(l) ? [i] : []))
+    expect(callAt).toBeGreaterThanOrEqual(0)
+    expect(guardAt).toBeGreaterThan(callAt)
+    expect(verdicts).toHaveLength(1)
+    expect(verdicts[0]).toBeGreaterThan(guardAt)
+  })
 
   it('build-commercial-drive.ps1 passes -Commercial to every fetch-runtime run', () => {
     const code = codeLines('scripts/build-commercial-drive.ps1').map((l) => l.text)
@@ -739,68 +709,13 @@ describe('one commercial gate — builder + fetch-runtime literals (#233, #234)'
     ['scripts/fetch-runtime.ps1', '$archiveVerified'],
     ['scripts/fetch-runtime.sh', 'ARCHIVE_VERIFIED']
   ])('%s writes the marker binary hash only behind the archive-verified flag', (rel, flag) => {
-    const src = read(rel)
+    const src = repoText(rel)
     // The LAST `"binaries"` literal is the marker write (earlier ones read a marker).
     const markerWrite = src.lastIndexOf('"binaries"')
     expect(markerWrite, 'marker write not found').toBeGreaterThan(0)
     // The flag is tested within the 25 lines that precede the marker write.
     const window = src.slice(Math.max(0, markerWrite - 2000), markerWrite)
     expect(window.split('\n').slice(-25).join('\n')).toContain(flag)
-  })
-})
-
-describe('verify-models / fetch-models enumerate every declared file (#310)', () => {
-  // Text-level anchors: each script must carry a dedicated `files:` block scraper (named like
-  // the existing mmproj_block_of / Get-MmprojBlock precedent) rather than hand-rolling the
-  // parse inline, so a future edit has one obvious place to keep in sync with manifestFiles().
-  it.each([
-    ['scripts/verify-models.sh', 'files_block_of() {', 'files_member_records() {'],
-    ['scripts/verify-models.ps1', 'function Get-FilesBlock', 'function Get-FilesMembers'],
-    ['scripts/fetch-models.sh', 'files_block_of() {', 'files_member_records() {'],
-    ['scripts/fetch-models.ps1', 'function Get-FilesBlock', 'function Get-FilesMembers']
-  ])('%s declares a files: block scraper and a member reader', (rel, blockMarker, memberMarker) => {
-    const src = read(rel)
-    expect(src, `${rel}: missing "${blockMarker}"`).toContain(blockMarker)
-    expect(src, `${rel}: missing "${memberMarker}"`).toContain(memberMarker)
-  })
-
-  // The additional-file label format `(file N/M)` (#310) must appear at the report site of
-  // every script — the load-bearing text a maintainer scanning `verify-models`'s or
-  // `fetch-models`'s output relies on to tell which shard failed.
-  it.each([
-    ['scripts/verify-models.sh'],
-    ['scripts/verify-models.ps1'],
-    ['scripts/fetch-models.sh'],
-    ['scripts/fetch-models.ps1']
-  ])('%s reports an additional declared file with the "(file " label', (rel) => {
-    expect(read(rel), `${rel}: missing the "(file " label`).toContain('(file ')
-  })
-
-  it('verify-models.sh loops files_member_records through verify_file, same as the mmproj call', () => {
-    const src = read('scripts/verify-models.sh')
-    expect(src).toContain('verify_file "$id" " (file $file_n/$total_files)"')
-  })
-
-  it('verify-models.ps1 loops Get-FilesMembers through Write-WeightResult, same as the mmproj call', () => {
-    const src = read('scripts/verify-models.ps1')
-    expect(src).toContain('Get-FilesMembers')
-    expect(src).toContain('Write-WeightResult')
-  })
-
-  it('verify-models --generate scripts emit one checksums.json entry per declared file', () => {
-    const sh = read('scripts/verify-models.sh')
-    const ps = read('scripts/verify-models.ps1')
-    // The generate loop calls emit_entry (sh) / builds an entry (ps1) once per files: member,
-    // in addition to the primary and the mmproj — the DIST-2 precedent this issue extends.
-    expect(sh).toContain('emit_entry "$id" "$(clean_value "$f_local")"')
-    expect(ps).toContain('$fileMembers')
-  })
-
-  it('fetch-models scripts pass the (file N/M) label through the EXISTING handle_file/Invoke-HandleFile arity (#310)', () => {
-    const sh = read('scripts/fetch-models.sh')
-    const ps = read('scripts/fetch-models.ps1')
-    expect(sh).toContain('handle_file "$id" " (file $file_n/$total_files)"')
-    expect(ps).toContain('Invoke-HandleFile $id $label')
   })
 })
 
@@ -818,14 +733,21 @@ describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
     'launchers/start-hilbertraum.sh',
     'launchers/Start HilbertRaum.command'
   ]
-  const BASH4_ONLY: Array<[string, RegExp]> = [
-    ['mapfile / readarray', /(^|[\s;&|(])(mapfile|readarray)\s/],
-    ['associative array (declare/local -A)', /\b(declare|local|typeset)\s+-[a-zA-Z]*A/],
-    ['nameref (declare/local -n)', /\b(declare|local|typeset)\s+-[a-zA-Z]*n\s/],
-    ['case-modifying expansion ${x,,} / ${x^^}', /\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(,,?|\^\^?)[^}]*\}/],
-    ['coproc', /(^|[\s;&|(])coproc\s/],
-    ['|& pipe', /\|&/],
-    ['&>> redirect', /&>>/]
+  const BASH4_ONLY: Array<[string, RegExp, string]> = [
+    ['mapfile / readarray', /(^|[\s;&|(])(mapfile|readarray)\s/, 'mapfile -t lines'],
+    ['associative array (declare/local -A)', /\b(declare|local|typeset)\s+-[a-zA-Z]*A/, 'declare -A map'],
+    ['nameref (declare/local -n)', /\b(declare|local|typeset)\s+-[a-zA-Z]*n\s/, 'local -n ref=x'],
+    ['case-modifying expansion ${x,,} / ${x^^}', /\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(,,?|\^\^?)[^}]*\}/, 'x=${name,,}'],
+    ['coproc', /(^|[\s;&|(])coproc\s/, 'coproc cat'],
+    ['|& pipe', /\|&/, 'a |& b'],
+    ['&>> redirect', /&>>/, 'a &>> log'],
+    ['declare -g', /\b(declare|local|typeset)\s+-[a-zA-Z]*g/, 'declare -g FOO=1'],
+    ['[[ -v', /\[\[\s+-v\s/, '[[ -v FOO ]]'],
+    ['case fall-through ;& / ;;&', /;;?&\s*$/, '  a) echo a ;;&'],
+    ['negative array index', /\$\{[A-Za-z_][A-Za-z0-9_]*\[-\d+\]\}/, 'x=${arr[-1]}'],
+    ['${x@op} transform', /\$\{[A-Za-z_][A-Za-z0-9_]*@[A-Za-z]\}/, 'x=${y@Q}'],
+    ['wait -n', /\bwait\s+-n\b/, 'wait -n'],
+    ['globstar', /\bshopt\s+-s\s+globstar\b/, 'shopt -s globstar']
   ]
 
   it('finds the scripts it is meant to scan', () => {
@@ -833,10 +755,14 @@ describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
     expect(SHELL_SCRIPTS.length).toBeGreaterThanOrEqual(8)
   })
 
+  it('every construct pattern matches its own example', () => {
+    for (const [name, re, example] of BASH4_ONLY) expect(re.test(example), name).toBe(true)
+  })
+
   for (const rel of SHELL_SCRIPTS) {
     it(`${rel} uses no Bash 4+ construct`, () => {
       const hits: string[] = []
-      read(rel)
+      repoText(rel)
         .split('\n')
         .forEach((text, i) => {
           if (text.trim().startsWith('#')) return
@@ -847,4 +773,39 @@ describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
       expect(hits).toEqual([])
     })
   }
+})
+
+// A renamed launcher or doc is skipped silently: both copy steps sit behind a plain existence test.
+describe('what the scripts copy onto a drive', () => {
+  it.each(['scripts/build-commercial-drive.ps1', 'scripts/build-commercial-drive.sh'])(
+    '%s copies every Kit launcher and READ ME FIRST.txt',
+    (rel) => {
+      const line = codeLines(rel).map((l) => l.text).find((l) => l.includes('READ ME FIRST.txt'))
+      for (const name of [...KIT_PLATFORMS.map((p) => KIT_PLATFORM_SPECS[p].launcher), 'READ ME FIRST.txt']) {
+        expect(line, `${rel} step 5`).toContain(name)
+        expect(existsSync(join(REPO_ROOT, 'launchers', name)), name).toBe(true)
+      }
+    }
+  )
+
+  it('both prepare-drive twins copy the same user docs, and each one exists', () => {
+    const ps = repoText('scripts/prepare-drive.ps1').match(/\$DocFiles = @\(([^)]*)\)/)
+    const sh = repoText('scripts/prepare-drive.sh').match(/for rel in ([^;]+);/)
+    const psDocs = [...ps![1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect(sh![1].trim().split(/\s+/)).toEqual(psDocs)
+    expect(psDocs.length).toBeGreaterThan(0)
+    for (const d of psDocs) expect(existsSync(join(REPO_ROOT, d)), d).toBe(true)
+  })
+})
+
+describe('launchers keep the line endings their shell needs (audit M20)', () => {
+  it.each(['launchers/Start HilbertRaum.cmd', 'launchers/READ ME FIRST.txt'])('%s is CRLF on every line', (rel) => {
+    const text = repoText(rel)
+    expect(text.length).toBeGreaterThan(0)
+    expect(text.match(/(?<!\r)\n/g) ?? []).toEqual([])
+  })
+
+  it.each(['launchers/Start HilbertRaum.command', 'launchers/start-hilbertraum.sh'])('%s has no CR', (rel) => {
+    expect(repoText(rel)).not.toContain('\r')
+  })
 })

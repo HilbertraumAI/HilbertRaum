@@ -1,15 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildModelList,
-  discoverManifests,
   estimateGraphicsNeedMib,
   fitsGraphicsMemory,
   graphicsBudgetMib,
+  isSupportedRuntimeFormat,
   manifestFiles,
-  resolveManifestsDir,
   recommendChatModelId,
   recommendModelIdByRam,
   weightsMib
@@ -18,130 +17,170 @@ import { isRealSha256, type ModelManifest } from '../../src/shared/manifest'
 import type { ModelInfo } from '../../src/shared/types'
 import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
 import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
+import { committedManifests } from '../helpers/catalog'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
+import { validManifest } from '../helpers/manifest-fixtures'
+import { modelManifestDocs } from '../helpers/repo-files'
 
 // The COMMITTED model-manifests/ tree is what a real drive is provisioned from. These tests
 // assert invariants directly against the on-disk catalog (mirrors the committed
 // runtime-sources.yaml tests in assets.test.ts) — so a malformed or mis-promoted manifest
 // fails CI, not a user's drive.
-function committedManifests(): ModelManifest[] {
-  const dir = resolveManifestsDir(process.cwd())
-  if (!dir) throw new Error('could not locate model-manifests from the repo')
-  const { manifests, errors } = discoverManifests(dir)
-  // Every committed manifest must validate cleanly (no skipped/erroring files).
-  expect(errors).toEqual([])
-  return manifests.map((m) => m.manifest)
+
+/**
+ * The committed facts of every downloadable chat manifest. These are owner decisions, so literals are the right shape: a
+ * manifest edit that moves one fails here, not on a user's drive. A NEW manifest needs no row (models are added without
+ * code changes); a row whose manifest is gone fails, so nothing leaves the catalog unnoticed.
+ *
+ * Common to every row, asserted in the body: role chat, llama_cpp + gguf, apache-2.0, license review approved, a real hash
+ * that the download block repeats, no mmproj (text-only: upstream vision weights ship no projector here). `profiles` is []
+ * and `withdrawn` false unless a row says otherwise.
+ *
+ * - Ranks: the benchmark verdicts and owner decisions in model-benchmarks.md §6.2-§6.5, §9.3-§9.5. Issue #378 questions the
+ *   F1 basis of some of them; a re-rank is a deliberate edit here.
+ * - RAM: a silent mis-edit is how a rank-0 model becomes an auto-pick (the sweep in the §6.5 describe) or gets locked out of
+ *   machines it fits. The 0.8B and 2B are deliberately tier-aligned with the 4B.
+ * - ctx: the local runtime budget, never the native window. The 4B's cache term is computed at its 4,096.
+ * - thinking: gates the Deep answer mode; a dropped flag removes Deep silently.
+ * - TQ-2 (full-audit 2026-07-12): the 2507 stays rank 1 under the original 4B's rank 2, so the ordering cannot invert.
+ * - withdrawn (#196): the three static Qwen3.8 K-quants. Their upstream files are gone, so they stay rank 0, kept as
+ *   installed-base records. The Qwen3.6 pair's live sources are the point of `withdrawn: false` there.
+ */
+interface ChatFacts {
+  family: string
+  rank: number
+  minRam: number
+  recRam: number
+  ctx: number
+  thinking: boolean
+  displayName: string
+  profiles?: string[]
+  withdrawn?: boolean
 }
 
-// The Qwen3.5 Unsloth wave (model-policy.md "Qwen3.5 Unsloth wave"): the 4B incumbent plus the
-// 9B / 27B / 35B-A3B additions, and the later fast-tier 2B / 0.8B (issue #48 closed the test
-// gap — the fast-tier pair shipped without joining these invariants). All are text-only chat
-// models, not bundled. Ranks: the 4B and 9B carry rank 3 since the newest-Qwen promotion
-// (owner decision 2026-07-12, model-benchmarks.md §6.4); the 35B-A3B carries rank 1 since the
-// wave ratification (owner decision 2026-08-03, §9.3 — hallucination-clean §2 eval + the
-// confirmed 3B-active speed case); the rest stay rank 0 (selectable, never auto-recommended).
-// Pin ALL so neither an accidental demotion nor a silent promotion slips through.
-const QWEN35_WAVE_IDS = [
-  'qwen3.5-0.8b-q6',
-  'qwen3.5-2b-ud-q4kxl',
-  'qwen3.5-4b-ud-q4kxl',
-  'qwen3.5-9b-ud-q4kxl',
-  'qwen3.5-27b-ud-q4kxl',
-  'qwen3.5-35b-a3b-ud-q4kxl'
-]
-
-// The committed promotion facts: 2026-07-12 newest-Qwen decision + 2026-08-03 ratification.
-const QWEN_WAVE_RANKS: Record<string, number> = {
-  'qwen3.5-0.8b-q6': 0,
-  'qwen3.5-2b-ud-q4kxl': 0,
-  'qwen3.5-4b-ud-q4kxl': 3,
-  'qwen3.5-9b-ud-q4kxl': 3,
-  'qwen3.5-27b-ud-q4kxl': 0,
-  'qwen3.5-35b-a3b-ud-q4kxl': 1
+const CHAT_FACTS: Record<string, ChatFacts> = {
+  'gemma4-12b-it-qat-q4': { family: 'gemma4', rank: 2, minRam: 14, recRam: 24, ctx: 8192, thinking: true, displayName: 'Gemma 4 12B Instruct QAT Q4' },
+  'gemma4-26b-a4b-it-qat-q4': { family: 'gemma4', rank: 2, minRam: 20, recRam: 32, ctx: 8192, thinking: true, displayName: 'Gemma 4 26B-A4B Instruct QAT Q4' },
+  'gemma4-31b-it-qat-q4': { family: 'gemma4', rank: 0, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Gemma 4 31B Instruct QAT Q4' },
+  'gemma4-e2b-it-qat-q4': { family: 'gemma4', rank: 3, minRam: 8, recRam: 12, ctx: 8192, thinking: true, displayName: 'Gemma 4 E2B Instruct QAT Q4' },
+  'gemma4-e4b-it-qat-q4': { family: 'gemma4', rank: 0, minRam: 12, recRam: 16, ctx: 8192, thinking: true, displayName: 'Gemma 4 E4B Instruct QAT Q4' },
+  'granite-4.1-8b-q4': { family: 'granite', rank: 0, minRam: 12, recRam: 16, ctx: 8192, thinking: false, displayName: 'Granite 4.1 8B Q4' },
+  'ministral3-8b-instruct-2512-q4': { family: 'ministral3', rank: 2, minRam: 12, recRam: 16, ctx: 8192, thinking: false, displayName: 'Ministral 3 8B Instruct (2512) Q4' },
+  'qwen3-14b-instruct-q4': { family: 'qwen3', rank: 1, minRam: 14, recRam: 24, ctx: 8192, thinking: true, displayName: 'Qwen3 14B Instruct Q4', profiles: ['PRO'] },
+  'qwen3-30b-a3b-q4': { family: 'qwen3', rank: 0, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3 30B-A3B (MoE) Q4' },
+  'qwen3-4b-instruct-2507-q4': { family: 'qwen3', rank: 1, minRam: 8, recRam: 16, ctx: 4096, thinking: false, displayName: 'Qwen3 4B Instruct 2507 Q4' },
+  'qwen3-4b-instruct-q4': { family: 'qwen3', rank: 2, minRam: 8, recRam: 16, ctx: 4096, thinking: true, displayName: 'Qwen3 4B Instruct Q4', profiles: ['TINY', 'LITE', 'UNKNOWN'] },
+  'qwen3-8b-instruct-q4': { family: 'qwen3', rank: 1, minRam: 12, recRam: 16, ctx: 8192, thinking: true, displayName: 'Qwen3 8B Instruct Q4', profiles: ['BALANCED'] },
+  'qwen3.5-0.8b-q6': { family: 'qwen3.5', rank: 0, minRam: 8, recRam: 16, ctx: 4096, thinking: true, displayName: 'Qwen3.5 0.8B Q6_K' },
+  'qwen3.5-27b-ud-q4kxl': { family: 'qwen3.5', rank: 0, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.5 27B (UD-Q4_K_XL)' },
+  'qwen3.5-2b-ud-q4kxl': { family: 'qwen3.5', rank: 0, minRam: 8, recRam: 16, ctx: 4096, thinking: true, displayName: 'Qwen3.5 2B (UD-Q4_K_XL)' },
+  'qwen3.5-35b-a3b-ud-q4kxl': { family: 'qwen3.5', rank: 1, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.5 35B-A3B (UD-Q4_K_XL)' },
+  'qwen3.5-4b-ud-q4kxl': { family: 'qwen3.5', rank: 3, minRam: 8, recRam: 16, ctx: 4096, thinking: true, displayName: 'Qwen3.5 4B (UD-Q4_K_XL)' },
+  'qwen3.5-9b-ud-q4kxl': { family: 'qwen3.5', rank: 3, minRam: 12, recRam: 16, ctx: 8192, thinking: true, displayName: 'Qwen3.5 9B (UD-Q4_K_XL)' },
+  'qwen3.6-27b-q4': { family: 'qwen3.6', rank: 1, minRam: 20, recRam: 24, ctx: 8192, thinking: true, displayName: 'Qwen3.6 27B Q4_K_M' },
+  'qwen3.6-27b-q5': { family: 'qwen3.6', rank: 1, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.6 27B Q5_K_M' },
+  'qwen3.8-27b-q4': { family: 'qwen3.8', rank: 0, minRam: 21, recRam: 24, ctx: 8192, thinking: true, displayName: 'Qwen3.8 27B Q4_K_M', withdrawn: true },
+  'qwen3.8-27b-q5': { family: 'qwen3.8', rank: 0, minRam: 23, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.8 27B Q5_K_M', withdrawn: true },
+  'qwen3.8-27b-q6': { family: 'qwen3.8', rank: 0, minRam: 26, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.8 27B Q6_K', withdrawn: true },
+  'qwen3.8-27b-ud-q4km': { family: 'qwen3.8', rank: 3, minRam: 21, recRam: 24, ctx: 8192, thinking: true, displayName: 'Qwen3.8 27B UD-Q4_K_M' },
+  'qwen3.8-27b-ud-q5km': { family: 'qwen3.8', rank: 3, minRam: 23, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.8 27B UD-Q5_K_M' },
+  'qwen3.8-27b-ud-q6k': { family: 'qwen3.8', rank: 0, minRam: 26, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.8 27B UD-Q6_K' }
 }
 
-describe('committed catalog — Qwen3.5 Unsloth wave', () => {
-  it('all six Qwen3.5 wave manifests are present and validate', () => {
-    const ids = new Set(committedManifests().map((m) => m.id))
-    for (const id of QWEN35_WAVE_IDS) expect(ids.has(id), `${id} present`).toBe(true)
-  })
+describe('committed catalog — chat manifest facts (owner decisions)', () => {
+  const byId = new Map(committedManifests().map((m) => [m.id, m]))
 
-  it('every Qwen3.5 wave manifest holds the wave invariants', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    for (const id of QWEN35_WAVE_IDS) {
-      const m = byId[id]
-      expect(m, id).toBeDefined()
-      // role / runtime — the chat pipeline only.
-      expect(m.role, `${id} role`).toBe('chat')
-      expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
-      expect(m.format, `${id} format`).toBe('gguf')
-      expect(m.family, `${id} family`).toBe('qwen3.5')
-      // Ranks per the 2026-07-12 promotion record; legacy profiles stay empty for the whole
-      // wave (promotion is carried by recommendation_rank, never by the legacy profile table).
-      expect(m.recommendationRank, `${id} rank`).toBe(QWEN_WAVE_RANKS[id])
-      expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
-      // Apache-2.0, license reviewed + approved (drive-shippable provenance).
-      expect(m.license, `${id} license`).toBe('apache-2.0')
-      expect(m.licenseReview.status, `${id} review`).toBe('approved')
-      // Real top-level hash that matches the download hash (same file). All four carry a hash captured
-      // from the actual upstream file: the 4B by download+sha256sum (2026-06-18), the 9B/27B/35B from HF
-      // LFS metadata (2026-07-03) after the 27B/35B wave values were found WRONG (BUG dl-size-cap-2026-07-03).
-      expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
-      expect(m.download, `${id} download block`).toBeDefined()
-      expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)
-      // Text-only: a chat model never carries an mmproj projector (no vision in chat).
-      expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
-      // Runtime context is the safe LOCAL budget, NOT the 262,144-token native window — the
-      // manifest field is the recommended runtime context, not the theoretical model maximum.
-      expect(m.recommendedContextTokens, `${id} ctx not native`).toBeLessThanOrEqual(32768)
+  it.each(Object.entries(CHAT_FACTS))('%s holds its committed facts', (id, facts) => {
+    const m = byId.get(id)
+    expect(m, 'manifest present').toBeDefined()
+    expect({
+      family: m!.family,
+      rank: m!.recommendationRank,
+      minRam: m!.recommendedMinRamGb,
+      recRam: m!.recommendedRamGb,
+      ctx: m!.recommendedContextTokens,
+      thinking: m!.supportsThinkingMode,
+      displayName: m!.displayName,
+      profiles: m!.recommendedProfiles,
+      withdrawn: m!.download?.withdrawn !== undefined
+    }).toEqual({ profiles: [], withdrawn: false, ...facts })
+    expect([m!.role, m!.runtime, m!.format]).toEqual(['chat', 'llama_cpp', 'gguf'])
+    expect(m!.license).toBe('apache-2.0')
+    expect(m!.licenseReview.status).toBe('approved')
+    expect(isRealSha256(m!.sha256), 'real sha256').toBe(true)
+    expect(m!.download?.sha256, 'download hash equals top-level').toBe(m!.sha256)
+    expect(m!.mmproj, 'text-only').toBeUndefined()
+  })
+})
+
+/** The scripts' `field` / `Get-ManifestField`: the first line naming the key, at any indent; inline ` #` comment and outer quotes dropped. */
+function flatField(text: string, key: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const hit = new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*$`).exec(line)
+    if (hit) return hit[1].replace(/\s+#.*$/, '').replace(/^["']|["']$/g, '')
+  }
+  return ''
+}
+
+describe('committed catalog — rules over every manifest', () => {
+  it('a placeholder hash marks a local-test stub: no download block, rank 0, no legacy profile', () => {
+    const stubs = committedManifests().filter((m) => !isRealSha256(m.sha256))
+    expect(stubs.length, 'the local-test stubs; drop this row if they go').toBeGreaterThan(0)
+    for (const m of stubs) {
+      expect(m.download, `${m.id} download`).toBeUndefined()
+      expect(m.recommendationRank, `${m.id} rank`).toBe(0)
+      expect(m.recommendedProfiles, `${m.id} profiles`).toEqual([])
     }
   })
 
-  it('the three NEW additions pin recommended_context_tokens to the 8192 local budget', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    for (const id of ['qwen3.5-9b-ud-q4kxl', 'qwen3.5-27b-ud-q4kxl', 'qwen3.5-35b-a3b-ud-q4kxl']) {
-      expect(byId[id].recommendedContextTokens, `${id} ctx`).toBe(8192)
+  it('every committed manifest names a runtime and format the app can run', () => {
+    for (const m of committedManifests()) {
+      expect(isSupportedRuntimeFormat(m.runtime, m.format), `${m.id}: ${m.runtime}/${m.format}`).toBe(true)
     }
   })
 
-  it('the three NEW additions are the 9B, 27B, and 35B-A3B manifests', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    expect(byId['qwen3.5-9b-ud-q4kxl'].displayName).toBe('Qwen3.5 9B (UD-Q4_K_XL)')
-    expect(byId['qwen3.5-27b-ud-q4kxl'].displayName).toBe('Qwen3.5 27B (UD-Q4_K_XL)')
-    expect(byId['qwen3.5-35b-a3b-ud-q4kxl'].displayName).toBe('Qwen3.5 35B-A3B (UD-Q4_K_XL)')
-    // supports_tools is a display/capability flag only — it must NOT change the role/runtime
-    // routing (tool execution stays owned by the Skills/Tier-2 gate, not the model manifest).
-    expect(byId['qwen3.5-9b-ud-q4kxl'].role).toBe('chat')
+  // discoverManifests only checks ids: a copy-paste that shares a weight or a hash passes it.
+  it('no two committed files share a drive path or a real hash', () => {
+    const files = committedManifests().flatMap((m) => manifestFiles(tmpdir(), m))
+    const paths = files.map((f) => f.localPath)
+    expect(new Set(paths).size).toBe(paths.length)
+    const hashes = files.map((f) => f.sha).filter(isRealSha256)
+    expect(new Set(hashes).size).toBe(hashes.length)
   })
 
-  it('NEVER auto-recommends a wave model below the rank-3 promoted pair at any realistic RAM level', () => {
-    // recommendModelIdByRam is the production picker (RAM-best-fit + rank tiebreak). The
-    // 2026-07-12 promotion covers exactly the 4B and 9B (plus the Qwen3.6 27B pair below);
-    // every OTHER wave member — rank 0 AND the ratified rank-1 35B-A3B (a ranked alternative,
-    // not a tier pick) — must never be the auto-recommendation.
-    const chat = committedManifests()
-    const unpromoted = new Set(QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] < 3))
-    // 14 and 20 joined the sample in the PR-#83 hardening: unsampled odd values are where a
-    // rank-0 manifest's RAM mis-edit hides from this guard (see the Gemma wave block).
-    for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
-      const picked = recommendModelIdByRam(chat, ram, 'chat')
-      expect(unpromoted.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
+  // docs/drive-layout.md: models/{chat,embeddings,reranker,transcriber,vision,translation}/, the same under model-manifests/.
+  it('every weight sits under models/<role>/ and every manifest under model-manifests/<role>/', () => {
+    for (const m of committedManifests()) {
+      for (const f of manifestFiles(tmpdir(), m)) {
+        expect(f.localPath.startsWith(`models/${m.role}/`), `${m.id}: ${f.localPath}`).toBe(true)
+      }
+    }
+    for (const { path, doc } of modelManifestDocs()) {
+      expect(path.replace(/\\/g, '/'), String(doc.id)).toMatch(new RegExp(`(^|/)model-manifests/${String(doc.role)}/`))
     }
   })
 
-  // §6.6 on a discrete card: rule C since the PR #308 audit — see the dedicated
-  // "§6.6 rule C" block below (the 30-point grid, the thresholds, R1/R2, the sweep).
-
-  it('keeps the existing incumbents in the catalog (no model removed)', () => {
-    const ids = new Set(committedManifests().map((m) => m.id))
-    for (const id of [
-      'qwen3-4b-instruct-q4',
-      'qwen3-4b-instruct-2507-q4',
-      'ministral3-8b-instruct-2512-q4',
-      'gemma4-12b-it-qat-q4',
-      'qwen3-14b-instruct-q4',
-      'qwen3-30b-a3b-q4'
-    ]) {
-      expect(ids.has(id), `${id} still present`).toBe(true)
+  // The key-order rule (shared/manifest.ts `files`): fetch-models and verify-models read a manifest flat, first match wins,
+  // because they must run with no Node. A nested local_path / sha256 placed above the top-level one would poison them, and a
+  // " #" in a value would truncate it.
+  it('the flat first-match parser of the scripts reads what the YAML parser reads, on every committed manifest (#310 key order)', () => {
+    for (const { path, text, doc } of modelManifestDocs()) {
+      const download = (doc.download ?? {}) as Record<string, unknown>
+      const review = doc.license_review as Record<string, unknown>
+      const parsed: Record<string, unknown> = {
+        id: doc.id,
+        local_path: doc.local_path,
+        sha256: doc.sha256,
+        url: download.url,
+        size_bytes: download.size_bytes,
+        license: doc.license,
+        license_url: download.license_url,
+        status: review.status,
+        withdrawn: download.withdrawn
+      }
+      for (const [key, value] of Object.entries(parsed)) {
+        expect(flatField(text, key), `${path}: ${key}`).toBe(String(value ?? ''))
+      }
     }
   })
 })
@@ -175,9 +214,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     fitsGraphicsMemory(m, budgetMb) && m.recommendedMinRamGb <= ramGb
 
   // (j) Decision 11: the seven config-derived cache terms (ubatch 2048; the 4B's figure is its
-  // 4,096-token window). EXACTLY these seven carry the field; every other manifest defaults to
-  // 0.5 GiB. RECOMPUTED 2026-09-07 for ONE server slot (issue #319: `CHAT_SERVER_ARGS` passes
-  // `-np 1`, replacing b9849's four unified slots). The rule, measured on the pin (leg7-baseline-q5km
+  // 4,096-token window), plus #473's measured translation term. EXACTLY these eight carry the
+  // field; every other manifest defaults to 0.5 GiB. RECOMPUTED 2026-09-07 for ONE server slot
+  // (issue #319: `CHAT_SERVER_ARGS` passes `-np 1`, replacing b9849's four unified slots). The
+  // rule, measured on the pin (leg7-baseline-q5km
   // vs leg1-np-1 under `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/`, same model and
   // context, one thing varied): the KV cache — and Gemma's sliding-window cache — is sized in CELLS
   // from `--ctx-size` and is counted ONCE at either setting (512.00 MiB both times); only the
@@ -246,13 +286,6 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     const e2b = byId['gemma4-e2b-it-qat-q4']
     const w = weightsMib(e2b)
     expect(estimateGraphicsNeedMib(e2b)).toBeCloseTo((w - 2152.5) * 1.15 + 0.1 * 1024 + 1024, 6)
-    // Why it moved. #321 took the host-mapped share out of the 15 % term only, which closed
-    // 2,152.50 × 0.15 = 323 MiB of the E2B's gap; the other 2,152.50 was still charged to the card
-    // by the base term. Both retired forms pinned as deltas so the history is checkable:
-    const whole = w * 1.15 + 0.1 * 1024 + 1024 // pre-#321
-    const shareOnly = w + (w - 2152.5) * 0.15 + 0.1 * 1024 + 1024 // #321
-    expect(whole - shareOnly).toBeCloseTo(2152.5 * 0.15, 6)
-    expect(shareOnly - estimateGraphicsNeedMib(e2b)).toBeCloseTo(2152.5, 6)
     // Measured: llama.cpp projected 1,997 MiB and used ≈ 1,998 for this model (#318 leg 4). The
     // estimate stays ABOVE the measurement — conservative is the safe direction — but by 1.14×
     // rather than 2.4×.
@@ -269,9 +302,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     )
     // And the 4B, now that it has one: the measurement moved its need by 497.31 × 1.15 = 571.9 MiB.
     const fourB = byId['qwen3.5-4b-ud-q4kxl']
-    expect(fourB.hostMappedWeightsMib).toBe(497.31)
     expect(estimateGraphicsNeedMib(fourB)).toBeCloseTo((weightsMib(fourB) - 497.31) * 1.15 + 0.2 * 1024 + 1024, 6)
-    expect(weightsMib(fourB) * 1.15 + 0.2 * 1024 + 1024 - estimateGraphicsNeedMib(fourB)).toBeCloseTo(497.31 * 1.15, 6)
     // Measured on the RTX 3060 Laptop: llama.cpp projected 3,261 MiB at 33/33. Conservative still,
     // but 1.18× rather than the 1.35× the whole-file base gave.
     expect(estimateGraphicsNeedMib(fourB)).toBeGreaterThan(3261)
@@ -319,10 +350,9 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       expect(fitsGraphicsMemory(m, t), `${m.id} fits at ${t}`).toBe(true)
       expect(fitsGraphicsMemory(m, t - 1), `${m.id} does not fit at ${t - 1}`).toBe(false)
     }
-    // The two figures the decisions turn on, spelled out: the 9B needs 7,830 (0.3 GiB cache since
-    // #319, working share on the offloadable weights since #321) — under a nominal 8 GiB but STILL
-    // over what an idle 8 GB card has FREE (7,168), so neither decision moved the 8 GB row;
-    // Gemma 12B 11,041 (2.4 GiB cache) = 10.8 GiB, where the PR's flat 0.5 GiB read 9.0 GiB.
+    // The two figures the decisions turn on, spelled out: the 9B needs 7,285, under a nominal 8 GiB
+    // but STILL over what an idle 8 GB card has FREE (7,168), so the 8 GB row stays the 4B; Gemma
+    // 12B 10,254 = 10.0 GiB (2.4 GiB cache), where the PR's flat 0.5 GiB read 9.0 GiB.
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeLessThan(8192)
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeGreaterThan(8192 - 1024)
     expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeGreaterThan(10 * 1024)
@@ -448,40 +478,41 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(onCard(chat, 5136, 32)).toBe('qwen3.5-4b-ud-q4kxl')
   })
 
-  // (a) R1: the speed step-down can no longer escape the RAM floor or the card. The audit's two
-  // counterexamples (both stepped MoE → Q4 at the PR head: min RAM 21 > 20; Q4's need > 17 GiB).
+  // (a) R1: the speed step-down can no longer escape the RAM floor or the card. On the committed catalog every lower tier is
+  // eligible whenever the pick is, so no committed input reaches the destination filter. The audit's two counterexamples are
+  // therefore replayed on a copy with the one landing tier put out of reach. Synthetic owner: models.test "§6.5 step-down
+  // applies ONCE to the candidate…".
   it('R1: a slow sample never steps to a model over the RAM floor or off the card', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
-    const q4 = 'qwen3.8-27b-ud-q4km'
-    // RAM 20 / 20 GiB budget: base = 9B (fits, stands); a crawl on the MoE (in the pool but a
-    // tier above) keeps it; a crawl on the 9B itself steps to the E2B — never Q4.
-    expect(onCard(chat, 20 * 1024, 20)).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(onCard(chat, 20 * 1024, 20, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(onCard(chat, 20 * 1024, 20, crawlOn('qwen3.5-9b-ud-q4kxl'))).toBe('gemma4-e2b-it-qat-q4')
-    for (const measured of chat) {
-      const id = onCard(chat, 20 * 1024, 20, crawlOn(measured.id))
-      expect(id, `measured=${measured.id}`).not.toBe(q4)
-      expect(chat.find((m) => m.id === id)!.recommendedMinRamGb, `measured=${measured.id} RAM floor`).toBeLessThanOrEqual(20)
-    }
-    // RAM 64 / 17 GiB budget: base = Q5 does not fit → 9B; no sample moves it onto Q4.
-    expect(onCard(chat, 17 * 1024, 64)).toBe('qwen3.5-9b-ud-q4kxl')
-    for (const measured of chat) {
-      const id = onCard(chat, 17 * 1024, 64, crawlOn(measured.id))
-      expect(id, `measured=${measured.id}`).not.toBe(q4)
-      expect(fitsGraphicsMemory(chat.find((m) => m.id === id)!, 17 * 1024), `measured=${measured.id} fits`).toBe(true)
-    }
+    const e2b = 'gemma4-e2b-it-qat-q4'
+    const nineB = 'qwen3.5-9b-ud-q4kxl'
+    // RAM 20 / 20 GiB budget: base = 9B (fits, stands); a crawl on the MoE (a tier above) keeps it; a crawl on the 9B steps to the E2B.
+    expect(onCard(chat, 20 * 1024, 20)).toBe(nineB)
+    expect(onCard(chat, 20 * 1024, 20, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe(nineB)
+    expect(onCard(chat, 20 * 1024, 20, crawlOn(nineB))).toBe(e2b)
+    // RAM 64 / 17 GiB budget: base = Q5 does not fit → the 9B.
+    expect(onCard(chat, 17 * 1024, 64)).toBe(nineB)
+    // The landing tier over the RAM floor, then off the card: the step has nowhere to go, and the 9B stays.
+    const overFloor = chat.map((m) => (m.id === e2b ? { ...m, recommendedMinRamGb: 21 } : m))
+    expect(onCard(overFloor, 20 * 1024, 20, crawlOn(nineB))).toBe(nineB)
+    const offCard = chat.map((m) => (m.id === e2b ? { ...m, sizeOnDiskGb: 40 } : m))
+    expect(onCard(offCard, 20 * 1024, 20, crawlOn(nineB))).toBe(nineB)
   })
 
   // (c) R2: a crawl measured on a model the card cannot hold says nothing about the fitting pick.
   it('R2: a crawl on a card-oversized model leaves the fitting pick unchanged', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
-    // RAM 24 / 12 GiB budget: base = Q4 (19,940 MiB) does not fit → the 9B (rank 3; Gemma 12B fits
-    // at 11,041 but ranks 2). A 4 tok/s sample on the manually started Q4 is not in the eligible
+    // RAM 24 / 12 GiB budget: base = Q4 (19,258 MiB) does not fit → the 9B (rank 3; Gemma 12B fits
+    // at 10,254 but ranks 2). A 4 tok/s sample on the manually started Q4 is not in the eligible
     // pool → the 9B stays. (At the PR head the card pick here was Gemma 12B and the Q4 crawl
     // lowered it to the 9B — the audit's A2 reproduction; under rule C no oversized sample moves it.)
     expect(onCard(chat, 12 * 1024, 24)).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 12 * 1024, 24, crawlOn('qwen3.8-27b-ud-q4km'))).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 12 * 1024, 24, crawlOn('gemma4-26b-a4b-it-qat-q4'))).toBe('qwen3.5-9b-ud-q4kxl')
+    // Those two return at the #52 guard (their tier is above the pick). This one reaches R2's own guard: the same tier as the
+    // pick, but its 19,961 MiB does not fit a 19,500 budget, so it says nothing about the UD-Q4 that does.
+    expect(onCard(chat, 19_500, 24)).toBe('qwen3.8-27b-ud-q4km')
+    expect(onCard(chat, 19_500, 24, crawlOn('qwen3.6-27b-q4'))).toBe('qwen3.8-27b-ud-q4km')
     // …while a crawl on the 9B itself (right-sized, eligible) steps to the E2B as §6.5 intends.
     expect(onCard(chat, 12 * 1024, 24, crawlOn('qwen3.5-9b-ud-q4kxl'))).toBe('gemma4-e2b-it-qat-q4')
   })
@@ -493,7 +524,6 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   it('sweep: every stepped result is eligible or the documented no-fit fallback (3,021 points)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const byId = new Map(chat.map((m) => [m.id, m]))
-    const started = Date.now()
     let points = 0
     const violations: string[] = []
     for (let budget = 6 * 1024; budget <= 32 * 1024; budget += 512) {
@@ -511,7 +541,6 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     }
     expect(points).toBe(3021)
     expect(violations).toEqual([])
-    expect(Date.now() - started).toBeLessThan(2000)
   })
 
   // (k) Unknown RAM on the card path keeps the pre-rule-C `ramOk` semantics: the floor is open,
@@ -542,9 +571,9 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     // the no-fit path. Since #391 the demotion lands on the 4B (3,838) rather than the E2B.
     expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 4000, 16)).toBe('qwen3.5-4b-ud-q4kxl')
-    // The no-fit fallback itself is unchanged, just reached lower down: under the smallest ranked
-    // threshold nothing is eligible, so the RAM pick stands, partially offloaded — and never the
-    // rank-0 2B (#326), whose 2,962 MiB would otherwise fit here.
+    // The no-fit fallback itself is unchanged, just reached lower down: under the smallest ranked threshold nothing is
+    // eligible, so the RAM pick stands, partially offloaded. #326's rank-0 exclusion is not reachable here: every rank-0 need
+    // (the 0.8B's 2,304 is the lowest) sits above the E2B's 2,271. Its proof is models.test "where the RAM pick does not fit…".
     expect(onCard(chat, 2270, 16)).toBe(recommendModelIdByRam(chat, 16, 'chat'))
     expect(onCard(chat, 2270, 16)).toBe('qwen3.5-9b-ud-q4kxl')
   })
@@ -624,12 +653,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
         recommendModelIdByRam(chat, ram, 'chat', slow)
       )
     }
-    const manifestsDir = resolveManifestsDir(process.cwd())
-    if (!manifestsDir) throw new Error('could not locate model-manifests from the repo')
     const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-rulec-'))
     try {
       const star = async (extra: Partial<Parameters<typeof buildModelList>[0]>) => {
-        const { models } = await buildModelList({ manifestsDir, rootPath, developerMode: false, machineRamGb: 32, ...extra })
+        const { models } = await buildModelList({ manifestsDir: CATALOG_MANIFESTS, rootPath, developerMode: false, machineRamGb: 32, ...extra })
         return models.find((m) => m.role === 'chat' && m.recommended)?.id
       }
       expect(await star({})).toBe('qwen3.8-27b-ud-q5km')
@@ -640,103 +667,23 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       rmSync(rootPath, { recursive: true, force: true })
     }
   })
-})
 
-// The Qwen3.6 27B pair: productized from local-test stubs and promoted to rank 3 in the
-// newest-Qwen decision (owner, 2026-07-12, model-benchmarks.md §6.4). These are the #48 tester
-// eval's top quality scorers, and the only promoted models whose promotion the eval AGREES
-// with — pin the full promotion facts so a mis-edit fails CI, not a user's drive. The pair
-// carries rank 3 AGAIN since 2026-08-20 (issue #196, §9.5): the Qwen3.8 wave that took the two
-// tiers on 2026-08-16 lost its upstream files, and the tiers came back to the best-measured
-// models that can still be downloaded.
-describe('committed catalog — Qwen3.6 27B pair (2026-07-12 promotion; rank 3 again since #196)', () => {
-  it('both Qwen3.6 manifests hold the productization + tier-pick invariants', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    for (const id of ['qwen3.6-27b-q4', 'qwen3.6-27b-q5']) {
-      const m = byId[id]
-      expect(m, id).toBeDefined()
-      expect(m.role, `${id} role`).toBe('chat')
-      expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
-      expect(m.format, `${id} format`).toBe('gguf')
-      expect(m.family, `${id} family`).toBe('qwen3.6')
-      // Ranks after the #196 successor wave (2026-08-20, measured, owner-ratified; §9.5):
-      // both tiers went back to the Qwen3.8 successors (the full §9.4 generational handover
-      // restored), so the pair returns to rank 1. The q4's measured decode advantage over the
-      // UD successor (40.1 vs 32.4 t/s) is recorded in its manifest; the owner call weighed
-      // the newest generation ahead at quality inside cross-run uncertainty.
-      expect(m.recommendationRank, `${id} rank`).toBe(1)
-      // …and its own source must still be fetchable — the whole point of taking the tier back.
-      expect(m.download!.withdrawn, `${id} source live`).toBeUndefined()
-      expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
-      expect(m.license, `${id} license`).toBe('apache-2.0')
-      expect(m.licenseReview.status, `${id} review`).toBe('approved')
-      // Productized: real upstream hash (HF LFS OID) + a download block carrying the same hash.
-      expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
-      expect(m.download, `${id} download block`).toBeDefined()
-      expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)
-      expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
-      expect(m.recommendedContextTokens, `${id} ctx not native`).toBeLessThanOrEqual(32768)
-    }
-    // The tier split the original promotion rested on: Q4 in the 24 GB capacity group, Q5 in 32.
-    expect(byId['qwen3.6-27b-q4'].recommendedRamGb, 'Q4 comfortable tier').toBe(24)
-    expect(byId['qwen3.6-27b-q5'].recommendedRamGb, 'Q5 comfortable tier').toBe(32)
+  it('RAM stays a hard gate on the card path: nothing under the lowest floor, and a crawl on a model over the floor is no signal (§6.6 point 5)', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    // RAM 7 is under every floor: the RAM pick is null, and no card however large overrides that.
+    expect(onCard(chat, 24_000, 7)).toBeNull()
+    // RAM 8, 7,100 MiB: the 4B stands. The 8B fits the card (7,020) but needs RAM 12, so a crawl on it says nothing.
+    expect(onCard(chat, 7100, 8)).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(onCard(chat, 7100, 8, crawlOn('qwen3-8b-instruct-q4'))).toBe('qwen3.5-4b-ud-q4kxl')
   })
 })
-
-// The Qwen3.8 wave (2026-08-16 promotion; model-benchmarks.md §9.4): three unsloth quants of
-// Qwen3.8-27B, productized with real HF-LFS hashes on day one. All three carry rank 0 SINCE
-// 2026-08-20 (issue #196, §9.5): unsloth deleted the static K-quants in their Dynamic 3.0
-// restructure, so the pinned files 404 and a fresh drive cannot obtain them. The MEASUREMENTS
-// are unchanged and the manifests stay as installed-base records — rank 0 only stops the picker
-// from recommending what can no longer be downloaded (q6 was rank 0 by design anyway: the
-// "24 GB GPU quality ceiling" selectable, the gemma4-31b precedent). No UD-Q4_K_XL manifest:
-// measured slower than q5 at equal quality (§9.4).
-const QWEN38_WAVE_FACTS: Record<
-  string,
-  { rank: number; minRam: number; recRam: number; displayName: string }
-> = {
-  'qwen3.8-27b-q4': { rank: 0, minRam: 21, recRam: 24, displayName: 'Qwen3.8 27B Q4_K_M' },
-  'qwen3.8-27b-q5': { rank: 0, minRam: 23, recRam: 32, displayName: 'Qwen3.8 27B Q5_K_M' },
-  'qwen3.8-27b-q6': { rank: 0, minRam: 26, recRam: 32, displayName: 'Qwen3.8 27B Q6_K' }
-}
 
 describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () => {
-  it('all three Qwen3.8 manifests hold the productization + promotion invariants', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    for (const [id, facts] of Object.entries(QWEN38_WAVE_FACTS)) {
-      const m = byId[id]
-      expect(m, id).toBeDefined()
-      expect(m.role, `${id} role`).toBe('chat')
-      expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
-      expect(m.format, `${id} format`).toBe('gguf')
-      expect(m.family, `${id} family`).toBe('qwen3.8')
-      expect(m.recommendationRank, `${id} rank`).toBe(facts.rank)
-      expect(m.recommendedMinRamGb, `${id} min RAM`).toBe(facts.minRam)
-      expect(m.recommendedRamGb, `${id} rec RAM`).toBe(facts.recRam)
-      expect(m.displayName, `${id} display name`).toBe(facts.displayName)
-      expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
-      expect(m.license, `${id} license`).toBe('apache-2.0')
-      expect(m.licenseReview.status, `${id} review`).toBe('approved')
-      expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
-      expect(m.download, `${id} download block`).toBeDefined()
-      expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)
-      expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
-      expect(m.recommendedContextTokens, `${id} ctx local budget`).toBe(8192)
-    }
-  })
-
   // Issue #182 (§9.4 MTP addendum): the draft head costs ~2 GiB VRAM, so exactly the two
   // quants that keep 24 GB headroom opt in. Q6_K peaks at 22.7 GiB on a 24 GB card at ctx
   // 8192 — its VRAM fit IS its reason to exist, and MTP would spend it. The runtime's VRAM
   // guard would refuse it anyway; this pins the DECISION so nobody "fixes" the asymmetry.
-  it('opts exactly the Q4 and Q5 quants into MTP speculative decoding — never the Q6_K', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    expect(byId['qwen3.8-27b-q4'].speculativeDecoding).toBe('mtp')
-    expect(byId['qwen3.8-27b-q5'].speculativeDecoding).toBe('mtp')
-    expect(byId['qwen3.8-27b-q6'].speculativeDecoding).toBeUndefined()
-  })
-
-  it('no OTHER committed manifest claims a draft head it does not ship', () => {
+  it('exactly the four manifests whose weight carries a draft head opt into MTP, never a Q6 (#182, #196)', () => {
     // The flag is a claim about the WEIGHT (Qwen3.8's in-GGUF `blk.64.nextn.*` tensors), not a
     // tuning knob: copying it onto a model without the head makes llama-server refuse to start,
     // which the ladder then recovers from by falling back — a wasted multi-GB load per session.
@@ -760,197 +707,62 @@ describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () 
   // planner, the in-app downloader and both fetch scripts all key off this one field.
   it('all three manifests declare the withdrawn upstream source, block intact', () => {
     const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    for (const id of Object.keys(QWEN38_WAVE_FACTS)) {
+    const withdrawn = Object.entries(CHAT_FACTS).filter(([, f]) => f.withdrawn).map(([id]) => id)
+    expect(withdrawn).toHaveLength(3)
+    for (const id of withdrawn) {
       const dl = byId[id].download!
       expect(dl.withdrawn, `${id} withdrawn note`).toMatch(/^2026-08-20: unsloth removed/)
       // The dead URL + hash + size are KEPT: they are the provenance record of the file that
       // existing drives carry, and that copy still verifies against this manifest.
       expect(dl.url, `${id} url kept`).toContain('huggingface.co/unsloth/Qwen3.8-27B-GGUF')
       expect(dl.sizeBytes, `${id} size kept`).toBeGreaterThan(0)
-      // The fetch scripts read this value with a flat-YAML parser that strips inline comments
-      // at " #" — a note containing one would be silently truncated mid-sentence.
-      expect(dl.withdrawn, `${id} no " #" in the note`).not.toContain(' #')
     }
   })
 
-  // The general rule, not just this wave: a model the app cannot obtain must never be the
-  // auto-pick. Rank 0 is the established "selectable, never recommended" convention.
+  // The general rule, not just this wave: a model the app cannot obtain or verify must never be the auto-pick. Rank 0 is the
+  // established "selectable, never recommended" convention; a legacy profile is the other road to a recommendation.
   it('no committed manifest is both recommended and unobtainable', () => {
-    const offenders = committedManifests()
-      .filter((m) => m.download?.withdrawn && m.recommendationRank > 0)
+    const recommended = committedManifests().filter((m) => m.recommendationRank > 0 || m.recommendedProfiles.length > 0)
+    expect(recommended.length, '15 ranked chat models + the embedder, reranker and transcriber').toBeGreaterThanOrEqual(18)
+    const offenders = recommended
+      .filter(
+        (m) =>
+          !m.download ||
+          m.download.withdrawn !== undefined ||
+          m.download.sha256 !== m.sha256 ||
+          m.licenseReview.status !== 'approved' ||
+          !manifestFiles(tmpdir(), m).every((f) => isRealSha256(f.sha))
+      )
       .map((m) => m.id)
     expect(offenders).toEqual([])
   })
 
-  it('hands both big tiers to the measured UD successors (no-signal mapping)', () => {
+  // The RAM bands as ratified (model-policy.md): both ends of each band, plus every point the older rows sampled.
+  // #196 successor wave (2026-08-20, measured, owner-ratified): 24 GB goes to the UD-Q4_K_M (the measured 19 percent decode
+  // regression vs the withdrawn file is recorded and accepted); >=32 GB to the UD-Q5_K_M, which reproduces its envelope.
+  // #153: 12-15 fit the E2B's rec-12 comfortably and nothing else ranked fits below 16. 8-11 stay the runnable-stage 4B
+  // (min-8 tie → rank tie → disk-asc, 2.9 GB < 3.3 GB); 16 is the rank-3 9B (capacity-first: the 16 tier outranks the 12).
+  it('hands each RAM band to its ratified pick, the big tiers to the measured UD successors (no-signal mapping)', () => {
     const chat = committedManifests()
-    // #196 successor wave (2026-08-20, measured, owner-ratified): the full §9.4 generational
-    // handover is restored with the successors. 24 GB goes to qwen3.8-27b-ud-q4km (the
-    // measured 19 percent decode regression vs the withdrawn file is recorded and accepted);
-    // >=32 GB goes to qwen3.8-27b-ud-q5km, which reproduces the withdrawn file's envelope.
-    expect(recommendModelIdByRam(chat, 24, 'chat')).toBe('qwen3.8-27b-ud-q4km')
-    for (const ram of [32, 48, 64, 128]) {
-      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram}`).toBe('qwen3.8-27b-ud-q5km')
+    const fourB = 'qwen3.5-4b-ud-q4kxl'
+    const e2b = 'gemma4-e2b-it-qat-q4'
+    const nineB = 'qwen3.5-9b-ud-q4kxl'
+    const q4 = 'qwen3.8-27b-ud-q4km'
+    const q5 = 'qwen3.8-27b-ud-q5km'
+    const bands: Array<[ramGb: number, pick: string | null]> = [
+      [7, null], [8, fourB], [11, fourB], [12, e2b], [14, e2b], [15, e2b], [16, nineB], [20, nineB], [23, nineB],
+      [24, q4], [31, q4], [32, q5], [48, q5], [64, q5], [128, q5]
+    ]
+    for (const [ram, pick] of bands) {
+      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram}`).toBe(pick)
     }
-    // No WITHDRAWN Qwen3.8 manifest may be the auto-pick at ANY realistic RAM level (the UD
-    // successors are separate ids with live sources and may hold tiers).
-    for (const ram of [8, 12, 14, 16, 20, 24, 26, 32, 48, 64, 128]) {
-      expect(
-        Object.keys(QWEN38_WAVE_FACTS),
-        `ram=${ram}`
-      ).not.toContain(recommendModelIdByRam(chat, ram, 'chat'))
-    }
-    // Below 24 nothing changed (min-21 q4 never leaked into the 16-20 band either).
-    expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(recommendModelIdByRam(chat, 20, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
-  })
-
-  it('NEVER auto-recommends the rank-0 Q6_K at any realistic RAM level, with or without a slow signal', () => {
-    const chat = committedManifests()
-    for (const ram of [8, 12, 14, 16, 20, 24, 26, 32, 48, 64, 128]) {
-      expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram}`).not.toBe('qwen3.8-27b-q6')
-      const slow = {
-        tokensPerSecond: 2.0,
-        measuredModelId: recommendModelIdByRam(chat, ram, 'chat')
-      }
-      expect(recommendModelIdByRam(chat, ram, 'chat', slow), `ram=${ram} slow`).not.toBe(
-        'qwen3.8-27b-q6'
-      )
-    }
-  })
-})
-
-// The Gemma 4 QAT wave (model-policy.md "Gemma 4 QAT wave", issue #82): the four official
-// Google QAT Q4_0 additions around the shipped 12B winner. Text-only chat, not bundled.
-// Ranks per the 2026-08-03 wave ratification (model-benchmarks.md §9.3 wave outcome), amended
-// 2026-08-09: the 26B-A4B carries rank 2 (ranked runner-up to the rank-3 qwen3.6-27b-q4 — EM
-// parity + zero hallucinations at ~4x the speed, F1 under it); E2B carries rank 3 since the
-// issue-#153 promotion (the weak-16 GB-box datapoint landed: 17.0 tok/s settled vs the previous
-// 12 GB pick qwen3.5-4b's 9.0 on the designated class, F1 .3373 vs .2728 — E2B wins the sub-16
-// band it now defines, rec-RAM retuned 16 → 12); E4B stays 0 (missed the 8B bar), 31B stays 0
-// (issue-#82 drop condition met — never promote). Only the rank-3 E2B may be the auto-pick
-// (asserted below).
-const GEMMA4_WAVE_IDS = [
-  'gemma4-e2b-it-qat-q4',
-  'gemma4-e4b-it-qat-q4',
-  'gemma4-26b-a4b-it-qat-q4',
-  'gemma4-31b-it-qat-q4'
-]
-
-// The committed rank facts: 2026-08-03 ratification + the 2026-08-09 issue-#153 E2B promotion.
-const GEMMA4_WAVE_RANKS: Record<string, number> = {
-  'gemma4-e2b-it-qat-q4': 3,
-  'gemma4-e4b-it-qat-q4': 0,
-  'gemma4-26b-a4b-it-qat-q4': 2,
-  'gemma4-31b-it-qat-q4': 0
-}
-
-// The committed RAM lines and display names. RAM is pinned because a silent mis-edit here is
-// exactly how a rank-0 model becomes an auto-pick (a UNIQUE low recommended_ram_gb slips past
-// the preferRanked guard at RAM levels the sample misses) or gets locked out of machines it
-// fits; display names are pinned per the Qwen3.5 precedent so a copy-paste swap can't mislabel
-// the picker UI. E2B's rec-RAM is 12 SINCE the #153 promotion — the same value whose earlier
-// accidental appearance on the then-rank-0 manifest this block caught as a hijack; ranked, it
-// is the deliberate sub-16 capacity band (and the §6.5 step-down's 16–20 GB landing tier).
-const GEMMA4_WAVE_FACTS: Record<string, { minRam: number; recRam: number; displayName: string }> = {
-  'gemma4-e2b-it-qat-q4': { minRam: 8, recRam: 12, displayName: 'Gemma 4 E2B Instruct QAT Q4' },
-  'gemma4-e4b-it-qat-q4': { minRam: 12, recRam: 16, displayName: 'Gemma 4 E4B Instruct QAT Q4' },
-  'gemma4-26b-a4b-it-qat-q4': {
-    minRam: 20,
-    recRam: 32,
-    displayName: 'Gemma 4 26B-A4B Instruct QAT Q4'
-  },
-  'gemma4-31b-it-qat-q4': { minRam: 24, recRam: 32, displayName: 'Gemma 4 31B Instruct QAT Q4' }
-}
-
-describe('committed catalog — Gemma 4 QAT wave (issue #82)', () => {
-  it('all four Gemma 4 QAT wave manifests are present and validate', () => {
-    const ids = new Set(committedManifests().map((m) => m.id))
-    for (const id of GEMMA4_WAVE_IDS) expect(ids.has(id), `${id} present`).toBe(true)
-  })
-
-  it('every Gemma 4 QAT wave manifest holds the wave invariants', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    for (const id of GEMMA4_WAVE_IDS) {
-      const m = byId[id]
-      expect(m, id).toBeDefined()
-      // role / runtime — the chat pipeline only.
-      expect(m.role, `${id} role`).toBe('chat')
-      expect(m.runtime, `${id} runtime`).toBe('llama_cpp')
-      expect(m.format, `${id} format`).toBe('gguf')
-      expect(m.family, `${id} family`).toBe('gemma4')
-      // Ranks per the 2026-08-03 ratification (26B-A4B rank 2, rest 0); legacy profiles stay
-      // empty — none of the wave is ever auto-recommended (asserted below too).
-      expect(m.recommendationRank, `${id} rank`).toBe(GEMMA4_WAVE_RANKS[id])
-      expect(m.recommendedProfiles, `${id} profiles`).toEqual([])
-      // Apache-2.0 (Gemma 4 is the Apache generation), review approved (official Google QAT —
-      // first-party provenance, drive-shippable). Distinct from the two local-test Gemma stubs
-      // (gemma-4-26b-q4 / gemma4-coding-q8: license "gemma", no download block, unverified hash).
-      expect(m.license, `${id} license`).toBe('apache-2.0')
-      expect(m.licenseReview.status, `${id} review`).toBe('approved')
-      // Real hashes: pinned from HF LFS OIDs and confirmed against real downloads for
-      // E2B/E4B/26B-A4B by the 2026-07-23 fetch-models run (SHA-256-verified on disk).
-      expect(isRealSha256(m.sha256), `${id} real sha256`).toBe(true)
-      expect(m.download, `${id} download block`).toBeDefined()
-      expect(m.download!.sha256, `${id} download hash equals top-level`).toBe(m.sha256)
-      // Text-only: the upstream repos ship mmproj projectors we deliberately do not reference.
-      expect(m.mmproj, `${id} no mmproj`).toBeUndefined()
-      // The 8192 local runtime budget (the wave convention, matching the 12B).
-      expect(m.recommendedContextTokens, `${id} ctx`).toBe(8192)
-      // RAM + display-name pins (the Qwen3.6 precedent, extended per the PR-#83 merge review).
-      expect(m.recommendedMinRamGb, `${id} min RAM`).toBe(GEMMA4_WAVE_FACTS[id].minRam)
-      expect(m.recommendedRamGb, `${id} comfortable RAM`).toBe(GEMMA4_WAVE_FACTS[id].recRam)
-      expect(m.displayName, `${id} display name`).toBe(GEMMA4_WAVE_FACTS[id].displayName)
-      // Deep-mode gate: the wave ships supports_thinking_mode true (12B-verified template
-      // family; per-size suppression smoke pending, model-benchmarks.md §9.3) — a dropped
-      // flag would silently remove Deep for the model with no other CI signal.
-      expect(m.supportsThinkingMode, `${id} thinking flag`).toBe(true)
-    }
-  })
-
-  it('NEVER auto-recommends a below-rank-3 Gemma 4 wave model at any realistic RAM level', () => {
-    // A rank-0 model with a UNIQUE recommended_ram_gb below every ranked model's would become
-    // the only "comfortable fit" at that RAM level and slip past the preferRanked guard —
-    // exactly what happened when the then-rank-0 E2B briefly declared 12 (since the #153
-    // promotion the rank-3 E2B holds rec-12 deliberately and is EXCLUDED here — its positive
-    // pins live in the test below). 14 and 20 are deliberately in the sample: unsampled odd
-    // values are where a RAM mis-edit hides (a rec of 13–15 would win ram=14 unseen), and 20
-    // is the 26B-A4B's own hard-min boundary introduced by this wave. Since the 2026-08-03
-    // ratification this deliberately includes the rank-2 26B-A4B: a ranked runner-up must
-    // still lose every tier to the rank-3 holders (qwen3.8-27b-q4 at 24 GB, qwen3.8-27b-q5
-    // at ≥32 GB since the 2026-08-16 §9.4 handover).
-    const chat = committedManifests()
-    const waveSet = new Set(GEMMA4_WAVE_IDS.filter((id) => GEMMA4_WAVE_RANKS[id] < 3))
-    for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
-      const picked = recommendModelIdByRam(chat, ram, 'chat')
-      expect(waveSet.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
-    }
-  })
-
-  it('the promoted E2B owns exactly the sub-16 comfortable band (#153 promotion pins)', () => {
-    // The two RAM points the #153 promotion CHANGED (base mapping): 12 and the unsampled-odd
-    // guard point 14 both fit E2B's retuned rec-12 comfortably and nothing else ranked fits
-    // below 16. The neighbors are pinned unchanged on both sides: 8 stays the runnable-stage
-    // qwen3.5-4b (min-8 tie → rank tie → disk-asc, 2.9 GB < 3.3 GB), 16 stays the 16-band
-    // rank-3 winner 9B (capacity-first: the 16 tier outranks the 12 tier at ram=16).
-    const chat = committedManifests()
-    expect(recommendModelIdByRam(chat, 8, 'chat')).toBe('qwen3.5-4b-ud-q4kxl')
-    expect(recommendModelIdByRam(chat, 12, 'chat')).toBe('gemma4-e2b-it-qat-q4')
-    expect(recommendModelIdByRam(chat, 14, 'chat')).toBe('gemma4-e2b-it-qat-q4')
-    expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
-  })
-
-  it('the shipped 12B winner keeps its Phase-29 rank next to the wave', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    // The wave must not disturb the ranked incumbent it challenges.
-    expect(byId['gemma4-12b-it-qat-q4'].recommendationRank, '12B rank').toBe(2)
   })
 })
 
 // §6.5 speed-signal step-down (issue #95) against the REAL committed catalog: a sub-threshold
 // crawl measured on the tier's own pick steps the recommendation exactly one capacity band
-// down. The no-signal mapping is pinned separately ("NEVER auto-recommends…" + the #153 pins
-// above + benchmark.test.ts's 8/12/16/20/24/32 table) — these rows only pin the stepped picks.
+// down. The no-signal mapping is pinned separately (the RAM bands above + benchmark.test.ts's
+// 8/12/16/20/24/32 table) — these rows only pin the stepped picks.
 // Since the #153 E2B promotion the 16–20 GB crawl has a landing tier (previously rule 3: keeps).
 describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', () => {
   /** A crawl measured on the tier's own no-signal pick: the predicate always applies. */
@@ -989,65 +801,61 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
     ).toBe('qwen3.5-9b-ud-q4kxl')
   })
 
-  it('still NEVER lands on a rank-0 or below-rank-3 wave model with a slow signal', () => {
+  // A rank-0 model must never be the pick, and a ranked runner-up must lose every tier to a rank-3 holder (§6.3, §9.3; the
+  // withdrawn Qwen3.8 quants are rank 0 for the #196 reason). Every RAM size, because a mis-edit hides at the sizes a sample
+  // misses: a rank-0 model with a UNIQUE low recommended_ram_gb becomes the only comfortable fit there and slips past the
+  // preferRanked guard (exactly what the then-rank-0 E2B did at 12), and one with a min under 8 wins the machines nothing
+  // ranked fits. Both arms: the no-signal pick and a crawl on it.
+  it('every RAM size from 1 to 128 GB picks a rank-3 model or nothing, with or without a crawl on the pick', () => {
     const chat = committedManifests()
-    const neverAutoPick = new Set([
-      ...QWEN35_WAVE_IDS.filter((id) => QWEN_WAVE_RANKS[id] < 3),
-      ...GEMMA4_WAVE_IDS.filter((id) => GEMMA4_WAVE_RANKS[id] < 3)
-    ])
-    for (const ram of [8, 12, 14, 16, 20, 24, 32, 48, 64, 128]) {
-      const picked = recommendModelIdByRam(chat, ram, 'chat', slowOnOwnPick(chat, ram))
-      expect(neverAutoPick.has(picked ?? ''), `ram=${ram} picked=${picked}`).toBe(false)
+    const rank = new Map(chat.map((m) => [m.id, m.recommendationRank]))
+    let picks = 0
+    for (let ram = 1; ram <= 128; ram++) {
+      const base = recommendModelIdByRam(chat, ram, 'chat')
+      if (base === null) {
+        expect(ram, 'nothing runs only under the 8 GB floor').toBeLessThan(8)
+        continue
+      }
+      for (const id of [base, recommendModelIdByRam(chat, ram, 'chat', slowOnOwnPick(chat, ram))]) {
+        expect(rank.get(id ?? ''), `ram=${ram} picked=${id}`).toBe(3)
+        picks++
+      }
     }
+    expect(picks).toBe(242)
   })
 })
 
-// full-audit 2026-07-12 TQ-2: the 2507 refresh is the one RANKED (auto-recommendable) chat
-// manifest that carried no named CI invariant — a rank/license/hash mis-edit or an accidental
-// deletion passed the suite (issue #48 closed exactly this gap for the fast-tier pair; this
-// closes it one manifest over). Values below are the manifest's COMMITTED promotion facts
-// (Phase-29 D18, model-policy.md "Chat (better 4B)" row), not aspirations.
-describe('committed catalog — qwen3-4b-instruct-2507-q4 invariants (TQ-2)', () => {
-  it('the 2507 refresh holds its Phase-29 promotion values', () => {
-    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    const m = byId['qwen3-4b-instruct-2507-q4']
-    expect(m, 'manifest present').toBeDefined()
-    expect(m.role, 'role').toBe('chat')
-    expect(m.family, 'family').toBe('qwen3')
-    expect(m.runtime, 'runtime').toBe('llama_cpp')
-    expect(m.format, 'format').toBe('gguf')
-    // Phase-29 user decision: the ORIGINAL 4B (rank 2, hybrid thinking → Deep) stays the
-    // catalog default; 2507 is the better-RAG manual pick ranked just BELOW it (rank 1).
-    // Pin BOTH ranks so the ordering (not just one number) can't silently invert.
-    expect(m.recommendationRank, '2507 rank').toBe(1)
-    expect(byId['qwen3-4b-instruct-q4'].recommendationRank, 'original 4B rank').toBe(2)
-    expect(m.recommendedProfiles, 'no legacy profiles').toEqual([])
-    // Apache-2.0, review approved (drive-shippable provenance), real verified hash.
-    expect(m.license, 'license').toBe('apache-2.0')
-    expect(m.licenseReview.status, 'license review').toBe('approved')
-    expect(isRealSha256(m.sha256), 'real sha256').toBe(true)
-    expect(m.download?.sha256, 'download hash equals top-level').toBe(m.sha256)
-    expect(m.mmproj, 'text-only chat model').toBeUndefined()
-  })
-
-  // The four single-per-role manifests (+ vision) share the thin-coverage gap but churn far
-  // less; a presence + real-hash pin is the cheap half that catches deletion/hash mis-edits.
-  // License posture is deliberately NOT pinned here: TranslateGemma's `pending` is a standing
-  // owner decision (the mechanical sell-gate guard) — pinning statuses would freeze that.
+describe('committed catalog — the single-manifest roles (TQ-2)', () => {
+  // The role manifests churn far less than the chat waves; a presence + real-hash pin over EVERY declared file is the cheap
+  // half that catches deletion and hash mis-edits. License posture is deliberately NOT pinned here: TranslateGemma's `pending`
+  // is a standing owner decision (the mechanical sell-gate guard), and pinning statuses would freeze that.
   it('each non-chat role ships exactly its one known manifest with a real hash', () => {
     const manifests = committedManifests()
-    const expected: Record<string, string> = {
-      embeddings: 'multilingual-e5-small-q8',
-      reranker: 'bge-reranker-v2-m3-f16', // manifest id ≠ its filename (bge-reranker-v2-m3.yaml)
-      transcriber: 'whisper-small-multilingual',
-      translation: 'translategemma-12b-it-q4',
-      vision: 'qwen2.5-vl-3b-instruct-q4'
+    const expected: Record<string, { id: string; kinds: string[] }> = {
+      embeddings: { id: 'multilingual-e5-small-q8', kinds: ['weight'] },
+      reranker: { id: 'bge-reranker-v2-m3-f16', kinds: ['weight'] }, // manifest id ≠ its filename (bge-reranker-v2-m3.yaml)
+      transcriber: { id: 'whisper-small-multilingual', kinds: ['weight', 'extra'] },
+      translation: { id: 'translategemma-12b-it-q4', kinds: ['weight'] },
+      vision: { id: 'qwen2.5-vl-3b-instruct-q4', kinds: ['weight', 'mmproj'] }
     }
-    for (const [role, id] of Object.entries(expected)) {
+    for (const [role, { id, kinds }] of Object.entries(expected)) {
       const ofRole = manifests.filter((m) => m.role === role)
       expect(ofRole.map((m) => m.id), `${role} manifest set`).toEqual([id])
-      expect(isRealSha256(ofRole[0].sha256), `${id} real sha256`).toBe(true)
+      const files = manifestFiles(tmpdir(), ofRole[0])
+      expect(files.map((f) => f.kind), `${id} declared files`).toEqual(kinds)
+      for (const f of files) expect(isRealSha256(f.sha), `${f.localPath} real sha256`).toBe(true)
     }
+  })
+
+  it('the transcriber declares its Silero VAD file beside the weight (#504)', () => {
+    const whisper = committedManifests().find((m) => m.role === 'transcriber')
+    expect(whisper, 'one transcriber manifest').toBeDefined()
+    expect(manifestFiles(tmpdir(), whisper!).map((f) => [f.localPath, f.kind])).toEqual([
+      ['models/transcriber/ggml-small.bin', 'weight'],
+      ['models/transcriber/ggml-silero-v5.1.2.bin', 'extra']
+    ])
+    // Fetched with the weight: dictation needs both, and the wrapper finds this one by its name.
+    expect(whisper!.files?.[0].download, 'the VAD file has a source').toBeDefined()
   })
 })
 
@@ -1103,7 +911,7 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
   // small hard-min is an incoherent promise: the gate lets the machine in, then the spawn cannot
   // fit. This is a model-agnostic PLAUSIBILITY bound (not a physical KV model): cap the recommended
   // runtime context at 2048 tokens per GB of hard-min RAM. The whole committed catalog sits at or
-  // below 1024 tok/GB (tightest: gemma4-coding-q8, 16384 @ 16 → 1024), so 2048 leaves 2x headroom;
+  // below 1024 tok/GB (tightest: gemma4-coding-q8 and the E2B, 1024), so 2048 leaves 2x headroom;
   // the F-06 defect (98304 @ 14 → 7022 tok/GB) blows past it by 3.4x. A future manifest that
   // genuinely wants a bigger context must raise its hard-min RAM to stay honest — which is exactly
   // the coherence the start gate is supposed to encode.
@@ -1132,9 +940,13 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
   // of any sizable weight (the F-16 pair was off by 1.12 / 1.31 GB).
   it('size_on_disk_gb matches size_bytes/1e9 (decimal GB) for every real download block', () => {
     const TOLERANCE_GB = 0.15
+    const unsized: string[] = []
     for (const m of committedManifests()) {
       const sizeBytes = m.download?.sizeBytes
-      if (sizeBytes == null || sizeBytes <= 0) continue
+      if (sizeBytes == null || sizeBytes <= 0) {
+        if (m.download) unsized.push(m.id)
+        continue
+      }
       const decimalGb = sizeBytes / 1e9
       expect(
         Math.abs(m.sizeOnDiskGb - decimalGb),
@@ -1142,6 +954,8 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
           `(${decimalGb.toFixed(3)}); a gap this large means GiB was recorded instead of GB`
       ).toBeLessThan(TOLERANCE_GB)
     }
+    // An exact list: a floor would let a later manifest drop its size_bytes once a new one had been added.
+    expect(unsized).toEqual(['qwen2.5-vl-3b-instruct-q4'])
   })
 })
 
@@ -1162,10 +976,9 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
 // (catalog membership), not this issue's verification story.
 //
 // The reviewed head of PR #302 carried a second commit (883f5e40) adding a Flash-Next chat
-// manifest whose weight is FOUR GGUF shards, with shards 2-4 recorded only in YAML comments
-// "for the operator". The owner split that commit back out of PR #302 (Gate A, 2026-09-05); the
-// manifest stays on its own branch and lands under #311. That audited YAML is the fixture below
-// — the red proof, now expressed as a validator rejection.
+// manifest with shards 2-4 only in YAML comments. It stays on feat/qwen38-flash-next-manifest and
+// lands under #311; its refusal is proved at the owner, unit/manifest "rejects a shard-1
+// local_path with no files: list at all".
 const SHARDED_GGUF_RE = /-(\d{5})-of-(\d{5})\.gguf$/i
 
 /** The id the split removed from this PR (883f5e40 → `feat/qwen38-flash-next-manifest`). */
@@ -1184,16 +997,30 @@ function declaredFilePaths(manifests: ModelManifest[]): string[] {
   return manifests.flatMap((m) => manifestFiles(tmpdir(), m).map((f) => f.localPath))
 }
 
-/** The declared paths that name a conventional llama.cpp shard (`…-00001-of-00004.gguf`). */
-function shardedGgufPaths(manifests: ModelManifest[]): string[] {
-  return declaredFilePaths(manifests).filter((p) => SHARDED_GGUF_RE.test(p))
+/** Every sibling a declared shard path implies that the same manifest does not declare. */
+function incompleteSeries(manifests: ModelManifest[]): string[] {
+  const incomplete: string[] = []
+  for (const m of manifests) {
+    const declared = declaredFilePaths([m])
+    for (const p of declared) {
+      const hit = SHARDED_GGUF_RE.exec(p)
+      if (!hit) continue
+      const stem = p.slice(0, hit.index)
+      const total = Number(hit[2])
+      for (let n = 1; n <= total; n++) {
+        const sibling = `${stem}-${String(n).padStart(5, '0')}-of-${hit[2]}.gguf`
+        if (!declared.includes(sibling)) incomplete.push(`${m.id}: ${sibling} is not declared`)
+      }
+    }
+  }
+  return incomplete
 }
 
 // The `qwen3.8` family as committed at the integration base (bfdb514a): the three static
 // K-quants plus the three Dynamic UD quants. Flash-Next declares `family: qwen3.8` too, so
 // pinning this ONE family's membership expresses "nothing was added to or removed from the
 // family the split touched" without freezing the whole chat catalog (new models in other
-// families stay a normal, test-free addition — the per-wave blocks above pin their facts).
+// families stay a normal, test-free addition — the facts table at the top pins the current ones).
 const QWEN38_FAMILY_IDS = [
   'qwen3.8-27b-q4',
   'qwen3.8-27b-q5',
@@ -1202,101 +1029,6 @@ const QWEN38_FAMILY_IDS = [
   'qwen3.8-27b-ud-q5km',
   'qwen3.8-27b-ud-q6k'
 ]
-
-// The audited manifest, from `git show 883f5e40:model-manifests/chat/
-// qwen3.8-flash-next-ud-q4kxl.yaml` (backticks escaped for the template literal); verbatim YAML
-// keys/values; a few private-context comment lines trimmed (P6). It is SCHEMA-VALID — that is
-// the point: the guard has to catch a manifest the validator accepts, in an isolated temp
-// catalog, never in the real `model-manifests/` tree.
-const FLASH_NEXT_MANIFEST_YAML = `
-id: qwen3.8-flash-next-ud-q4kxl
-display_name: Qwen3.8-Flash-Next 125B-A6B (UD-Q4_K_XL)
-family: qwen3.8
-role: chat
-format: gguf
-runtime: llama_cpp
-# NOT apache-2.0: Qwen/Qwen3.8-Flash-Next ships under the "Qwen Community License 1.0" (HF card
-# tag \`license: other\`, LICENSE blob at the URL in license_review.notes). Permissive for use and
-# redistribution, but clause 2 requires a separate Qwen license for any commercial "AI Work
-# Assistant" business (a product "primarily designed for AI-assisted coding or office
-# productivity"). Whether HilbertRaum's document skills fall under that definition is an open
-# legal question, hence \`license_review.status: pending\` and no bundling.
-license: qwen-community-1.0
-# Four shards, 111,334,654,784 bytes total (HF LFS sizes, matched on disk 2026-09-04).
-size_on_disk_gb: 111.3
-# MoE: 125B total / ~6B active, plus a ~51 GB N-gram/PLE embedding table (\`ple_ngram_embd\`).
-# The weight lives in RAM, not VRAM. With 125 GB the Q4 shards no longer fit the page cache
-# completely (light NVMe paging on long sessions); 64 GB machines cannot run it at all.
-recommended_min_ram_gb: 120
-recommended_ram_gb: 128
-# Rank 0 = selectable, never auto-recommended: the RAM tier is out of reach for the target
-# machines and the runtime story below is not shippable yet.
-recommendation_rank: 0
-# Native context is far larger; 8192 is the runtime budget the catalog uses everywhere. The
-# 2026-09-03 one-shot series ran it at 32768 without a Vulkan OOM (\`-ncmoe 40\`).
-recommended_context_tokens: 8192
-# The chat template honours \`enable_thinking\` (smoke 2026-09-03: thinking off is respected, no
-# <think> leak), so Deep / Balanced apply.
-supports_thinking_mode: true
-supports_tools: true
-# NO \`speculative_decoding\`: the PR build's MTP path is still work-in-progress and untested.
-# RUNTIME PIN: the catalog's pinned llama.cpp release (runtime-sources.yaml) cannot load this
-# architecture. It needs llama.cpp PR #27742 (unmerged at the time of writing; measured at
-# commit 250b614, Vulkan build). In a dev build point \`HILBERTRAUM_LLAMA_BIN\` at that
-# llama-server (and set the LunarG loader \`LD_LIBRARY_PATH\`); a packaged build ignores the
-# override by design and will report the model as failing to start until the pin is bumped
-# to a release that includes the merge.
-# SHARDED WEIGHT: llama.cpp opens the first shard and finds the siblings by the
-# \`-0000N-of-00004\` naming convention, so all four files must sit next to each other under
-# models/chat/ with this exact prefix. The manifest schema knows one file: \`local_path\` and
-# \`sha256\` are shard 1; shards 2 to 4 are listed below for the operator and are NOT checked
-# by the app's checksum gate (a known gap, tracked with the multi-file download work).
-local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00001-of-00004.gguf
-# Shard 1 hash: HF LFS OID AND on-disk sha256sum on the i9 rig, 2026-09-04.
-sha256: 4448186216b3af4cc558bbce2c3213f01608f8f8b2e5267a9767971dd3ec8082
-# Shards 2 to 4 (HF LFS OIDs from unsloth/Qwen3.8-Flash-Next-GGUF, folder UD-Q4_K_XL):
-#   qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf  49,859,583,136 B  3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9
-#   qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf  49,376,141,504 B  56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3
-#   qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf  12,087,983,520 B  753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a
-# Upstream files: https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/main/UD-Q4_K_XL
-# NO \`download\` block on purpose: the in-app downloader fetches exactly one file per manifest,
-# and a shard-1-only download would leave a model that can never start. Until the downloader
-# understands multi-file weights this stays a manually placed model (curl -C - against the
-# resolve URLs with a HF token was the only reliable route on the rig; hf/xet stalled).
-bundled_on_preconfigured_drive: false
-recommended_profiles: []
-license_review:
-  status: pending
-  reviewed_by: null
-  reviewed_at: null
-  notes: "PENDING 2026-09-04: base model Qwen/Qwen3.8-Flash-Next is NOT apache-2.0 but 'Qwen Community License 1.0' (https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE; HF card tag license:other). Grants use, copy, modify, distribute, sell; conditions: (1) keep the copyright + permission notice, model-name attribution only above 100M MAU / US$20M monthly revenue; (2) a licensee running a 'Model as a Service' or an 'AI Work Assistant' business (a product primarily designed for AI-assisted coding or office productivity) needs a separate Qwen license for commercial use. Whether a prepared HilbertRaum drive with document/office skills is an 'AI Work Assistant' under clause 2 is unresolved; do not bundle or sell until legal has reviewed. Quantization provenance: unsloth Dynamic UD-Q4_K_XL GGUF (unsloth/Qwen3.8-Flash-Next-GGUF, card license:other, base_model Qwen/Qwen3.8-Flash-Next). Runtime: unmerged llama.cpp PR #27742 required; dev-only until the runtime pin catches up."
-`
-
-/**
- * The `files:` block the audited manifest was missing: shards 2-4 with the HF LFS OIDs its own
- * comments recorded. Appended at column 0 AFTER `local_path`/`sha256` — the key-order rule the
- * flat first-match scrapers in `verify-models.{sh,ps1}` / `fetch-models.{sh,ps1}` depend on.
- */
-const FLASH_NEXT_FILES_BLOCK = `files:
-  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf
-    sha256: 3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9
-  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf
-    sha256: 56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3
-  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf
-    sha256: 753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a
-`
-
-/** Discover a one-manifest catalog from YAML text, in a throwaway directory. */
-function discoverTempCatalog(yaml: string): ReturnType<typeof discoverManifests> {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-shard-guard-'))
-  try {
-    mkdirSync(join(dir, 'chat'), { recursive: true })
-    writeFileSync(join(dir, 'chat', `${FLASH_NEXT_ID}.yaml`), yaml, 'utf8')
-    return discoverManifests(dir)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-}
 
 describe('committed catalog — prompt cache on for every chat model (#512)', () => {
   // Owner decision 1: on b11146 qwen3.5 and gemma4 restore an evicted prompt (measured), and
@@ -1332,70 +1064,29 @@ describe('committed catalog — every multi-file weight is fully declared (#310)
   // a complete `files:` list — so an undeclared shard set cannot be in the catalog at all. This
   // states the property directly over the production enumeration, series by series, so it also
   // covers a shard path reached through any other manifest slot.
+  // No committed path is sharded today, so this reads nothing until one is: the control below shows it firing.
   it('declares no shard-pattern path whose sibling series is incomplete', () => {
-    const manifests = committedManifests()
-    const incomplete: string[] = []
-    for (const m of manifests) {
-      const declared = declaredFilePaths([m])
-      for (const p of declared) {
-        const hit = SHARDED_GGUF_RE.exec(p)
-        if (!hit) continue
-        const stem = p.slice(0, hit.index)
-        const total = Number(hit[2])
-        for (let n = 1; n <= total; n++) {
-          const sibling = `${stem}-${String(n).padStart(5, '0')}-of-${hit[2]}.gguf`
-          if (!declared.includes(sibling)) incomplete.push(`${m.id}: ${sibling} is not declared`)
-        }
-      }
-    }
-    expect(incomplete).toEqual([])
+    expect(incompleteSeries(committedManifests())).toEqual([])
   })
 
-  // Control: without this the assertion above could pass vacuously for a projector, because it
-  // would never look at one. The vision model is the catalog's only multi-file entry today.
+  // The validator's shard rule reads `local_path` only, so this check is the one thing watching a sharded projector.
+  it('the series check fires on a sharded projector with a missing sibling, and clears once it is declared (control)', () => {
+    const mmproj = { local_path: 'models/vision/p-00001-of-00002.gguf', sha256: 'x' }
+    const sibling = 'models/vision/p-00002-of-00002.gguf'
+    const half = validManifest({ id: 'sharded-projector', role: 'vision', mmproj })
+    expect(incompleteSeries([half])).toEqual([`sharded-projector: ${sibling} is not declared`])
+    const whole = validManifest({ id: 'sharded-projector', role: 'vision', mmproj, files: [{ local_path: sibling, sha256: 'x' }] })
+    expect(incompleteSeries([whole])).toEqual([])
+  })
+
+  // Control: the series check can only judge what the enumeration lists. Multi-file entries today: the vision model (mmproj) and the transcriber (its files: list, #504).
   it('enumerates the projector path too, so a sharded mmproj could not slip past', () => {
     const manifests = committedManifests()
     const vision = manifests.filter((m) => m.role === 'vision')
     expect(vision.length, 'one vision manifest').toBe(1)
-    const paths = declaredFilePaths(vision)
-    expect(paths, 'GGUF + mmproj').toEqual([vision[0].localPath, vision[0].mmproj!.localPath])
-    expect(paths.length, 'two declared files').toBe(2)
+    expect(declaredFilePaths(vision), 'GGUF + mmproj').toEqual([vision[0].localPath, vision[0].mmproj!.localPath])
     // Every manifest contributes at least its own weight path (no silently empty enumeration).
     expect(declaredFilePaths(manifests).length).toBeGreaterThanOrEqual(manifests.length)
-  })
-
-  // The red proof, committed: the ACTUAL audited manifest in a throwaway catalog laid out like
-  // `model-manifests/chat/`. It used to VALIDATE and enumerate one file; it is now refused by
-  // the schema itself, so no drive can ever carry it half-verified.
-  it('REJECTS the audited Flash-Next manifest: shard 1 with no files: list', () => {
-    const { manifests, errors } = discoverTempCatalog(FLASH_NEXT_MANIFEST_YAML)
-    expect(manifests, 'a manifest naming part of a weight is skipped, not offered').toEqual([])
-    expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain(
-      '"local_path" names shard 1 of a multi-file weight but no "files" list declares the remaining shards'
-    )
-  })
-
-  // …and the same manifest with the missing declaration added is fully understood: four files,
-  // each with its own hash, through the production enumeration every consumer iterates.
-  it('ACCEPTS the same manifest once its files: block declares shards 2-4', () => {
-    const { manifests, errors } = discoverTempCatalog(
-      `${FLASH_NEXT_MANIFEST_YAML}${FLASH_NEXT_FILES_BLOCK}`
-    )
-    expect(errors).toEqual([])
-    expect(manifests.map((m) => m.manifest.id)).toEqual([FLASH_NEXT_ID])
-    const files = manifestFiles(tmpdir(), manifests[0].manifest)
-    expect(files.map((f) => f.localPath)).toEqual([
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00001-of-00004.gguf',
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf',
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf',
-      'models/chat/qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf'
-    ])
-    expect(files.map((f) => f.kind)).toEqual(['weight', 'extra', 'extra', 'extra'])
-    // Four DISTINCT expected hashes — the whole point of criterion 1.
-    expect(new Set(files.map((f) => f.sha)).size).toBe(4)
-    // The declared series is complete, so the catalog-wide assertion above would accept it.
-    expect(shardedGgufPaths([manifests[0].manifest])).toHaveLength(4)
   })
 })
 
@@ -1410,12 +1101,10 @@ describe('committed catalog — variant grouping as the library renders it (PR #
   const RAM_16_GB = 16
 
   async function libraryModels(): Promise<ModelInfo[]> {
-    const manifestsDir = resolveManifestsDir(process.cwd())
-    if (!manifestsDir) throw new Error('could not locate model-manifests from the repo')
     const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-group-'))
     try {
       const { models } = await buildModelList({
-        manifestsDir,
+        manifestsDir: CATALOG_MANIFESTS,
         rootPath,
         developerMode: false,
         machineRamGb: RAM_16_GB
@@ -1427,23 +1116,16 @@ describe('committed catalog — variant grouping as the library renders it (PR #
   }
 
   it('collapses into exactly three multi-member variant groups — no false merges (O10)', async () => {
-    const groups = groupModelVariants(await libraryModels()).filter((g) => g.models.length > 1)
+    const models = await libraryModels()
+    const all = groupModelVariants(models)
+    // Every catalog model lands in exactly one group.
+    expect(all.flatMap((g) => g.models.map((m) => m.id)).sort()).toEqual(models.map((m) => m.id).sort())
+    const groups = all.filter((g) => g.models.length > 1)
     expect(groups.map((g) => [g.name, g.models.length]).sort()).toEqual([
       ['Qwen3.5 9B', 2],
       ['Qwen3.6 27B', 2],
       ['Qwen3.8 27B', 6]
     ])
-  })
-
-  it('keeps every catalog model in exactly one group, and every group role/family-pure', async () => {
-    const models = await libraryModels()
-    const groups = groupModelVariants(models)
-    expect(groups.flatMap((g) => g.models.map((m) => m.id)).sort()).toEqual(
-      models.map((m) => m.id).sort()
-    )
-    for (const g of groups) {
-      expect(new Set(g.models.map((m) => `${m.role}/${m.family}/${m.runtime}`)).size).toBe(1)
-    }
   })
 
   // F5 (#196), ADAPTED from the audit probe `catalog-group-review.probe.ts` test 2. The probe

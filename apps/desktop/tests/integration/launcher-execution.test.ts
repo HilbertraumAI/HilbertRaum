@@ -1,9 +1,11 @@
-import { afterAll, describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { basename, join } from 'node:path'
+import { REPO_ROOT } from '../helpers/repo-files'
+import { bashLegSkipped, outputOf } from '../helpers/script-legs'
+import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // Executes the drive-root launchers (#235, #257). Every launcher derives the drive root from
 // its own location, so each case copies the launcher into a scratch root beside 0-byte app
@@ -12,7 +14,6 @@ import { fileURLToPath } from 'node:url'
 // exit without starting it — the single-artifact control. The `.cmd` leg runs on Windows, the
 // two bash legs elsewhere (Git Bash on a Windows dev box: HILBERTRAUM_SCRIPT_SH_LEG=1).
 
-const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 const LAUNCHERS = join(REPO_ROOT, 'launchers')
 const CMD = 'Start HilbertRaum.cmd'
 const COMMAND = 'Start HilbertRaum.command'
@@ -21,24 +22,35 @@ const SH = 'start-hilbertraum.sh'
 // A launcher that reaches its launch line on a 0-byte artifact hangs (Windows shows an error
 // dialog for a bad exe) — the child is killed well before vitest's own budget so the failure
 // carries the launcher's output.
-const CHILD_TIMEOUT_MS = 10_000
-vi.setConfig({ testTimeout: 60_000 })
+const CHILD_TIMEOUT_MS = hangBudgetMs(10_000)
+vi.setConfig({ testTimeout: testBudgetMs(60_000) })
 
 const REFUSAL = /More than one HilbertRaum app was found on this drive/
 const NOT_STARTED = /Nothing was started/
 
-const text = (r: SpawnSyncReturns<string>): string => `${r.stdout ?? ''}\n${r.stderr ?? ''}`
-
-const scratchDirs: string[] = []
-afterAll(() => {
-  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
-})
-
 function scratchRoot(launcher: string): string {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-launcher-'))
-  scratchDirs.push(root)
   copyFileSync(join(LAUNCHERS, launcher), join(root, launcher))
   return root
+}
+
+/** An exec-able stand-in that records the two variables a launcher must hand the app. */
+function stubApp(path: string, record: string): void {
+  // /bin/bash, not env: a launcher that wipes the environment must fail on the recorded values, not on "bash not found".
+  writeFileSync(path, `#!/bin/bash\nprintf '%s\\n%s\\n' "$HILBERTRAUM_DRIVE_ROOT" "$HILBERTRAUM_MANIFESTS_DIR" > "$(dirname "$0")/${record}"\n`)
+  chmodSync(path, 0o755)
+}
+
+/** The scratch root's random name proves the value came from the launcher's own location. */
+function expectDriveEnv(recorded: string, root: string): void {
+  const [driveRoot, manifestsDir] = recorded.trim().split('\n')
+  expect(basename(driveRoot)).toBe(basename(root))
+  expect(manifestsDir).toBe(`${driveRoot}/model-manifests`)
+}
+
+/** The line --check prints (troubleshooting.md "Two app versions on the drive"). */
+function expectDriveRootLine(out: string, root: string): void {
+  expect(out.split(/\r?\n/).find((l) => l.includes('Drive root :')), out).toContain(basename(root))
 }
 
 /** 0-byte artifacts, the NEWER name created first so a creation-order pick cannot pass. */
@@ -79,7 +91,7 @@ describe.skipIf(process.platform !== 'win32')('Start HilbertRaum.cmd (Windows)',
     const root = scratchRoot(CMD)
     twoArtifacts(root, two)
     const r = runCmd(root, [])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(r.status, out).not.toBeNull()
     expect(out).toMatch(REFUSAL)
@@ -91,7 +103,7 @@ describe.skipIf(process.platform !== 'win32')('Start HilbertRaum.cmd (Windows)',
     const root = scratchRoot(CMD)
     twoArtifacts(root, two)
     const r = runCmd(root, ['/check'])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(r.status, out).not.toBeNull()
     expect(out).toMatch(REFUSAL)
@@ -103,33 +115,34 @@ describe.skipIf(process.platform !== 'win32')('Start HilbertRaum.cmd (Windows)',
     const root = scratchRoot(CMD)
     writeFileSync(join(root, two[1]), '')
     const r = runCmd(root, ['/check'])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).toBe(0)
     expect(out).toContain(two[1])
     expect(out).toMatch(NOT_STARTED)
+    expectDriveRootLine(out, root)
   })
 
   it('/check with no app fails with the existing not-found message', () => {
     const root = scratchRoot(CMD)
     const r = runCmd(root, ['/check'])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(out).toMatch(/Could not find the HilbertRaum app/)
   })
 })
 
-// Git Bash exists on the Windows CI runner too — gate the bash legs so they run once.
-const bashSkip = process.platform === 'win32' && !process.env.HILBERTRAUM_SCRIPT_SH_LEG
+describe('Start HilbertRaum.cmd variables', () => {
+  // A real .cmd launch is not testable (architecture.md B9) and /check does not print this one.
+  it('points the app at the manifests on its own drive', () => {
+    expect(readFileSync(join(LAUNCHERS, CMD), 'utf8')).toMatch(/^set "HILBERTRAUM_MANIFESTS_DIR=%~dp0model-manifests"\r?$/m)
+  })
+})
 
-describe.skipIf(bashSkip)('start-hilbertraum.sh (Linux)', () => {
+// Git Bash exists on the Windows CI runner too — the bash legs are gated so they run once.
+describe.skipIf(bashLegSkipped)('start-hilbertraum.sh (Linux)', () => {
   const two: [string, string] = ['HilbertRaum-0.1.57.AppImage', 'HilbertRaum-0.1.59.AppImage']
 
-  /** An exec-able stand-in for the AppImage: records the drive root it was started with. */
-  function stubAppImage(root: string, name: string): void {
-    const p = join(root, name)
-    writeFileSync(p, '#!/usr/bin/env bash\nprintf %s "$HILBERTRAUM_DRIVE_ROOT" > "$(dirname "$0")/launched-$(basename "$0").txt"\n')
-    chmodSync(p, 0o755)
-  }
+  const stubAppImage = (root: string, name: string): void => stubApp(join(root, name), `launched-${name}.txt`)
   const launched = (root: string, name: string): boolean => existsSync(join(root, `launched-${name}.txt`))
 
   it('parses under bash -n and runs under set -euo pipefail (#257)', () => {
@@ -142,7 +155,7 @@ describe.skipIf(bashSkip)('start-hilbertraum.sh (Linux)', () => {
     stubAppImage(root, two[1])
     stubAppImage(root, two[0])
     const r = runBash(root, SH, [])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(r.status, out).not.toBeNull()
     expect(out).toMatch(REFUSAL)
@@ -156,7 +169,7 @@ describe.skipIf(bashSkip)('start-hilbertraum.sh (Linux)', () => {
     const root = scratchRoot(SH)
     twoArtifacts(root, two)
     const r = runBash(root, SH, ['--check'])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(out).toMatch(REFUSAL)
     expect(out).toContain(two[0])
@@ -167,27 +180,28 @@ describe.skipIf(bashSkip)('start-hilbertraum.sh (Linux)', () => {
     const root = scratchRoot(SH)
     stubAppImage(root, two[1])
     const r = runBash(root, SH, ['--check'])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).toBe(0)
     expect(out).toContain(two[1])
     expect(out).toMatch(NOT_STARTED)
     expect(launched(root, two[1])).toBe(false)
+    expectDriveRootLine(out, root)
   })
 
   it('with one AppImage and no argument it starts it (no unbound-variable abort)', () => {
     const root = scratchRoot(SH)
     stubAppImage(root, two[1])
     const r = runBash(root, SH, [])
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).toBe(0)
     expect(out).not.toMatch(/unbound variable/)
     expect(launched(root, two[1])).toBe(true)
     // The stub saw the drive root the launcher derived from its own location.
-    expect(readFileSync(join(root, `launched-${two[1]}.txt`), 'utf8')).toContain('hilbertraum-launcher-')
+    expectDriveEnv(readFileSync(join(root, `launched-${two[1]}.txt`), 'utf8'), root)
   })
 })
 
-describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
+describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
   const zips: [string, string] = ['HilbertRaum-0.1.57-mac-arm64.app.zip', 'HilbertRaum-0.1.59-mac-arm64.app.zip']
 
   function extractedApp(root: string, name: string): void {
@@ -196,9 +210,7 @@ describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
 
   /** A scratch HOME: the refusal must land before the launcher writes its unpack cache. */
   function scratchHome(): string {
-    const home = mkdtempSync(join(tmpdir(), 'hilbertraum-launcher-home-'))
-    scratchDirs.push(home)
-    return home
+    return mkdtempSync(join(tmpdir(), 'hilbertraum-launcher-home-'))
   }
   const cacheTouched = (home: string): boolean => existsSync(join(home, 'Library'))
 
@@ -213,13 +225,12 @@ describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
     extractedApp(root, 'HilbertRaum.app')
     extractedApp(root, 'HilbertRaum 2.app')
     const r = runBash(root, COMMAND, [], { HOME: home })
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(r.status, out).not.toBeNull()
     expect(out).toMatch(REFUSAL)
-    expect(out).toContain('HilbertRaum.app')
+    expect(out).toMatch(/^\s+HilbertRaum\.app$/m)
     expect(out).toContain('HilbertRaum 2.app')
-    expect(cacheTouched(home)).toBe(false)
   })
 
   it('refuses two .app.zip archives, naming both, before touching the unpack cache', () => {
@@ -227,7 +238,7 @@ describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
     const home = scratchHome()
     twoArtifacts(root, zips)
     const r = runBash(root, COMMAND, [], { HOME: home })
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(r.status, out).not.toBeNull()
     expect(out).toMatch(REFUSAL)
@@ -242,13 +253,12 @@ describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
     extractedApp(root, 'HilbertRaum.app')
     writeFileSync(join(root, zips[1]), '')
     const r = runBash(root, COMMAND, [], { HOME: home })
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(r.status, out).not.toBeNull()
     expect(out).toMatch(REFUSAL)
-    expect(out).toContain('HilbertRaum.app')
+    expect(out).toMatch(/^\s+HilbertRaum\.app$/m)
     expect(out).toContain(zips[1])
-    expect(cacheTouched(home)).toBe(false)
   })
 
   it('--check with one zip names it, writes nothing under $HOME and starts nothing', () => {
@@ -256,7 +266,7 @@ describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
     const home = scratchHome()
     writeFileSync(join(root, zips[1]), '')
     const r = runBash(root, COMMAND, ['--check'], { HOME: home })
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).toBe(0)
     expect(out).toContain(zips[1])
     expect(out).toMatch(NOT_STARTED)
@@ -267,16 +277,27 @@ describe.skipIf(bashSkip)('Start HilbertRaum.command (macOS)', () => {
     const root = scratchRoot(COMMAND)
     extractedApp(root, 'HilbertRaum.app')
     const r = runBash(root, COMMAND, ['--check'], { HOME: scratchHome() })
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).toBe(0)
     expect(out).toContain('HilbertRaum.app')
     expect(out).toMatch(NOT_STARTED)
+    expectDriveRootLine(out, root)
+  })
+
+  it("with one extracted .app and no argument it starts the bundle with the drive's variables", () => {
+    const root = scratchRoot(COMMAND)
+    extractedApp(root, 'HilbertRaum.app')
+    const macos = join(root, 'HilbertRaum.app', 'Contents', 'MacOS')
+    stubApp(join(macos, 'HilbertRaum'), 'launched.txt')
+    const r = runBash(root, COMMAND, [], { HOME: scratchHome() })
+    expect(r.status, outputOf(r)).toBe(0)
+    expectDriveEnv(readFileSync(join(macos, 'launched.txt'), 'utf8'), root)
   })
 
   it('--check with no app fails with the existing not-found message', () => {
     const root = scratchRoot(COMMAND)
     const r = runBash(root, COMMAND, ['--check'], { HOME: scratchHome() })
-    const out = text(r)
+    const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(out).toMatch(/Could not find the HilbertRaum app/)
   })

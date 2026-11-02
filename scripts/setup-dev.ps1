@@ -39,7 +39,7 @@ Set-Location $RepoRoot
 # Probe via `node -p` on the flag-introspection set, NOT `& node --use-system-ca -e 0 2>$null`:
 # under $ErrorActionPreference='Stop' (line 30) Windows PowerShell 5.1 wraps a native command's
 # REDIRECTED stderr in ErrorRecords and TERMINATES the script — so a Node that rejects the flag
-# (any 22.5–22.14, all within our >=22.5 engines floor) would print 'bad option' to stderr and
+# (any 22.12–22.14, all within our >=22.12 engines floor) would print 'bad option' to stderr and
 # crash the bootstrap with a NativeCommandError instead of falling back. `node -p` needs no
 # stderr redirect: it prints True/False on stdout and exits 0 on every supported Node
 # (`process.allowedNodeEnvironmentFlags` exists since Node 10), so the EAP hazard never arises
