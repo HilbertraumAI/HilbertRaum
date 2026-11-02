@@ -207,6 +207,21 @@ function patchPolicy(root: string, section: string, key: string, value: boolean)
   writeFileSync(file, JSON.stringify(policy, null, 2))
 }
 
+/** OCR files whose bytes are their own language code, each pinned to that real hash. */
+const ocrFilesBlock = (langs: string[]): string =>
+  [
+    'ocr:',
+    '  version: 4.0.0_best_int',
+    '  files:',
+    ...langs.flatMap((lang) => [
+      `    - lang: ${lang}`,
+      `      url: https://example.invalid/${lang}.traineddata.gz`,
+      `      sha256: ${sha256(lang)}`,
+      `      dest: ocr/${lang}.traineddata.gz`
+    ]),
+    ''
+  ].join('\n')
+
 /** One OCR file. It stays the last block of the yaml, as it is in the committed one. */
 const ocrBlock = (sha: string): string =>
   [
@@ -820,11 +835,17 @@ for (const leg of SCRIPT_LEGS) {
       })
 
       // The positive behind the two ocr flips below: a pre-flight that called every OCR file a mismatch would pass both.
-      // Not on Git Bash, where a backslash target reads any OCR file as a mismatch.
-      it.skipIf(!toolBuilt || (leg.ext === 'sh' && process.platform === 'win32'))('one ocr file with the pinned bytes reaches SELLABLE', () => {
+      // The sh pre-flight also died with no verdict on the second file, or on a key after the block (#765); and on Git
+      // Bash it hashed by filename, so a backslash target read every file as a mismatch.
+      it.skipIf(!toolBuilt).each<[string, string[], string]>([
+        ['one ocr file', ['deu'], ''],
+        ['two ocr files', ['deu', 'eng'], ''],
+        ['the committed three, osd included', ['deu', 'eng', 'osd'], ''],
+        ['an ocr file followed by another top-level key', ['deu'], 'future_family:\n  version: 1\n']
+      ])('%s with the pinned bytes reach SELLABLE', (_title, langs, after) => {
         const root = sellableDrive()
-        appendOcr(root)
-        writeDriveFile(root, 'ocr/deu.traineddata.gz', 'deu')
+        appendFileSync(join(root, 'model-manifests', 'runtime-sources.yaml'), ocrFilesBlock(langs) + after)
+        for (const lang of langs) writeDriveFile(root, `ocr/${lang}.traineddata.gz`, lang)
         const r = verify(root)
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
@@ -865,7 +886,6 @@ for (const leg of SCRIPT_LEGS) {
           'runtime: runtime/whisper.cpp/win marker does not match the pinned'
         ],
         ['a missing ocr file', appendOcr, 'ocr: ocr/deu.traineddata.gz missing'],
-        // On Git Bash a backslash target reads ANY OCR file as a mismatch, so ubuntu and macOS are this row's honest sh legs.
         [
           'an ocr file with the wrong bytes',
           (root) => {

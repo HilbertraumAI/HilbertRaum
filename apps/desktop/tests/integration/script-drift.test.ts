@@ -719,6 +719,14 @@ describe('one commercial gate — builder + fetch-runtime literals (#233, #234)'
   })
 })
 
+const SHELL_SCRIPTS = [
+  ...readdirSync(join(REPO_ROOT, 'scripts'))
+    .filter((f) => f.endsWith('.sh'))
+    .map((f) => `scripts/${f}`),
+  'launchers/start-hilbertraum.sh',
+  'launchers/Start HilbertRaum.command'
+]
+
 describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
   // macOS ships Bash 3.2 (GPLv2) and `#!/usr/bin/env bash` resolves to it on a stock machine
   // and on the macOS runners. A Bash 4+ construct passes every Windows/Linux leg (git-bash and
@@ -726,13 +734,6 @@ describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
   // fetch-runtime.sh, added after v0.1.59, failed the v0.1.60 release's mac leg, then the only
   // place any CI ran these scripts on macOS. String scan of CODE lines only (the comments
   // legitimately name the builtins they avoid).
-  const SHELL_SCRIPTS = [
-    ...readdirSync(join(REPO_ROOT, 'scripts'))
-      .filter((f) => f.endsWith('.sh'))
-      .map((f) => `scripts/${f}`),
-    'launchers/start-hilbertraum.sh',
-    'launchers/Start HilbertRaum.command'
-  ]
   const BASH4_ONLY: Array<[string, RegExp, string]> = [
     ['mapfile / readarray', /(^|[\s;&|(])(mapfile|readarray)\s/, 'mapfile -t lines'],
     ['associative array (declare/local -A)', /\b(declare|local|typeset)\s+-[a-zA-Z]*A/, 'declare -A map'],
@@ -771,6 +772,79 @@ describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
           }
         })
       expect(hits).toEqual([])
+    })
+  }
+})
+
+// #765: a `[[ … =~ … ]]` rewrites BASH_REMATCH. A function that runs one, called between a caller's
+// match and its read of the capture, leaves the caller the function's capture or none, and under
+// `set -u` that read ends the script. It shows only on the input that takes the call (a second OCR
+// file in build-commercial-drive.sh), so the shape is checked as text, on every script.
+describe('shell scripts — no capture read after a call that rewrites it', () => {
+  const code = (line: string): boolean => !line.trim().startsWith('#')
+
+  /** The functions whose body runs a `=~`, one-line (`f() { …; }`) or block form. */
+  function matchingFunctions(lines: string[]): string[] {
+    const names: string[] = []
+    lines.forEach((line, i) => {
+      const head = /^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{(.*)$/.exec(line)
+      if (!head) return
+      const [, indent, name, rest] = head
+      const body = [rest]
+      if (!rest.trim().endsWith('}')) {
+        for (let j = i + 1; j < lines.length && lines[j] !== `${indent}}`; j++) body.push(lines[j])
+      }
+      if (body.some((l) => code(l) && l.includes('=~'))) names.push(name)
+    })
+    return names
+  }
+
+  /** `file:line` for each read of BASH_REMATCH that a completed call to such a function precedes. */
+  function clobberedReads(rel: string, text: string): string[] {
+    const lines = text.split('\n')
+    const fns = matchingFunctions(lines)
+    // A call that completes before the read: the name ends a command. `f "${BASH_REMATCH[1]}"` expands first, so it is fine.
+    const call = (s: string): boolean => fns.some((fn) => new RegExp(`(^|[;&|{(\\s])${fn}\\s*(;|$)`, 'm').test(s))
+    const hits: string[] = []
+    let match = -1
+    lines.forEach((line, i) => {
+      if (!code(line)) return
+      const read = line.indexOf('BASH_REMATCH')
+      // A match ahead of the read on its own line is the one the read belongs to.
+      if (line.includes('=~') && (read < 0 || line.indexOf('=~') < read)) match = i
+      if (read >= 0 && match >= 0) {
+        const after = (s: string): string => s.slice(s.lastIndexOf(']]') + 2)
+        const between =
+          match === i
+            ? after(line.slice(0, read))
+            : [after(lines[match]), ...lines.slice(match + 1, i).filter(code), line.slice(0, read)].join('\n')
+        if (call(between)) hits.push(`${rel}:${i + 1}`)
+      }
+      if (line.includes('=~') && read >= 0 && line.indexOf('=~') > read) match = i
+    })
+    return hits
+  }
+
+  it('finds the #765 shape, and passes a capture handed to a function as its argument', () => {
+    const fixture = [
+      'check() {',
+      '  [[ "$x" =~ ^[a-f0-9]{64}$ ]] && echo ok',
+      '}',
+      'strip() { echo "$1"; }',
+      'while read -r line; do',
+      '  if [[ "$line" =~ ^-\\ lang:\\ (.+)$ ]]; then',
+      '    check',
+      '    lang="${BASH_REMATCH[1]}"',
+      '  fi',
+      '  [[ "$line" =~ ^(.+)$ ]] && v="$(strip "${BASH_REMATCH[1]}")"',
+      'done'
+    ].join('\n')
+    expect(clobberedReads('fixture', fixture)).toEqual(['fixture:8'])
+  })
+
+  for (const rel of SHELL_SCRIPTS) {
+    it(`${rel} reads no capture after a call that rewrites it`, () => {
+      expect(clobberedReads(rel, repoText(rel))).toEqual([])
     })
   }
 })
