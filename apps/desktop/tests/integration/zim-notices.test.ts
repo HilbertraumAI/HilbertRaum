@@ -177,6 +177,16 @@ describe('generate-zim-notices: the command (#769)', () => {
     expect(noticesOf(root)).toEqual(['u-b.md'])
   })
 
+  // A notice that cannot be built or written (here an id that decodes to a CR, which the LF-only notice refuses) threw out of
+  // the loop: no exit 1, a stack, and no notice for any archive after it.
+  it('an archive whose notice cannot be written exits 1, and the others are still written', () => {
+    const root = driveWith({ 'a.zim': 'id="u-a&#13;" title="Alpha"', 'b.zim': 'id="u-b" title="Beta"' })
+    const r = runNotices(['--target', root, '--tools-dir', toolsDir])
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not write the notice for a.zim')
+    expect(noticesOf(root)).toEqual(['u-b.md'])
+  })
+
   it('a drive with no archive exits 0 and writes nothing', () => {
     const root = driveWith({})
     const r = runNotices(['--target', root, '--tools-dir', toolsDir])

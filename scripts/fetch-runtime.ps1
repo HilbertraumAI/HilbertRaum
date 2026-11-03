@@ -104,10 +104,12 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 function Invoke-CurlResilient {
   param([Parameter(Mandatory = $true)] [string] $Url,
         [Parameter(Mandatory = $true)] [string] $Dest)
+  $curlArgs = @('-L', '--fail', '--retry', '3', '--retry-delay', '2', '--retry-connrefused', '--connect-timeout', '30')
+  if (Test-OnWindows) { $curlArgs += '--ssl-revoke-best-effort' }
+  $curl = (Get-Curl).Source
   $attempts = 5
   for ($i = 1; $i -le $attempts; $i++) {
-    & curl.exe -L --fail --retry 3 --retry-delay 2 --retry-connrefused `
-      --connect-timeout 30 --ssl-revoke-best-effort -C - -o "$Dest" "$Url"
+    & $curl @curlArgs -C - -o "$Dest" "$Url"
     if ($LASTEXITCODE -eq 0) { return $true }
     if ($i -lt $attempts) {
       $wait = $i * 3
@@ -116,6 +118,30 @@ function Invoke-CurlResilient {
     }
   }
   return $false
+}
+
+function Test-OnWindows { return ($PSVersionTable.PSVersion.Major -lt 6 -or $IsWindows) }
+
+# The downloader: curl.exe on Windows (5.1's bare `curl` is an alias for Invoke-WebRequest).
+# PowerShell 7 on macOS/Linux has no such alias and names the same tool `curl`. The scripts carry
+# no PowerShell download line of their own (#767): antivirus heuristics flag one.
+function Get-Curl {
+  $c = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $c -and -not (Test-OnWindows)) {
+    $c = Get-Command curl -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  }
+  return $c
+}
+
+# Whether a relative path stays inside the extract dir once its `.` and `..` are resolved (#767):
+# a link's `../lib/x` stays inside its archive, `a/../../x` leaves it.
+function Test-StaysInside([string]$Rel) {
+  $depth = 0
+  foreach ($seg in ($Rel -split '[/\\]')) {
+    if ($seg -eq '' -or $seg -eq '.') { continue }
+    if ($seg -eq '..') { $depth--; if ($depth -lt 0) { return $false } } else { $depth++ }
+  }
+  return $true
 }
 
 # #339 P8-3: parse a flow-sequence value ("[a, b, c]", or "[]"/empty) into a string array.
@@ -270,7 +296,7 @@ if ($Family -eq 'ocr') {
       Remove-Item -Force -LiteralPath $dest -ErrorAction SilentlyContinue
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
-    $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+    $Curl = Get-Curl
     if ($Curl) {
       if (-not (Invoke-CurlResilient -Url $f.url -Dest $dest)) {
         Write-Host '    download failed after retries' -ForegroundColor Red; $failed++; continue
@@ -487,7 +513,7 @@ $archiveName = [System.IO.Path]::GetFileName(([uri]$build.url).AbsolutePath)
 if (-not $archiveName) { $archiveName = "{0}-{1}-{2}-{3}.zip" -f $binaryBase, $version, $build.os, $build.arch }
 $archive = Join-Path $extractTo $archiveName
 
-$Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+$Curl = Get-Curl
 if ($Curl) {
   # Resilient curl (see Invoke-CurlResilient): retries + resumes a dropped transfer so a
   # flaky connection doesn't lose the whole archive. Integrity is enforced by the SHA-256
@@ -563,11 +589,12 @@ if ($archiveName -match '\.(tar\.gz|tgz)$') {
     foreach ($l in $links) {
       $lnkPath = Join-Path $extractTo ($l[0] -replace '/', [IO.Path]::DirectorySeparatorChar)
       if (Test-Path -LiteralPath $lnkPath) { continue }
-      foreach ($end in $l) {
-        if ($end -match '\.\.' -or $end -match '^[/\\]' -or $end -match '^[A-Za-z]:') {
-          Write-Host ("  FAIL: archive link {0} -> {1} points outside {2} -- not copied" -f $l[0], $l[1], $extractTo) -ForegroundColor Red
-          exit 1
-        }
+      # The link's name, and its target read from the link's own directory, once `..` is resolved.
+      $absolute = @($l | Where-Object { $_ -match '^[/\\]' -or $_ -match '^[A-Za-z]:' }).Count -gt 0
+      $linkDir = $l[0] -replace '[^/\\]*$', ''
+      if ($absolute -or -not (Test-StaysInside $l[0]) -or -not (Test-StaysInside ($linkDir + $l[1]))) {
+        Write-Host ("  FAIL: archive link {0} -> {1} points outside {2} -- not copied" -f $l[0], $l[1], $extractTo) -ForegroundColor Red
+        exit 1
       }
       $srcPath = Join-Path (Split-Path -Parent $lnkPath) $l[1]
       if (Test-Path -LiteralPath $srcPath) { Copy-Item -Force -LiteralPath $srcPath -Destination $lnkPath }

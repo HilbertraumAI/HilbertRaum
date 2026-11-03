@@ -115,6 +115,21 @@ if [[ -z "$ARCH" ]]; then
 fi
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
+
+# Whether a relative path stays inside the extract dir once its `.` and `..` are resolved (#767): a
+# link's `../lib/x` stays inside its archive, `a/../../x` leaves it.
+stays_inside() {
+  local parts seg depth=0
+  IFS='/' read -r -a parts <<< "$1"
+  for seg in ${parts[@]+"${parts[@]}"}; do
+    case "$seg" in
+      ''|.) ;;
+      ..) depth=$((depth - 1)); if [[ $depth -lt 0 ]]; then return 1; fi ;;
+      *) depth=$((depth + 1)) ;;
+    esac
+  done
+  return 0
+}
 sha256_of() {
   # Hash from STDIN, never by filename: when the path contains a backslash (git-bash on
   # Windows, e.g. "$RUNNER_TEMP/…" = "D:\a\_temp/…"), GNU coreutils escapes the name and
@@ -587,13 +602,15 @@ case "$ARCHIVE_NAME" in
         for pair in "${LINK_PAIRS[@]}"; do
           lnk="${pair%%|*}"; tgt="${pair#*|}"
           [[ -e "$EXTRACT_TO/$lnk" ]] && continue
+          # The link's name, and its target read from the link's own directory, once `..` is resolved.
+          outside=0
           for end in "$lnk" "$tgt"; do
-            case "$end" in
-              *..*|/*|\\*|[A-Za-z]:*)
-                echo "  FAIL: archive link $lnk -> $tgt points outside $EXTRACT_TO — not copied" >&2
-                exit 1 ;;
-            esac
+            case "$end" in /*|\\*|[A-Za-z]:*) outside=1 ;; esac
           done
+          if [[ $outside -eq 1 ]] || ! stays_inside "$lnk" || ! stays_inside "$(dirname "$lnk")/$tgt"; then
+            echo "  FAIL: archive link $lnk -> $tgt points outside $EXTRACT_TO — not copied" >&2
+            exit 1
+          fi
           src="$EXTRACT_TO/$(dirname "$lnk")/$tgt"
           if [[ -f "$src" ]]; then cp -f "$src" "$EXTRACT_TO/$lnk"; else UNRESOLVED=$((UNRESOLVED + 1)); fi
         done

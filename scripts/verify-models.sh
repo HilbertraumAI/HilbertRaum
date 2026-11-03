@@ -68,7 +68,8 @@ field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space
 # model, DIST-2) and `files:` (the ADDITIONAL required files of a multi-file weight, #310, e.g. a
 # GGUF shard set's shards 2..N). `files:` is emitted AFTER local_path/sha256/download/mmproj in
 # every manifest (model-policy.md key-order rule), so it never poisons the flat top-level reads.
-block_of() { awk -v key="$2" '$0 ~ ("^" key ":[[:space:]]*$") {f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+# The key line may carry a comment, and a comment line at column 0 does not end a mapping (YAML).
+block_of() { awk -v key="$2" '$0 ~ ("^" key ":[[:space:]]*(#.*)?$") {f=1;next} /^#/{next} /^[^[:space:]]/{f=0} f' "$1"; }
 
 # The field separator of the `files:` member records: the ASCII unit separator, not a tab. A tab
 # is IFS whitespace, so `read` collapsed an empty field and shifted the rest left (#767).
@@ -88,7 +89,7 @@ files_member_records() {
       sha = ""; durl = ""; dsize = ""
       next
     }
-    started && /^[[:space:]]*download:[[:space:]]*$/ { indl = 1; next }
+    started && /^[[:space:]]*download:[[:space:]]*(#.*)?$/ { indl = 1; next }
     started && !indl && /^[[:space:]]*sha256:/ {
       sha = $0; sub(/^[[:space:]]*sha256:[[:space:]]*/, "", sha); next
     }

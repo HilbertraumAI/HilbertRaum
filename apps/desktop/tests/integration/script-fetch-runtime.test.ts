@@ -208,6 +208,24 @@ for (const leg of SCRIPT_LEGS) {
       expect(existsSync(join(root, 'runtime', 'llama.cpp', 'escaped'))).toBe(false)
     })
 
+    // The control of the row above: a `..` that stays inside the archive is an ordinary relative link. Where tar cannot make
+    // links (Windows, exFAT) a guard that refused every `..` failed the install, after the old build was gone.
+    it('a link whose target climbs out of its own folder but stays in the archive is followed (#767)', () => {
+      const ggml = 'libggml bytes'
+      const archive = nestedLinuxBuild([
+        { name: `llama-${VERSION}/bin/`, dir: true },
+        { name: `llama-${VERSION}/bin/libggml.so`, symlink: '../lib/libggml.so.1' },
+        { name: `llama-${VERSION}/lib/`, dir: true },
+        { name: `llama-${VERSION}/lib/libggml.so.1`, data: Buffer.from(ggml) }
+      ])
+      const root = pinnedDrive(LINUX, serve(`llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz`, archive), sha256Of(archive))
+      const r = fetchRuntime(root, [f('Os'), 'linux'])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      expect(out).not.toContain('points outside')
+      expect(readFileSync(join(root, ...LINUX.extractTo.split('/'), 'bin', 'libggml.so'), 'utf8')).toBe(ggml)
+    })
+
     it('an OCR file present with the wrong bytes is deleted and fetched whole, not resumed onto (AUD-24)', () => {
       // The same length as the real file: curl -C - resumes at the end of what is on disk, so without the delete it asks for
       // nothing and the wrong bytes stay.

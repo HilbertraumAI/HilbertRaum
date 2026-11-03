@@ -18,8 +18,8 @@
 // flavour, scraper, or licence — the app reads no `M/` metadata namespace, so this generator
 // does not either. The notice states plainly what is NOT known rather than guessing.
 //
-// Exit codes: 0 ok (including "no archives found") · 1 kiwix-manage failed on some archive ·
-// 2 usage error, or no kiwix-manage under --tools-dir.
+// Exit codes: 0 ok (including "no archives found") · 1 kiwix-manage failed on some archive, or its
+// notice could not be written · 2 usage error, or no kiwix-manage under --tools-dir.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -213,15 +213,22 @@ function main() {
         failed = true
         continue
       }
-      const notice = buildNoticeMd(book, leaf)
-      if (dryRun) {
-        console.log(`dry-run  ${leaf}  uuid=${book.id}`)
-      } else {
-        mkdirSync(noticesDir, { recursive: true })
-        writeFileSync(join(noticesDir, `${book.id}.md`), notice, 'utf8')
-        console.log(`ok  ${leaf}  -> zim/NOTICES/${book.id}.md`)
+      // One archive's notice failing (a field the notice refuses, a full or read-only disk) is that archive's failure:
+      // the rest still get theirs, and the run ends with exit 1, not a stack.
+      try {
+        const notice = buildNoticeMd(book, leaf)
+        if (dryRun) {
+          console.log(`dry-run  ${leaf}  uuid=${book.id}`)
+        } else {
+          mkdirSync(noticesDir, { recursive: true })
+          writeFileSync(join(noticesDir, `${book.id}.md`), notice, 'utf8')
+          console.log(`ok  ${leaf}  -> zim/NOTICES/${book.id}.md`)
+        }
+        written++
+      } catch (err) {
+        console.error(`could not write the notice for ${leaf}: ${err instanceof Error ? err.message : String(err)}`)
+        failed = true
       }
-      written++
     } finally {
       try {
         rmSync(metaDir, { recursive: true, force: true })

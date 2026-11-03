@@ -105,10 +105,13 @@ $SupportedRuntimeFormats = [ordered]@{
 function Get-Block([string]$text, [string]$key) {
   $out = New-Object System.Collections.Generic.List[string]
   $inBlk = $false
-  $head = '^' + [Regex]::Escape($key) + ':\s*$'
+  # The key line may carry a comment, and a comment line at column 0 does not end a mapping (YAML).
+  $head = '^' + [Regex]::Escape($key) + ':\s*(#.*)?$'
   foreach ($line in ($text -split "`n")) {
     if (-not $inBlk) {
       if ($line -match $head) { $inBlk = $true }
+    } elseif ($line -match '^#') {
+      continue
     } elseif ($line -match '^\S') {
       break
     } else {

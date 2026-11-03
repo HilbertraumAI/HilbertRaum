@@ -567,7 +567,8 @@ that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `me
 `wget`) — no new npm/script deps. The `fetch-models` scripts additionally prefer `aria2c` when it is
 installed; `fetch-runtime` uses `curl` only. The `.sh` twins fall back to `wget`; the `.ps1` twins
 have no fallback and stop with "No downloader found" (`fetch-models`: that file fails, exit 1;
-`fetch-runtime`: exit 3), because every Windows from 10 1803 on ships `curl.exe`. They carry **no
+`fetch-runtime`: exit 3), because every Windows from 10 1803 on ships `curl.exe` (PowerShell 7 on
+macOS/Linux runs the system `curl`). They carry **no
 PowerShell download line** on purpose (#767): their old last resort, `Invoke-WebRequest`, has no
 literal `-OutFile` in PowerShell 5.1 (a `[` in the drive path broke it), and its replacement,
 `(New-Object System.Net.WebClient).DownloadFile(…)`, got a copy of `fetch-models.ps1` quarantined by

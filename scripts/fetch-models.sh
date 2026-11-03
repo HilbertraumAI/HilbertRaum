@@ -82,7 +82,8 @@ field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space
 # key nested in one block never answers for another: read flat, a projector's size_bytes reached
 # the primary file when the top-level download carried none, and handle_file's size guard then
 # deleted a resumable partial (#767).
-block_of() { awk -v key="$2" '$0 ~ ("^" key ":[[:space:]]*$") {f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+# The key line may carry a comment, and a comment line at column 0 does not end a mapping (YAML).
+block_of() { awk -v key="$2" '$0 ~ ("^" key ":[[:space:]]*(#.*)?$") {f=1;next} /^#/{next} /^[^[:space:]]/{f=0} f' "$1"; }
 
 # The field separator of the `files:` member records: the ASCII unit separator, not a tab. A tab
 # is IFS whitespace, so `read` collapsed an empty field and shifted the rest left: a verified
@@ -103,7 +104,7 @@ files_member_records() {
       sha = ""; durl = ""; dsize = ""
       next
     }
-    started && /^[[:space:]]*download:[[:space:]]*$/ { indl = 1; next }
+    started && /^[[:space:]]*download:[[:space:]]*(#.*)?$/ { indl = 1; next }
     started && !indl && /^[[:space:]]*sha256:/ {
       sha = $0; sub(/^[[:space:]]*sha256:[[:space:]]*/, "", sha); next
     }
@@ -250,7 +251,7 @@ done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
 
 planned=0; fetched=0; skipped=0; had_failure=0
 # --only names one model: an id no manifest carries, or one with nothing to fetch, exits 2 below.
-only_seen=0; only_fetchable=0
+only_seen=0; only_unbundled=0; only_fetchable=0
 
 echo "Fetch models -> $TARGET"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run — nothing will be downloaded)"
@@ -268,6 +269,7 @@ for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
   fi
   # One grep, and only under --bundled: under Git Bash every fork counts.
   if [[ $BUNDLED -eq 1 ]] && ! grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$mf"; then
+    [[ -n "$ONLY" ]] && only_unbundled=1
     continue
   fi
   local_path="$(field "$mf" local_path)"
@@ -435,6 +437,10 @@ done
 # default id in prepare-drive --with-assets would otherwise pass silently (#767).
 if [[ -n "$ONLY" && $only_seen -eq 0 ]]; then
   echo "No model manifest with id '$ONLY' under '$MANIFESTS_DIR'." >&2
+  exit 2
+fi
+if [[ -n "$ONLY" && $only_unbundled -eq 1 ]]; then
+  echo "Model '$ONLY' is not in the bundled set (bundled_on_preconfigured_drive: true): nothing to fetch." >&2
   exit 2
 fi
 if [[ -n "$ONLY" && $only_fetchable -eq 0 ]]; then

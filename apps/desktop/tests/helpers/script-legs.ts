@@ -133,10 +133,18 @@ export function scriptRoot(prefix: string): string {
 const ARIA2 = ['aria2c', 'aria2c.exe', 'aria2c.cmd', 'aria2c.bat']
 const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH'
 
-/** A copy of `dir` made of symlinks, minus aria2c: on a POSIX runner aria2c sits in /usr/bin beside every tool the scripts need. */
+const mirrors = new Map<string, string>()
+
+/**
+ * A copy of `dir` made of symlinks, minus aria2c: on a POSIX runner aria2c sits in /usr/bin beside every tool the scripts
+ * need. Built once per test file (the temp-root sweep removes it with the file's other roots).
+ */
 function mirrorWithoutAria2(dir: string): string {
+  const known = mirrors.get(dir)
+  if (known !== undefined && existsSync(known)) return known
   const mirror = mkdtempSync(join(tmpdir(), 'hilbertraum-path-'))
   for (const name of readdirSync(dir)) if (!ARIA2.includes(name)) symlinkSync(join(dir, name), join(mirror, name))
+  mirrors.set(dir, mirror)
   return mirror
 }
 

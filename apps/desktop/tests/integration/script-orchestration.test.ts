@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, relative, sep } from 'node:path'
 import { buildPolicyJson } from '../../src/main/services/drive'
@@ -185,6 +185,17 @@ for (const leg of SCRIPT_LEGS) {
       expect(out).not.toContain('Refusing to proceed')
       expect(out).toMatch(step(4))
       for (const a of artifacts) expect(out).toContain(`copy ${a} -> `)
+    })
+
+    // The comma split above must not break one artifact whose own path holds a comma (a "v0.1.64, signed" folder).
+    it.runIf(leg.ext === 'ps1')('one artifact whose path holds a comma is copied whole', () => {
+      const dir = join(mkdtempSync(join(tmpdir(), 'hilbertraum-orch-art-')), 'v1, signed')
+      mkdirSync(dir)
+      const artifact = join(dir, `HilbertRaum-${APP_VERSION}-portable.exe`)
+      writeFileSync(artifact, 'new')
+      const out = outputOf(dry(kitTarget('orch-comma-'), [f('AppArtifact'), artifact]))
+      expect(out).not.toContain('AppArtifact not found')
+      expect(out).toContain(`copy ${artifact} -> `)
     })
 
     // #339 P8-4, a copyleft duty: no kiwix-tools binary reaches a Kit without its corresponding source.

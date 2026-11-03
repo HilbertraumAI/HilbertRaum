@@ -100,20 +100,28 @@ function Get-Sha256([string]$path) {
   return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()
 }
 
+function Test-OnWindows { return ($PSVersionTable.PSVersion.Major -lt 6 -or $IsWindows) }
+
 # Pick the best available downloader. aria2c is multi-connection + resumable if present;
-# otherwise curl.exe (-C - resumes). Never require either beyond curl (ships on Win10+).
+# otherwise curl (-C - resumes): curl.exe on Windows (5.1's bare `curl` is an alias for
+# Invoke-WebRequest; it ships on Win10 1803+), `curl` under PowerShell 7 on macOS/Linux.
 $Aria = (Get-Command aria2c -ErrorAction SilentlyContinue)
-$Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+$Curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $Curl -and -not (Test-OnWindows)) {
+  $Curl = Get-Command curl -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 
 # Resilient curl (mirrors fetch-runtime.ps1): curl --retry alone does not retry a mid-transfer
 # DROP on older curl, so an OUTER loop resumes the partial file (-C -) on each attempt — a
 # flaky link (beta-tester report) survives several disconnects. Hash verification afterwards
 # guards integrity, so resume is safe.
 function Invoke-CurlResilient([string]$url, [string]$dest) {
+  $curlArgs = @('-L', '--fail', '--retry', '3', '--retry-delay', '2', '--retry-connrefused', '--connect-timeout', '30')
+  # --ssl-revoke-best-effort is Schannel's: Windows curl only.
+  if (Test-OnWindows) { $curlArgs += '--ssl-revoke-best-effort' }
   $attempts = 5
   for ($i = 1; $i -le $attempts; $i++) {
-    & curl.exe -L --fail --retry 3 --retry-delay 2 --retry-connrefused `
-      --connect-timeout 30 --ssl-revoke-best-effort -C - -o "$dest" "$url"
+    & $Curl.Source @curlArgs -C - -o "$dest" "$url"
     if ($LASTEXITCODE -eq 0) { return $true }
     if ($i -lt $attempts) {
       $wait = $i * 3
@@ -155,10 +163,13 @@ function Invoke-Download([string]$url, [string]$dest) {
 function Get-Block([string]$text, [string]$key) {
   $out = New-Object System.Collections.Generic.List[string]
   $inBlk = $false
-  $head = '^' + [Regex]::Escape($key) + ':\s*$'
+  # The key line may carry a comment, and a comment line at column 0 does not end a mapping (YAML).
+  $head = '^' + [Regex]::Escape($key) + ':\s*(#.*)?$'
   foreach ($line in ($text -split "`n")) {
     if (-not $inBlk) {
       if ($line -match $head) { $inBlk = $true }
+    } elseif ($line -match '^#') {
+      continue
     } elseif ($line -match '^\S') {
       break
     } else {
@@ -194,7 +205,7 @@ function Get-FileDownloadBlock([string]$memberText) {
   $lines = $memberText -split "`n"
   $idx = -1
   for ($i = 0; $i -lt $lines.Count; $i++) {
-    if ($lines[$i] -match '^\s*download:\s*$') { $idx = $i; break }
+    if ($lines[$i] -match '^\s*download:\s*(#.*)?$') { $idx = $i; break }
   }
   if ($idx -lt 0 -or $idx -ge ($lines.Count - 1)) { return '' }
   return ($lines[($idx + 1)..($lines.Count - 1)] -join "`n")
@@ -294,6 +305,7 @@ $skipped = 0
 $hadFailure = $false
 # -Only names one model: an id no manifest carries, or one with nothing to fetch, exits 2 below.
 $onlySeen = $false
+$onlyUnbundled = $false
 $onlyFetchable = $false
 
 Write-Host "Fetch models -> $Target" -ForegroundColor Cyan
@@ -306,7 +318,10 @@ foreach ($mf in $manifestFiles) {
   $id = Get-ManifestField $text 'id'
   if ($Only -and $id -ne $Only) { continue }
   if ($Only) { $onlySeen = $true }
-  if ($Bundled -and (Get-ManifestField $text 'bundled_on_preconfigured_drive') -ne 'true') { continue }
+  if ($Bundled -and (Get-ManifestField $text 'bundled_on_preconfigured_drive') -ne 'true') {
+    if ($Only) { $onlyUnbundled = $true }
+    continue
+  }
   $localPath = Get-ManifestField $text 'local_path'
   $sha = (Get-ManifestField $text 'sha256'); if ($sha) { $sha = $sha.ToLower() }
   # The primary file's source: the top-level `download:` block only, never another file's (#767).
@@ -451,6 +466,10 @@ foreach ($mf in $manifestFiles) {
 # default id in prepare-drive -WithAssets would otherwise pass silently (#767).
 if ($Only -and -not $onlySeen) {
   Write-Host ("No model manifest with id '{0}' under '{1}'." -f $Only, $ManifestsDir) -ForegroundColor Red
+  exit 2
+}
+if ($Only -and $onlyUnbundled) {
+  Write-Host ("Model '{0}' is not in the bundled set (bundled_on_preconfigured_drive: true): nothing to fetch." -f $Only) -ForegroundColor Red
   exit 2
 }
 if ($Only -and -not $onlyFetchable) {

@@ -637,6 +637,20 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toMatch(/VERIFIED\s+z-model/)
       })
 
+      it('a projector block with a comment on its key line and one at column 0 inside is still verified (#767)', () => {
+        const yaml = manifestYaml({ id: 'p-model', localPath: 'models/chat/p-model.gguf', sha256: sha256('p') }, [
+          'mmproj:  # the vision projector',
+          '  local_path: models/chat/p-mm.gguf',
+          '# a note at column 0',
+          `  sha256: ${sha256('pm')}`
+        ])
+        const root = modelsTarget([yaml], { 'models/chat/p-model.gguf': 'p', 'models/chat/p-mm.gguf': 'pm' })
+        const r = leg.run(verifier, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toMatch(/VERIFIED\s+p-model \(mmproj\)/)
+      })
+
       it('--generate with no manifest writes the empty entries list buildChecksumsJson writes', async () => {
         const root = modelsTarget([])
         const r = leg.run(verifier, [f('Target'), root, f('Generate')])
@@ -783,6 +797,35 @@ for (const leg of SCRIPT_LEGS) {
             manifests: [fetchable('s-model', { extra: FILES_LINES })],
             status: 0,
             contains: ['fetch  s-model (file 2/2)', 'https://example.invalid/s-2.gguf', '-> models/chat/s-2.gguf']
+          }
+        ],
+        [
+          // Valid YAML the app reads: a comment on the block's key line, and one at column 0 inside it. The block reader
+          // that replaced the flat url / size_bytes reads (#767) took the first for no block and ended at the second.
+          'a download block with a comment on its key line and one at column 0 inside is still planned (#767)',
+          {
+            manifests: [
+              manifestYaml({ id: 'c-model', localPath: 'models/chat/c-model.gguf', sha256: REAL_SHA }, [
+                'download:  # pinned with the manifest',
+                '  url: https://example.invalid/c-model.gguf',
+                '# a note at column 0',
+                `  sha256: ${REAL_SHA}`,
+                '  size_bytes: 9'
+              ])
+            ],
+            status: 0,
+            contains: ['fetch  c-model', 'https://example.invalid/c-model.gguf', '-> models/chat/c-model.gguf', 'Planned 1'],
+            absent: ['BLOCK']
+          }
+        ],
+        [
+          '--only naming a model outside --bundled says so, not that it has no download block (exit 2, #767)',
+          {
+            manifests: [fetchable('a-model')],
+            extra: [f('Only'), 'a-model', f('Bundled')],
+            status: 2,
+            contains: ["Model 'a-model' is not in the bundled set"],
+            absent: ['declares no download block', 'fetch  a-model']
           }
         ],
         [

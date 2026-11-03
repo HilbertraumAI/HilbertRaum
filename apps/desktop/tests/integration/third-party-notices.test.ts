@@ -28,6 +28,12 @@ import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoT
 const NOTICES = join(REPO_ROOT, 'THIRD-PARTY-NOTICES.md')
 const REGEN = 'run `node scripts/generate-third-party-notices.mjs` and commit the result'
 
+/** `text` without the `### <id>` sections named, each up to the next `##`/`###` heading. */
+function withoutSections(text: string, ids: string[]): string {
+  const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return ids.reduce((t, id) => t.replace(new RegExp(`^### ${escape(id)}\\n[\\s\\S]*?(?=^#{2,3} |(?![\\s\\S]))`, 'm'), ''), text)
+}
+
 describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
   it('exists, is non-trivial, and is byte-clean (LF-only, no NUL, no BOM)', () => {
     expect(existsSync(NOTICES), `THIRD-PARTY-NOTICES.md missing — ${REGEN}`).toBe(true)
@@ -39,12 +45,28 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
   })
 
   // #769: the rows below read parts of the file; this one holds every byte, so a hand edit of a license text or a
-  // generator change that nobody regenerated fails here.
-  it('is byte-identical to a regeneration from the lockfile + the installed packages (#769)', () => {
+  // generator change that nobody regenerated fails here. A platform-gated package (lockfile os/cpu) is installed on its
+  // own platform only, so its section is the real license there and REL-2's lockfile fallback elsewhere: it is left out
+  // of the comparison, or the gate would be red on every CI leg but the one that regenerated. None ships today.
+  it('is byte-identical to a regeneration from the lockfile + the installed packages, a platform-gated section aside (#769)', () => {
+    const lock = lockPackages()
+    const gated = computeShippedPackages(REPO_ROOT)
+      .filter((p) => {
+        const entry = lock[p.lockPath] as { os?: unknown; cpu?: unknown } | undefined
+        return entry?.os !== undefined || entry?.cpu !== undefined
+      })
+      .map((p) => `${p.name}@${p.version}`)
     expect(
-      readFileSync(NOTICES, 'utf8'),
+      withoutSections(readFileSync(NOTICES, 'utf8'), gated),
       `THIRD-PARTY-NOTICES.md is STALE (a license text, the generator or the shipped set changed) — ${REGEN}`
-    ).toBe(buildThirdPartyNotices(REPO_ROOT))
+    ).toBe(withoutSections(buildThirdPartyNotices(REPO_ROOT, { warn: () => {} }), gated))
+  })
+
+  it('the comparison drops exactly the named package sections', () => {
+    const text = '## Licenses\n\n### a@1.0.0\n\nA text\n\n### b@2.0.0\n\nB text\n\n## Extra\n\nX\n'
+    expect(withoutSections(text, ['a@1.0.0'])).toBe('## Licenses\n\n### b@2.0.0\n\nB text\n\n## Extra\n\nX\n')
+    expect(withoutSections(text, ['b@2.0.0'])).toBe('## Licenses\n\n### a@1.0.0\n\nA text\n\n## Extra\n\nX\n')
+    expect(withoutSections(text, [])).toBe(text)
   })
 
   it('its package list EXACTLY matches the shipped set from the lockfile + builder yml', () => {
