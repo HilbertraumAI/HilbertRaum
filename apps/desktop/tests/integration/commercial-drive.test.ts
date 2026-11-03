@@ -4,11 +4,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  planCommercialDrive,
-  formatPlan,
-  assertCommercialDrive
-} from '../../src/main/services/commercial-drive'
+import { assertCommercialDrive } from '../../src/main/services/commercial-drive'
 import { buildPolicyJson } from '../../src/main/services/drive'
 import { writeRuntimeMarker } from '../../src/main/services/assets'
 import type { ModelManifest } from '../../src/shared/manifest'
@@ -107,56 +103,6 @@ function provisionAppSkill(root: string, id = 'bank-statement'): void {
     ['---', `id: ${id}`, `title: ${id}`, `description: ${id} skill`, 'version: 1.0.0', '---', 'Guidance.'].join('\n')
   )
 }
-
-describe('planCommercialDrive', () => {
-  it('produces the ordered build steps with signing flagged manual', () => {
-    const steps = planCommercialDrive({ target: 'E:\\', acceptLicense: true })
-    expect(steps.map((s) => s.id)).toEqual([
-      'prepare',
-      'fetch-models',
-      'fetch-runtime',
-      'fetch-whisper',
-      'fetch-ocr',
-      'package',
-      'copy-app',
-      'verify',
-      'assert'
-    ])
-    // Only the package (sign/notarize) step is manual.
-    expect(steps.find((s) => s.id === 'package')!.manual).toBe(true)
-    expect(steps.filter((s) => s.manual).map((s) => s.id)).toEqual(['package'])
-    // fetch-models fetches only the bundled set (#766), with --accept-license threaded in.
-    expect(steps.find((s) => s.id === 'fetch-models')!.command).toBe('fetch-models --target E:\\ --bundled --accept-license')
-  })
-
-  it('omits --accept-license when not set and targets the requested OS for packaging', () => {
-    const win = planCommercialDrive({ target: 'E:\\' })
-    expect(win.find((s) => s.id === 'fetch-models')!.command).not.toContain('--accept-license')
-    expect(win.find((s) => s.id === 'package')!.title).toMatch(/Windows/i)
-
-    const mac = planCommercialDrive({ target: '/Volumes/HILBERTRAUM', os: 'mac' })
-    expect(mac.find((s) => s.id === 'package')!.description).toMatch(/notarize/i)
-  })
-
-  it('targets the Linux AppImage when os=linux', () => {
-    const linux = planCommercialDrive({ target: '/mnt/usb', os: 'linux' })
-    const pkg = linux.find((s) => s.id === 'package')!
-    expect(pkg.title).toMatch(/Linux AppImage/i)
-    expect(pkg.command).toContain('--linux')
-    expect(pkg.manual).toBe(true)
-  })
-
-  it('formatPlan renders ordered steps and marks the PACKAGE step (not another) manual', () => {
-    const text = formatPlan(planCommercialDrive({ target: 'E:\\' }))
-    expect(text).toMatch(/1\. Lay out the drive/)
-    // The MANUAL tag must land on the package/sign line specifically.
-    const manualLine = text.split('\n').find((l) => l.includes('[MANUAL'))!
-    expect(manualLine).toMatch(/sign/i)
-    // Non-manual steps are not tagged.
-    expect(text).toMatch(/Lay out the drive[^\n]*$/m)
-    expect(text.split('\n').find((l) => l.includes('Lay out the drive'))).not.toContain('[MANUAL')
-  })
-})
 
 describe('assertCommercialDrive', () => {
   it('passes on a verified, commercial-posture drive with no user data', async () => {

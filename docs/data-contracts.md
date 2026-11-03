@@ -1319,27 +1319,36 @@ head's own weights + KV.
   non-blocking). Reuses `buildDriveStatus` + `measureDriveSpeed`/`buildWarnings`. `LOW_FREE_SPACE_BYTES
   = 2 GB`. `PreflightResult` lives in `shared/types.ts`. IPC `runPreflight` (`preflight:run`) in
   `registerCoreIpc` → preload `api.runPreflight`; **HomeScreen** shows a non-blocking note.
-✅ **`services/commercial-drive.ts`** — `planCommercialDrive({ target, os?, acceptLicense? }) →
-  CommercialStep[] { id, title, command, manual, description }` (ordered: prepare → fetch-models →
-  fetch-runtime → **package [manual]** → copy-app → verify → assert) + `formatPlan`; and
-  `assertCommercialDrive(rootPath, manifests) → CommercialAssertion { ok, problems[], checks{
-  policyCommercial, networkDenied, weightsVerified, noUserData }, modelResults }` (reuses `loadPolicy`
-  + `verifyDriveModels`; flags network-allowed / plaintext / unverified-or-mismatch weights / present
-  user data — `workspace/hilbertraum.sqlite[.enc]`, `config/workspace.json`, non-empty `workspace/documents/`).
-✅ **`scripts/build-commercial-drive.{ps1,sh}`** — self-contained dual-shell master pipeline mirroring
-  the plan; `-Target`/`--target` (req), `-AcceptLicense`/`--accept-license`, `-AppArtifact`/
-  `--app-artifact` (a pre-built signed app to copy), `-SkipPackage`/`--skip-package`, `-DryRun`/
-  `--dry-run`. Orchestrates prepare-drive (`-Force`) → fetch-models → fetch-runtime → (package =
-  manual) → copy launchers+docs → verify-models `--generate` → native posture cross-check (exit 1 if
-  not sellable). PS uses **hashtable** splatting for named params. Both dry-run-smoke-tested.
+✅ **`services/commercial-drive.ts`** — the sell gate `assertCommercialDrive(rootPath, manifests, runtimeSources?,
+  whisperSources?, ocrSources?, opts?: { platforms, appVersion, families? }) → Promise<CommercialAssertion { ok,
+  problems[], checks{ policyCommercial, networkDenied, weightsVerified, licensesApproved, noUserData, runtimeCurrent,
+  runtimeHashed, optionalRuntimesConsistent, kiwixSourceBundle, ocrAssetsVerified, appSkillsPresent, userSkillsEmpty,
+  licenseArtifactsPresent, platformMatrixDeclared, appArtifactsPresent, launchersPresent }, modelResults }>`. Never
+  throws; every failed check adds a `problems[]` line. The Kit rule (#766): a model SHIPS when it is bundled
+  (`bundled_on_preconfigured_drive`) or has any file on the drive; at least one model is bundled, every shipped weight
+  is VERIFIED (`weightsVerified`) and every shipped model's `license_review.status` is `approved` (`licensesApproved` —
+  `--accept-license` never overrides it); a manifest with no file on the drive is the in-app catalog and is not checked.
+  The runtime pins are opt-in (`runtimeCurrent` / `runtimeHashed` read each build's `.hilbertraum-runtime.json`);
+  without `opts` the drive is not sellable (`platformMatrixDeclared`). The CLI `out/tools/assert-commercial-drive.mjs`
+  (`--target --platforms --app-version [--json]`; exit 0 sellable / 1 not / 2 usage, an unknown platform included) runs
+  it on a drive's own manifests and pin; `--json` prints one `{ ok, problems, checks }` line on stdout, any log
+  line goes to stderr (#767). The TS build plan (`planCommercialDrive`/`formatPlan`) had no caller and was removed (#770).
+✅ **`scripts/build-commercial-drive.{ps1,sh}`** — self-contained dual-shell master pipeline; `-Target`/`--target`
+  (req), `-AcceptLicense`, `-AppArtifact` (pre-built signed apps to copy, one per platform), `-Platforms` (default all
+  three), `-KiwixSourceDir`, `-SkipPackage`, `-VerifyOnly`, `-DryRun` (each also `--kebab-case` in the .sh).
+  Orchestrates prepare-drive (`-Force`) → fetch-models `--bundled` → fetch-runtime (every OS, `--commercial`) →
+  [kiwix source bundle, then kiwix_tools] → (package = manual) → copy launchers+docs → verify-models `--generate` →
+  native pre-flight (verify-models `--kit` for the weights) + the canonical gate above, which alone prints SELLABLE.
+  Before step 1 it refuses a missing `-AppArtifact` and a differently named prior app at the root (exit 1). PS uses
+  **hashtable** splatting for named params.
 ✅ **Packaging/signing** — `electron-builder.yml` `win.signtoolOptions` + `mac.notarize`/
   `hardenedRuntime`/`gatekeeperAssess:false`/`entitlements: build/entitlements.mac.plist`; secrets are
   env-driven + git-ignored. The green gate does NOT sign (it never runs electron-builder).
 ✅ **Tests** — `tests/integration/preflight.test.ts` (ok/slow/read-only/low-space at the shipped floor/
   unmeasurable) + `tests/integration/launcher-execution.test.ts` +
-  `tests/integration/commercial-drive.test.ts` (8: ordered plan + manual package + `--accept-license`
-  threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
-  placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
+  `tests/integration/commercial-drive.test.ts` (`assertCommercialDrive` passes verified-commercial, fails
+  network/plaintext/placeholder-weight/user-data, …) + `script-execution.test.ts` / `script-orchestration.test.ts` (the
+  builder and the gate CLI executed). **Signing + notarization + the real USB launch = manual (R5/R7).**
 
 ### Evidence Pack / Review Mode (EP-1 Phases 0–6 live — contracts, storage, snapshot engine + IPC, review UI, HTML + PDF export, freshness, selections)
 The wave is CLOSED (2026-07-18); the durable design record is `architecture.md` "Evidence

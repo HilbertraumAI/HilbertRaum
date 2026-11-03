@@ -5907,8 +5907,12 @@ Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` m
 - **`services/assets.ts`** — the DIY asset loader logic: `planModelDownloads`, runtime-build
   selection, `verifyDownloadedFile`, injected-fetch download seam.
 - **`services/preflight.ts`** — the friendly, non-blocking first-run drive check (`runPreflight` IPC).
-- **`services/commercial-drive.ts`** — `planCommercialDrive` + `assertCommercialDrive`, the "is this
-  drive sellable?" gate (commercial policy, weights VERIFIED, license reviews APPROVED, no user data).
+- **`services/commercial-drive.ts`** — `assertCommercialDrive`, the "is this drive sellable?" gate
+  (commercial policy, weights VERIFIED, license reviews APPROVED, no user data, the app artifact +
+  launcher per declared platform), which `build-commercial-drive` calls through the built
+  `out/tools/assert-commercial-drive.mjs`. The build ORDER lives in the two builder scripts alone
+  (`script-orchestration.test.ts` runs it); the TS step plan that once mirrored it had no caller and
+  was removed (#770).
 - Drive detection without the launcher: `workspace.ts findPreparedDriveRoot` walks up from the app's
   own location (`PORTABLE_EXECUTABLE_DIR` / exe path) to the `config/drive.json` marker (audit M16).
 

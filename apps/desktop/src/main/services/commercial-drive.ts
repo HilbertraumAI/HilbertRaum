@@ -24,16 +24,14 @@ import {
 import { manifestFiles, sha256File } from './models'
 import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './drive'
 
-// Commercial-drive pipeline + final posture assertion (spec §12.2).
+// The commercial-drive gate: the final posture assertion (spec §12.2).
 //
-// Mirrors services/drive.ts + services/assets.ts: this module is the CANONICAL,
-// unit-tested reference. `scripts/build-commercial-drive.{ps1,sh}` run the SAME ordered
-// plan natively and, for the verdict, CALL this assertion through the built
-// `out/tools/assert-commercial-drive.mjs` (src/main/tools) — SELLABLE is printed only
-// from its result (#233, #234). It does NOT re-implement prepare-drive/fetch-*/
-// verify-models — it ORCHESTRATES them. The final automated check
-// (`assertCommercialDrive`) is the gate that decides "is this drive actually sellable?"
-// and reuses loadPolicy + verifyDriveModels rather than duplicating that logic.
+// `scripts/build-commercial-drive.{ps1,sh}` run the ordered build natively (they orchestrate
+// prepare-drive / fetch-* / verify-models; tests/integration/script-orchestration.test.ts runs
+// that order) and, for the verdict, CALL this assertion through the built
+// `out/tools/assert-commercial-drive.mjs` (src/main/tools) — SELLABLE is printed only from its
+// result (#233, #234). `assertCommercialDrive` is the gate that decides "is this drive actually
+// sellable?" and reuses loadPolicy + verifyDriveModels rather than duplicating that logic.
 //
 // A sellable drive MUST ship the commercial posture (encryption required, plaintext off,
 // models must verify, NETWORK DENIED — spec §12.2), contain NO user data, and carry the
@@ -56,186 +54,6 @@ export const DRIVE_LICENSE_ARTIFACTS = [
   'THIRD-PARTY-NOTICES.md',
   'DRIVE-NOTICES.md'
 ] as const
-
-// ---- The ordered "build a sellable drive" plan -------------------------------------
-
-export interface CommercialStep {
-  id: string
-  title: string
-  /** The native command a drive-builder runs (mirrored by the shell scripts). */
-  command: string
-  /**
-   * True when the step needs a human / secrets that never enter the repo (signing +
-   * notarization). The green gate does NOT run these; they are documented manual steps.
-   */
-  manual: boolean
-  description: string
-}
-
-export type CommercialOs = 'win' | 'mac' | 'linux'
-
-export interface PlanCommercialDriveOptions {
-  /** The drive root to build onto (e.g. `E:\` or `/Volumes/HILBERTRAUM`). */
-  target: string
-  /** Which OS the portable app is packaged + signed for. Default `win`. */
-  os?: CommercialOs
-  /** Accept the model licenses non-interactively (required to fetch a gated weight). */
-  acceptLicense?: boolean
-}
-
-/** The packaged-app + signing step differs per OS; keep the copy honest about what's manual. */
-function packageStep(os: CommercialOs): CommercialStep {
-  if (os === 'mac') {
-    return {
-      id: 'package',
-      title: 'Package + sign + notarize the macOS app',
-      command: 'npm run package -- --mac',
-      manual: true,
-      description:
-        'Build the .app, sign with a Developer ID Application certificate, notarize, and ' +
-        'staple. Requires Apple Developer credentials supplied via env vars on the build ' +
-        'machine — NEVER committed. Without notarization a USB-launched .app is quarantined.'
-    }
-  }
-  if (os === 'linux') {
-    return {
-      id: 'package',
-      title: 'Package the Linux AppImage',
-      command: 'npm run package -- --linux',
-      manual: true,
-      description:
-        'Build the AppImage. Linux has no OS gatekeeper, so signing is optional; the build ' +
-        'still runs on a network-touching machine (Electron download, R2).'
-    }
-  }
-  return {
-    id: 'package',
-    title: 'Package + sign the Windows portable .exe',
-    command: 'npm run package:win',
-    manual: true,
-    description:
-      'Build the portable .exe and sign the launcher + .exe with an OV/EV code-signing ' +
-      'certificate (EV builds SmartScreen reputation fastest). The cert + creds come from ' +
-      'env vars / a git-ignored secrets file on the build machine — NEVER committed.'
-  }
-}
-
-/**
- * Plan the ordered steps that turn a blank drive into a finished, verified, sellable
- * drive. Pure (string assembly only) so the order + commands are unit-testable. The
- * shell scripts mirror this exactly; the signing/notarization steps are flagged `manual`.
- */
-export function planCommercialDrive(opts: PlanCommercialDriveOptions): CommercialStep[] {
-  const target = opts.target
-  const os = opts.os ?? 'win'
-  const acceptFlag = opts.acceptLicense ? ' --accept-license' : ''
-
-  return [
-    {
-      id: 'prepare',
-      title: 'Lay out the drive with the COMMERCIAL policy',
-      command: `prepare-drive --target ${target}`,
-      manual: false,
-      description:
-        'Create the directory tree + copy manifests/docs + the root license/attribution ' +
-        'notices (LICENSE, THIRD-PARTY-NOTICES.md, DRIVE-NOTICES.md — LIC-1) + write ' +
-        'config/{drive,policy}.json in the commercial posture (encryption required, ' +
-        'plaintext off, network denied).'
-    },
-    {
-      id: 'fetch-models',
-      title: 'Download + verify the bundled model weights',
-      command: `fetch-models --target ${target} --bundled${acceptFlag}`,
-      manual: false,
-      description:
-        'Fetch the weights of the bundled set (bundled_on_preconfigured_drive, #766) from their ' +
-        'manifest download URLs, SHA-256-verified before they count as installed. Every other ' +
-        'manifest stays on the drive as the in-app download catalog. A preloaded weight needs a ' +
-        'redistribution-permitting license whose license_review.status is approved (spec §13).'
-    },
-    {
-      id: 'fetch-runtime',
-      title: 'Download + verify the llama.cpp sidecar builds for every shipped OS',
-      command:
-        `fetch-runtime --target ${target} --os win|mac|linux ` +
-        `(+ --backend cpu safety net on win/linux; one run per build)`,
-      manual: false,
-      description:
-        'Fetch EVERY llama-server build each shipped OS needs from runtime-sources.yaml: ' +
-        'the default build (Vulkan full build on win/linux — degrades to CPU on GPU-less ' +
-        'machines; Metal on mac) into runtime/llama.cpp/<os>/ PLUS the pure-CPU safety net ' +
-        'into runtime/llama.cpp/<os>/cpu/ where one is pinned. Each archive is verified and ' +
-        'leaves a .hilbertraum-runtime.json install marker.'
-    },
-    {
-      id: 'fetch-whisper',
-      title: 'Download + verify the whisper.cpp transcriber builds (second sidecar family)',
-      command: `fetch-runtime --target ${target} --family whisper_cpp (one run per pinned build)`,
-      manual: false,
-      description:
-        'Fetch every whisper_cpp build pinned in runtime-sources.yaml into ' +
-        'runtime/whisper.cpp/<os>/ (upstream ships a prebuilt Windows CPU build only; ' +
-        'mac/linux builds come from the documented source-build step when shipped). ' +
-        'Same verify-before-trust + .hilbertraum-runtime.json marker as the llama family.'
-    },
-    {
-      id: 'fetch-ocr',
-      title: 'Download + verify the OCR language files (ocr/ asset class)',
-      command: `fetch-runtime --target ${target} --family ocr`,
-      manual: false,
-      description:
-        'Fetch the pinned traineddata files from runtime-sources.yaml into ocr/ ' +
-        '(deu + eng, the tessdata_best-integerized variant). Plain ' +
-        'sha256-verified files — no extraction, no marker; idempotency is the hash.'
-    },
-    packageStep(os),
-    {
-      id: 'copy-app',
-      title: 'Copy the launcher + portable app + user docs onto the drive',
-      command: `copy "Start HilbertRaum" launcher + portable app + docs -> ${target}`,
-      manual: false,
-      description:
-        'Place the signed portable app and the obvious double-click launcher at the drive ' +
-        'root, alongside the bundled user-guide / privacy / troubleshooting docs.'
-    },
-    {
-      id: 'verify',
-      title: 'Capture real hashes + verify all weights',
-      command: `verify-models --target ${target} --generate`,
-      manual: false,
-      description:
-        'Record the real SHA-256 of every present weight into config/checksums.json and ' +
-        'confirm each weight verifies against its manifest.'
-    },
-    {
-      id: 'assert',
-      title: 'Final check: assert the drive is sellable',
-      command: `assertCommercialDrive(${target})`,
-      manual: false,
-      description:
-        'Automated gate: commercial policy (encryption required, plaintext off, models must ' +
-        'verify, network denied), every bundled weight and every weight on the drive VERIFIED, ' +
-        'the license_review of each such model APPROVED (spec §13 — not overridable by ' +
-        '--accept-license), NO user data present, and the ' +
-        'root license/attribution artifacts (LICENSE, THIRD-PARTY-NOTICES.md, ' +
-        'DRIVE-NOTICES.md) present and non-empty (LIC-1).'
-    }
-  ]
-}
-
-/** Render the commercial-drive plan as a human-readable, ordered report. */
-export function formatPlan(steps: CommercialStep[]): string {
-  const lines: string[] = []
-  lines.push('Build a commercial (sellable) drive — ordered steps:')
-  lines.push('')
-  steps.forEach((step, i) => {
-    const tag = step.manual ? ' [MANUAL — signing/secrets, not in the green gate]' : ''
-    lines.push(`  ${i + 1}. ${step.title}${tag}`)
-    lines.push(`       $ ${step.command}`)
-    lines.push(`       ${step.description}`)
-  })
-  return lines.join('\n')
-}
 
 // ---- The final "is this drive sellable?" assertion ---------------------------------
 
