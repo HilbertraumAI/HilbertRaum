@@ -580,6 +580,20 @@ flags were also strengthened: `--retry 3 --retry-delay 2 --retry-connrefused --c
 **SHA-256 pin AFTER download**, so resuming a partial transfer can never weaken verification. `aria2c`
 (when present) already resumes via `--continue=true`; `wget` via `-c`.
 
+**Extracting a runtime archive (#767).** `fetch-runtime` unpacks a `.tar.gz` (the macOS/Linux
+builds) with `tar`, and a `.zip` with `unzip`/`ditto` (`.sh`) or .NET's `ZipFile` (`.ps1`). Windows
+has three traps, each avoided on purpose: the `.ps1` runs Windows' own bsdtar
+(`%SystemRoot%\System32\tar.exe`, Windows 10 1803+) by full path, because in a PowerShell started
+from Git Bash the first `tar` on PATH is Git's GNU tar, which reads the `C:` of an archive path as a
+remote host; the `.sh` hands `tar` the archive on stdin (`-f -`) for the same reason under Git Bash;
+and the `.ps1` avoids `Expand-Archive`, which in Windows PowerShell 5.1 reads its destination as a
+wildcard pattern and stops on a drive path holding `[`. Windows and FAT/exFAT cannot hold the
+tarballs' version symlinks, so `tar` fails there and each missing link is copied from its target.
+Any other `tar` failure (an archive it cannot read, a member it could not write) fails the run with
+`tar`'s own message, and a link whose name or target leaves the extract dir is refused.
+`script-fetch-runtime.test.ts` runs both twins through these steps over archives served from
+`file://` URLs, offline, on a drive root whose name holds `[` (#769).
+
 End-to-end (Windows example). `-WithAssets` alone provisions the default chat model for a fast,
 launch-ready drive; add `-AllModels` to pre-load every model (a fully provisioned commercial drive):
 ```powershell

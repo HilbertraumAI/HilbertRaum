@@ -525,36 +525,8 @@ describe('fetch-models — a withdrawn upstream source is skipped, never request
   })
 })
 
-describe('fetch-runtime — the OCR re-fetch delete is deliberately UNCONDITIONAL (AUD-24)', () => {
-  // The asymmetry with fetch-models is intentional and must not be "harmonized" away: the OCR
-  // language files are a few MB, runtime-sources.yaml records no size field for them, and
-  // re-fetching one costs nothing — there is no partial worth saving and no field to distinguish
-  // one with. Wrapping this delete in a fetch-models-style size guard would make it a no-op
-  // (there is no size to compare against), silently restoring the HTTP-416 repair loop it fixes.
-  //
-  // Asserted structurally: between the "hash differs" message and the delete there is nothing
-  // but comments — no intervening condition of any kind.
-  it.each([
-    ['scripts/fetch-runtime.ps1', 'Remove-Item'],
-    ['scripts/fetch-runtime.sh', 'rm -f']
-  ])('%s deletes the mismatching OCR file with no size test in between', (rel, deleteToken) => {
-    const src = repoText(rel)
-    const msg = src.indexOf('present but hash differs')
-    expect(msg, `${rel}: the OCR hash-mismatch branch not found`).toBeGreaterThanOrEqual(0)
-    const del = src.indexOf(deleteToken, msg)
-    expect(del, `${rel}: the OCR re-fetch delete is gone`).toBeGreaterThan(msg)
-    const between = src
-      .slice(src.indexOf('\n', msg) + 1, src.lastIndexOf('\n', del) + 1)
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith('#'))
-    expect(
-      between,
-      `${rel}: the OCR delete gained a condition. It is unconditional on purpose — see the ` +
-        'comment above it; do not harmonize it with the size-guarded fetch-models delete.'
-    ).toEqual([])
-  })
-})
+// fetch-runtime's OCR re-fetch deletes a mismatching file unconditionally (AUD-24), unlike fetch-models' size-guarded
+// delete: script-fetch-runtime.test.ts runs it on both twins over a wrong file of the right length.
 
 // The commercial gate is ONE function (#233, #234): both builders call the built
 // assert-commercial-drive tool, spell the same platform labels, pass --commercial to
@@ -825,6 +797,28 @@ describe('shell scripts — no capture read after a call that rewrites it', () =
       expect(clobberedReads(rel, repoText(rel))).toEqual([])
     })
   }
+})
+
+// GNU tar reads a `C:` in an archive name as a remote host, so under Git Bash `tar -xzf 'C:\…'` opens nothing (#767). No CI
+// leg runs a shell script with a tar archive on Windows, yet release.yml runs fetch-runtime.sh under Git Bash; so the shape
+// is checked as text: a script hands tar its archive on stdin (`-f -`).
+describe('shell scripts — tar reads its archive from stdin', () => {
+  const BY_NAME = /\btar\s+(-[A-Za-z]*f|--file)[\s=]+(?!-(\s|$))\S/
+
+  it('the pattern finds an archive passed by name and passes stdin', () => {
+    expect(BY_NAME.test('tar -xzf "$ARCHIVE" -C "$DIR"')).toBe(true)
+    expect(BY_NAME.test('tar --file="$ARCHIVE" -t')).toBe(true)
+    expect(BY_NAME.test('tar -xzf - -C "$DIR" < "$ARCHIVE"')).toBe(false)
+  })
+
+  it('no shell script passes tar an archive name', () => {
+    const hits = SHELL_SCRIPTS.flatMap((rel) =>
+      codeLines(rel)
+        .filter(({ text }) => BY_NAME.test(text))
+        .map(({ n, text }) => `${rel}:${n}: ${text.trim()}`)
+    )
+    expect(hits).toEqual([])
+  })
 })
 
 // A renamed launcher or doc is skipped silently: both copy steps sit behind a plain existence test.

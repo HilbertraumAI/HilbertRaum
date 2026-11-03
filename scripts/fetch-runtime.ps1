@@ -169,8 +169,8 @@ if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Loc
 $Target = [System.IO.Path]::GetFullPath($Target)
 
 $SourcesFile = Join-Path $Target 'model-manifests/runtime-sources.yaml'
-if (-not (Test-Path $SourcesFile)) { $SourcesFile = Join-Path $RepoRoot 'model-manifests/runtime-sources.yaml' }
-if (-not (Test-Path $SourcesFile)) {
+if (-not (Test-Path -LiteralPath $SourcesFile)) { $SourcesFile = Join-Path $RepoRoot 'model-manifests/runtime-sources.yaml' }
+if (-not (Test-Path -LiteralPath $SourcesFile)) {
   Write-Host "No runtime-sources.yaml found under '$Target' or repo root." -ForegroundColor Red
   exit 2
 }
@@ -198,7 +198,7 @@ if (-not $Arch) {
 # verifies the sha256 of the file AS DOWNLOADED, and skips files already present with a
 # matching hash. Mirrors assets.ts planOcrDownloads.
 if ($Family -eq 'ocr') {
-  $lines = (Get-Content -Path $SourcesFile) -split "`n"
+  $lines = (Get-Content -LiteralPath $SourcesFile) -split "`n"
   $ocrVersion = $null
   $files = @()
   $cur = $null
@@ -252,8 +252,8 @@ if ($Family -eq 'ocr') {
     $sha = ([string]$f.sha256).ToLower()
     Write-Host ("  {0}: {1}" -f $f.lang, $f.dest)
     if ($DryRun) { Write-Host ("    would fetch {0}" -f $f.url) -ForegroundColor Yellow; continue }
-    if ((Test-Path $dest) -and (& $IsRealShaOcr $sha)) {
-      $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+    if ((Test-Path -LiteralPath $dest) -and (& $IsRealShaOcr $sha)) {
+      $actual = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower()
       if ($actual -eq $sha) { Write-Host '    skip (present + verified)' -ForegroundColor Green; continue }
       Write-Host '    present but hash differs -- re-fetching' -ForegroundColor Yellow
       # DELETE the bad file first (AUD-24). The download below resumes at the end of whatever
@@ -267,7 +267,7 @@ if ($Family -eq 'ocr') {
       # against. These OCR language files are a few MB, runtime-sources.yaml records no size
       # for them, and re-fetching one costs nothing -- so there is no partial worth saving and
       # no field to distinguish one with.
-      Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
+      Remove-Item -Force -LiteralPath $dest -ErrorAction SilentlyContinue
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
     $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
@@ -288,10 +288,10 @@ if ($Family -eq 'ocr') {
       }
     }
     if (& $IsRealShaOcr $sha) {
-      $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+      $actual = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower()
       if ($actual -ne $sha) {
         Write-Host ("    FAIL: checksum mismatch (expected {0}, got {1}) -- deleting" -f $sha, $actual) -ForegroundColor Red
-        Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
+        Remove-Item -Force -LiteralPath $dest -ErrorAction SilentlyContinue
         $failed++
         continue
       }
@@ -308,7 +308,7 @@ if ($Family -eq 'ocr') {
 # BLOCK-AWARE since Phase 36: the file holds TWO top-level families (llama_cpp +
 # whisper_cpp) with the same shape -- only the selected -Family's version/builds are
 # collected, so the whisper builds can never leak into a llama selection or vice versa.
-$lines = ConvertTo-FlowListLines ((Get-Content -Path $SourcesFile) -split "`n")
+$lines = ConvertTo-FlowListLines ((Get-Content -LiteralPath $SourcesFile) -split "`n")
 $version = $null
 $builds = @()
 $current = $null
@@ -355,7 +355,7 @@ if (-not $version) { Write-Host "runtime-sources.yaml: missing $Family.version (
 # this re-installs the OLD pin. Say so: refreshing the drive's manifests (prepare-drive) comes first.
 function Get-FamilyVersion([string]$File, [string]$Fam) {
   $top = $null
-  foreach ($raw in (Get-Content -Path $File)) {
+  foreach ($raw in (Get-Content -LiteralPath $File)) {
     $l = $raw.TrimEnd()
     if ($l -match '^\s*#') { continue }
     if ($l -match '^([A-Za-z0-9_]+)\s*:\s*$') { $top = $Matches[1]; continue }
@@ -366,7 +366,7 @@ function Get-FamilyVersion([string]$File, [string]$Fam) {
   return $null
 }
 $RepoSources = Join-Path $RepoRoot 'model-manifests/runtime-sources.yaml'
-if ((Test-Path $RepoSources) -and ((Resolve-Path $SourcesFile).Path -ne (Resolve-Path $RepoSources).Path)) {
+if ((Test-Path -LiteralPath $RepoSources) -and ((Resolve-Path -LiteralPath $SourcesFile).Path -ne (Resolve-Path -LiteralPath $RepoSources).Path)) {
   $repoVersion = Get-FamilyVersion $RepoSources $Family
   if ($repoVersion -and $repoVersion -ne $version) {
     Write-Host "Note: the drive's runtime-sources.yaml pins $Family $version; this repo pins $repoVersion." -ForegroundColor Yellow
@@ -444,15 +444,15 @@ Write-Host ("  files: {0}" -f ($requiredFileNames -join ', '))
 # multi-file family is not "present", mirrors assets.ts runtimeBinaryPresent) and
 # .hilbertraum-runtime.json matches the selected version+backend -- and, under -Commercial,
 # records a hash for EVERY required file (a hashless legacy marker is re-fetched, #234).
-if (Test-Path $binaryPath) {
+if (Test-Path -LiteralPath $binaryPath) {
   $skip = $false
   $why = 'install marker is missing or differs'
-  $allPresent = -not ($requiredFileNames | Where-Object { -not (Test-Path (Join-Path $extractTo $_)) })
+  $allPresent = -not ($requiredFileNames | Where-Object { -not (Test-Path -LiteralPath (Join-Path $extractTo $_)) })
   if (-not $allPresent) {
     $why = 'one or more required files are missing'
-  } elseif (Test-Path $markerPath) {
+  } elseif (Test-Path -LiteralPath $markerPath) {
     try {
-      $marker = Get-Content -Path $markerPath -Raw | ConvertFrom-Json
+      $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
       if ($marker.version -eq $version -and $marker.backend -eq $build.backend) {
         $skip = $true
         if ($Commercial) {
@@ -506,10 +506,10 @@ if ($Curl) {
 
 $archiveVerified = $false
 if (& $IsRealSha $sha) {
-  $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLower()
+  $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLower()
   if ($actual -ne $sha) {
     Write-Host ("  FAIL: archive checksum mismatch (expected {0}, got {1}) -- deleting" -f $sha, $actual) -ForegroundColor Red
-    Remove-Item -Force -Path $archive -ErrorAction SilentlyContinue
+    Remove-Item -Force -LiteralPath $archive -ErrorAction SilentlyContinue
     exit 1
   }
   Write-Host "  archive VERIFIED" -ForegroundColor Green
@@ -524,78 +524,119 @@ if (& $IsRealSha $sha) {
 # in place while a fresh marker claims the new build (audit fix: the cpu->vulkan upgrade
 # path). The cpu/ safety net and the just-downloaded archive survive; the stale marker
 # dies with the old build, so a failed extraction cannot leave a lying marker behind.
-Get-ChildItem -Path $extractTo -Force |
+Get-ChildItem -LiteralPath $extractTo -Force |
   Where-Object { $_.Name -ne $archiveName -and $_.Name -ne 'cpu' } |
   Remove-Item -Recurse -Force
 
 if ($archiveName -match '\.(tar\.gz|tgz)$') {
-  # bsdtar (tar.exe) ships with Windows 10 1803+ and handles .tar.gz natively.
+  # Windows' own bsdtar (System32\tar.exe, Windows 10 1803+; it handles .tar.gz natively), by full
+  # path (#767): in a PowerShell started from Git Bash the first `tar` on PATH is Git's GNU tar, which
+  # reads the `C:` of the archive path as a remote host and extracts nothing. PowerShell 7 on a Mac
+  # or Linux has no SystemRoot and takes the tar on PATH.
+  $tarExe = 'tar'
+  if ($env:SystemRoot) {
+    $systemTar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    if (Test-Path -LiteralPath $systemTar) { $tarExe = $systemTar }
+  }
   # NOTE: EAP must be Continue around native stderr redirects (PS 5.1 wraps redirected
-  # stderr in error records, which would terminate under 'Stop').
+  # stderr in error records, which would terminate under 'Stop'). tar's messages are kept (#767):
+  # for a failure the link copies below cannot repair, they are the only account of it.
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  & tar -xzf "$archive" -C "$extractTo" 2>$null
+  $tarMessages = @(& $tarExe -xzf "$archive" -C "$extractTo" 2>&1 | ForEach-Object {
+      if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" } })
   $tarExit = $LASTEXITCODE
-  $listing = & tar -tvzf "$archive" 2>$null
+  $listing = & $tarExe -tvzf "$archive" 2>$null
   $ErrorActionPreference = $prevEap
 
   # The llama.cpp tarballs contain version SYMLINKS (lib*.so -> lib*.so.X.Y.Z), which
   # cannot be created on Windows (or on an exFAT drive at all). Materialize each missing
   # link as a COPY of its target -- the dynamic loader only needs the name to exist.
   # Multi-pass, because links can chain (libllama.so -> libllama.so.0 -> ...0.14.0).
+  # The archive names both ends of a link, so neither may leave the extract dir: the extract_to
+  # rule (M18). tar itself refuses such a member; the copy must not do what tar would not (#767).
   $links = @()
   foreach ($line in @($listing)) {
     if ($line -match '^l' -and $line -match '\s(\S+)\s->\s(\S+)\s*$') {
       $links += , @($Matches[1], $Matches[2])
     }
   }
-  $unresolved = 0
   for ($pass = 0; $pass -lt 4; $pass++) {
     $unresolved = 0
     foreach ($l in $links) {
       $lnkPath = Join-Path $extractTo ($l[0] -replace '/', [IO.Path]::DirectorySeparatorChar)
-      if (Test-Path $lnkPath) { continue }
+      if (Test-Path -LiteralPath $lnkPath) { continue }
+      foreach ($end in $l) {
+        if ($end -match '\.\.' -or $end -match '^[/\\]' -or $end -match '^[A-Za-z]:') {
+          Write-Host ("  FAIL: archive link {0} -> {1} points outside {2} -- not copied" -f $l[0], $l[1], $extractTo) -ForegroundColor Red
+          exit 1
+        }
+      }
       $srcPath = Join-Path (Split-Path -Parent $lnkPath) $l[1]
-      if (Test-Path $srcPath) { Copy-Item -Force -Path $srcPath -Destination $lnkPath }
+      if (Test-Path -LiteralPath $srcPath) { Copy-Item -Force -LiteralPath $srcPath -Destination $lnkPath }
       else { $unresolved++ }
     }
     if ($unresolved -eq 0) { break }
   }
-  if ($tarExit -ne 0 -and $unresolved -gt 0) {
-    Write-Host "tar extraction failed (exit $tarExit; $unresolved unresolved entries)" -ForegroundColor Red
-    exit 1
+  # Those links make tar fail on Windows and FAT/exFAT for every such archive, and the copies are
+  # the repair. Any other failure (an archive tar cannot read, a member it could not write) is real,
+  # and used to pass unseen until the binary check blamed the archive layout (#767). After a failed
+  # tar every member the archive lists must be on disk; if one is not, or tar cannot list the
+  # archive at all, the run fails with tar's own words.
+  if ($tarExit -ne 0) {
+    $ErrorActionPreference = 'Continue'
+    $members = @(& $tarExe -tzf "$archive" 2>$null)
+    $listExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    $missing = @($members | Where-Object { $_ -and -not (Test-Path -LiteralPath (Join-Path $extractTo $_)) })
+    if ($listExit -ne 0 -or $members.Count -eq 0 -or $missing.Count -gt 0) {
+      Write-Host "  FAIL: tar could not extract $archiveName (exit $tarExit):" -ForegroundColor Red
+      foreach ($m in $tarMessages) { if ($m.Trim()) { Write-Host "    $m" -ForegroundColor Red } }
+      if ($missing.Count -gt 0) { Write-Host ("    not on disk after extraction: {0}" -f ($missing -join ', ')) -ForegroundColor Red }
+      exit 1
+    }
   }
 } else {
-  Expand-Archive -Path $archive -DestinationPath $extractTo -Force
+  # .NET's ZipFile, not Expand-Archive (#767): Windows PowerShell 5.1's Expand-Archive reads
+  # -DestinationPath as a wildcard pattern, so on a drive path holding `[` it misses the existing
+  # directory, tries to create it again and stops. The dir was emptied above (only the archive and
+  # cpu/ remain), so nothing is overwritten.
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $extractTo)
+  } catch {
+    Write-Host ("  FAIL: could not extract {0}: {1}" -f $archiveName, $_.Exception.Message) -ForegroundColor Red
+    exit 1
+  }
 }
-Remove-Item -Force -Path $archive -ErrorAction SilentlyContinue
+Remove-Item -Force -LiteralPath $archive -ErrorAction SilentlyContinue
 
 # Flatten: the macOS/Linux tarballs nest everything under llama-<tag>/ -- move the
 # binary's directory contents up so llama-server sits at the extract_to root, where
 # services/runtime/sidecar.ts resolves it.
-if (-not (Test-Path $binaryPath)) {
+if (-not (Test-Path -LiteralPath $binaryPath)) {
   $rootFull = [System.IO.Path]::GetFullPath($extractTo).TrimEnd('\', '/')
   # Exclude the cpu/ safety-net subdir from the search: when the DEFAULT build is being
   # (re)fetched into <os>/ and <os>/cpu/ already holds its own llama-server, the flatten
   # must not mistake the safety net for the freshly extracted nested binary.
   $cpuSubdir = Join-Path $rootFull 'cpu'
-  $found = Get-ChildItem -Path $extractTo -Recurse -File -Filter $binaryName -ErrorAction SilentlyContinue |
+  $found = Get-ChildItem -LiteralPath $extractTo -Recurse -File -Filter $binaryName -ErrorAction SilentlyContinue |
     Where-Object { -not $_.FullName.StartsWith($cpuSubdir + [IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) } |
     Select-Object -First 1
   if ($found) {
     $srcFull = [System.IO.Path]::GetFullPath($found.DirectoryName).TrimEnd('\', '/')
     if ($srcFull -ne $rootFull) {
-      Get-ChildItem -Path $found.DirectoryName -Force | Move-Item -Destination $extractTo -Force
+      Get-ChildItem -LiteralPath $found.DirectoryName -Force | Move-Item -Destination $extractTo -Force
       # Clean up the now-empty nesting dirs (deepest first).
-      Get-ChildItem -Path $extractTo -Recurse -Directory -ErrorAction SilentlyContinue |
+      Get-ChildItem -LiteralPath $extractTo -Recurse -Directory -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
-        Where-Object { -not (Get-ChildItem -Path $_.FullName -Force -ErrorAction SilentlyContinue) } |
+        Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue) } |
         Remove-Item -Force -ErrorAction SilentlyContinue
     }
   }
 }
 
-if (-not (Test-Path $binaryPath)) {
+if (-not (Test-Path -LiteralPath $binaryPath)) {
   Write-Host "  FAIL: $binaryName not found under $extractTo after extraction -- the release archive layout may have changed." -ForegroundColor Red
   exit 1
 }
@@ -605,7 +646,7 @@ if (-not (Test-Path $binaryPath)) {
 # the app's own post-extract check (runtime-download.ts installOne). A half-installed
 # multi-file family (e.g. the kiwix ICU DLLs left behind by a differently-shaped archive)
 # must fail loudly instead of writing a marker that claims a complete install.
-$missingRequired = @($requiredFileNames | Where-Object { -not (Test-Path (Join-Path $extractTo $_)) })
+$missingRequired = @($requiredFileNames | Where-Object { -not (Test-Path -LiteralPath (Join-Path $extractTo $_)) })
 if ($missingRequired.Count -gt 0) {
   Write-Host ("  FAIL: required file(s) missing under {0} after extraction: {1}" -f $extractTo, ($missingRequired -join ', ')) -ForegroundColor Red
   exit 1
@@ -633,7 +674,7 @@ if ($archiveVerified) {
   $entries = @()
   foreach ($f in $requiredFileNames) {
     try {
-      $h = (Get-FileHash -Path (Join-Path $extractTo $f) -Algorithm SHA256).Hash.ToLower()
+      $h = (Get-FileHash -LiteralPath (Join-Path $extractTo $f) -Algorithm SHA256).Hash.ToLower()
       $entries += ('"' + $f + '":"' + $h + '"')
     } catch {
       $allHashed = $false

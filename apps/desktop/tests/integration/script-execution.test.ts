@@ -8,7 +8,7 @@ import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJson } from '../../src/main/services/drive'
 import { REPO_ROOT, repoText } from '../helpers/repo-files'
-import { SCRIPT_LEGS, outputOf, scriptRoot } from '../helpers/script-legs'
+import { SCRIPT_LEGS, downloadEnv, isolatedScripts, outputOf, scriptRoot } from '../helpers/script-legs'
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
 
@@ -107,8 +107,9 @@ function runtimeSourcesYaml(sha: string): string {
   ].join('\n')
 }
 
+/** A bracketed drive root (#767) whose runtime-sources.yaml is `runtimeSourcesYaml(sha)`, edited. */
 function scratchTarget(sha: string, edit: (yaml: string) => string = (y) => y): string {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-exec-'))
+  const root = scriptRoot('script-exec-')
   mkdirSync(join(root, 'model-manifests'), { recursive: true })
   writeFileSync(join(root, 'model-manifests', 'runtime-sources.yaml'), edit(runtimeSourcesYaml(sha)))
   return root
@@ -452,6 +453,10 @@ for (const leg of SCRIPT_LEGS) {
     })
 
     describe('fetch-runtime commercial mode (#234)', () => {
+      // Most of these runs are meant to stop before a download, so a regression could reach one: a copy of scripts/ with no
+      // repo pins beside it, under dead proxies, keeps it off the network (#767).
+      const scriptsCopy = isolatedScripts()
+      const fetchOffline = (args: string[]) => leg.run(fetcher, args, { scriptsDir: scriptsCopy, env: downloadEnv() })
       const commercialArgs = (root: string, extra: string[] = []): string[] => [
         f('Target'),
         root,
@@ -463,7 +468,7 @@ for (const leg of SCRIPT_LEGS) {
 
       it('refuses a placeholder archive hash BEFORE any download: nothing extracted, no marker', () => {
         const root = scratchTarget(PLACEHOLDER)
-        const r = leg.run(fetcher, commercialArgs(root))
+        const r = fetchOffline(commercialArgs(root))
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -473,7 +478,7 @@ for (const leg of SCRIPT_LEGS) {
       it('does not SKIP a hashless (legacy) install: the placeholder is refused instead', () => {
         const root = scratchTarget(PLACEHOLDER)
         installWinBuild(root, false)
-        const r = leg.run(fetcher, commercialArgs(root))
+        const r = fetchOffline(commercialArgs(root))
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -483,7 +488,7 @@ for (const leg of SCRIPT_LEGS) {
       it('without the flag a hashless install is still skipped (DIY tolerance unchanged)', () => {
         const root = scratchTarget(PLACEHOLDER)
         installWinBuild(root, false)
-        const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win'])
+        const r = fetchOffline([f('Target'), root, f('Os'), 'win'])
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
         expect(out).toMatch(/skip \(/)
@@ -492,7 +497,7 @@ for (const leg of SCRIPT_LEGS) {
       it('a hashed, matching install is skipped in commercial mode too (nothing to re-fetch)', () => {
         const root = scratchTarget(PLACEHOLDER)
         installWinBuild(root, true)
-        const r = leg.run(fetcher, commercialArgs(root))
+        const r = fetchOffline(commercialArgs(root))
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
         expect(out).toMatch(/skip \(/)
@@ -500,7 +505,7 @@ for (const leg of SCRIPT_LEGS) {
 
       it('a dry run in commercial mode reports the placeholder as a failure (exit 1)', () => {
         const root = scratchTarget(PLACEHOLDER)
-        const r = leg.run(fetcher, commercialArgs(root, [f('DryRun')]))
+        const r = fetchOffline(commercialArgs(root, [f('DryRun')]))
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -508,7 +513,7 @@ for (const leg of SCRIPT_LEGS) {
 
       it('the OCR family refuses a placeholder before any download too', () => {
         const root = scratchTarget(PLACEHOLDER)
-        const r = leg.run(fetcher, [f('Target'), root, f('Family'), 'ocr', f('Commercial')])
+        const r = fetchOffline([f('Target'), root, f('Family'), 'ocr', f('Commercial')])
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -516,39 +521,8 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
-    // #339 P8-3: kiwix_tools is the first multi-file, multi-build OPTIONAL family the
-    // scripts fetch. A dry run for each of the four pinned builds (win + the two mac archs
-    // + linux) must print that build's full required-file plan (the executables the yaml's
-    // `executables:` declares, plus win's ICU `runtime_files:`) without touching the
-    // network, and must never require --Family/--family to guess right without --os/--arch.
-    describe('fetch-runtime kiwix_tools family — dry run enumerates every build (#339 P8-3)', () => {
-      it.each([
-        ['win', 'x64', KIWIX_WIN],
-        ['mac', 'arm64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']],
-        ['mac', 'x64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']],
-        ['linux', 'x64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']]
-      ] as const)('%s/%s: prints the required-file plan, offline, exit 0', (os, arch, files) => {
-        const root = scratchTarget(REAL_SHA)
-        const r = leg.run(fetcher, [
-          f('Target'),
-          root,
-          f('Family'),
-          'kiwix_tools',
-          f('Os'),
-          os,
-          f('Arch'),
-          arch,
-          f('DryRun')
-        ])
-        const out = outputOf(r)
-        expect(r.status, out).toBe(0)
-        expect(out).toMatch(/dry run/i)
-        expect(out).toContain(`build: ${os}/${arch} cpu @ 3.8.1`)
-        for (const file of files) expect(out, `${os}/${arch}: expected ${file} in the plan`).toContain(file)
-        // Nothing extracted — dry run touches no network and creates no runtime/ tree.
-        expect(existsSync(join(root, 'runtime', 'kiwix-tools'))).toBe(false)
-      })
-    })
+    // The kiwix_tools dry run of every pinned build (#339 P8-3) runs over the committed yaml, held to the app's own
+    // reading of it, in script-fetch-runtime.test.ts.
 
     // #310: verify-models must enumerate every file a multi-file weight declares, not just the
     // primary GGUF — this executes the real script against a small on-disk shard set with REAL
@@ -957,6 +931,8 @@ for (const leg of SCRIPT_LEGS) {
         ['an os with no build', (y) => y, [f('Os'), 'freebsd'], 'No runtime build for os=freebsd'],
         ['an arch with no build', (y) => y, [f('Os'), 'win', f('Arch'), 'arm64'], 'No runtime build for os=win arch=arm64'],
         ['a family the yaml does not declare', (y) => y, [f('Family'), 'whisper_cpp'], 'missing whisper_cpp.version'],
+        // BSD seq counts DOWN from 0 to -1, so on macOS the selection loop read an unset build and died with exit 1 (#767).
+        ['a family with a version and no builds', (y) => `${y}whisper_cpp:\n  version: v1.8.6\n  builds:\n`, [f('Family'), 'whisper_cpp', f('Os'), 'win'], 'No runtime build for os=win'],
         ['an ocr file with no url', drop('      url: https://example.invalid/deu.traineddata.gz\n'), [f('Family'), 'ocr'], "ocr.files (deu): missing 'url'"],
         ['a yaml with no ocr block', (y) => y.slice(0, y.indexOf('\nocr:\n') + 1), [f('Family'), 'ocr'], 'no ocr block']
       ]
