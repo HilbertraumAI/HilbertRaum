@@ -68,22 +68,27 @@ function renderGuard(opts: Partial<TranscriptProps>): void {
 }
 
 describe('"Answer without it" undo vs. an evidence review (AUD-01)', () => {
-  // Any review blocks it, draft or ready: either is human work the delete would destroy.
-  it.each(['draft', 'ready'] as const)(
-    'renders the undo DISABLED with an explanatory title when the turn carries a %s review, and a click does nothing',
-    (status) => {
-      const onAnswerWithoutSkill = vi.fn()
-      renderGuard({ messages: [msg()], reviewSummaries: new Map([['m1', summary({ status })]]), onAnswerWithoutSkill })
-      // Still present (the review chip sits in the same row — a vanished button would confuse)…
-      const undo = screen.getByRole('button', { name: UNDO })
-      // …but inert, and it explains the state instead of leaving the user guessing.
-      expect(undo).toBeDisabled()
-      expect(undo).toHaveAttribute('title', BLOCKED_TITLE)
-      // The click attempt too, so a move to `aria-disabled` (which `toBeDisabled` would miss) stays pinned.
-      undo.click()
-      expect(onAnswerWithoutSkill).not.toHaveBeenCalled()
-    }
-  )
+  // Any review blocks it, draft or ready: either is human work the delete would destroy. The row's
+  // shared `actionsDisabled` blocks it too, with no review title. ChatScreen also withholds the
+  // handler while it streams, so that leg is the component's own contract, as for the other
+  // actions (#743).
+  const blocked: Array<[string, Partial<TranscriptProps>, string | null]> = [
+    ['the turn carries a draft review, with the review title', { reviewSummaries: new Map([['m1', summary({ status: 'draft' })]]) }, BLOCKED_TITLE],
+    ['the turn carries a ready review, with the review title', { reviewSummaries: new Map([['m1', summary({ status: 'ready' })]]) }, BLOCKED_TITLE],
+    ['the row’s actions are disabled and there is no review, with no title', { actionsDisabled: true }, null]
+  ]
+  it.each(blocked)('renders the undo DISABLED when %s, and a click does nothing', (_case, state, title) => {
+    const onAnswerWithoutSkill = vi.fn()
+    renderGuard({ messages: [msg()], ...state, onAnswerWithoutSkill })
+    // Still present (the review chip sits in the same row — a vanished button would confuse)…
+    const undo = screen.getByRole('button', { name: UNDO })
+    // …but inert, and a review says why instead of leaving the user guessing.
+    expect(undo).toBeDisabled()
+    expect(undo.getAttribute('title')).toBe(title)
+    // The click attempt too, so a move to `aria-disabled` (which `toBeDisabled` would miss) stays pinned.
+    undo.click()
+    expect(onAnswerWithoutSkill).not.toHaveBeenCalled()
+  })
 
   it('stays ENABLED and title-free on a skill-stamped turn with no review', () => {
     renderGuard({ messages: [msg()] })
