@@ -84,6 +84,13 @@ describe('verify-electron: the Electron 42 lazy-download boundary (DEP-4 §A)', 
     expect(mod.diagnose(dir, 43)).toBeNull()
   })
 
+  // #769: absent path.txt wins over what dist/ holds. Electron's install.js (`isInstalled`) needs both files, so this
+  // state re-downloads on first use; the docs once said the script caught it as a half-extract.
+  it('on Electron 43 a missing path.txt is not-installed even beside a dist/version with no binary (#769)', () => {
+    makeInstall({ pathTxt: null, distVersion: true, binary: 'missing' })
+    expect(mod.diagnose(dir, 43)).toBeNull()
+  })
+
   it('on Electron 42 (the boundary itself) a missing path.txt is likewise normal', () => {
     makeInstall({ pathTxt: null, distVersion: false, binary: 'missing' })
     expect(mod.diagnose(dir, 42)).toBeNull()

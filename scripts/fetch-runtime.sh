@@ -115,6 +115,21 @@ if [[ -z "$ARCH" ]]; then
 fi
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
+
+# Whether a relative path stays inside the extract dir once its `.` and `..` are resolved (#767): a
+# link's `../lib/x` stays inside its archive, `a/../../x` leaves it.
+stays_inside() {
+  local parts seg depth=0
+  IFS='/' read -r -a parts <<< "$1"
+  for seg in ${parts[@]+"${parts[@]}"}; do
+    case "$seg" in
+      ''|.) ;;
+      ..) depth=$((depth - 1)); if [[ $depth -lt 0 ]]; then return 1; fi ;;
+      *) depth=$((depth + 1)) ;;
+    esac
+  done
+  return 0
+}
 sha256_of() {
   # Hash from STDIN, never by filename: when the path contains a backslash (git-bash on
   # Windows, e.g. "$RUNNER_TEMP/…" = "D:\a\_temp/…"), GNU coreutils escapes the name and
@@ -223,7 +238,7 @@ if [[ "$FAMILY" == "ocr" ]]; then
   # --commercial: every file must be verifiable BEFORE the first download (#234).
   if [[ $COMMERCIAL -eq 1 ]]; then
     PLACEHOLDERS=""
-    for i in $(seq 0 $fidx); do
+    for (( i = 0; i <= fidx; i++ )); do
       sha_i="${F_SHA[$i]:-}"
       if [[ -n "$sha_i" ]] && ! is_real_sha "$sha_i"; then PLACEHOLDERS="${PLACEHOLDERS:+$PLACEHOLDERS, }${F_LANG[$i]}"; fi
     done
@@ -233,7 +248,7 @@ if [[ "$FAMILY" == "ocr" ]]; then
     fi
   fi
   FAILED=0
-  for i in $(seq 0 $fidx); do
+  for (( i = 0; i <= fidx; i++ )); do
     for required in url sha256 dest; do
       case "$required" in
         url) v="${F_URL[$i]:-}" ;;
@@ -377,7 +392,9 @@ fi
 # (vulkan on win/linux, metal on mac since Phase 14).
 # Explicit --os without --arch = cross-provisioning: take that OS's first build (any arch).
 SEL=-1
-for i in $(seq 0 $idx); do
+# A C-style loop, never `seq 0 $idx`: for a family with no build (idx=-1) BSD seq counts DOWN,
+# 0 then -1, so macOS read an unset B_OS[0] and died under set -u with exit 1, not 2 (#767).
+for (( i = 0; i <= idx; i++ )); do
   [[ "${B_OS[$i]}" == "$OS" ]] || continue
   if [[ $OS_EXPLICIT -eq 0 || $ARCH_EXPLICIT -eq 1 ]]; then
     [[ "${B_ARCH[$i]}" == "$ARCH" ]] || continue
@@ -563,32 +580,64 @@ find "$EXTRACT_TO" -mindepth 1 -maxdepth 1 \
 # Extract: tar.gz via tar; zip via unzip (linux) / ditto (macOS).
 case "$ARCHIVE_NAME" in
   *.tar.gz|*.tgz)
+    # The archive goes in on stdin (#767): GNU tar reads a `C:` in an archive NAME as a remote
+    # host, so under Git Bash `tar -xzf 'C:\…'` extracts nothing; GNU and BSD tar both read `-f -`.
+    # tar's messages are kept: for a failure the link copies below cannot repair, they are the
+    # only account of it.
     TAR_EXIT=0
-    tar -xzf "$ARCHIVE" -C "$EXTRACT_TO" 2>/dev/null || TAR_EXIT=$?
+    TAR_MESSAGES="$(tar -xzf - -C "$EXTRACT_TO" < "$ARCHIVE" 2>&1)" || TAR_EXIT=$?
     # The llama.cpp tarballs contain version SYMLINKS (lib*.so -> lib*.so.X.Y.Z), which
     # an exFAT/FAT32 drive cannot hold. Materialize each missing link as a COPY of its
     # target — the dynamic loader only needs the name to exist. Multi-pass, because
     # links can chain (libllama.so -> libllama.so.0 -> ...0.14.0).
+    # The archive names both ends of a link, so neither may leave the extract dir: the extract_to
+    # rule (M18). tar itself refuses such a member; the copy must not do what tar would not (#767).
     LINK_PAIRS=()
     while IFS= read -r pair; do
       [[ -n "$pair" ]] && LINK_PAIRS+=("$pair")
-    done < <(tar -tvzf "$ARCHIVE" 2>/dev/null | sed -n 's/^l.*[[:space:]]\([^[:space:]]*\)[[:space:]]->[[:space:]]\([^[:space:]]*\)$/\1|\2/p')
-    UNRESOLVED=0
+    done < <(tar -tvzf - < "$ARCHIVE" 2>/dev/null | sed -n 's/^l.*[[:space:]]\([^[:space:]]*\)[[:space:]]->[[:space:]]\([^[:space:]]*\)$/\1|\2/p')
     if [[ ${#LINK_PAIRS[@]} -gt 0 ]]; then
       for _pass in 1 2 3 4; do
         UNRESOLVED=0
         for pair in "${LINK_PAIRS[@]}"; do
           lnk="${pair%%|*}"; tgt="${pair#*|}"
           [[ -e "$EXTRACT_TO/$lnk" ]] && continue
+          # The link's name, and its target read from the link's own directory, once `..` is resolved.
+          outside=0
+          for end in "$lnk" "$tgt"; do
+            case "$end" in /*|\\*|[A-Za-z]:*) outside=1 ;; esac
+          done
+          if [[ $outside -eq 1 ]] || ! stays_inside "$lnk" || ! stays_inside "$(dirname "$lnk")/$tgt"; then
+            echo "  FAIL: archive link $lnk -> $tgt points outside $EXTRACT_TO — not copied" >&2
+            exit 1
+          fi
           src="$EXTRACT_TO/$(dirname "$lnk")/$tgt"
           if [[ -f "$src" ]]; then cp -f "$src" "$EXTRACT_TO/$lnk"; else UNRESOLVED=$((UNRESOLVED + 1)); fi
         done
         [[ $UNRESOLVED -eq 0 ]] && break
       done
     fi
-    if [[ $TAR_EXIT -ne 0 && $UNRESOLVED -gt 0 ]]; then
-      echo "tar extraction failed (exit $TAR_EXIT; $UNRESOLVED unresolved entries)" >&2
-      exit 1
+    # Those links make tar fail on FAT/exFAT (and on Windows) for every such archive, and the copies
+    # are the repair. Any other failure (an archive tar cannot read, a member it could not write) is
+    # real, and used to pass unseen until the binary check blamed the archive layout (#767). After a
+    # failed tar every member the archive lists must be on disk; if one is not, or tar cannot list
+    # the archive at all, the run fails with tar's own words.
+    if [[ $TAR_EXIT -ne 0 ]]; then
+      LIST_EXIT=0
+      MEMBERS="$(tar -tzf - < "$ARCHIVE" 2>/dev/null)" || LIST_EXIT=$?
+      LISTED=0
+      MISSING_MEMBERS=""
+      while IFS= read -r member; do
+        [[ -n "$member" ]] || continue
+        LISTED=$((LISTED + 1))
+        [[ -e "$EXTRACT_TO/$member" ]] || MISSING_MEMBERS="${MISSING_MEMBERS:+$MISSING_MEMBERS, }$member"
+      done <<< "$MEMBERS"
+      if [[ $LIST_EXIT -ne 0 || $LISTED -eq 0 || -n "$MISSING_MEMBERS" ]]; then
+        echo "  FAIL: tar could not extract $ARCHIVE_NAME (exit $TAR_EXIT):" >&2
+        printf '%s\n' "$TAR_MESSAGES" | sed -e '/^[[:space:]]*$/d' -e 's/^/    /' >&2
+        [[ -n "$MISSING_MEMBERS" ]] && echo "    not on disk after extraction: $MISSING_MEMBERS" >&2
+        exit 1
+      fi
     fi
     ;;
   *)
@@ -609,8 +658,15 @@ rm -f "$ARCHIVE"
 if [[ ! -f "$BIN_PATH" ]]; then
   # Exclude the cpu/ safety-net subdir from the search: when the DEFAULT build is being
   # (re)fetched into <os>/ and <os>/cpu/ already holds its own llama-server, the flatten
-  # must not mistake the safety net for the freshly extracted nested binary.
-  FOUND="$(find "$EXTRACT_TO" -path "$EXTRACT_TO/cpu" -prune -o -type f -name "$BIN_NAME" -print | head -n1)"
+  # must not mistake the safety net for the freshly extracted nested binary. Matched by a
+  # quoted `case` prefix, not `find -path`: its pattern reads the `[` of a drive path such as
+  # `Kit [1]` as a bracket expression, so the prune never fired and the flatten could move the
+  # safety net's files up instead (#767).
+  FOUND=""
+  while IFS= read -r cand; do
+    case "$cand" in "$EXTRACT_TO/cpu/"*) continue ;; esac
+    FOUND="$cand"; break
+  done < <(find "$EXTRACT_TO" -type f -name "$BIN_NAME")
   if [[ -n "$FOUND" ]]; then
     SRC_DIR="$(dirname "$FOUND")"
     if [[ "$SRC_DIR" != "$EXTRACT_TO" ]]; then

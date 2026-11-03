@@ -194,7 +194,7 @@ Key config points:
   electron-builder still maps the option (an unmapped name is ignored silently). Since #562 the block
   also sets four more fuses; see "Electron fuses" below.
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
-  (`electron` is pinned `^39.8.5`). A downgraded/stripped runtime would lose it — do not downgrade.
+  (`electron` is pinned `^43.8.3`). A downgraded/stripped runtime would lose it — do not downgrade.
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
   electron-builder 26 cannot auto-detect it from `apps/desktop` — so `electron-builder.yml` pins
   **`electronVersion`** explicitly (keep it in sync with the `electron` devDependency when bumping).
@@ -223,7 +223,7 @@ Key config points:
   `tests/helpers/asar-layout.ts` replays the hoisting with electron-builder's own hoister; after a
   package build,
   `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts`
-  compares it with the real archive.
+  compares it with the real archive, and `release.yml`'s build-win does so on every build it packages (#769).
 - **The dev-only screenshot-verify preview harness is excluded from `app.asar`** via a
   `!out/preview/**` negation (CODE-1, full-audit 2026-07-12b): `npm run preview:build`/`screenshot`
   emit it to `out/preview/` and `electron-vite build` clears only `out/main|preload|renderer`, so a
@@ -306,9 +306,11 @@ Key config points:
   SIL-OFL-1.1 notice for the KaTeX fonts, MIT/BSD/ISC attribution). The committed file is
   **generated** — after any dependency change, regenerate with
   `node scripts/generate-third-party-notices.mjs` and commit the result;
-  `tests/integration/third-party-notices.test.ts` recomputes the shipped package set from
-  `package-lock.json` + the `files:` negations (shared logic in `scripts/lib/shipped-packages.mjs`)
-  and fails the gate while the file is stale. Electron's own `LICENSE.electron.txt` /
+  `tests/integration/third-party-notices.test.ts` runs the generator's own builder
+  (`scripts/lib/third-party-notices.mjs`, over the shipped set `scripts/lib/shipped-packages.mjs`
+  computes from `package-lock.json` + the `files:` negations) and fails the gate while the committed
+  file differs from a regeneration by a single byte (#769), as `drive-notices.test.ts` does for
+  `DRIVE-NOTICES.md`. The two builders share their text helpers (`scripts/lib/notice-text.mjs`, #770). Electron's own `LICENSE.electron.txt` /
   `LICENSES.chromium.html` are placed beside the executable by electron-builder itself.
 - **The project's own `LICENSE` ships as an `extraResource` too** (as `LICENSE.txt`, LIC-2
   full-audit 2026-07-12b): the root GPL-3.0-or-later text sits outside the `apps/desktop` build
@@ -347,6 +349,8 @@ maps every option and still writes the integrity hash, and fails on `asar: false
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
 Decode it with the library, not by hand. Expected for 43.8.3 (as for 43.7.7 and 43.8.0): `001011001`.
+`release.yml`'s build-win decodes the Windows exe it packages against `verify-mac-build.sh`'s
+`EXPECTED_WIRE` on every run (#769); by hand:
 
 ```bash
 # from the repo root; prints index → state ('0' off, '1' on)
@@ -541,12 +545,12 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | Script | Purpose |
 |---|---|
 | `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
-| `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-Bundled`/`--bundled` for the Kit's bundled set only (#766); `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
+| `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model (exit 2 when no manifest has that id, or its manifest declares no `download:` block, #767); `-Bundled`/`--bundled` for the Kit's bundled set only (#766); `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Half a download pair (a top-level `download:` without one on `mmproj` or a `files:` member, or the other way round, which the app refuses) → `BLOCK` with the validator's message, nothing of that model fetched, exit 1 (#767). Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), `kiwix_tools` (optional; the knowledge-pack tools — `kiwix-serve`/`kiwix-manage`/`kiwix-search` plus, on Windows, the five ICU DLLs; never part of `--with-assets`, only fetched by an explicit `--family kiwix_tools`, #339 P8-3), or `ocr` (the language files + the `osd` page-orientation data, #538). The DRIVE's `runtime-sources.yaml` wins over the repo's, so on a drive whose manifests predate a pin bump it re-installs the OLD pin; since #516 it prints a **Note** when the two pin different versions. **To move a drive to the repo's pin:** re-run `prepare-drive` on it (it overwrites `model-manifests/` and leaves `config/` alone unless `-Force`), then `fetch-runtime` (plus `-Backend cpu` for the safety net and `-Family whisper_cpp`). The app offers the same update in-app (AI Model screen, #516; `architecture.md` "In-app engine updates"). |
-| `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. `-Strict`/`--strict` fails unless every manifest's weight is VERIFIED; `-Kit`/`--kit` is the same gate over what a Kit ships (the bundled set + any model with a file on the drive; the rest is listed as `CATALOG`, #766). |
+| `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1; no runtime, or a runtime/format pair the app does not run → *UNSUPPORTED*, #767). `-Generate`/`--generate` writes `config/checksums.json` (`entries: []` when there is no manifest, #767). `-Strict`/`--strict` fails unless every manifest's weight is VERIFIED; `-Kit`/`--kit` is the same gate over what a Kit ships (the bundled set + any model with a file on the drive; the rest is listed as `CATALOG`, #766). |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
 | `release-issues-section.sh` | Not drive prep: `.github/workflows/release.yml` runs it while building a tag and appends its output to the release notes. It emits an "Issues resolved" section — the ISSUES closed by the PRs merged since the last **published** release (the same baseline GitHub's own generated "What's Changed" uses, so the two agree), resolved via each commit's associated PRs + `closingIssuesReferences` rather than by parsing "(#N)" out of subjects (which would miss true merge commits). Read-only `gh` API calls, so it is locally testable: `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`. Best-effort by design — a failure is downgraded to a workflow warning, so release notes can never block a release build. |
-| `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt`/`dist/version` present but the platform binary missing or zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently; on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`, which also runs the script from a scratch copy against a stub electron package. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
+| `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt` present but `dist/version` or the platform binary missing, or the binary zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently, even beside a `dist/version` (#769: Electron's own `install.js` reads that as not installed and extracts again on first use); on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`, which also runs the script from a scratch copy against a stub electron package. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
 | `verify-mac-build.sh` + `lib/packaged-app-probe.mjs` | Not drive prep, not CI: the owner-run check of a packaged build (#560, #562). On a Mac the shell script builds (or takes) the `.app`, checks the fuse wire, the signature, the entitlements and the `app.asar` integrity hash, exercises the fuses, then launches the app and runs the probe; on Windows and Linux the probe runs alone against a packaged build started with `--remote-debugging-port` on a scratch drive root. "Verifying a packaged build on macOS" below. |
 
 The asset **download / verify / plan** logic is mirrored from the unit-tested
@@ -556,12 +560,20 @@ NOT in `assets.ts`**: it lives only in `scripts/prepare-drive.ps1`
 (`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
 **between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
 does not change which models `--with-assets` fetches (a parity test,
-`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match, that every id is a committed manifest `--with-assets` can fetch,
-and that both fetch the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match and that every id is a committed manifest `--with-assets` can fetch;
+`tests/integration/script-orchestration.test.ts` runs both twins' `--with-assets --dry-run` and checks that each fetches these ids, then both runtimes and the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
-`Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
-`aria2c` when it is installed; `fetch-runtime` uses `curl`/`Invoke-WebRequest` only.
+`wget`) — no new npm/script deps. The `fetch-models` scripts additionally prefer `aria2c` when it is
+installed; `fetch-runtime` uses `curl` only. The `.sh` twins fall back to `wget`; the `.ps1` twins
+have no fallback and stop with "No downloader found" (`fetch-models`: that file fails, exit 1;
+`fetch-runtime`: exit 3), because every Windows from 10 1803 on ships `curl.exe` (PowerShell 7 on
+macOS/Linux runs the system `curl`). They carry **no
+PowerShell download line** on purpose (#767): their old last resort, `Invoke-WebRequest`, has no
+literal `-OutFile` in PowerShell 5.1 (a `[` in the drive path broke it), and its replacement,
+`(New-Object System.Net.WebClient).DownloadFile(…)`, got a copy of `fetch-models.ps1` quarantined by
+Norton (IDP.HELU.PSD11) — the shape antivirus heuristics read as a malware download cradle, on a
+script that ships on every Kit. `script-drift.test.ts` keeps both out.
 
 **Resilient downloads (flaky-connection hardening).** `curl`'s own `--retry` does not retry a
 **mid-transfer drop** (exit 18/56/28) on older curl, so a beta tester whose link dropped during a
@@ -573,6 +585,20 @@ flags were also strengthened: `--retry 3 --retry-delay 2 --retry-connrefused --c
 (all available on the curl that ships with Win10 1803+/git-bash). Integrity is still enforced by the
 **SHA-256 pin AFTER download**, so resuming a partial transfer can never weaken verification. `aria2c`
 (when present) already resumes via `--continue=true`; `wget` via `-c`.
+
+**Extracting a runtime archive (#767).** `fetch-runtime` unpacks a `.tar.gz` (the macOS/Linux
+builds) with `tar`, and a `.zip` with `unzip`/`ditto` (`.sh`) or .NET's `ZipFile` (`.ps1`). Windows
+has three traps, each avoided on purpose: the `.ps1` runs Windows' own bsdtar
+(`%SystemRoot%\System32\tar.exe`, Windows 10 1803+) by full path, because in a PowerShell started
+from Git Bash the first `tar` on PATH is Git's GNU tar, which reads the `C:` of an archive path as a
+remote host; the `.sh` hands `tar` the archive on stdin (`-f -`) for the same reason under Git Bash;
+and the `.ps1` avoids `Expand-Archive`, which in Windows PowerShell 5.1 reads its destination as a
+wildcard pattern and stops on a drive path holding `[`. Windows and FAT/exFAT cannot hold the
+tarballs' version symlinks, so `tar` fails there and each missing link is copied from its target.
+Any other `tar` failure (an archive it cannot read, a member it could not write) fails the run with
+`tar`'s own message, and a link whose name or target leaves the extract dir is refused.
+`script-fetch-runtime.test.ts` runs both twins through these steps over archives served from
+`file://` URLs, offline, on a drive root whose name holds `[` (#769).
 
 End-to-end (Windows example). `-WithAssets` alone provisions the default chat model for a fast,
 launch-ready drive; add `-AllModels` to pre-load every model (a fully provisioned commercial drive):
@@ -637,14 +663,15 @@ The drive root ships an obvious, double-clickable launcher (spec §6 names). Sou
 | OS | File | What it does |
 |---|---|---|
 | Windows | `Start HilbertRaum.cmd` | `%~dp0` → drive root → set `HILBERTRAUM_DRIVE_ROOT` → spawn the portable `.exe`. |
-| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. |
+| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, publishes that folder only when an `.app` landed in it (#769), and runs the bundle from there. An extracted `.app` at the root runs in place. |
 | Linux | `start-hilbertraum.sh` | same, next to the AppImage. |
 | all | `READ ME FIRST.txt` | friendly first-run + SmartScreen/Gatekeeper instructions. |
 
 All three launchers refuse to start while more than one app artifact of their kind sits at the
 drive root (two portable `.exe`s, two AppImages, two `.app.zip`s, or an extracted `.app` beside a
 zip), naming the files to delete and never deleting anything themselves (#235); `--check`
-(`/check` on Windows) resolves the app and exits without starting it.
+(`/check` on Windows) prints the drive root, the manifests folder the app will read and the app it
+resolved, and exits without starting it.
 `tests/integration/launcher-execution.test.ts` executes all three in scratch roots.
 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
@@ -680,9 +707,10 @@ green gate does not sign** (it never invokes electron-builder).
 ### The `build-commercial-drive` master pipeline
 
 One self-contained, dual-shell script (`scripts/build-commercial-drive.{ps1,sh}`) runs the ordered
-steps. Its step plan mirrors the canonical, unit-tested `planCommercialDrive`; the final "is this
-sellable?" verdict comes from **calling** `assertCommercialDrive` itself (both in
-`apps/desktop/src/main/services/commercial-drive.ts`; see "The builders **refuse to proceed**" below, #233).
+steps; the order lives in the two twins alone (`tests/integration/script-orchestration.test.ts` runs
+their dry pipeline). The final "is this sellable?" verdict comes from **calling** `assertCommercialDrive`
+itself (`apps/desktop/src/main/services/commercial-drive.ts`; see "The builders **refuse to proceed**"
+below, #233).
 
 ```
 prepare-drive  --force            # commercial policy (encrypted, plaintext off, no phone-home)
@@ -725,7 +753,8 @@ scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license
 
 The builders **refuse to proceed** when a differently named `HilbertRaum-*` artifact (or an extracted
 `.app`) already sits at the drive root — delete the old build first (#233; the launchers must never
-find two). `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
+find two) — and when an `--app-artifact` path does not exist. Both refusals come before step 1, so no
+download runs first (#769: the missing artifact used to surface at step 4). `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
 `mac-arm64`, `linux-x64` — decision #229 on its default); the kit's label names them and the gate
 requires the artifact + launcher for each and none for any other. Every `fetch-runtime` run gets
 `--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
@@ -777,7 +806,10 @@ declared platform has exactly one app artifact of the version being built plus i
 canonical gate is `assertCommercialDrive(...)`, and since PR #271 both scripts **call it** (through the
 built `apps/desktop/out/tools/assert-commercial-drive.mjs`; `npm run build` produces it, `node` runs it):
 `SELLABLE` is printed only from its verdict, the scripts' own native checks are a pre-flight, not a
-second gate. **"Every
+second gate. Run by hand, the tool takes `--target <root> --platforms <list> --app-version <v> [--json]`
+and exits 0 (sellable, or `--help`), 1 (not sellable) or 2 (a usage error, an unknown platform
+included); `--json` prints the verdict as one `{ ok, problems, checks }` line on stdout and sends any
+log line to stderr (#767). **"Every
 weight VERIFIED" spans every shipped runtime family (2026-07-01):** the verifier + `verify-models.{ps1,sh}`
 gate on the canonical `(runtime → format)` support table (`models.ts` `SUPPORTED_RUNTIME_FORMATS`), so the
 bundled **ggml / whisper_cpp** transcriber verifies by SHA-256 like any GGUF — previously it was reported
@@ -1100,7 +1132,14 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
 - **`test-win`** — `windows-latest`, two shards like CI's windows legs (#458): `npm ci` → typecheck →
   build → **the full test suite**, on the first-class OS: belt-and-braces on the exact tagged commit.
 - **`build-win`** — `windows-latest`, after `test-win`: `npm ci` → typecheck → build →
-  `npm run package:win` → `HilbertRaum-<version>-portable.exe`. Also fetches the win Vulkan runtime via
+  `npm run package:win` → `HilbertRaum-<version>-portable.exe`, then **checks the packaged app** (#769,
+  blocking): `packaging.test.ts`, `third-party-notices.test.ts` and `asar-unpack-closure.test.ts` run
+  against `release/win-unpacked` (`HILBERTRAUM_PACKED_ASAR` / `HILBERTRAUM_PACKED_EXE`): the layout
+  model's package directories and the notices' `name@version` list against the real `app.asar`, the
+  shipped `THIRD-PARTY-NOTICES.md` and `LICENSE.txt` against the committed files, the OCR worker
+  closure inside `app.asar.unpacked`, and the exe's fuse wire. `HILBERTRAUM_PACKED_REQUIRED=1` fails
+  the step when either path is missing, so those rows cannot skip; `packaging.test.ts` also reads the
+  step itself on every PR (a workflow change first runs at a tag). Also fetches the win Vulkan runtime via
   `scripts/fetch-runtime.sh` (git-bash; the SAME pinned, SHA-256-verified upstream build the
   in-app engine installer fetches — `runtime-sources.yaml` first win/x64 match) and zips the
   extracted install tree (`Compress-Archive`; root entry `win/` incl. the
@@ -1209,11 +1248,11 @@ run one real-model session covering:
    `scripts/verify-mac-build.sh` on a Mac, and on Windows and Linux start the packaged build with
    `--remote-debugging-port` on a scratch drive root and run `scripts/lib/packaged-app-probe.mjs`
    against it (next section).
-11. **The `app.asar` layout model against a real archive (#548).** No CI job reads a real archive, so this is the only
-   check of `tests/helpers/asar-layout.ts`. From `apps/desktop`, on a `npm run package:win` of the tagged commit:
-   `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`
-   (PowerShell: set `$env:HILBERTRAUM_PACKED_ASAR` first). `names exactly the package directories of a real app.asar` must
-   run, not skip, and pass. Run it too after any electron-builder bump.
+11. **The `app.asar` layout model against a real archive (#548).** `release.yml`'s build-win runs it on every Windows
+   build it packages (#769, "The release workflow" above): check that step passed. By hand, after an electron-builder
+   bump or a local `npm run package:win`, from `apps/desktop`: set `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar`
+   and `HILBERTRAUM_PACKED_EXE=release/win-unpacked/HilbertRaum.exe`, then
+   `npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`.
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 

@@ -249,27 +249,31 @@ if [[ $WITH_ASSETS -eq 1 ]]; then
   # natural DIY invocation (--with-assets with neither --accept-license nor --dry-run — every
   # default-set model is already license-approved) this array is EMPTY, and Bash 3.2 + `set -u`
   # (macOS stock /bin/bash) aborts an unguarded empty-array expansion with "unbound variable"
-  # (M23 — the same class guarded in fetch-models.sh:161 / verify-models.sh). Expand it via the
+  # (M23 — the same class guarded in fetch-models.sh / verify-models.sh). Expand it via the
   # `${arr[@]+"${arr[@]}"}` idiom so an empty array vanishes instead of erroring (F-03).
   COMMON_MODEL_ARGS=()
   [[ $ACCEPT_LICENSE -eq 1 ]] && COMMON_MODEL_ARGS+=(--accept-license)
   [[ $DRY_RUN -eq 1 ]] && COMMON_MODEL_ARGS+=(--dry-run)
 
+  # A failed child ends the run with exit 1 and names the step, as the .ps1 twin does (#769):
+  # under `set -e` alone it ended with the child's code and no line of its own.
   # fetch-models takes a single --only id, so the default set is fetched one id at a time;
   # --all-models fetches every manifest in one pass (a single call with no --only).
   if [[ $ALL_MODELS -eq 1 ]]; then
-    bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" ${COMMON_MODEL_ARGS[@]+"${COMMON_MODEL_ARGS[@]}"}
+    bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" ${COMMON_MODEL_ARGS[@]+"${COMMON_MODEL_ARGS[@]}"} ||
+      { echo "fetch-models failed." >&2; exit 1; }
   else
     echo "  (default set: ${DEFAULT_MODEL_IDS[*]}; pass --all-models for every model)"
     for id in "${DEFAULT_MODEL_IDS[@]}"; do
-      bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" --only "$id" ${COMMON_MODEL_ARGS[@]+"${COMMON_MODEL_ARGS[@]}"}
+      bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" --only "$id" ${COMMON_MODEL_ARGS[@]+"${COMMON_MODEL_ARGS[@]}"} ||
+        { echo "fetch-models failed." >&2; exit 1; }
     done
   fi
 
   # llama.cpp sidecar (the chat + embeddings engine) — always.
   RUNTIME_ARGS=(--target "$TARGET")
   [[ $DRY_RUN -eq 1 ]] && RUNTIME_ARGS+=(--dry-run)
-  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}"
+  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" || { echo "fetch-runtime (llama.cpp) failed." >&2; exit 1; }
 
   # whisper.cpp sidecar (the transcriber engine) — always, to match the bundled Whisper
   # model. Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a
@@ -285,7 +289,7 @@ if [[ $WITH_ASSETS -eq 1 ]]; then
   # llama.cpp (a failure aborts). Without it the DIY drive's ocr/ dir stays empty and
   # scanned-PDF/photo OCR (Phase 38) is silently unavailable — the provisioning root cause
   # of issue #59 (F-05, full audit 2026-07-16). build-commercial-drive already fetches it.
-  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" --family ocr
+  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" --family ocr || { echo "fetch-runtime (ocr) failed." >&2; exit 1; }
 
   echo
   echo "Now capture real hashes: scripts/verify-models.sh --target \"$TARGET\" --generate"

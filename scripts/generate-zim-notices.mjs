@@ -18,8 +18,8 @@
 // flavour, scraper, or licence — the app reads no `M/` metadata namespace, so this generator
 // does not either. The notice states plainly what is NOT known rather than guessing.
 //
-// Exit codes: 0 ok (including "no archives found") · 1 kiwix-manage failed on some archive ·
-// 2 usage error.
+// Exit codes: 0 ok (including "no archives found") · 1 kiwix-manage failed on some archive, or its
+// notice could not be written · 2 usage error, or no kiwix-manage under --tools-dir.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -38,7 +38,11 @@ function parseArgs(argv) {
     const a = argv[i]
     const next = () => {
       const v = argv[i + 1]
-      if (v === undefined) throw new Error(`${a} needs a value`)
+      if (v === undefined) {
+        // A usage error, so exit 2 like the others below, not a thrown stack and 1 (#768).
+        console.error(`${a} needs a value\n${USAGE}`)
+        process.exit(2)
+      }
       i++
       return v
     }
@@ -115,12 +119,19 @@ function resolveManagePath(toolsDir) {
   const posix = join(toolsDir, 'kiwix-manage')
   if (existsSync(win)) return win
   if (existsSync(posix)) return posix
-  throw new Error(`kiwix-manage not found under ${toolsDir} (looked for kiwix-manage(.exe))`)
+  // A configuration error (the wrong --tools-dir), so exit 2 with the message rather than a stack (#768).
+  console.error(`kiwix-manage not found under ${toolsDir} (looked for kiwix-manage(.exe))`)
+  process.exit(2)
 }
 
-/** The generated per-archive notice. LF-only, no BOM. States plainly what is not knowable. */
-function buildNoticeMd(book, leaf) {
-  const value = (v, fallback = 'not recorded') => (v === null || v === '' ? fallback : v)
+/**
+ * The generated per-archive notice: LF-only, no BOM, and plain about what is not knowable. A field the library leaves out
+ * reads "not recorded" (the title falls back to the archive's file name). Exported for zim-notices.test.ts (#769).
+ */
+export function buildNoticeMd(book, leaf) {
+  // A field may decode to a CR (`&#13;` in a description): the notice keeps the line break as LF, where the LF-only
+  // check below threw mid-run and left every later archive without its notice.
+  const value = (v, fallback = 'not recorded') => (v === null || v === '' ? fallback : v.replace(/\r\n?/g, '\n'))
   const lines = []
   lines.push(`# ${value(book.title, leaf)} — knowledge pack notice`)
   lines.push('')
@@ -202,15 +213,22 @@ function main() {
         failed = true
         continue
       }
-      const notice = buildNoticeMd(book, leaf)
-      if (dryRun) {
-        console.log(`dry-run  ${leaf}  uuid=${book.id}`)
-      } else {
-        mkdirSync(noticesDir, { recursive: true })
-        writeFileSync(join(noticesDir, `${book.id}.md`), notice, 'utf8')
-        console.log(`ok  ${leaf}  -> zim/NOTICES/${book.id}.md`)
+      // One archive's notice failing (a field the notice refuses, a full or read-only disk) is that archive's failure:
+      // the rest still get theirs, and the run ends with exit 1, not a stack.
+      try {
+        const notice = buildNoticeMd(book, leaf)
+        if (dryRun) {
+          console.log(`dry-run  ${leaf}  uuid=${book.id}`)
+        } else {
+          mkdirSync(noticesDir, { recursive: true })
+          writeFileSync(join(noticesDir, `${book.id}.md`), notice, 'utf8')
+          console.log(`ok  ${leaf}  -> zim/NOTICES/${book.id}.md`)
+        }
+        written++
+      } catch (err) {
+        console.error(`could not write the notice for ${leaf}: ${err instanceof Error ? err.message : String(err)}`)
+        failed = true
       }
-      written++
     } finally {
       try {
         rmSync(metaDir, { recursive: true, force: true })

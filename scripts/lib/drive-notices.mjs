@@ -8,7 +8,7 @@
 // generator writes and fails while the committed file is stale.
 //
 // The output is DETERMINISTIC (sorted with the case-folded code-unit comparator — see the
-// REL-1 note in generate-third-party-notices.mjs — no timestamps, no locale-dependent
+// REL-1 note in notice-text.mjs — no timestamps, no locale-dependent
 // calls): rerunning on the same manifests + pinned license texts is byte-identical on
 // every host/locale. Everything in the file is DERIVED from the repo's own records:
 // model-manifests/**/*.yaml (attribution lines), model-manifests/runtime-sources.yaml
@@ -18,21 +18,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
-
-/** Case-folded code-unit order (REL-1 — locale-independent; see the third-party generator). */
-function foldedCodepointCompare(a, b) {
-  const fa = a.toLowerCase()
-  const fb = b.toLowerCase()
-  if (fa !== fb) return fa < fb ? -1 : 1
-  return a < b ? -1 : a > b ? 1 : 0
-}
-
-/** Normalize a pinned text: LF endings, no BOM; NUL is a hard error (repo hygiene). */
-function cleanText(raw, source) {
-  const t = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  if (t.includes(String.fromCharCode(0))) throw new Error(`NUL byte in pinned text: ${source}`)
-  return t.trimEnd()
-}
+import { cleanText, fence, foldedCodepointCompare } from './notice-text.mjs'
 
 /**
  * Pinned upstream copyright lines for MIT-licensed model WEIGHTS (reviewer should-fix,
@@ -68,14 +54,6 @@ const EXTRA_FILE_NOTICES = {
 }
 const WEIGHT_SHARD_RE = /-\d{5}-of-\d{5}\./
 
-/** Wrap verbatim license text in a code fence that cannot collide with its content. */
-function fence(text) {
-  const runs = text.match(/`+/g) ?? []
-  const longest = runs.reduce((m, r) => Math.max(m, r.length), 0)
-  const f = '`'.repeat(Math.max(3, longest + 1))
-  return `${f}\n${text}\n${f}`
-}
-
 /** Recursively list *.yaml/*.yml under dir in deterministic order. */
 function walkYaml(dir) {
   const out = []
@@ -96,7 +74,7 @@ function walkYaml(dir) {
  */
 export function buildDriveNotices(repoRoot) {
   const pinned = (name) =>
-    cleanText(readFileSync(join(repoRoot, 'licenses', name), 'utf8'), `licenses/${name}`)
+    cleanText(readFileSync(join(repoRoot, 'licenses', name), 'utf8'), `licenses/${name}`, { trimLineEnds: false })
   const llamaMit = pinned('llama.cpp-MIT.txt')
   const whisperMit = pinned('whisper.cpp-MIT.txt')
   const sdlZlib = pinned('SDL2-zlib.txt')
@@ -178,10 +156,14 @@ export function buildDriveNotices(repoRoot) {
   models.sort((a, b) => foldedCodepointCompare(a.id, b.id))
   if (models.length === 0) throw new Error('no model manifests found under model-manifests/')
 
+  // Grouped by the license id folded to lower case (#768): `validateManifest` takes any spelling,
+  // and a case-exact `mit` let `license: MIT` skip the copyright refusal below. The catalog is
+  // all lower case, so the headings are unchanged; each line keeps the manifest's own spelling.
   const byLicense = new Map()
   for (const m of models) {
-    if (!byLicense.has(m.license)) byLicense.set(m.license, [])
-    byLicense.get(m.license).push(m)
+    const key = m.license.toLowerCase()
+    if (!byLicense.has(key)) byLicense.set(key, [])
+    byLicense.get(key).push(m)
   }
   const licenseKeys = [...byLicense.keys()].sort(foldedCodepointCompare)
 

@@ -41,10 +41,14 @@ const noticesFixture = (): NoticesFixture => ({
   manifests: { alpha: { id: 'alpha', display_name: 'Alpha', license: 'apache-2.0', local_path: 'models/chat/alpha.gguf' } }
 })
 
-/** The builder over a scratch repo: the real pinned license texts, the fixture's yaml. */
-function buildFrom(f: NoticesFixture): string {
+/** The builder over a scratch repo: the real pinned license texts (rewritten by `licenses`, if given), the fixture's yaml. */
+function buildFrom(f: NoticesFixture, licenses?: Record<string, (text: string) => string>): string {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-drive-notices-'))
   cpSync(join(REPO_ROOT, 'licenses'), join(root, 'licenses'), { recursive: true })
+  for (const [name, rewrite] of Object.entries(licenses ?? {})) {
+    const path = join(root, 'licenses', name)
+    writeFileSync(path, rewrite(readFileSync(path, 'utf8')))
+  }
   mkdirSync(join(root, 'model-manifests', 'chat'), { recursive: true })
   writeFileSync(join(root, 'model-manifests', 'runtime-sources.yaml'), stringify(f.sources))
   for (const [name, doc] of Object.entries(f.manifests)) {
@@ -172,6 +176,12 @@ describe('buildDriveNotices refuses to write an incomplete file (LIC-1)', () => 
     expect(text).toContain('model: alpha apache-2.0')
   })
 
+  // #768: the BOM strip is the one place a normalising editor can silently turn the regex into `/^/` (a raw U+FEFF).
+  it('reads a pinned license text saved with a BOM and CRLF line ends as the plain text', () => {
+    const saved = buildFrom(noticesFixture(), { 'curl.txt': (text) => '\uFEFF' + text.replace(/\n/g, '\r\n') })
+    expect(saved).toBe(buildFrom(noticesFixture()))
+  })
+
   it.each<[string, (f: NoticesFixture) => void, string]>([
     ['a new runtime family', (f) => { f.sources.fifth = { version: '1' } }, 'runtime-sources.yaml families changed'],
     ['a family with no version', (f) => { delete f.sources.ocr.version }, 'family ocr has no version'],
@@ -190,6 +200,12 @@ describe('buildDriveNotices refuses to write an incomplete file (LIC-1)', () => 
     [
       'an MIT weight with no pinned copyright line',
       (f) => { f.manifests.alpha.license = 'mit' },
+      'no pinned upstream copyright line'
+    ],
+    [
+      // #768: validateManifest takes any spelling; the refusal must not hang on lower case.
+      'an MIT weight spelled `MIT` with no pinned copyright line (#768)',
+      (f) => { f.manifests.alpha.license = 'MIT' },
       'no pinned upstream copyright line'
     ],
     [

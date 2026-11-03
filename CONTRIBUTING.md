@@ -249,6 +249,13 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **The bash legs on a Windows desk** need `C:\Program Files\Git\bin` first on `PATH` and `HILBERTRAUM_SCRIPT_SH_LEG=1`: from
   PowerShell, plain `bash` is WSL's and fails every `.sh` row. Run those suites on their own. Git Bash's forks are slow under
   load, and inside a full run the builder's gate row can reach the 60 s child kill. No CI leg runs them that way.
+- **A script row runs on `scriptRoot()`**, a drive root named `Kit [1]`: a `[` read as a wildcard by a non-literal
+  PowerShell path made `fetch-models` fall back to the repo's catalog (#767). **A row that really downloads** also passes
+  `env: downloadEnv()` (no aria2c on `PATH`: every CI image ships it and it reads no `file://` URL; every proxy variable
+  names a dead port) and `scriptsDir: isolatedScripts()` (a copy of the scripts with no repo catalog beside it). Run an
+  old or mutated script the same way, or dry: a pre-fix `fetch-models.ps1` on a bracketed root started a real 1.6 GB
+  download from the repo's catalog. The shipped `.ps1` scripts carry no PowerShell download line (`script-drift`):
+  a `WebClient` one got a copy of `fetch-models.ps1` quarantined by Norton.
 - **Prove a cache hit with a swap behind the cache, not a counter.** Rewrite the file with the same size
   and mtime: a stale value proves no read, and it needs no probe in production (`policy.test.ts`, F-30).
   Keep a changed-signature row beside it, or a cache that never re-reads passes.
@@ -377,15 +384,17 @@ PR is the gate, so open a **draft PR** to run CI on a work-in-progress branch. T
 `HILBERTRAUM_*` manual smoke matrix stays a separate human gate (see
 [`docs/packaging.md`](docs/packaging.md)).
 
-**Don't put `node_modules` on an NTFS volume mounted on Linux.** `npm install` downloads
-Electron's ~100 MB platform binary and unpacks it with `extract-zip`; on an ntfs-3g/FUSE mount
-the unzip can *silently* drop the binary (you get an empty `dist/locales/` and nothing else),
-which later surfaces as electron-vite's opaque `Electron uninstall` error. The root
-`postinstall` (`scripts/verify-electron.mjs`) now detects this on **every** `npm install`,
-force-re-extracts from the cached download, and — if the mount genuinely can't hold the binary —
-fails with a clear message instead of letting the breakage surface later. The fix is to keep
-`node_modules` on a native filesystem (ext4/Btrfs/APFS); the portable HilbertRaum **drive** can
-still be NTFS. Override the check with `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` if needed.
+**Don't put `node_modules` on an NTFS volume mounted on Linux.** Since Electron 42 the install
+itself downloads nothing: Electron fetches its ~100 MB platform binary lazily, the first time
+something runs it (`npm run dev`, a build, an Electron-launching test), and unpacks it with
+`extract-zip`. On an ntfs-3g/FUSE mount the unzip can *silently* drop the binary (you get an
+empty `dist/locales/` and nothing else), which surfaces as electron-vite's opaque `Electron
+uninstall` error. The root `postinstall` (`scripts/verify-electron.mjs`) runs on every
+`npm ci` / `npm install`: when it finds a half-extracted download (`path.txt` written, the binary
+missing or empty) it re-extracts from the cached download, and if the mount genuinely can't hold
+the binary it fails with a clear message instead of letting the breakage surface later. The fix
+is to keep `node_modules` on a native filesystem (ext4/Btrfs/APFS); the portable HilbertRaum
+**drive** can still be NTFS. Override the check with `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` if needed.
 
 ## Code style
 - TypeScript, strict mode. Prefer small, well-named modules.

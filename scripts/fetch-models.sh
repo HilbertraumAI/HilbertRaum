@@ -18,6 +18,14 @@
 # --bundled fetches only the models a preconfigured Kit ships preloaded
 # (bundled_on_preconfigured_drive: true, #766); build-commercial-drive passes it.
 #
+# --only <id> fetches one model. An id no manifest carries, or one whose manifest declares no
+# download block, exits 2: an explicit request that names nothing fetchable.
+#
+# Half a download pair (#767): a model whose top-level download has no partner on its mmproj
+# projector or on a files: member (or the other way round) is refused with the validator's
+# message (BLOCK, exit 1), whatever is on disk and whatever --accept-license says: the app
+# refuses such a manifest, so any file of it fetched would never start.
+#
 # Usage:
 #   scripts/fetch-models.sh --target /Volumes/HILBERTRAUM [--only <id>] [--bundled] \
 #       [--accept-license] [--dry-run]
@@ -64,27 +72,31 @@ sha256_of() {
 # Inline YAML comments (whitespace + '#' + rest) are stripped before unquoting (M17).
 field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
-# Same flat parse, but over a string (a YAML sub-block) instead of a file — used to read the
-# mmproj projector block's local_path/sha256/url (the SECOND file of a vision model, DIST-1).
+# Same flat parse, but over a string (a YAML sub-block from block_of) instead of a file.
 field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
-# Extract the indented body of a top-level `mmproj:` mapping (lines until the next column-0 key).
-mmproj_block_of() { awk '/^mmproj:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+# Extract the indented body of a top-level `<key>:` mapping (lines until the next column-0 key);
+# field_in then parses it. Three blocks are read this way: the top-level `download:` (the primary
+# file's source), `mmproj:` (the SECOND file of a vision model, DIST-1) and `files:` (the
+# ADDITIONAL required files of a multi-file weight, #310, e.g. a GGUF shard set's shards 2..N). A
+# key nested in one block never answers for another: read flat, a projector's size_bytes reached
+# the primary file when the top-level download carried none, and handle_file's size guard then
+# deleted a resumable partial (#767).
+# The key line may carry a comment, and a comment line at column 0 does not end a mapping (YAML).
+block_of() { awk -v key="$2" '$0 ~ ("^" key ":[[:space:]]*(#.*)?$") {f=1;next} /^#/{next} /^[^[:space:]]/{f=0} f' "$1"; }
 
-# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
-# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — lines until the next
-# column-0 key. Mirrors mmproj_block_of; emitted AFTER local_path/sha256/download/mmproj in
-# every manifest (model-policy.md key-order rule), so it never poisons the flat top-level reads.
-files_block_of() { awk '/^files:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+# The field separator of the `files:` member records: the ASCII unit separator, not a tab. A tab
+# is IFS whitespace, so `read` collapsed an empty field and shifted the rest left: a verified
+# member with no size_bytes read its state as its size and was planned as a fetch (#767).
+SEP=$'\037'
 
-# Split a `files:` block (as text, e.g. from files_block_of) into one TAB-separated record per
-# list member: local_path, sha256, download.url, download.size_bytes (raw — comments/quotes are
-# stripped by the caller via clean_value). A member starts at its own `- local_path:` line and
-# runs to the next one (or the end of the block). Every member declares a `download` when the
-# manifest carries a top-level one (validator all-or-nothing rule, #310).
+# Split a `files:` block (as text, from block_of) into one SEP-separated record per list member:
+# local_path, sha256, download.url, download.size_bytes (raw — comments/quotes are stripped by
+# the caller via clean_value). A member starts at its own `- local_path:` line and runs to the
+# next one (or the end of the block).
 files_member_records() {
   printf '%s\n' "$1" | awk '
-    function emit() { if (started) printf "%s\t%s\t%s\t%s\n", lp, sha, durl, dsize }
+    function emit() { if (started) printf "%s\037%s\037%s\037%s\n", lp, sha, durl, dsize }
     /^[[:space:]]*-[[:space:]]*local_path:/ {
       emit()
       started = 1; indl = 0
@@ -92,7 +104,7 @@ files_member_records() {
       sha = ""; durl = ""; dsize = ""
       next
     }
-    started && /^[[:space:]]*download:[[:space:]]*$/ { indl = 1; next }
+    started && /^[[:space:]]*download:[[:space:]]*(#.*)?$/ { indl = 1; next }
     started && !indl && /^[[:space:]]*sha256:/ {
       sha = $0; sub(/^[[:space:]]*sha256:[[:space:]]*/, "", sha); next
     }
@@ -200,8 +212,8 @@ handle_file() {
   # tell the two apart, so we do NOT delete and keep the previous behaviour (resume; a wrong
   # file is still deleted by the post-download verification below, which self-heals on the
   # next run).
-  # NOTE the value comes from the manifest's `download:` block, which the schema places before
-  # any `mmproj:` block, and the flat parse returns the first match.
+  # NOTE the value comes from this file's own download block (block_of), never from another
+  # file's: a projector's size once deleted the primary file's resumable partial (#767).
   if [[ "$state" == mismatch && "$expected_size" =~ ^[0-9]+$ ]]; then
     local on_disk
     on_disk="$(wc -c < "$dest" 2>/dev/null | tr -d '[:space:]')"
@@ -238,51 +250,113 @@ done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
          ! -name 'runtime-sources.yaml' ! -name 'runtime-sources.yml' | sort)
 
 planned=0; fetched=0; skipped=0; had_failure=0
+# --only names one model: an id no manifest carries, or one with nothing to fetch, exits 2 below.
+only_seen=0; only_unbundled=0; only_fetchable=0
 
 echo "Fetch models -> $TARGET"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run — nothing will be downloaded)"
 echo
+[[ ${#MANIFEST_FILES[@]} -eq 0 ]] && echo "No model manifests found under '$MANIFESTS_DIR' — nothing to fetch."
 
 # Bash 3.2 + `set -u`: expanding an EMPTY array aborts with "unbound variable" (M23).
-if [[ ${#MANIFEST_FILES[@]} -eq 0 ]]; then
-  echo "No model manifests found under $MANIFESTS_DIR — nothing to fetch."
-  exit 0
-fi
-
-for mf in "${MANIFEST_FILES[@]}"; do
+for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
   id="$(field "$mf" id)"
+  # Under --only the rest of a manifest is read only for the one it names: under Git Bash every
+  # fork counts.
+  if [[ -n "$ONLY" ]]; then
+    [[ "$id" != "$ONLY" ]] && continue
+    only_seen=1
+  fi
+  # One grep, and only under --bundled: under Git Bash every fork counts.
+  if [[ $BUNDLED -eq 1 ]] && ! grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$mf"; then
+    [[ -n "$ONLY" ]] && only_unbundled=1
+    continue
+  fi
   local_path="$(field "$mf" local_path)"
   sha="$(field "$mf" sha256 | tr '[:upper:]' '[:lower:]')"
-  url="$(field "$mf" url)"
+  # The primary file's source: the top-level `download:` block only, never another file's (#767).
+  dl_block="$(block_of "$mf" download)"
+  url="$(field_in "$dl_block" url)"
   # Optional (30 of the committed manifests carry it) — used only to tell a complete-but-wrong
   # file apart from a resumable partial in handle_file.
-  size_bytes="$(field "$mf" size_bytes)"
+  size_bytes="$(field_in "$dl_block" size_bytes)"
+  license_url="$(field_in "$dl_block" license_url)"
   license="$(field "$mf" license)"
-  license_url="$(field "$mf" license_url)"
   review_status="$(field "$mf" status)"
   # Optional `download.withdrawn` (issue 196): the publisher deleted the exact file this
   # manifest pins, so the URL above is known-dead. Mirrors planModelDownloads' 'source-
   # withdrawn' task status (assets.ts is the source of truth; script-execution.test.ts runs both
   # twins). Note values must not contain " #" — `field` strips inline YAML comments.
+  # Read FLAT on purpose, unlike url/size_bytes: a note in ANY file's download block skips the
+  # whole model when something needs fetching. The app plans each file on its own, but a model
+  # with one file gone can never be completed, so fetching its other files would only spend GBs
+  # on a model that stays missing.
   withdrawn="$(field "$mf" withdrawn)"
-
-  [[ -z "$url" || -z "$local_path" ]] && continue       # no download block → skip
-  [[ -n "$ONLY" && "$id" != "$ONLY" ]] && continue
-  # One grep, and only under --bundled: under Git Bash every fork counts.
-  if [[ $BUNDLED -eq 1 ]] && ! grep -Eiq '^[[:space:]]*bundled_on_preconfigured_drive[[:space:]]*:[[:space:]]*true[[:space:]]*(#.*)?$' "$mf"; then
-    continue
-  fi
-  planned=$((planned + 1))
-
-  dest="$TARGET/$local_path"
 
   # A vision model is TWO files: the language GGUF (above) + the mmproj projector (DIST-1). Parse
   # the projector's own block (its local_path/sha256/download.url) — absent for non-vision models.
-  mmproj_block="$(mmproj_block_of "$mf")"
+  mmproj_block="$(block_of "$mf" mmproj)"
   mmproj_local="$(field_in "$mmproj_block" local_path)"
   mmproj_sha="$(field_in "$mmproj_block" sha256 | tr '[:upper:]' '[:lower:]')"
   mmproj_url="$(field_in "$mmproj_block" url)"
   mmproj_size="$(field_in "$mmproj_block" size_bytes)"
+
+  # Half a download pair (#767): the validator's all-or-nothing rule (shared/manifest.ts, #752),
+  # with its messages, collected one per line into `half`.
+  half=""
+  if [[ -n "$mmproj_local" ]]; then
+    if [[ -n "$url" && -z "$mmproj_url" ]]; then
+      half="${half}\"mmproj.download\" is required when the model declares a top-level \"download\" (a partial download plan would install a model that cannot start)"$'\n'
+    fi
+    if [[ -n "$mmproj_url" && -z "$url" ]]; then
+      half="${half}\"download\" is required when \"mmproj\" declares one (a partial download plan would install a model that cannot start)"$'\n'
+    fi
+  fi
+
+  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards 2..N),
+  # read here into files_spec (local, sha, url, size per line, SEP-separated) and hashed only once
+  # the model passes the checks below.
+  files_block="$(block_of "$mf" files)"
+  files_spec=""; any_file_url=0; member_idx=0
+  if [[ -n "$files_block" ]]; then
+    while IFS="$SEP" read -r f_local f_sha f_dlurl f_dlsize; do
+      f_local="$(clean_value "$f_local")"
+      f_sha="$(clean_value "$f_sha" | tr '[:upper:]' '[:lower:]')"
+      f_dlurl="$(clean_value "$f_dlurl")"
+      f_dlsize="$(clean_value "$f_dlsize")"
+      if [[ -n "$f_dlurl" ]]; then
+        any_file_url=1
+        if [[ -z "$url" ]]; then
+          half="${half}\"download\" is required when \"files[$member_idx]\" declares one (a partial download plan would install a model that cannot start)"$'\n'
+        fi
+      elif [[ -n "$url" ]]; then
+        half="${half}\"files[$member_idx].download\" is required when the model declares a top-level \"download\" (a partial download plan would install a model that cannot start)"$'\n'
+      fi
+      member_idx=$((member_idx + 1))
+      # A command substitution strips its trailing newline, so the separator is appended
+      # explicitly — otherwise two concatenated records would run together on one line.
+      files_spec="${files_spec}$(printf '%s%s%s%s%s%s%s' "$f_local" "$SEP" "$f_sha" "$SEP" "$f_dlurl" "$SEP" "$f_dlsize")"$'\n'
+    done < <(files_member_records "$files_block")
+  fi
+
+  # A url stands for its download block: the validator requires one in every block.
+  [[ -z "$url" && -z "$mmproj_url" && $any_file_url -eq 0 ]] && continue   # no download block → skip
+  [[ -z "$local_path" ]] && continue
+  [[ -n "$ONLY" ]] && only_fetchable=1
+  planned=$((planned + 1))
+
+  # The app refuses half a pair, so any file of it fetched would belong to a model that never
+  # starts; without a top-level download the primary file has no source at all. Checked before
+  # any file is hashed, whatever is on disk and whatever --accept-license says.
+  if [[ -n "$half" ]]; then
+    while IFS= read -r message; do
+      [[ -n "$message" ]] && printf '  BLOCK  %s: %s\n' "$id" "$message" >&2
+    done <<< "$half"
+    echo '         Nothing fetched: the app refuses this manifest, so the model could never start.' >&2
+    had_failure=1; continue
+  fi
+
+  dest="$TARGET/$local_path"
   has_mmproj=0
   [[ -n "$mmproj_url" && -n "$mmproj_local" ]] && has_mmproj=1
   mmproj_dest="$TARGET/$mmproj_local"
@@ -292,28 +366,18 @@ for mf in "${MANIFEST_FILES[@]}"; do
   mmproj_state=""
   [[ $has_mmproj -eq 1 ]] && mmproj_state="$(file_state "$mmproj_dest" "$mmproj_sha")"
 
-  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
-  # 2..N). Looped only when the model has a top-level download — the validator's all-or-nothing
-  # rule guarantees every declared file then carries its own download block too. Classified once
-  # into files_plan (local\tsha\turl\tsize\tstate per line) so the later fetch pass never re-hashes.
-  files_block="$(files_block_of "$mf")"
+  # The files: members, classified once into files_plan (files_spec plus a state per line) so the
+  # later fetch pass never re-hashes.
   total_files=1
   files_plan=""
-  if [[ -n "$files_block" ]]; then
+  if [[ -n "$files_spec" ]]; then
     file_count=0
-    while IFS=$'\t' read -r f_local f_sha f_dlurl f_dlsize; do
+    while IFS="$SEP" read -r f_local f_sha f_dlurl f_dlsize; do
       [[ -z "$f_local" ]] && continue
-      f_local="$(clean_value "$f_local")"
-      f_sha="$(clean_value "$f_sha" | tr '[:upper:]' '[:lower:]')"
-      f_dlurl="$(clean_value "$f_dlurl")"
-      f_dlsize="$(clean_value "$f_dlsize")"
-      f_dest="$TARGET/$f_local"
-      f_state="$(file_state "$f_dest" "$f_sha")"
+      f_state="$(file_state "$TARGET/$f_local" "$f_sha")"
       file_count=$((file_count + 1))
-      # A command substitution strips its trailing newline, so the separator is appended
-      # explicitly — otherwise two concatenated records would run together on one line.
-      files_plan="${files_plan}$(printf '%s\t%s\t%s\t%s\t%s' "$f_local" "$f_sha" "$f_dlurl" "$f_dlsize" "$f_state")"$'\n'
-    done < <(files_member_records "$files_block")
+      files_plan="${files_plan}$(printf '%s%s%s%s%s%s%s%s%s' "$f_local" "$SEP" "$f_sha" "$SEP" "$f_dlurl" "$SEP" "$f_dlsize" "$SEP" "$f_state")"$'\n'
+    done <<< "$files_spec"
     total_files=$((1 + file_count))
   fi
 
@@ -323,7 +387,7 @@ for mf in "${MANIFEST_FILES[@]}"; do
   [[ "$gguf_state" == absent || "$gguf_state" == mismatch ]] && needs_fetch=1
   [[ $has_mmproj -eq 1 && ( "$mmproj_state" == absent || "$mmproj_state" == mismatch ) ]] && needs_fetch=1
   if [[ -n "$files_plan" ]]; then
-    while IFS=$'\t' read -r _ _ _ _ f_state; do
+    while IFS="$SEP" read -r _ _ _ _ f_state; do
       [[ "$f_state" == absent || "$f_state" == mismatch ]] && needs_fetch=1
     done <<< "$files_plan"
   fi
@@ -361,13 +425,28 @@ for mf in "${MANIFEST_FILES[@]}"; do
   [[ $has_mmproj -eq 1 ]] && { handle_file "$id" " (mmproj)" "$mmproj_dest" "$mmproj_sha" "$mmproj_url" "$mmproj_local" "$mmproj_state" "$mmproj_size" || true; }
   if [[ -n "$files_plan" ]]; then
     file_n=2
-    while IFS=$'\t' read -r f_local f_sha f_dlurl f_dlsize f_state; do
+    while IFS="$SEP" read -r f_local f_sha f_dlurl f_dlsize f_state; do
       [[ -z "$f_local" ]] && continue
       handle_file "$id" " (file $file_n/$total_files)" "$TARGET/$f_local" "$f_sha" "$f_dlurl" "$f_local" "$f_state" "$f_dlsize" || true
       file_n=$((file_n + 1))
     done <<< "$files_plan"
   fi
 done
+
+# An explicit --only that names nothing fetchable is a usage error, not an empty success: a stale
+# default id in prepare-drive --with-assets would otherwise pass silently (#767).
+if [[ -n "$ONLY" && $only_seen -eq 0 ]]; then
+  echo "No model manifest with id '$ONLY' under '$MANIFESTS_DIR'." >&2
+  exit 2
+fi
+if [[ -n "$ONLY" && $only_unbundled -eq 1 ]]; then
+  echo "Model '$ONLY' is not in the bundled set (bundled_on_preconfigured_drive: true): nothing to fetch." >&2
+  exit 2
+fi
+if [[ -n "$ONLY" && $only_fetchable -eq 0 ]]; then
+  echo "Model '$ONLY' declares no download block: nothing to fetch." >&2
+  exit 2
+fi
 
 echo
 printf 'Planned %d | fetched %d | skipped %d\n' "$planned" "$fetched" "$skipped"
@@ -377,7 +456,7 @@ if [[ $BUNDLED -eq 1 && $planned -eq 0 ]]; then
   exit 1
 fi
 if [[ $had_failure -eq 1 ]]; then
-  echo "One or more models failed to download/verify (or were license-blocked)." >&2
+  echo "One or more models failed to download/verify (or were blocked)." >&2
   exit 1
 fi
 exit 0

@@ -1085,7 +1085,7 @@ change; nothing here touches the model recommender. Code comments cite this sect
    are the same state — and it was the wrong instinct anyway: the ★ sits on ONE card, while the
    first screenful is what a user actually scans. The ★ card is runnable **by construction**
    (the recommender never picks a RAM-gated model), so this key can only move it up, never down —
-   pinned by `integration/models.test.ts` "RAM stays a hard gate: never a model the Models screen would refuse to start". Measured live on a 16 GB box, fresh workspace with the ★ in the picker: the
+   pinned by `integration/models.test.ts` "RAM stays a hard gate: the card fallback never picks a model the Models screen would refuse to start (#769)". Measured live on a 16 GB box, fresh workspace with the ★ in the picker: the
    first RAM-warned card moved from position 1 to position 15 of 23.
    **Superseded in the upward direction (2026-08-03, issue #93 item 3):** the ★ card now LEADS
    its group — `orderPickerModels` inserts **recommended-first** between installed-first and

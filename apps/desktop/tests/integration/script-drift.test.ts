@@ -202,30 +202,11 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
 
 // --- Kiwix-tools corresponding-source bundle (#339 P8-4) ----------------------------
 // The builder twins gained their own un-numbered step (-KiwixSourceDir/--kiwix-source-dir):
-// install the source bundle via the new node helper, then fetch the kiwix_tools binaries for
+// install the source bundle via the node helper, then fetch the kiwix_tools binaries for
 // the three Kit platforms with EXPLICIT archs. Both re-spell the platform list as literals —
-// the same drift risk as every other matrix in this file.
+// the same drift risk as every other matrix in this file. SOURCE FIRST is behaviour, run in
+// script-orchestration.test.ts: a source dir without the archives fetches no kiwix-tools.
 describe('TS ↔ shell-script drift (kiwix source bundle, #339 P8-4)', () => {
-  it.each([
-    ['scripts/build-commercial-drive.ps1', '& $kiwixNodeCmd.Source @kiwixInstallArgs', "Family = 'kiwix_tools'"],
-    ['scripts/build-commercial-drive.sh', 'node "${KIWIX_INSTALL_ARGS[@]}"', '--family kiwix_tools']
-  ])('%s invokes install-kiwix-source-bundle.mjs before any kiwix_tools fetch', (rel, call, fetch) => {
-    const code = codeLines(rel).map((l) => l.text)
-    const callAt = code.findIndex((l) => l.includes(call))
-    expect(callAt, `${rel}: the install call is gone`).toBeGreaterThanOrEqual(0)
-    expect(code.findIndex((l) => l.includes(fetch)), 'SOURCE FIRST').toBeGreaterThan(callAt)
-  })
-
-  it('build-commercial-drive.ps1 declares $KiwixSourceDir', () => {
-    expect(repoText('scripts/build-commercial-drive.ps1')).toMatch(/\[string\]\s*\$KiwixSourceDir/)
-  })
-
-  it('build-commercial-drive.sh handles --kiwix-source-dir', () => {
-    const src = repoText('scripts/build-commercial-drive.sh')
-    expect(src).toContain('--kiwix-source-dir)')
-    expect(src).toContain('KIWIX_SOURCE_DIR')
-  })
-
   /** ps1: `@{ Os = 'win'; Arch = 'x64' }` rows inside the kiwix fetch loop. */
   function ps1KiwixPlatforms(): Set<string> {
     const src = repoText('scripts/build-commercial-drive.ps1')
@@ -488,10 +469,10 @@ describe('TS ↔ shell-script drift (verify-models gates)', () => {
 })
 
 // --- Provisioning-script error/repair structure (AUD-05 + AUD-24) --------------------
-// These scripts have no Node, no test harness and no CI leg of their own — they run once, on a
-// maintainer's machine, against multi-GB downloads. The three properties below are structural
-// (they hold or don't by the shape of the source), so a text guard is the only automated check
-// available and is worth far more than nothing.
+// These scripts have no Node — they run once, on a maintainer's machine, against multi-GB
+// downloads. The properties below are structural (they hold or don't by the shape of the source),
+// so a text guard is the cheapest automated check. fetch-models' AUD-24 delete rule is no longer
+// read here but run, over real `file://` downloads on both twins: script-fetch-models.test.ts (#769).
 
 /** Source lines with pure-comment lines dropped (`#` after optional leading whitespace). */
 function codeLines(rel: string): { n: number; text: string }[] {
@@ -501,6 +482,14 @@ function codeLines(rel: string): { n: number; text: string }[] {
     .filter(({ text }) => !text.trim().startsWith('#'))
 }
 
+const PROVISIONING_PS1 = [
+  'scripts/build-commercial-drive.ps1',
+  'scripts/fetch-runtime.ps1',
+  'scripts/fetch-models.ps1',
+  'scripts/prepare-drive.ps1',
+  'scripts/verify-models.ps1'
+]
+
 describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', () => {
   // Under `$ErrorActionPreference = 'Stop'` — which all of these set — `Write-Error` is promoted
   // from a non-terminating record to a SCRIPT-TERMINATING exception. Three consequences, all of
@@ -509,18 +498,6 @@ describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', 
   // exit, so the process died with code 1 and callers keying on 2 mis-read the outcome; and
   // (c) the exception propagated OUT of a parent script's `& .\child.ps1` call and killed the
   // parent too. The fix is `Write-Host -ForegroundColor Red` plus an explicit `exit`.
-  //
-  // build-commercial-drive.ps1 is deliberately NOT in this list: its `Run` helper still has one
-  // `Write-Error …; exit 1` pair whose exit CODE is already 1, so the terminating behaviour is
-  // currently harmless there. It carries the same hazard and should be converted, but that is a
-  // separate change — adding it here now would redden on an untouched file.
-  const PROVISIONING_PS1 = [
-    'scripts/fetch-runtime.ps1',
-    'scripts/fetch-models.ps1',
-    'scripts/prepare-drive.ps1',
-    'scripts/verify-models.ps1'
-  ]
-
   it.each(PROVISIONING_PS1)('%s never uses Write-Error (it is script-terminating under Stop)', (rel) => {
     // Comment lines are dropped first: the scripts legitimately NAME Write-Error in the
     // explanatory comments that record exactly this reasoning.
@@ -535,83 +512,56 @@ describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', 
   })
 })
 
-describe('fetch-models — the mismatch re-download deletes only when resume cannot help (AUD-24)', () => {
-  // A checksum "mismatch" covers two different files: a SHORT cross-run partial (resume is the
-  // whole point — a multi-GB weight on a flaky link must not restart from zero) and a file that
-  // is complete and WRONG (resuming that one requests a byte range at/past the resource length,
-  // an unsatisfiable HTTP 416, so every retry transfers nothing). So the redo deletes the
-  // destination first, but ONLY when the bytes on disk already reach the manifest's expected
-  // size. If that delete ever escapes its size guard, every interrupted multi-GB download in
-  // the wild restarts from zero — an expensive, silent regression with no error to notice.
-  //
-  // Asserted structurally: inside the mismatch region (from the mismatch test to the download
-  // call), the size comparison must appear BEFORE the first delete, which is only true while
-  // the delete is nested inside the guard.
-  it('fetch-models.ps1 compares the on-disk size before its first Remove-Item', () => {
-    const src = repoText('scripts/fetch-models.ps1')
-    const region = src.indexOf("$state -eq 'mismatch' -and $expectedSize -match")
-    expect(region, 'the size-guarded mismatch branch in fetch-models.ps1 not found').toBeGreaterThanOrEqual(0)
-    const download = src.indexOf('Invoke-Download', region)
-    expect(download, 'the download call after the mismatch branch not found').toBeGreaterThan(region)
-    const body = src.slice(region, download)
-    const compare = body.indexOf('-ge [long]$expectedSize')
-    const remove = body.indexOf('Remove-Item')
-    expect(compare, 'the on-disk-vs-expected size comparison is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the pre-download delete is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the delete escaped its size guard — it must stay nested inside it').toBeGreaterThan(compare)
-  })
+describe('provisioning scripts — every path is literal (#767)', () => {
+  // A drive root is any folder a user picks, and `[` is legal in one: a `-Path` (or positional) argument is a wildcard, so
+  // `Test-Path '…\Kit [1]'` found nothing and fetch-models fell back to the repo's catalog, verify-models reported 36
+  // missing weights, the builder called a complete drive NOT SELLABLE. Every row of the script suites now runs on such a
+  // root (`scriptRoot()`); this scan covers the branches no row reaches. A cmdlet fed by a pipeline binds -LiteralPath
+  // from each object's PSPath.
+  const PATH_CMDLET = /\b(Test-Path|Get-Content|Get-ChildItem|Get-Item|Get-FileHash|Remove-Item|Copy-Item|Move-Item|Rename-Item|Expand-Archive|Resolve-Path|Set-Content|Add-Content|Out-File)\b/g
 
-  it('fetch-models.sh compares the on-disk size before its first rm -f', () => {
-    const src = repoText('scripts/fetch-models.sh')
-    const region = src.indexOf('"$state" == mismatch && "$expected_size" =~')
-    expect(region, 'the size-guarded mismatch branch in fetch-models.sh not found').toBeGreaterThanOrEqual(0)
-    const download = src.indexOf('if ! download ', region)
-    expect(download, 'the download call after the mismatch branch not found').toBeGreaterThan(region)
-    const body = src.slice(region, download)
-    const compare = body.indexOf('on_disk >= expected_size')
-    const remove = body.indexOf('rm -f')
-    expect(compare, 'the on-disk-vs-expected size comparison is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the pre-download delete is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the delete escaped its size guard — it must stay nested inside it').toBeGreaterThan(compare)
-  })
-
-  // The guard above FAILS OPEN: with no expected size it does not delete and the old
-  // resume-onto-a-wrong-file behaviour returns. So a dropped call-site argument disables the fix
-  // for every model with nothing erroring anywhere — the highest-value assertion in this file.
-  /** Split a shell/PowerShell call's argument list into tokens ('' and "" runs stay whole). */
-  const callArgs = (line: string, fn: string): string[] => {
-    let rest = line.slice(line.indexOf(fn) + fn.length)
-    const chain = rest.indexOf('||')
-    if (chain >= 0) rest = rest.slice(0, chain)
-    return [...rest.matchAll(/'[^']*'|"[^"]*"|[^\s;{}]+/g)].map((m) => m[0])
+  /** Each path cmdlet call whose own segment (to the next `|`, `;` or `}`) names no -LiteralPath and is not pipeline-fed. */
+  function nonLiteralCalls(lines: { n: number; text: string }[]): string[] {
+    const offenders: string[] = []
+    lines.forEach(({ n, text }, i) => {
+      for (const m of text.matchAll(PATH_CMDLET)) {
+        const before = text.slice(0, m.index).trimEnd()
+        const fed = before.endsWith('|') || (before === '' && (lines[i - 1]?.text.trimEnd().endsWith('|') ?? false))
+        const segment = text.slice(m.index).split(/[|;}]/)[0]
+        if (!fed && !segment.includes('-LiteralPath')) offenders.push(`${n}: ${text.trim()}`)
+      }
+    })
+    return offenders
   }
 
-  it('every Invoke-HandleFile call in fetch-models.ps1 still passes the expected size', () => {
-    const calls = codeLines('scripts/fetch-models.ps1').filter(
-      ({ text }) => text.includes('Invoke-HandleFile') && !text.trim().startsWith('function ')
-    )
-    expect(calls.length, 'expected the gguf + mmproj call sites').toBeGreaterThanOrEqual(2)
-    for (const { n, text } of calls) {
-      const args = callArgs(text, 'Invoke-HandleFile')
-      expect(args.length, `fetch-models.ps1:${n}: argument count`).toBe(8)
-      expect(args[7], `fetch-models.ps1:${n}: the 8th argument must be the manifest size`).toMatch(
-        /^\$[A-Za-z0-9_]*[Ss]ize[A-Za-z0-9_]*$/
-      )
-    }
+  it('the scan tells a literal or pipeline-fed call from a wildcard one', () => {
+    const lines = [
+      'if (Test-Path -LiteralPath $a) { Remove-Item $b }',
+      'Get-ChildItem -LiteralPath $d -Force |',
+      '  Remove-Item -Recurse -Force',
+      '$h = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash',
+      'Get-Content $f -Raw'
+    ].map((text, i) => ({ n: i + 1, text }))
+    expect(nonLiteralCalls(lines)).toEqual([`1: ${lines[0].text}`, `5: ${lines[4].text}`])
   })
 
-  it('every handle_file call in fetch-models.sh still passes the expected size', () => {
-    const calls = codeLines('scripts/fetch-models.sh').filter(
-      ({ text }) => text.includes('handle_file "') && !text.trim().startsWith('handle_file()')
-    )
-    expect(calls.length, 'expected the gguf + mmproj call sites').toBeGreaterThanOrEqual(2)
-    for (const { n, text } of calls) {
-      const args = callArgs(text, 'handle_file')
-      expect(args.length, `fetch-models.sh:${n}: argument count`).toBe(8)
-      expect(args[7], `fetch-models.sh:${n}: the 8th argument must be the manifest size`).toMatch(
-        /^"\$[a-z0-9_]*size[a-z0-9_]*"$/i
-      )
-    }
+  it.each(PROVISIONING_PS1)('%s passes every path as -LiteralPath', (rel) => {
+    expect(nonLiteralCalls(codeLines(rel)), 'a `[` in the drive root reads as a wildcard: use -LiteralPath').toEqual([])
+  })
+})
+
+describe('provisioning scripts — no in-script downloader (#767)', () => {
+  // The scripts download with curl.exe (or aria2c) and nothing else. A PowerShell download line is what antivirus heuristics
+  // key on: while this wave replaced Invoke-WebRequest's last-resort fallback (no literal -OutFile in 5.1) with
+  // `(New-Object System.Net.WebClient).DownloadFile(…)`, Norton quarantined a copy of fetch-models.ps1 as IDP.HELU.PSD11.
+  // These scripts ship on every Kit and DIY drive. Every Windows from 10 1803 on ships curl.exe; without it they stop.
+  const DOWNLOADER = /\b(Invoke-WebRequest|Invoke-RestMethod|Net\.WebClient|DownloadFile|DownloadString|DownloadData|Start-BitsTransfer)\b/
+
+  it.each(PROVISIONING_PS1)('%s carries no PowerShell download line', (rel) => {
+    const offenders = codeLines(rel)
+      .filter(({ text }) => DOWNLOADER.test(text))
+      .map(({ n, text }) => `${rel}:${n}: ${text.trim()}`)
+    expect(offenders, 'download with curl.exe only: antivirus heuristics quarantine a script holding such a line').toEqual([])
   })
 })
 
@@ -628,36 +578,8 @@ describe('fetch-models — a withdrawn upstream source is skipped, never request
   })
 })
 
-describe('fetch-runtime — the OCR re-fetch delete is deliberately UNCONDITIONAL (AUD-24)', () => {
-  // The asymmetry with fetch-models is intentional and must not be "harmonized" away: the OCR
-  // language files are a few MB, runtime-sources.yaml records no size field for them, and
-  // re-fetching one costs nothing — there is no partial worth saving and no field to distinguish
-  // one with. Wrapping this delete in a fetch-models-style size guard would make it a no-op
-  // (there is no size to compare against), silently restoring the HTTP-416 repair loop it fixes.
-  //
-  // Asserted structurally: between the "hash differs" message and the delete there is nothing
-  // but comments — no intervening condition of any kind.
-  it.each([
-    ['scripts/fetch-runtime.ps1', 'Remove-Item'],
-    ['scripts/fetch-runtime.sh', 'rm -f']
-  ])('%s deletes the mismatching OCR file with no size test in between', (rel, deleteToken) => {
-    const src = repoText(rel)
-    const msg = src.indexOf('present but hash differs')
-    expect(msg, `${rel}: the OCR hash-mismatch branch not found`).toBeGreaterThanOrEqual(0)
-    const del = src.indexOf(deleteToken, msg)
-    expect(del, `${rel}: the OCR re-fetch delete is gone`).toBeGreaterThan(msg)
-    const between = src
-      .slice(src.indexOf('\n', msg) + 1, src.lastIndexOf('\n', del) + 1)
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith('#'))
-    expect(
-      between,
-      `${rel}: the OCR delete gained a condition. It is unconditional on purpose — see the ` +
-        'comment above it; do not harmonize it with the size-guarded fetch-models delete.'
-    ).toEqual([])
-  })
-})
+// fetch-runtime's OCR re-fetch deletes a mismatching file unconditionally (AUD-24), unlike fetch-models' size-guarded
+// delete: script-fetch-runtime.test.ts runs it on both twins over a wrong file of the right length.
 
 // The commercial gate is ONE function (#233, #234): both builders call the built
 // assert-commercial-drive tool, spell the same platform labels, pass --commercial to
@@ -716,6 +638,87 @@ describe('one commercial gate — builder + fetch-runtime literals (#233, #234)'
     // The flag is tested within the 25 lines that precede the marker write.
     const window = src.slice(Math.max(0, markerWrite - 2000), markerWrite)
     expect(window.split('\n').slice(-25).join('\n')).toContain(flag)
+  })
+})
+
+// #769: one name per flag across the twins: `-AcceptLicense` in the .ps1's param() is `--accept-license` among the .sh's
+// case arms. A flag added to one twin alone is a command that works on one OS and stops at "Unknown argument" on the other.
+describe('twin scripts take the same flags', () => {
+  const kebab = (name: string): string => `--${name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}`
+
+  /**
+   * A .ps1's `param(...)` names, kebab-cased. Strings, comments and the `[...]` attributes and types go first, so
+   * `[Parameter(Mandatory = $true)]` names no `$true` and a default `@('a', 'b')` is no list of names; a name right after
+   * a `=` is a default's value, not a parameter.
+   */
+  function ps1Flags(src: string): string[] {
+    const start = src.search(/^param\(/im)
+    if (start < 0) throw new Error('no param( block')
+    let depth = 0
+    let end = -1
+    let quote = ''
+    for (let i = start + 'param'.length; i < src.length && end < 0; i++) {
+      const c = src[i]
+      if (quote) {
+        if (c === quote) quote = ''
+      } else if (c === "'" || c === '"') quote = c
+      else if (c === '#') i = src.includes('\n', i) ? src.indexOf('\n', i) : src.length
+      else if (c === '(') depth++
+      else if (c === ')' && --depth === 0) end = i
+    }
+    if (end < 0) throw new Error('param( block not closed')
+    let body = src
+      .slice(start + 'param('.length, end)
+      .replace(/'[^']*'|"[^"]*"/g, "''")
+      .replace(/#.*$/gm, '')
+    while (/\[[^[\]]*\]/.test(body)) body = body.replace(/\[[^[\]]*\]/g, ' ')
+    return [...body.matchAll(/(?<!=\s*)\$([A-Za-z_]\w*)(?=\s*(?:[=,]|$))/g)].map((m) => kebab(m[1])).sort()
+  }
+
+  /** A .sh's long flags: its case arms (`--x)`, `--x=*)`, `-h|--help)`) and any `== "--x"` test, less `--help`. */
+  function shFlags(src: string): string[] {
+    const flags = new Set<string>()
+    for (const line of src.split('\n')) {
+      if (line.trim().startsWith('#')) continue
+      const arm = /^\s*([-\w|=*]+)\)/.exec(line)
+      for (const alt of arm?.[1].split('|') ?? []) if (alt.startsWith('--')) flags.add(alt.replace(/=\*$/, ''))
+      for (const m of line.matchAll(/==\s*"(--[\w-]+)"/g)) flags.add(m[1])
+    }
+    flags.delete('--help') // PowerShell answers -? and Get-Help on its own
+    return [...flags].sort()
+  }
+
+  const TWINS = readdirSync(join(REPO_ROOT, 'scripts'))
+    .filter((f) => f.endsWith('.ps1') && existsSync(join(REPO_ROOT, 'scripts', f.replace(/\.ps1$/, '.sh'))))
+    .map((f) => f.replace(/\.ps1$/, ''))
+
+  it('finds the twins, and reads both spellings of an example', () => {
+    expect(TWINS).toEqual(expect.arrayContaining(['build-commercial-drive', 'fetch-models', 'prepare-drive', 'setup-dev']))
+    const ps1 = [
+      'param(',
+      '  [Parameter(Mandatory = $true)] [string] $Target,',
+      "  [string[]] $Platforms = @('a', 'b'),",
+      '  [bool] $Keep = $true, # a comment (with a paren',
+      '  [switch] $DryRun',
+      ')',
+      '$Ignored = 1'
+    ].join('\n')
+    expect(ps1Flags(ps1)).toEqual(['--dry-run', '--keep', '--platforms', '--target'])
+    const sh = [
+      'case "$1" in',
+      '  --target) T="$2"; shift 2 ;;',
+      '  --target=*) T="${1#*=}"; shift ;;',
+      '  --dry-run|-n) D=1; shift ;;',
+      '  -h|--help) exit 0 ;;',
+      '  *) exit 2 ;;',
+      'esac',
+      '[[ "${1:-}" == "--keep" ]] && K=1'
+    ].join('\n')
+    expect(shFlags(sh)).toEqual(['--dry-run', '--keep', '--target'])
+  })
+
+  it.each(TWINS)('%s: the .ps1 param() names are the .sh flags', (base) => {
+    expect(shFlags(repoText(`scripts/${base}.sh`))).toEqual(ps1Flags(repoText(`scripts/${base}.ps1`)))
   })
 })
 
@@ -847,6 +850,28 @@ describe('shell scripts — no capture read after a call that rewrites it', () =
       expect(clobberedReads(rel, repoText(rel))).toEqual([])
     })
   }
+})
+
+// GNU tar reads a `C:` in an archive name as a remote host, so under Git Bash `tar -xzf 'C:\…'` opens nothing (#767). No CI
+// leg runs a shell script with a tar archive on Windows, yet release.yml runs fetch-runtime.sh under Git Bash; so the shape
+// is checked as text: a script hands tar its archive on stdin (`-f -`).
+describe('shell scripts — tar reads its archive from stdin', () => {
+  const BY_NAME = /\btar\s+(-[A-Za-z]*f|--file)[\s=]+(?!-(\s|$))\S/
+
+  it('the pattern finds an archive passed by name and passes stdin', () => {
+    expect(BY_NAME.test('tar -xzf "$ARCHIVE" -C "$DIR"')).toBe(true)
+    expect(BY_NAME.test('tar --file="$ARCHIVE" -t')).toBe(true)
+    expect(BY_NAME.test('tar -xzf - -C "$DIR" < "$ARCHIVE"')).toBe(false)
+  })
+
+  it('no shell script passes tar an archive name', () => {
+    const hits = SHELL_SCRIPTS.flatMap((rel) =>
+      codeLines(rel)
+        .filter(({ text }) => BY_NAME.test(text))
+        .map(({ n, text }) => `${rel}:${n}: ${text.trim()}`)
+    )
+    expect(hits).toEqual([])
+  })
 })
 
 // A renamed launcher or doc is skipped silently: both copy steps sit behind a plain existence test.

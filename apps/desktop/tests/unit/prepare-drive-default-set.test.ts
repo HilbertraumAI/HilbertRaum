@@ -9,7 +9,8 @@ import { committedManifests } from '../helpers/catalog'
 // import, so they can silently drift. This parity test pins the documented invariant: the two lists
 // must match exactly (same ids, same order), id by id: the parser closes on a line that is exactly
 // `)`, because the first `)` in either file sits in a comment on the first id. See docs/packaging.md
-// + docs/drive-layout.md.
+// + docs/drive-layout.md. That `--with-assets` fetches these ids, then both runtimes and the OCR files
+// (F-05), is run on both twins in tests/integration/script-orchestration.test.ts.
 
 const ps1Text = repoText('scripts', 'prepare-drive.ps1')
 const shText = repoText('scripts', 'prepare-drive.sh')
@@ -33,24 +34,5 @@ describe('prepare-drive default model set parity (DOC-N4)', () => {
       expect(m!.download!.withdrawn, `${id}: source withdrawn`).toBeUndefined()
       expect(m!.licenseReview.status, `${id}: license review`).toBe('approved')
     }
-  })
-})
-
-// F-05 (full audit 2026-07-16): --with-assets used to fetch models + the llama.cpp and
-// whisper.cpp runtimes but NEVER the `ocr` family, so every DIY drive shipped with an empty
-// ocr/ dir and scanned-PDF/photo OCR was silently unavailable (open issue #59). Only
-// build-commercial-drive fetched it. There is no canonical TS plan for the with-assets fetch
-// CALL SET (drive.ts holds the layout and the config shapes only — the with-assets
-// orchestration lives solely in the two shells, per docs/packaging.md), so this parity net
-// pins the invariant directly against the two scripts: both siblings' --with-assets block must
-// invoke fetch-runtime for the ocr family, or a Windows-vs-mac/linux drive drifts on OCR again.
-describe('prepare-drive --with-assets fetches the OCR family in both siblings (F-05)', () => {
-  it('prepare-drive.ps1 invokes fetch-runtime with -Family ocr', () => {
-    expect(ps1Text).toMatch(/Family\s*=\s*'ocr'/)
-    expect(ps1Text).toContain('Invoke-FetchScript $fetchRuntime $ocrArgs')
-  })
-
-  it('prepare-drive.sh invokes fetch-runtime with --family ocr', () => {
-    expect(shText).toMatch(/--family ocr\b/)
   })
 })

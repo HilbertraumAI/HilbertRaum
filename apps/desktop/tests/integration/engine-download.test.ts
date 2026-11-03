@@ -24,9 +24,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parse as parseYaml, stringify } from 'yaml'
+import { stringify } from 'yaml'
 import { isRealSha256 } from '../../src/shared/manifest'
-import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import {
   EngineDownloadManager,
   engineStatus,
@@ -60,9 +59,11 @@ import { tMain } from '../../src/main/services/i18n'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { verifierInert } from '../helpers/binary-fixtures'
+import { committedRuntimeSources } from '../helpers/catalog'
 import { bodyFetch, runToEnd } from '../helpers/download-fixtures'
 import { deferred } from '../helpers/deferred'
 import { hangBudgetMs, within } from '../helpers/hang-budget'
+import { repoText } from '../helpers/repo-files'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
 // In-app engine (llama.cpp sidecar) downloader: the gates (a closed gate never reaches the
@@ -771,10 +772,7 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     // The COMMITTED pin: four per-platform artifacts with real digests, the family optional in
     // the yaml exactly as the code spec says, and the notices carrying the family + its
     // corresponding-source record (the drift and notices suites pin the matrices and the text).
-    const repoRoot = join(__dirname, '..', '..', '..', '..')
-    const shipped = validateRuntimeSources(parseYaml(readFileSync(join(repoRoot, 'model-manifests', 'runtime-sources.yaml'), 'utf8')))
-    expect(shipped.errors).toEqual([])
-    const kiwix = shipped.families?.kiwix_tools
+    const kiwix = committedRuntimeSources().families?.kiwix_tools
     expect(kiwix?.version).toBe('3.8.1')
     expect(kiwix?.optional).toBe(true)
     expect(kiwix?.executables).toEqual(['kiwix-serve', 'kiwix-manage', 'kiwix-search'])
@@ -785,7 +783,7 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     }
     expect(kiwix?.builds[0]?.runtimeFiles).toEqual(['icudt74.dll', 'icuin74.dll', 'icuio74.dll', 'icutu74.dll', 'icuuc74.dll'])
     expect(SIDECAR_FAMILY_SPECS.find((s) => s.family === 'kiwix_tools')?.optional).toBe(true)
-    const notices = readFileSync(join(repoRoot, 'DRIVE-NOTICES.md'), 'utf8')
+    const notices = repoText('DRIVE-NOTICES.md')
     expect(notices).toContain('runtime-family: kiwix_tools 3.8.1')
     expect(notices).toContain('### kiwix-tools 3.8.1 — GPL-3.0-or-later')
     expect(notices).toContain('#### Complete corresponding source')

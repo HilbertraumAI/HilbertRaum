@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /**
  * The `node_modules` layout that electron-builder 26 writes into `app.asar` (#548).
@@ -20,15 +20,17 @@ import { dirname, join } from 'node:path'
  * order 17.x took the top slot and mermaid's copy stayed nested under the negated `mermaid/`, in
  * the reverse order 16.x would have shipped.
  *
- * Checked against a real `package:win` `app.asar` (master `12ec7bd0`, 2026-10-02): the model names
- * its 226 package directories exactly. Platform-specific optional packages are all modelled (only
- * the negated `@napi-rs/canvas-*` variants exist today, so every build host packs the same layout).
+ * Checked against a real Windows `app.asar` (`70eab0fe`, 2026-11-03): the model names its 224 package
+ * directories exactly. Since #769 release.yml's build-win runs that check on every build it packages
+ * (`packedArtifact` below). Platform-specific optional packages are all modelled (only the negated
+ * `@napi-rs/canvas-*` variants exist today, so every build host packs the same layout).
  */
 
 /** A `package-lock.json` v3 `packages` entry — the fields the packaging gates read. */
 export interface LockPackage {
   name?: string
   version?: string
+  license?: string
   dependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
@@ -158,11 +160,14 @@ export function packedNodeModules(packages: LockPackages, appPath = 'apps/deskto
   return packed
 }
 
+interface AsarModule {
+  listPackage: (archive: string, options: { isPack: boolean }) => string[]
+  extractFile: (archive: string, filename: string) => Buffer
+}
+
 /** The package directories in a real `app.asar` (`node_modules/a`, `node_modules/a/node_modules/@s/b`). */
 export function asarPackageDirs(asarPath: string): string[] {
-  const { listPackage } = builderRequire()('@electron/asar') as {
-    listPackage: (archive: string, options: { isPack: boolean }) => string[]
-  }
+  const { listPackage } = builderRequire()('@electron/asar') as AsarModule
   const chain = /^node_modules\/(?:@[^/]+\/)?[^/]+(?:\/node_modules\/(?:@[^/]+\/)?[^/]+)*$/
   return listPackage(asarPath, { isPack: false })
     .map((p) => p.replace(/\\/g, '/').replace(/^\//, ''))
@@ -170,4 +175,60 @@ export function asarPackageDirs(asarPath: string): string[] {
     .map((p) => p.slice(0, -'/package.json'.length))
     .filter((dir) => chain.test(dir))
     .sort()
+}
+
+/** `name@version` of every package a real `app.asar` carries, read from each package's own package.json, sorted. */
+export function asarPackageIds(asarPath: string): string[] {
+  const { extractFile } = builderRequire()('@electron/asar') as AsarModule
+  const ids = asarPackageDirs(asarPath).map((dir) => {
+    // extractFile splits the name on the host's separator, so on Windows a `/` path is not found.
+    const { name, version } = JSON.parse(extractFile(asarPath, join(...dir.split('/'), 'package.json')).toString('utf8')) as {
+      name: string
+      version: string
+    }
+    return `${name}@${version}`
+  })
+  return [...new Set(ids)].sort()
+}
+
+/** The variables that name a packaged build; release.yml's build-win sets all three (packaging.test.ts reads its step). */
+export const PACKED_ENV = {
+  asar: 'HILBERTRAUM_PACKED_ASAR',
+  exe: 'HILBERTRAUM_PACKED_EXE',
+  required: 'HILBERTRAUM_PACKED_REQUIRED'
+} as const
+
+/**
+ * The packaged build the real-archive rows read (#548, #769): `HILBERTRAUM_PACKED_ASAR` names its `app.asar` and
+ * `HILBERTRAUM_PACKED_EXE` its executable, each relative to apps/desktop. Unset, those rows skip. release.yml's build-win
+ * also sets `HILBERTRAUM_PACKED_REQUIRED=1`, under which packaging.test.ts fails unless both name existing files, so a
+ * build that moved cannot turn the rows into silent skips.
+ */
+export function packedArtifact(): { asar?: string; exe?: string; required: boolean } {
+  const at = (value: string | undefined): string | undefined =>
+    value ? resolve(join(__dirname, '..', '..'), value) : undefined
+  return {
+    asar: at(process.env[PACKED_ENV.asar]),
+    exe: at(process.env[PACKED_ENV.exe]),
+    required: process.env[PACKED_ENV.required] === '1'
+  }
+}
+
+/** Whether a packed path is set and exists: what the required guard asks of each. */
+export const packedPathExists = (path: string | undefined): boolean => path !== undefined && existsSync(path)
+
+/**
+ * The fuse wire of a packaged executable, one `0`/`1` (or `r`, removed) per fuse, read with the `@electron/fuses` that
+ * electron-builder flips them with: the format `scripts/verify-mac-build.sh` compares as `EXPECTED_WIRE`.
+ */
+export async function packedFuseWire(exePath: string): Promise<string> {
+  const { getCurrentFuseWire } = builderRequire()('@electron/fuses') as {
+    getCurrentFuseWire: (path: string) => Promise<Record<string, unknown>>
+  }
+  const wire = await getCurrentFuseWire(exePath)
+  return Object.keys(wire)
+    .filter((key) => /^\d+$/.test(key))
+    .sort((a, b) => Number(a) - Number(b))
+    .map((key) => String.fromCharCode(Number(wire[key])))
+    .join('')
 }

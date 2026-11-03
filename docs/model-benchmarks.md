@@ -677,8 +677,10 @@ consumer machine.
    item 22 (e) now records: the two models with no measured figure, and the fact that nothing
    recomputes the field when a manifest's weights change.
 4. `estimated_context_cache_gib` (optional manifest field, number ≥ 0) replaces the flat 0.5 GiB
-   term for the seven models whose figure was derived from the launch config (`--ctx-size 8192`,
-   `ubatch 2048`; the 4B's figure is its own 4,096-token window); every other manifest defaults to
+   term for eight models: the seven chat models below, whose figure was derived from the launch
+   config (`--ctx-size 8192`, `ubatch 2048`; the 4B's figure is its own 4,096-token window) — the
+   26B-A4B's has since been read off a hardware start instead (#412) — and, since #473, the
+   translation model, whose figure was measured; every other manifest defaults to
    0.5 GiB in code (the field is absent, not stored as 0.5). **Recomputed 2026-09-07 for ONE server
    slot** (issue #319: `CHAT_SERVER_ARGS` passes `-np 1` — the amendment below). Pinned in
    `committed-catalog.test.ts` ("pins the eight `estimated_context_cache_gib` values, and that no
@@ -693,6 +695,7 @@ consumer machine.
    | `qwen3.8-27b-ud-q5km` | **0.9** | 1.1 | identical figures — the recurrent state is f32, quant-independent |
    | `qwen3.5-9b-ud-q4kxl` | **0.3** | 0.4 | KV 256 + 1 × 48 = 304 MiB (measured at 4 slots: 256 + 201) |
    | `qwen3.5-4b-ud-q4kxl` | **0.2** | 0.3 | KV 128 + 1 × 48 = 176 MiB, at its 4,096 window |
+   | `translategemma-12b-it-q4` | 0.75 | — (added by #473) | measured on a full-offload start at its 4,096 window: KV 256 (non-SWA) + 480 (SWA) = 736 MiB, rounded up; it feeds the translation sidecar's headroom gate |
 
    The rule behind the column, measured on the pin (`leg7-baseline-q5km` vs `leg1-np-1` under
    `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/`: same model, same context, one thing

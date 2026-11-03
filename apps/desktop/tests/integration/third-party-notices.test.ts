@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { stringify } from 'yaml'
 import { builderFileNegations, computeShippedPackages } from '../../../../scripts/lib/shipped-packages.mjs'
 import {
@@ -10,7 +10,8 @@ import {
   LEPTONICA_LICENSE,
   OFL_1_1_LICENSE
 } from '../../../../scripts/lib/extra-notices.mjs'
-import { packedNodeModules } from '../helpers/asar-layout'
+import { buildThirdPartyNotices } from '../../../../scripts/lib/third-party-notices.mjs'
+import { asarPackageIds, packedArtifact, packedNodeModules, type LockPackages } from '../helpers/asar-layout'
 import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
 
 // LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~224 npm packages
@@ -21,10 +22,17 @@ import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoT
 // extraResource. These tests keep it HONEST: the file's machine-readable package list must
 // exactly match the shipped set recomputed from package-lock.json + electron-builder.yml
 // (the same computation the generator uses — scripts/lib/shipped-packages.mjs), so any
-// dependency change fails the gate until the file is regenerated.
+// dependency change fails the gate until the file is regenerated, and the whole file must equal
+// what the generator's builder (scripts/lib/third-party-notices.mjs) writes (#769).
 
 const NOTICES = join(REPO_ROOT, 'THIRD-PARTY-NOTICES.md')
 const REGEN = 'run `node scripts/generate-third-party-notices.mjs` and commit the result'
+
+/** `text` without the `### <id>` sections named, each up to the next `##`/`###` heading. */
+function withoutSections(text: string, ids: string[]): string {
+  const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return ids.reduce((t, id) => t.replace(new RegExp(`^### ${escape(id)}\\n[\\s\\S]*?(?=^#{2,3} |(?![\\s\\S]))`, 'm'), ''), text)
+}
 
 describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
   it('exists, is non-trivial, and is byte-clean (LF-only, no NUL, no BOM)', () => {
@@ -34,6 +42,31 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(raw.includes(0), 'literal NUL byte in THIRD-PARTY-NOTICES.md').toBe(false)
     expect(raw.includes(0x0d), 'CR line ending in THIRD-PARTY-NOTICES.md').toBe(false)
     expect(raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf, 'UTF-8 BOM').toBe(false)
+  })
+
+  // #769: the rows below read parts of the file; this one holds every byte, so a hand edit of a license text or a
+  // generator change that nobody regenerated fails here. A platform-gated package (lockfile os/cpu) is installed on its
+  // own platform only, so its section is the real license there and REL-2's lockfile fallback elsewhere: it is left out
+  // of the comparison, or the gate would be red on every CI leg but the one that regenerated. None ships today.
+  it('is byte-identical to a regeneration from the lockfile + the installed packages, a platform-gated section aside (#769)', () => {
+    const lock = lockPackages()
+    const gated = computeShippedPackages(REPO_ROOT)
+      .filter((p) => {
+        const entry = lock[p.lockPath] as { os?: unknown; cpu?: unknown } | undefined
+        return entry?.os !== undefined || entry?.cpu !== undefined
+      })
+      .map((p) => `${p.name}@${p.version}`)
+    expect(
+      withoutSections(readFileSync(NOTICES, 'utf8'), gated),
+      `THIRD-PARTY-NOTICES.md is STALE (a license text, the generator or the shipped set changed) — ${REGEN}`
+    ).toBe(withoutSections(buildThirdPartyNotices(REPO_ROOT, { warn: () => {} }), gated))
+  })
+
+  it('the comparison drops exactly the named package sections', () => {
+    const text = '## Licenses\n\n### a@1.0.0\n\nA text\n\n### b@2.0.0\n\nB text\n\n## Extra\n\nX\n'
+    expect(withoutSections(text, ['a@1.0.0'])).toBe('## Licenses\n\n### b@2.0.0\n\nB text\n\n## Extra\n\nX\n')
+    expect(withoutSections(text, ['b@2.0.0'])).toBe('## Licenses\n\n### a@1.0.0\n\nA text\n\n## Extra\n\nX\n')
+    expect(withoutSections(text, [])).toBe(text)
   })
 
   it('its package list EXACTLY matches the shipped set from the lockfile + builder yml', () => {
@@ -60,6 +93,23 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(noticed.sort(), 'the notices and app.asar disagree about what ships').toEqual(
       [...new Set(packed)].sort()
     )
+  })
+
+  // #769: the row above compares the notices with the modelled layout; these two read a real build
+  // (HILBERTRAUM_PACKED_ASAR, which release.yml's build-win sets to the build it just packaged).
+  const { asar: packedAsar } = packedArtifact()
+  it.skipIf(!packedAsar)('lists exactly the name@version set a real app.asar carries (#769)', () => {
+    const listed = /^## Shipped packages \(\d+\)\n\n```\n([\s\S]*?)\n```/m.exec(readFileSync(NOTICES, 'utf8'))
+    expect(listed, `machine-readable "## Shipped packages" block missing — ${REGEN}`).toBeTruthy()
+    expect(asarPackageIds(packedAsar!), 'the notices and the real app.asar disagree about what ships').toEqual(
+      listed![1].split('\n').sort()
+    )
+  })
+
+  it.skipIf(!packedAsar)('a real build ships the committed notices and license beside its app.asar (#769)', () => {
+    const resources = dirname(packedAsar!)
+    expect(readFileSync(join(resources, 'THIRD-PARTY-NOTICES.md'), 'utf8')).toBe(readFileSync(NOTICES, 'utf8'))
+    expect(readFileSync(join(resources, 'LICENSE.txt'), 'utf8')).toBe(repoText('LICENSE'))
   })
 
   it('every shipped package has its own license section', () => {
@@ -125,8 +175,8 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     // The freshness gate above recomputes the shipped set through the generator's own lib, so a bug in that walk passes both
     // sides. This row re-reads each required peer from the shipped set's lockfile entries and checks it against shipped NAMES.
     // On today's tree every required peer is also a normal dependency (56 edges, none peer-only), so this fires on a negated
-    // peer; the fold itself is proved by the fixture row below. electron-builder's collector follows dependencies +
-    // optionalDependencies only, so a pure peer would be noticed but not packed: `names exactly the packages…` goes red.
+    // peer; a peer-only one makes computeShippedPackages throw (#768, the fixture row below). electron-builder's collector
+    // follows dependencies + optionalDependencies only, so a pure peer would be noticed but not packed.
     const lock = lockPackages()
     const shipped = computeShippedPackages(REPO_ROOT)
     const shippedNames = new Set(shipped.map((p) => p.name))
@@ -145,39 +195,42 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     ).toEqual([])
   })
 
-  it('computes the shipped set: required peers in, optional peers and negated packages out, one entry per name@version, code-unit order', () => {
+  /** The shipped set of a scratch repo: this lockfile, and one package negation in electron-builder.yml. */
+  function shippedFrom(packages: LockPackages): ReturnType<typeof computeShippedPackages> {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-shipped-'))
     mkdirSync(join(root, 'apps', 'desktop'), { recursive: true })
     writeFileSync(
       join(root, 'apps', 'desktop', 'electron-builder.yml'),
       stringify({ files: ['out/**/*', '!**/node_modules/negated/**'] })
     )
-    writeFileSync(
-      join(root, 'package-lock.json'),
-      JSON.stringify({
-        packages: {
-          'apps/desktop': { name: 'app', dependencies: { alpha: '*', Zeta: '*', negated: '*' } },
-          'node_modules/alpha': {
-            version: '1.0.0',
-            license: 'MIT',
-            dependencies: { dup: '*', multi: '*' },
-            optionalDependencies: { maybe: '*' },
-            peerDependencies: { 'req-peer': '*', 'opt-peer': '*' },
-            peerDependenciesMeta: { 'opt-peer': { optional: true } }
-          },
-          'node_modules/Zeta': { version: '1.0.0', dependencies: { dup: '*', multi: '*' } },
-          'node_modules/dup': { version: '4.0.0' },
-          'node_modules/Zeta/node_modules/dup': { version: '4.0.0' },
-          'node_modules/multi': { version: '1.0.0' },
-          'node_modules/Zeta/node_modules/multi': { version: '2.0.0' },
-          'node_modules/maybe': { version: '1.1.0' },
-          'node_modules/req-peer': { version: '2.0.0' },
-          'node_modules/opt-peer': { version: '3.0.0' },
-          'node_modules/negated': { version: '9.0.0' }
-        }
-      })
-    )
-    const shipped = computeShippedPackages(root)
+    writeFileSync(join(root, 'package-lock.json'), JSON.stringify({ packages }))
+    return computeShippedPackages(root)
+  }
+
+  // alpha's required peer is also Zeta's dependency (every required peer of today's tree is reached that way, TQ-3).
+  const shippedFixture = (): LockPackages => ({
+    'apps/desktop': { name: 'app', dependencies: { alpha: '*', Zeta: '*', negated: '*' } },
+    'node_modules/alpha': {
+      version: '1.0.0',
+      license: 'MIT',
+      dependencies: { dup: '*', multi: '*' },
+      optionalDependencies: { maybe: '*' },
+      peerDependencies: { 'req-peer': '*', 'opt-peer': '*' },
+      peerDependenciesMeta: { 'opt-peer': { optional: true } }
+    },
+    'node_modules/Zeta': { version: '1.0.0', dependencies: { dup: '*', multi: '*', 'req-peer': '*' } },
+    'node_modules/dup': { version: '4.0.0' },
+    'node_modules/Zeta/node_modules/dup': { version: '4.0.0' },
+    'node_modules/multi': { version: '1.0.0' },
+    'node_modules/Zeta/node_modules/multi': { version: '2.0.0' },
+    'node_modules/maybe': { version: '1.1.0' },
+    'node_modules/req-peer': { version: '2.0.0' },
+    'node_modules/opt-peer': { version: '3.0.0' },
+    'node_modules/negated': { version: '9.0.0' }
+  })
+
+  it('computes the shipped set: dependency and optional edges in, an optional peer and negated packages out, one entry per name@version, code-unit order', () => {
+    const shipped = shippedFrom(shippedFixture())
     expect(shipped.map((p) => `${p.name}@${p.version}`)).toEqual([
       'Zeta@1.0.0',
       'alpha@1.0.0',
@@ -189,6 +242,16 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     ])
     expect(shipped.find((p) => p.name === 'alpha')?.lockLicense).toBe('MIT')
     expect(shipped.find((p) => p.name === 'dup')?.lockLicense).toBeNull()
+  })
+
+  // #768, owner call: npm installs a required peer, electron-builder does not pack one, so the notices would name a
+  // package app.asar lacks. A peer that no dependency edge reaches is refused, with the fix.
+  it('refuses a required peer that only a peer edge reaches, naming it and the fix (#768)', () => {
+    const packages = shippedFixture()
+    packages['node_modules/Zeta'].dependencies = { dup: '*', multi: '*' }
+    expect(() => shippedFrom(packages)).toThrow(
+      /^req-peer is a required peer of alpha@1\.0\.0 that no dependency edge reaches: .* Add req-peer to the dependencies of apps\/desktop\/package\.json\.$/
+    )
   })
 
   // DEP-6: a license file inside a path the build excludes does not ship, so the generator skips it (`shipsFile`).

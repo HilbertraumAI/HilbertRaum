@@ -19,9 +19,10 @@
        requires the app artifact + launcher for every platform in -Platforms and a
        recorded, matching hash for every sidecar binary.
 
-  Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
-  assertCommercialDrive) -- that TS module is the CANONICAL, unit-tested reference. This
-  script orchestrates the existing scripts; it does NOT re-implement them.
+  The verdict is assertCommercialDrive's (apps/desktop/src/main/services/commercial-drive.ts,
+  the CANONICAL, unit-tested gate). This script orchestrates the existing scripts; it does NOT
+  re-implement them. The order of the steps lives here and in the .sh twin alone
+  (tests/integration/script-orchestration.test.ts runs it).
 
   SIGNING IS MANUAL. The green gate does not sign. Supply the pre-built, signed app(s)
   via -AppArtifact, or run with -SkipPackage to assemble everything else and sign/copy the
@@ -81,6 +82,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+# Every path cmdlet below takes -LiteralPath: in a target such as 'Kit [1]' the brackets are part of
+# the name, and a plain -Path reads them as a wildcard that matches nothing (#767).
 
 # Normalize -Target to a full path before passing it to the child scripts (audit M22).
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
@@ -95,6 +98,11 @@ $KitPlatforms = @(
 )
 # Accept both `-Platforms win-x64,mac-arm64` (array binding) and a quoted comma list.
 $Platforms = @($Platforms | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# -AppArtifact is documented comma-separated the same way: under -File a list arrives as ONE string. An
+# element that names an existing file stays whole, so a path that itself holds a comma still works.
+$AppArtifact = @($AppArtifact | Where-Object { $_ } |
+  ForEach-Object { if (Test-Path -LiteralPath $_ -PathType Leaf) { $_ } else { $_ -split ',' } } |
+  ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($Platforms.Count -eq 0) { Write-Host '-Platforms must name at least one platform' -ForegroundColor Red; exit 2 }
 foreach ($p in $Platforms) {
   if ($KitPlatforms -notcontains $p) {
@@ -104,12 +112,17 @@ foreach ($p in $Platforms) {
 }
 # The version the artifacts must carry = the desktop package's (electron-builder and the
 # release workflow name HilbertRaum-<version>-... from apps/desktop/package.json).
-$AppVersion = (Get-Content (Join-Path $RepoRoot 'apps/desktop/package.json') -Raw | ConvertFrom-Json).version
+$AppVersion = (Get-Content -LiteralPath (Join-Path $RepoRoot 'apps/desktop/package.json') -Raw | ConvertFrom-Json).version
 
 # Refuse to proceed when another app artifact already sits at the drive root (#233): the
 # copy in step 4 overwrites only the same basename, so an older build would stay beside
 # the new one and the launchers would find two. Delete it first, on purpose.
+# Every artifact must exist, too: step 4 copies them only after steps 1-3 have downloaded
+# every weight and runtime, which is where a typo used to surface (#769).
 if ($AppArtifact -and -not $VerifyOnly) {
+  foreach ($artifact in $AppArtifact) {
+    if (-not (Test-Path -LiteralPath $artifact)) { Write-Host "AppArtifact not found: $artifact" -ForegroundColor Red; exit 1 }
+  }
   $incoming = @($AppArtifact | ForEach-Object { Split-Path -Leaf $_ })
   $prior = @(Get-ChildItem -LiteralPath $Target -Force -ErrorAction SilentlyContinue |
     Where-Object { ($_.Name -like 'HilbertRaum-*' -or ($_.PSIsContainer -and $_.Name -like '*.app')) -and ($incoming -notcontains $_.Name) })
@@ -125,12 +138,13 @@ function Step([int]$n, [string]$msg) { Write-Host "`n[$n] $msg" -ForegroundColor
 # Invoke a sibling script with NAMED parameters. Hashtable splatting (not array splatting)
 # is required so -Target is bound by name, not positionally. Reset $LASTEXITCODE first so a
 # stale exit code from an earlier command can't be misread as a failure (the child scripts
-# that fail use `exit 1`, which sets it).
+# that fail use `exit 1`, which sets it). Write-Host, not Write-Error: under 'Stop' the
+# latter throws, and the `exit 1` after it never ran (AUD-05).
 function Run([string]$script, [hashtable]$params) {
   $path = Join-Path $PSScriptRoot $script
   $global:LASTEXITCODE = 0
   & $path @params
-  if ($LASTEXITCODE -ne 0) { Write-Error "$script failed (exit $LASTEXITCODE)."; exit 1 }
+  if ($LASTEXITCODE -ne 0) { Write-Host "$script failed (exit $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
 }
 
 Write-Host "Build a COMMERCIAL (sellable) drive at: $Target" -ForegroundColor Green
@@ -188,8 +202,8 @@ if ($DryRun) { $ocrAssets.DryRun = $true }
 Run 'fetch-runtime.ps1' $ocrAssets
 
 # --- Kiwix-tools corresponding-source bundle (#339 P8-4) ---------------------------
-# UN-NUMBERED: sits between the runtime sidecars above and packaging below, but is not
-# one of the nine planCommercialDrive step ids (commercial-drive.test.ts pins those).
+# UN-NUMBERED: sits between the runtime sidecars above and packaging below, outside the
+# seven numbered steps.
 # SOURCE FIRST: the bundle is installed + re-verified BEFORE the kiwix_tools binaries are
 # fetched, so a failed/aborted install can never leave binaries on the drive without their
 # complete corresponding source. Omitted -KiwixSourceDir = this Kit ships no kiwix-tools at
@@ -231,10 +245,9 @@ if ($SkipPackage) {
   Write-Host '  -SkipPackage set: skipping packaging. Sign + copy the app yourself (NOT SELLABLE until then).' -ForegroundColor Yellow
 } elseif ($AppArtifact) {
   foreach ($artifact in $AppArtifact) {
-    if (-not (Test-Path $artifact)) { Write-Host "AppArtifact not found: $artifact" -ForegroundColor Red; exit 1 }
     $dst = Join-Path $Target (Split-Path -Leaf $artifact)
     if ($DryRun) { Write-Host "  copy $artifact -> $dst" }
-    else { Copy-Item -Path $artifact -Destination $dst -Recurse -Force; Write-Host "  copied signed app -> $dst" }
+    else { Copy-Item -LiteralPath $artifact -Destination $dst -Recurse -Force; Write-Host "  copied signed app -> $dst" }
   }
 } else {
   Write-Host '  No -AppArtifact supplied. Build + sign the app for every platform in -Platforms, then' -ForegroundColor Yellow
@@ -250,9 +263,9 @@ $LauncherSrc = Join-Path $RepoRoot 'launchers'
 $LauncherFiles = @('Start HilbertRaum.cmd', 'Start HilbertRaum.command', 'start-hilbertraum.sh', 'READ ME FIRST.txt')
 foreach ($f in $LauncherFiles) {
   $src = Join-Path $LauncherSrc $f
-  if (Test-Path $src) {
+  if (Test-Path -LiteralPath $src) {
     if ($DryRun) { Write-Host "  copy $f -> drive root" }
-    else { Copy-Item -Path $src -Destination (Join-Path $Target $f) -Force; Write-Host "  copied $f" }
+    else { Copy-Item -LiteralPath $src -Destination (Join-Path $Target $f) -Force; Write-Host "  copied $f" }
   }
 }
 
@@ -270,8 +283,8 @@ Step 7 'Final check: native pre-flight, then the canonical gate (assertCommercia
 Write-Host '  Native pre-flight of the key invariants (the verdict below comes from the canonical gate):'
 $policyPath = Join-Path $Target 'config/policy.json'
 $problems = @()
-if (Test-Path $policyPath) {
-  $policy = Get-Content $policyPath -Raw | ConvertFrom-Json
+if (Test-Path -LiteralPath $policyPath) {
+  $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
   if (-not $policy.workspace.encryption_required) { $problems += 'policy: encryption not required' }
   if ($policy.workspace.allow_plaintext_dev_mode) { $problems += 'policy: plaintext allowed' }
   # Model downloads are a permitted, user-initiated action on a sold drive; only phone-home
@@ -285,10 +298,10 @@ if (Test-Path $policyPath) {
 # No user data on a drive meant to ship empty (spec 12.2). Mirror assertCommercialDrive:
 # flat DB/descriptor files + the WAL/SHM sidecars + a non-empty documents dir.
 foreach ($ud in @('workspace/hilbertraum.sqlite', 'workspace/hilbertraum.sqlite.enc', 'workspace/hilbertraum.sqlite-wal', 'workspace/hilbertraum.sqlite-shm', 'config/workspace.json')) {
-  if (Test-Path (Join-Path $Target $ud)) { $problems += "user data present: $ud" }
+  if (Test-Path -LiteralPath (Join-Path $Target $ud)) { $problems += "user data present: $ud" }
 }
 $docsDir = Join-Path $Target 'workspace/documents'
-if ((Test-Path $docsDir) -and (Get-ChildItem -Force $docsDir -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+if ((Test-Path -LiteralPath $docsDir) -and (Get-ChildItem -LiteralPath $docsDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
   $problems += 'user data present: workspace/documents/*'
 }
 # App skills present + user-skills empty (assertCommercialDrive parity, skills plan S9 / §14):
@@ -296,13 +309,13 @@ if ((Test-Path $docsDir) -and (Get-ChildItem -Force $docsDir -ErrorAction Silent
 # EMPTY user-skills/ (the buyer fills it). Mirrors commercial-drive.ts listSkillFolders.
 $appSkillsDir = Join-Path $Target 'app-skills'
 $appSkillCount = 0
-if (Test-Path $appSkillsDir) {
-  $appSkillCount = @(Get-ChildItem -Directory $appSkillsDir -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'SKILL.md') }).Count
+if (Test-Path -LiteralPath $appSkillsDir) {
+  $appSkillCount = @(Get-ChildItem -LiteralPath $appSkillsDir -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') }).Count
 }
 if ($appSkillCount -eq 0) { $problems += 'no app skills provisioned (a sold drive ships trusted product skills under app-skills/)' }
 $userSkillsDir = Join-Path $Target 'user-skills'
-if (Test-Path $userSkillsDir) {
-  foreach ($us in @(Get-ChildItem -Force $userSkillsDir -ErrorAction SilentlyContinue)) {
+if (Test-Path -LiteralPath $userSkillsDir) {
+  foreach ($us in @(Get-ChildItem -LiteralPath $userSkillsDir -Force -ErrorAction SilentlyContinue)) {
     $problems += "user skill present on a drive meant to ship empty: user-skills/$($us.Name)"
   }
 }
@@ -314,10 +327,11 @@ if (Test-Path $userSkillsDir) {
 # projector or an extra file on the drive fails the weight gate below and the canonical one.
 if (-not $DryRun) {
   $driveManifests = Join-Path $Target 'model-manifests'
-  if (Test-Path $driveManifests) {
-    $mfFiles = Get-ChildItem -Path $driveManifests -Recurse -Include *.yaml, *.yml
+  if (Test-Path -LiteralPath $driveManifests) {
+    # -Include is ignored beside -LiteralPath (PS 5.1 returns every file and dir): filter by extension.
+    $mfFiles = @(Get-ChildItem -LiteralPath $driveManifests -Recurse -File | Where-Object { $_.Extension -in '.yaml', '.yml' })
     foreach ($mf in $mfFiles) {
-      $text = Get-Content -Path $mf.FullName -Raw
+      $text = Get-Content -LiteralPath $mf.FullName -Raw
       # Only model manifests (runtime-sources.yaml has no local_path).
       if (-not ($text -match '(?m)^\s*local_path\s*:\s*(.+?)\s*$')) { continue }
       $mfLocal = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
@@ -351,7 +365,7 @@ foreach ($lic in $LicenseArtifacts) {
   $licPath = Join-Path $Target $lic
   # -Force: a HIDDEN root artifact would otherwise make Get-Item throw under
   # $ErrorActionPreference = 'Stop' instead of reaching the SELLABLE verdict below.
-  if (-not (Test-Path $licPath) -or ((Get-Item -Force $licPath).Length -eq 0)) {
+  if (-not (Test-Path -LiteralPath $licPath) -or ((Get-Item -LiteralPath $licPath -Force).Length -eq 0)) {
     $problems += "license/attribution artifact missing or empty at the drive root: $lic (re-run prepare-drive)"
   }
 }
@@ -363,11 +377,11 @@ foreach ($lic in $LicenseArtifacts) {
 # yaml pin; keep them in sync.
 if (-not $DryRun) {
   $rtSources = Join-Path $Target 'model-manifests/runtime-sources.yaml'
-  if (Test-Path $rtSources) {
+  if (Test-Path -LiteralPath $rtSources) {
     # Per-family pinned versions (Phase 36: the yaml holds llama_cpp AND whisper_cpp).
     $famVersions = @{}
     $topKey = $null
-    foreach ($raw in (Get-Content -Path $rtSources)) {
+    foreach ($raw in (Get-Content -LiteralPath $rtSources)) {
       if ($raw -match '^\s*#') { continue }
       if ($raw -match '^([A-Za-z0-9_]+)\s*:\s*$') { $topKey = $Matches[1]; continue }
       if ($topKey -and -not $famVersions[$topKey] -and $raw -match '^\s*version\s*:\s*(.+?)\s*$') {
@@ -386,13 +400,13 @@ if (-not $DryRun) {
       $rtVersion = $famVersions[$rt.family]
       $markerFile = Join-Path $Target "$rtDir/.hilbertraum-runtime.json"
       $binFile = Join-Path $Target "$rtDir/$($rt.bin)"
-      if (-not (Test-Path $binFile)) {
+      if (-not (Test-Path -LiteralPath $binFile)) {
         $problems += "runtime: $($rt.bin) missing under $rtDir (re-run fetch-runtime)"
-      } elseif (-not (Test-Path $markerFile)) {
+      } elseif (-not (Test-Path -LiteralPath $markerFile)) {
         $problems += "runtime: no .hilbertraum-runtime.json install marker under $rtDir (re-run fetch-runtime)"
       } else {
         $marker = $null
-        try { $marker = Get-Content -Path $markerFile -Raw | ConvertFrom-Json } catch {}
+        try { $marker = Get-Content -LiteralPath $markerFile -Raw | ConvertFrom-Json } catch {}
         if (-not $marker -or ($rtVersion -and $marker.version -ne $rtVersion) -or $marker.backend -ne $rt.backend) {
           $problems += "runtime: $rtDir marker does not match the pinned $rtVersion/$($rt.backend) (re-run fetch-runtime)"
         }
@@ -406,11 +420,11 @@ if (-not $DryRun) {
 # be present with a matching sha256 (plain files -- the hash IS the install state).
 if (-not $DryRun) {
   $rtSources = Join-Path $Target 'model-manifests/runtime-sources.yaml'
-  if (Test-Path $rtSources) {
+  if (Test-Path -LiteralPath $rtSources) {
     $topKey = $null
     $cur = $null
     $ocrFiles = @()
-    foreach ($raw in (Get-Content -Path $rtSources)) {
+    foreach ($raw in (Get-Content -LiteralPath $rtSources)) {
       if ($raw -match '^\s*#') { continue }
       if ($raw -match '^([A-Za-z0-9_]+)\s*:\s*$') {
         if ($cur) { $ocrFiles += $cur; $cur = $null }
@@ -429,10 +443,10 @@ if (-not $DryRun) {
     if ($cur) { $ocrFiles += $cur }
     foreach ($f in $ocrFiles) {
       $dest = Join-Path $Target ($f.dest -replace '/', [IO.Path]::DirectorySeparatorChar)
-      if (-not (Test-Path $dest)) {
+      if (-not (Test-Path -LiteralPath $dest)) {
         $problems += "ocr: $($f.dest) missing (run fetch-runtime -Family ocr)"
       } elseif ($f.sha256 -match '^[a-f0-9]{64}$') {
-        $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+        $actual = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower()
         if ($actual -ne $f.sha256.ToLower()) {
           $problems += "ocr: $($f.dest) checksum mismatch (re-run fetch-runtime -Family ocr)"
         }
@@ -454,7 +468,7 @@ if ($DryRun) { Write-Host '  (dry run: weight verification skipped; the canonica
 # Reads only the drive (no network). Needs `npm run build` and node on PATH.
 $gateTool = Join-Path $RepoRoot 'apps/desktop/out/tools/assert-commercial-drive.mjs'
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-if (-not (Test-Path $gateTool)) {
+if (-not (Test-Path -LiteralPath $gateTool)) {
   $problems += "canonical gate not built: $gateTool missing (run npm run build)"
 } elseif (-not $nodeCmd) {
   $problems += 'canonical gate needs node on PATH'

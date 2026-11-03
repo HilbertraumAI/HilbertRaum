@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
-import { DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
+import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJson } from '../../src/main/services/drive'
 import { REPO_ROOT, repoText } from '../helpers/repo-files'
-import { SCRIPT_LEGS, outputOf } from '../helpers/script-legs'
+import { SCRIPT_LEGS, downloadEnv, isolatedScripts, outputOf, scriptRoot } from '../helpers/script-legs'
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
 
@@ -17,7 +17,9 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // any download (a dry run, a placeholder hash refused, or the install skipped), the builder
 // cases run only its verify-only gate or its up-front refusal, and prepare-drive runs without
 // its assets flag, so it fetches nothing. The .ps1 leg runs on Windows, the .sh leg elsewhere
-// (CI runs `npm test` on both).
+// (CI runs `npm test` on both). The prepare-drive and builder rows run on a `scriptRoot()`, whose
+// name holds a space and a `[` (#767). The dry pipelines that reach the child scripts live in
+// script-orchestration.test.ts.
 
 const GATE_TOOL = join(REPO_ROOT, 'apps', 'desktop', 'out', 'tools', 'assert-commercial-drive.mjs')
 const toolBuilt = existsSync(GATE_TOOL)
@@ -105,8 +107,9 @@ function runtimeSourcesYaml(sha: string): string {
   ].join('\n')
 }
 
+/** A bracketed drive root (#767) whose runtime-sources.yaml is `runtimeSourcesYaml(sha)`, edited. */
 function scratchTarget(sha: string, edit: (yaml: string) => string = (y) => y): string {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-exec-'))
+  const root = scriptRoot('script-exec-')
   mkdirSync(join(root, 'model-manifests'), { recursive: true })
   writeFileSync(join(root, 'model-manifests', 'runtime-sources.yaml'), edit(runtimeSourcesYaml(sha)))
   return root
@@ -162,7 +165,7 @@ const SELLABLE_BUILDS = [
 
 /** A drive that passes every check for win-x64, with one bundled weight and no ocr: block, so a row can flip one input. */
 function sellableDrive(): string {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-sellable-'))
+  const root = scriptRoot('script-sellable-')
   const yaml: string[] = []
   for (const family of ['llama_cpp', 'whisper_cpp']) {
     const builds = SELLABLE_BUILDS.filter((b) => b.family === family)
@@ -193,6 +196,8 @@ function sellableDrive(): string {
     'model-manifests/drive-model.yaml',
     manifestYaml({ id: 'drive-model', localPath: 'models/chat/drive-model.gguf', sha256: weight }, [BUNDLED])
   )
+  // A real drive keeps its manifests in per-role folders, and a folder is what a manifest walk must skip.
+  mkdirSync(join(root, 'model-manifests', 'vision'))
   writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
   mkdirSync(join(root, 'user-skills'))
@@ -271,8 +276,12 @@ const FILES_LINES = [
   '      size_bytes: 9'
 ]
 
+/** A model with no top-level `download` block. */
+const sourceless = (id: string, extra: string[] = []): string =>
+  manifestYaml({ id, localPath: `models/chat/${id}.gguf`, sha256: REAL_SHA }, extra)
+
 function modelsTarget(manifests: string[], driveFiles: Record<string, string> = {}): string {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-models-'))
+  const root = scriptRoot('script-models-')
   mkdirSync(join(root, 'model-manifests'), { recursive: true })
   manifests.forEach((y, i) => writeFileSync(join(root, 'model-manifests', `m${i}.yaml`), y))
   for (const [rel, content] of Object.entries(driveFiles)) writeDriveFile(root, rel, content)
@@ -308,6 +317,50 @@ it.runIf(process.env.CI && process.platform === 'darwin')('bash on PATH is the s
   expect(spawnSync('bash', ['--version'], { encoding: 'utf8' }).stdout).toMatch(/^GNU bash, version 3\.2\./)
 })
 
+// The gate tool's own command line (#769): the builders call it with three flags, a maintainer by hand with any.
+describe.skipIf(!toolBuilt)('assert-commercial-drive command line', () => {
+  const gate = (args: string[]) => spawnSync(process.execPath, [GATE_TOOL, ...args], { encoding: 'utf8', timeout: testBudgetMs(60_000) })
+  const declared = (root: string, platforms = 'win-x64'): string[] => ['--target', root, '--platforms', platforms, '--app-version', APP_VERSION]
+
+  it.each<[string, () => string[], string]>([
+    ['no argument', () => [], '--target is required'],
+    ['an unknown argument', () => ['--bogus'], 'unknown argument: --bogus'],
+    ['--target with no value', () => ['--target'], '--target needs a value'],
+    // It reached the gate, which came back NOT SELLABLE (exit 1) for a drive that is fine.
+    ['an unknown platform', () => declared(sellableDrive(), 'win-x64,win-arm64'), 'unknown platform "win-arm64"']
+  ])('%s is a usage error: exit 2, the cause and the usage on stderr', (_title, args, cause) => {
+    const r = gate(args())
+    expect(r.status, outputOf(r)).toBe(2)
+    expect(r.stderr).toContain(cause)
+    expect(r.stderr).toContain('usage: node assert-commercial-drive.mjs')
+    expect(r.stdout).toBe('')
+  })
+
+  it.each(['-h', '--help'])('%s prints the usage on stdout and exits 0', (help) => {
+    const r = gate([help])
+    expect(r.status, outputOf(r)).toBe(0)
+    expect(r.stdout).toContain('usage: node assert-commercial-drive.mjs')
+    expect(r.stderr).toBe('')
+  })
+
+  // #767: verifying a weight logs a line through console.log, and it landed on stdout ahead of the object.
+  it('--json keeps stdout to the one verdict object while a weight is hashed', async () => {
+    const root = sellableDrive()
+    const r = gate([...declared(root), '--json'])
+    expect(r.status, outputOf(r)).toBe(0)
+    expect(r.stderr).toContain('Model checksum hashed')
+    const lines = r.stdout.trim().split(/\r?\n/)
+    expect(lines).toHaveLength(1)
+    const verdict = JSON.parse(lines[0]) as { ok: boolean; problems: string[]; checks: Record<string, boolean> }
+    expect(Object.keys(verdict).sort()).toEqual(['checks', 'ok', 'problems'])
+    expect(verdict.ok).toBe(true)
+    expect(verdict.problems).toEqual([])
+    const inProcess = await assertCommercialDrive(root, [], null, null, null)
+    expect(Object.keys(verdict.checks)).toEqual(Object.keys(inProcess.checks))
+    expect(Object.values(verdict.checks).every((v) => v === true)).toBe(true)
+  })
+})
+
 for (const leg of SCRIPT_LEGS) {
   describe.skipIf(leg.skip)(`script execution — ${leg.name}`, () => {
     const builder = `build-commercial-drive.${leg.ext}`
@@ -319,7 +372,7 @@ for (const leg of SCRIPT_LEGS) {
     describe('prepare-drive keeps an existing config', () => {
       it('skips an edited config file on a re-run and rewrites it only with the force flag', () => {
         const preparer = `prepare-drive.${leg.ext}`
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-prep-'))
+        const root = scriptRoot('script-prep-')
         const configFile = (name: string): string => join(root, 'config', name)
         const first = leg.run(preparer, [f('Target'), root])
         expect(first.status, outputOf(first)).toBe(0)
@@ -342,7 +395,7 @@ for (const leg of SCRIPT_LEGS) {
 
     describe('prepare-drive lays out a drive', () => {
       it('creates every layout dir and copies the notices, manifests, skills and docs (LIC-1)', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-layout-'))
+        const root = scriptRoot('script-layout-')
         const r = leg.run(`prepare-drive.${leg.ext}`, [f('Target'), root])
         expect(r.status, outputOf(r)).toBe(0)
         for (const dir of DRIVE_LAYOUT_DIRS) expect(existsSync(join(root, ...dir.split('/'))), dir).toBe(true)
@@ -359,7 +412,7 @@ for (const leg of SCRIPT_LEGS) {
 
     describe('build-commercial-drive verify-only gate (#233)', () => {
       it.skipIf(!toolBuilt)('runs the canonical gate offline and prints NOT SELLABLE for an empty target', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-gate-'))
+        const root = scriptRoot('script-gate-')
         const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
@@ -377,7 +430,7 @@ for (const leg of SCRIPT_LEGS) {
       })
 
       it('rejects an unknown platform label before doing anything (exit 2)', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-plat-'))
+        const root = scriptRoot('script-plat-')
         const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-arm64'])
         expect(r.status, outputOf(r)).toBe(2)
         expect(outputOf(r)).toContain('win-arm64')
@@ -385,7 +438,7 @@ for (const leg of SCRIPT_LEGS) {
       })
 
       it('refuses to proceed when a differently named app artifact already sits at the root', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-prior-'))
+        const root = scriptRoot('script-prior-')
         writeFileSync(join(root, 'HilbertRaum-0.1.58-portable.exe'), 'old')
         const src = mkdtempSync(join(tmpdir(), 'hilbertraum-script-artifact-'))
         const artifact = join(src, 'HilbertRaum-0.1.59-portable.exe')
@@ -394,12 +447,16 @@ for (const leg of SCRIPT_LEGS) {
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toContain('HilbertRaum-0.1.58-portable.exe')
-        expect(out).not.toContain('[1]') // refused before step 1 ran
+        expect(out).not.toMatch(/^\[1\] /m) // refused before step 1 ran (the root's own name holds a "[1]")
         expect(existsSync(join(root, 'HilbertRaum-0.1.59-portable.exe'))).toBe(false)
       })
     })
 
     describe('fetch-runtime commercial mode (#234)', () => {
+      // Most of these runs are meant to stop before a download, so a regression could reach one: a copy of scripts/ with no
+      // repo pins beside it, under dead proxies, keeps it off the network (#767).
+      const scriptsCopy = isolatedScripts()
+      const fetchOffline = (args: string[]) => leg.run(fetcher, args, { scriptsDir: scriptsCopy, env: downloadEnv() })
       const commercialArgs = (root: string, extra: string[] = []): string[] => [
         f('Target'),
         root,
@@ -411,7 +468,7 @@ for (const leg of SCRIPT_LEGS) {
 
       it('refuses a placeholder archive hash BEFORE any download: nothing extracted, no marker', () => {
         const root = scratchTarget(PLACEHOLDER)
-        const r = leg.run(fetcher, commercialArgs(root))
+        const r = fetchOffline(commercialArgs(root))
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -421,7 +478,7 @@ for (const leg of SCRIPT_LEGS) {
       it('does not SKIP a hashless (legacy) install: the placeholder is refused instead', () => {
         const root = scratchTarget(PLACEHOLDER)
         installWinBuild(root, false)
-        const r = leg.run(fetcher, commercialArgs(root))
+        const r = fetchOffline(commercialArgs(root))
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -431,7 +488,7 @@ for (const leg of SCRIPT_LEGS) {
       it('without the flag a hashless install is still skipped (DIY tolerance unchanged)', () => {
         const root = scratchTarget(PLACEHOLDER)
         installWinBuild(root, false)
-        const r = leg.run(fetcher, [f('Target'), root, f('Os'), 'win'])
+        const r = fetchOffline([f('Target'), root, f('Os'), 'win'])
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
         expect(out).toMatch(/skip \(/)
@@ -440,7 +497,7 @@ for (const leg of SCRIPT_LEGS) {
       it('a hashed, matching install is skipped in commercial mode too (nothing to re-fetch)', () => {
         const root = scratchTarget(PLACEHOLDER)
         installWinBuild(root, true)
-        const r = leg.run(fetcher, commercialArgs(root))
+        const r = fetchOffline(commercialArgs(root))
         const out = outputOf(r)
         expect(r.status, out).toBe(0)
         expect(out).toMatch(/skip \(/)
@@ -448,7 +505,7 @@ for (const leg of SCRIPT_LEGS) {
 
       it('a dry run in commercial mode reports the placeholder as a failure (exit 1)', () => {
         const root = scratchTarget(PLACEHOLDER)
-        const r = leg.run(fetcher, commercialArgs(root, [f('DryRun')]))
+        const r = fetchOffline(commercialArgs(root, [f('DryRun')]))
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -456,7 +513,7 @@ for (const leg of SCRIPT_LEGS) {
 
       it('the OCR family refuses a placeholder before any download too', () => {
         const root = scratchTarget(PLACEHOLDER)
-        const r = leg.run(fetcher, [f('Target'), root, f('Family'), 'ocr', f('Commercial')])
+        const r = fetchOffline([f('Target'), root, f('Family'), 'ocr', f('Commercial')])
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toMatch(/placeholder/i)
@@ -464,39 +521,8 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
-    // #339 P8-3: kiwix_tools is the first multi-file, multi-build OPTIONAL family the
-    // scripts fetch. A dry run for each of the four pinned builds (win + the two mac archs
-    // + linux) must print that build's full required-file plan (the executables the yaml's
-    // `executables:` declares, plus win's ICU `runtime_files:`) without touching the
-    // network, and must never require --Family/--family to guess right without --os/--arch.
-    describe('fetch-runtime kiwix_tools family — dry run enumerates every build (#339 P8-3)', () => {
-      it.each([
-        ['win', 'x64', KIWIX_WIN],
-        ['mac', 'arm64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']],
-        ['mac', 'x64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']],
-        ['linux', 'x64', ['kiwix-serve', 'kiwix-manage', 'kiwix-search']]
-      ] as const)('%s/%s: prints the required-file plan, offline, exit 0', (os, arch, files) => {
-        const root = scratchTarget(REAL_SHA)
-        const r = leg.run(fetcher, [
-          f('Target'),
-          root,
-          f('Family'),
-          'kiwix_tools',
-          f('Os'),
-          os,
-          f('Arch'),
-          arch,
-          f('DryRun')
-        ])
-        const out = outputOf(r)
-        expect(r.status, out).toBe(0)
-        expect(out).toMatch(/dry run/i)
-        expect(out).toContain(`build: ${os}/${arch} cpu @ 3.8.1`)
-        for (const file of files) expect(out, `${os}/${arch}: expected ${file} in the plan`).toContain(file)
-        // Nothing extracted — dry run touches no network and creates no runtime/ tree.
-        expect(existsSync(join(root, 'runtime', 'kiwix-tools'))).toBe(false)
-      })
-    })
+    // The kiwix_tools dry run of every pinned build (#339 P8-3) runs over the committed yaml, held to the app's own
+    // reading of it, in script-fetch-runtime.test.ts.
 
     // #310: verify-models must enumerate every file a multi-file weight declares, not just the
     // primary GGUF — this executes the real script against a small on-disk shard set with REAL
@@ -506,7 +532,7 @@ for (const leg of SCRIPT_LEGS) {
 
       /** A three-file shard model (shard 1 + two declared siblings) plus a single-file model. */
       function buildTempDrive(withThirdShard: boolean): { root: string; manifests: ModelManifest[] } {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-verify-'))
+        const root = scriptRoot('script-verify-')
         mkdirSync(join(root, 'model-manifests'), { recursive: true })
         mkdirSync(join(root, 'models', 'chat'), { recursive: true })
 
@@ -581,9 +607,61 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
-    // Real manifests, the real script, no network: a dry run stops short of every download. Each row has
-    // an absent primary and a size_bytes: the flat parsers differ past those two, and that is a defect
-    // of its own, not a shape to pin here.
+    // #767: the .ps1 died on a manifest with no runtime (a null table index) and reported nothing after it, and it
+    // compared a missing format with the missing answer for a runtime it does not know; the .sh compared an empty format
+    // with an empty answer. Each passed a manifest the app calls unsupported, or stopped the run.
+    describe('verify-models answers as the app does (#767)', () => {
+      const verifier = `verify-models.${leg.ext}`
+      const present = (id: string): string => manifestYaml({ id, localPath: `models/chat/${id}.gguf`, sha256: sha256(id) })
+
+      it('no runtime, or no format beside a runtime the app does not run, is UNSUPPORTED, and the next model is still verified', () => {
+        const ids = ['n-model', 'o-model', 'u-model', 'z-model']
+        // z-model sits in a role directory, as on a prepared drive: the .ps1 walk filters by hand what -Include ignores.
+        const root = modelsTarget(
+          [
+            present('n-model').replace('runtime: llama_cpp\n', ''),
+            present('o-model').replace('runtime: llama_cpp\n', '').replace('format: gguf\n', ''),
+            present('u-model').replace('runtime: llama_cpp', 'runtime: other_cpp').replace('format: gguf\n', '')
+          ],
+          {
+            ...Object.fromEntries(ids.map((id) => [`models/chat/${id}.gguf`, id])),
+            'model-manifests/chat/z-model.yaml': present('z-model')
+          }
+        )
+        const r = leg.run(verifier, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toMatch(/UNSUPPORTED\s+n-model/)
+        expect(out).toMatch(/UNSUPPORTED\s+o-model/)
+        expect(out).toMatch(/UNSUPPORTED\s+u-model/)
+        expect(out).toMatch(/VERIFIED\s+z-model/)
+      })
+
+      it('a projector block with a comment on its key line and one at column 0 inside is still verified (#767)', () => {
+        const yaml = manifestYaml({ id: 'p-model', localPath: 'models/chat/p-model.gguf', sha256: sha256('p') }, [
+          'mmproj:  # the vision projector',
+          '  local_path: models/chat/p-mm.gguf',
+          '# a note at column 0',
+          `  sha256: ${sha256('pm')}`
+        ])
+        const root = modelsTarget([yaml], { 'models/chat/p-model.gguf': 'p', 'models/chat/p-mm.gguf': 'pm' })
+        const r = leg.run(verifier, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toMatch(/VERIFIED\s+p-model \(mmproj\)/)
+      })
+
+      it('--generate with no manifest writes the empty entries list buildChecksumsJson writes', async () => {
+        const root = modelsTarget([])
+        const r = leg.run(verifier, [f('Target'), root, f('Generate')])
+        expect(r.status, outputOf(r)).toBe(0)
+        const written = JSON.parse(readFileSync(join(root, 'config', 'checksums.json'), 'utf8')) as ChecksumsJson
+        expect(written.entries).toEqual((await buildChecksumsJson(root, [])).entries)
+      })
+    })
+
+    // Real manifests, the real script, no network: a dry run stops short of every download. The real
+    // downloads (resume, the size-guarded delete, aria2) are script-fetch-models.test.ts.
     describe('fetch-models plans offline (--dry-run)', () => {
       interface PlanRow {
         manifests: string[]
@@ -592,9 +670,19 @@ for (const leg of SCRIPT_LEGS) {
         status: number
         contains: string[]
         absent?: string[]
+        /** Every error the validator gives a manifest of the row is a `BLOCK  <id>: <error>` line (#767). */
+        refused?: true
       }
       const pending = [fetchable('p-model', { status: 'pending' })]
       const verified = { 'models/chat/v-model.gguf': 'bytes' }
+      // A present verified primary and one files: member: one PSCustomObject has no .Count under PowerShell 5.1, so
+      // the .ps1 read the absent member as nothing to fetch and passed the license gate and the withdrawn skip (#767).
+      const onDisk = { 'models/chat/s-model.gguf': 'bytes' }
+      const withMember = (o: { status?: string; withdrawn?: string } = {}): string[] => [
+        fetchable('s-model', { ...o, sha: sha256('bytes'), extra: FILES_LINES })
+      ]
+      const MMPROJ_NO_DOWNLOAD = ['mmproj:', '  local_path: models/vision/h-mm.gguf', `  sha256: ${REAL_SHA}`]
+      const FILES_NO_DOWNLOAD = ['files:', '  - local_path: models/chat/h-2.gguf', `    sha256: ${REAL_SHA}`]
       const rows: Array<[string, PlanRow]> = [
         [
           'plans an absent approved model: its fetch line, URL and path',
@@ -710,6 +798,123 @@ for (const leg of SCRIPT_LEGS) {
             status: 0,
             contains: ['fetch  s-model (file 2/2)', 'https://example.invalid/s-2.gguf', '-> models/chat/s-2.gguf']
           }
+        ],
+        [
+          // Valid YAML the app reads: a comment on the block's key line, and one at column 0 inside it. The block reader
+          // that replaced the flat url / size_bytes reads (#767) took the first for no block and ended at the second.
+          'a download block with a comment on its key line and one at column 0 inside is still planned (#767)',
+          {
+            manifests: [
+              manifestYaml({ id: 'c-model', localPath: 'models/chat/c-model.gguf', sha256: REAL_SHA }, [
+                'download:  # pinned with the manifest',
+                '  url: https://example.invalid/c-model.gguf',
+                '# a note at column 0',
+                `  sha256: ${REAL_SHA}`,
+                '  size_bytes: 9'
+              ])
+            ],
+            status: 0,
+            contains: ['fetch  c-model', 'https://example.invalid/c-model.gguf', '-> models/chat/c-model.gguf', 'Planned 1'],
+            absent: ['BLOCK']
+          }
+        ],
+        [
+          '--only naming a model outside --bundled says so, not that it has no download block (exit 2, #767)',
+          {
+            manifests: [fetchable('a-model')],
+            extra: [f('Only'), 'a-model', f('Bundled')],
+            status: 2,
+            contains: ["Model 'a-model' is not in the bundled set"],
+            absent: ['declares no download block', 'fetch  a-model']
+          }
+        ],
+        [
+          'one absent files: member beside a verified primary still meets the license gate (#767)',
+          {
+            manifests: withMember({ status: 'pending' }),
+            files: onDisk,
+            status: 1,
+            contains: ['BLOCK  s-model', 'One or more models failed'],
+            absent: ['fetch  s-model']
+          }
+        ],
+        [
+          'one absent files: member beside a verified primary still meets the withdrawn skip (#767)',
+          {
+            manifests: withMember({ withdrawn: '2026-11-02: removed upstream, issue 196' }),
+            files: onDisk,
+            status: 0,
+            contains: ['SKIP   s-model: upstream source withdrawn'],
+            absent: ['fetch  s-model']
+          }
+        ],
+        [
+          // A tab is IFS whitespace: the .sh collapsed the empty size field and read the member's state as its size.
+          'a verified files: member with no size_bytes is skipped, not fetched (#767)',
+          {
+            manifests: [
+              fetchable('s-model', {
+                sha: sha256('bytes'),
+                extra: FILES_LINES.filter((l) => !l.includes('size_bytes')).map((l) => l.replace(REAL_SHA, sha256('second')))
+              })
+            ],
+            files: { ...onDisk, 'models/chat/s-2.gguf': 'second' },
+            status: 0,
+            contains: ['skip   s-model (present + verified)', 'skip   s-model (file 2/2) (present + verified)'],
+            absent: ['fetch  s-model', 'redo']
+          }
+        ],
+        [
+          '--only with an id no manifest carries exits 2 and names it (#767)',
+          {
+            manifests: [fetchable('a-model')],
+            extra: [f('Only'), 'zz-model'],
+            status: 2,
+            contains: ["No model manifest with id 'zz-model'"],
+            absent: ['fetch  a-model']
+          }
+        ],
+        [
+          '--only with a model that declares no download block exits 2 (#767)',
+          {
+            manifests: [sourceless('n-model'), fetchable('a-model')],
+            extra: [f('Only'), 'n-model'],
+            status: 2,
+            contains: ["Model 'n-model' declares no download block"],
+            absent: ['fetch  ']
+          }
+        ],
+        // Half a download pair, which the validator refuses: the scripts fetched the half that had a source, and with
+        // no top-level download read another file's url as the primary's (#767).
+        [
+          'half a pair: a top-level download and no mmproj.download is refused, --accept-license or not, and the run goes on (#767)',
+          {
+            manifests: [fetchable('h-model', { status: 'pending', extra: MMPROJ_NO_DOWNLOAD }), fetchable('a-model')],
+            extra: [f('AcceptLicense')],
+            status: 1,
+            refused: true,
+            contains: ['fetch  a-model', 'Planned 2 | fetched 0 | skipped 0'],
+            absent: ['fetch  h-model', 'note   h-model']
+          }
+        ],
+        [
+          'half a pair: an mmproj.download and no top-level download is refused (#767)',
+          { manifests: [sourceless('h-model', MMPROJ_LINES)], status: 1, refused: true, contains: [], absent: ['fetch  h-model'] }
+        ],
+        [
+          'half a pair: a top-level download and no files[0].download is refused, whatever is on disk (#767)',
+          {
+            manifests: [fetchable('h-model', { sha: sha256('bytes'), extra: FILES_NO_DOWNLOAD })],
+            files: { 'models/chat/h-model.gguf': 'bytes' },
+            status: 1,
+            refused: true,
+            contains: [],
+            absent: ['fetch  h-model', 'skip   h-model']
+          }
+        ],
+        [
+          'half a pair: a files[0].download and no top-level download is refused (#767)',
+          { manifests: [sourceless('h-model', FILES_LINES)], status: 1, refused: true, contains: [], absent: ['fetch  h-model'] }
         ]
       ]
 
@@ -720,6 +925,14 @@ for (const leg of SCRIPT_LEGS) {
         expect(r.status, out).toBe(row.status)
         for (const text of row.contains) expect(out).toContain(text)
         for (const text of row.absent ?? []) expect(out).not.toContain(text)
+        if (row.refused) {
+          const refusals = row.manifests.flatMap((yaml) => {
+            const doc = parseYaml(yaml) as { id: string }
+            return validateManifest(doc).errors.map((error) => `BLOCK  ${doc.id}: ${error}`)
+          })
+          expect(refusals.length, 'the row must hold a manifest the validator refuses').toBeGreaterThan(0)
+          for (const line of refusals) expect(out).toContain(line)
+        }
         // A dry run writes nothing, and leaves what is there alone.
         if (!row.files) expect(existsSync(join(root, 'models'))).toBe(false)
         for (const [rel, content] of Object.entries(row.files ?? {})) {
@@ -761,6 +974,8 @@ for (const leg of SCRIPT_LEGS) {
         ['an os with no build', (y) => y, [f('Os'), 'freebsd'], 'No runtime build for os=freebsd'],
         ['an arch with no build', (y) => y, [f('Os'), 'win', f('Arch'), 'arm64'], 'No runtime build for os=win arch=arm64'],
         ['a family the yaml does not declare', (y) => y, [f('Family'), 'whisper_cpp'], 'missing whisper_cpp.version'],
+        // BSD seq counts DOWN from 0 to -1, so on macOS the selection loop read an unset build and died with exit 1 (#767).
+        ['a family with a version and no builds', (y) => `${y}whisper_cpp:\n  version: v1.8.6\n  builds:\n`, [f('Family'), 'whisper_cpp', f('Os'), 'win'], 'No runtime build for os=win'],
         ['an ocr file with no url', drop('      url: https://example.invalid/deu.traineddata.gz\n'), [f('Family'), 'ocr'], "ocr.files (deu): missing 'url'"],
         ['a yaml with no ocr block', (y) => y.slice(0, y.indexOf('\nocr:\n') + 1), [f('Family'), 'ocr'], 'no ocr block']
       ]
@@ -1029,7 +1244,7 @@ for (const leg of SCRIPT_LEGS) {
       it.skipIf(!toolBuilt)(
         'a dry run reaches the canonical verdict: NOT SELLABLE on an empty target',
         () => {
-          const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-dry-'))
+          const root = scriptRoot('script-dry-')
           const r = leg.run(builder, [f('Target'), root, f('AcceptLicense'), f('DryRun')], { timeoutMs: 240_000 })
           const out = outputOf(r)
           expect(r.status, out).toBe(1)

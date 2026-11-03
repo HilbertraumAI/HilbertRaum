@@ -29,9 +29,12 @@ if [ -z "$PREV" ] || [ "$PREV" = "$TAG" ]; then
   exit 0 # first release, or a re-run after this tag already published
 fi
 
+# Every call inside a loop ends it on failure: a `$( … )` subshell does not inherit `set -e` (Bash 3.2 has no
+# inherit_errexit), so without `|| exit 1` a loop's status was its LAST call's and an earlier failure dropped that PR's
+# issues from the notes without a word.
 PRS=$(gh api --paginate "repos/$REPO/compare/$PREV...$TAG" -q '.commits[].sha' |
   while read -r sha; do
-    gh api "repos/$REPO/commits/$sha/pulls" -q '.[].number'
+    gh api "repos/$REPO/commits/$sha/pulls" -q '.[].number' || exit 1
   done | sort -un)
 [ -n "$PRS" ] || exit 0
 
@@ -44,7 +47,7 @@ ISSUES=$(for pr in $PRS; do
           pullRequest(number:$pr){
             closingIssuesReferences(first:50){nodes{number title}}}}}' \
     -q '.data.repository.pullRequest.closingIssuesReferences.nodes[]
-        | [(.number|tostring), .title] | @tsv'
+        | [(.number|tostring), .title] | @tsv' || exit 1
 done | sort -t"$TAB" -k1,1n -u)
 [ -n "$ISSUES" ] || exit 0
 

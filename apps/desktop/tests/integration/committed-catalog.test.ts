@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import {
   buildModelList,
   estimateGraphicsNeedMib,
@@ -14,10 +14,12 @@ import {
   weightsMib
 } from '../../src/main/services/models'
 import { isRealSha256, type ModelManifest } from '../../src/shared/manifest'
+import type { RuntimeFamily } from '../../src/shared/runtime-sources'
 import type { ModelInfo } from '../../src/shared/types'
 import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
 import { orderPickerModels } from '../../src/renderer/lib/modelAvailability'
-import { committedManifests } from '../helpers/catalog'
+import { committedManifests, committedRuntimeSources } from '../helpers/catalog'
+import { docTableRows } from '../helpers/doc-tables'
 import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 import { validManifest } from '../helpers/manifest-fixtures'
 import { modelManifestDocs } from '../helpers/repo-files'
@@ -162,7 +164,8 @@ describe('committed catalog — rules over every manifest', () => {
 
   // The key-order rule (shared/manifest.ts `files`): fetch-models and verify-models read a manifest flat, first match wins,
   // because they must run with no Node. A nested local_path / sha256 placed above the top-level one would poison them, and a
-  // " #" in a value would truncate it.
+  // " #" in a value would truncate it. Since #767 fetch-models reads url, size_bytes and license_url from the top-level
+  // `download:` block instead (a projector's size reached the primary); the flat read of those three still agrees here.
   it('the flat first-match parser of the scripts reads what the YAML parser reads, on every committed manifest (#310 key order)', () => {
     for (const { path, text, doc } of modelManifestDocs()) {
       const download = (doc.download ?? {}) as Record<string, unknown>
@@ -828,8 +831,7 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
 
 describe('committed catalog — the single-manifest roles (TQ-2)', () => {
   // The role manifests churn far less than the chat waves; a presence + real-hash pin over EVERY declared file is the cheap
-  // half that catches deletion and hash mis-edits. License posture is deliberately NOT pinned here: TranslateGemma's `pending`
-  // is a standing owner decision (the mechanical sell-gate guard), and pinning statuses would freeze that.
+  // half that catches deletion and hash mis-edits. TranslateGemma's license posture has a row of its own below.
   it('each non-chat role ships exactly its one known manifest with a real hash', () => {
     const manifests = committedManifests()
     const expected: Record<string, { id: string; kinds: string[] }> = {
@@ -857,6 +859,21 @@ describe('committed catalog — the single-manifest roles (TQ-2)', () => {
     ])
     // Fetched with the weight: dictation needs both, and the wrapper finds this one by its name.
     expect(whisper!.files?.[0].download, 'the VAD file has a source').toBeDefined()
+  })
+
+  // #769 (owner call): `license_review.status` is the REDISTRIBUTION review a sold drive needs, and TranslateGemma's
+  // stays `pending` until the Gemma flow-down checklist its manifest note lists exists. Freezing it is the point: a flip
+  // is an owner decision, never a tidy-up. DRIVE-NOTICES.md prints the status, so its byte gate already shows a flip as
+  // a diff; this row carries the intent and says what the flip costs.
+  it('TranslateGemma\'s license review stays pending until a redistribution review is recorded (#769)', () => {
+    const tg = committedManifests().find((m) => m.id === 'translategemma-12b-it-q4')
+    expect(tg, 'translategemma manifest present').toBeDefined()
+    expect(
+      tg!.licenseReview.status,
+      'approving it drops the in-app license confirmation (ModelsScreen needsAck) and the downloaders\' license ' +
+        'refusal (services/assets.ts, fetch-models), and lets a Kit preload the weight past the sell gate ' +
+        '(services/commercial-drive.ts). Record the redistribution review in docs/model-policy.md first.'
+    ).toBe('pending')
   })
 })
 
@@ -1181,5 +1198,75 @@ describe('committed catalog — variant grouping as the library renders it (PR #
     expect(face.download!.withdrawn, `${face.id} is not withdrawn`).toBeUndefined()
     // Presentation exception only — the face is a member of the group, not a new entry.
     expect(group!.models).toContain(face)
+  })
+})
+
+// #769: docs/model-policy.md keeps two inventories of the committed files that nothing else checked: "Download hosts"
+// (every host a committed URL names) and the runtime licence records' hash tables. These rows hold the files to the doc,
+// so a new host or a re-pinned build is a deliberate doc edit. The OCR table is ocr-pins.test.ts's (OCR_PINS anchors it).
+describe('committed catalog — the inventories docs/model-policy.md keeps (#769)', () => {
+  const POLICY = ['docs', 'model-policy.md']
+  const runtime = committedRuntimeSources()
+  const families = runtime.families ?? {}
+  const codeSpans = (cell: string): string[] => [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1])
+
+  it('the download-host table names exactly the hosts the committed manifests and runtime-sources.yaml name', () => {
+    const hosts = (urls: string[]): string[] => [...new Set(urls.map((url) => new URL(url).hostname))].sort()
+    const manifestHosts = hosts(
+      committedManifests().flatMap((m) =>
+        [m.download, m.mmproj?.download, ...(m.files ?? []).map((f) => f.download)].flatMap((d) => (d ? [d.url] : []))
+      )
+    )
+    const runtimeHosts = hosts([
+      ...Object.values(families).flatMap((block) => [
+        ...block!.builds.map((b) => b.url),
+        ...(block!.sourceBundle?.files ?? []).map((f) => f.url)
+      ]),
+      ...(runtime.ocr?.files ?? []).map((f) => f.url)
+    ])
+    // Columns: the backticked host, what the model manifests fetch from it, what runtime-sources.yaml does; `—` is none.
+    const table = docTableRows('### Download hosts', ...POLICY).map(([host, models, sources]) => ({
+      host: /^`([a-z0-9.-]+)`$/.exec(host ?? '')?.[1],
+      models: models !== '—',
+      sources: sources !== '—'
+    }))
+    const column = (named: (r: (typeof table)[number]) => boolean): Array<string | undefined> =>
+      table.filter(named).map((r) => r.host).sort()
+    expect(column(() => true), 'one row per host').toEqual([...new Set([...manifestHosts, ...runtimeHosts])].sort())
+    expect(column((r) => r.models), 'the model-manifest column').toEqual(manifestHosts)
+    expect(column((r) => r.sources), 'the runtime-sources.yaml column').toEqual(runtimeHosts)
+  })
+
+  // Each family's records live in its own section. The historical b9849 / b9585 tables name their tag in every asset,
+  // so they never answer for a current pin. The kiwix per-binary hashes exist only in the doc (no yaml field states
+  // them), so there is nothing to hold them to.
+  const RECORDS: Record<RuntimeFamily, string> = {
+    llama_cpp: '### `runtime-sources.yaml`',
+    whisper_cpp: '## The whisper.cpp transcriber family',
+    kiwix_tools: '## Sidecar binaries — kiwix-tools'
+  }
+
+  it('every yaml build and kiwix source tarball has a licence-record row with its sha256 (and byte count where pinned)', () => {
+    expect(Object.keys(families).sort(), 'every family has a record section').toEqual(Object.keys(RECORDS).sort())
+    const unheld: string[] = []
+    for (const [family, heading] of Object.entries(RECORDS) as Array<[RuntimeFamily, string]>) {
+      const block = families[family]!
+      const rows = docTableRows(heading, ...POLICY)
+      const pins = [
+        ...block.builds.map((b) => ({ asset: posix.basename(new URL(b.url).pathname), sha256: b.sha256, size: b.sizeBytes })),
+        ...(block.sourceBundle?.files ?? []).map((f) => ({ asset: f.name, sha256: f.sha256, size: f.sizeBytes }))
+      ]
+      for (const { asset, sha256, size } of pins) {
+        // The asset is a code span of its own, or the last segment of a code-span URL (the kiwix build table).
+        const held = rows.some(
+          (row) =>
+            row.some((cell) => codeSpans(cell).some((span) => span === asset || span.endsWith(`/${asset}`))) &&
+            row.includes(`\`${sha256}\``) &&
+            (size === undefined || row.some((cell) => cell.replace(/,/g, '') === String(size)))
+        )
+        if (!held) unheld.push(`${family} ${asset} ${sha256}${size === undefined ? '' : ` ${size} bytes`}`)
+      }
+    }
+    expect(unheld, 'yaml pins with no row naming the asset with the same sha256 (and byte count)').toEqual([])
   })
 })

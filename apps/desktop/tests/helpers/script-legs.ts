@@ -1,7 +1,9 @@
 // The shipped `scripts/*.{ps1,sh}` run on a fresh machine with no Node, so each pair repeats its logic and the suites read
 // or run both. This is the shell half of those suites: the two legs, and the array parser the twin rows compare with.
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { join } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { testBudgetMs } from './hang-budget'
 import { REPO_ROOT } from './repo-files'
 
@@ -32,6 +34,15 @@ export function extractScriptArray(src: string, header: string): string[] {
   return entries
 }
 
+export interface RunOptions {
+  timeoutMs?: number
+  /** Variables set on top of this process's environment. A `PATH` here replaces the inherited one, whatever its case. */
+  env?: NodeJS.ProcessEnv
+  cwd?: string
+  /** Runs the script from this folder instead of the repo's scripts/ (see `isolatedScripts`). */
+  scriptsDir?: string
+}
+
 export interface ScriptLeg {
   name: string
   skip: boolean
@@ -39,7 +50,15 @@ export interface ScriptLeg {
   /** A flag in this leg's spelling: `flag('DryRun')` is `-DryRun` or `--dry-run`. */
   flag(name: string): string
   /** Runs `scripts/<script>`. */
-  run(script: string, args: string[], opts?: { timeoutMs?: number }): SpawnSyncReturns<string>
+  run(script: string, args: string[], opts?: RunOptions): SpawnSyncReturns<string>
+}
+
+/** This process's environment with `overrides` on top. Windows env names are case-insensitive, so a `PATH` override drops `Path`. */
+function childEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const replaced = Object.keys(overrides).map((k) => k.toLowerCase())
+  const env: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(process.env)) if (!replaced.includes(k.toLowerCase())) env[k] = v
+  return { ...env, ...overrides }
 }
 
 /**
@@ -48,9 +67,9 @@ export interface ScriptLeg {
  * autoload and every hashing script dies with CommandNotFoundException. Replace it, case-insensitively as Windows env names
  * are, with 5.1's own default module path, which is what any user's machine gives the script.
  */
-function powershellEnv(): NodeJS.ProcessEnv {
+function powershellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(process.env)) if (!/^psmodulepath$/i.test(k)) env[k] = v
+  for (const [k, v] of Object.entries(base)) if (!/^psmodulepath$/i.test(k)) env[k] = v
   const sysRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
   env.PSModulePath = [
     process.env.ProgramFiles ? join(process.env.ProgramFiles, 'WindowsPowerShell', 'Modules') : null,
@@ -73,8 +92,14 @@ export const SCRIPT_LEGS: ScriptLeg[] = [
     run: (script, args, opts = {}) =>
       spawnSync(
         'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(SCRIPTS, script), ...args],
-        { encoding: 'utf8', timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS, windowsHide: true, env: powershellEnv() }
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(opts.scriptsDir ?? SCRIPTS, script), ...args],
+        {
+          encoding: 'utf8',
+          timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS,
+          windowsHide: true,
+          env: powershellEnv(childEnv(opts.env)),
+          cwd: opts.cwd
+        }
       )
   },
   {
@@ -83,8 +108,75 @@ export const SCRIPT_LEGS: ScriptLeg[] = [
     ext: 'sh',
     flag: (n) => `--${n.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()}`,
     run: (script, args, opts = {}) =>
-      spawnSync('bash', [join(SCRIPTS, script), ...args], { encoding: 'utf8', timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS })
+      spawnSync('bash', [join(opts.scriptsDir ?? SCRIPTS, script), ...args], {
+        encoding: 'utf8',
+        timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS,
+        env: childEnv(opts.env),
+        cwd: opts.cwd
+      })
   }
 ]
 
 export const outputOf = (r: SpawnSyncReturns<string>): string => `${r.stdout ?? ''}\n${r.stderr ?? ''}`
+
+/**
+ * A scratch drive root for a script row. Its last segment holds a space and a `[`, the two characters a careless shell
+ * script or a non-literal PowerShell path cmdlet trips on: `Test-Path '…\Kit [1]'` reads `[1]` as a wildcard, finds
+ * nothing, and fetch-models and verify-models then fell back to the repo's manifests (#767).
+ */
+export function scriptRoot(prefix: string): string {
+  const root = join(mkdtempSync(join(tmpdir(), `hilbertraum-${prefix}`)), 'Kit [1]')
+  mkdirSync(root)
+  return root
+}
+
+const ARIA2 = ['aria2c', 'aria2c.exe', 'aria2c.cmd', 'aria2c.bat']
+const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH'
+
+const mirrors = new Map<string, string>()
+
+/**
+ * A copy of `dir` made of symlinks, minus aria2c: on a POSIX runner aria2c sits in /usr/bin beside every tool the scripts
+ * need. Built once per test file (the temp-root sweep removes it with the file's other roots).
+ */
+function mirrorWithoutAria2(dir: string): string {
+  const known = mirrors.get(dir)
+  if (known !== undefined && existsSync(known)) return known
+  const mirror = mkdtempSync(join(tmpdir(), 'hilbertraum-path-'))
+  for (const name of readdirSync(dir)) if (!ARIA2.includes(name)) symlinkSync(join(dir, name), join(mirror, name))
+  mirrors.set(dir, mirror)
+  return mirror
+}
+
+/** A proxy on a loopback port nothing listens on: curl, wget and aria2c fail an http(s) request at once; `file://` ignores it. */
+const DEAD_PROXY = 'http://127.0.0.1:9'
+
+/**
+ * Overrides for a row that really downloads, from a `file://` URL. Every CI runner image ships aria2c, which the scripts
+ * prefer and which reads no `file://` URL, so it leaves PATH: a Windows directory holding it (a choco shim folder) is
+ * dropped, a POSIX one is mirrored without it. `firstDir` (a stub downloader) goes first. `STUB_NODE` names this node for
+ * the stubs. Every proxy variable names a dead port, so a row that went wrong cannot reach the network (CLAUDE.md).
+ */
+export function downloadEnv(firstDir?: string): NodeJS.ProcessEnv {
+  const dirs: string[] = []
+  for (const dir of (process.env[pathKey] ?? '').split(delimiter)) {
+    if (!dir) continue
+    if (!ARIA2.some((n) => existsSync(join(dir, n)))) dirs.push(dir)
+    else if (process.platform !== 'win32') dirs.push(mirrorWithoutAria2(dir))
+  }
+  const proxies: NodeJS.ProcessEnv = {}
+  for (const name of ['http_proxy', 'https_proxy', 'all_proxy']) proxies[name] = proxies[name.toUpperCase()] = DEAD_PROXY
+  return { PATH: [...(firstDir ? [firstDir] : []), ...dirs].join(delimiter), STUB_NODE: process.execPath, ...proxies, no_proxy: '', NO_PROXY: '' }
+}
+
+/**
+ * A copy of the repo's shipped `*.ps1` / `*.sh` scripts, for rows that really download. Its parent holds no
+ * model-manifests/, so a script that misses the drive's own manifests or pin cannot fall back to the repo's catalog and
+ * fetch it: a pre-fix fetch-models on a `Kit [1]` root did exactly that, a real 1.6 GB download (#767).
+ */
+export function isolatedScripts(): string {
+  const dir = join(mkdtempSync(join(tmpdir(), 'hilbertraum-scripts-')), 'scripts')
+  mkdirSync(dir)
+  for (const name of readdirSync(SCRIPTS)) if (/\.(ps1|sh)$/.test(name)) copyFileSync(join(SCRIPTS, name), join(dir, name))
+  return dir
+}

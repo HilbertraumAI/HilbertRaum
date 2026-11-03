@@ -590,6 +590,12 @@ pages (png, jpg, jpeg — needs the OCR files). Other files in the same import s
   above.
 - On Linux, see **"Linux: the AppImage does not start"** above.
 - On Windows, the portable `.exe` may take a few seconds on first launch — wait for the window.
+- On macOS, the launcher unpacks the app once from the drive's `.app.zip` into
+  `~/Library/Caches/HilbertRaum/` on this Mac (a folder named after the zip) and starts it from
+  there; your workspace stays on the drive. If it says **"found no .app inside it"**, the zip on
+  the drive is damaged: copy it to the drive again. If it says the app unpacked earlier **"is
+  incomplete"**, delete the folder it names (in Finder: **Go → Go to Folder…**, paste the path);
+  the next start unpacks a fresh copy.
 - Check that the drive has free space and is writable. The app shows a friendly note on the Home
   screen if the drive is read-only, low on space, or slow (none of these block you).
 - If the drive was just prepared, confirm `config/drive.json` exists at the drive root.
@@ -613,7 +619,8 @@ double-click the launcher again.
 To see which app the launcher would start **without** starting it, run it with `/check` on
 Windows (`"Start HilbertRaum.cmd" /check` in a Command Prompt opened at the drive root) or
 `--check` on macOS/Linux (`./"Start HilbertRaum.command" --check`, `./start-hilbertraum.sh
---check`). It prints the drive root and the app it resolved, then "Nothing was started".
+--check`). It prints the drive root, the folder of model descriptions the app will read
+(`model-manifests` on the drive), and the app it resolved, then "Nothing was started".
 
 ---
 

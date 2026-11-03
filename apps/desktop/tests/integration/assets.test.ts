@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, win32 } from 'node:path'
-import { parse } from 'yaml'
 import {
   archiveNameFromUrl,
   planModelDownloads,
@@ -31,6 +30,7 @@ import {
 } from '../../src/main/services/assets'
 import { validateManifest, isRealSha256, type ModelManifest } from '../../src/shared/manifest'
 import { validateRuntimeSources, type RuntimeSources } from '../../src/shared/runtime-sources'
+import { committedRuntimeSources } from '../helpers/catalog'
 import { sha256, validManifest } from '../helpers/manifest-fixtures'
 
 function tempDir(prefix: string): string {
@@ -619,12 +619,9 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
 // assert the Phase-14 shape directly against it (mirrors the committed-manifest tests).
 describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => {
   const committed = (): RuntimeSources => {
-    const raw = parse(
-      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
-    )
-    const res = validateRuntimeSources(raw)
-    if (!res.sources) throw new Error('committed yaml invalid: ' + res.errors.join(', '))
-    return res.sources
+    const { sources } = committedRuntimeSources()
+    if (!sources) throw new Error('committed runtime-sources.yaml has no llama_cpp block')
+    return sources
   }
 
   it('validates (incl. the duplicate-triple check)', () => {
@@ -664,11 +661,7 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
   // Phase 36: the committed whisper pin (the second family) — win CPU prebuilt only
   // (R-W1: upstream ships no mac/linux CLI binaries), real hash, own extract tree.
   it('pins the whisper_cpp family at v1.8.6 with a real hash', () => {
-    const raw = parse(
-      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
-    )
-    const res = validateRuntimeSources(raw)
-    expect(res.ok).toBe(true)
+    const res = committedRuntimeSources()
     expect(res.whisper?.version).toBe('v1.8.6')
     expect(res.whisper?.builds).toHaveLength(1)
     const win = res.whisper!.builds[0]
@@ -681,11 +674,7 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
   // #339 P8-1: the third family — OPTIONAL, multi-executable, four builds (two mac archs
   // sharing one extract dir), real hashes throughout.
   it('pins the kiwix_tools family at 3.8.1 with real hashes for all four builds', () => {
-    const raw = parse(
-      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
-    )
-    const res = validateRuntimeSources(raw)
-    expect(res.ok).toBe(true)
+    const res = committedRuntimeSources()
     const kiwix = res.families?.kiwix_tools
     expect(kiwix?.version).toBe('3.8.1')
     expect(kiwix?.optional).toBe(true)
@@ -714,10 +703,7 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
   })
 
   it('the committed kiwix_tools pin carries the five-archive source_bundle with real hashes and the exact grant wording (#339 P8-4)', () => {
-    const raw = parse(
-      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
-    )
-    const bundle = validateRuntimeSources(raw).families?.kiwix_tools?.sourceBundle
+    const bundle = committedRuntimeSources().families?.kiwix_tools?.sourceBundle
     expect(bundle?.dir).toBe('runtime/kiwix-tools/source')
     expect(bundle?.recipeUrl).toBe('https://github.com/kiwix/kiwix-build')
     expect(bundle?.recipeCommit).toBeUndefined() // none is pinned — never invented
@@ -1316,9 +1302,7 @@ describe('archiveNameFromUrl (#245)', () => {
   })
 
   it('every shipped runtime-sources.yaml build keeps its real basename (no silent fallback)', () => {
-    const file = join(__dirname, '..', '..', '..', '..', 'model-manifests', 'runtime-sources.yaml')
-    const res = validateRuntimeSources(parse(readFileSync(file, 'utf8')))
-    expect(res.ok).toBe(true)
+    const res = committedRuntimeSources()
     // Iterate `res.families` (#339 P8-1) rather than hand-enumerating `sources`/`whisper` —
     // a new family that this test never learned about would otherwise stay invisible to it,
     // exactly the blind spot that let kiwix_tools ship unchecked before this change.

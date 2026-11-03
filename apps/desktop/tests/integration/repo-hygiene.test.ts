@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { en } from '../../src/shared/i18n'
+import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
 // long-standing npm/Arborist behaviour), so with an unpinned npm every contributor's
@@ -10,9 +11,7 @@ import { en } from '../../src/shared/i18n'
 // `git pull` loop. The committed lockfile is canonical under the pinned version below;
 // installs go through `npm ci` (CI, setup-dev, CONTRIBUTING), which never rewrites it.
 describe('repo hygiene — lockfile discipline (issue #49)', () => {
-  const rootPkg = JSON.parse(
-    readFileSync(join(process.cwd(), '..', '..', 'package.json'), 'utf8')
-  ) as { packageManager?: string; engines?: Record<string, string> }
+  const rootPkg = JSON.parse(repoText('package.json')) as { packageManager?: string; engines?: Record<string, string> }
 
   it('pins the npm version the committed lockfile is canonical under', () => {
     // Exact-version corepack pin. If you bump this, regenerate package-lock.json with the
@@ -37,6 +36,9 @@ describe('repo hygiene — lockfile discipline (issue #49)', () => {
 // caught by review, not by the original src-only net. The extension filter deliberately
 // excludes the legitimate BINARY fixtures under tests/ (the .png vision chart, the local-only
 // real-data .pdf corpus) — only text/source files must be NUL-free.
+// The text-file types both byte nets below cover (the NUL net's comments say why each one joined).
+const TEXT_FILE = /\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml|txt|sh|ps1|cmd|command)$/
+
 describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // `txt` joined the filter with licenses/ (LIC-1, 2026-07-12b): the pinned license
   // texts are inlined verbatim into the generated DRIVE-NOTICES.md, so a stray byte
@@ -57,24 +59,15 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // BOM'd .sh/.command stops launching with no error a buyer could act on. .ps1/.cmd are kept
   // in the NUL half regardless — a NUL makes git treat the file as binary and ripgrep skip it,
   // which is what let the original class hide.
-  const walk = (dir: string): string[] => {
-    const out: string[] = []
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name)
-      if (entry.isDirectory()) out.push(...walk(p))
-      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml|txt|sh|ps1|cmd|command)$/.test(entry.name))
-        out.push(p)
-    }
-    return out
-  }
+  const walk = (dir: string): string[] => filesUnder(dir, TEXT_FILE)
 
   it('holds no 0x00 byte in any src file (git must see them all as text)', () => {
-    const offenders = walk(join(process.cwd(), 'src')).filter((p) => readFileSync(p).includes(0))
+    const offenders = walk(join(DESKTOP_ROOT, 'src')).filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
   })
 
   it('holds no 0x00 byte in any tests source file either', () => {
-    const offenders = walk(join(process.cwd(), 'tests')).filter((p) =>
+    const offenders = walk(join(DESKTOP_ROOT, 'tests')).filter((p) =>
       readFileSync(p).includes(0)
     )
     expect(offenders).toEqual([])
@@ -86,7 +79,7 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // retirement legend at its end. Docs are grep-navigated reference material, so they get the
   // same net (the extension filter keeps it to text files).
   it('holds no 0x00 byte in any docs file either', () => {
-    const offenders = walk(join(process.cwd(), '..', '..', 'docs')).filter((p) =>
+    const offenders = walk(join(REPO_ROOT, 'docs')).filter((p) =>
       readFileSync(p).includes(0)
     )
     expect(offenders).toEqual([])
@@ -97,10 +90,9 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // README, …) are scanned non-recursively: the repo root also holds node_modules, which must
   // never be walked.
   it('holds no 0x00 byte in any repo-root markdown file either', () => {
-    const root = join(process.cwd(), '..', '..')
-    const offenders = readdirSync(root, { withFileTypes: true })
+    const offenders = readdirSync(REPO_ROOT, { withFileTypes: true })
       .filter((e) => e.isFile() && /\.md$/.test(e.name))
-      .map((e) => join(root, e.name))
+      .map((e) => join(REPO_ROOT, e.name))
       .filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
   })
@@ -112,10 +104,9 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // example .md + schema .json + workflow .yml since the 2026-07-12b widening below) and
   // neither contains node_modules, so the recursive walk is safe.
   it('holds no 0x00 byte in any app-skills or .github text file either', () => {
-    const repoRoot = join(process.cwd(), '..', '..')
     const offenders = [
-      ...walk(join(repoRoot, 'app-skills')),
-      ...walk(join(repoRoot, '.github'))
+      ...walk(join(REPO_ROOT, 'app-skills')),
+      ...walk(join(REPO_ROOT, '.github'))
     ].filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
   })
@@ -127,11 +118,10 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // packaged app. The extension filter above now covers those types; this walks the three
   // missing roots (none contains node_modules).
   it('holds no 0x00 byte in any scripts or model-manifests file either', () => {
-    const repoRoot = join(process.cwd(), '..', '..')
     const offenders = [
-      ...walk(join(repoRoot, 'scripts')),
-      ...walk(join(process.cwd(), 'scripts')),
-      ...walk(join(repoRoot, 'model-manifests'))
+      ...walk(join(REPO_ROOT, 'scripts')),
+      ...walk(join(DESKTOP_ROOT, 'scripts')),
+      ...walk(join(REPO_ROOT, 'model-manifests'))
     ].filter((p) => readFileSync(p).includes(0))
     expect(offenders).toEqual([])
   })
@@ -140,7 +130,7 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // that generate-drive-notices.mjs inlines verbatim into DRIVE-NOTICES.md (which ships
   // at the root of every prepared drive) — the same byte-trap class as the manifests.
   it('holds no 0x00 byte in any licenses/ file either', () => {
-    const offenders = walk(join(process.cwd(), '..', '..', 'licenses')).filter((p) =>
+    const offenders = walk(join(REPO_ROOT, 'licenses')).filter((p) =>
       readFileSync(p).includes(0)
     )
     expect(offenders).toEqual([])
@@ -152,7 +142,7 @@ describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // downstream re-encodes or validates them. Small tree, no node_modules, so the recursive walk
   // is safe.
   it('holds no 0x00 byte in any drive-root launcher file either', () => {
-    const files = walk(join(process.cwd(), '..', '..', 'launchers'))
+    const files = walk(join(REPO_ROOT, 'launchers'))
     expect(files.length).toBeGreaterThanOrEqual(4) // the walk really walked (not a moved root)
     expect(files.filter((p) => readFileSync(p).includes(0))).toEqual([])
   })
@@ -168,16 +158,7 @@ describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => 
   // Same filter as the NUL net above (incl. the LIC-1 `txt` widening for licenses/ and the
   // AUD-06 `sh|ps1|cmd|command` widening — see that net's comment for why shell scripts and
   // the drive-root launchers are the highest-stakes members of this class).
-  const walk = (dir: string): string[] => {
-    const out: string[] = []
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name)
-      if (entry.isDirectory()) out.push(...walk(p))
-      else if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|json|css|md|html|yml|yaml|txt|sh|ps1|cmd|command)$/.test(entry.name))
-        out.push(p)
-    }
-    return out
-  }
+  const walk = (dir: string): string[] => filesUnder(dir, TEXT_FILE)
   const hasBom = (p: string): boolean => {
     const b = readFileSync(p)
     return b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf
@@ -195,21 +176,20 @@ describe('repo hygiene — no UTF-8 BOM in any covered text file (TQ-1)', () => 
   // the buyer's machine — no error message, no log, nothing to bisect. The class is one careless
   // `Out-File` away on any Windows dev box (PowerShell 5.1 writes BOM'd UTF-8 by default).
   it('no src/tests/scripts/launchers/docs/app-skills/.github/model-manifests/root-md file starts with EF BB BF', () => {
-    const repoRoot = join(process.cwd(), '..', '..')
     const files = [
-      ...walk(join(process.cwd(), 'src')),
-      ...walk(join(process.cwd(), 'tests')),
-      ...walk(join(process.cwd(), 'scripts')),
-      ...walk(join(repoRoot, 'scripts')),
-      ...walk(join(repoRoot, 'launchers')), // AUD-06: shipped verbatim to the drive root
-      ...walk(join(repoRoot, 'model-manifests')),
-      ...walk(join(repoRoot, 'licenses')), // LIC-1: pinned texts inlined into DRIVE-NOTICES.md
-      ...walk(join(repoRoot, 'docs')),
-      ...walk(join(repoRoot, 'app-skills')),
-      ...walk(join(repoRoot, '.github')),
-      ...readdirSync(repoRoot, { withFileTypes: true })
+      ...walk(join(DESKTOP_ROOT, 'src')),
+      ...walk(join(DESKTOP_ROOT, 'tests')),
+      ...walk(join(DESKTOP_ROOT, 'scripts')),
+      ...walk(join(REPO_ROOT, 'scripts')),
+      ...walk(join(REPO_ROOT, 'launchers')), // AUD-06: shipped verbatim to the drive root
+      ...walk(join(REPO_ROOT, 'model-manifests')),
+      ...walk(join(REPO_ROOT, 'licenses')), // LIC-1: pinned texts inlined into DRIVE-NOTICES.md
+      ...walk(join(REPO_ROOT, 'docs')),
+      ...walk(join(REPO_ROOT, 'app-skills')),
+      ...walk(join(REPO_ROOT, '.github')),
+      ...readdirSync(REPO_ROOT, { withFileTypes: true })
         .filter((e) => e.isFile() && /\.md$/.test(e.name))
-        .map((e) => join(repoRoot, e.name))
+        .map((e) => join(REPO_ROOT, e.name))
     ]
     expect(files.length).toBeGreaterThan(500) // the walk really walked (not a moved root)
     // AUD-06 sub-assertion: the shebang-bearing shipped artifacts are IN the list above. Without
@@ -297,7 +277,7 @@ describe('repo hygiene — docs/ markdown links resolve (DOC-1 + AUD-21)', () =>
     return out
   }
 
-  const docsDir = join(process.cwd(), '..', '..', 'docs')
+  const docsDir = join(REPO_ROOT, 'docs')
 
   it('the only relative link is the header ../BUILD_STATE.md pointer, and it resolves', () => {
     const buildLog = join(docsDir, 'build-log.md')
@@ -345,7 +325,7 @@ describe('repo hygiene — docs/ markdown links resolve (DOC-1 + AUD-21)', () =>
 describe('repo hygiene — BUILD_STATE.md stays a one-pass handoff file (retention budget)', () => {
   /** Split BUILD_STATE into its `## N. …` sections, plus the dated-entry preamble at the top. */
   const sections = (): Map<string, number> => {
-    const text = readFileSync(join(process.cwd(), '..', '..', 'BUILD_STATE.md'), 'utf8')
+    const text = repoText('BUILD_STATE.md')
     const lines = text.split('\n')
     const out = new Map<string, number>()
     let current = 'preamble'
@@ -364,7 +344,7 @@ describe('repo hygiene — BUILD_STATE.md stays a one-pass handoff file (retenti
   }
 
   it('stays under the whole-file retention budget (archive closed waves to docs/build-log.md)', () => {
-    const raw = readFileSync(join(process.cwd(), '..', '..', 'BUILD_STATE.md'))
+    const raw = readFileSync(join(REPO_ROOT, 'BUILD_STATE.md'))
     expect(raw.byteLength).toBeLessThanOrEqual(300 * 1024)
     expect(raw.toString('utf8').split('\n').length).toBeLessThanOrEqual(2000)
   })
@@ -408,7 +388,7 @@ describe('repo hygiene — BUILD_STATE.md stays a one-pass handoff file (retenti
   })
 
   it('§5 does not carry a closed round as a full narrative (the shape the budget protects)', () => {
-    const text = readFileSync(join(process.cwd(), '..', '..', 'BUILD_STATE.md'), 'utf8')
+    const text = repoText('BUILD_STATE.md')
     const s5 = text.slice(text.indexOf('\n## 5. '), text.indexOf('\n## 6. '))
     // A collapsed item is a handful of lines; a pasted wave narrative is dozens. Any item that
     // both declares itself complete AND runs long has been left un-collapsed.
@@ -438,17 +418,9 @@ describe('repo hygiene — BUILD_STATE.md stays a one-pass handoff file (retenti
 // the bare form is therefore invisible to every existing behavioural test. This enumerates the
 // bare call sites that remain and pins the set.
 describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlisted (AUD-02)', () => {
-  const MAIN = join(process.cwd(), 'src', 'main')
+  const MAIN = join(DESKTOP_ROOT, 'src', 'main')
 
-  const tsFiles = (dir: string): string[] => {
-    const out: string[] = []
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name)
-      if (entry.isDirectory()) out.push(...tsFiles(p))
-      else if (/\.(ts|tsx|mts)$/.test(entry.name)) out.push(p)
-    }
-    return out
-  }
+  const tsFiles = (dir: string): string[] => filesUnder(dir, /\.(ts|tsx|mts)$/)
 
   /** Drop comment-only lines and any trailing `// …` tail — the conversion left a lot of prose
    *  that legitimately NAMES `isUnlocked()` while explaining why it must not be used. */
@@ -511,7 +483,7 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     const found = new Set<string>()
     const unclassified: string[] = []
     for (const file of tsFiles(MAIN)) {
-      const rel = file.slice(join(process.cwd()).length + 1).replace(/\\/g, '/')
+      const rel = file.slice(DESKTOP_ROOT.length + 1).replace(/\\/g, '/')
       for (const rawLine of readFileSync(file, 'utf8').split('\n')) {
         const code = codeOf(rawLine)
         for (const m of code.matchAll(/isUnlocked\s*(?:\?\.)?\s*\(\s*\)/g)) {
@@ -552,21 +524,13 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
 // only `npm run build` fails — which is exactly why the phase gate is typecheck → build → test in
 // that order. Comments are stripped before the plugin runs, so only STRING LITERALS are the hazard.
 describe('repo hygiene — no string literal ends with the bare word "import" (#188 bundler trap)', () => {
-  const walk = (dir: string): string[] => {
-    const out: string[] = []
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name)
-      if (entry.isDirectory()) out.push(...walk(p))
-      else if (/\.(ts|tsx)$/.test(entry.name)) out.push(p)
-    }
-    return out
-  }
+  const walk = (dir: string): string[] => filesUnder(dir, /\.(ts|tsx)$/)
   // A quote closing immediately after ` import`, with the line NOT being a real import statement.
   const TRAP = /(^|[\s;])import(['"])/
 
   it('no src file closes a string literal right after the word "import"', () => {
     const offenders: string[] = []
-    for (const p of walk(join(process.cwd(), 'src'))) {
+    for (const p of walk(join(DESKTOP_ROOT, 'src'))) {
       readFileSync(p, 'utf8')
         .split('\n')
         .forEach((line, i) => {
@@ -587,10 +551,9 @@ describe('repo hygiene — no string literal ends with the bare word "import" (#
 // files that had been withdrawn upstream — on a public download page. These are the
 // invariants that would have caught that.
 describe('repo hygiene — CHANGELOG is release-page-shaped', () => {
-  const repoRoot = join(process.cwd(), '..', '..')
-  const changelog = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8')
+  const changelog = repoText('CHANGELOG.md')
   const version = JSON.parse(
-    readFileSync(join(process.cwd(), 'package.json'), 'utf8')
+    readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')
   ).version as string
 
   // Headings look like "## [0.1.57] — 2026-08-17". The em dash is the committed style; accept
@@ -638,7 +601,7 @@ describe('repo hygiene — CHANGELOG is release-page-shaped', () => {
 // structural: no bare `ipcMain.handle(` and no `ipcMain` import under src/main/ipc/** except
 // in the guard module itself.
 describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through the guard (#252)', () => {
-  const ipcDir = join(process.cwd(), 'src', 'main', 'ipc')
+  const ipcDir = join(DESKTOP_ROOT, 'src', 'main', 'ipc')
   const sources = readdirSync(ipcDir)
     .filter((f) => f.endsWith('.ts') && f !== 'guarded-handle.ts')
     .map((f) => ({ file: f, src: readFileSync(join(ipcDir, f), 'utf8') }))
@@ -665,12 +628,8 @@ describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through 
   })
 
   it('the permissive ANY_SENDER set stays out of src/main: only the test harness has one', () => {
-    const mainDir = join(process.cwd(), 'src', 'main')
-    const walk = (dir: string): string[] =>
-      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-        e.isDirectory() ? walk(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : []
-      )
-    const offenders = walk(mainDir)
+    const mainDir = join(DESKTOP_ROOT, 'src', 'main')
+    const offenders = filesUnder(mainDir, /\.ts$/)
       .filter((p) => /\bANY_SENDER\b/.test(readFileSync(p, 'utf8')))
       .map((p) => p.slice(mainDir.length + 1))
     expect(offenders).toEqual([])
@@ -685,9 +644,7 @@ describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through 
 // nobody is forced to flip it), or a test renamed away from the inventory that now names nothing.
 // Style matches the rest of this file — readdir walks + regexes over source text, no test-runner API.
 describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 → #301, plan §0.3 item 5)', () => {
-  const desktopRoot = process.cwd()
-  const repoRoot = join(desktopRoot, '..', '..')
-  const inventoryPath = join(desktopRoot, 'tests', 'fixtures', 'zim', 'required-checks.json')
+  const inventoryPath = join(DESKTOP_ROOT, 'tests', 'fixtures', 'zim', 'required-checks.json')
   type Status = 'implemented' | 'baseline-pending' | 'pending' | 'manual-evidence'
   interface Row {
     id: string
@@ -710,16 +667,8 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
     const m = re.exec(source)
     return { found: m !== null, fails: m !== null && m[1] !== undefined }
   }
-  const walkTests = (dir: string): string[] => {
-    const out: string[] = []
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name)
-      if (entry.isDirectory()) out.push(...walkTests(p))
-      else if (/\.test\.tsx?$/.test(entry.name)) out.push(p)
-    }
-    return out
-  }
-  const rel = (p: string): string => p.slice(desktopRoot.length + 1).split('\\').join('/')
+  const walkTests = (dir: string): string[] => filesUnder(dir, /\.test\.tsx?$/)
+  const rel = (p: string): string => p.slice(DESKTOP_ROOT.length + 1).split('\\').join('/')
   const basename = (p: string): string => rel(p).split('/').pop() ?? ''
 
   it('parses; four statuses only; unique ids; every T01–T19 has a P7-gated row, every T20 row is P8-gated', () => {
@@ -751,7 +700,7 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
         problems.push(`${r.id}: needs file + test`)
         continue
       }
-      const p = join(desktopRoot, r.file)
+      const p = join(DESKTOP_ROOT, r.file)
       if (!existsSync(p)) {
         problems.push(`${r.id}: ${r.file} does not exist`)
         continue
@@ -770,7 +719,7 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
     for (const r of rows()) {
       if (r.status === 'pending') {
         if (!r.file || !r.test || !/^P\d/.test(r.phase)) problems.push(`${r.id}: pending needs file + test + owning phase`)
-        else if (existsSync(join(desktopRoot, r.file)) && findTest(readFileSync(join(desktopRoot, r.file), 'utf8'), r.test).found)
+        else if (existsSync(join(DESKTOP_ROOT, r.file)) && findTest(readFileSync(join(DESKTOP_ROOT, r.file), 'utf8'), r.test).found)
           problems.push(`${r.id}: listed pending but a test with that exact name exists — update the status`)
       }
       if (r.status === 'manual-evidence' && !(typeof r.evidence === 'string' && r.evidence.trim().length > 20))
@@ -784,7 +733,7 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
     const listedFiles = new Set(all.filter((r) => r.file).map((r) => r.file as string))
     // This file is itself listed (the L2 / plural-pair rows) but its regexes and messages spell the
     // patterns they hunt for, so the net skips it — it holds no tests of the ZIM feature anyway.
-    const zimFiles = walkTests(join(desktopRoot, 'tests')).filter(
+    const zimFiles = walkTests(join(DESKTOP_ROOT, 'tests')).filter(
       (p) => basename(p) !== 'repo-hygiene.test.ts' && (/zim/i.test(basename(p)) || listedFiles.has(rel(p)))
     )
     expect(zimFiles.length).toBeGreaterThan(5) // the walk really walked
@@ -804,7 +753,7 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
   })
 
   it('the drive zim/ dir is git-ignored, anchored like /runtime/ (PR #294 L2)', () => {
-    const lines = readFileSync(join(repoRoot, '.gitignore'), 'utf8').split(/\r?\n/)
+    const lines = repoText('.gitignore').split(/\r?\n/)
     expect(lines).toContain('/zim/')
     // Anchored ONLY — a bare `zim/` would un-track apps/desktop/src/main/services/zim/ (the /runtime/ bug).
     expect(lines.filter((l) => /^\/?zim\/?$/.test(l.trim()))).toEqual(['/zim/'])
@@ -812,7 +761,7 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
 
   it('EN/DE chat.scope.projectCount.one/.other are adjacent lines again (PR #294 review INFO, split plural pair)', () => {
     for (const lang of ['en', 'de']) {
-      const lines = readFileSync(join(desktopRoot, 'src', 'shared', 'i18n', `${lang}.ts`), 'utf8').split(/\r?\n/)
+      const lines = readFileSync(join(DESKTOP_ROOT, 'src', 'shared', 'i18n', `${lang}.ts`), 'utf8').split(/\r?\n/)
       const one = lines.findIndex((l) => l.includes("'chat.scope.projectCount.one'"))
       const other = lines.findIndex((l) => l.includes("'chat.scope.projectCount.other'"))
       expect(one, `${lang}: .one present`).toBeGreaterThan(-1)
@@ -832,10 +781,10 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
       const para = end === -1 ? text.slice(start) : text.slice(start, end)
       return para.includes(needle)
     }
-    const securityModel = readFileSync(join(repoRoot, 'docs', 'security-model.md'), 'utf8')
-    const privacy = readFileSync(join(repoRoot, 'PRIVACY.md'), 'utf8')
-    const knownLimitations = readFileSync(join(repoRoot, 'docs', 'known-limitations.md'), 'utf8')
-    const userGuide = readFileSync(join(repoRoot, 'docs', 'user-guide.md'), 'utf8')
+    const securityModel = repoText('docs', 'security-model.md')
+    const privacy = repoText('PRIVACY.md')
+    const knownLimitations = repoText('docs', 'known-limitations.md')
+    const userGuide = repoText('docs', 'user-guide.md')
     // Markdown source soft-wraps a long sentence across lines; collapse whitespace runs to a
     // single space on both sides so a wrapped quote still counts as verbatim.
     const oneLine = (s: string): string => s.replace(/\s+/g, ' ')
@@ -887,10 +836,10 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
       'The only things the app ever downloads are AI models, the AI engine, the optional ' +
       'knowledge-pack tools and the optional text-recognition (OCR) files — each one only after ' +
       'you confirm it, each one verified before use.'
-    const privacy = readFileSync(join(repoRoot, 'PRIVACY.md'), 'utf8')
-    const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8')
-    const userGuide = readFileSync(join(repoRoot, 'docs', 'user-guide.md'), 'utf8')
-    const securityModelDoc = readFileSync(join(repoRoot, 'docs', 'security-model.md'), 'utf8')
+    const privacy = repoText('PRIVACY.md')
+    const readme = repoText('README.md')
+    const userGuide = repoText('docs', 'user-guide.md')
+    const securityModelDoc = repoText('docs', 'security-model.md')
 
     expect(oneLine(privacy).includes(sentence), 'PRIVACY.md must state the sentence verbatim').toBe(true)
     expect(oneLine(readme).includes(sentence), 'README.md must state the sentence verbatim').toBe(true)
@@ -917,10 +866,10 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
       'The only things the app ever downloads are AI models, the AI engine and the optional ' +
       'knowledge-pack tools —'
     const docs = [
-      ...readdirSync(repoRoot).filter((f) => f.endsWith('.md')).map((f) => join(repoRoot, f)),
-      ...readdirSync(join(repoRoot, 'docs'))
+      ...readdirSync(REPO_ROOT).filter((f) => f.endsWith('.md')).map((f) => join(REPO_ROOT, f)),
+      ...readdirSync(join(REPO_ROOT, 'docs'))
         .filter((f) => f.endsWith('.md') && f !== 'build-log.md')
-        .map((f) => join(repoRoot, 'docs', f))
+        .map((f) => join(REPO_ROOT, 'docs', f))
     ]
     const offenders = docs.filter((f) => oneLine(readFileSync(f, 'utf8')).includes(retired))
     const uiKeys = Object.entries(en)
@@ -935,10 +884,9 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
 // call each other through `bash`, which hid it. Every tracked shell script under scripts/ must be
 // executable in the git index (launchers get their bit from build-commercial-drive at drive time).
 describe('repo hygiene — scripts/*.sh are executable in git (#512)', () => {
-  const repoRoot = resolve(process.cwd(), '..', '..')
   let index = ''
   try {
-    index = execFileSync('git', ['ls-files', '-s', '--', 'scripts/*.sh'], { cwd: repoRoot, encoding: 'utf8' })
+    index = execFileSync('git', ['ls-files', '-s', '--', 'scripts/*.sh'], { cwd: REPO_ROOT, encoding: 'utf8' })
   } catch {
     index = '' // not a git checkout (e.g. a source tarball) — nothing to check
   }

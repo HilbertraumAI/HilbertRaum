@@ -12,9 +12,9 @@
 
 | Role | Candidate | Size | Min RAM | Auto-tier | Purpose |
 |---|---|---|---|---|---|
-| Chat default | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | TINY / LITE / UNKNOWN | Smallest chat model; **catalog / weak-laptop-fallback default** and the model bundled on the preconfigured commercial drive (`bundled_on_preconfigured_drive:true`) — distinct from the **DIY `--with-assets` default-set chat model, which is Ministral 3 8B**. Kept as the catalog default (has hybrid thinking → Deep) despite 2507 scoring higher (Phase-29 user decision) |
+| Chat default | Qwen3 4B Instruct Q4 | ~2.5 GB | 8 GB | TINY / LITE / UNKNOWN | Smallest chat model; **catalog / weak-laptop-fallback default** and the model bundled on the preconfigured commercial drive (`bundled_on_preconfigured_drive:true`) — distinct from the **DIY `--with-assets` default-set chat model, which is Ministral 3 8B**. Kept as the catalog default (has hybrid thinking → Deep) despite 2507 scoring higher (Phase-29 user decision) |
 | Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 12 GB | BALANCED | 12 GB+ laptops (RAM recalibrated from measured ~8.3 GiB peak) |
-| Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 14 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU (slowest decode of all 8). RAM recalibrated from measured ~10.6 GiB |
+| Chat best dense | Qwen3 14B Instruct Q4 | ~9.0 GB | 14 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU (slowest decode of all 8). RAM recalibrated from measured ~10.6 GiB |
 | Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |
 | Chat (winner, 8B) | Ministral 3 8B Instruct (2512) Q4 | ~5.2 GB | 12 GB | — (deferred‡) | **Phase-29 winner at 8B**: 0/15 hallucinations (only model that never fabricated) + fastest 8B decode |
 | Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 12 GB | — (not promoted) | Phase-29: lost its tier (most 8B hallucinations 3/15, lowest F1); kept selectable for its IBM provenance story |
@@ -22,8 +22,8 @@
 | Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
 | Chat (fast-tier 0.8B) | Qwen3.5 0.8B Q6_K | ~0.6 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** Smallest runnable; Q6_K (not UD-Q4_K_XL — quant error bites hardest at 0.8B). Text-only, not bundled. **§9 eval (ratified 2026-08-03, §9.3): the surviving fast-tier candidate — the honest floor (better F1 + abstention than the 2B); stays unranked.** b9849 load evidence via the tester eval; §9.1 in-app smoke still informal. |
 | Chat (fast-tier 2B) | Qwen3.5 2B (UD-Q4_K_XL) | ~1.3 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** CPU-only speed tier. Text-only, not bundled. **§9 eval (ratified 2026-08-03, §9.3): FAILED — worst unanswerable-discipline of all models scored (should not be recommended anywhere, rank stays 0); the 0.8B dominates it.** |
-| Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 3) | **Recommended ≤12 GB since the newest-Qwen promotion (owner decision 2026-07-12, `model-benchmarks.md` §6.4).** unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). §9 eval standing recorded honestly in the manifest (F1 under the Qwen3-4B incumbent, EM comparable); b9849 load observed through the app 2026-07-12. Vision model run text-only. |
-| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended 16–20 GB since the newest-Qwen promotion (2026-07-12, §6.4).** unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (edges Ministral on F1/EM within cross-run tolerance, ranked under it only on the hallucination-trap axis); ran on the b9849 binary in the #48 tester eval; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 6.57 GiB vulkan). Text-only, not bundled. |
+| Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 3) | **Recommended at 8–11 GB** (≤12 GB from the newest-Qwen promotion, owner decision 2026-07-12, `model-benchmarks.md` §6.4, until #153 gave 12–15 GB to Gemma 4 E2B on 2026-08-09). unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). §9 eval standing recorded honestly in the manifest (F1 under the Qwen3-4B incumbent, EM comparable); b9849 load observed through the app 2026-07-12. Vision model run text-only. |
+| Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended at 16–23 GB** today (the RAM path below); 16–20 GB at the newest-Qwen promotion (2026-07-12, §6.4). unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (edges Ministral on F1/EM within cross-run tolerance, ranked under it only on the hallucination-trap axis); ran on the b9849 binary in the #48 tester eval; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 6.57 GiB vulkan). Text-only, not bundled. |
 | Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger; superseded at its tier by the Qwen3.6 27B pair (below) before ever being promoted. Text-only, opt-in (not bundled). |
 | Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 1) | **Ranked and selectable, not the auto-pick.** Tier history: held 24 GB 2026-07-12..2026-08-16, lost it to the Qwen3.8 handover (§9.4), took it back on 2026-08-20 when upstream deleted the Qwen3.8 files, and handed it to `qwen3.8-27b-ud-q4km` the same day when the §9.5 successor wave measured the replacement and the owner ratified the handover — so rank 3 → 1. NOTE it still out-decodes the successor (tg 40.1 vs 32.4 t/s) at quality inside cross-run uncertainty; its own URL + LFS hash re-verified live 2026-08-20. Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M, real HF-LFS hash, apache-2.0 review; hallucinations 0 on the v3 rescore; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 16.87 GiB vulkan). Still ranked + selectable. Text-only, not bundled. |
 | Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 1) | **Ranked and selectable, not the auto-pick** — same tier history as the Q4 sibling (rank 3 → 1 when the §9.5 successor wave gave ≥32 GB to `qwen3.8-27b-ud-q5km`), and it never stopped being the harness top scorer. Still the all-time top scorer of the grounded-QA harness (F1 .3573, zero unanswerable-set hallucinations) — the handover is the §6.4 generational call, not a quality verdict. **§9.1 smoke PASSED 2026-07-30** (peak RSS 19.38 GiB vulkan). Text-only, not bundled. |
@@ -56,7 +56,7 @@
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
 
-All models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5, Whisper transcriber, the Silero VAD file the transcriber manifest carries since #504).
+The models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5, Whisper transcriber, the Silero VAD file the transcriber manifest carries since #504), except three manifests under the **Gemma Terms of Use** (`license: gemma`): the two user-added local-test stubs `gemma-4-26b-q4` and `gemma4-coding-q8`, and TranslateGemma (`translategemma-12b-it-q4`, see "The translation role + TranslateGemma" below).
 Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the
@@ -77,7 +77,7 @@ Sizes/RAM come from each manifest
 > decision 2026-07-12; handed to the Qwen3.8 pair 2026-08-16; reverted 2026-08-20 when upstream
 > deleted the Qwen3.8 files (issue #196) and RESTORED the same day to their measured `UD-*`
 > successors, `model-benchmarks.md` §6.4 + §9.4 + §9.5; asserted in `benchmark.test.ts` and
-> `committed-catalog.test.ts`): **≤12 GB → Qwen3.5 4B, 12–15 GB → Gemma 4 E2B (#153),
+> `committed-catalog.test.ts`): **8–11 GB → Qwen3.5 4B, 12–15 GB → Gemma 4 E2B (#153),
 > 16–23 GB → Qwen3.5 9B, 24 GB → Qwen3.8 27B UD-Q4_K_M, ≥32 GB → Qwen3.8 27B UD-Q5_K_M**;
 > Granite, both MoEs, the three withdrawn Qwen3.8 static K-quants, and the superseded former
 > winners (Ministral, Gemma 4 12B, the Qwen3.6 pair — all still ranked and selectable) are never
@@ -135,7 +135,9 @@ refresh — same established-quantizer posture as `qwen3-4b-instruct-2507-q4`):
   _(Superseded 2026-07-12: the `qwen3.5-4b-ud-q4kxl` and `qwen3.5-9b-ud-q4kxl` were promoted to
   `recommendation_rank: 3` by owner decision — they are the ≤12 GB / 16–20 GB auto-picks now, see
   the catalog table above and `model-benchmarks.md` §6.4. `qwen3.5-27b-ud-q4kxl` and
-  `qwen3.5-35b-a3b-ud-q4kxl` remain rank 0.)_
+  `qwen3.5-35b-a3b-ud-q4kxl` remain rank 0.)_ _(Correction 2026-11-03, #770: since #153
+  (2026-08-09) the 4B's band is 8–11 GB, 12–15 GB going to Gemma 4 E2B, and the 9B's is 16–23 GB;
+  the RAM path above is current.)_
 
   _(Update 2026-08-03, wave ratification — `model-benchmarks.md` §9.3 "Wave outcome": the
   **35B-A3B's deferred rank resolved to rank 1** (ranked MoE alternative for ≥32 GB — §2 eval
@@ -245,9 +247,11 @@ the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdBy
 a `download` block (below),
 `estimated_context_cache_gib` (number ≥ 0; the graphics-memory picker's per-model context-cache
 term, PR #308 §6.6 rule C — absent defaults to 0.5 GiB in code, so the field is set only for the
-seven models whose figure was actually measured), `host_mapped_weights_mib` (number ≥ 0, #321; the
-weights that stay host-mapped on a full offload, which the same estimate subtracts — absent charges
-the whole file to the card), and — for a `role: vision`
+eight models with a worked-out figure: two read off a hardware start, `gemma4-26b-a4b-it-qat-q4`
+(#412) and `translategemma-12b-it-q4` (#473), and six derived from the launch config, each
+manifest's YAML comment carrying its arithmetic; `model-benchmarks.md` §6.6),
+`host_mapped_weights_mib` (number ≥ 0, #321; the weights that stay host-mapped on a full offload,
+which the same estimate subtracts — absent charges the whole file to the card), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
 vision role + mmproj projector" below), and an optional **`files:` list** (below, #310). Unknown
 extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
@@ -256,11 +260,13 @@ extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
   beyond `local_path`/`sha256`, which stay mandatory and PRIMARY — shard 1, the file
   `llama-server --model` receives. Each member is a mapping `{ local_path, sha256, download? }`
   (same shapes as the top-level fields; `download` validated by the same rules as the top-level
-  `download` block). **Key order**: `files:` must be the LAST manifest key, emitted after
-  `local_path`/`sha256`/`download`/`mmproj` — `verify-models.{sh,ps1}` and `fetch-models.{sh,ps1}`
-  scrape a manifest with a flat, first-match line parser (§"Re-verifying the catalog against
-  upstream" / "The DIY download flow" below) that reads the top-level keys by file order, so a
-  nested `local_path:`/`sha256:` pair placed earlier would poison them.
+  `download` block). **Key order**: `files:` must come after `local_path`/`sha256`/`download`/
+  `mmproj`; other keys may follow it (the whisper manifest ends with
+  `bundled_on_preconfigured_drive`, `recommended_profiles` and `license_review`) —
+  `verify-models.{sh,ps1}` and `fetch-models.{sh,ps1}` scrape a manifest with a flat, first-match
+  line parser (§"Re-verifying the catalog against upstream" / "The DIY download flow" below) that
+  reads the top-level keys by file order, so a nested `local_path:`/`sha256:` pair placed earlier
+  would poison them.
   Validator rules (fail-closed, exact messages):
   - `files` must be a non-empty list of mappings: `"files" must be a list of mappings
     (local_path/sha256/download)`; `"files" must not be an empty list — omit it instead`.
@@ -558,7 +564,11 @@ every installed copy into `checksum_failed` overnight.
 ### The DIY download flow + license gate (spec §13)
 `scripts/fetch-models.{ps1,sh}` downloads each weight with a `download` block, **resumes** partials,
 and **SHA-256-verifies against the manifest before counting it installed** (a real-hash mismatch
-deletes the partial and exits non-zero; a placeholder hash downloads but reports *UNVERIFIED*).
+deletes the partial and exits non-zero; a placeholder hash downloads but reports *UNVERIFIED*). Each
+file's `url` and `size_bytes` come from that file's own `download` block, never another file's (#767).
+Half a download pair (a top-level `download` without one on `mmproj` or a `files[N]`, or the other way
+round) is refused before anything is fetched, as the vision section below describes, and
+`--only <id>` exits 2 when no manifest has that id or its manifest declares no `download` block.
 `scripts/fetch-runtime.{ps1,sh}` does the same for the `llama-server` sidecar from
 `model-manifests/runtime-sources.yaml`.
 
@@ -655,6 +665,13 @@ re-verifies each archive before extraction.
 | `llama-b11146-bin-ubuntu-vulkan-x64.tar.gz` | `d3ce40fce7403cc93bcf5718fc46c6efb61ed9709f8e5d9f10c86bf0e30e8fb3` | MIT; Vulkan full build (default linux build) |
 | `llama-b11146-bin-ubuntu-x64.tar.gz` | `c150306eb16b5ab696f76a8bdf810c35fd98a24e82158742e6fa28f420ff8410` | MIT; pure-CPU safety net |
 
+**The yaml is held to these records (#769).** `committed-catalog.test.ts` needs, for every
+`runtime-sources.yaml` build of `llama_cpp`, `whisper_cpp` and `kiwix_tools` and every kiwix
+source tarball, a table row in that family's section of this file naming the asset with the same
+SHA-256, and the same byte count where the yaml pins one. A pin bump is red until its record is
+written. The historical tables below name their tag in every asset, so they never answer for the
+current pin. The OCR table is held the same way, through `OCR_PINS` (`ocr-pins.test.ts`).
+
 **What these builds need from the host system** (#530, read with `objdump -T` / `readelf -d`
 and run in stock Ubuntu containers, 2026-10-01; `architecture.md` "Engine load failures"):
 - **Both Linux builds** need glibc ≥ 2.34, libstdc++ with `GLIBCXX_3.4.30` (GCC 12), OpenSSL 3
@@ -732,6 +749,32 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   If the floor moves, update the record above, `known-limitations.md` and the user-facing
 >   minimum (README, `user-guide.md` §1, `troubleshooting.md`, `launchers/READ ME FIRST.txt`,
 >   the `models.engineProblem.systemTooOldLinux` copy).
+
+### Download hosts (#769)
+
+Every host a committed URL names. This is an **inventory, not an allowlist**: the app and the
+scripts fetch from whatever host a drive's yaml names (`security-model.md` S4 declined a
+download-host allowlist), and a download follows redirects to hosts no file names (the Hugging
+Face and GitHub storage CDNs, `mirror.download.kiwix.org`). `committed-catalog.test.ts` holds both
+columns to the committed files exactly, so a new host is a deliberate edit of this table. A model
+manifest's URLs are its `download.url`, `mmproj.download.url` and every `files[].download.url`,
+withdrawn sources included; `runtime-sources.yaml`'s are each build's `url`, each `ocr:` file's
+`url` and each kiwix `source_bundle` file's `url`. Links nothing downloads (`license_url`,
+`recipe_url`) are not listed.
+
+| Host | Model manifests | `runtime-sources.yaml` |
+|---|---|---|
+| `huggingface.co` | every weight, projector and extra file | — |
+| `github.com` | — | the llama.cpp and whisper.cpp builds |
+| `download.kiwix.org` | — | the kiwix-tools builds; the kiwix-tools and libkiwix source tarballs |
+| `cdn.jsdelivr.net` | — | the OCR language files |
+| `download.openzim.org` | — | the libzim source tarball |
+| `oligarchy.co.uk` | — | the xapian-core source tarball |
+| `dev.kiwix.org` | — | the libmicrohttpd source tarball |
+
+The source tarballs' URLs record where the maintainer's archive came from: no script downloads
+them (`install-kiwix-source-bundle.mjs` copies a local archive), and `SOURCES.md` and
+`DRIVE-NOTICES.md` print them.
 
 ## The whisper.cpp transcriber family
 
@@ -904,6 +947,9 @@ where the Windows zip ships the ICU 74 DLLs). Per-binary SHA-256:
 `kiwix-serve` `a4efa19354e52a2b4a3c6567d363897140d35fbec6b10b9843ee1f511434042c`,
 `kiwix-manage` `d5ea144a87418d15245d73280ec92084f7878860a7d3d8e80252e83c3f709ccb`,
 `kiwix-search` `51941af707dc98c660e856178a5f4aa751b3ff8e9ceb53b6f74e78e2b56016d3`.
+These per-binary hashes, the win build's and the linux build's, exist only in this file: no yaml
+field states them, so no test holds them. The archive and source-tarball tables are held to the
+yaml (#769, above).
 
 Transitive components, with grants **read from the pinned source trees** (`COPYING` files + the
 per-file headers under `src/`, not assumed from upstream README prose):
@@ -1014,7 +1060,9 @@ plan would install a model that cannot start)`) and the other way round (`"downl
 when "mmproj" declares one (…)`). The planner fetches only the blocks that exist, so half of them is
 a clean multi-GB download of a model that stays `missing`. A refused manifest is skipped with a log
 line, so a hand-made manifest that relies on a hand-placed projector leaves out both blocks. The
-`fetch-models` scripts do not apply this rule: they still fetch the GGUF of such a manifest. Install state
+`fetch-models` scripts apply the same rule, to `mmproj` and to every `files[N]` (#767): they print
+`BLOCK  <id>: <the validator's message>`, fetch no file of that model whatever is on disk and whatever
+`--accept-license` says, carry on with the next model and exit 1. Install state
 (`services/models.ts`) requires **every** declared file — the GGUF, the mmproj, and any `files:`
 entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
 treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)

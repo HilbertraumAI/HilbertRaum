@@ -4,6 +4,7 @@ import { parse as parseYaml } from 'yaml'
 import { assertCommercialDrive, type CommercialAssertion } from '../services/commercial-drive'
 import { discoverManifests } from '../services/models'
 import {
+  isKitPlatform,
   KIT_PLATFORMS,
   validateRuntimeSources,
   type KitPlatform,
@@ -15,7 +16,7 @@ import {
 // `vite.tools.config.ts` into `out/tools/assert-commercial-drive.mjs` and called by
 // `scripts/build-commercial-drive.{ps1,sh}` with plain `node`: the scripts print
 // SELLABLE only from this verdict. Reads only the drive (no network). Exit codes:
-// 0 sellable · 1 not sellable · 2 usage error.
+// 0 sellable (or `--help`) · 1 not sellable · 2 usage error, an unknown platform included.
 
 const USAGE =
   'usage: node assert-commercial-drive.mjs --target <drive-root> ' +
@@ -23,12 +24,19 @@ const USAGE =
 
 interface Args {
   target: string
-  platforms: string[]
+  platforms: KitPlatform[]
   appVersion: string
   json: boolean
 }
 
-function parseArgs(argv: string[]): Args | string {
+/** What a command line that runs no gate prints: the usage on stdout for `--help` (exit 0), a cause on stderr (exit 2). */
+interface NoRun {
+  exitCode: 0 | 2
+  text: string
+}
+
+function parseArgs(argv: string[]): Args | NoRun {
+  const usageError = (cause: string): NoRun => ({ exitCode: 2, text: `${cause}\n${USAGE}` })
   let target = ''
   let platforms: string[] = []
   let appVersion = ''
@@ -50,16 +58,21 @@ function parseArgs(argv: string[]): Args | string {
           .filter((p) => p.length > 0)
       else if (a === '--app-version') appVersion = next()
       else if (a === '--json') json = true
-      else if (a === '-h' || a === '--help') return USAGE
-      else return `unknown argument: ${a}\n${USAGE}`
+      else if (a === '-h' || a === '--help') return { exitCode: 0, text: USAGE }
+      else return usageError(`unknown argument: ${a}`)
     } catch (err) {
-      return `${err instanceof Error ? err.message : String(err)}\n${USAGE}`
+      return usageError(err instanceof Error ? err.message : String(err))
     }
   }
-  if (!target) return `--target is required\n${USAGE}`
-  if (platforms.length === 0) return `--platforms is required (${KIT_PLATFORMS.join(', ')})\n${USAGE}`
-  if (!appVersion) return `--app-version is required\n${USAGE}`
-  return { target: resolve(target), platforms, appVersion, json }
+  if (!target) return usageError('--target is required')
+  if (platforms.length === 0) return usageError(`--platforms is required (${KIT_PLATFORMS.join(', ')})`)
+  // A typo in the label is the caller's error, not the drive's: no gate verdict for it (#769).
+  const unknown = platforms.filter((p) => !isKitPlatform(p))
+  if (unknown.length > 0) {
+    return usageError(`unknown platform ${unknown.map((p) => `"${p}"`).join(', ')} (known: ${KIT_PLATFORMS.join(', ')})`)
+  }
+  if (!appVersion) return usageError('--app-version is required')
+  return { target: resolve(target), platforms: platforms.filter(isKitPlatform), appVersion, json }
 }
 
 interface DriveInputs {
@@ -126,9 +139,18 @@ function readDriveInputs(root: string): DriveInputs {
 
 async function main(argv: string[]): Promise<number> {
   const args = parseArgs(argv)
-  if (typeof args === 'string') {
-    console.error(args)
-    return 2
+  if ('exitCode' in args) {
+    if (args.exitCode === 0) console.log(args.text)
+    else console.error(args.text)
+    return args.exitCode
+  }
+  if (args.json) {
+    // stdout carries the one JSON object. The services log through console.log (services/logging.ts), and hashing a
+    // weight logs a line, which landed ahead of the object (#767): send every such line to stderr for this run.
+    const toStderr = (...line: unknown[]): void => console.error(...line)
+    console.log = toStderr
+    console.info = toStderr
+    console.debug = toStderr
   }
   const inputs = readDriveInputs(args.target)
   const result: CommercialAssertion = await assertCommercialDrive(
@@ -138,7 +160,7 @@ async function main(argv: string[]): Promise<number> {
     inputs.whisper,
     inputs.ocr,
     {
-      platforms: args.platforms as KitPlatform[],
+      platforms: args.platforms,
       appVersion: args.appVersion,
       families: { kiwix_tools: inputs.kiwix }
     }
@@ -146,7 +168,7 @@ async function main(argv: string[]): Promise<number> {
   const problems = [...inputs.problems, ...result.problems]
   const ok = problems.length === 0
   if (args.json) {
-    console.log(JSON.stringify({ ok, problems, checks: result.checks }))
+    process.stdout.write(`${JSON.stringify({ ok, problems, checks: result.checks })}\n`)
     return ok ? 0 : 1
   }
   console.log(`assert-commercial-drive: ${args.target}`)

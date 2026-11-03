@@ -99,10 +99,10 @@ HILBERTRAUM/
 │                                                #   drive-letter change) — both checked against the archive's header UUID.
 │   └── NOTICES/<uuid>.md                        #   generated per-archive licence notice (title, UUID, language, tags,
 │                                                #   a "Content licence" section stating plainly what is NOT knowable
-│                                                #   offline) written by `scripts/generate-zim-notices.mjs` when a
-│                                                #   commercial build provisions kiwix-tools + packs together (#339
-│                                                #   P8-4); invisible to the app (only `*.zim` is enumerated) and absent
-│                                                #   on a DIY drive built without that step.
+│                                                #   offline) written by `scripts/generate-zim-notices.mjs`, a MANUAL
+│                                                #   build-time step run once the kiwix-tools binaries and the packs are
+│                                                #   on the drive (#339 P8-4); neither builder script runs it. Invisible
+│                                                #   to the app (only `*.zim` is enumerated); absent until someone runs it.
 ├── model-manifests/{chat,embeddings,reranker,transcriber,vision,translation}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + kiwix_tools + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
@@ -174,8 +174,10 @@ HILBERTRAUM/
 There is **no in-app updater** (by design: the app makes no internet calls of its own). Updating a prepared
 drive is the same flow as building it, run again from a machine with the repo:
 
-1. `prepare-drive --target <drive> --force` refreshes `model-manifests/` + the bundled docs +
-   `config/{drive,policy}.json` (the workspace and weights are untouched).
+1. `prepare-drive --target <drive>` refreshes `model-manifests/` + the bundled skills, docs and
+   notices (the workspace and weights are untouched). Run it **without** `--force`: an existing
+   `config/drive.json` and `config/policy.json` are kept, and `--force` would rewrite both to the
+   defaults, resetting a drive owner's policy (`docs/packaging.md`, "To move a drive to the repo's pin").
 2. `fetch-models` / `fetch-runtime` download anything new (present + verified files are skipped).
    On a Kit, `fetch-models --bundled`: plain `fetch-models` would preload the whole catalog (#766).
 3. **Delete every prior app artifact** at the drive root — `HilbertRaum-<old>-portable.exe`,

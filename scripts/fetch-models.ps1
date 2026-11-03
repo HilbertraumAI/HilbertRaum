@@ -21,11 +21,17 @@
   License gate (spec section 13): a model whose license_review.status is not 'approved' is
   refused unless -AcceptLicense is passed; the license + license_url are printed first.
 
+  Half a download pair (#767): a model whose top-level download has no partner on its mmproj
+  projector or on a files: member (or the other way round) is refused with the validator's
+  message (BLOCK, exit 1), whatever is on disk and whatever -AcceptLicense says: the app
+  refuses such a manifest, so any file of it fetched would never start.
+
 .PARAMETER Target
   The prepared drive root (e.g. E:\). Required.
 
 .PARAMETER Only
-  Fetch only the model with this id.
+  Fetch only the model with this id. An id no manifest carries, or one whose manifest
+  declares no download block, exits 2: an explicit request that names nothing fetchable.
 
 .PARAMETER Bundled
   Fetch only the models a preconfigured Kit ships preloaded
@@ -65,16 +71,19 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
 $Target = [System.IO.Path]::GetFullPath($Target)
 
+# Every path cmdlet below takes -LiteralPath (#767): a drive root such as `Kit [2026]` is a
+# wildcard to -Path, so Test-Path found no manifests there and the run fell back to the repo's.
 $ManifestsDir = Join-Path $Target 'model-manifests'
-if (-not (Test-Path $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
-if (-not (Test-Path $ManifestsDir)) {
+if (-not (Test-Path -LiteralPath $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
+if (-not (Test-Path -LiteralPath $ManifestsDir)) {
   Write-Host "No model-manifests found under '$Target' or repo root." -ForegroundColor Red
   exit 2
 }
 
 # Flat-YAML line parse (same approach as verify-models.ps1). Returns the FIRST match, so a
 # top-level `sha256:` wins over the one nested in the download block (which is what we
-# verify against). `url`/`size_bytes`/`license_url` are unique to the download block.
+# verify against). `url`/`size_bytes`/`license_url` are read from the body of one block
+# (Get-Block), never from the whole manifest.
 function Get-ManifestField([string]$text, [string]$key) {
   foreach ($line in $text -split "`n") {
     if ($line -match "^\s*$([Regex]::Escape($key))\s*:\s*(.+?)\s*$") {
@@ -88,23 +97,31 @@ function Get-ManifestField([string]$text, [string]$key) {
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 
 function Get-Sha256([string]$path) {
-  return (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLower()
+  return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()
 }
 
+function Test-OnWindows { return ($PSVersionTable.PSVersion.Major -lt 6 -or $IsWindows) }
+
 # Pick the best available downloader. aria2c is multi-connection + resumable if present;
-# otherwise curl.exe (-C - resumes). Never require either beyond curl (ships on Win10+).
+# otherwise curl (-C - resumes): curl.exe on Windows (5.1's bare `curl` is an alias for
+# Invoke-WebRequest; it ships on Win10 1803+), `curl` under PowerShell 7 on macOS/Linux.
 $Aria = (Get-Command aria2c -ErrorAction SilentlyContinue)
-$Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+$Curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $Curl -and -not (Test-OnWindows)) {
+  $Curl = Get-Command curl -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 
 # Resilient curl (mirrors fetch-runtime.ps1): curl --retry alone does not retry a mid-transfer
 # DROP on older curl, so an OUTER loop resumes the partial file (-C -) on each attempt — a
 # flaky link (beta-tester report) survives several disconnects. Hash verification afterwards
 # guards integrity, so resume is safe.
 function Invoke-CurlResilient([string]$url, [string]$dest) {
+  $curlArgs = @('-L', '--fail', '--retry', '3', '--retry-delay', '2', '--retry-connrefused', '--connect-timeout', '30')
+  # --ssl-revoke-best-effort is Schannel's: Windows curl only.
+  if (Test-OnWindows) { $curlArgs += '--ssl-revoke-best-effort' }
   $attempts = 5
   for ($i = 1; $i -le $attempts; $i++) {
-    & curl.exe -L --fail --retry 3 --retry-delay 2 --retry-connrefused `
-      --connect-timeout 30 --ssl-revoke-best-effort -C - -o "$dest" "$url"
+    & $Curl.Source @curlArgs -C - -o "$dest" "$url"
     if ($LASTEXITCODE -eq 0) { return $true }
     if ($i -lt $attempts) {
       $wait = $i * 3
@@ -129,19 +146,30 @@ function Invoke-Download([string]$url, [string]$dest) {
     # after download, so resume can never weaken verification.
     if (-not (Invoke-CurlResilient $url $dest)) { throw 'curl failed after retries' }
   } else {
-    # Last resort: Invoke-WebRequest (no resume; restarts the file).
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+    # No in-script downloader: a WebClient / Invoke-WebRequest download line is what antivirus
+    # heuristics flag (Norton quarantined a copy carrying one, #767), and every Windows from 10
+    # 1803 on ships curl.exe. Same outcome as the .sh twin with no downloader: this file fails.
+    throw 'No downloader found (need curl.exe, built into Windows 10 1803 and later, or aria2c).'
   }
 }
 
-# Extract the indented body of a top-level `mmproj:` mapping (the SECOND file of a vision model,
-# DIST-1) — lines from `mmproj:` until the next column-0 key. Get-ManifestField then parses it.
-function Get-MmprojBlock([string]$text) {
+# Extract the indented body of a top-level `<key>:` mapping -- lines from `<key>:` until the
+# next column-0 key. Get-ManifestField then parses it. Three blocks are read this way: the
+# top-level `download:` (the primary file's source), `mmproj:` (the SECOND file of a vision
+# model, DIST-1) and `files:` (the ADDITIONAL required files of a multi-file weight, #310, e.g.
+# a GGUF shard set's shards 2..N). A key nested in one block never answers for another: read
+# flat, a projector's size_bytes reached the primary file when the top-level download carried
+# none, and the size guard below then deleted a resumable partial (#767).
+function Get-Block([string]$text, [string]$key) {
   $out = New-Object System.Collections.Generic.List[string]
   $inBlk = $false
+  # The key line may carry a comment, and a comment line at column 0 does not end a mapping (YAML).
+  $head = '^' + [Regex]::Escape($key) + ':\s*(#.*)?$'
   foreach ($line in ($text -split "`n")) {
     if (-not $inBlk) {
-      if ($line -match '^mmproj:\s*$') { $inBlk = $true }
+      if ($line -match $head) { $inBlk = $true }
+    } elseif ($line -match '^#') {
+      continue
     } elseif ($line -match '^\S') {
       break
     } else {
@@ -151,26 +179,7 @@ function Get-MmprojBlock([string]$text) {
   return ($out -join "`n")
 }
 
-# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
-# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — the same shape as
-# Get-MmprojBlock. Emitted AFTER local_path/sha256/download/mmproj in every manifest
-# (model-policy.md key-order rule), so it never poisons the flat top-level reads.
-function Get-FilesBlock([string]$text) {
-  $out = New-Object System.Collections.Generic.List[string]
-  $inBlk = $false
-  foreach ($line in ($text -split "`n")) {
-    if (-not $inBlk) {
-      if ($line -match '^files:\s*$') { $inBlk = $true }
-    } elseif ($line -match '^\S') {
-      break
-    } else {
-      $out.Add($line)
-    }
-  }
-  return ($out -join "`n")
-}
-
-# Split a `files:` block (as text, e.g. from Get-FilesBlock) into one member's raw text per
+# Split a `files:` block (as text, from Get-Block) into one member's raw text per
 # list entry (#310). A member starts at its own `- local_path:` line (the leading `- ` is
 # stripped so Get-ManifestField sees `local_path:` at the front) and runs to the next one.
 function Get-FilesMembers([string]$block) {
@@ -196,7 +205,7 @@ function Get-FileDownloadBlock([string]$memberText) {
   $lines = $memberText -split "`n"
   $idx = -1
   for ($i = 0; $i -lt $lines.Count; $i++) {
-    if ($lines[$i] -match '^\s*download:\s*$') { $idx = $i; break }
+    if ($lines[$i] -match '^\s*download:\s*(#.*)?$') { $idx = $i; break }
   }
   if ($idx -lt 0 -or $idx -ge ($lines.Count - 1)) { return '' }
   return ($lines[($idx + 1)..($lines.Count - 1)] -join "`n")
@@ -204,7 +213,7 @@ function Get-FileDownloadBlock([string]$memberText) {
 
 # Classify a destination file against its expected hash: verified|placeholder|mismatch|absent.
 function Get-FileState([string]$dest, [string]$sha) {
-  if (-not (Test-Path $dest)) { return 'absent' }
+  if (-not (Test-Path -LiteralPath $dest)) { return 'absent' }
   if (& $IsRealSha $sha) {
     if ((Get-Sha256 $dest) -eq $sha) { return 'verified' } else { return 'mismatch' }
   }
@@ -246,8 +255,8 @@ function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$
   # tell the two apart, so we do NOT delete and keep the previous behaviour (resume; a wrong
   # file is still deleted by the post-download verification below, which self-heals on the
   # next run).
-  # NOTE the value comes from the manifest's `download:` block, which the schema places before
-  # any `mmproj:` block, and the flat parse returns the first match.
+  # NOTE the value comes from this file's own download block (Get-Block), never from another
+  # file's: a projector's size once deleted the primary file's resumable partial (#767).
   if ($state -eq 'mismatch' -and $expectedSize -match '^\d+$') {
     $onDisk = (Get-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue)
     if ($onDisk -and $onDisk.Length -ge [long]$expectedSize) {
@@ -275,8 +284,8 @@ function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$
       $script:fetched++
     } else {
       Write-Host ("  FAIL   {0}{1}: checksum mismatch (expected {2}, got {3}) -- deleting partial" -f $id, $label, $sha, $actual) -ForegroundColor Red
-      Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
-      Remove-Item -Force -Path "$dest.aria2" -ErrorAction SilentlyContinue
+      Remove-Item -Force -LiteralPath $dest -ErrorAction SilentlyContinue
+      Remove-Item -Force -LiteralPath "$dest.aria2" -ErrorAction SilentlyContinue
       $script:hadFailure = $true
     }
   } else {
@@ -285,51 +294,110 @@ function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$
   }
 }
 
-$manifestFiles = Get-ChildItem -Path $ManifestsDir -Recurse -Include *.yaml, *.yml |
-  Where-Object { $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml') }
+# -LiteralPath with -Include returns every item in 5.1 (the filter is ignored), so the
+# extensions are filtered by hand.
+$manifestFiles = @(Get-ChildItem -LiteralPath $ManifestsDir -Recurse -File |
+  Where-Object { $_.Extension -in @('.yaml', '.yml') -and $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml') })
 
 $planned = 0
 $fetched = 0
 $skipped = 0
 $hadFailure = $false
+# -Only names one model: an id no manifest carries, or one with nothing to fetch, exits 2 below.
+$onlySeen = $false
+$onlyUnbundled = $false
+$onlyFetchable = $false
 
 Write-Host "Fetch models -> $Target" -ForegroundColor Cyan
 if ($DryRun) { Write-Host '(dry run -- nothing will be downloaded)' -ForegroundColor Yellow }
 Write-Host ''
+if ($manifestFiles.Count -eq 0) { Write-Host "No model manifests found under '$ManifestsDir' -- nothing to fetch." }
 
 foreach ($mf in $manifestFiles) {
-  $text = Get-Content -Path $mf.FullName -Raw
+  $text = Get-Content -LiteralPath $mf.FullName -Raw
   $id = Get-ManifestField $text 'id'
+  if ($Only -and $id -ne $Only) { continue }
+  if ($Only) { $onlySeen = $true }
+  if ($Bundled -and (Get-ManifestField $text 'bundled_on_preconfigured_drive') -ne 'true') {
+    if ($Only) { $onlyUnbundled = $true }
+    continue
+  }
   $localPath = Get-ManifestField $text 'local_path'
   $sha = (Get-ManifestField $text 'sha256'); if ($sha) { $sha = $sha.ToLower() }
-  $url = Get-ManifestField $text 'url'
+  # The primary file's source: the top-level `download:` block only, never another file's (#767).
+  $dlBlock = Get-Block $text 'download'
+  $url = Get-ManifestField $dlBlock 'url'
   # Optional (30 of the committed manifests carry it) -- used only to tell a complete-but-wrong
   # file apart from a resumable partial in Invoke-HandleFile.
-  $sizeBytes = Get-ManifestField $text 'size_bytes'
+  $sizeBytes = Get-ManifestField $dlBlock 'size_bytes'
+  $licenseUrl = Get-ManifestField $dlBlock 'license_url'
   $license = Get-ManifestField $text 'license'
-  $licenseUrl = Get-ManifestField $text 'license_url'
   $reviewStatus = Get-ManifestField $text 'status'
   # Optional download.withdrawn (issue 196): the publisher deleted the exact file this manifest
   # pins, so the URL above is known-dead. Mirrors planModelDownloads' 'source-withdrawn' task
   # status (assets.ts is the source of truth; script-execution.test.ts runs both twins). Note values
   # must not contain ' #' -- Get-ManifestField strips inline YAML comments.
+  # Read FLAT on purpose, unlike url/size_bytes: a note in ANY file's download block skips the
+  # whole model when something needs fetching. The app plans each file on its own, but a model
+  # with one file gone can never be completed, so fetching its other files would only spend GBs
+  # on a model that stays missing.
   $withdrawn = Get-ManifestField $text 'withdrawn'
-  $isBundled = (Get-ManifestField $text 'bundled_on_preconfigured_drive') -eq 'true'
-
-  if (-not $url -or -not $localPath) { continue }      # no download block -> skip
-  if ($Only -and $id -ne $Only) { continue }
-  if ($Bundled -and -not $isBundled) { continue }
-  $planned++
-
-  $dest = Join-Path $Target ($localPath -replace '/', [IO.Path]::DirectorySeparatorChar)
 
   # A vision model is TWO files: the language GGUF (above) + the mmproj projector (DIST-1). Parse
   # the projector's own block (its local_path/sha256/download.url) -- absent for non-vision models.
-  $mmprojBlock = Get-MmprojBlock $text
+  $mmprojBlock = Get-Block $text 'mmproj'
   $mmprojLocal = Get-ManifestField $mmprojBlock 'local_path'
   $mmprojSha = (Get-ManifestField $mmprojBlock 'sha256'); if ($mmprojSha) { $mmprojSha = $mmprojSha.ToLower() }
   $mmprojUrl = Get-ManifestField $mmprojBlock 'url'
   $mmprojSize = Get-ManifestField $mmprojBlock 'size_bytes'
+
+  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards 2..N),
+  # read here and hashed only once the model passes the checks below.
+  $fileSpecs = @()
+  foreach ($member in @(Get-FilesMembers (Get-Block $text 'files'))) {
+    $fLocal = Get-ManifestField $member 'local_path'
+    $fSha = Get-ManifestField $member 'sha256'; if ($fSha) { $fSha = $fSha.ToLower() }
+    $fDlBlock = Get-FileDownloadBlock $member
+    $fUrl = Get-ManifestField $fDlBlock 'url'
+    $fSize = Get-ManifestField $fDlBlock 'size_bytes'
+    $fileSpecs += [pscustomobject]@{ Local = $fLocal; Sha = $fSha; Url = $fUrl; Size = $fSize }
+  }
+
+  # A url stands for its download block: the validator requires one in every block.
+  $declaresDownload = [bool]$url -or [bool]$mmprojUrl -or (@($fileSpecs | Where-Object { $_.Url }).Count -gt 0)
+  if (-not $declaresDownload -or -not $localPath) { continue }      # no download block -> skip
+  if ($Only) { $onlyFetchable = $true }
+  $planned++
+
+  # Half a download pair (#767): the validator's all-or-nothing rule (shared/manifest.ts, #752),
+  # with its messages. The app refuses such a manifest, so any file of it fetched would belong to
+  # a model that never starts; without a top-level download the primary file has no source at
+  # all. Checked before any file is hashed, whatever is on disk and whatever -AcceptLicense says.
+  $halfPair = @()
+  if ($mmprojLocal) {
+    if ($url -and -not $mmprojUrl) {
+      $halfPair += '"mmproj.download" is required when the model declares a top-level "download" (a partial download plan would install a model that cannot start)'
+    }
+    if ($mmprojUrl -and -not $url) {
+      $halfPair += '"download" is required when "mmproj" declares one (a partial download plan would install a model that cannot start)'
+    }
+  }
+  for ($i = 0; $i -lt $fileSpecs.Count; $i++) {
+    if ($url -and -not $fileSpecs[$i].Url) {
+      $halfPair += ('"files[{0}].download" is required when the model declares a top-level "download" (a partial download plan would install a model that cannot start)' -f $i)
+    }
+    if ($fileSpecs[$i].Url -and -not $url) {
+      $halfPair += ('"download" is required when "files[{0}]" declares one (a partial download plan would install a model that cannot start)' -f $i)
+    }
+  }
+  if ($halfPair.Count -gt 0) {
+    foreach ($message in $halfPair) { Write-Host ("  BLOCK  {0}: {1}" -f $id, $message) -ForegroundColor Red }
+    Write-Host '         Nothing fetched: the app refuses this manifest, so the model could never start.' -ForegroundColor Red
+    $hadFailure = $true
+    continue
+  }
+
+  $dest = Join-Path $Target ($localPath -replace '/', [IO.Path]::DirectorySeparatorChar)
   $hasMmproj = [bool]($mmprojUrl -and $mmprojLocal)
   $mmprojDest = if ($hasMmproj) { Join-Path $Target ($mmprojLocal -replace '/', [IO.Path]::DirectorySeparatorChar) } else { $null }
 
@@ -337,30 +405,23 @@ foreach ($mf in $manifestFiles) {
   $ggufState = Get-FileState $dest $sha
   $mmprojState = if ($hasMmproj) { Get-FileState $mmprojDest $mmprojSha } else { $null }
 
-  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
-  # 2..N). Looped only when the model has a top-level download -- the validator's all-or-nothing
-  # rule guarantees every declared file then carries its own download block too. Classified once
-  # into $filePlans so the later fetch pass never re-hashes.
-  $fileMembers = Get-FilesMembers (Get-FilesBlock $text)
-  $totalFiles = 1 + $fileMembers.Count
+  # The files: members, classified once into $filePlans so the later fetch pass never re-hashes.
+  $totalFiles = 1 + $fileSpecs.Count
   $filePlans = @()
-  foreach ($member in $fileMembers) {
-    $fLocal = Get-ManifestField $member 'local_path'
-    if (-not $fLocal) { continue }
-    $fSha = Get-ManifestField $member 'sha256'; if ($fSha) { $fSha = $fSha.ToLower() }
-    $dlBlock = Get-FileDownloadBlock $member
-    $fUrl = Get-ManifestField $dlBlock 'url'
-    $fSize = Get-ManifestField $dlBlock 'size_bytes'
-    $fDest = Join-Path $Target ($fLocal -replace '/', [IO.Path]::DirectorySeparatorChar)
-    $fState = Get-FileState $fDest $fSha
-    $filePlans += [pscustomobject]@{ Local = $fLocal; Sha = $fSha; Url = $fUrl; Size = $fSize; Dest = $fDest; State = $fState }
+  foreach ($spec in $fileSpecs) {
+    if (-not $spec.Local) { continue }
+    $fDest = Join-Path $Target ($spec.Local -replace '/', [IO.Path]::DirectorySeparatorChar)
+    $fState = Get-FileState $fDest $spec.Sha
+    $filePlans += [pscustomobject]@{ Local = $spec.Local; Sha = $spec.Sha; Url = $spec.Url; Size = $spec.Size; Dest = $fDest; State = $fState }
   }
 
   # Does anything need the network? (absent / checksum-mismatch). A model already fully present is
-  # skipped WITHOUT a license prompt (the license is only relevant to an actual download).
+  # skipped WITHOUT a license prompt (the license is only relevant to an actual download). @(...):
+  # one PSCustomObject has no .Count in 5.1, so a lone member that needed fetching read as none and
+  # skipped the license gate and the withdrawn skip (#767).
   $needsFetch = ($ggufState -eq 'absent' -or $ggufState -eq 'mismatch') -or
     ($hasMmproj -and ($mmprojState -eq 'absent' -or $mmprojState -eq 'mismatch')) -or
-    (($filePlans | Where-Object { $_.State -eq 'absent' -or $_.State -eq 'mismatch' }).Count -gt 0)
+    (@($filePlans | Where-Object { $_.State -eq 'absent' -or $_.State -eq 'mismatch' }).Count -gt 0)
 
   # Withdrawn upstream source (issue 196) -- only relevant when something WOULD be fetched: a
   # drive that already carries the weight is unaffected and verifies as usual. Skipped, not
@@ -401,6 +462,21 @@ foreach ($mf in $manifestFiles) {
   }
 }
 
+# An explicit -Only that names nothing fetchable is a usage error, not an empty success: a stale
+# default id in prepare-drive -WithAssets would otherwise pass silently (#767).
+if ($Only -and -not $onlySeen) {
+  Write-Host ("No model manifest with id '{0}' under '{1}'." -f $Only, $ManifestsDir) -ForegroundColor Red
+  exit 2
+}
+if ($Only -and $onlyUnbundled) {
+  Write-Host ("Model '{0}' is not in the bundled set (bundled_on_preconfigured_drive: true): nothing to fetch." -f $Only) -ForegroundColor Red
+  exit 2
+}
+if ($Only -and -not $onlyFetchable) {
+  Write-Host ("Model '{0}' declares no download block: nothing to fetch." -f $Only) -ForegroundColor Red
+  exit 2
+}
+
 Write-Host ''
 Write-Host ("Planned {0} | fetched {1} | skipped {2}" -f $planned, $fetched, $skipped) -ForegroundColor Cyan
 # A Kit with nothing to preload fails at step 2, not after the builder's runtime downloads (#766).
@@ -409,7 +485,7 @@ if ($Bundled -and $planned -eq 0) {
   exit 1
 }
 if ($hadFailure) {
-  Write-Host 'One or more models failed to download/verify (or were license-blocked).' -ForegroundColor Red
+  Write-Host 'One or more models failed to download/verify (or were blocked).' -ForegroundColor Red
   exit 1
 }
 exit 0

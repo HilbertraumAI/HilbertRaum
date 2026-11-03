@@ -27,6 +27,36 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-03 — the closed 2026-10-14 #681 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #767/#769 entry). Its records are unchanged:
+the `architecture.md` FE-6 "#681" record, the SEC-3 row, data-contracts and security-model. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#681 — `pickDocuments` is lock-gated; `previewDocumentPage` caps the renderer's page (`fix/681-docs-ipc-inputs`).** Owner calls as recommended: gate the
+last ungated picker (SEC-3 closed; `docs:pick` leaves `ipc-lock-coverage`'s exempt set) and clamp a preview page to 1–50 segments, a non-finite `offset`/`limit` taking 0/50.
+Real app (encrypted scratch root): master returned 120/120 sections for `limit` 10000 and Infinity, an empty page for NaN, and opened "Dokumente importieren" while locked;
+the fix returns 50 + a cursor each time and refuses the picker. Record: `architecture.md` FE-6 "#681", SEC-3 row; data-contracts; security-model. Open: none._
+
+## 2026-11-03 — the closed 2026-10-14 #684 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #767/#769 entry). Its records are unchanged:
+the `architecture.md` document-organization data model "#684" record. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#684 — a folder picked as a drive root (`D:\`) or with a trailing separator keeps its folder label and relative paths (`fix/684-drive-root-folder-label`).**
+`expandPathsWithSource` matched files against `dir + sep`, so a pick that already ended in a separator (`D:\` → `D:\\`) matched none of them and every row stored `null` for both.
+Now a root ending in a separator is its own boundary (DM-3 kept, now pinned) and a drive root is labelled `D:`. Real app (subst `Q:`, a drop of `Q:\`): master null/null on 2/2 rows,
+the fix `Q:` + `sub/nested.md` / `top.txt`. Display-only; no screen shows the columns today. Record: `architecture.md` document-organization data model "#684". Open: none._
+
+## 2026-11-03 — the closed 2026-10-14 #680 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #767/#769 entry). Its records are unchanged:
+the `architecture.md` "Poll write-back (#680)" record. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#680 — a doc-task poll writes back the entry as it is after its round-trip (`fix/680-doctask-poll-writeback`).** The 400 ms tick spread the entry it read
+before awaiting `getDocTask`: a Cancel clicked meanwhile lost "Stopping if possible…" (DOC-5), a lock purge brought the task back (SH-4), overlapping slow ticks could give up
+(CODE-6) and then revive a task nothing polled, and a rejected cancel left Cancel disabled. Now the tick re-reads the entry after its round-trips and leaves a purged or replaced one
+alone, one tick runs at a time, and a rejected cancel clears the latch. 7 store rows fail on master. Record: `architecture.md` "Poll write-back (#680)". Open: none (the skill-run store's same overlap got the same latch in #688; the row's untargeted cancel: #689, above)._
+
 ## 2026-11-03 — the closed 2026-10-13 #671 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #736 entry). Its records are unchanged:

@@ -58,10 +58,12 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
 $Target = [System.IO.Path]::GetFullPath($Target)
 
+# Every path cmdlet below takes -LiteralPath (#767): a drive root such as `Kit [2026]` is a
+# wildcard to -Path, so Test-Path found no manifests there and the run verified the repo's.
 # Prefer the drive's own manifests; fall back to the repo's committed ones.
 $ManifestsDir = Join-Path $Target 'model-manifests'
-if (-not (Test-Path $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
-if (-not (Test-Path $ManifestsDir)) {
+if (-not (Test-Path -LiteralPath $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
+if (-not (Test-Path -LiteralPath $ManifestsDir)) {
   # Reported with Write-Host, not Write-Error (AUD-05): under $ErrorActionPreference = 'Stop'
   # a Write-Error is a SCRIPT-TERMINATING exception, so the `exit 2` below would never run
   # (the process would exit 1, collapsing the config-error code into the verification-failure
@@ -94,14 +96,22 @@ $SupportedRuntimeFormats = [ordered]@{
   'whisper_cpp' = 'ggml'
 }
 
-# Extract the indented body of a top-level `mmproj:` mapping (the SECOND file of a vision model,
-# DIST-2: verify BOTH files). Get-ManifestField then reads its local_path/sha256.
-function Get-MmprojBlock([string]$text) {
+# Extract the indented body of a top-level `<key>:` mapping -- lines from `<key>:` until the
+# next column-0 key. Get-ManifestField then reads it. Two blocks are read this way: `mmproj:`
+# (the SECOND file of a vision model, DIST-2: verify BOTH files) and `files:` (the ADDITIONAL
+# required files of a multi-file weight, #310, e.g. a GGUF shard set's shards 2..N). `files:` is
+# emitted AFTER local_path/sha256/download/mmproj in every manifest (model-policy.md key-order
+# rule), so it never poisons the flat top-level reads.
+function Get-Block([string]$text, [string]$key) {
   $out = New-Object System.Collections.Generic.List[string]
   $inBlk = $false
+  # The key line may carry a comment, and a comment line at column 0 does not end a mapping (YAML).
+  $head = '^' + [Regex]::Escape($key) + ':\s*(#.*)?$'
   foreach ($line in ($text -split "`n")) {
     if (-not $inBlk) {
-      if ($line -match '^mmproj:\s*$') { $inBlk = $true }
+      if ($line -match $head) { $inBlk = $true }
+    } elseif ($line -match '^#') {
+      continue
     } elseif ($line -match '^\S') {
       break
     } else {
@@ -111,26 +121,7 @@ function Get-MmprojBlock([string]$text) {
   return ($out -join "`n")
 }
 
-# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
-# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — the same shape as
-# Get-MmprojBlock. Emitted AFTER local_path/sha256/download/mmproj in every manifest
-# (model-policy.md key-order rule), so it never poisons the flat top-level reads.
-function Get-FilesBlock([string]$text) {
-  $out = New-Object System.Collections.Generic.List[string]
-  $inBlk = $false
-  foreach ($line in ($text -split "`n")) {
-    if (-not $inBlk) {
-      if ($line -match '^files:\s*$') { $inBlk = $true }
-    } elseif ($line -match '^\S') {
-      break
-    } else {
-      $out.Add($line)
-    }
-  }
-  return ($out -join "`n")
-}
-
-# Split a `files:` block (as text, e.g. from Get-FilesBlock) into one member's raw text per
+# Split a `files:` block (as text, from Get-Block) into one member's raw text per
 # list entry (#310). A member starts at its own `- local_path:` line (the leading `- ` is
 # stripped so Get-ManifestField sees `local_path:` at the front) and runs to the next one.
 function Get-FilesMembers([string]$block) {
@@ -151,8 +142,8 @@ function Get-FilesMembers([string]$block) {
 
 # Classify one weight file against its expected hash (mirrors services/models.ts verifyChecksum).
 function Get-WeightStatus([string]$weight, [string]$sha) {
-  if (-not (Test-Path $weight)) { return 'MISSING' }
-  $actual = (Get-FileHash -Path $weight -Algorithm SHA256).Hash.ToLower()
+  if (-not (Test-Path -LiteralPath $weight)) { return 'MISSING' }
+  $actual = (Get-FileHash -LiteralPath $weight -Algorithm SHA256).Hash.ToLower()
   if (-not (& $IsRealSha $sha)) { return 'UNVERIFIED' }
   if ($actual -eq $sha) { return 'VERIFIED' }
   $script:hadMismatch = $true
@@ -173,15 +164,17 @@ function Write-WeightResult([string]$id, [string]$label, [string]$status) {
 
 # Exclude the runtime-sources manifest (it describes the sidecar, not a model). It has
 # no local_path today, but mirroring fetch-models' explicit exclusion removes the
-# fragility if it ever gains one.
-$manifestFiles = Get-ChildItem -Path $ManifestsDir -Recurse -Include *.yaml, *.yml |
-  Where-Object { $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml') }
+# fragility if it ever gains one. -LiteralPath with -Include returns every item in 5.1 (the
+# filter is ignored), so the extensions are filtered by hand.
+$manifestFiles = @(Get-ChildItem -LiteralPath $ManifestsDir -Recurse -File |
+  Where-Object { $_.Extension -in @('.yaml', '.yml') -and $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml') })
+if ($manifestFiles.Count -eq 0) { Write-Host "No model manifests found under '$ManifestsDir' -- nothing to verify." -ForegroundColor Yellow }
 $results = @()
 $hadMismatch = $false
 $bundledModels = 0
 
 foreach ($mf in $manifestFiles) {
-  $text = Get-Content -Path $mf.FullName -Raw
+  $text = Get-Content -LiteralPath $mf.FullName -Raw
   $id = Get-ManifestField $text 'id'
   $localPath = Get-ManifestField $text 'local_path'
   $sha = (Get-ManifestField $text 'sha256')
@@ -191,14 +184,14 @@ foreach ($mf in $manifestFiles) {
   if (-not $localPath) { continue }
 
   # A vision model is TWO files: the language GGUF + the mmproj projector (DIST-2).
-  $mmprojBlock = Get-MmprojBlock $text
+  $mmprojBlock = Get-Block $text 'mmproj'
   $mmprojLocal = Get-ManifestField $mmprojBlock 'local_path'
   $mmprojSha = (Get-ManifestField $mmprojBlock 'sha256'); if ($mmprojSha) { $mmprojSha = $mmprojSha.ToLower() }
 
   # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
   # 2..N), each verified with an " (file N/M)" label — M is the primary plus every declared
   # file (mmproj is reported separately and does not count towards M).
-  $fileMembers = Get-FilesMembers (Get-FilesBlock $text)
+  $fileMembers = @(Get-FilesMembers (Get-Block $text 'files'))
   $totalFiles = 1 + $fileMembers.Count
 
   # -Kit (#766): a model ships when it is bundled or has any file on the drive. Every other
@@ -221,7 +214,11 @@ foreach ($mf in $manifestFiles) {
     }
   }
 
-  if ($SupportedRuntimeFormats[$runtime] -ne $format) {
+  # A runtime the table does not name, or none at all, is UNSUPPORTED (the app's
+  # isSupportedRuntimeFormat). Indexing the table with a null runtime threw and ended the run
+  # with no later model reported, and an unknown runtime with no format compared $null with
+  # $null and passed (#767).
+  if (-not $runtime -or -not $SupportedRuntimeFormats.Contains($runtime) -or $SupportedRuntimeFormats[$runtime] -ne $format) {
     Write-WeightResult $id '' 'UNSUPPORTED'
     continue
   }
@@ -247,28 +244,28 @@ foreach ($mf in $manifestFiles) {
 
 if ($Generate) {
   $entries = foreach ($mf in $manifestFiles) {
-    $text = Get-Content -Path $mf.FullName -Raw
+    $text = Get-Content -LiteralPath $mf.FullName -Raw
     $id = Get-ManifestField $text 'id'
     $localPath = Get-ManifestField $text 'local_path'
     if (-not $localPath) { continue }
     # One entry per FILE: the GGUF, a vision model's mmproj projector (DIST-2), plus every
     # ADDITIONAL declared file (#310) — same order as manifestFiles().
     $paths = @($localPath)
-    $mmprojLocal = Get-ManifestField (Get-MmprojBlock $text) 'local_path'
+    $mmprojLocal = Get-ManifestField (Get-Block $text 'mmproj') 'local_path'
     if ($mmprojLocal) { $paths += $mmprojLocal }
-    $fileMembers = Get-FilesMembers (Get-FilesBlock $text)
+    $fileMembers = @(Get-FilesMembers (Get-Block $text 'files'))
     foreach ($member in $fileMembers) {
       $fLocal = Get-ManifestField $member 'local_path'
       if ($fLocal) { $paths += $fLocal }
     }
     foreach ($lp in $paths) {
       $weight = Join-Path $Target ($lp -replace '/', [IO.Path]::DirectorySeparatorChar)
-      $present = Test-Path $weight
+      $present = Test-Path -LiteralPath $weight
       [ordered]@{
         id         = $id
         local_path = $lp
-        sha256     = if ($present) { (Get-FileHash -Path $weight -Algorithm SHA256).Hash.ToLower() } else { $null }
-        size_bytes = if ($present) { (Get-Item $weight).Length } else { $null }
+        sha256     = if ($present) { (Get-FileHash -LiteralPath $weight -Algorithm SHA256).Hash.ToLower() } else { $null }
+        size_bytes = if ($present) { (Get-Item -LiteralPath $weight).Length } else { $null }
         present    = [bool]$present
       }
     }

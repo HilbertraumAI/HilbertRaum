@@ -15,9 +15,10 @@
 #      requires the app artifact + launcher for every platform in --platforms and a
 #      recorded, matching hash for every sidecar binary.
 #
-# Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
-# assertCommercialDrive) -- that TS module is the CANONICAL, unit-tested reference. This
-# script ORCHESTRATES the existing scripts; it does not re-implement them.
+# The verdict is assertCommercialDrive's (apps/desktop/src/main/services/commercial-drive.ts,
+# the CANONICAL, unit-tested gate). This script ORCHESTRATES the existing scripts; it does not
+# re-implement them. The order of the steps lives here and in the .ps1 twin alone
+# (tests/integration/script-orchestration.test.ts runs it).
 #
 # SIGNING IS MANUAL. The green gate does not sign. Supply the pre-built, signed app(s)
 # via --app-artifact (repeatable, one per platform), or use --skip-package (the drive is
@@ -97,7 +98,12 @@ APP_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' 
 # Refuse to proceed when another app artifact already sits at the drive root (#233): the
 # copy in step 4 overwrites only the same basename, so an older build would stay beside
 # the new one and the launchers would find two. Delete it first, on purpose.
+# Every artifact must exist, too: step 4 copies them only after steps 1-3 have downloaded
+# every weight and runtime, which is where a typo used to surface (#769).
 if [[ ${#APP_ARTIFACTS[@]} -gt 0 && $VERIFY_ONLY -eq 0 ]]; then
+  for artifact in "${APP_ARTIFACTS[@]}"; do
+    if [[ ! -e "$artifact" ]]; then echo "AppArtifact not found: $artifact" >&2; exit 1; fi
+  done
   PRIOR=()
   shopt -s nullglob
   for existing in "$TARGET"/HilbertRaum-* "$TARGET"/*.app; do
@@ -172,8 +178,8 @@ OCR_ASSETS=(--target "$TARGET" --family ocr --commercial)
 bash "$SCRIPT_DIR/fetch-runtime.sh" "${OCR_ASSETS[@]}"
 
 # --- Kiwix-tools corresponding-source bundle (#339 P8-4) ---------------------------
-# UN-NUMBERED: sits between the runtime sidecars above and packaging below, but is not
-# one of the nine planCommercialDrive step ids (commercial-drive.test.ts pins those).
+# UN-NUMBERED: sits between the runtime sidecars above and packaging below, outside the
+# seven numbered steps.
 # SOURCE FIRST: the bundle is installed + re-verified BEFORE the kiwix_tools binaries are
 # fetched, so a failed/aborted install can never leave binaries on the drive without their
 # complete corresponding source. Omitted --kiwix-source-dir = this Kit ships no kiwix-tools
@@ -211,7 +217,6 @@ if [[ $SKIP_PACKAGE -eq 1 ]]; then
   echo "  --skip-package set: skipping packaging. Sign + copy the app yourself (NOT SELLABLE until then)."
 elif [[ ${#APP_ARTIFACTS[@]} -gt 0 ]]; then
   for artifact in "${APP_ARTIFACTS[@]}"; do
-    if [[ ! -e "$artifact" ]]; then echo "AppArtifact not found: $artifact" >&2; exit 1; fi
     DST="$TARGET/$(basename "$artifact")"
     if [[ $DRY_RUN -eq 1 ]]; then echo "  copy $artifact -> $DST"
     else cp -R "$artifact" "$DST"; echo "  copied signed app -> $DST"; fi

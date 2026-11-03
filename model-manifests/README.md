@@ -5,8 +5,10 @@ Each YAML file here describes one model. Manifests are committed to git; **model
 (SHA-256), recommend, and select models without code changes.
 
 - `chat/` — chat/instruct models (Qwen3 4B / 8B / 14B Q4 + 30B-A3B MoE, Qwen3-4B-2507, the Qwen3.5
-  wave, the Qwen3.6 27B pair, Granite 4.1 8B, Ministral 8B, Gemma 4 12B + the Gemma 4 QAT wave
-  E2B / E4B / 26B-A4B / 31B)
+  wave, the Qwen3.6 27B pair, the Qwen3.8 27B family (three withdrawn static K-quants and their
+  `UD-*` successors), Granite 4.1 8B, Ministral 8B, Gemma 4 12B + the Gemma 4 QAT wave
+  E2B / E4B / 26B-A4B / 31B, and two user-added local-test stubs, `gemma-4-26b-q4` and
+  `gemma4-coding-q8`)
 - `embeddings/` — embedding models (Multilingual E5 Small, F16; the manifest `id`/`local_path`
   keep a `-q8` suffix for historical stability — it tags stored vectors and is referenced across
   tests/docs, **not** a quant claim. Q8 is *not* the shipping quant — its q8_0 conversion crashes
@@ -33,13 +35,16 @@ Key points when authoring a manifest:
 - `recommended_profiles` (optional) lists the hardware profiles the model is recommended for
   (`TINY`/`LITE`/`BALANCED`/`PRO`/`UNKNOWN`) and drives the recommendation badge on the Models
   screen. `id` must be unique across all manifests.
-- `download` (optional, Phase 12) — `{ url, sha256, size_bytes?, license_url? }`. When present, the
-  `fetch-models` scripts download + SHA-256-verify the weight. A real `download.sha256` must equal a
-  real top-level `sha256`. See [`../docs/model-policy.md`](../docs/model-policy.md).
+- `download` (optional, Phase 12) — `{ url, sha256, size_bytes?, license_url?, withdrawn? }`. When
+  present, the `fetch-models` scripts download + SHA-256-verify the weight. A real `download.sha256`
+  must equal a real top-level `sha256`. `withdrawn` (#196) is a dated note that the publisher
+  deleted the file (no `" #"` in it): the fetch scripts and the app skip the download, an installed
+  copy keeps verifying, and the manifest carries `recommendation_rank: 0`. See
+  [`../docs/model-policy.md`](../docs/model-policy.md) "Withdrawn upstream sources".
 - `files` (optional, #310) — the ADDITIONAL required files of this model's weight beyond
   `local_path`/`sha256` (which stay the primary — shard 1). A list of
-  `{ local_path, sha256, download? }`, same shapes/rules as above. **Must be the LAST key in the
-  manifest**, after `local_path`/`sha256`/`download`/`mmproj` — `verify-models`/`fetch-models` read
-  the top-level keys by file order. See "Manifest fields (required)" in
+  `{ local_path, sha256, download? }`, same shapes/rules as above. **Must come after
+  `local_path`/`sha256`/`download`/`mmproj`** (other keys may follow it) — `verify-models`/
+  `fetch-models` read the top-level keys by file order. See "Manifest fields (required)" in
   [`../docs/model-policy.md`](../docs/model-policy.md) for the full validator rules (download
   all-or-nothing, the shard-completeness rule).

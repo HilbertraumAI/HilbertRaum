@@ -87,26 +87,37 @@ function prodClosure(packages) {
     const r = resolveDep('apps/desktop', d)
     if (r) queue.push(r)
   }
+  const requiredPeers = []
   while (queue.length > 0) {
     const cur = queue.pop()
     if (seen.has(cur)) continue
     seen.add(cur)
     const entry = packages[cur]
-    const deps = { ...entry.dependencies, ...entry.optionalDependencies }
-    // TQ-3 (full-audit 2026-07-12b): fold NON-OPTIONAL peerDependencies into the walk:
-    // npm 7+ auto-installs them. electron-builder's collector does not follow peer edges
-    // (it reads `_dependencies`, which `npm list` fills from dependencies +
-    // optionalDependencies), so a package reached only as a peer is listed here and not
-    // packed, and third-party-notices.test.ts "names exactly the packages…" goes red.
-    // Peers flagged optional in peerDependenciesMeta are NOT auto-installed and stay out.
-    // Verified 2026-07-12: every required peer of the current shipped set is already in
-    // the closure, so this changes nothing today (regeneration stays byte-identical).
-    for (const d of Object.keys(entry.peerDependencies ?? {})) {
-      if (!entry.peerDependenciesMeta?.[d]?.optional) deps[d] = true
-    }
-    for (const d of Object.keys(deps)) {
+    for (const d of Object.keys({ ...entry.dependencies, ...entry.optionalDependencies })) {
       const r = resolveDep(cur, d)
       if (r && !seen.has(r)) queue.push(r)
+    }
+    // Peers flagged optional in peerDependenciesMeta are NOT auto-installed and stay out.
+    for (const d of Object.keys(entry.peerDependencies ?? {})) {
+      if (!entry.peerDependenciesMeta?.[d]?.optional) requiredPeers.push([cur, d])
+    }
+  }
+  // TQ-3 (full-audit 2026-07-12b), #768 owner call: npm 7+ auto-installs a NON-OPTIONAL peer, but
+  // electron-builder's collector does not follow peer edges (it reads `_dependencies`, which
+  // `npm list` fills from dependencies + optionalDependencies). A required peer that only a peer
+  // edge reaches would be installed and noticed, yet missing from app.asar, where the package that
+  // needs it fails at runtime. So it is refused, not folded in: the fix is to make it a dependency.
+  // None of the shipped set's 56 required peer edges was peer-only when this landed (each peer is
+  // also reached as a normal dependency), so the shipped set did not change.
+  for (const [from, d] of requiredPeers) {
+    const r = resolveDep(from, d)
+    if (r && !seen.has(r)) {
+      const by = `${from.replace(/^.*node_modules\//, '')}@${packages[from].version}`
+      throw new Error(
+        `${d} is a required peer of ${by} that no dependency edge reaches: npm installs it, but ` +
+          `electron-builder does not pack peers, so app.asar would ship without it. Add ${d} to ` +
+          'the dependencies of apps/desktop/package.json.'
+      )
     }
   }
   return seen

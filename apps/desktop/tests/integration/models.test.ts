@@ -884,12 +884,14 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
     expect(recommendModelIdByVram([...all, rank0], 4_000, 64)).toBe('big')
   })
 
-  it('RAM stays a hard gate: never a model the Models screen would refuse to start', () => {
-    // A 24 GiB budget in a 16 GB box: big needs 23 GB RAM minimum → the RAM pick mid stands.
-    expect(recommendModelIdByVram(all, 24_000, 16)).toBe('mid')
-    // …and the fallback pool honours the floor too: RAM 12, budget 24,000 → base = small12
-    // (the 12 tier) fits → stands; mid (min 12) would be admissible but is not the RAM pick.
-    expect(recommendModelIdByVram([...all, small12], 24_000, 12)).toBe('small12')
+  // #769: the floor only matters where the RAM pick does not fit and the fallback pool decides (a RAM pick passes its
+  // own floor). `lean` fits a 5,000 MiB card (3,729 MiB) and leads that pool on tier, but needs 24 GB of RAM.
+  it('RAM stays a hard gate: the card fallback never picks a model the Models screen would refuse to start (#769)', () => {
+    const lean = validManifest({ id: 'lean', size_on_disk_gb: 2.0, recommended_min_ram_gb: 24, recommended_ram_gb: 32, recommendation_rank: 3 })
+    // RAM 16: the RAM pick mid needs 8,116 MiB, so the pool decides, and lean is over its floor → tiny (4,716 MiB).
+    expect(recommendModelIdByVram([...all, lean], 5_000, 16)).toBe('tiny')
+    // At its floor (RAM 24; the floor is inclusive) the same pool picks lean: the floor, not the card, kept it out.
+    expect(recommendModelIdByVram([...all, lean], 5_000, 24)).toBe('lean')
   })
 
   it('unknown RAM keeps the floor open (the pre-rule-C card-path semantics): the best fitting model by rank', () => {

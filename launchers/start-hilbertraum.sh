@@ -59,6 +59,7 @@ if [ "$CHECK" = 1 ]; then
   echo
   echo "  HilbertRaum launcher check"
   echo "  Drive root : $DIR"
+  echo "  Manifests  : $HILBERTRAUM_MANIFESTS_DIR"
   echo "  App        : $APP"
   echo "  Nothing was started."
   echo

@@ -88,6 +88,19 @@ jobs:
           name: win-portable
           path: apps/desktop/release/HilbertRaum-*-portable.exe
           if-no-files-found: error
+      # #769: the packaging gates model app.asar from the lockfile; this reads the build just made. The
+      # portable target packs release/win-unpacked, which electron-builder leaves in place. The real-archive
+      # rows: the package directories and name@version set against the layout model and the notices list,
+      # the shipped THIRD-PARTY-NOTICES.md and LICENSE, the worker closure in app.asar.unpacked, and the
+      # exe's fuse wire. HILBERTRAUM_PACKED_REQUIRED fails the run if either path is missing instead of
+      # letting those rows skip. Blocking: the release job needs build-win.
+      - name: Check the packaged app against the asar, notices and fuse models (#548, #562, #769)
+        working-directory: apps/desktop
+        env:
+          HILBERTRAUM_PACKED_ASAR: release/win-unpacked/resources/app.asar
+          HILBERTRAUM_PACKED_EXE: release/win-unpacked/HilbertRaum.exe
+          HILBERTRAUM_PACKED_REQUIRED: '1'
+        run: npx vitest run tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts
       - name: Fetch win llama.cpp runtime (Vulkan), zip for offline install
         # #102 item 1 — the mac Metal zip's Windows twin: a convenience re-host of the
         # SAME pinned upstream build the in-app engine installer fetches
