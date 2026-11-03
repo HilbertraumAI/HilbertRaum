@@ -148,7 +148,7 @@ extraResources:
   # into app.asar / the Vite bundles (Apache-2.0 NOTICE preservation, MIT/BSD attribution,
   # KaTeX OFL fonts). Generated file — regenerate with
   # `node scripts/generate-third-party-notices.mjs`; tests/integration/third-party-notices.test.ts
-  # fails the gate when it drifts from package-lock.json.
+  # fails the gate when it is not byte-identical to a regeneration (#769).
   - from: ../../THIRD-PARTY-NOTICES.md
     to: THIRD-PARTY-NOTICES.md
   # LIC-2 (full-audit 2026-07-12b): the project's OWN GPL-3.0-or-later license text.

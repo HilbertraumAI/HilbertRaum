@@ -164,7 +164,8 @@ describe('committed catalog — rules over every manifest', () => {
 
   // The key-order rule (shared/manifest.ts `files`): fetch-models and verify-models read a manifest flat, first match wins,
   // because they must run with no Node. A nested local_path / sha256 placed above the top-level one would poison them, and a
-  // " #" in a value would truncate it.
+  // " #" in a value would truncate it. Since #767 fetch-models reads url, size_bytes and license_url from the top-level
+  // `download:` block instead (a projector's size reached the primary); the flat read of those three still agrees here.
   it('the flat first-match parser of the scripts reads what the YAML parser reads, on every committed manifest (#310 key order)', () => {
     for (const { path, text, doc } of modelManifestDocs()) {
       const download = (doc.download ?? {}) as Record<string, unknown>
