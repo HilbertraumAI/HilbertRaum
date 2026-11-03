@@ -8,6 +8,7 @@ import type { BadgeTone } from '../../components'
 import type { DocTaskKind, DocumentInfo, IngestionStatus } from '@shared/types'
 import { provenanceView } from '@shared/types'
 import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
+import { fmtDiskSize } from '@shared/format'
 import type { I18n } from '../../i18n'
 import { unsupportedTypeExt } from '../../lib/displayMap'
 
@@ -210,18 +211,8 @@ export function friendlyMimeLabel(mime: string | null | undefined): string {
   return sub.toUpperCase()
 }
 
-// Decimal separator follows the UI language (i18n record §5); units stay as-is.
+// Decimal units and separator (#768, i18n record §5). DR-9: the GB tier keeps a multi-GB
+// recording from reading "2457.6 MB" (the "Large files" smart view, long audio).
 export function formatSize(bytes: number | null, lang: UiLanguage): string {
-  if (bytes == null) return '—'
-  if (bytes < 1024) return `${bytes} B`
-  const fmt = (n: number): string =>
-    n.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })
-  const MB = 1024 * 1024
-  const GB = MB * 1024
-  if (bytes < MB) return `${fmt(bytes / 1024)} KB`
-  // DR-9: the app explicitly handles large files (the "Large files" smart view, long audio); a
-  // multi-GB recording used to read "2457.6 MB". Add the GB tier — locale decimal handling
-  // (comma on `de`) is unchanged, it rides on the shared `fmt`.
-  if (bytes < GB) return `${fmt(bytes / MB)} MB`
-  return `${fmt(bytes / GB)} GB`
+  return bytes == null ? '—' : fmtDiskSize(bytes, lang)
 }

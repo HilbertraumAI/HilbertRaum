@@ -362,10 +362,11 @@ the everyday path.
 | "Open AI Model" under "the speech model is missing" | "Get the speech model" — a hint's button names its action, and lands where the action is (#527) |
 | A button about a missing optional model opens the AI Model screen's default view | It lands on that model: Browse, filtered to its task (`models:voice` / `models:images` / `models:translation`). The default view ("On this drive") by definition does not list a missing model (#527, #539). Chat-model and engine buttons keep plain `models`: the default view shows them |
 
-**Disk sizes are decimal (#768).** A size on a drive is GB = 10⁹ bytes (MB = 10⁶), one decimal,
-locale-formatted (`shared/format.ts` `fmtDiskGb`), so the manifests' `size_on_disk_gb`, the AI
-Model card, its download dialog and progress, the not-enough-space refusal and the Diagnostics free
-space agree to the digit. The download dialog used to divide by 1024³ and round from 10 GB up to a
+**Disk sizes are decimal (#768).** A size on a drive is GB = 10⁹ bytes (MB = 10⁶, KB = 10³), one
+decimal, locale-formatted (`shared/format.ts`: `fmtDiskGb`, and `fmtDiskSize` where the unit
+varies — documents, saved images, the OCR language download), so the manifests' `size_on_disk_gb`,
+the AI Model card, its download dialog and progress, the not-enough-space refusal and the
+Diagnostics free space agree to the digit. The download dialog used to divide by 1024³ and round from 10 GB up to a
 whole number, so a 14.4 GB card offered "13 GB": under, the direction that lets a too-full drive
 look fine. Memory and graphics-memory figures are a different quantity and stay binary.
 

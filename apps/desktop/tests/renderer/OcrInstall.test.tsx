@@ -161,7 +161,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     expect(
       within(dialog).getByText(`${en['ocr.install.lang.deu']}, ${en['ocr.install.lang.eng']}`)
     ).toBeInTheDocument()
-    expect(within(dialog).getByText('4.1 MB')).toBeInTheDocument()
+    expect(within(dialog).getByText('4.3 MB')).toBeInTheDocument()
     expect(within(dialog).getByText('Apache-2.0')).toBeInTheDocument()
     expect(within(dialog).getByText('ocr.example.org').tagName).toBe('CODE')
     expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument()
@@ -627,7 +627,7 @@ describe('OcrInstall — German (#410)', () => {
     expect(
       within(docsDialog).getByText(`${de['ocr.install.lang.deu']}, ${de['ocr.install.lang.eng']}`)
     ).toBeInTheDocument()
-    expect(within(docsDialog).getByText('4,1 MB')).toBeInTheDocument()
+    expect(within(docsDialog).getByText('4,3 MB')).toBeInTheDocument()
 
     cleanup()
     window.localStorage.clear()

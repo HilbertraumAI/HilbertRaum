@@ -671,8 +671,9 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     stubApi(
       visionScreenStubs({
         listImageSessions: vi.fn(async () => [
-          imageSessionSummary({ id: 's1', title: 'a.png', sizeBytes: 2 * 1024 * 1024 }),
-          imageSessionSummary({ id: 's2', title: 'b.png', sizeBytes: 1024 * 1024 })
+          // Decimal megabytes (#768): in 1024 steps these read 1.9 MB and a 2.9 MB total.
+          imageSessionSummary({ id: 's1', title: 'a.png', sizeBytes: 2_000_000 }),
+          imageSessionSummary({ id: 's2', title: 'b.png', sizeBytes: 1_000_000 })
         ])
       })
     )

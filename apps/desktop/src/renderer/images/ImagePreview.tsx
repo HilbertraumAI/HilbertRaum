@@ -1,6 +1,6 @@
 import { Button } from '../components'
 import { useT } from '../i18n'
-import type { UiLanguage } from '@shared/i18n'
+import { fmtDiskSize } from '@shared/format'
 import type { ImageMime } from './decode'
 
 // Preview pane (§5.3): the image via a `data:` URL (CSP-safe — never `blob:`, SEC-1),
@@ -10,16 +10,6 @@ import type { ImageMime } from './decode'
 const MIME_LABEL: Record<ImageMime, string> = {
   'image/png': 'PNG',
   'image/jpeg': 'JPEG'
-}
-
-// Decimal separator follows the UI language (i18n record §5), mirroring DocumentsScreen.
-// Exported for the history list's per-entry size + total (#122) — one images-surface definition.
-export function formatSize(bytes: number, lang: UiLanguage): string {
-  if (bytes < 1024) return `${bytes} B`
-  const fmt = (n: number): string =>
-    n.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })
-  if (bytes < 1024 * 1024) return `${fmt(bytes / 1024)} KB`
-  return `${fmt(bytes / (1024 * 1024))} MB`
 }
 
 export function ImagePreview({
@@ -44,7 +34,7 @@ export function ImagePreview({
   busy?: boolean
 }): JSX.Element {
   const { t, lang } = useT()
-  const meta = `${MIME_LABEL[mimeType]} · ${formatSize(sizeBytes, lang)} · ${width}×${height}`
+  const meta = `${MIME_LABEL[mimeType]} · ${fmtDiskSize(sizeBytes, lang)} · ${width}×${height}`
   return (
     <div className="image-preview">
       <div className="image-preview-frame">

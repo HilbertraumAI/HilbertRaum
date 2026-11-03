@@ -19,3 +19,13 @@ export function fmt1(n: number, lang: UiLanguage): string {
 export function fmtDiskGb(bytes: number, lang: UiLanguage): string {
   return `${fmt1(bytes / 1e9, lang)} GB`
 }
+
+/** Bytes on a drive at the unit that fits: "512 B", "2.0 KB", "4.3 MB", "2.5 GB", decimal like
+ *  `fmtDiskGb` (#768). One definition for the sizes of documents, saved images and the OCR
+ *  language download, which each used to divide by 1024 under the same decimal-looking labels. */
+export function fmtDiskSize(bytes: number, lang: UiLanguage): string {
+  if (bytes < 1e3) return `${bytes} B`
+  if (bytes < 1e6) return `${fmt1(bytes / 1e3, lang)} KB`
+  if (bytes < 1e9) return `${fmt1(bytes / 1e6, lang)} MB`
+  return fmtDiskGb(bytes, lang)
+}
