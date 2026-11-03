@@ -148,6 +148,17 @@ export function resolveAskCandidateScope(
   return rerankScopeFor(resolveRerankProfile(input), input, posture)
 }
 
+/** #733: does the scope hold any section at all, whatever its document's status (retrieval reads the old
+ *  sections of a failed re-index too)? Without one, and without a pack, retrieval can find nothing. */
+function sectionsExistInScope(db: Db, scope: RetrievalScope): boolean {
+  const filter = buildScopeFilter(scope, 'c.document_id')
+  const where = filter ? ` WHERE ${filter.sql}` : ''
+  const row = db
+    .prepare(`SELECT 1 FROM chunks c${where} LIMIT 1`)
+    .get(...(filter ? filter.params : [])) as unknown as { 1: number } | undefined
+  return row != null
+}
+
 /** Does any in-scope document have precomputed structured-extract data (a `__scan__` marker)?
  *  Gates the router's coverage-extract branch — without it we cannot honestly claim a complete
  *  list, so the question falls back to labelled relevance (plan §4.2/§4.4, H7). */
@@ -853,8 +864,9 @@ export function registerRagIpc(ctx: AppContext): void {
 
       const classifierOffer = async (signal: AbortSignal, routed: RouteDecision): Promise<SkillOffer | null> => {
         if (!isClassificationTrigger(routed, text)) return null
-        // #733: with documents off and no pack every answer is the fixed no-context reply, which no skill changes.
-        if (scope.noDocuments && !scope.packIds?.length) return null
+        // #733: with no section in scope and no pack (documents off, an empty project, a document that never
+        // indexed) every answer is the fixed no-context reply, which no skill changes.
+        if (!scope.packIds?.length && !sectionsExistInScope(ctx.db, scope)) return null
         // Candidates = the shared offer gate, minus the turn's own skill, minus (#133) any skill
         // whose engine would NOT engage this question+scope — an offer must be a real capability,
         // not a provenance-stamped re-run of the same answer.

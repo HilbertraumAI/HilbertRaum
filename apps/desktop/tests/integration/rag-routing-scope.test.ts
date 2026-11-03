@@ -243,10 +243,24 @@ describe('askDocuments — the classifier offers no document skill without an an
     expect(msg.skillOffer).toMatchObject({ installId: PLAIN_LANGUAGE, source: 'classifier' })
   })
 
-  // Every answer there is the fixed no-context reply, which no skill changes: no offer, and no model call.
-  it('documents off, no pack: no classification, no offer', async () => {
+  // With no section in scope and no pack every answer is the fixed no-context reply, which no skill changes:
+  // no offer, and no model call.
+  it.each([
+    { name: 'documents off, no pack', scope: () => DOCUMENTS_OFF },
+    {
+      name: 'a chat whose only document failed to import',
+      scope: () => {
+        // Failed before it was chunked: no section of it exists.
+        const now = new Date().toISOString()
+        h.db
+          .prepare("INSERT INTO documents (id, title, status, created_at, updated_at) VALUES ('kaputt', 'kaputt.txt', 'failed', ?, ?)")
+          .run(now, now)
+        return only('kaputt')
+      }
+    }
+  ])('$name: no classification, no offer', async ({ scope }) => {
     const calls0 = h.modelCalls()
-    const { msg } = await ask(DOCUMENTS_OFF, MEETING_ASK)
+    const { msg } = await ask(scope(), MEETING_ASK)
     expect(msg.content).toBe(t('en', 'main.rag.noContext'))
     expect(msg.skillOffer).toBeUndefined()
     expect(h.modelCalls() - calls0).toBe(0)
