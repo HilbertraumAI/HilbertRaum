@@ -52,9 +52,10 @@ beforeAll(async () => {
   try {
     linkSync(process.execPath, manage)
   } catch {
-    copyFileSync(process.execPath, manage) // another volume, or a binary this user may not link (Program Files)
+    // Another volume, or a binary this user may not link (Program Files, a root-owned node): a copy, made executable.
+    copyFileSync(process.execPath, manage)
+    chmodSync(manage, 0o755)
   }
-  chmodSync(manage, 0o755)
   writeFileSync(join(scratch, 'stub.cjs'), STUB)
   // Forward slashes: NODE_OPTIONS reads a backslash inside quotes as an escape.
   stubOptions = `--require "${join(scratch, 'stub.cjs').split('\\').join('/')}"`
