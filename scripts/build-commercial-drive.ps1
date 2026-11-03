@@ -98,6 +98,8 @@ $KitPlatforms = @(
 )
 # Accept both `-Platforms win-x64,mac-arm64` (array binding) and a quoted comma list.
 $Platforms = @($Platforms | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# -AppArtifact is documented comma-separated the same way: under -File a list arrives as ONE string.
+$AppArtifact = @($AppArtifact | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($Platforms.Count -eq 0) { Write-Host '-Platforms must name at least one platform' -ForegroundColor Red; exit 2 }
 foreach ($p in $Platforms) {
   if ($KitPlatforms -notcontains $p) {

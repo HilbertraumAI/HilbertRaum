@@ -171,16 +171,20 @@ for (const leg of SCRIPT_LEGS) {
     })
 
     // The control of script-execution's refusal row: the incoming build's own name at the root is where it is copied to.
-    it('an artifact of the same name at the root is no prior build: the run proceeds to the step-4 copy', () => {
+    // Two platforms' artifacts in each twin's documented spelling: a comma list in the .ps1, which it did not split (under
+    // -File the list arrived as one path), a repeated flag in the .sh.
+    it('artifacts for two platforms, one already at the root under its own name, are each copied at step 4', () => {
       const root = kitTarget('orch-same-')
       const name = `HilbertRaum-${APP_VERSION}-portable.exe`
       writeFileSync(join(root, name), 'old')
-      const artifact = join(mkdtempSync(join(tmpdir(), 'hilbertraum-orch-art-')), name)
-      writeFileSync(artifact, 'new')
-      const out = outputOf(dry(root, [f('AppArtifact'), artifact]))
+      const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-orch-art-'))
+      const artifacts = [join(dir, name), join(dir, `HilbertRaum-${APP_VERSION}-mac-arm64.app.zip`)]
+      for (const a of artifacts) writeFileSync(a, 'new')
+      const flags = leg.ext === 'ps1' ? [f('AppArtifact'), artifacts.join(',')] : artifacts.flatMap((a) => [f('AppArtifact'), a])
+      const out = outputOf(dry(root, [...flags, f('Platforms'), 'win-x64,mac-arm64']))
       expect(out).not.toContain('Refusing to proceed')
       expect(out).toMatch(step(4))
-      expect(out).toContain(`copy ${artifact} -> `)
+      for (const a of artifacts) expect(out).toContain(`copy ${a} -> `)
     })
 
     // #339 P8-4, a copyleft duty: no kiwix-tools binary reaches a Kit without its corresponding source.
@@ -212,14 +216,14 @@ describe.skipIf(shLeg.skip)('release-issues-section.sh against a stub gh (#769)'
       "  \"api --paginate\") printf 'sha1\\nsha2\\nsha3\\n' ;;",
       '  "api repos/"*)',
       '    case "$2" in',
-      '      */sha1/pulls) echo 10 ;;',
+      '      */sha1/pulls) [ "${GH_STUB_FAIL:-}" != sha1 ] || exit 1; echo 10 ;;',
       "      */sha2/pulls) printf '9\\n10\\n' ;;",
-      '      */sha3/pulls) [ -z "${GH_STUB_FAIL:-}" ] || exit 1; echo 11 ;;',
+      '      */sha3/pulls) [ "${GH_STUB_FAIL:-}" != sha3 ] || exit 1; echo 11 ;;',
       '    esac ;;',
       '  "api graphql")',
       '    for a in "$@"; do',
       '      case "$a" in',
-      "        pr=9) printf '99\\tNine\\n' ;;",
+      "        pr=9) [ \"${GH_STUB_FAIL:-}\" != pr9 ] || exit 1; printf '99\\tNine\\n' ;;",
       "        pr=10) printf '100\\tTen\\n' ;;",
       "        pr=11) printf '100\\tTen\\n101\\tEleven\\n' ;;",
       '      esac',
@@ -250,10 +254,15 @@ describe.skipIf(shLeg.skip)('release-issues-section.sh against a stub gh (#769)'
     expect(r.stdout).toBe('')
   })
 
-  // The workflow turns a non-zero exit into a warning. Only the LAST call of each loop reaches the exit status, so this
-  // row fails the last one: an earlier failure is swallowed today, and the section comes out short.
-  it('a failed PR lookup on the last commit ends the run with exit 1 and no section', () => {
-    const r = section({ GH_STUB_PREV: 'v1', GH_STUB_FAIL: '1' })
+  // The workflow turns a non-zero exit into a warning. A `$( … )` subshell does not inherit `set -e` (Bash 3.2 has no
+  // inherit_errexit), so each loop's status was its LAST call's: an earlier failure was swallowed and the section came out
+  // short, an issue silently missing from the release notes.
+  it.each([
+    ["the last commit's PR lookup", 'sha3'],
+    ["an earlier commit's PR lookup", 'sha1'],
+    ["an earlier PR's issue lookup", 'pr9']
+  ])('a failure in %s ends the run with exit 1 and no section', (_title, fail) => {
+    const r = section({ GH_STUB_PREV: 'v1', GH_STUB_FAIL: fail })
     expect(r.status, outputOf(r)).toBe(1)
     expect(r.stdout).toBe('')
   })
