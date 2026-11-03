@@ -5,14 +5,8 @@ import { join } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import {
-  discoverManifests,
-  resolveManifestsDir,
-  recommendModelId,
-  recommendModelIdByRam
-} from '../../src/main/services/models'
+import { recommendModelId, recommendModelIdByRam } from '../../src/main/services/models'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
-import type { ModelManifest } from '../../src/shared/manifest'
 import {
   detectSystem,
   classifyProfile,
@@ -27,6 +21,7 @@ import {
 import { t } from '../../src/shared/i18n'
 import type { BenchmarkProgressStep } from '../../src/shared/types'
 import type { ModelRuntime, RuntimeTimings } from '../../src/main/services/runtime'
+import { committedManifests } from '../helpers/catalog'
 import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 
 // A switchable OS pin. The RAM is a KNOWN input wherever a row reads a profile or a pick, not the
@@ -53,11 +48,6 @@ const pinRam = (gb: number): void => {
 
 function workspace(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-bench-ws-'))
-}
-function realManifests(): ModelManifest[] {
-  const dir = resolveManifestsDir(process.cwd())
-  if (!dir) throw new Error('could not locate model-manifests from the repo')
-  return discoverManifests(dir).manifests.map((m) => m.manifest)
 }
 function runtime() {
   return createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 2048 })
@@ -194,7 +184,7 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
   })
 
   it('24 GB card → the 27B Q5 since -np 1 (#319); 8 GB card → the 4B; no class → the RAM pick', async () => {
-    const manifests = realManifests()
+    const manifests = committedManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // RTX 3090 as the Windows rig reports it (24,822 total); a probe without a free figure →
     // total − 1,024 = 23,798 MiB, which clears Q5's 22,877 (committed-catalog pins the threshold), so
@@ -215,7 +205,7 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
   })
 
   it('a discrete class without a budget figure, or a cpu class with one, is the RAM pick (byte-identical)', async () => {
-    const manifests = realManifests()
+    const manifests = committedManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // An 8 GiB card, because the 3090's card pick is the RAM pick since #319 and could not tell the two apart.
     const noBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, memoryClass: 'discrete' } })
@@ -228,7 +218,7 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
 
 describe('recommendation per profile', () => {
   it('selects the right chat model from the committed manifests', () => {
-    const manifests = realManifests()
+    const manifests = committedManifests()
     // Mapping table (spec §7.3): TINY→4b, LITE→4b, BALANCED→8b, PRO→14b, UNKNOWN→4b.
     // 1.7b was dropped 2026-06-10 (no official Q4_K_M), so 4b — the smallest bundled chat
     // model — now also covers TINY + UNKNOWN. Each profile is still claimed by exactly one
@@ -241,7 +231,7 @@ describe('recommendation per profile', () => {
   })
 
   it('does not auto-recommend the 30B-A3B MoE model for any profile (opt-in only)', () => {
-    const manifests = realManifests()
+    const manifests = committedManifests()
     const moe = manifests.find((m) => m.id === 'qwen3-30b-a3b-q4')
     expect(moe).toBeDefined()
     expect(moe!.recommendedProfiles).toEqual([])
@@ -260,7 +250,7 @@ describe('recommendation per profile', () => {
   // rec-RAM retuned to 12 — the first ranked capacity band below 16); 8 GB stays the
   // runnable-stage 4B (disk-asc tiebreak among the min-8 rank-3s).
   it('recommends the newest-Qwen promoted model per machine RAM (real manifests)', () => {
-    const m = realManifests()
+    const m = committedManifests()
     expect(recommendModelIdByRam(m, 8, 'chat')).toBe('qwen3.5-4b-ud-q4kxl') // low-end pick
     expect(recommendModelIdByRam(m, 12, 'chat')).toBe('gemma4-e2b-it-qat-q4') // #153 sub-16 band
     expect(recommendModelIdByRam(m, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl') // 8B-class tier
@@ -603,7 +593,7 @@ describe('runBenchmark', () => {
     vi.setSystemTime(new Date('2026-06-09T00:00:00.000Z'))
     // The stub, not the mock: the mock's real per-token delay can read under 3 tok/s on a starved
     // runner and step the profile.
-    const result = await runBenchmark({ workspacePath: workspace(), manifests: realManifests(), runtime: stubChatRuntime() })
+    const result = await runBenchmark({ workspacePath: workspace(), manifests: committedManifests(), runtime: stubChatRuntime() })
     expect(result).toEqual({
       os: process.platform,
       arch: process.arch,
@@ -661,14 +651,14 @@ describe('runBenchmark', () => {
     const crawl = () => stubChatRuntime({ modelId: 'oversized-27b', perSecond: 2.2 })
     const stepped = t('en', 'main.benchmark.warnVeryLowTokens', { model: 'oversized-27b' })
     pinRam(16)
-    const lite = await runBenchmark({ workspacePath: workspace(), manifests: realManifests(), runtime: crawl() })
+    const lite = await runBenchmark({ workspacePath: workspace(), manifests: committedManifests(), runtime: crawl() })
     expect(lite.tokensPerSecond).toBe(2.2)
     expect(lite.measuredModelId).toBe('oversized-27b')
     expect(lite.profile).toBe('TINY')
     expect(lite.warnings).toContain(stepped)
     // Already on the lowest rung: the reading moved nothing, so nothing is claimed.
     pinRam(8)
-    const tiny = await runBenchmark({ workspacePath: workspace(), manifests: realManifests(), runtime: crawl() })
+    const tiny = await runBenchmark({ workspacePath: workspace(), manifests: committedManifests(), runtime: crawl() })
     expect(tiny.profile).toBe('TINY')
     expect(tiny.warnings).not.toContain(stepped)
   })
@@ -677,7 +667,7 @@ describe('runBenchmark', () => {
   // with the just-measured values — so the Diagnostics card and the Models screen ★ can
   // never disagree. The named warning appears exactly when the signal moved the pick.
   it('applies the §6.5 speed signal to its own recommendation, consistently with the picker (issue #95)', async () => {
-    const manifests = realManifests()
+    const manifests = committedManifests()
     pinRam(32)
     const q5 = 'qwen3.8-27b-ud-q5km'
     const moved = await runBenchmark({ workspacePath: workspace(), manifests, runtime: stubChatRuntime({ modelId: q5, perSecond: 2.2 }) })
@@ -695,7 +685,7 @@ describe('runBenchmark', () => {
     pinRam(32)
     const result = await runBenchmark({
       workspacePath: workspace(),
-      manifests: realManifests(),
+      manifests: committedManifests(),
       runtime: stubChatRuntime({ modelId: 'mock-not-in-catalog', perSecond: 2.2 })
     })
     expect(result.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
@@ -770,7 +760,7 @@ describe('offline guarantee (benchmark path)', () => {
 
     const result = await runBenchmark({
       workspacePath: workspace(),
-      manifests: realManifests(),
+      manifests: committedManifests(),
       runtime: runtime()
     })
     expect(result.profile).toBeTruthy()
