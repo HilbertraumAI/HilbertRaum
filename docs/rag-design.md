@@ -663,7 +663,7 @@ semantics (`buildScopeFilter` and the retrieval path are unchanged):
     "I didn't find a match" from no documents instead. The chip names such a file *"(not readable
     yet)"* and the popover says it adds nothing yet (design-guidelines §11.18).
 - **Always-visible scope.** The scope popover's trigger is now an *"Answering from: {source}"* /
-  *"Antwortet aus: {source}"* chip (`scopeChipLabel` over the shared `scopeSources`), so the
+  *"Antwortet aus: {source}"* chip (its label built inline in `ScopePopover.tsx` over the shared `scopeSources`), so the
   active scope is legible before asking and one click still opens the same picker: a single
   document/attachment is named directly; the whole-library case reads *"your whole library — N
   documents"* (corpus size, not the bare word "Library"). The one-shot filename auto-scope toast

@@ -362,10 +362,14 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **Assert translated copy in a second language when the English text equals its source.** Dictation's mic-blocked
   row matched the English constant DictationButton translates from, so deleting the translation lookup stayed green.
   The row now renders German.
-- **Fake only the clock the code reads.** Testing Library's waits drain through Jest-only hooks, so `userEvent` and
-  `findBy*` hang under vitest's full fake timers. Dictation's no-signal rows fake `setInterval`, `clearInterval` and
-  `Date` only and drive the shipped 2 s default, where a test-only 80 ms prop used to stand in for it. The
-  conversation-search debounce row types with `fireEvent.change`.
+- **Fake only the clock the code reads.** Under vitest's full fake timers `findBy*`, `waitFor` and every `userEvent`
+  call hang: each finishes through React Testing Library's async wrapper, which drains on a `setTimeout(0)` it
+  advances only through Jest's `jest.advanceTimersByTime`, and `userEvent` also waits its keystroke delay on the faked
+  `setTimeout`. A global `jest` shim would fix the first and not the second (each `userEvent.setup` would still need
+  `advanceTimers: vi.advanceTimersByTime` or `delay: null`), so the suite has none (#745). With the whole clock faked,
+  settle with `flushFakeTimers()` (`tests/helpers/chat-screen.tsx`) and type with `fireEvent`. Dictation's no-signal
+  rows fake `setInterval`, `clearInterval` and `Date` only and drive the shipped 2 s default, where a test-only 80 ms
+  prop used to stand in for it. The conversation-search debounce row types with `fireEvent.change`.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

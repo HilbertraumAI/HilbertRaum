@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-03 — the closed 2026-10-13 #670 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #745 entry). Its records are unchanged:
+the "Engine load failures" §10 record it pointed to. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#670 — on a Kit, a fresh engine copy refused as damaged keeps the reinstall from coming back (`fix/670-after-install-kit`).** The store took #532's
+`afterInstall` from the latest report only, so after "Install the AI engine again" the `cpu/` net's refusal (rung 3, after the fresh copy's on rungs 1–2) replaced it: the banner offered
+the reinstall again with the damaged-files sentence instead of the Visual C++ one, and each walk flipped the verdict twice. Now the verdict keeps the mark once the fresh copy was refused
+as damaged, whichever program reports next, until it is dropped (the issue's first option; no contract change). Real app (scratch Kit roots, b11146, the fresh copy's `llama.dll` removed after
+the in-app reinstall): master offered "KI-Engine neu installieren" again; the fix kept the Visual C++ sentence and only "Erneut prüfen". Record: "Engine load failures" §10. Open: none._
+
 ## 2026-11-02 — the closed 2026-10-13 #660 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-02 (preamble budget, making room for the #742 entry). Its records are unchanged:

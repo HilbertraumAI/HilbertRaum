@@ -144,8 +144,9 @@ export function unsupportedTypeExt(raw: string): string | null {
 //
 // Code guard: a literal `[S1]` inside a fenced block or an inline code span must stay verbatim, so
 // the rewrite runs only over the PROSE segments — mirrors `normalizeMathDelimiters` in
-// Transcript.tsx (even split indices are prose, odd are code; an unclosed trailing fence swallows
-// to end-of-text and lands on an odd index, so a mid-stream buffer inside a fence is left alone).
+// AssistantMarkdown.tsx (even split indices are prose, odd are code; an unclosed trailing fence
+// swallows to end-of-text as one code part, and the split still ends on a '' prose part, so a
+// mid-stream buffer inside a fence is left alone).
 // The regexes themselves live in `@shared/citation-markers` (EP-1 plan §6.2): the main-side
 // evidence-review marker extraction imports the SAME definitions, so "what is a citation vs
 // literal code" can never drift between the chat display and a review's answer_marker links.

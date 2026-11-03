@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
+import { screen, cleanup } from '@testing-library/react'
 import type { RuntimeStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { STOPPED_RUNTIME } from '../helpers/status'
 
 // #107: while a model start is in flight, the no-model panel shows HONEST load progress
 // when an estimate exists — the model file size over the measured effective read speed
@@ -11,34 +12,24 @@ import { stubApi } from '../helpers/renderer'
 // approximate ("about {pct}%") and the bar caps below 100%. Without a measured read
 // speed (fresh install), the plain indeterminate line stays: no data, no claim.
 
+/** Nothing running yet, `qwen3-9b` starting; `starting` carries the load estimate. */
 function startingStatus(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return {
-    running: false,
-    modelId: null,
-    port: null,
-    healthy: false,
-    message: 'Starting',
-    startingModelId: 'qwen3-9b',
-    ...over
-  }
+  return { ...STOPPED_RUNTIME, message: 'Starting', startingModelId: 'qwen3-9b', ...over }
 }
 
 function setup(status: RuntimeStatus): void {
-  stubApi({
-    listConversations: vi.fn(async () => []),
-    listMessages: vi.fn(async () => []),
-    listActiveStreamConversations: vi.fn(async () => []),
-    getActiveStream: vi.fn(async () => null),
-    getRuntimeStatus: vi.fn(async () => status),
-    onScopeNotice: vi.fn(() => () => {})
-  })
-  render(<ChatScreen onNavigate={() => {}} />)
+  stubApi(chatScreenStubs({ getRuntimeStatus: vi.fn(async () => status) }))
+  renderChatScreen()
 }
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 describe('ChatScreen — honest model-load progress (#107)', () => {

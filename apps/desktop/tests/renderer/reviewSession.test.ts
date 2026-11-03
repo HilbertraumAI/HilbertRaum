@@ -25,7 +25,6 @@ import {
   openReviewSession,
   purgeReviewSession,
   reopenReview,
-  resetReviewSessionForTests,
   retryReviewSave
 } from '../../src/renderer/lib/reviewSession'
 
@@ -43,12 +42,12 @@ async function openWith(detail: EvidenceReviewDetail): Promise<void> {
 }
 
 beforeEach(() => {
-  resetReviewSessionForTests()
+  purgeReviewSession()
 })
 
 afterEach(() => {
   vi.useRealTimers()
-  resetReviewSessionForTests()
+  purgeReviewSession()
 })
 
 describe('reviewSession — open', () => {
@@ -76,7 +75,7 @@ describe('reviewSession — open', () => {
         throw new Error("Error invoking remote method 'evidence:create': Error: This review request is not valid.")
       })
     })
-    resetReviewSessionForTests()
+    purgeReviewSession()
     await openReviewSession({ messageId: 'nope' })
     const s = getReviewSessionSnapshot()
     expect(s.openError).toEqual({ kind: 'failed', message: 'This review request is not valid.' })

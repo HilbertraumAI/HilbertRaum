@@ -3,19 +3,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CoverageMeter } from '../../src/renderer/components'
-import { Transcript } from '../../src/renderer/chat/Transcript'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { I18nProvider } from '../../src/renderer/i18n'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { t } from '../../src/shared/i18n'
-import type {
-  CoverageInfo,
-  DocTaskStatus,
-  DocumentCoverage,
-  DocumentInfo,
-  Message
-} from '../../src/shared/types'
+import type { CoverageInfo, DocTaskStatus, DocumentCoverage, DocumentInfo } from '../../src/shared/types'
+import { makeCitations, makeMessage } from '../helpers/chat-fixtures'
 import { stubApi } from '../helpers/renderer'
+import { renderTranscript } from '../helpers/transcript'
 
 // Whole-document-analysis Phase 2 renderer tests: the coverage meter's HONESTY (breadth ≠
 // fidelity, never "100%" unless a deep index is ready), the "Build deep index" / "Re-index
@@ -116,37 +111,10 @@ describe('CoverageMeter — breadth ≠ fidelity honesty (C1/L2)', () => {
 })
 
 describe('Transcript — a grounded answer is labelled relevance-based', () => {
-  function transcript(messages: Message[]): JSX.Element {
-    return (
-      <I18nProvider>
-        <Transcript
-          messages={messages}
-          streamingHere={false}
-          streamText=""
-          streamThinking=""
-          thinkingOpen={false}
-          onThinkingOpenChange={() => {}}
-          emptyState={null}
-          onCopy={() => {}}
-          onSave={() => {}}
-          actionsDisabled={false}
-        />
-      </I18nProvider>
-    )
-  }
-
   it('renders the "most relevant passages — not the whole document" label under the answer', () => {
-    const messages: Message[] = [
-      {
-        id: 'm1',
-        conversationId: 'c1',
-        role: 'assistant',
-        content: 'The payment is due in 30 days [S1].',
-        createdAt: '2026-01-01T00:00:00Z',
-        citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 2, snippet: 'due in 30 days' }]
-      }
-    ]
-    render(transcript(messages))
+    renderTranscript({
+      messages: [makeMessage({ content: 'The payment is due in 30 days [S1].', citations: makeCitations(1) })]
+    })
     expect(screen.getByText(t('en', 'coverage.relevance'))).toBeInTheDocument()
   })
 
@@ -154,27 +122,18 @@ describe('Transcript — a grounded answer is labelled relevance-based', () => {
   // coverage renders THAT breadth; a citation-bearing message with no coverage (NULL / pre-migration)
   // still falls back to the relevance label — byte-identical to the pre-Phase-1 hardcoded behaviour.
   it('renders the PERSISTED coverage when a message carries one (extract → whole document)', () => {
-    const messages: Message[] = [
-      {
-        id: 'm1',
-        conversationId: 'c1',
-        role: 'assistant',
-        content: 'There are 213 transactions [S1].',
-        createdAt: '2026-01-01T00:00:00Z',
-        citations: [{ label: 'S1', sourceTitle: 'statement.pdf', snippet: 'row' }],
-        coverage: { mode: 'extract', chunksCovered: 213, chunksTotal: 213, fullyChunked: true }
-      }
-    ]
-    render(transcript(messages))
+    const answer = makeMessage({
+      content: 'There are 213 transactions [S1].',
+      citations: makeCitations(1),
+      coverage: { mode: 'extract', chunksCovered: 213, chunksTotal: 213, fullyChunked: true }
+    })
+    renderTranscript({ messages: [answer] })
     expect(screen.getByText(t('en', 'coverage.extract.whole', { scanned: 213 }))).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'coverage.relevance'))).not.toBeInTheDocument()
   })
 
   it('does not label a plain (citation-free) answer', () => {
-    const messages: Message[] = [
-      { id: 'm1', conversationId: 'c1', role: 'assistant', content: 'Hello there.', createdAt: '2026-01-01T00:00:00Z' }
-    ]
-    render(transcript(messages))
+    renderTranscript({ messages: [makeMessage({ content: 'Hello there.' })] })
     expect(screen.queryByText(t('en', 'coverage.relevance'))).not.toBeInTheDocument()
   })
 })

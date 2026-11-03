@@ -4,7 +4,7 @@ import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { evidencePaneMode } from '../../src/renderer/review/EvidencePane'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceReviewItemPatch } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
@@ -27,7 +27,7 @@ import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/e
 // structural teeth keep biting on every other surface.
 
 beforeEach(() => {
-  resetReviewSessionForTests()
+  purgeReviewSession()
 })
 
 afterEach(() => {

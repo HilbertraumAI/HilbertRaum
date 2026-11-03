@@ -15,7 +15,7 @@
 /**
  * Fence/code split: `text.split(CITE_CODE_SPLIT_RE)` yields prose at EVEN indices and code
  * (fenced ``` / ~~~ blocks — an unclosed trailing fence swallows to end-of-text — and inline
- * single-backtick spans) at ODD indices. Mirrors `normalizeMathDelimiters` in Transcript.tsx.
+ * single-backtick spans) at ODD indices. Mirrors `normalizeMathDelimiters` in AssistantMarkdown.tsx.
  */
 export const CITE_CODE_SPLIT_RE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/
 

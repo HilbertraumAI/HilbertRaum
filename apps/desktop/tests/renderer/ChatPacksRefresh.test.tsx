@@ -1,16 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import type {
-  Collection,
-  Conversation,
-  DocumentInfo,
-  RuntimeStatus
-} from '../../src/shared/types'
+import type { Collection, Conversation } from '../../src/shared/types'
 import { knowledgePack, packsEventEmitter } from '../helpers/knowledge-pack-fixtures'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { makeConversation, makeDocumentInfo } from '../helpers/chat-fixtures'
 
 // #301 P3b, finding L7 (plan §9.17 (e)3) — the Chat half of T13, modelled on
 // ChatScopeToolsRefresh.test.tsx's CH-2 pattern.
@@ -21,42 +17,9 @@ import { stubApi } from '../helpers/renderer'
 // subscribes to `onKnowledgePacksChanged` and refetches on every event, ignoring one whose
 // epoch is below the last seen (an old session's late announcement).
 
+// Differs from makeConversation: documents mode + an explicit docs-only scope (no D71 dialog).
 function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'Doc Q&A',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'documents',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: { collectionIds: [], documentIds: [] },
-    ...over
-  }
-}
-
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-function docInfo(id: string, title: string): DocumentInfo {
-  return {
-    id,
-    title,
-    originalPath: null,
-    mimeType: 'application/pdf',
-    sizeBytes: 10,
-    status: 'indexed',
-    errorMessage: null,
-    chunkCount: 1,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z'
-  } as DocumentInfo
+  return makeConversation({ title: 'Doc Q&A', mode: 'documents', scope: { collectionIds: [], documentIds: [] }, ...over })
 }
 
 function collection(over: Partial<Collection>): Collection {
@@ -75,9 +38,13 @@ function collection(over: Partial<Collection>): Collection {
 }
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T13)', () => {
@@ -88,17 +55,16 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
     const docConv = conv()
     const emitter = packsEventEmitter()
     const listKnowledgePacks = vi.fn(async () => [knowledgePack()])
-    stubApi({
-      listConversations: vi.fn(async () => [docConv]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
-      listCollections: vi.fn(async () => [collection({})]),
-      listAttachments: vi.fn(async () => []),
-      listKnowledgePacks,
-      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [docConv]),
+        listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
+        listCollections: vi.fn(async () => [collection({})]),
+        listKnowledgePacks,
+        onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Doc Q&A'))
     await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(1))
 
@@ -124,17 +90,16 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
       listCalls++
       return listCalls === 1 ? [] : [knowledgePack()]
     })
-    stubApi({
-      listConversations: vi.fn(async () => [docConv]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
-      listCollections: vi.fn(async () => [collection({})]),
-      listAttachments: vi.fn(async () => []),
-      listKnowledgePacks,
-      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [docConv]),
+        listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
+        listCollections: vi.fn(async () => [collection({})]),
+        listKnowledgePacks,
+        onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Doc Q&A'))
     await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(1))
 
@@ -170,17 +135,16 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
       if (listCalls === 2) throw new Error('transient IPC failure')
       return [knowledgePack()]
     })
-    stubApi({
-      listConversations: vi.fn(async () => [docConv]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
-      listCollections: vi.fn(async () => [collection({})]),
-      listAttachments: vi.fn(async () => []),
-      listKnowledgePacks,
-      onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [docConv]),
+        listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
+        listCollections: vi.fn(async () => [collection({})]),
+        listKnowledgePacks,
+        onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Doc Q&A'))
     await waitFor(() => expect(listKnowledgePacks).toHaveBeenCalledTimes(1))
     await user.click(await screen.findByRole('button', { name: /answering from/i }))

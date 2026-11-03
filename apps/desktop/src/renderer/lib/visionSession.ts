@@ -1,4 +1,5 @@
 import type { DecodedImage, ImageTurn } from '../images'
+import { STREAM_FLUSH_MS } from './polling'
 
 // Renderer-side store for the SINGLE active image analysis (the `doctasks.ts` / `skillruns.ts`
 // precedent). Module-level — NOT inside the Images screen — so a running analysis (the loaded
@@ -73,13 +74,12 @@ const listeners = new Set<() => void>()
 const persistListeners = new Set<() => void>()
 
 // PF-7c (full-audit 2026-07-10, closes carried-forward PERF-5): token deltas are BATCHED through
-// a small flush buffer (the ChatScreen STREAM_FLUSH_MS precedent) instead of notifying per token.
+// a small flush buffer (ChatScreen's STREAM_FLUSH_MS, shared) instead of notifying per token.
 // Each per-token notify re-mapped the whole `turns` array and re-rendered the Images screen; a
 // vision decode is fast enough for that to be real churn. translateSession documents when
 // per-token IS justified (~4 tok/s decode); vision has no such justification. The buffer is
 // applied by `flushPending` — settle paths (done/error/stop) flush FIRST so no token is lost;
 // teardown paths that discard the turn anyway (new image / Remove / lock purge) drop it unsent.
-const STREAM_FLUSH_MS = 40
 let pendingAnswer = ''
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 

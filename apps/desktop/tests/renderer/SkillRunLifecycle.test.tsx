@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { startSkillRun, clearSkillRunSession } from '../../src/renderer/lib/skillruns'
-import type { Conversation, Message, RuntimeStatus, SkillInfo, SkillRunState, StartSkillRunRequest, StartSkillRunResult, DocumentInfo } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
-import { appStatus } from '../helpers/status'
-import { makeSkillInfo, makeConversation } from '../helpers/chat-fixtures'
+import {
+  DEFAULT_SETTINGS,
+  type Conversation,
+  type Message,
+  type SkillInfo,
+  type SkillRunState,
+  type StartSkillRunRequest,
+  type StartSkillRunResult
+} from '../../src/shared/types'
+import type { PreloadApi } from '../../src/preload'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { makeSkillInfo, makeConversation, makeDocumentInfo, makeMessage, userMsg } from '../helpers/chat-fixtures'
 
 // SKA-6/SKA-17 (skills audit 2026-07-03, U6) — the ChatScreen wiring of the per-run store. These
 // exercise the invariants that had ZERO renderer coverage: the run bar is gated to the launching
@@ -26,14 +34,6 @@ function conv(over: Partial<Conversation> = {}): Conversation {
   })
 }
 
-function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
-}
-
-function doc(id: string, title: string): DocumentInfo {
-  return { id, title, status: 'indexed', mimeType: 'text/plain', createdAt: 't', updatedAt: 't' } as unknown as DocumentInfo
-}
-
 function runState(over: Partial<SkillRunState>): SkillRunState {
   return {
     runHandle: 'h',
@@ -47,54 +47,38 @@ function runState(over: Partial<SkillRunState>): SkillRunState {
 }
 
 afterEach(() => {
-  // Unmount first: it unsubscribes the store listener, so the clear notifies nothing (no act() warning).
-  cleanup()
-  clearSkillRunSession()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    // Unmount first: it unsubscribes the store listener, so the clear notifies nothing (no act() warning).
+    cleanup()
+    clearSkillRunSession()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
-const unsub = () => () => {}
-
 /** Stub the bridge for a two-conversation, documents-mode ChatScreen; return the spies a test asserts. */
-function baseApi(runs: Record<string, SkillRunState>, extra: Record<string, unknown> = {}): { askDocuments: ReturnType<typeof vi.fn> } {
-  const askDocuments = vi.fn(
-    async (): Promise<Message> => ({
-      id: 'a1',
-      conversationId: 'convA',
-      role: 'assistant',
-      content: 'ok',
-      createdAt: '2026-01-01T00:02:00Z'
+function baseApi(runs: Record<string, SkillRunState>, extra: Partial<PreloadApi> = {}): { askDocuments: ReturnType<typeof vi.fn> } {
+  const askDocuments = vi.fn(async (): Promise<Message> => makeMessage({ conversationId: 'convA', content: 'ok' }))
+  stubApi(
+    chatScreenStubs({
+      listConversations: vi.fn(async () => [conv(), conv({ id: 'convB', title: 'Chat B', scopeDocumentIds: ['docB'], scope: { collectionIds: [], documentIds: ['docB'] } })]),
+      listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'docA', title: 'a.pdf' }), makeDocumentInfo({ id: 'docB', title: 'b.pdf' })]),
+      // The per-run store surface.
+      startSkillRun: vi.fn(
+        async (req: StartSkillRunRequest): Promise<StartSkillRunResult> => ({
+          started: true,
+          run: runs[req.documentId ?? '']
+        })
+      ),
+      getSkillRun: vi.fn(async (h: string) => Object.values(runs).find((r) => r.runHandle === h) ?? null),
+      clearSkillRun: vi.fn(async () => {}),
+      // The routed relay's `stream()` sends through askDocuments; chatScreenStubs answers its stream subscriptions.
+      askDocuments,
+      ...extra
     })
   )
-  stubApi({
-    listConversations: vi.fn(async () => [conv(), conv({ id: 'convB', title: 'Chat B', scopeDocumentIds: ['docB'], scope: { collectionIds: [], documentIds: ['docB'] } })]),
-    getRuntimeStatus: vi.fn(async () => status()),
-    listMessages: vi.fn(async () => []),
-    listDocuments: vi.fn(async () => [doc('docA', 'a.pdf'), doc('docB', 'b.pdf')]),
-    listSkills: vi.fn(async () => [] as SkillInfo[]),
-    suggestSkills: vi.fn(async () => []),
-    listAttachments: vi.fn(async () => []),
-    listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
-    getAppStatus: vi.fn(async () => appStatus()),
-    // The per-run store surface.
-    startSkillRun: vi.fn(
-      async (req: StartSkillRunRequest): Promise<StartSkillRunResult> => ({
-        started: true,
-        run: runs[req.documentId ?? '']
-      })
-    ),
-    getSkillRun: vi.fn(async (h: string) => Object.values(runs).find((r) => r.runHandle === h) ?? null),
-    clearSkillRun: vi.fn(async () => {}),
-    listSkillRuns: vi.fn(async () => []),
-    // Streaming surface the routed relay's `stream()` touches.
-    onToken: vi.fn(unsub),
-    onReasoning: vi.fn(unsub),
-    onScopeNotice: vi.fn(unsub),
-    onCompaction: vi.fn(unsub),
-    askDocuments,
-    ...extra
-  })
   return { askDocuments }
 }
 
@@ -107,7 +91,7 @@ describe('ChatScreen — per-run store gating (SKA-6)', () => {
     const runs = { docB: runState({ runHandle: 'hB', conversationId: 'convB', documentId: 'docB', state: 'done', transactionCount: 9 }) }
     baseApi(runs)
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     await selectConversation(user, 'Chat A') // active = convA
     // Seed a finished run in convB while convA is active.
     await act(async () => {
@@ -124,7 +108,7 @@ describe('ChatScreen — per-run store gating (SKA-6)', () => {
     const runs = { docB: runState({ runHandle: 'hB', conversationId: 'convB', documentId: 'docB', state: 'running' }) }
     baseApi(runs)
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     await selectConversation(user, 'Chat A')
     await act(async () => {
       await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'extract_transactions', conversationId: 'convB', documentId: 'docB' })
@@ -137,7 +121,7 @@ describe('ChatScreen — per-run store gating (SKA-6)', () => {
   it('re-adopts an in-flight run on a fresh mount and lands on its conversation, showing the outcome (SKA-17)', async () => {
     const term = runState({ runHandle: 'hB', conversationId: 'convB', documentId: 'docB', state: 'done', transactionCount: 5 })
     baseApi({ docB: term }, { listSkillRuns: vi.fn(async () => [term]) })
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     // No manual selection — the mount re-adopts the run and lands on convB, showing its terminal outcome.
     expect(await screen.findByText('Extracted 5 transactions.')).toBeInTheDocument()
   })
@@ -150,7 +134,7 @@ describe('ChatScreen — routed-run relay invariants (C1/C2/ux-6)', () => {
     }
     const { askDocuments } = baseApi(runs)
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     await selectConversation(user, 'Chat A') // documents mode, no skill picked in the composer
     // A routed run (summarize_cashflow) finishes for convA — seed it via the same store ChatScreen reads.
     await act(async () => {
@@ -175,11 +159,11 @@ describe('ChatScreen — routed-run relay invariants (C1/C2/ux-6)', () => {
     let history: Message[] = []
     const { askDocuments } = baseApi(runs, { listMessages: vi.fn(async () => history) })
     askDocuments.mockImplementationOnce(async () => {
-      history = [{ id: 'q1', conversationId: 'convA', role: 'user', content: 'Summarize my income and expenses.', createdAt: '2026-01-01T00:01:00Z' }]
+      history = [userMsg('q1', 'Summarize my income and expenses.', { conversationId: 'convA' })]
       throw new Error('The AI model stopped before the answer was finished.')
     })
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     await selectConversation(user, 'Chat A') // no skill picked in the composer
     await act(async () => {
       await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'summarize_cashflow', conversationId: 'convA', documentId: 'docA' })
@@ -197,7 +181,7 @@ describe('ChatScreen — routed-run relay invariants (C1/C2/ux-6)', () => {
     }
     const { askDocuments } = baseApi(runs)
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     await selectConversation(user, 'Chat A') // active = convA, but the run is convB's
     await act(async () => {
       await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'summarize_cashflow', conversationId: 'convB', documentId: 'docB' })
@@ -224,40 +208,25 @@ describe('ChatScreen — the "new"-composer pick is cleared after being carried 
     const setConversationDefaultSkill = vi.fn(async () => {})
     const created: Conversation = { ...conv({ id: 'conv1', title: 'Created', mode: 'chat', scope: null, scopeDocumentIds: null }) }
     let convList: Conversation[] = []
-    stubApi({
-      // Empty at first (start on the 'new' composer); the created conversation appears after send so the
-      // mode toggle can see the active conversation's (chat) mode and deselect it.
-      listConversations: vi.fn(async () => convList),
-      getRuntimeStatus: vi.fn(async () => status()),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => []),
-      listSkills: vi.fn(async () => [skill()]),
-      suggestSkills: vi.fn(async () => []),
-      listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
-      listAttachments: vi.fn(async () => []),
-      getAppStatus: vi.fn(async () => appStatus()),
-      listSkillRuns: vi.fn(async () => []),
-      createConversation: vi.fn(async () => {
-        convList = [created] // the send's ensureConversation created it
-        return created
-      }),
-      setConversationDefaultSkill,
-      sendChatMessage: vi.fn(
-        async (): Promise<Message> => ({
-          id: 'a1',
-          conversationId: 'conv1',
-          role: 'assistant',
-          content: 'ok',
-          createdAt: '2026-01-01T00:02:00Z'
-        })
-      ),
-      onToken: vi.fn(unsub),
-      onReasoning: vi.fn(unsub),
-      onScopeNotice: vi.fn(unsub),
-      onCompaction: vi.fn(unsub)
-    })
+    stubApi(
+      chatScreenStubs({
+        // Empty at first (start on the 'new' composer); the created conversation appears after send so the
+        // mode toggle can see the active conversation's (chat) mode and deselect it.
+        listConversations: vi.fn(async () => convList),
+        listSkills: vi.fn(async () => [skill()]),
+        // The skill's #46 info card was already seen, so the first pick opens no card (and writes no
+        // settings): this row is about the carry, not the card.
+        getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: ['bank-statement'] })),
+        createConversation: vi.fn(async () => {
+          convList = [created] // the send's ensureConversation created it
+          return created
+        }),
+        setConversationDefaultSkill,
+        sendChatMessage: vi.fn(async (): Promise<Message> => makeMessage({ conversationId: 'conv1', content: 'ok' }))
+      })
+    )
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     // Pick the skill + keep it for the conversation, both on the 'new' composer (wait for the async
     // listSkills load so the picker is present).
     await user.click(await screen.findByRole('button', { name: /^skill:/i }))
@@ -285,29 +254,21 @@ describe('ChatScreen — the "new"-composer pick is cleared after being carried 
     const setConversationDefaultSkill = vi.fn(async () => {})
     const created: Conversation = { ...conv({ id: 'conv1', title: 'Created', mode: 'chat', scope: null, scopeDocumentIds: null }) }
     let convList: Conversation[] = []
-    stubApi({
-      listConversations: vi.fn(async () => convList),
-      getRuntimeStatus: vi.fn(async () => status()),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => []),
-      listSkills: vi.fn(async () => [skill()]),
-      suggestSkills: vi.fn(async () => []),
-      listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
-      listAttachments: vi.fn(async () => []),
-      getAppStatus: vi.fn(async () => appStatus()),
-      listSkillRuns: vi.fn(async () => []),
-      createConversation: vi.fn(async () => {
-        convList = [created]
-        return created
-      }),
-      setConversationDefaultSkill,
-      onToken: vi.fn(unsub),
-      onReasoning: vi.fn(unsub),
-      onScopeNotice: vi.fn(unsub),
-      onCompaction: vi.fn(unsub)
-    })
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => convList),
+        listSkills: vi.fn(async () => [skill()]),
+        // As in the row above: the info card was already seen.
+        getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: ['bank-statement'] })),
+        createConversation: vi.fn(async () => {
+          convList = [created]
+          return created
+        }),
+        setConversationDefaultSkill
+      })
+    )
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     // Pick + keep on the 'new' composer (no send).
     await user.click(await screen.findByRole('button', { name: /^skill:/i }))
     await user.click(await screen.findByRole('menuitemradio', { name: /bank statement helper/i }))
@@ -330,29 +291,17 @@ describe('ChatScreen — the "new"-composer pick is cleared after being carried 
   // CODE-30 rider: ConversationList's `onClick={onNew}` discards the promise — a failed
   // createConversation used to be an unhandled rejection with zero feedback.
   it('a failed "+ New chat" surfaces on the error banner (CODE-30)', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => status()),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => []),
-      listSkills: vi.fn(async () => [] as SkillInfo[]),
-      suggestSkills: vi.fn(async () => []),
-      listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
-      listAttachments: vi.fn(async () => []),
-      getAppStatus: vi.fn(async () => appStatus()),
-      listSkillRuns: vi.fn(async () => []),
-      createConversation: vi.fn(async () => {
-        throw new Error(
-          "Error invoking remote method 'chat:createConversation': Error: The workspace is locked. Unlock it to continue."
-        )
-      }),
-      onToken: vi.fn(unsub),
-      onReasoning: vi.fn(unsub),
-      onScopeNotice: vi.fn(unsub),
-      onCompaction: vi.fn(unsub)
-    })
+    stubApi(
+      chatScreenStubs({
+        createConversation: vi.fn(async () => {
+          throw new Error(
+            "Error invoking remote method 'chat:createConversation': Error: The workspace is locked. Unlock it to continue."
+          )
+        })
+      })
+    )
     const user = userEvent.setup()
-    render(<ChatScreen onNavigate={() => {}} />)
+    renderChatScreen()
     await user.click(await screen.findByRole('button', { name: '+ New chat' }))
     // Pre-fix: an unhandled rejection (vitest fails on it) and no banner.
     expect(await screen.findByText(/workspace is locked/i)).toBeInTheDocument()

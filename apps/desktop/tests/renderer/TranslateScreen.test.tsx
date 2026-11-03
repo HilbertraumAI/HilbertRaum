@@ -295,6 +295,8 @@ describe('TranslateScreen — translate → stream → copy', () => {
     await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
     await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
     await waitFor(() => expect(s.token.fn).toBeDefined())
+    // One busy state (TG-5): the document zone's picker is shut while the text translation runs.
+    expect(screen.getByRole('button', { name: t('en', 'translate.drop.choose') })).toBeDisabled()
 
     await user.click(screen.getByRole('button', { name: t('en', 'translate.stop') }))
     expect(s.translateCancel).toHaveBeenCalledWith('j1')
@@ -404,6 +406,8 @@ describe('TranslateScreen — language selects', () => {
     const from = screen.getByLabelText(t('en', 'translate.from')) as HTMLSelectElement
     await user.selectOptions(screen.getByLabelText(t('en', 'translate.to')), from.value)
     expect(screen.getByRole('button', { name: t('en', 'translate.action') })).toBeDisabled()
+    // #162 (FE-2): the document zone follows the text path's disabled Translate button.
+    expect(screen.getByRole('button', { name: t('en', 'translate.drop.choose') })).toBeDisabled()
     expect(screen.getByText(t('en', 'translate.err.sameLang'))).toBeInTheDocument()
     expect(s.translateStart).not.toHaveBeenCalled()
   })

@@ -7,7 +7,7 @@ import {
   editReviewItem,
   getReviewSessionSnapshot,
   openReviewSession,
-  resetReviewSessionForTests
+  purgeReviewSession
 } from '../../src/renderer/lib/reviewSession'
 import {
   type EvidenceReviewItemPatch,
@@ -41,7 +41,7 @@ const lockedState: WorkspaceStateInfo = {
 
 afterEach(() => {
   cleanup()
-  resetReviewSessionForTests()
+  purgeReviewSession()
   vi.restoreAllMocks()
 })
 

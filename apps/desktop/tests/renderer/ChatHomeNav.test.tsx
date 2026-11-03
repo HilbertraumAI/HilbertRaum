@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
-import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
+import { screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
-import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
+import type { Conversation, DocumentInfo } from '../../src/shared/types'
 import { knowledgePack, WIKIPEDIA_EN_PACK } from '../helpers/knowledge-pack-fixtures'
 import { renderHome as renderScreen, stubHomeApi } from '../helpers/home-screen'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { makeConversation, makeDocumentInfo, makeMessage, userMsg } from '../helpers/chat-fixtures'
 import { STOPPED_RUNTIME, appStatus, preflightResult, runtimeStatus } from '../helpers/status'
 
 // Renderer tests for the chat screen's structural behaviors (Phase 25 layout, same
@@ -17,33 +18,19 @@ import { STOPPED_RUNTIME, appStatus, preflightResult, runtimeStatus } from '../h
 // directly in documents mode, the documents-scope popover (replaces the scope-chip row),
 // and the Home screen's "Ask My Documents" navigating to the document-Q&A chat.
 
-function conv(over: Partial<Conversation>): Conversation {
-  return {
-    id: 'c1',
-    title: 'My first chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
+// Differs from makeConversation: the title the rows below look up.
+function conv(over: Partial<Conversation> = {}): Conversation {
+  return makeConversation({ title: 'My first chat', ...over })
 }
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 /** Open conversation-row "⋯" menu → "Delete conversation" → the confirm dialog. */
@@ -58,15 +45,18 @@ describe('ChatScreen — delete conversation (⋯ menu + ConfirmDialog)', () => 
     const user = userEvent.setup()
     const listConversations = vi
       .fn<() => Promise<Conversation[]>>()
-      .mockResolvedValueOnce([conv({})]) // initial mount
+      .mockResolvedValueOnce([conv()]) // initial mount
       .mockResolvedValue([]) // after delete
     const deleteConversation = vi.fn(async () => {})
-    stubApi({
-      listConversations,
-      deleteConversation,
-      getRuntimeStatus: vi.fn(async () => runningStatus)
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations,
+        deleteConversation,
+        // The open dialog counts the reviews a delete would take with it: none here.
+        countEvidenceReviewsForConversation: vi.fn(async () => 0)
+      })
+    )
+    renderChatScreen()
 
     await screen.findByText('My first chat')
     await openDeleteConfirm(user, 'My first chat')
@@ -79,12 +69,14 @@ describe('ChatScreen — delete conversation (⋯ menu + ConfirmDialog)', () => 
   it('does nothing when the dialog is cancelled', async () => {
     const user = userEvent.setup()
     const deleteConversation = vi.fn(async () => {})
-    stubApi({
-      listConversations: vi.fn(async () => [conv({})]),
-      deleteConversation,
-      getRuntimeStatus: vi.fn(async () => runningStatus)
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [conv()]),
+        deleteConversation,
+        countEvidenceReviewsForConversation: vi.fn(async () => 0)
+      })
+    )
+    renderChatScreen()
 
     await screen.findByText('My first chat')
     await openDeleteConfirm(user, 'My first chat')
@@ -96,28 +88,17 @@ describe('ChatScreen — delete conversation (⋯ menu + ConfirmDialog)', () => 
 })
 
 describe('ChatScreen — markdown rendering', () => {
-  function msg(over: Partial<Message>): Message {
-    return {
-      id: 'm1',
-      conversationId: 'c1',
-      role: 'assistant',
-      content: '',
-      createdAt: '2026-01-01T00:00:00Z',
-      tokenCount: null,
-      ...over
-    }
-  }
-
   it('renders assistant markdown (e.g. **bold**) as formatting, not raw asterisks', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv({})]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => [
-        msg({ content: 'Total for **Invoice 42** is due.\n\n- item one\n- item two' })
-      ])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [conv()]),
+        listMessages: vi.fn(async () => [
+          makeMessage({ content: 'Total for **Invoice 42** is due.\n\n- item one\n- item two' })
+        ])
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('My first chat'))
 
     const bold = await screen.findByText('Invoice 42')
@@ -128,12 +109,13 @@ describe('ChatScreen — markdown rendering', () => {
 
   it('renders raw HTML in model output as literal text (no injection)', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv({})]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => [msg({ content: 'hi <img src=x onerror=alert(1)> there' })])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [conv()]),
+        listMessages: vi.fn(async () => [makeMessage({ content: 'hi <img src=x onerror=alert(1)> there' })])
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('My first chat'))
     await screen.findByText(/hi/)
     expect(document.querySelector('.msg-content img')).toBeNull()
@@ -141,12 +123,13 @@ describe('ChatScreen — markdown rendering', () => {
 
   it('leaves user messages as plain text (asterisks intact)', async () => {
     const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => [conv({})]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => [msg({ id: 'u1', role: 'user', content: 'what is **this**?' })])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [conv()]),
+        listMessages: vi.fn(async () => [userMsg('u1', 'what is **this**?')])
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('My first chat'))
     expect(await screen.findByText('what is **this**?')).toBeInTheDocument()
   })
@@ -154,40 +137,23 @@ describe('ChatScreen — markdown rendering', () => {
 
 describe('ChatScreen — initial mode', () => {
   it('opens in documents mode when initialMode="documents"', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus)
-    })
-    render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
+    stubApi(chatScreenStubs())
+    renderChatScreen({ initialMode: 'documents' })
     expect(await screen.findByPlaceholderText(/ask about your documents/i)).toBeInTheDocument()
   })
 
   it('defaults to plain chat mode', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus)
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(chatScreenStubs())
+    renderChatScreen()
     expect(await screen.findByPlaceholderText("Message…")).toBeInTheDocument()
   })
 })
 
 // ---- Documents-scope popover (Phase 25 §3; scope semantics from Phase 17 §5.3) ----
 
-function indexedDoc(id: string, title: string) {
-  return {
-    id,
-    title,
-    originalPath: null,
-    mimeType: 'text/plain',
-    sizeBytes: 10,
-    status: 'indexed' as const,
-    errorMessage: null,
-    chunkCount: 1,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z'
-  }
-}
+/** The two indexed documents the scope rows name by title. */
+const contractPdf = (): DocumentInfo => makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })
+const termsDocx = (): DocumentInfo => makeDocumentInfo({ id: 'd2', title: 'terms.docx' })
 
 describe('ChatScreen — documents-scope multi-select picker (plan §13)', () => {
   it('shows a persisted specific-doc scope and removes one document via setConversationScope', async () => {
@@ -198,14 +164,14 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
       .fn<() => Promise<Conversation[]>>()
       .mockResolvedValueOnce([scoped])
       .mockResolvedValue([{ ...scoped, scopeDocumentIds: ['d2'] }])
-    stubApi({
-      listConversations,
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')]),
-      setConversationScope
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations,
+        listDocuments: vi.fn(async () => [contractPdf(), termsDocx()]),
+        setConversationScope
+      })
+    )
+    renderChatScreen()
 
     await user.click(await screen.findByText('Doc Q&A'))
     await user.click(await screen.findByRole('button', { name: /answering from: 2 documents/i }))
@@ -232,14 +198,14 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
       .mockResolvedValueOnce([scoped])
       .mockResolvedValueOnce([{ ...scoped, scopeDocumentIds: ['d1', 'd2'] }])
       .mockResolvedValue([{ ...scoped, scopeDocumentIds: ['d1', 'd2'] }])
-    stubApi({
-      listConversations,
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')]),
-      setConversationScope
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations,
+        listDocuments: vi.fn(async () => [contractPdf(), termsDocx()]),
+        setConversationScope
+      })
+    )
+    renderChatScreen()
 
     await user.click(await screen.findByText('Doc Q&A'))
     await user.click(await screen.findByRole('button', { name: /answering from: contract\.pdf/i }))
@@ -262,16 +228,8 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
     const user = userEvent.setup()
     const created = conv({ id: 'c2', title: 'New chat', mode: 'documents', scopeDocumentIds: ['d1'] })
     const createConversation = vi.fn(async () => created)
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')]),
-      createConversation
-    })
-    render(
-      <ChatScreen onNavigate={() => {}} initialMode="documents" initialScopeDocumentIds={['d1']} />
-    )
+    stubApi(chatScreenStubs({ listDocuments: vi.fn(async () => [contractPdf()]), createConversation }))
+    renderChatScreen({ initialMode: 'documents', initialScopeDocumentIds: ['d1'] })
 
     // The handoff shows in the footer affordance before any conversation exists…
     expect(await screen.findByRole('button', { name: /answering from: contract\.pdf/i })).toBeInTheDocument()
@@ -293,15 +251,14 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
     const wikipedia = knowledgePack({ ...WIKIPEDIA_EN_PACK })
     const created = conv({ id: 'c3', title: 'New chat', mode: 'documents' })
     const createConversation = vi.fn(async () => created)
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')]),
-      listKnowledgePacks: vi.fn(async () => [wikipedia]),
-      createConversation
-    })
-    render(<ChatScreen onNavigate={() => {}} initialMode="documents" initialScopePackIds={['p1']} />)
+    stubApi(
+      chatScreenStubs({
+        listDocuments: vi.fn(async () => [contractPdf()]),
+        listKnowledgePacks: vi.fn(async () => [wikipedia]),
+        createConversation
+      })
+    )
+    renderChatScreen({ initialMode: 'documents', initialScopePackIds: ['p1'] })
 
     // The handoff shows in the footer affordance: the pack, and the honest "documents off" tail.
     expect(
@@ -318,12 +275,8 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
   })
 
   it('labels the whole corpus honestly when no scope is set', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')])
-    })
-    render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
+    stubApi(chatScreenStubs({ listDocuments: vi.fn(async () => [contractPdf(), termsDocx()]) }))
+    renderChatScreen({ initialMode: 'documents' })
     // The whole-library case names the corpus size (D71) so "answer from everything" reads as a
     // deliberate breadth. (The chip never shows 0 — an empty corpus falls to the "Add documents" CTA.)
     expect(
@@ -353,7 +306,7 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
           : STOPPED_RUNTIME
       ),
       listDocuments: vi.fn(async () =>
-        Array.from({ length: docCount }, (_, i) => indexedDoc(`d${i + 1}`, `doc-${i + 1}.pdf`))
+        Array.from({ length: docCount }, (_, i) => makeDocumentInfo({ id: `d${i + 1}`, title: `doc-${i + 1}.pdf` }))
       ),
       runPreflight: vi.fn(async () => preflightResult({ problems: opts.problems ?? [] }))
     })

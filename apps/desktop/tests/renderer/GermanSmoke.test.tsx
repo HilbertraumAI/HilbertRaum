@@ -10,7 +10,7 @@ import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceReview'
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
@@ -18,47 +18,25 @@ import { Banner, CoverageMeter, PasswordField, ToastProvider, type Translator } 
 import { t } from '../../src/shared/i18n'
 import {
   DEFAULT_SETTINGS,
-  type AppStatus,
   type ModelInfo,
   type MovedDriveNotice,
-  type PerformanceSnapshot,
-  type RuntimeStatus
+  type PerformanceSnapshot
 } from '../../src/shared/types'
+import { chatScreenStubs } from '../helpers/chat-screen'
 import { stubHomeApi } from '../helpers/home-screen'
 import { modelInfo, stubModelsApi } from '../helpers/model-fixtures'
 import { laptopResult } from '../helpers/performance-screen'
 import { renderInLanguage } from '../helpers/render-language'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { appStatus, runtimeStatus } from '../helpers/status'
+import { pickedImage, visionScreenStubs } from '../helpers/vision-fixtures'
 
 // Phase-40 German render smokes (i18n record §5): one per migrated screen. Each renders
 // the screen inside I18nProvider with the pre-unlock localStorage mirror seeded 'de'
 // (i18n record §3.2 / D-L3) and asserts a German string from the de catalog — proving the
 // screen's copy actually flows through t() (an untranslated literal would stay English).
-// Assertions reference the catalogs (D-L8), never re-typed literals.
-
-function appStatus(over: Partial<AppStatus> = {}): AppStatus {
-  return {
-    appName: 'x',
-    appVersion: '0',
-    offlineMode: true,
-    networkAllowed: false,
-    activeModelId: 'm1',
-    hardwareProfile: 'UNKNOWN',
-    workspaceMode: 'plaintext_dev',
-    workspaceReady: true,
-    machineRamGb: 16,
-    dictationAvailable: false,
-    ...over
-  } as AppStatus
-}
-
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
+// Assertions reference the catalogs (D-L8), never re-typed literals. Every row stubs the
+// bridge calls its screen makes; the afterEach fails on any it missed.
 
 /** A complete `performance:get` reply for the Performance smoke (PR #303 audit T6): a discrete
  *  card, an active model with an 8,192-token context (the localized number the smoke asserts)
@@ -92,17 +70,23 @@ function perfSnapshot(): PerformanceSnapshot {
   }
 }
 
+// The review store is module-level: purge it AFTER cleanup has unmounted ReviewScreen (a purge
+// while it is mounted notifies it outside act).
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    purgeReviewSession()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 describe('German render smokes (Phase 40)', () => {
   it('HomeScreen renders German', async () => {
+    // stubHomeApi's default: the selected model is running, so the headline reads ready.
     stubHomeApi({
-      getAppStatus: vi.fn(async () => appStatus()),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
       // §5 item 22 (a): the moved-drive notice is a Home surface, so it belongs in this smoke.
       // The restored case is the one that interpolates a date, which is where a German render
       // can go wrong on its own. A local time, no `Z`: a UTC instant is another day somewhere.
@@ -122,14 +106,11 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('ChatScreen renders German (empty state + composer)', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(
-        async (): Promise<RuntimeStatus> => ({ ...runningStatus, backend: 'cpu', gpuAutoDisabled: true })
-      ),
-      listDocuments: vi.fn(async () => []),
-      getAppStatus: vi.fn(async () => appStatus())
-    })
+    stubApi(
+      chatScreenStubs({
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ backend: 'cpu', gpuAutoDisabled: true }))
+      })
+    )
     renderInLanguage(<ChatScreen onNavigate={() => {}} />, 'de')
 
     expect(await screen.findByText(t('de', 'chat.empty.title'))).toBeInTheDocument()
@@ -158,7 +139,9 @@ describe('German render smokes (Phase 40)', () => {
     stubApi({
       listDocuments: vi.fn(async () => []),
       listCollections: vi.fn(async () => []),
-      getAppStatus: vi.fn(async () => appStatus())
+      getAppStatus: vi.fn(async () => appStatus()),
+      getReindexAllJob: vi.fn(async () => null),
+      getActiveImportJob: vi.fn(async () => null)
     })
     renderInLanguage(<DocumentsScreen />, 'de')
 
@@ -200,7 +183,9 @@ describe('German render smokes (Phase 40)', () => {
           updatedAt: '2026-01-01T00:00:00Z'
         }
       ]),
-      getAppStatus: vi.fn(async () => appStatus())
+      getAppStatus: vi.fn(async () => appStatus()),
+      getReindexAllJob: vi.fn(async () => null),
+      getActiveImportJob: vi.fn(async () => null)
     })
     renderInLanguage(<DocumentsScreen />, 'de')
     await screen.findByText('bericht.pdf')
@@ -235,26 +220,24 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('ChatScreen documents-mode renders the German source picker (plan §13)', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      listCollections: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [
-        {
-          id: 'd1',
-          title: 'contract.pdf',
-          originalPath: null,
-          mimeType: 'text/plain',
-          sizeBytes: 1,
-          status: 'indexed' as const,
-          errorMessage: null,
-          chunkCount: 1,
-          createdAt: '2026-01-01T00:00:00Z',
-          updatedAt: '2026-01-01T00:00:00Z'
-        }
-      ]),
-      getAppStatus: vi.fn(async () => appStatus())
-    })
+    stubApi(
+      chatScreenStubs({
+        listDocuments: vi.fn(async () => [
+          {
+            id: 'd1',
+            title: 'contract.pdf',
+            originalPath: null,
+            mimeType: 'text/plain',
+            sizeBytes: 1,
+            status: 'indexed' as const,
+            errorMessage: null,
+            chunkCount: 1,
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z'
+          }
+        ])
+      })
+    )
     renderInLanguage(<ChatScreen onNavigate={() => {}} initialMode="documents" />, 'de')
     // The composer footer's "Answering from:" scope chip (D71) reads in German, and the whole-library
     // case names the corpus size (one indexed document here).
@@ -269,7 +252,8 @@ describe('German render smokes (Phase 40)', () => {
   it('TranslateScreen renders German (title + language bar + action)', async () => {
     stubApi({
       getAppStatus: vi.fn(async () => appStatus({ translationAvailable: true })),
-      getActiveTranslateJob: vi.fn(async () => null)
+      getActiveTranslateJob: vi.fn(async () => null),
+      listActiveDocTasks: vi.fn(async () => [])
     })
     renderInLanguage(<TranslateScreen onNavigate={() => {}} />, 'de')
 
@@ -288,8 +272,7 @@ describe('German render smokes (Phase 40)', () => {
     stubModelsApi({
       getPolicy: vi.fn(async () => {
         throw new Error('no policy')
-      }),
-      getAppStatus: vi.fn(async () => appStatus())
+      })
     })
     renderInLanguage(<ModelsScreen />, 'de')
 
@@ -313,8 +296,7 @@ describe('German render smokes (Phase 40)', () => {
       ]),
       getPolicy: vi.fn(async () => {
         throw new Error('no policy')
-      }),
-      getAppStatus: vi.fn(async () => appStatus())
+      })
     })
     const onNavigate = vi.fn()
     renderInLanguage(<ModelsScreen onNavigate={onNavigate} />, 'de')
@@ -325,19 +307,15 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('ImagesScreen renders the German PDF pointer and the OCR line (#539)', async () => {
-    stubApi({
-      imageGetStatus: vi.fn(async () => ({ available: true, modelId: 'v', modelDisplayName: 'V' })),
-      imageChooseImage: vi.fn(async () => ({ token: 'tok', name: 'Scan.pdf', sizeBytes: 4 }))
-    })
-    const onNavigate = vi.fn()
+    stubApi(visionScreenStubs(pickedImage('Scan.pdf')))
     const user = userEvent.setup()
-    renderInLanguage(<ImagesScreen onNavigate={onNavigate} />, 'de')
+    renderInLanguage(<ImagesScreen onNavigate={() => {}} />, 'de')
 
     expect(await screen.findByText(t('de', 'images.avail.ocrPointer'))).toBeVisible()
     await user.click(screen.getByRole('button', { name: t('de', 'images.drop.choose') }))
     expect(await screen.findByText(t('de', 'images.err.pdf'))).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: t('de', 'images.err.pdfAction') }))
-    expect(onNavigate).toHaveBeenCalledWith('documents')
+    // The pointer's action reads in German; where it leads is ImagesScreen.test's picked-PDF row.
+    expect(screen.getByRole('button', { name: t('de', 'images.err.pdfAction') })).toBeInTheDocument()
   })
 
   it('PrivacyTab renders German', async () => {
@@ -364,7 +342,7 @@ describe('German render smokes (Phase 40)', () => {
   it('DiagnosticsTab renders German', async () => {
     stubApi({
       getAppStatus: vi.fn(async () => appStatus()),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
+      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
       getSettings: vi.fn(async () => {
         throw new Error('no settings')
       }),
@@ -374,6 +352,10 @@ describe('German render smokes (Phase 40)', () => {
       getRuntimeInstall: vi.fn(async () => {
         throw new Error('no install')
       }),
+      getEngineStatus: vi.fn(async () => {
+        throw new Error('no engine')
+      }),
+      onEngineProblemsChanged: vi.fn(() => () => {}),
       // #327: the Acceleration line reads its device from the snapshot. Failing here too keeps
       // this smoke's premise — every read fails, the tab still renders — and covers the
       // best-effort fallback to the CPU wording in German.
@@ -403,7 +385,7 @@ describe('German render smokes (Phase 40)', () => {
       listModels: vi.fn(async () => [
         { id: 'qwen', displayName: 'Qwen', state: 'installed', recommended: true, recommendedContextTokens: 8192 }
       ] as unknown as ModelInfo[]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
+      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getAppStatus: vi.fn(async () => appStatus()),
       onEngineProblemsChanged: vi.fn(() => () => {}),
@@ -450,7 +432,6 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('ReviewScreen renders German (EP-1 plan §7.7 — header, decisions, evidence caption)', async () => {
-    resetReviewSessionForTests()
     stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
     renderInLanguage(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={() => {}} />, 'de')
 
@@ -471,11 +452,9 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('button', { name: t('de', 'review.footer.summary') })
     ).toBeInTheDocument()
-    resetReviewSessionForTests()
   })
 
   it('ReviewScreen outdated overlay renders German (EP-1 P4 — banner, chip, badge, context action)', async () => {
-    resetReviewSessionForTests()
     stubReviewApi(
       { getEvidenceReview: vi.fn(async () => makeDetail()) },
       makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
@@ -494,6 +473,5 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('button', { name: t('de', 'review.sourceContext.open') })
     ).toBeInTheDocument()
-    resetReviewSessionForTests()
   })
 })

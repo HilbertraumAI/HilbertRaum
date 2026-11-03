@@ -268,7 +268,7 @@ noted below.
   pattern). PF-7b: the doc-task store's 400 ms poll ports the skillruns `sameRun` no-change gate
   (SKA-39 precedent) — an identical tick sets nothing and the snapshot identity stays stable.
   PF-7c (**closes the carried-forward PERF-5**, see the 2026-06-30 ledger): `visionSession` batches
-  token deltas through a 40 ms flush buffer (the ChatScreen `STREAM_FLUSH_MS` precedent; settle
+  token deltas through a 40 ms flush buffer (ChatScreen's `STREAM_FLUSH_MS`, one constant in `lib/polling.ts` since #745; settle
   paths flush first so no token is lost, discard paths drop the buffer), and ImagesScreen got the
   FE-3 `useEventCallback` sweep over `onCopy`/`onTryAgain`/`onStop` — a settled `TurnRow` no longer
   re-renders while a sibling turn streams (render-count-pinned like the DocRow PERF-5 memo
@@ -2392,7 +2392,7 @@ explicitly out of scope.
   = "a transcriber is selected"; the live mic renders with it and — the #497 amendment to D30 —
   a visibly disabled **"not installed" mic** renders without it (`DictationUnavailableButton`:
   `aria-disabled`, a click reveals the hint that names the missing speech model plus the
-  `onNavigate('models')` deep link; the composer prop is tri-state, `null` = status unread →
+  `onNavigate('models:voice')` deep link (`models` until #527, below); the composer prop is tri-state, `null` = status unread →
   nothing, so mount never flashes either state). The AI Model screen's hide-the-disabled-Select
   precedent (§11 of the design guidelines) does not apply: there the one clear action sits on
   the same card, here it lives on another screen, so the mic is the pointer. The IPC
@@ -3217,7 +3217,7 @@ Per-finding disposition (F-1…F-8):
 - File-pane live region (a11y) + partial-output indication after cancel/error.
 
 - **TG-5 — document drag-and-drop in the Translate view (plan §2 D7).** A drop zone
-  (`renderer/translate/TranslateDropZone.tsx`, the ImageDropZone template — focusable, drag-over
+  (`renderer/components/FileDropZone.tsx`, the one the Images screen renders too since #745 — drag-over
   state, a WCAG 2.5.7 "choose a document" button, multi-drop rejected) under the input pane. A
   dropped/picked file does NOT go through the live TEXT job; per D7 it rides the EXISTING
   translation **doc-task**: `getDroppedFilePath` (or `pickDocuments`) → `importDocuments(paths,
@@ -3720,7 +3720,7 @@ anchor as:
 | D4 | 2K input budget, structurally enforced | `--ctx-size 4096` + `TRANSLATION_MAX_INPUT_TOKENS = 1800` clamp in `planTranslationWindows`; TG-6 sized the tokens-per-word constants so the clamp binds in REAL tokens |
 | D5 | Curated 10 languages, source+target | `TRANSLATION_LANGUAGE_CODES` (shared) + native-name selects; no auto-detect. **Superseded in extent by issue #31 (2026-07-07):** widened to the 51-code WMT24++ production tier — still a closed, server-validated list (see the issue-#31 bullet above) |
 | D6 | Translate view = 7th primary destination | `TranslateScreen` + `TranslateJobService` (`translate:*` IPC, `trToken/trDone/trError`) |
-| D7 | Dropped/picked documents ride the doc-task | `TranslateDropZone` → import `{kind:'temporary'}` → `startDocTask('translation')` → materialized Markdown |
+| D7 | Dropped/picked documents ride the doc-task | `FileDropZone` → import `{kind:'temporary'}` → `startDocTask('translation')` → materialized Markdown |
 | D8 | GPU posture | CPU-pinned shipped at TG-2; TG-6 kept it (GPU deferred, not rejected). **Superseded by issue #42 (2026-07-09):** a two-rung device ladder honours `gpuMode`/`gpuAutoDisabled` per cold start — GPU auto-offload by default, forced-CPU fallback + session latch on a GPU fault (see the issue-#40/#42 bullet above); the GPU-drive re-smoke (§11.4) is the open owner action |
 | D9 | Concurrency guards stay | doc-task FIFO + chat↔task exclusion + view-job `docTaskBusy`; TG-6 KEEPS them (co-residency ≈13.2 GiB rules out two large models decoding at once) |
 | D10 | Manifest discipline | rank 0, profiles `[]`, not bundled, `license_review: pending`; `recommended_min_ram_gb` set to 17 (§4 rule on the TG-6 co-residency floor 13.24 GiB). **Superseded by PR #30 (2026-07-07):** shipped value **13** — the 17 baked the co-residency floor into the hard min (model-benchmarks §11.2) |
@@ -12773,10 +12773,10 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   leaves WITHOUT cancelling). While an analysis runs the upload is **disabled** (vision is
   one-at-a-time) and the in-flight job shows as a distinct "Analysis running…" top row of the
   results list (`ImageHistory`'s `running` prop) that re-opens the live detail view on click.
-  Building blocks in `renderer/images/`: `ImageDropZone`, `ImagePreview` = `data:` URL,
+  Building blocks in `renderer/images/` (the drop zone is the shared `components/FileDropZone`, #745): `ImagePreview` = `data:` URL,
   `QuestionComposer`, `AnswerThread`, `VisionUnavailable`,
   `decode.ts` = `createImageBitmap({imageOrientation:'from-image'})`
-  → downscale longest side to 1536 → re-encode to the input MIME on `OffscreenCanvas`/`<canvas>` →
+  → downscale longest side to 1536 → re-encode on `OffscreenCanvas`/`<canvas>` (JPEG stays JPEG, PNG and WEBP become PNG, #124) →
   `data:` URL, EXIF stripped by the draw **best-effort** (#120 item 5: the original-bytes fallback
   below ships EXIF intact), best-effort fallback to original bytes. Images is the
   **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility"
@@ -12954,7 +12954,7 @@ anchor as:
 |---|---|---|
 | plan §7 / §10 | Option A sidecar + the `services/vision/` module design | §1 + §5 |
 | plan §9 / §9.1–§9.4 | IPC/preload surface + the job pattern (busy-reject) | §5 (+ IPC-1/2/3) |
-| plan §5.1–§5.6 | The renderer component anchors cited in `screens/images/*.tsx` (VisionUnavailable §5.1, ImageDropZone §5.2, ImagePreview/QuestionComposer §5.3, AnswerThread §5.4, the §5.6 state matrix) | §5 / the §4 state matrix |
+| plan §5.1–§5.6 | The renderer component anchors cited in `screens/images/*.tsx` (VisionUnavailable §5.1, ImageDropZone §5.2 — now `components/FileDropZone`, #745 — ImagePreview/QuestionComposer §5.3, AnswerThread §5.4, the §5.6 state matrix) | §5 / the §4 state matrix |
 | plan §11 | Renderer components + decode/downscale/EXIF algorithm | §5 |
 | plan §12 / §13 | Privacy posture (ephemeral, no content in log/audit) + security model | §2 + §7 |
 | plan §14 | Caps + RAM co-residency | §8 |

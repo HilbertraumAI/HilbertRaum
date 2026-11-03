@@ -5,7 +5,7 @@ import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { EvidencePane } from '../../src/renderer/review/EvidencePane'
 import { ReviewSummaryView } from '../../src/renderer/review/ReviewSummaryView'
 import { PROVENANCE_CARD_CAP } from '../../src/renderer/chat/SourcesDisclosure'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import {
   t,
   tCount,
@@ -31,7 +31,7 @@ import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceRev
 // behind when the condition that produced it goes away.
 
 beforeEach(() => {
-  resetReviewSessionForTests()
+  purgeReviewSession()
 })
 
 afterEach(() => {

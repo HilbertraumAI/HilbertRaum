@@ -2,10 +2,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { SkillPicker, Transcript } from '../../src/renderer/chat'
+import { SkillPicker } from '../../src/renderer/chat'
 import { I18nProvider } from '../../src/renderer/i18n'
-import type { Message, SkillInfo } from '../../src/shared/types'
-import { makeSkillInfo } from '../helpers/chat-fixtures'
+import type { SkillInfo } from '../../src/shared/types'
+import { assistantMsg, makeMessage, makeSkillInfo, userMsg } from '../helpers/chat-fixtures'
+import { renderTranscript } from '../helpers/transcript'
 
 // Skills plan S6 (UI) — the composer skill picker + the per-message glyph. The picker is a pure
 // component; the glyph rides the assistant message in the Transcript. Heavier send/stamp wiring is
@@ -145,37 +146,8 @@ describe('SkillPicker — closed-trigger suggestion hint (U-3)', () => {
 })
 
 describe('per-message skill glyph (Transcript, DS16/§22-A5)', () => {
-  function msg(over: Partial<Message>): Message {
-    return {
-      id: 'm1',
-      conversationId: 'c1',
-      role: 'assistant',
-      content: 'An answer.',
-      createdAt: 't',
-      ...over
-    }
-  }
-  function renderTranscript(messages: Message[]): void {
-    render(
-      withI18n(
-        <Transcript
-          messages={messages}
-          streamingHere={false}
-          streamText=""
-          streamThinking=""
-          thinkingOpen={false}
-          onThinkingOpenChange={() => {}}
-          emptyState={<div />}
-          onCopy={() => {}}
-          onSave={() => {}}
-          actionsDisabled={false}
-        />
-      )
-    )
-  }
-
   it('shows no glyph when the answer carried no skill (null skillId)', () => {
-    renderTranscript([msg({ skillId: null, skillTitle: null })])
+    renderTranscript({ messages: [makeMessage({ skillId: null, skillTitle: null })] })
     expect(screen.queryByText(/^Skill:/)).not.toBeInTheDocument()
   })
 
@@ -183,7 +155,7 @@ describe('per-message skill glyph (Transcript, DS16/§22-A5)', () => {
   // JOIN-resolved title) keeps the glyph, labelled "(removed skill)" — deleting a skill no longer
   // erases the provenance. Keyed off the persisted skillId, not the title.
   it('labels a stamped turn whose skill was deleted "(removed skill)"', () => {
-    renderTranscript([msg({ skillId: 'user:gone', skillTitle: null })])
+    renderTranscript({ messages: [makeMessage({ skillId: 'user:gone', skillTitle: null })] })
     expect(screen.getByText('Skill: (removed skill)')).toBeInTheDocument()
   })
 })
@@ -203,43 +175,21 @@ describe('SkillPicker — per-turn chip × + keep toggle (U3, audit §4.3)', () 
 // U3 (audit §4.3): the "answer without it" undo now rides EVERY skill-stamped last turn — a per-turn
 // pick must be as reversible as an auto-fire, so no skill-shaped answer is a dead end.
 describe('per-message "answer without it" undo — extended to picked turns (U3)', () => {
-  function msg(over: Partial<Message>): Message {
-    return { id: 'm1', conversationId: 'c1', role: 'assistant', content: 'An answer.', createdAt: 't', ...over }
-  }
-  function renderT(messages: Message[], onAnswerWithoutSkill?: () => void): void {
-    render(
-      withI18n(
-        <Transcript
-          messages={messages}
-          streamingHere={false}
-          streamText=""
-          streamThinking=""
-          thinkingOpen={false}
-          onThinkingOpenChange={() => {}}
-          emptyState={<div />}
-          onAnswerWithoutSkill={onAnswerWithoutSkill}
-          onCopy={() => {}}
-          onSave={() => {}}
-          actionsDisabled={false}
-        />
-      )
-    )
-  }
-
   it('renders no undo when no handler is provided, even on a skill-stamped last turn', () => {
-    renderT([msg({ skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: false })], undefined)
+    // No `onAnswerWithoutSkill`: the shared render wires none by default.
+    renderTranscript({ messages: [makeMessage({ skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: false })] })
     expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
   })
 
   it('does not offer the undo on a NON-last skill turn', () => {
-    renderT(
-      [
-        msg({ id: 'm1', skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: false }),
-        msg({ id: 'm2', role: 'user', content: 'a follow-up' }),
-        msg({ id: 'm3', content: 'A later, skill-free answer.', skillId: null, skillTitle: null })
+    renderTranscript({
+      messages: [
+        makeMessage({ id: 'm1', skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: false }),
+        userMsg('m2', 'a follow-up'),
+        assistantMsg('m3', 'A later, skill-free answer.', { skillId: null, skillTitle: null })
       ],
-      vi.fn()
-    )
+      onAnswerWithoutSkill: vi.fn()
+    })
     // The skill glyph sits on m1, but the undo only rides the LAST assistant turn (m3, skill-free).
     expect(screen.getByText('Skill: Bank statement helper')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
@@ -250,13 +200,13 @@ describe('per-message "answer without it" undo — extended to picked turns (U3)
   // Q2 skill-free (the regenerate path acts on the conversation's last turn). Before the fix, the
   // skill glyph's own turn was the "last assistant" and wrongly kept the undo.
   it('suppresses the undo when a trailing unanswered USER turn follows the skill turn (SKA-37)', () => {
-    renderT(
-      [
-        msg({ id: 'm1', skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: true }),
-        msg({ id: 'm2', role: 'user', content: 'a new, still-unanswered question' })
+    renderTranscript({
+      messages: [
+        makeMessage({ id: 'm1', skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: true }),
+        userMsg('m2', 'a new, still-unanswered question')
       ],
-      vi.fn()
-    )
+      onAnswerWithoutSkill: vi.fn()
+    })
     // The glyph still marks m1, but its undo is gone (the last message is the unanswered user turn).
     expect(screen.getByText('Answered with Bank statement helper')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
@@ -266,7 +216,7 @@ describe('per-message "answer without it" undo — extended to picked turns (U3)
   it('keeps the undo on a removed-skill last turn, labelled "(removed skill)"', async () => {
     const onAnswerWithoutSkill = vi.fn()
     const user = userEvent.setup()
-    renderT([msg({ skillId: 'user:gone', skillTitle: null, autoFired: true })], onAnswerWithoutSkill)
+    renderTranscript({ messages: [makeMessage({ skillId: 'user:gone', skillTitle: null, autoFired: true })], onAnswerWithoutSkill })
     expect(screen.getByText('Answered with (removed skill)')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Answer without it' }))
     expect(onAnswerWithoutSkill).toHaveBeenCalled()
@@ -280,7 +230,7 @@ describe('per-message "answer without it" undo — extended to picked turns (U3)
   ] as const)('shows the glyph and a working undo on %s last turn', async (_kind, autoFired, glyph) => {
     const undo = vi.fn()
     const user = userEvent.setup()
-    renderT([msg({ skillId: 'app:bank', skillTitle: 'Bank statement helper', autoFired })], undo)
+    renderTranscript({ messages: [makeMessage({ skillId: 'app:bank', skillTitle: 'Bank statement helper', autoFired })], onAnswerWithoutSkill: undo })
     expect(screen.getByText(glyph)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Answer without it' }))
     expect(undo).toHaveBeenCalledTimes(1)

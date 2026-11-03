@@ -9,6 +9,7 @@ import {
   subscribeVisionPersisted,
   subscribeVisionSession
 } from '../../src/renderer/lib/visionSession'
+import { STREAM_FLUSH_MS } from '../../src/renderer/lib/polling'
 import type { ImageJob } from '../../src/shared/types'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { until } from '../helpers/hang-budget'
@@ -103,7 +104,7 @@ describe('visionSession — L6a busy guard (F-26)', () => {
 
 // PF-7c (full-audit 2026-07-10, closes carried-forward PERF-5): the store used to notify per token
 // with a freshly mapped `turns` array — every token re-rendered the Images screen. Tokens now
-// buffer through a 40 ms flush (the ChatScreen STREAM_FLUSH_MS precedent): a burst inside one
+// buffer through the STREAM_FLUSH_MS window ChatScreen uses too: a burst inside one
 // window produces ONE snapshot rebuild + ONE notify, and the settle paths flush FIRST so no
 // token is ever lost.
 describe('visionSession — PF-7c batched token flush', () => {
@@ -124,7 +125,7 @@ describe('visionSession — PF-7c batched token flush', () => {
       expect(listener).not.toHaveBeenCalled()
       expect(getVisionSession()).toBe(before)
 
-      await vi.advanceTimersByTimeAsync(40)
+      await vi.advanceTimersByTimeAsync(STREAM_FLUSH_MS)
       expect(listener).toHaveBeenCalledTimes(1) // ONE batched notify for the whole burst
       expect(getVisionSession().turns[0].answer).toBe('abcde')
       expect(getVisionSession().turns[0].state).toBe('analyzing')
@@ -152,8 +153,9 @@ describe('visionSession — PF-7c batched token flush', () => {
   })
 
   // Main never sends this today: an empty answer is an `emptyResponse` ERROR event (vision/index.ts
-  // `run` → `fail()`), and `done` carries the answer. `ImageJob.answer` is optional in the DTO, and this
-  // pins the branch that guards it (moved from ImagesScreen's empty-`done` row, chat-ui campaign).
+  // `run` → `fail()`, pinned by images-ipc's blank-answer row), and `done` carries the answer.
+  // `ImageJob.answer` is optional in the DTO, and this pins the branch that guards it (moved from
+  // ImagesScreen's empty-`done` row, chat-ui campaign; kept as defensive by owner call, #745).
   it('a done carrying no usable answer settles the turn as emptyResponse and persists nothing (defensive: main sends emptiness as an error)', async () => {
     const s = visionStream()
     stubApi(s.api)

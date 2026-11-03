@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { t } from '../../src/shared/i18n'
-import type { Conversation, Message, RuntimeStatus, SkillInfo } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
-import { makeSkillInfo, makeConversation } from '../helpers/chat-fixtures'
+import type { Conversation, Message, SkillInfo } from '../../src/shared/types'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { assistantMsg, makeSkillInfo, makeConversation, userMsg } from '../helpers/chat-fixtures'
 
 // #135 (skills-pipeline audit TEST-2): the #80 offer ACCEPT flow at the ChatScreen level — the
 // feature's core promise ("re-run via the EXISTING regenerate path with the skill explicitly set")
@@ -21,10 +21,6 @@ function conv(over: Partial<Conversation> = {}): Conversation {
   return makeConversation({ title: 'My documents chat', mode: 'documents', ...over })
 }
 
-function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
-}
-
 function skill(over: Partial<SkillInfo> = {}): SkillInfo {
   return makeSkillInfo({
     title: 'Bank Statement Analysis',
@@ -36,29 +32,22 @@ function skill(over: Partial<SkillInfo> = {}): SkillInfo {
 }
 
 const MESSAGES: Message[] = [
-  {
-    id: 'm-user',
-    conversationId: 'c1',
-    role: 'user',
-    content: 'kategorisiere alle transaktionen und erstelle eine summe pro kategorie',
-    createdAt: '2026-08-09T10:00:00.000Z'
-  },
-  {
-    id: 'm-assistant',
-    conversationId: 'c1',
-    role: 'assistant',
-    content: 'Found 2 amounts across 1 section scanned.',
-    createdAt: '2026-08-09T10:00:05.000Z',
+  userMsg('m-user', 'kategorisiere alle transaktionen und erstelle eine summe pro kategorie'),
+  assistantMsg('m-assistant', 'Found 2 amounts across 1 section scanned.', {
     skillOffer: { installId: 'app:bank-statement', title: 'Bank Statement Analysis', source: 'deterministic' }
-  }
+  })
 ]
 
 const RUN_LABEL = t('en', 'chat.skill.offer.run', { title: 'Bank Statement Analysis' })
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 async function mountWithOffer(skills: SkillInfo[]): Promise<{
@@ -69,21 +58,15 @@ async function mountWithOffer(skills: SkillInfo[]): Promise<{
   // The accept HANGS (an in-flight stream): the optimistic drop of the answered turn stays
   // observable — a resolved stream would refetch listMessages (this stub) and re-show the old row.
   const askDocuments = vi.fn((): Promise<Message> => new Promise<Message>(() => {}))
-  stubApi({
-    listConversations: vi.fn(async () => [conv()]),
-    getRuntimeStatus: vi.fn(async () => status()),
-    listMessages: vi.fn(async () => MESSAGES),
-    listDocuments: vi.fn(async () => []),
-    listSkills: vi.fn(async () => skills),
-    suggestSkills: vi.fn(async () => []),
-    listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
-    listAttachments: vi.fn(async () => []),
-    askDocuments,
-    onToken: vi.fn(() => () => {}),
-    onReasoning: vi.fn(() => () => {}),
-    onScopeNotice: vi.fn(() => () => {})
-  })
-  render(<ChatScreen onNavigate={() => {}} />)
+  stubApi(
+    chatScreenStubs({
+      listConversations: vi.fn(async () => [conv()]),
+      listMessages: vi.fn(async () => MESSAGES),
+      listSkills: vi.fn(async () => skills),
+      askDocuments
+    })
+  )
+  renderChatScreen()
   await user.click(await screen.findByText('My documents chat'))
   await screen.findByText('Found 2 amounts across 1 section scanned.')
   return { askDocuments, user }

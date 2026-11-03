@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceSelectionInput } from '../../src/shared/types'
@@ -21,7 +21,7 @@ import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 // Structural no-call tripwire (P2 convention): stubReviewApi + file-wide afterEach.
 
 beforeEach(() => {
-  resetReviewSessionForTests()
+  purgeReviewSession()
 })
 
 afterEach(() => {
