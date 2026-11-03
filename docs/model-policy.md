@@ -56,7 +56,7 @@
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
 
-The models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5, Whisper transcriber, the Silero VAD file the transcriber manifest carries since #504), except three manifests under the **Gemma Terms of Use** (`license: gemma`): the two user-added local-test stubs `gemma-4-26b-q4` and `gemma4-coding-q8`, and TranslateGemma (`translategemma-12b-it-q4`, see "The translation role + TranslateGemma" below).
+The models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5, Whisper transcriber, the Silero VAD file the transcriber manifest carries since #504), except three manifests under the **Gemma Terms of Use** (`license: gemma`): the two user-added local-test stubs `gemma-4-26b-q4` and `gemma4-coding-q8` (`license_review.status: pending` since #768: local use only, no redistribution review), and TranslateGemma (`translategemma-12b-it-q4`, see "The translation role + TranslateGemma" below).
 Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the
@@ -174,7 +174,11 @@ repos ungated), 140+ languages:
   model, `sha256: local-unverified`, no download block) and `gemma4-coding-q8` are user-added
   local-test manifests. The wave's `gemma4-26b-a4b-it-qat-q4` **supersedes the 26B stub for any
   distribution purpose** (official QAT, verified hash, download block, Apache-2.0 review); the
-  stubs stay as-is for the owner's local models. NOTE: the stubs' comment "Gemma has no runtime
+  stubs stay for the owner's local models. Their `license_review.status` is `pending` since #768:
+  it read `approved` beside a note saying "local/non-redistribution use", while `approved` means the
+  redistribution review (see "The translation role + TranslateGemma"). Nothing else moves: with no
+  download block and a placeholder hash no drive fetches or ships them, and the sell gate asks for
+  `approved` only of a model a Kit ships. NOTE: the stubs' comment "Gemma has no runtime
   thinking-mode toggle" contradicts the 12B's verified `enable_thinking` behaviour — the wave
   manifests follow the 12B precedent; the suppression smoke below decides.
 - **Text-only in HilbertRaum.** E2B/E4B are any-to-any upstream (image/audio in), 26B/31B
@@ -394,8 +398,10 @@ The approved review notes record "ship the LICENSE/NOTICE attribution with the d
 `license_url` in YAML is not a license copy, and resolving one needs network on an offline
 product. The mechanism: the committed, **GENERATED** root file `DRIVE-NOTICES.md`
 (`node scripts/generate-drive-notices.mjs`) carries one attribution line per model manifest
-(id, upstream repo, declared license, `download.license_url`, plus any non-`approved`
-`license_review.status`), the full Apache-2.0 text once, and the MIT / zlib texts for the
+(id, upstream repo, declared license, `download.license_url` where one is recorded, plus any
+non-`approved` `license_review.status`; a local-test entry, with no `download` block and no real
+hash, says "no license URL recorded: a local-test entry; no drive ships or downloads this weight"
+in place of the upstream and the URL, #768), the full Apache-2.0 text once, and the MIT / zlib texts for the
 llama.cpp + whisper.cpp binaries and the SDL2.dll the whisper Windows archive bundles — those
 texts are **pinned in-repo under `licenses/`** at review time because the upstream release
 archives ship no license file (see `licenses/README.md`). `prepare-drive` copies

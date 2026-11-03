@@ -20,7 +20,7 @@ sha256: local-unverified
 recommended_profiles: []
 recommendation_rank: 0
 license_review:
-  status: approved
+  status: pending
   reviewed_by: "vldmr (manual, local test model)"
   reviewed_at: "2026-06-22"
-  notes: "User-added for local testing. Source: gemma-4-26B-A4B-it (Unsloth UD Q4_K_M), Gemma Terms of Use (local/non-redistribution use). Added manually via `llama get`, not via fetch-models."
+  notes: "User-added for local testing. Source: gemma-4-26B-A4B-it (Unsloth UD Q4_K_M), Gemma Terms of Use (local/non-redistribution use). Added manually via `llama get`, not via fetch-models. Local use only, with no redistribution review, so the status is pending (issue 768)."
