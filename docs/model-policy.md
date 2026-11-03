@@ -655,6 +655,13 @@ re-verifies each archive before extraction.
 | `llama-b11146-bin-ubuntu-vulkan-x64.tar.gz` | `d3ce40fce7403cc93bcf5718fc46c6efb61ed9709f8e5d9f10c86bf0e30e8fb3` | MIT; Vulkan full build (default linux build) |
 | `llama-b11146-bin-ubuntu-x64.tar.gz` | `c150306eb16b5ab696f76a8bdf810c35fd98a24e82158742e6fa28f420ff8410` | MIT; pure-CPU safety net |
 
+**The yaml is held to these records (#769).** `committed-catalog.test.ts` needs, for every
+`runtime-sources.yaml` build of `llama_cpp`, `whisper_cpp` and `kiwix_tools` and every kiwix
+source tarball, a table row in that family's section of this file naming the asset with the same
+SHA-256, and the same byte count where the yaml pins one. A pin bump is red until its record is
+written. The historical tables below name their tag in every asset, so they never answer for the
+current pin. The OCR table is held the same way, through `OCR_PINS` (`ocr-pins.test.ts`).
+
 **What these builds need from the host system** (#530, read with `objdump -T` / `readelf -d`
 and run in stock Ubuntu containers, 2026-10-01; `architecture.md` "Engine load failures"):
 - **Both Linux builds** need glibc ≥ 2.34, libstdc++ with `GLIBCXX_3.4.30` (GCC 12), OpenSSL 3
@@ -732,6 +739,32 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   If the floor moves, update the record above, `known-limitations.md` and the user-facing
 >   minimum (README, `user-guide.md` §1, `troubleshooting.md`, `launchers/READ ME FIRST.txt`,
 >   the `models.engineProblem.systemTooOldLinux` copy).
+
+### Download hosts (#769)
+
+Every host a committed URL names. This is an **inventory, not an allowlist**: the app and the
+scripts fetch from whatever host a drive's yaml names (`security-model.md` S4 declined a
+download-host allowlist), and a download follows redirects to hosts no file names (the Hugging
+Face and GitHub storage CDNs, `mirror.download.kiwix.org`). `committed-catalog.test.ts` holds both
+columns to the committed files exactly, so a new host is a deliberate edit of this table. A model
+manifest's URLs are its `download.url`, `mmproj.download.url` and every `files[].download.url`,
+withdrawn sources included; `runtime-sources.yaml`'s are each build's `url`, each `ocr:` file's
+`url` and each kiwix `source_bundle` file's `url`. Links nothing downloads (`license_url`,
+`recipe_url`) are not listed.
+
+| Host | Model manifests | `runtime-sources.yaml` |
+|---|---|---|
+| `huggingface.co` | every weight, projector and extra file | — |
+| `github.com` | — | the llama.cpp and whisper.cpp builds |
+| `download.kiwix.org` | — | the kiwix-tools builds; the kiwix-tools and libkiwix source tarballs |
+| `cdn.jsdelivr.net` | — | the OCR language files |
+| `download.openzim.org` | — | the libzim source tarball |
+| `oligarchy.co.uk` | — | the xapian-core source tarball |
+| `dev.kiwix.org` | — | the libmicrohttpd source tarball |
+
+The source tarballs' URLs record where the maintainer's archive came from: no script downloads
+them (`install-kiwix-source-bundle.mjs` copies a local archive), and `SOURCES.md` and
+`DRIVE-NOTICES.md` print them.
 
 ## The whisper.cpp transcriber family
 
@@ -904,6 +937,9 @@ where the Windows zip ships the ICU 74 DLLs). Per-binary SHA-256:
 `kiwix-serve` `a4efa19354e52a2b4a3c6567d363897140d35fbec6b10b9843ee1f511434042c`,
 `kiwix-manage` `d5ea144a87418d15245d73280ec92084f7878860a7d3d8e80252e83c3f709ccb`,
 `kiwix-search` `51941af707dc98c660e856178a5f4aa751b3ff8e9ceb53b6f74e78e2b56016d3`.
+These per-binary hashes, the win build's and the linux build's, exist only in this file: no yaml
+field states them, so no test holds them. The archive and source-tarball tables are held to the
+yaml (#769, above).
 
 Transitive components, with grants **read from the pinned source trees** (`COPYING` files + the
 per-file headers under `src/`, not assumed from upstream README prose):
