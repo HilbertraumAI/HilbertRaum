@@ -224,27 +224,30 @@ for (const leg of SCRIPT_LEGS) {
       expect(readFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'utf8')).toBe(real)
     })
 
-    // The last-resort downloader, when no curl.exe is on PATH. Invoke-WebRequest -OutFile has no literal form in PowerShell
-    // 5.1 and failed on the `[` of the drive root (#767), as fetch-models' did. The .sh twin has no such branch.
-    it.runIf(leg.ext === 'ps1').each(['a runtime archive', 'an OCR file'])('with no curl.exe on PATH, the .NET fallback fetches %s into the bracketed root', (what) => {
+    // No curl.exe on PATH. The .ps1 carries no downloader of its own: its last resort, Invoke-WebRequest and then a WebClient
+    // line, was the download line antivirus heuristics flag (Norton quarantined a copy, #767), and every Windows from 10 1803
+    // on ships curl.exe. Exit 3, as the .sh twin exits with no downloader.
+    it.runIf(leg.ext === 'ps1').each(['a runtime archive', 'an OCR file'])('with no curl.exe on PATH, fetching %s stops naming curl.exe (exit 3)', (what) => {
       const { PATH = '', ...rest } = downloadEnv()
       const noCurl = { ...rest, PATH: PATH.split(delimiter).filter((dir) => !existsSync(join(dir, 'curl.exe'))).join(delimiter) }
+      let root: string
+      let r: ReturnType<typeof fetchRuntime>
       if (what === 'a runtime archive') {
         const archive = winBuild('new build')
-        const root = pinnedDrive(WIN, serve(`llama-${VERSION}-bin-win-vulkan-x64.zip`, archive), sha256Of(archive))
-        const r = fetchRuntime(root, [f('Os'), 'win'], noCurl)
-        expect(r.status, outputOf(r)).toBe(0)
-        expect(readFileSync(join(root, ...WIN.extractTo.split('/'), 'llama-server.exe'), 'utf8')).toBe('new build')
+        root = pinnedDrive(WIN, serve(`llama-${VERSION}-bin-win-vulkan-x64.zip`, archive), sha256Of(archive))
+        r = fetchRuntime(root, [f('Os'), 'win'], noCurl)
       } else {
         const real = 'deu traineddata'
-        const root = scriptRoot('fr-ocr-')
+        root = scriptRoot('fr-ocr-')
         const yaml = ['ocr:', '  version: 4.0.0_best_int', '  files:', '    - lang: deu']
         yaml.push(`      url: ${serve('deu.traineddata.gz', Buffer.from(real))}`, `      sha256: ${sha256Of(real)}`, '      dest: ocr/deu.traineddata.gz', '')
         writeDriveFile(root, 'model-manifests/runtime-sources.yaml', yaml.join('\n'))
-        const r = fetchRuntime(root, [f('Family'), 'ocr'], noCurl)
-        expect(r.status, outputOf(r)).toBe(0)
-        expect(readFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'utf8')).toBe(real)
+        r = fetchRuntime(root, [f('Family'), 'ocr'], noCurl)
       }
+      const out = outputOf(r)
+      expect(r.status, out).toBe(3)
+      expect(out).toContain('No downloader found (need curl.exe')
+      expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz')) || existsSync(join(root, ...WIN.extractTo.split('/'), 'llama-server.exe'))).toBe(false)
     })
   })
 }

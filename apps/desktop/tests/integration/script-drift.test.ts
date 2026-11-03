@@ -517,8 +517,8 @@ describe('provisioning scripts — every path is literal (#767)', () => {
   // `Test-Path '…\Kit [1]'` found nothing and fetch-models fell back to the repo's catalog, verify-models reported 36
   // missing weights, the builder called a complete drive NOT SELLABLE. Every row of the script suites now runs on such a
   // root (`scriptRoot()`); this scan covers the branches no row reaches. A cmdlet fed by a pipeline binds -LiteralPath
-  // from each object's PSPath. Invoke-WebRequest has no literal -OutFile in 5.1, so it is out altogether.
-  const PATH_CMDLET = /\b(Test-Path|Get-Content|Get-ChildItem|Get-Item|Get-FileHash|Remove-Item|Copy-Item|Move-Item|Rename-Item|Expand-Archive|Resolve-Path|Set-Content|Add-Content|Out-File|Invoke-WebRequest)\b/g
+  // from each object's PSPath.
+  const PATH_CMDLET = /\b(Test-Path|Get-Content|Get-ChildItem|Get-Item|Get-FileHash|Remove-Item|Copy-Item|Move-Item|Rename-Item|Expand-Archive|Resolve-Path|Set-Content|Add-Content|Out-File)\b/g
 
   /** Each path cmdlet call whose own segment (to the next `|`, `;` or `}`) names no -LiteralPath and is not pipeline-fed. */
   function nonLiteralCalls(lines: { n: number; text: string }[]): string[] {
@@ -528,7 +528,7 @@ describe('provisioning scripts — every path is literal (#767)', () => {
         const before = text.slice(0, m.index).trimEnd()
         const fed = before.endsWith('|') || (before === '' && (lines[i - 1]?.text.trimEnd().endsWith('|') ?? false))
         const segment = text.slice(m.index).split(/[|;}]/)[0]
-        if (m[1] === 'Invoke-WebRequest' || (!fed && !segment.includes('-LiteralPath'))) offenders.push(`${n}: ${text.trim()}`)
+        if (!fed && !segment.includes('-LiteralPath')) offenders.push(`${n}: ${text.trim()}`)
       }
     })
     return offenders
@@ -540,14 +540,28 @@ describe('provisioning scripts — every path is literal (#767)', () => {
       'Get-ChildItem -LiteralPath $d -Force |',
       '  Remove-Item -Recurse -Force',
       '$h = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash',
-      'Get-Content $f -Raw',
-      'Invoke-WebRequest -Uri $u -OutFile $f -UseBasicParsing'
+      'Get-Content $f -Raw'
     ].map((text, i) => ({ n: i + 1, text }))
-    expect(nonLiteralCalls(lines)).toEqual([`1: ${lines[0].text}`, `5: ${lines[4].text}`, `6: ${lines[5].text}`])
+    expect(nonLiteralCalls(lines)).toEqual([`1: ${lines[0].text}`, `5: ${lines[4].text}`])
   })
 
   it.each(PROVISIONING_PS1)('%s passes every path as -LiteralPath', (rel) => {
     expect(nonLiteralCalls(codeLines(rel)), 'a `[` in the drive root reads as a wildcard: use -LiteralPath').toEqual([])
+  })
+})
+
+describe('provisioning scripts — no in-script downloader (#767)', () => {
+  // The scripts download with curl.exe (or aria2c) and nothing else. A PowerShell download line is what antivirus heuristics
+  // key on: while this wave replaced Invoke-WebRequest's last-resort fallback (no literal -OutFile in 5.1) with
+  // `(New-Object System.Net.WebClient).DownloadFile(…)`, Norton quarantined a copy of fetch-models.ps1 as IDP.HELU.PSD11.
+  // These scripts ship on every Kit and DIY drive. Every Windows from 10 1803 on ships curl.exe; without it they stop.
+  const DOWNLOADER = /\b(Invoke-WebRequest|Invoke-RestMethod|Net\.WebClient|DownloadFile|DownloadString|DownloadData|Start-BitsTransfer)\b/
+
+  it.each(PROVISIONING_PS1)('%s carries no PowerShell download line', (rel) => {
+    const offenders = codeLines(rel)
+      .filter(({ text }) => DOWNLOADER.test(text))
+      .map(({ n, text }) => `${rel}:${n}: ${text.trim()}`)
+    expect(offenders, 'download with curl.exe only: antivirus heuristics quarantine a script holding such a line').toEqual([])
   })
 })
 

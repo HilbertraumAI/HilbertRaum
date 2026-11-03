@@ -276,18 +276,11 @@ if ($Family -eq 'ocr') {
         Write-Host '    download failed after retries' -ForegroundColor Red; $failed++; continue
       }
     } else {
-      # Same warn-and-continue contract as the curl branch: a failing download is a
-      # terminating error under $ErrorActionPreference = 'Stop', which would abort the whole
-      # batch at the first bad file instead of attempting the rest (AUD-05). .NET's WebClient,
-      # not Invoke-WebRequest: its -OutFile has no literal form in 5.1 and fails on a `[` in
-      # the drive root (#767).
-      try {
-        (New-Object System.Net.WebClient).DownloadFile($f.url, $dest)
-      } catch {
-        Write-Host ("    download failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
-        $failed++
-        continue
-      }
+      # No in-script downloader: a WebClient / Invoke-WebRequest download line is what antivirus
+      # heuristics flag (Norton quarantined a copy carrying one, #767), and every Windows from
+      # 10 1803 on ships curl.exe. Exit 3, as the .sh twin does with no downloader.
+      Write-Host 'No downloader found (need curl.exe, built into Windows 10 1803 and later).' -ForegroundColor Red
+      exit 3
     }
     if (& $IsRealShaOcr $sha) {
       $actual = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower()
@@ -503,13 +496,9 @@ if ($Curl) {
     Write-Host 'curl failed after retries' -ForegroundColor Red; exit 1
   }
 } else {
-  # Last resort: .NET's WebClient. Not Invoke-WebRequest: its -OutFile has no literal form in
-  # 5.1 and fails on a `[` in the drive root (#767). A failure is reported, not thrown (AUD-05).
-  try {
-    (New-Object System.Net.WebClient).DownloadFile($build.url, $archive)
-  } catch {
-    Write-Host ("download failed: {0}" -f $_.Exception.Message) -ForegroundColor Red; exit 1
-  }
+  # No in-script downloader (antivirus heuristics flag one, #767): exit 3, as the .sh twin does.
+  Write-Host 'No downloader found (need curl.exe, built into Windows 10 1803 and later).' -ForegroundColor Red
+  exit 3
 }
 
 $archiveVerified = $false

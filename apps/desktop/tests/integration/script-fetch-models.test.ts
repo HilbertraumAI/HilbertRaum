@@ -283,17 +283,18 @@ for (const leg of SCRIPT_LEGS) {
       expect(bytesAt(root, `models/chat/${ID}-mm.gguf`)).toBe(projector)
     })
 
-    // The last-resort downloader when neither aria2c nor curl is on PATH. Invoke-WebRequest -OutFile has no literal form
-    // in PowerShell 5.1 and failed on the `[` of the drive root (#767). The .sh twin falls back to wget instead.
-    it.runIf(leg.ext === 'ps1')('with neither aria2c nor curl on PATH, the .NET fallback downloads into the bracketed root', () => {
+    // Neither aria2c nor curl on PATH. The .ps1 carries no downloader of its own: its last resort, Invoke-WebRequest and
+    // then a WebClient line, was the download line antivirus heuristics flag (Norton quarantined a copy, #767), and every
+    // Windows from 10 1803 on ships curl.exe. The file fails as the .sh twin's does with no downloader; the .sh has wget.
+    it.runIf(leg.ext === 'ps1')('with neither aria2c nor curl on PATH, the file fails naming curl.exe and nothing is written', () => {
       const { PATH = '', ...rest } = downloadEnv()
       const noCurl = PATH.split(delimiter).filter((dir) => !existsSync(join(dir, 'curl.exe')))
       const root = drive(manifest({ sha: sha256(SOURCE), url: source(SOURCE), size: SOURCE.length }), {})
       const r = fetchModels(root, { ...rest, PATH: noCurl.join(delimiter) })
       const out = outputOf(r)
-      expect(r.status, out).toBe(0)
-      expect(bytesAt(root, PRIMARY)).toBe(SOURCE)
-      expect(out).toContain(`ok     ${ID} (VERIFIED)`)
+      expect(r.status, out).toBe(1)
+      expect(out).toContain(`FAIL   ${ID}: No downloader found (need curl.exe`)
+      expect(bytesAt(root, PRIMARY)).toBeNull()
     })
 
     // #769: the real flat parsers over the committed yaml, held to the app's own planner. The Git Bash leg on a Windows

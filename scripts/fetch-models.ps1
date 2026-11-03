@@ -138,9 +138,10 @@ function Invoke-Download([string]$url, [string]$dest) {
     # after download, so resume can never weaken verification.
     if (-not (Invoke-CurlResilient $url $dest)) { throw 'curl failed after retries' }
   } else {
-    # Last resort: .NET's WebClient (no resume; restarts the file). Not Invoke-WebRequest: its
-    # -OutFile has no literal form in 5.1 and fails on a `[` in the drive root (#767).
-    (New-Object System.Net.WebClient).DownloadFile($url, $dest)
+    # No in-script downloader: a WebClient / Invoke-WebRequest download line is what antivirus
+    # heuristics flag (Norton quarantined a copy carrying one, #767), and every Windows from 10
+    # 1803 on ships curl.exe. Same outcome as the .sh twin with no downloader: this file fails.
+    throw 'No downloader found (need curl.exe, built into Windows 10 1803 and later, or aria2c).'
   }
 }
 
