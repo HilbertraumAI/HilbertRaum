@@ -564,7 +564,11 @@ every installed copy into `checksum_failed` overnight.
 ### The DIY download flow + license gate (spec §13)
 `scripts/fetch-models.{ps1,sh}` downloads each weight with a `download` block, **resumes** partials,
 and **SHA-256-verifies against the manifest before counting it installed** (a real-hash mismatch
-deletes the partial and exits non-zero; a placeholder hash downloads but reports *UNVERIFIED*).
+deletes the partial and exits non-zero; a placeholder hash downloads but reports *UNVERIFIED*). Each
+file's `url` and `size_bytes` come from that file's own `download` block, never another file's (#767).
+Half a download pair (a top-level `download` without one on `mmproj` or a `files[N]`, or the other way
+round) is refused before anything is fetched, as the vision section below describes, and
+`--only <id>` exits 2 when no manifest has that id or its manifest declares no `download` block.
 `scripts/fetch-runtime.{ps1,sh}` does the same for the `llama-server` sidecar from
 `model-manifests/runtime-sources.yaml`.
 
@@ -1056,7 +1060,9 @@ plan would install a model that cannot start)`) and the other way round (`"downl
 when "mmproj" declares one (…)`). The planner fetches only the blocks that exist, so half of them is
 a clean multi-GB download of a model that stays `missing`. A refused manifest is skipped with a log
 line, so a hand-made manifest that relies on a hand-placed projector leaves out both blocks. The
-`fetch-models` scripts do not apply this rule: they still fetch the GGUF of such a manifest. Install state
+`fetch-models` scripts apply the same rule, to `mmproj` and to every `files[N]` (#767): they print
+`BLOCK  <id>: <the validator's message>`, fetch no file of that model whatever is on disk and whatever
+`--accept-license` says, carry on with the next model and exit 1. Install state
 (`services/models.ts`) requires **every** declared file — the GGUF, the mmproj, and any `files:`
 entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
 treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)
