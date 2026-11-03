@@ -1,22 +1,16 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { cleanup, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { Transcript } from '../../src/renderer/chat/Transcript'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import type { UiLanguage } from '../../src/shared/i18n'
-import type { Citation, KnowledgePackOutcome, Message } from '../../src/shared/types'
+import type { Citation, KnowledgePackOutcome } from '../../src/shared/types'
+import { makeCitations, makeMessage } from '../helpers/chat-fixtures'
+import { renderTranscript } from '../helpers/transcript'
 
 // Per-answer knowledge-pack outcomes in the transcript (#301 P4, findings M6/M7; plan §9.21
 // (e)7). The point of the notice is the honesty gap it closes: a ticked pack that was disabled,
 // unavailable, index-less, trimmed by the cap or whose search failed used to contribute nothing
 // and SAY nothing. So the cases below deliberately include the turns with NO citation cards —
 // the notice must not live inside `SourcesDisclosure`, which renders only with citations.
-
-vi.mock('streamdown', () => ({
-  Streamdown: vi.fn(({ children }) => <div data-testid="sd">{children}</div>),
-  defaultRehypePlugins: { raw: () => undefined, sanitize: () => undefined }
-}))
 
 function outcome(over: Partial<KnowledgePackOutcome> = {}): KnowledgePackOutcome {
   return {
@@ -26,17 +20,6 @@ function outcome(over: Partial<KnowledgePackOutcome> = {}): KnowledgePackOutcome
     reason: null,
     found: 3,
     admitted: 2,
-    ...over
-  }
-}
-
-function assistantMsg(over: Partial<Message> = {}): Message {
-  return {
-    id: 'm1',
-    conversationId: 'c1',
-    role: 'assistant',
-    content: 'An answer.',
-    createdAt: '2026-01-01T00:00:00Z',
     ...over
   }
 }
@@ -53,44 +36,21 @@ const archiveCitation: Citation = {
   articlePath: 'Treibhausgas'
 }
 
-const noop = (): void => {}
-
-function renderTranscript(lang: UiLanguage, messages: Message[]) {
-  window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, lang)
-  return render(
-    <I18nProvider>
-      <Transcript
-        messages={messages}
-        streamingHere={false}
-        streamText=""
-        streamThinking=""
-        thinkingOpen={false}
-        onThinkingOpenChange={noop}
-        emptyState={null}
-        onCopy={noop}
-        onSave={noop}
-        actionsDisabled={false}
-      />
-    </I18nProvider>
-  )
-}
-
 beforeEach(() => window.localStorage.clear())
 afterEach(() => cleanup())
 
 describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
   it('summarizes searched vs not searched and expands to one row per pack (EN)', async () => {
     const user = userEvent.setup()
-    renderTranscript('en', [
-      assistantMsg({
-        citations: [archiveCitation],
-        packOutcomes: [
-          outcome(),
-          outcome({ packId: 'uuid-chem', title: 'Chemie', status: 'skipped', reason: 'disabled', found: 0, admitted: 0 }),
-          outcome({ packId: 'uuid-bio', title: 'Biologie', status: 'failed', reason: 'timeout', found: 0, admitted: 0 })
-        ]
-      })
-    ])
+    const answer = makeMessage({
+      citations: [archiveCitation],
+      packOutcomes: [
+        outcome(),
+        outcome({ packId: 'uuid-chem', title: 'Chemie', status: 'skipped', reason: 'disabled', found: 0, admitted: 0 }),
+        outcome({ packId: 'uuid-bio', title: 'Biologie', status: 'failed', reason: 'timeout', found: 0, admitted: 0 })
+      ]
+    })
+    renderTranscript({ messages: [answer] }, 'en')
     const toggle = screen.getByRole('button', {
       name: /Knowledge packs: 1 searched · 2 not searched or failed/
     })
@@ -112,21 +72,20 @@ describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
 
   it('renders the German copy for the summary, a one-passage count and a skip reason', async () => {
     const user = userEvent.setup()
-    renderTranscript('de', [
-      assistantMsg({
-        packOutcomes: [
-          outcome({ admitted: 1 }),
-          outcome({
-            packId: 'uuid-old',
-            title: 'Altes Paket',
-            status: 'skipped',
-            reason: 'selection-limit',
-            found: 0,
-            admitted: 0
-          })
-        ]
-      })
-    ])
+    const answer = makeMessage({
+      packOutcomes: [
+        outcome({ admitted: 1 }),
+        outcome({
+          packId: 'uuid-old',
+          title: 'Altes Paket',
+          status: 'skipped',
+          reason: 'selection-limit',
+          found: 0,
+          admitted: 0
+        })
+      ]
+    })
+    renderTranscript({ messages: [answer] }, 'de')
     const toggle = screen.getByRole('button', {
       name: /Wissenspakete: 1 durchsucht · 1 nicht durchsucht oder fehlgeschlagen/
     })
@@ -142,22 +101,21 @@ describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
     // unavailable. `SourcesDisclosure` renders nothing here, so a notice living inside it
     // would leave the user with a bare "I could not find that" and no explanation.
     const user = userEvent.setup()
-    renderTranscript('en', [
-      assistantMsg({
-        content: "I couldn't find that in your documents.",
-        packOutcomes: [
-          outcome({ status: 'skipped', reason: 'file-missing', found: 0, admitted: 0 }),
-          outcome({
-            packId: 'uuid-chem',
-            title: null,
-            status: 'skipped',
-            reason: 'removed',
-            found: 0,
-            admitted: 0
-          })
-        ]
-      })
-    ])
+    const answer = makeMessage({
+      content: "I couldn't find that in your documents.",
+      packOutcomes: [
+        outcome({ status: 'skipped', reason: 'file-missing', found: 0, admitted: 0 }),
+        outcome({
+          packId: 'uuid-chem',
+          title: null,
+          status: 'skipped',
+          reason: 'removed',
+          found: 0,
+          admitted: 0
+        })
+      ]
+    })
+    renderTranscript({ messages: [answer] }, 'en')
     expect(screen.queryByRole('button', { name: /Sources/ })).not.toBeInTheDocument()
     const toggle = screen.getByRole('button', {
       name: /Knowledge packs: 0 searched · 2 not searched or failed/
@@ -172,28 +130,15 @@ describe('PackOutcomesNotice (#301 P4, M6/M7)', () => {
   it('says so explicitly for a LEGACY archive answer that recorded no outcomes', () => {
     // Persisted before `pack_outcomes_json` existed: inventing "searched" would be a lie and
     // silence would read as "nothing to report", so the notice names the gap.
-    renderTranscript('en', [assistantMsg({ citations: [archiveCitation] })])
+    renderTranscript({ messages: [makeMessage({ citations: [archiveCitation] })] }, 'en')
     expect(
       screen.getByText('Knowledge packs: outcome not recorded for this older answer')
     ).toBeInTheDocument()
   })
 
   it('renders nothing for a plain answer with neither outcomes nor archive citations', () => {
-    renderTranscript('en', [
-      assistantMsg({
-        citations: [
-          {
-            label: 'S1',
-            sourceTitle: 'contract.pdf',
-            pageNumber: 4,
-            section: null,
-            snippet: 'A clause.',
-            documentId: 'd1',
-            chunkId: 'c1'
-          }
-        ]
-      })
-    ])
+    // One DOCUMENT citation (no `sourceKind`): cited, but nothing from a pack.
+    renderTranscript({ messages: [makeMessage({ citations: makeCitations(1) })] }, 'en')
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
     expect(screen.queryByText(/Knowledge packs/)).not.toBeInTheDocument()
   })

@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
-import { Transcript } from '../../src/renderer/chat/Transcript'
 import { ConversationList } from '../../src/renderer/chat/ConversationList'
 import { t } from '../../src/shared/i18n'
 import type { Conversation, EvidenceReviewSummary, Message } from '../../src/shared/types'
+import { makeCitations, makeMessage, userMsg } from '../helpers/chat-fixtures'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { renderTranscript } from '../helpers/transcript'
 
 // EP-1 plan §7.2 — the review entry points: the per-message "Review evidence" /
 // "Continue review" action + Draft/Ready chip (spec §9.1/§9.4), the quiet
@@ -29,22 +30,7 @@ afterEach(() => {
 
 function noop(): void {}
 
-let nextId = 0
-function msg(over: Partial<Message>): Message {
-  nextId += 1
-  return {
-    id: over.id ?? `m${nextId}`,
-    conversationId: 'c1',
-    role: 'assistant',
-    content: 'Answer text [S1]',
-    createdAt: '2026-07-18T10:00:00.000Z',
-    ...over
-  }
-}
-
-const CITED: Partial<Message> = {
-  citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12, snippet: 'Either…' }]
-}
+const CITED: Partial<Message> = { content: 'Answer text [S1]', citations: makeCitations(1) }
 
 function summary(over: Partial<EvidenceReviewSummary> = {}): EvidenceReviewSummary {
   return {
@@ -60,32 +46,6 @@ function summary(over: Partial<EvidenceReviewSummary> = {}): EvidenceReviewSumma
   }
 }
 
-function renderTranscript(opts: {
-  messages: Message[]
-  onOpenReview?: (id: string) => void
-  reviewSummaries?: ReadonlyMap<string, EvidenceReviewSummary | null>
-  reviewConversation?: { mode: 'chat' | 'documents' } | null
-  actionsDisabled?: boolean
-}): void {
-  render(
-    <Transcript
-      messages={opts.messages}
-      streamingHere={false}
-      streamText=""
-      streamThinking=""
-      thinkingOpen={false}
-      onThinkingOpenChange={noop}
-      emptyState={null}
-      onCopy={noop}
-      onSave={noop}
-      onOpenReview={opts.onOpenReview}
-      reviewSummaries={opts.reviewSummaries}
-      reviewConversation={opts.reviewConversation ?? null}
-      actionsDisabled={opts.actionsDisabled ?? false}
-    />
-  )
-}
-
 const START = t('en', 'review.action.start')
 const CONTINUE = t('en', 'review.action.continue')
 
@@ -93,7 +53,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
   it('ELIGIBLE: an assistant answer with citations offers "Review evidence" and hands off its message id', () => {
     const onOpenReview = vi.fn()
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview,
       reviewConversation: { mode: 'documents' }
     })
@@ -104,7 +64,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
   it('ELIGIBLE via documents-mode: no citations/coverage but a documents conversation', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1', citations: undefined, coverage: undefined })],
+      messages: [makeMessage({ id: 'm1', citations: undefined, coverage: undefined })],
       onOpenReview: noop,
       reviewConversation: { mode: 'documents' }
     })
@@ -113,7 +73,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
   it('INELIGIBLE (plain chat): an assistant answer without citations/coverage shows NO review action', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1' })],
+      messages: [makeMessage({ id: 'm1' })],
       onOpenReview: noop,
       reviewConversation: { mode: 'chat' }
     })
@@ -123,7 +83,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
   it('INELIGIBLE (user turn): user messages never carry the action', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1', role: 'user', content: 'Question?' })],
+      messages: [userMsg('m1', 'Question?')],
       onOpenReview: noop,
       reviewConversation: { mode: 'documents' }
     })
@@ -132,7 +92,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
   it('STREAMING: the action renders DISABLED while a reply streams (actionsDisabled row gate)', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewConversation: { mode: 'documents' },
       actionsDisabled: true
@@ -142,7 +102,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
   it('NO HANDOFF: without onOpenReview the affordance never renders (optional-callback gate)', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       reviewConversation: { mode: 'documents' }
     })
     expect(screen.queryByRole('button', { name: START })).toBeNull()
@@ -150,7 +110,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
   it('EXISTING REVIEW (spec §9.4): "Continue review" + Draft chip; Ready flips the chip', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', summary({ status: 'draft' })]]),
       reviewConversation: { mode: 'documents' }
@@ -161,7 +121,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
     cleanup()
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', summary({ status: 'ready' })]]),
       reviewConversation: { mode: 'documents' }
@@ -171,7 +131,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
 
   it('P4 OUTDATED chip (spec §9.4/§18.4): JOINS the status chip — Ready stays visible', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', summary({ status: 'ready', outdated: true })]]),
       reviewConversation: { mode: 'documents' }
@@ -183,7 +143,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     cleanup()
     // Not outdated → no Outdated chip.
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', summary({ status: 'draft', outdated: false })]]),
       reviewConversation: { mode: 'documents' }
@@ -196,7 +156,7 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
   it('the expanded sources region carries the quiet "Review answer and sources" action', () => {
     const onOpenReview = vi.fn()
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview,
       reviewConversation: { mode: 'documents' }
     })
@@ -209,7 +169,7 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
 
   it('an ineligible answer (no onOpenReview handoff) shows no footer action when expanded', () => {
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       reviewConversation: { mode: 'documents' }
     })
     fireEvent.click(screen.getByRole('button', { name: /sources \(1\)/i }))
@@ -219,7 +179,7 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
   it('STREAMING: the footer action honors the same gate as the action row (FIX-6)', () => {
     const onOpenReview = vi.fn()
     renderTranscript({
-      messages: [msg({ id: 'm1', ...CITED })],
+      messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview,
       reviewConversation: { mode: 'documents' },
       actionsDisabled: true
