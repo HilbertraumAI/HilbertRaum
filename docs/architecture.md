@@ -5955,9 +5955,10 @@ fetch of max(0, `size_bytes` − its kept `.part`), since the run resumes a `.pa
 when any file's size is undeclared or the free space cannot be read, and no headroom on top (owner
 call: the same gentle posture as preflight's low-space note). The free space is `statfs` at the
 files' nearest existing folder, ultimately the drive root (`services/disk-space.ts` `freeBytes`,
-shared with the drive status). `main.download.notEnoughSpace` names both figures in decimal GB with
-one decimal (`shared/format.ts` `fmtDiskGb`, the figure the confirmation dialog shows) and says what
-to do. Before it, a drive with 13.5 GB free took a 14.4 GB download and stopped on ENOSPC near the end.
+shared with the drive status). `main.download.notEnoughSpace` names both figures, decimal with one
+decimal, in the unit the size needs (GB as the confirmation dialog shows it; MB for a projector or
+the rest of a resume), and says what to do. The two never read alike: free space rounds down to the
+tenth, and the size rounds up when it would otherwise print the same tenth. Before it, a drive with 13.5 GB free took a 14.4 GB download and stopped on ENOSPC near the end.
 
 **Mechanics:** `services/downloads.ts` `DownloadManager` — a job state machine over the
 REUSED `assets.ts` seams (`planModelDownloads` + optional `hashStore`; `downloadToFile`,
