@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { cleanup, fireEvent, act } from '@testing-library/react'
-import { ATTACH_POLL_MS } from '../../src/renderer/screens/ChatScreen'
+import { ATTACH_POLL_MS } from '../../src/renderer/lib/polling'
 import type { Conversation, DocumentInfo, ImportJob, ImportJobStatus } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import {

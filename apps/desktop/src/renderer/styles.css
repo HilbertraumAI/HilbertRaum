@@ -1683,8 +1683,8 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* ---- Images screen (image-understanding §5/§11, Phase V3; width: the shared `.screen`
    frame, §14) ---- */
-/* Drop zone (§5.2): a large, calm, focusable target. Dashed border, centered stack, with a
-   clear drag-over highlight and the standard focus ring. */
+/* Drop zone (§5.2, FileDropZone): a large, calm drag target. Dashed border, centered stack, a clear
+   drag-over highlight; its inner button is the one focusable control (#161). */
 .image-dropzone {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
   min-height: 260px; padding: 32px; margin-top: 8px;

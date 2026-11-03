@@ -12,7 +12,8 @@ import { pngHeader } from '../helpers/image-fixtures'
 // stubbed; so is OffscreenCanvas, with no 2d context, so `rasterize` fails and decodeImage takes
 // its best-effort original-bytes fallback (which #124 disables for WEBP — also pinned here). The
 // stub says so outright (#745): jsdom's own canvas would draw once the `canvas` npm package is
-// installed, and the rows would quietly stop reaching the fallback.
+// installed, and the rows would quietly stop reaching the fallback. It is also the branch the app
+// takes: Electron's renderer always has OffscreenCanvas, so `rasterize`'s `<canvas>` path runs nowhere.
 // This suite is the only one that runs the real `decodeImage` (ImagesScreen mocks the module);
 // the pure helpers it calls (the MIME guard, the prescreen bound) are image-intake.test.ts's.
 

@@ -41,6 +41,7 @@ import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
 import {
+  ATTACH_POLL_MS,
   RUNTIME_POLL_MS,
   STREAM_FLUSH_MS,
   STREAM_RECOVER_FAILURE_BUDGET,
@@ -140,10 +141,6 @@ const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 /** Below this viewport width the history column auto-collapses (responsive; the
  *  persisted desktop preference is untouched — widening restores the user's choice). */
 export const LIST_AUTO_COLLAPSE_PX = 1150
-
-/** How often the attach-import poll (`watchAttachJob`) reads the import job's status.
- *  Exported for the renderer test's timer advance (ChatUnmount). */
-export const ATTACH_POLL_MS = 400
 
 /** #39: how long a turn must stay chunk-less (no answer token, no reasoning delta) before the
  *  calm "the first answer takes a little longer" hint may appear under the pending bubble —
