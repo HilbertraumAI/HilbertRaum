@@ -31,7 +31,7 @@ import {
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
-import { MAX_REDUCE_CONTINUATIONS, streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
+import { streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
 import { SKILL_GUARD_LINE, stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
 import { DATA_END, GROUNDED_DATA_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
@@ -675,7 +675,9 @@ describe('generateGroundedAnswer', () => {
     ])
     const msg = await askGrounded(runtime)
 
-    expect(runtime.calls).toBe(1 + MAX_REDUCE_CONTINUATIONS) // bounded: the first stream + 2 continuations
+    // Bounded: the first stream + 2 continuations. A literal, not MAX_REDUCE_CONTINUATIONS: the script
+    // repeats its last pass and the seam dedup swallows it, so a raised cap would stay green (#737).
+    expect(runtime.calls).toBe(3)
     expect(msg.truncated).toBe(true) // exhausted while still cut ⇒ honest output-truncated stamp
     expect(msg.content).toBe('alpha beta gamma delta') // 'beta'/'gamma' seams de-duplicated, not doubled
   })
