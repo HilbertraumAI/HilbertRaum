@@ -673,8 +673,7 @@ function backfillOcrMeta(db: Db): void {
   if (stale.length === 0) return
   const read = db.prepare('SELECT ocr_json FROM documents WHERE id = ?')
   const update = db.prepare('UPDATE documents SET ocr_meta_json = ? WHERE id = ?')
-  db.exec('BEGIN')
-  try {
+  inOneTransaction(db, () => {
     for (const r of stale) {
       const row = read.get(r.id) as { ocr_json: string | null } | undefined
       const meta = ocrMetaFromJson(row?.ocr_json)
@@ -682,11 +681,7 @@ function backfillOcrMeta(db: Db): void {
       // re-examined on the next open (negligible — effectively never happens for real OCR output).
       if (meta) update.run(JSON.stringify(meta), r.id)
     }
-    db.exec('COMMIT')
-  } catch (err) {
-    db.exec('ROLLBACK')
-    throw err
-  }
+  })
 }
 
 // CODE-4 (full audit 2026-07-11) — the canonical, rowid-targeted FTS sync trigger sets.
@@ -847,6 +842,9 @@ function canonicalTriggerMarkers(ddl: string): Map<string, string[]> {
   for (const [statement, name] of ddl.matchAll(/^CREATE TRIGGER (\w+)[\s\S]*?^END;$/gm)) {
     markers.set(name, FTS_STYLE_MARKERS.filter((m) => statement.includes(m)))
   }
+  // Five per table (ai, ad, au and the two legacy twins). A DDL edit this pattern no longer matches would
+  // otherwise read every table as current and switch the heal off without a word; fail at load instead.
+  if (markers.size !== 5) throw new Error(`FTS trigger DDL parsed to ${markers.size} triggers, expected 5`)
   return markers
 }
 

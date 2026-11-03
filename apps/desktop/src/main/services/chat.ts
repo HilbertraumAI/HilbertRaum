@@ -1564,7 +1564,9 @@ export function effectiveContextWindow(
   const reported = runtime.contextWindow?.()
   if (reported != null && reported > 0) return reported
   // No launched window to report (no model running, or a bare test stub): honour the user's
-  // context-size override (the value the next start will launch with) before the legacy fallback.
+  // context-size override (when set, the value the next start launches with) before the legacy
+  // fallback. Without one the next start takes the manifest's recommended size
+  // (`launchContextTokens`), which this fallback does not know, so the no-model meter can differ.
   return settings.contextTokensOverride ?? settings.contextTokens
 }
 
