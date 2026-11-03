@@ -1835,8 +1835,8 @@ code, pre, kbd { font-family: var(--font-mono); }
    only parsed on completion, so half-written syntax never flickers). */
 .translate-output-live { white-space: pre-wrap; }
 
-/* Document drag-and-drop zone (TG-5) — a compact dashed target under the input textarea, the
-   ImageDropZone visual language at a smaller footprint (the text path is primary). */
+/* Document drag-and-drop zone (TG-5, FileDropZone) — a compact dashed target under the input
+   textarea, the Images zone's visual language at a smaller footprint (the text path is primary). */
 .translate-dropzone {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
   min-height: 96px; padding: 16px;
@@ -1845,7 +1845,6 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .translate-dropzone:hover { background: var(--surface-hover); }
 .translate-dropzone.drag-over { border-color: var(--focus); background: var(--surface-hover); color: var(--text); }
-.translate-dropzone[aria-disabled='true'] { opacity: 0.6; cursor: default; }
 .translate-dropzone-title { font-weight: 600; color: var(--text); margin: 0; }
 .translate-dropzone-types { margin: 0; }
 .translate-file-name { margin: 0; font-style: italic; }

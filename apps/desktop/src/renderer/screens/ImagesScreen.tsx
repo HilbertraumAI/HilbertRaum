@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { Button, ErrorBanner, useToast } from '../components'
+import { Button, ErrorBanner, FileDropZone, useToast } from '../components'
 import {
   AnswerThread,
-  ImageDropZone,
   ImageHistory,
   ImagePreview,
   QuestionComposer,
@@ -422,7 +421,16 @@ export function ImagesScreen({ onNavigate }: { onNavigate: (target: string) => v
       return (
         <>
           {analyzing && <p className="hint">{t('images.drop.busy')}</p>}
-          <ImageDropZone onDropFiles={onDropFiles} onChoose={handleChoose} busy={decoding || analyzing} />
+          <FileDropZone
+            block="image-dropzone"
+            title={t('images.drop.title')}
+            chooseLabel={t('images.drop.choose')}
+            types={t('images.drop.types')}
+            chooseVariant="primary"
+            onDropFiles={onDropFiles}
+            onChoose={handleChoose}
+            busy={decoding || analyzing}
+          />
           {/* #539: the OCR pointer stays once the vision model is installed — the state in which
               a scan's owner is most likely to try this screen instead. */}
           <p className="hint">{t('images.avail.ocrPointer')}</p>

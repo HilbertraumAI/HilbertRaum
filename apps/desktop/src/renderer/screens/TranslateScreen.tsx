@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { Button, EmptyState, ErrorBanner, Icon, useToast } from '../components'
+import { Button, EmptyState, ErrorBanner, FileDropZone, Icon, useToast } from '../components'
 import { AssistantMarkdown, StreamAnnouncer } from '../chat'
 import {
   acknowledgeError,
@@ -20,7 +20,6 @@ import {
   translatePickedFile,
   type FileTranslateErrorCode
 } from '../lib/fileTranslateSession'
-import { TranslateDropZone } from '../translate/TranslateDropZone'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
@@ -548,7 +547,13 @@ export function TranslateScreen({
                 translation runs, keeping ONE busy state — and (#162 FE-2) while the language pair
                 is same-language, mirroring the text path's disabled Translate button (the visible
                 sameLang hint above explains why). The current file name shows as a caption. */}
-            <TranslateDropZone
+            <FileDropZone
+              block="translate-dropzone"
+              title={t('translate.drop.title')}
+              chooseLabel={t('translate.drop.choose')}
+              types={t('translate.drop.types')}
+              chooseVariant="ghost"
+              chooseSize="sm"
               onDropFiles={onDropFiles}
               onChoose={onChooseFile}
               busy={busy || sameLang}
