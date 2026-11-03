@@ -49,6 +49,24 @@ from its first public `1.0.0` release onward.
   as installed. They are now removed, and the app offers the download again (#752).
 - **A model start no longer fails with "Hashing was cancelled".** Cancelling Check all model files
   just as a model started could fail that start (#752).
+- **A model download that cannot fit on the drive is refused before it starts.** It used to start
+  and then stop partway once the drive was full, which for a large model could be well into the
+  download. The message now says how much the download needs and how much is free; a download you
+  already started counts only what is left (#768).
+- **Sizes on a drive are shown in the same units everywhere.** The download dialog showed a 14.4 GB
+  model as "13 GB": it counted in a larger unit than the model card and rounded down. The dialog,
+  the download progress, documents, saved images, knowledge packs and the text-recognition download
+  now all count 1 GB as a billion bytes, with one decimal, as the model card already did (#768).
+- **The notes on the three Qwen3.8 27B files that are no longer available name their replacement.**
+  They said a successor was still being measured; it has been in the catalog since August (#768).
+- **The memory meter is right when no model is running.** With no model loaded it measured the
+  conversation against the app's default window instead of the one the chosen model starts with,
+  usually a larger one, so the meter looked fuller than it was (#779).
+- **No skill offer on a "couldn't find this in your documents" answer when the skill would only
+  repeat it.** Accepting such an offer ran the same search again and gave the same answer (#779).
+- **A list built from your documents now says that the knowledge packs you ticked were not
+  searched.** So does a skill's answer built from a document's data. Before, such an answer showed
+  nothing about the packs, which read as if they had found nothing (#734).
 
 ### Changed
 

@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-03 — the closed 2026-10-14 #689 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #779/#768/#743 entry). Its record is unchanged:
+`architecture.md` "Cancel targeting (#689)". Its open residual (a chained extract queued behind a foreign task is never adopted) is unchanged.
+Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#689 — the Documents row's Cancel stops the row's own task, by its id (`fix/689-targeted-row-cancel`).** The row sent no id, so main cancelled whatever held the lane: a row task
+queued behind a Translate-screen translation, a skill's `categorize` or an import's own deep-index build stopped THAT task, then ran. Now the row sends its entry's `jobId` (nothing without one), a finished
+deep-index tree hands the cancel on to the extract it chained (the row holds the tree's id until its next poll), and the chat banner keeps the no-id cancel (call taken in the PR). 4 rows fail on master. Real app
+(4B, a deep-index build running): master cancelled the build and ran the summary; the fix cancelled the summary. Record: `architecture.md` "Cancel targeting (#689)". Open: a chained extract queued behind a foreign task is never adopted._
+
 ## 2026-11-03 — the closed 2026-10-14 #681 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #767/#769 entry). Its records are unchanged:
