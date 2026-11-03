@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { builtinModules, createRequire } from 'node:module'
 import { join, sep } from 'node:path'
-import { lockId, packedNodeModules } from '../helpers/asar-layout'
+import {
+  lockId,
+  packedArtifact,
+  packedNodeModules,
+  type LockPackages,
+  type PackedPackage
+} from '../helpers/asar-layout'
 import { globToRegExp } from '../helpers/globs'
 import { builderConfig, DESKTOP_ROOT, lockPackages } from '../helpers/repo-files'
 import { TESSERACT_WORKER_ENTRY } from '../../src/main/services/ocr/tesseract'
@@ -109,26 +115,38 @@ describe('asarUnpack closure — the tesseract.js worker require graph (#232)', 
     expect(offendingPackages, `uncovered by asarUnpack: ${uncovered.join(', ')}`).toEqual([])
   })
 
+  let layout: { lock: LockPackages; packed: PackedPackage[] } | undefined
+  /**
+   * Where electron-builder packs a resolved worker file, one `<package dest>/<path inside the package>` per packed copy.
+   * The lockfile path comes from asarRelative, not from the file's path relative to the repo: in a worktree whose
+   * node_modules is a junction, the resolved file sits under the junction's target, outside the repo (#770).
+   */
+  const packedPaths = (file: string): string[] => {
+    if (!layout) {
+      const lock = lockPackages()
+      layout = { lock, packed: packedNodeModules(lock) }
+    }
+    const lockRel = asarRelative(file)
+    const m = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\/(.+)$/.exec(lockRel)
+    expect(m, `${lockRel} is inside a package`).not.toBeNull()
+    const id = lockId(layout.lock, m![1])
+    const dests = layout.packed.filter((p) => p.id === id).map((p) => `${p.dest}/${m![2]}`)
+    expect(dests, `${id} is packed`).not.toEqual([])
+    return dests
+  }
+
   // #548: the two candidates above are a guess at electron-builder's layout. This checks the place
   // its hoister actually gives each package, which can also be under a different parent.
-  // The lockfile path comes from asarRelative, not from the file's path relative to the repo: in a worktree whose
-  // node_modules is a junction, the resolved file sits under the junction's target, outside the repo (#770).
   it('every module the worker can require is unpacked at the destination electron-builder packs it to', () => {
-    const lock = lockPackages()
-    const packed = packedNodeModules(lock)
-    const uncovered: string[] = []
-    for (const file of files) {
-      const lockRel = asarRelative(file)
-      const m = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\/(.+)$/.exec(lockRel)
-      expect(m, `${lockRel} is inside a package`).not.toBeNull()
-      const id = lockId(lock, m![1])
-      const dests = packed.filter((p) => p.id === id).map((p) => p.dest)
-      expect(dests, `${id} is packed`).not.toEqual([])
-      for (const dest of dests) {
-        if (!covered(`${dest}/${m![2]}`)) uncovered.push(`${dest}/${m![2]}`)
-      }
-    }
-    expect(uncovered).toEqual([])
+    expect(files.flatMap(packedPaths).filter((path) => !covered(path))).toEqual([])
+  })
+
+  // #769: the row above holds the globs to the modelled layout; this one reads the app.asar.unpacked of a real build
+  // (HILBERTRAUM_PACKED_ASAR, which release.yml's build-win sets to the build it just packaged).
+  const { asar: packedAsar } = packedArtifact()
+  it.skipIf(!packedAsar)('a real build has every module the worker can require in app.asar.unpacked, at every packed destination (#769)', () => {
+    const unpacked = `${packedAsar}.unpacked`
+    expect(files.flatMap(packedPaths).filter((path) => !existsSync(join(unpacked, ...path.split('/'))))).toEqual([])
   })
 
   it('unresolved specifiers are only the known optional try/catch deps (a new one fails the walk)', () => {

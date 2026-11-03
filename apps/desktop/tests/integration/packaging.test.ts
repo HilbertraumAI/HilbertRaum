@@ -1,12 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 // The glob → RegExp translation is shared with asar-unpack-closure.test.ts (#232).
 import { globToRegExp } from '../helpers/globs'
 import {
   asarPackageDirs,
   builderFile,
+  packedArtifact,
+  packedFuseWire,
   packedNodeModules,
+  packedPathExists,
+  PACKED_ENV,
   type LockPackages,
   type PackedPackage
 } from '../helpers/asar-layout'
@@ -180,9 +185,9 @@ describe('the app.asar layout model (#548)', () => {
     expect(dests['marked@16.4.2']).toBe('node_modules/mermaid/node_modules/marked')
   })
 
-  // Run it after a package build:
+  // release.yml's build-win runs it on the build it packaged (#769); by hand, after a package build:
   // HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts
-  const packedAsar = process.env.HILBERTRAUM_PACKED_ASAR
+  const { asar: packedAsar } = packedArtifact()
   it.skipIf(!packedAsar)('names exactly the package directories of a real app.asar', () => {
     const negations = (builderConfig().files ?? [])
       .filter((f) => f.startsWith('!'))
@@ -190,9 +195,7 @@ describe('the app.asar layout model (#548)', () => {
     const predicted = packedNodeModules(lockPackages())
       .map((p) => p.dest)
       .filter((dest) => !negations.some((rx) => rx.test(dest + '/x.js')))
-    expect(asarPackageDirs(resolve(DESKTOP_ROOT, packedAsar!))).toEqual(
-      [...new Set(predicted)].sort()
-    )
+    expect(asarPackageDirs(packedAsar!)).toEqual([...new Set(predicted)].sort())
   })
 })
 
@@ -394,10 +397,22 @@ describe('electron-builder.yml electronFuses (#560, #562)', () => {
     })
   })
 
+  /** The whole wire `scripts/verify-mac-build.sh` checks a built binary against: the six fuses above plus Electron's defaults. */
+  const expectedWire = (): string =>
+    /^EXPECTED_WIRE="(\d{9})"$/m.exec(repoText('scripts', 'verify-mac-build.sh'))?.[1] ?? ''
+
   it('verify-mac-build.sh expects the wire electronFuses sets', () => {
-    const wire = /^EXPECTED_WIRE="(\d{9})"$/m.exec(repoText('scripts', 'verify-mac-build.sh'))?.[1] ?? ''
+    const wire = expectedWire()
     const fuses = builderConfig().electronFuses ?? {}
     expect(FUSE_OPTIONS.map(([, , at]) => wire[at])).toEqual(FUSE_OPTIONS.map(([key]) => (fuses[key] ? '1' : '0')))
+  })
+
+  // #769: the rows here read the yml and the installed electron-builder; this one reads the wire off a real packaged
+  // executable (HILBERTRAUM_PACKED_EXE; release.yml's build-win names the one it just built), decoded by the
+  // @electron/fuses that electron-builder flips the fuses with.
+  const { exe: packedExe } = packedArtifact()
+  it.skipIf(!packedExe)('a real packaged executable carries the expected fuse wire (#562, #769)', async () => {
+    expect(await packedFuseWire(packedExe!)).toBe(expectedWire())
   })
 
   it('keeps what the integrity fuses need: an asar, and the header hash electron-builder writes', () => {
@@ -431,5 +446,48 @@ describe('electron-builder.yml electronFuses (#560, #562)', () => {
     expect(win).toMatch(/type:\s*"INTEGRITY"/)
     expect(win).toMatch(/id:\s*"ELECTRONASAR"/)
     expect(mac).toMatch(/appPlist\.ElectronAsarIntegrity\s*=/)
+  })
+})
+
+// #769: release.yml's build-win runs this file, third-party-notices.test.ts and asar-unpack-closure.test.ts against the
+// build it just packaged, naming it through HILBERTRAUM_PACKED_ASAR / _EXE. Unset, every real-archive row skips, so the
+// step also sets HILBERTRAUM_PACKED_REQUIRED=1: a renamed variable or a moved build then fails here instead.
+describe('the real-archive rows cannot skip where a build is required (#769)', () => {
+  const packed = packedArtifact()
+  it.runIf(packed.required)('HILBERTRAUM_PACKED_REQUIRED: the packaged app.asar and executable are both named and exist', () => {
+    expect(packedPathExists(packed.asar), `${PACKED_ENV.asar} names ${packed.asar ?? 'nothing'}`).toBe(true)
+    expect(packedPathExists(packed.exe), `${PACKED_ENV.exe} names ${packed.exe ?? 'nothing'}`).toBe(true)
+  })
+
+  // A workflow change first runs at a tag, so the step's wiring is read here, on every PR: the variables the rows read,
+  // the paths electron-builder writes (its output directory and executableName), and the three files.
+  it('release.yml build-win runs these files on the packaged build after package:win, with the guard on', () => {
+    interface Step {
+      run?: string
+      env?: Record<string, string>
+      'working-directory'?: string
+    }
+    const workflow = parseYaml(repoText('.github', 'workflows', 'release.yml')) as { jobs: Record<string, { steps: Step[] }> }
+    const steps = workflow.jobs['build-win'].steps
+    const step = steps.find((s) => s.env?.[PACKED_ENV.required] !== undefined)
+    expect(step, `build-win has a step that sets ${PACKED_ENV.required}`).toBeDefined()
+    const cfg = builderConfig()
+    const unpacked = `${(cfg.directories as { output: string }).output}/win-unpacked`
+    expect(step!['working-directory']).toBe('apps/desktop')
+    expect(step!.env).toEqual({
+      [PACKED_ENV.asar]: `${unpacked}/resources/app.asar`,
+      [PACKED_ENV.exe]: `${unpacked}/${cfg.executableName}.exe`,
+      [PACKED_ENV.required]: '1'
+    })
+    const files = (step!.run ?? '').split(/\s+/).filter((arg) => arg.endsWith('.test.ts'))
+    expect(files.sort()).toEqual([
+      'tests/integration/asar-unpack-closure.test.ts',
+      'tests/integration/packaging.test.ts',
+      'tests/integration/third-party-notices.test.ts'
+    ])
+    for (const file of files) expect(existsSync(join(DESKTOP_ROOT, file)), file).toBe(true)
+    const packageAt = steps.findIndex((s) => s.run === 'npm run package:win')
+    expect(packageAt, 'build-win runs npm run package:win').toBeGreaterThan(-1)
+    expect(steps.indexOf(step!), 'the check runs on the build package:win made').toBeGreaterThan(packageAt)
   })
 })

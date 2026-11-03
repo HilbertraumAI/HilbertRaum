@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { stringify } from 'yaml'
 import { builderFileNegations, computeShippedPackages } from '../../../../scripts/lib/shipped-packages.mjs'
 import {
@@ -11,7 +11,7 @@ import {
   OFL_1_1_LICENSE
 } from '../../../../scripts/lib/extra-notices.mjs'
 import { buildThirdPartyNotices } from '../../../../scripts/lib/third-party-notices.mjs'
-import { packedNodeModules, type LockPackages } from '../helpers/asar-layout'
+import { asarPackageIds, packedArtifact, packedNodeModules, type LockPackages } from '../helpers/asar-layout'
 import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
 
 // LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~224 npm packages
@@ -71,6 +71,23 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(noticed.sort(), 'the notices and app.asar disagree about what ships').toEqual(
       [...new Set(packed)].sort()
     )
+  })
+
+  // #769: the row above compares the notices with the modelled layout; these two read a real build
+  // (HILBERTRAUM_PACKED_ASAR, which release.yml's build-win sets to the build it just packaged).
+  const { asar: packedAsar } = packedArtifact()
+  it.skipIf(!packedAsar)('lists exactly the name@version set a real app.asar carries (#769)', () => {
+    const listed = /^## Shipped packages \(\d+\)\n\n```\n([\s\S]*?)\n```/m.exec(readFileSync(NOTICES, 'utf8'))
+    expect(listed, `machine-readable "## Shipped packages" block missing — ${REGEN}`).toBeTruthy()
+    expect(asarPackageIds(packedAsar!), 'the notices and the real app.asar disagree about what ships').toEqual(
+      listed![1].split('\n').sort()
+    )
+  })
+
+  it.skipIf(!packedAsar)('a real build ships the committed notices and license beside its app.asar (#769)', () => {
+    const resources = dirname(packedAsar!)
+    expect(readFileSync(join(resources, 'THIRD-PARTY-NOTICES.md'), 'utf8')).toBe(readFileSync(NOTICES, 'utf8'))
+    expect(readFileSync(join(resources, 'LICENSE.txt'), 'utf8')).toBe(repoText('LICENSE'))
   })
 
   it('every shipped package has its own license section', () => {

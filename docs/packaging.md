@@ -223,7 +223,7 @@ Key config points:
   `tests/helpers/asar-layout.ts` replays the hoisting with electron-builder's own hoister; after a
   package build,
   `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts`
-  compares it with the real archive.
+  compares it with the real archive, and `release.yml`'s build-win does so on every build it packages (#769).
 - **The dev-only screenshot-verify preview harness is excluded from `app.asar`** via a
   `!out/preview/**` negation (CODE-1, full-audit 2026-07-12b): `npm run preview:build`/`screenshot`
   emit it to `out/preview/` and `electron-vite build` clears only `out/main|preload|renderer`, so a
@@ -349,6 +349,8 @@ maps every option and still writes the integrity hash, and fails on `asar: false
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
 Decode it with the library, not by hand. Expected for 43.8.3 (as for 43.7.7 and 43.8.0): `001011001`.
+`release.yml`'s build-win decodes the Windows exe it packages against `verify-mac-build.sh`'s
+`EXPECTED_WIRE` on every run (#769); by hand:
 
 ```bash
 # from the repo root; prints index → state ('0' off, '1' on)
@@ -1103,7 +1105,14 @@ release job). **Trigger:** a push of a `v*` tag (or manual dispatch). **Five job
 - **`test-win`** — `windows-latest`, two shards like CI's windows legs (#458): `npm ci` → typecheck →
   build → **the full test suite**, on the first-class OS: belt-and-braces on the exact tagged commit.
 - **`build-win`** — `windows-latest`, after `test-win`: `npm ci` → typecheck → build →
-  `npm run package:win` → `HilbertRaum-<version>-portable.exe`. Also fetches the win Vulkan runtime via
+  `npm run package:win` → `HilbertRaum-<version>-portable.exe`, then **checks the packaged app** (#769,
+  blocking): `packaging.test.ts`, `third-party-notices.test.ts` and `asar-unpack-closure.test.ts` run
+  against `release/win-unpacked` (`HILBERTRAUM_PACKED_ASAR` / `HILBERTRAUM_PACKED_EXE`): the layout
+  model's package directories and the notices' `name@version` list against the real `app.asar`, the
+  shipped `THIRD-PARTY-NOTICES.md` and `LICENSE.txt` against the committed files, the OCR worker
+  closure inside `app.asar.unpacked`, and the exe's fuse wire. `HILBERTRAUM_PACKED_REQUIRED=1` fails
+  the step when either path is missing, so those rows cannot skip; `packaging.test.ts` also reads the
+  step itself on every PR (a workflow change first runs at a tag). Also fetches the win Vulkan runtime via
   `scripts/fetch-runtime.sh` (git-bash; the SAME pinned, SHA-256-verified upstream build the
   in-app engine installer fetches — `runtime-sources.yaml` first win/x64 match) and zips the
   extracted install tree (`Compress-Archive`; root entry `win/` incl. the
@@ -1212,11 +1221,11 @@ run one real-model session covering:
    `scripts/verify-mac-build.sh` on a Mac, and on Windows and Linux start the packaged build with
    `--remote-debugging-port` on a scratch drive root and run `scripts/lib/packaged-app-probe.mjs`
    against it (next section).
-11. **The `app.asar` layout model against a real archive (#548).** No CI job reads a real archive, so this is the only
-   check of `tests/helpers/asar-layout.ts`. From `apps/desktop`, on a `npm run package:win` of the tagged commit:
-   `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`
-   (PowerShell: set `$env:HILBERTRAUM_PACKED_ASAR` first). `names exactly the package directories of a real app.asar` must
-   run, not skip, and pass. Run it too after any electron-builder bump.
+11. **The `app.asar` layout model against a real archive (#548).** `release.yml`'s build-win runs it on every Windows
+   build it packages (#769, "The release workflow" above): check that step passed. By hand, after an electron-builder
+   bump or a local `npm run package:win`, from `apps/desktop`: set `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar`
+   and `HILBERTRAUM_PACKED_EXE=release/win-unpacked/HilbertRaum.exe`, then
+   `npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`.
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 
