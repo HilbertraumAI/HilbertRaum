@@ -8,6 +8,7 @@ import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import {
   chatScreenStubs,
   conversationRow,
+  deferred,
   fakeChatStream,
   flushFakeTimers,
   renderChatScreen,
@@ -148,6 +149,50 @@ describe('ChatScreen — first-answer warm-up hint (#39)', () => {
     // the model is visibly thinking, so "warming up" would be false.
     stream.reasoning('pondering…')
     await flushFakeTimers()
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument()
+  })
+
+  // #743: the hint is screen state, shown only inside a live bubble, and the turn's `finally` retires it. A
+  // turn that ends before its first token unmounts its bubble, so without that reset the hint waits, unseen,
+  // for the next live bubble. That can be a stream this screen did not start: an answer still being written
+  // from before the user navigated away and back, whose re-select lost to the user's own pick (CH-3) and
+  // that the user reaches later by clicking its chat. Its bubble then said "warming up" beside an answer that
+  // is visibly being written.
+  it('a turn that ends before its first token takes the hint with it: a recovered answer elsewhere never shows it', async () => {
+    vi.useFakeTimers()
+    const reselect = deferred<string[]>()
+    const send = deferred<Message>()
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [
+          makeConversation({ title: 'Warmup chat' }),
+          makeConversation({ id: 'c2', title: 'Earlier chat' })
+        ]),
+        getRuntimeStatus: vi.fn(async () => runtimeStatus({ warmedUp: false })),
+        // Earlier chat's answer is still being written; the mount's re-select to it answers late.
+        listActiveStreamConversations: vi.fn(() => reselect.promise),
+        getActiveStream: vi.fn(async (id: string) =>
+          id === 'c2' ? { content: 'the earlier answer', reasoning: '' } : null
+        ),
+        sendChatMessage: vi.fn(() => send.promise)
+      })
+    )
+    renderChatScreen()
+    await sendParkedTurn() // the user picked Warmup chat first and asked there
+    await act(async () => reselect.resolve(['c2'])) // too late: the user's pick stands
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WARMUP_HINT_DELAY_MS)
+    })
+    await flushFakeTimers()
+    expect(screen.getByText(HINT)).toBeInTheDocument()
+
+    // The turn fails before any token.
+    await act(async () => send.reject(new Error('the turn failed')))
+    await flushFakeTimers()
+
+    fireEvent.click(conversationRow('Earlier chat'))
+    await flushFakeTimers()
+    expect(screen.getByText('the earlier answer')).toBeInTheDocument() // the recovered live bubble
     expect(screen.queryByText(HINT)).not.toBeInTheDocument()
   })
 })

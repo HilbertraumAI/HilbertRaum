@@ -2,11 +2,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { Message } from '../../src/shared/types'
+import type { Conversation, Message } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { runtimeStatus } from '../helpers/status'
 import { assistantMsg, makeConversation } from '../helpers/chat-fixtures'
-import { chatScreenStubs, deferred, fakeChatStream, renderChatScreen } from '../helpers/chat-screen'
+import { chatScreenStubs, conversationRow, deferred, fakeChatStream, renderChatScreen } from '../helpers/chat-screen'
 
 // Answer-depth tests (Phase 20 contracts under the Phase 25 UI): the composer-footer
 // "Answer detail" dropdown — labels are Quick/Balanced/Thorough (decision D-UI4) while
@@ -126,6 +126,61 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
     // …and coming back restores this conversation's choice.
     await user.click(screen.getByText('Depth chat'))
     expect(depthTrigger()).toHaveTextContent('Answer detail: Quick')
+  })
+
+  /** One CR-8 row: how the new composer creates its chat, and the sends that makes. */
+  interface CarryRow {
+    create: (user: ReturnType<typeof userEvent.setup>) => Promise<void>
+    sends: unknown[][]
+  }
+  // CR-8 (SKA-18 parity, #743): a depth picked on the new composer moves onto the chat that composer creates,
+  // by "+ New chat" or by the first send, and no copy stays behind on the new composer: the next one (here,
+  // after a mode switch deselects the chat) starts on Balanced instead of inheriting the pick.
+  // [title, row] tuples titled with `%s`: vitest quotes an object row's `$label` and cuts it at 40 characters.
+  it.each<[string, CarryRow]>([
+    [
+      '"+ New chat"',
+      { create: (user) => user.click(screen.getByRole('button', { name: '+ New chat' })), sends: [] }
+    ],
+    [
+      'the first send',
+      {
+        create: async (user) => {
+          await user.type(screen.getByPlaceholderText('Message…'), 'hi')
+          await user.click(screen.getByRole('button', { name: 'Send' }))
+        },
+        sends: [['conv1', 'hi', { mode: 'fast' }]]
+      }
+    ]
+  ])('a depth picked on the new composer moves onto the chat %s creates (CR-8)', async (_label, row) => {
+    const user = userEvent.setup()
+    const created = makeConversation({ id: 'conv1', title: 'Created' })
+    let convList: Conversation[] = [] // no chat yet: the screen opens on the new composer
+    const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'ok', { conversationId: 'conv1' }))
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => convList),
+        createConversation: vi.fn(async () => {
+          convList = [created]
+          return created
+        }),
+        sendChatMessage
+      })
+    )
+    renderChatScreen()
+    await user.click(await screen.findByRole('button', { name: /answer detail/i }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /quick/i }))
+
+    await row.create(user)
+    await waitFor(() => expect(conversationRow('Created')).toHaveAttribute('aria-current', 'true'))
+    await waitFor(() => expect(sendChatMessage.mock.calls).toEqual(row.sends))
+    expect(depthTrigger()).toHaveTextContent('Answer detail: Quick')
+
+    // A mode switch and back deselects the chat: a new composer again, which kept no copy of the pick.
+    await user.click(screen.getByRole('radio', { name: 'Ask my documents' }))
+    await user.click(screen.getByRole('radio', { name: 'Chat' }))
+    expect(screen.queryByRole('button', { current: true })).not.toBeInTheDocument()
+    expect(depthTrigger()).toHaveTextContent('Answer detail: Balanced')
   })
 
   it('renders streamed reasoning as a collapsed Thinking… line that auto-collapses and is not persisted', async () => {

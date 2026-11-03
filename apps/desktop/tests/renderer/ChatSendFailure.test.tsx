@@ -513,3 +513,29 @@ describe('ChatScreen — double-submit guard (CH-14, #148)', () => {
     expect(createConversation).toHaveBeenCalledTimes(1)
   })
 })
+
+// CH-15 (frontend audit 2026-08-09, #148; #743): a send subscribes to six stream channels before it calls main.
+// A preload from another app version can lack one, and calling it throws. The subscriptions sit inside the
+// send's try, so the throw ends the send like any failure: the finally releases the listeners already made
+// and gives Send back. They used to sit above the try, which left the composer on Stop for good and leaked
+// the listeners on every attempt. The banner and the restored draft show either way, so the row reads the
+// Stop/Send state and the release.
+describe('ChatScreen — a throwing subscription ends the send (CH-15, #148)', () => {
+  it('a preload without onScopeNotice: the error shows, Send is back, nothing is sent, the token listener is released', async () => {
+    const releaseTokens = vi.fn()
+    const sendChatMessage = vi.fn(async () => assistantMsg('a1', 'never'))
+    // onScopeNotice is subscribed last, after the token listener: `undefined` is the older preload's bridge.
+    baseStub({ onToken: vi.fn(() => releaseTokens), onScopeNotice: undefined, sendChatMessage })
+    const user = userEvent.setup()
+    renderChatScreen()
+    await user.click(await screen.findByText('Chat 1'))
+    await user.type(screen.getByPlaceholderText('Message…'), 'hello')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(await screen.findByText(/onScopeNotice is not a function/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+    expect(sendChatMessage).not.toHaveBeenCalled()
+    expect(releaseTokens).toHaveBeenCalledTimes(1)
+  })
+})
