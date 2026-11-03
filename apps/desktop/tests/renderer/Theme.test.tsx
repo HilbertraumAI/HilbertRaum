@@ -6,31 +6,15 @@ import { initTheme, resolveTheme, setThemeSetting } from '../../src/renderer/the
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { fakeMatchMedia, removeMatchMedia } from '../helpers/match-media'
 
 // Phase 23 theming: the theme module owns `data-theme` on <html>; tokens.css makes
-// `:root` light and `[data-theme="dark"]` the dark overrides.
-
-/** Minimal fake for `matchMedia('(prefers-color-scheme: dark)')` with a firable listener. */
-function fakeMedia(initialDark: boolean) {
-  let listener: (() => void) | null = null
-  const media = {
-    matches: initialDark,
-    addEventListener: (_: string, fn: () => void) => {
-      listener = fn
-    }
-  }
-  ;(window as unknown as { matchMedia: unknown }).matchMedia = vi.fn(() => media)
-  return {
-    setOsDark(dark: boolean) {
-      media.matches = dark
-      listener?.()
-    }
-  }
-}
+// `:root` light and `[data-theme="dark"]` the dark overrides. `fakeMatchMedia(dark)` answers
+// `(prefers-color-scheme: dark)`; its `set` is the OS theme changing.
 
 afterEach(() => {
   cleanup()
-  delete (window as unknown as { matchMedia?: unknown }).matchMedia
+  removeMatchMedia()
   delete document.documentElement.dataset.theme
   // Reset module state for the next test (module-level setting survives between tests).
   setThemeSetting('system')
@@ -47,11 +31,11 @@ describe('resolveTheme', () => {
 
 describe('theme application on <html>', () => {
   it('initTheme follows the OS and stays live while the setting is system (the pre-unlock gate posture)', () => {
-    const os = fakeMedia(true)
+    const os = fakeMatchMedia(true)
     initTheme()
     expect(document.documentElement.dataset.theme).toBe('dark')
     // OS theme changes while on 'system' → live flip (no reload).
-    os.setOsDark(false)
+    os.set(false)
     expect(document.documentElement.dataset.theme).toBe('light')
   })
 
@@ -61,13 +45,13 @@ describe('theme application on <html>', () => {
   })
 
   it('setThemeSetting flips data-theme; an explicit choice overrides the OS', () => {
-    const os = fakeMedia(false)
+    const os = fakeMatchMedia(false)
     initTheme()
     expect(document.documentElement.dataset.theme).toBe('light')
     setThemeSetting('dark')
     expect(document.documentElement.dataset.theme).toBe('dark')
     // An OS change must NOT override an explicit choice…
-    os.setOsDark(false)
+    os.set(false)
     expect(document.documentElement.dataset.theme).toBe('dark')
     // …until the user goes back to 'system'.
     setThemeSetting('system')
