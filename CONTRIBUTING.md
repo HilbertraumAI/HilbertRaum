@@ -233,6 +233,9 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   production module needs a DEV-only counter. Keep a positive control that shows the counter moves.
   That wrapper never sees a component's own state updates, so `HomeScreenPoll` counts commits with a
   `<Profiler>` instead, with a row that shows a changed poll does commit.
+- **A media query that changes mid-test** uses the one firable `matchMedia` fake in
+  `tests/helpers/match-media.ts` (Theme, ReviewGateA11y, ReviewScreen and ChatRestructure's narrow-window fold):
+  `fakeMatchMedia(matches)` before the render, `removeMatchMedia()` in `afterEach`.
 - **A status flip is not a settled run.** Every download manager's `cancel()` sets `cancelled` at once,
   so a "wait" on the status passes with the run still unwinding. Rows that checked a `.part` or a rename
   "after cancel" read too early and stayed green with the abort check deleted. All three managers keep

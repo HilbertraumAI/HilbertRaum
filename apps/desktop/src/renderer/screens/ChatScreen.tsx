@@ -2548,7 +2548,8 @@ export function ChatScreen({
           streamText={streamText}
           streamThinking={streamThinking}
           // #39: the calm "first answer takes a little longer" line under the pending bubble.
-          // Rendered inside the streaming bubble only, so it can never outlive the turn.
+          // Rendered inside the streaming bubble only; the stream's `finally` retires it with the
+          // turn, which is what keeps it out of a bubble recovered for another chat (#743).
           warmupHint={warmupHint}
           thinkingOpen={thinkingOpen}
           onThinkingOpenChange={setThinkingOpen}
