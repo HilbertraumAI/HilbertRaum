@@ -11886,8 +11886,9 @@ review found are refinements inside the architecture (§3 below), not a change o
 > the offer ping-pong. *#733 (2026-11-03):* the W2 pre-pass acts only on an answerable document, so
 > `intends()` counts only with one in scope (`documentsInScope`, chunks required); with documents off or
 > nothing indexed a document skill's accept re-ran the same answer under its stamp. A handler-less
-> skill keeps passing (its fence shapes a pack answer), but a chat with documents off and no pack is not
-> classified at all: every answer there is the fixed no-context reply, which no skill changes. Since
+> skill keeps passing (its fence shapes a pack answer), but a chat with no section in scope and no pack
+> (documents off, an empty project, a document that never indexed) is not classified at all: every answer
+> there is the fixed no-context reply, which no skill changes. Since
 > #736 the classifier also reads the route that actually answered (a tree route the tree cannot answer
 > classifies as without the deep index). **(3) restore fidelity (#132/#135)** — `deleteLastAssistantMessage`/
 > `restoreMessage` now carry `skill_offer_json`, so the F2/CB-2 restore legs keep the offer (the
