@@ -1728,8 +1728,10 @@ export function wholeDocumentFitBudgetTokens(
 /**
  * The `skipped / mode` outcomes for an answer path that reads DOCUMENTS ONLY and never queries a
  * pack — the whole-document read, both compare paths and the grounded-DATA narration (#301 P4,
- * finding M6; plan §9.21 (e)5). Without them such an answer would silently look like "the packs
- * you ticked found nothing", which is a different and untrue claim.
+ * finding M6; plan §9.21 (e)5), and since #734 the coverage-extract listing and a tool skill's
+ * template answer. Without them such an answer would silently look like "the packs you ticked
+ * found nothing", which is a different and untrue claim. The two deterministic replies that make
+ * no document claim, the D45 refusal and the W2 routing answer, record none (#734 owner call).
  *
  * A DB-only title lookup (`packTitles`, no disk, no sidecar): an id with no registration row
  * keeps a null title and renders as "a removed pack". Returns undefined for an empty selection

@@ -461,7 +461,9 @@ export function registerRagIpc(ctx: AppContext): void {
         const turnSkill = skill
         const inScope = documentsInScope(ctx.db, scope, { requireChunks: true })
         // A deterministic routing answer over the LOCKED stream (skill-stamped, no coverage/citations —
-        // it makes no document claim). Same shape as the refuse/listing paths; no model call.
+        // it makes no document claim). Same shape as the refuse/listing paths; no model call. #734 (owner
+        // call): it records no pack outcome either. It answers nothing, so a ticked pack's "not searched"
+        // would describe an answer that does not exist.
         const routeAnswer = (label: string, answer: string): Promise<Message> =>
           withChatStream(
             event,
@@ -566,6 +568,8 @@ export function registerRagIpc(ctx: AppContext): void {
         // the exhaustive/compare branch reuse one body. A `routing` handler is EXEMPT: it reads no content.
         // F2: on regenerate the destructive delete runs inside the runFn (slot held), restored when it
         // fails with nothing in its place (#600: any thrown reason) — symmetric with the chat channel.
+        // #734 (owner call): no pack outcome. The refusal makes no document claim, so there is no answer
+        // for a ticked pack's "not searched" to qualify.
         const refusePartial = (): Promise<Message> =>
           withChatStream(
             event,
@@ -794,7 +798,11 @@ export function registerRagIpc(ctx: AppContext): void {
                   citations: result.citations,
                   coverage: result.coverage,
                   skillId: turnSkill.installId,
-                  autoFired: turnSkill.autoFired === true
+                  autoFired: turnSkill.autoFired === true,
+                  // #734 (#301 P4): the template answer is built from the document by the skill's tools and
+                  // never queries a pack, like the grounded-data narration above, so every ticked pack is
+                  // told `skipped / mode`.
+                  packOutcomes: modePackOutcomes(ctx.db, scope.packIds)
                 })
                 // Phase 2 (result-tables §4): persist the answer's structured table keyed by the
                 // just-appended message and light the flag on the returned object, so the renderer's
@@ -1066,7 +1074,10 @@ export function registerRagIpc(ctx: AppContext): void {
               content: answer,
               skillId: skill?.installId,
               autoFired: skill?.autoFired === true,
-              skillOffer: offer
+              skillOffer: offer,
+              // #734 (#301 P4): the listing is built from the documents' extract and never queries a
+              // pack, so every ticked pack gets `skipped / mode` rather than looking like it found nothing.
+              packOutcomes: modePackOutcomes(ctx.db, scope.packIds)
             })
           }),
           // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even

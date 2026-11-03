@@ -174,6 +174,29 @@ async function makeHarness(
   return { db, conversationId: conv.id, docId, runtime, audit }
 }
 
+/** A short German statement that fits a whole read; "Ausgaben" makes it match the BE-3 count question. */
+const DE_STATEMENT =
+  'Ausgaben Statement EUR\nOpening balance 2.000,00\n2026-01-02 Miete -800,00 1.200,00\n' +
+  'Closing balance 1.200,00'
+
+/** Seed a __scan__ completeness marker + one 'amount' record on the harness document, the shape a finished
+ *  deep-index extract pass leaves behind (extractionsExistInScope gates on the marker). */
+function seedAmountExtract(h: Harness): void {
+  const chunkId = (
+    h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
+  ).id
+  const insertRec = (recordType: string, value: string, normalized: string): void => {
+    h.db
+      .prepare(
+        `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(randomUUID(), h.docId, chunkId, recordType, value, normalized, `hash-${normalized}`, '2026-07-10T00:00:00.000Z')
+  }
+  insertRec(SCAN_MARKER_TYPE, '', 'ok')
+  insertRec('amount', '45,90 EUR', '45.90')
+}
+
 beforeEach(() => {
   inFlightStreams.clear()
 })
@@ -358,25 +381,6 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
     expect(toolNames).not.toContain('export_transactions_csv')
   })
 
-  // #715 / #301 P4: this path narrates the documents' extract and never queries a pack, so a
-  // ticked pack is told so (`skipped / mode`) rather than left without an outcome.
-  it('grounded-data: a knowledge pack ticked in the chat gets a skipped / mode outcome, persisted with the answer', async () => {
-    const h = await makeHarness({ fullyChunked: true, packIds: ['pack-ticked'] })
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'what was my largest transaction?',
-      BANK_INSTALL_ID
-    )
-    const msg = result as Message
-    expect(msg.content).toContain('Model answer.') // the grounded-data answer, not the relevance path
-    expect(msg.coverage?.mode).toBe('extract')
-    const outcome = { packId: 'pack-ticked', title: null, status: 'skipped', reason: 'mode', found: 0, admitted: 0 }
-    expect(msg.packOutcomes).toEqual([outcome])
-    expect(listMessages(h.db, h.conversationId).at(-1)?.packOutcomes).toEqual([outcome])
-  })
-
   it('format path: "as JSON" serializes the statement inline (no model)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
@@ -390,6 +394,84 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
     expect(h.runtime.calls).toBe(0)
     expect(msg.content).toContain('```json')
     expect(msg.content).toContain('"totalIn": 2500')
+  })
+})
+
+// #301 P4 / #715 / #734: an answer that reads the documents and never queries a pack tells each ticked pack so
+// (`skipped / mode`); without it the answer reads as "the pack found nothing". Owner call (#734): the two replies that
+// make no document claim, the D45 refusal and the W2 routing answer, record no outcome at all. `coverage` and
+// `contains` pin the path each row reaches, so a row cannot pass on another path.
+describe('askDocuments — a ticked knowledge pack on the answers that never query it (#734)', () => {
+  const SKIPPED = [{ packId: 'pack-ticked', title: null, status: 'skipped', reason: 'mode', found: 0, admitted: 0 }]
+  const packed = { packIds: ['pack-ticked'] }
+  it.each([
+    {
+      name: 'the grounded-data narration records skipped / mode',
+      harness: { ...packed, fullyChunked: true },
+      question: 'what was my largest transaction?',
+      skillId: BANK_INSTALL_ID,
+      coverage: 'extract',
+      contains: 'Model answer.',
+      outcomes: SKIPPED
+    },
+    {
+      name: 'the tool skill template answer records skipped / mode',
+      harness: { ...packed, fullyChunked: true },
+      question: 'summarize the transactions',
+      skillId: BANK_INSTALL_ID,
+      coverage: 'extract',
+      contains: t('en', 'skills.bankAnalysis.count', { count: 2 }),
+      outcomes: SKIPPED
+    },
+    {
+      name: 'the coverage-extract listing records skipped / mode',
+      harness: { ...packed, fullyChunked: true, text: DE_STATEMENT },
+      extract: true,
+      question: 'Zähle die Ausgaben',
+      skillId: null,
+      coverage: undefined,
+      contains: t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }),
+      outcomes: SKIPPED
+    },
+    {
+      name: 'the D45 refusal records none',
+      harness: { ...packed, fullyChunked: false },
+      question: 'what is the total spending?',
+      skillId: BANK_INSTALL_ID,
+      coverage: undefined,
+      contains: t('en', 'skills.analysis.refusePartial'),
+      outcomes: undefined
+    },
+    {
+      name: 'the W2 routing answer records none',
+      harness: { ...packed, fullyChunked: true, extraDocs: [CLEAN] },
+      question: 'summarize the transactions',
+      skillId: BANK_INSTALL_ID,
+      coverage: undefined,
+      contains: t('en', 'skills.analysis.selectOne', { count: 2 }),
+      outcomes: undefined
+    },
+    {
+      name: 'the listing in a chat with no pack ticked records none',
+      harness: { fullyChunked: true, text: DE_STATEMENT },
+      extract: true,
+      question: 'Zähle die Ausgaben',
+      skillId: null,
+      coverage: undefined,
+      contains: t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }),
+      outcomes: undefined
+    }
+  ])('$name', async ({ harness, extract, question, skillId, coverage, contains, outcomes }) => {
+    const h = await makeHarness(harness)
+    if (extract) seedAmountExtract(h)
+
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, skillId)
+    const msg = result as Message
+
+    expect(msg.content).toContain(contains)
+    expect(msg.coverage?.mode).toBe(coverage)
+    expect(msg.packOutcomes).toEqual(outcomes)
+    expect(listMessages(h.db, h.conversationId).at(-1)?.packOutcomes).toEqual(outcomes) // persisted with the answer
   })
 })
 
@@ -1041,31 +1123,9 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   // zähl stem previously sat behind a trailing \b only "zähl"/"zahl" could satisfy) must engage
   // the same coverage machinery as its English equivalent: the deterministic listing when
   // extract data exists in scope, the deep-index hint when not. Both cases FAILED pre-fix
-  // (silent top-k relevance, no hint). The doc text carries "Ausgaben" so the hint case's
+  // (silent top-k relevance, no hint). `DE_STATEMENT` carries "Ausgaben" so the hint case's
   // relevance retrieval finds the chunk under the token-overlap mock embedder (an empty
   // retrieval takes the no-context honesty path, which never carries a prefix).
-  const DE_STATEMENT =
-    'Ausgaben Statement EUR\nOpening balance 2.000,00\n2026-01-02 Miete -800,00 1.200,00\n' +
-    'Closing balance 1.200,00'
-
-  // Seed a __scan__ completeness marker + one 'amount' record, the shape a finished deep-index
-  // extract pass leaves behind (extractionsExistInScope gates on the marker).
-  const seedAmountExtract = (h: Harness): void => {
-    const chunkId = (
-      h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
-    ).id
-    const insertRec = (recordType: string, value: string, normalized: string): void => {
-      h.db
-        .prepare(
-          `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(randomUUID(), h.docId, chunkId, recordType, value, normalized, `hash-${normalized}`, '2026-07-10T00:00:00.000Z')
-    }
-    insertRec(SCAN_MARKER_TYPE, '', 'ok')
-    insertRec('amount', '45,90 EUR', '45.90')
-  }
-
   it('an inflected German count question WITH extract data takes the deterministic coverage-extract route (BE-3)', async () => {
     const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
     seedAmountExtract(h)

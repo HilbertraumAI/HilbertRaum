@@ -3150,7 +3150,11 @@ the figures they support are quoted in the text.
   no-context answer; a legacy answer that cited an archive but carries no outcomes shows an
   explicit "outcome not recorded" line instead of silence. A whole-document, compare or
   grounded-data answer produces `skipped/mode` for every selected pack via `packTitles` —
-  packs are still not queried on those paths, but the answer now SAYS so.
+  packs are still not queried on those paths, but the answer now SAYS so. **#734:** so do the
+  coverage-extract listing and a tool skill's template answer (both deterministic, both read
+  the documents only). Owner call: the D45 "isn't fully indexed" refusal and the W2 routing
+  answer ("select one / two documents") record no outcome. Neither makes a document claim, so
+  a "not searched" line would qualify an answer that was never given.
 - **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
   `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
   'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**
