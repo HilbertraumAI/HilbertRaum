@@ -214,7 +214,8 @@ export function findManifestById(
  * recommended window, falling back to the legacy setting for a manifest without one
  * (`recommended_context_tokens: 0`) — or when no manifest resolves at all. This is the
  * ONE spelling of that precedence: `startModelRuntime` launches with it, and the
- * no-runtime doc-task budget fallback mirrors it (full-audit 2026-07-10 BE-5 — the two
+ * no-runtime window (`contextWindowOrNextLaunch` in chat.ts — the doc-task budget and, since
+ * #779, the composer meter) mirrors it (full-audit 2026-07-10 BE-5 — the two
  * used to be spelled independently and disagreed, so with no runtime up the tree-build
  * size gate planned against the legacy 4096 default instead of the 32k+ window the next
  * start would actually use, over-marking documents `tree_status='pending'`).

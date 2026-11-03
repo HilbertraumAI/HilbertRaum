@@ -2512,9 +2512,11 @@ checkpoint exists; byte-identical to before when none does.
 All user-visible strings go through `shared/i18n` (en + de, parity test enforced); internal prompts stay
 English (R12).
 - **Context meter (§5.1).** `ContextUsage {usedTokens, window}` (`shared/types.ts`) +
-  `getConversationContextUsage(db, runtime|null, convId)` — a pure read that assembles via
-  `buildChatMessages` over `effectiveContextWindow` (with no runtime: `settings.contextTokensOverride ??
-  settings.contextTokens`) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
+  `getConversationContextUsage(db, runtime|null, manifestsDir, convId)` — a pure read that assembles via
+  `buildChatMessages` over `contextWindowOrNextLaunch` (the running runtime's `effectiveContextWindow`; with no
+  runtime, the window the next start launches with: `launchContextTokens` over the active model's manifest, so the
+  override, else the manifest's recommended size, else `settings.contextTokens` — #779, the doc-task budget's rule)
+  and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
   renderer refreshes on conversation switch + after each completed turn. `renderer/chat/ContextMeter.tsx`
   is a thin composer-footer gauge: calm <75% / amber 75–89% / near-full ≥90% of the percent it shows
   (#742: the bands read the raw ratio before, so 74.6% showed "75%" calm and without the heads-up). Since
@@ -2656,7 +2658,10 @@ context size."* All four observations were real seams:
 - **One window for every area.** Doc tasks budgeted against bare `settings.contextTokens` while chat/RAG
   budgeted against the launched window — the literal "different context sizes in different areas". The
   `DocTaskManager.getContextTokens` dep (main/index.ts) now returns `effectiveContextWindow(active, s)`
-  when a runtime is up (fallback: the override-aware next-start value).
+  when a runtime is up (fallback: the override-aware next-start value). **#779:** that rule now has one
+  spelling, `contextWindowOrNextLaunch` (chat.ts), which the resting meter takes too — with no model running
+  it used to fill against the override or the legacy setting while the next start launched at the
+  manifest's recommended size.
 - **User-settable context size.** `settings.contextTokensOverride` (nullable; DEFAULT null = automatic),
   clamped by `updateSettings` into `[MIN_CONTEXT_TOKENS 2048, MAX_CONTEXT_TOKENS_OVERRIDE 131072]` with
   junk rejected (the null default defeats the generic type check). The chat launch
