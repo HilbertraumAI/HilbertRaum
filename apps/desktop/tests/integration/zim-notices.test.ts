@@ -132,6 +132,13 @@ describe('generate-zim-notices: the notice (#769)', () => {
     expect(md).toContain('are NOT knowable offline and are not stated here.')
     expect(md.endsWith('\n')).toBe(true)
   })
+
+  // kiwix-manage writes a description's line break as `&#13;&#10;` or `&#13;`, which decodes to a CR the LF-only notice
+  // refused with a throw: the run stopped there and the archives after it got no notice.
+  it('keeps a line break a field decodes to as LF', () => {
+    const md = buildNoticeMd({ ...FULL, description: 'Zeile eins\r\nZeile zwei\rZeile drei' }, 'klima.zim')
+    expect(md.split('\n').slice(11, 14)).toEqual(['Zeile eins', 'Zeile zwei', 'Zeile drei'])
+  })
 })
 
 describe('generate-zim-notices: the command (#769)', () => {

@@ -129,7 +129,9 @@ function resolveManagePath(toolsDir) {
  * reads "not recorded" (the title falls back to the archive's file name). Exported for zim-notices.test.ts (#769).
  */
 export function buildNoticeMd(book, leaf) {
-  const value = (v, fallback = 'not recorded') => (v === null || v === '' ? fallback : v)
+  // A field may decode to a CR (`&#13;` in a description): the notice keeps the line break as LF, where the LF-only
+  // check below threw mid-run and left every later archive without its notice.
+  const value = (v, fallback = 'not recorded') => (v === null || v === '' ? fallback : v.replace(/\r\n?/g, '\n'))
   const lines = []
   lines.push(`# ${value(book.title, leaf)} — knowledge pack notice`)
   lines.push('')
