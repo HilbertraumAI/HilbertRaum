@@ -636,6 +636,29 @@ describe('generateAssistantMessage (streaming)', () => {
       })
       expect(seen).toEqual([])
     })
+
+    // #737: the guard's other half — the stream itself ended in an AbortError while the turn's signal never aborted.
+    // Defense in depth: readChatSSE never reports a finish before an abort. (The truncation flag below the guard has
+    // no abort guard on purpose: a finish reason exists only for a stream that ran to its end, #776.)
+    it('refuses timings from a stream that then threw an AbortError, even on a signal that never aborted (#737)', async () => {
+      const db = freshDb()
+      const conv = createConversation(db, {})
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+      const controller = new AbortController()
+      const seen: unknown[] = []
+      const misbehaving = timedRuntime((o) => {
+        o?.onFinish?.('stop', timings)
+        throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })
+      })
+      const msg = await generateAssistantMessage(db, misbehaving, conv.id, {
+        signal: controller.signal,
+        onTimings: (tm) => seen.push(tm)
+      })
+      expect(controller.signal.aborted).toBe(false) // only the caught AbortError marks the stream as cut short
+      expect(msg.content).toBe('a full answer') // the partial persists like any stopped answer
+      expect(listMessages(db, conv.id).at(-1)?.content).toBe('a full answer')
+      expect(seen).toEqual([])
+    })
   })
 
   // 2026-07-04 user report: a Fast-mode reply that hit the FAST_MAX_TOKENS cap also finishes with

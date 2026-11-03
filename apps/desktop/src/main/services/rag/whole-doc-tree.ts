@@ -125,7 +125,7 @@ function reduceUserPrompt(
 // conflated). Applies to BOTH the tree rescue and the chunk map-reduce (they share this reduce core).
 
 /** Hard cap on EXTRA reduce passes after a 'length'-cut deliverable (the runaway guard). */
-export const MAX_REDUCE_CONTINUATIONS = 2
+const MAX_REDUCE_CONTINUATIONS = 2
 /** Tail (chars) of the produced answer fed to a continuation as its resume anchor + the seam-dedup window. */
 export const CONTINUATION_ANCHOR_CHARS = 200
 /** A continuation is launched only when the launched window leaves at least this many OUTPUT tokens after

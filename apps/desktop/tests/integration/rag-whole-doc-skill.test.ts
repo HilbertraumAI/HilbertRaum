@@ -18,7 +18,7 @@ vi.mock('electron', () => ({
 }))
 
 import { randomUUID } from 'node:crypto'
-import { IPC } from '../../src/shared/ipc'
+import { IPC, STREAM } from '../../src/shared/ipc'
 import type { Message } from '../../src/shared/types'
 import type { Db } from '../../src/main/services/db'
 import { SCAN_MARKER_TYPE } from '../../src/main/services/analysis/extract'
@@ -30,7 +30,7 @@ import { writeSkillPackage } from '../helpers/skill-fixtures'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { t } from '../../src/shared/i18n'
-import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const MEETING_INSTALL_ID = 'app:meeting-protocol'
@@ -238,14 +238,15 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
 
   it('a DELIVERABLE ask over the SAME over-budget doc covers the WHOLE doc via chunk map-reduce (Phase 1)', async () => {
     const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
-    const { result } = await invoke(
+    const event = makeEvent()
+    const msg = (await invokeWithEvent(
       handlers,
       IPC.askDocuments,
+      event,
       h.conversationId,
       'write the meeting minutes',
       MEETING_INSTALL_ID
-    )
-    const msg = result as Message
+    )) as Message
     // A deliverable never downgrades: it keeps the whole-doc engine. BEFORE Phase 1 an over-budget doc with
     // no tree was read from the beginning only (1 call, capped + truncated). Now the chunk map-reduce covers
     // the WHOLE document (>1 call: map windows + reduce) and stamps honest untruncated capped coverage.
@@ -253,6 +254,9 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)
     expect(msg.coverage?.chunksCovered).toBe(msg.coverage?.chunksTotal)
+    // #743: the map steps stream nothing, so the service's 'analysis' notice reaches the stream channel once.
+    const notices = event.sender.send.mock.calls.filter((c) => c[0] === STREAM.compaction(h.conversationId))
+    expect(notices.map((c) => c[1])).toEqual([{ phase: 'start', kind: 'analysis' }])
   })
 
   it('SKA-23 (A4): a NEEDLE over a NOT-fully-chunked over-budget doc is served by top-k, NOT refused', async () => {

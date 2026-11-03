@@ -1548,12 +1548,14 @@ export function messageTokens(m: ChatMessage): number {
 
 /**
  * The REAL context-window budget for prompt assembly (§L0). The runtime is launched with
- * `manifest.recommendedContextTokens || settings.contextTokens` as llama-server's
+ * `launchContextTokens` (the user's `contextTokensOverride`, else
+ * `manifest.recommendedContextTokens || settings.contextTokens`) as llama-server's
  * `--ctx-size`, which can DIVERGE from `settings.contextTokens` — trimming against the
  * setting alone risks an over-window HTTP 400 (window larger than the setting → we'd trim
  * too tight, wasting capacity) or, the other way, an overflow. So we budget against the
- * value the runtime actually reports, falling back to the setting only when the runtime
- * can't report one (a bare test stub without `contextWindow()`).
+ * value the runtime actually reports, falling back to the override, then the setting, only
+ * when the runtime can't report one (no model running — the meter passes `{}` — or a bare test
+ * stub without `contextWindow()`).
  */
 export function effectiveContextWindow(
   runtime: Pick<ModelRuntime, 'contextWindow'>,
@@ -1561,8 +1563,10 @@ export function effectiveContextWindow(
 ): number {
   const reported = runtime.contextWindow?.()
   if (reported != null && reported > 0) return reported
-  // No launched window to report (bare test stub): honour the user's context-size override
-  // (the value the next start will launch with) before the legacy fallback.
+  // No launched window to report (no model running, or a bare test stub): honour the user's
+  // context-size override (when set, the value the next start launches with) before the legacy
+  // fallback. Without one the next start takes the manifest's recommended size
+  // (`launchContextTokens`), which this fallback does not know, so the no-model meter can differ.
   return settings.contextTokensOverride ?? settings.contextTokens
 }
 
@@ -1572,8 +1576,9 @@ export function effectiveContextWindow(
  * which honours the compaction toggle + any checkpoint) over the real launched `window`, then sums
  * the per-message ESTIMATE. `usedTokens` is therefore the same over-counting estimate the budget
  * uses (labelled approximate in the UI). `runtime` may be null (no model running) — the window then
- * falls back to `settings.contextTokens`. The skill fence is intentionally omitted: at rest there is
- * no pending turn/skill, and the meter is approximate.
+ * takes `effectiveContextWindow`'s fallback: the user's context-size override, else
+ * `settings.contextTokens`. The skill fence is intentionally omitted: at rest there is no pending
+ * turn/skill, and the meter is approximate.
  */
 export function getConversationContextUsage(
   db: Db,
@@ -1581,9 +1586,7 @@ export function getConversationContextUsage(
   conversationId: string
 ): ContextUsage {
   const settings = getSettings(db)
-  const window = runtime
-    ? effectiveContextWindow(runtime, settings)
-    : (settings.contextTokensOverride ?? settings.contextTokens)
+  const window = effectiveContextWindow(runtime ?? {}, settings)
   const messages = buildChatMessages(db, conversationId, window)
   const usedTokens = messages.reduce((sum, m) => sum + messageTokens(m), 0)
   return { usedTokens, window }

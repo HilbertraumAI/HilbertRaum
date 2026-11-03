@@ -20,6 +20,9 @@ import { containsGold } from '../eval/score'
 // same containment check the RAG scorer uses, and reports balanced-vs-deep correctness + mean
 // reasoning length. DECISION RULE: flip the flag iff Deep >= Balanced on correctness AND Deep
 // emits real reasoning (a non-empty chain-of-thought) — i.e. thinking helps and isn't inert.
+// It runs against the drive's llama-server, i.e. the pinned build (`model-manifests/runtime-sources.yaml`);
+// the Phase-29 measurements that flipped the flag were taken on b9585 (the Gemma 4 wave re-ran it on
+// b9849, model-benchmarks.md).
 
 const ROOT = process.env.HILBERTRAUM_GEMMA_THINKING?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
@@ -60,7 +63,7 @@ async function answerOnce(
   return { answer: deltas.join(''), reasoningChars: reasoning.join('').length }
 }
 
-describe.skipIf(!enabled)('Phase-29 Gemma thinking-quality (manual, real b9585)', () => {
+describe.skipIf(!enabled)('Phase-29 Gemma thinking-quality (manual, pinned llama-server)', () => {
   const binPath = enabled ? resolveLlamaServerPath(ROOT, process.platform, {}) : null
   const modelPath = enabled ? join(ROOT, 'models', 'chat', MODEL) : ''
 

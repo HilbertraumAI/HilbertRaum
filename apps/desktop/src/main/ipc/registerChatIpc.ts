@@ -212,9 +212,10 @@ export function registerChatIpc(ctx: AppContext): void {
   })
 
   // Resting-state context-window usage for the composer meter (context-compaction plan §5.1).
-  // Read-only, no model call: the assembled-prompt estimate over the launched window. Falls back to
-  // settings.contextTokens when no runtime is up. Returns null for an unknown conversation so the
-  // renderer hides the meter rather than showing a system-prompt-only sliver for a vanished chat.
+  // Read-only, no model call: the assembled-prompt estimate over the launched window. With no runtime
+  // up it falls back to the context-size override, else settings.contextTokens. Returns null for an
+  // unknown conversation so the renderer hides the meter rather than showing a system-prompt-only
+  // sliver for a vanished chat.
   ipcHandle(
     IPC.getConversationContextUsage,
     (_e, conversationId: string): ContextUsage | null => {

@@ -124,8 +124,9 @@ async function makeHarness(
     docFile?: string
     userToolSkill?: boolean
     routingSkill?: { id: string; tool: string }
-    /** More ingested documents in the same chat scope, one text each (#641's multi-document hint case). */
-    extraDocs?: string[]
+    /** More ingested documents in the same chat scope, one text each (#641's multi-document hint case), as
+     *  `note-<n>.txt` unless named. */
+    extraDocs?: Array<string | { file: string; text: string }>
     /** Knowledge packs ticked in the chat's scope (#715). */
     packIds?: string[]
   } = {}
@@ -152,8 +153,9 @@ async function makeHarness(
     fullyChunked: opts.fullyChunked
   })
   const extraIds: string[] = []
-  for (const [i, text] of (opts.extraDocs ?? []).entries()) {
-    extraIds.push(await ingestTextFile(w, `note-${i + 1}.txt`, text, { fullyChunked: opts.fullyChunked }))
+  for (const [i, doc] of (opts.extraDocs ?? []).entries()) {
+    const { file, text } = typeof doc === 'string' ? { file: `note-${i + 1}.txt`, text: doc } : doc
+    extraIds.push(await ingestTextFile(w, file, text, { fullyChunked: opts.fullyChunked }))
   }
 
   // A runtime that records whether it was ever asked to generate (the Phase-3 template/refuse outcomes must
@@ -294,6 +296,11 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     const channels = event.sender.send.mock.calls.map((c) => c[0])
     expect(channels).toContain(STREAM.token(h.conversationId))
     expect(channels).toContain(STREAM.done(h.conversationId))
+    // #743: the silent extraction step is announced first with the 'analysis' kind ("Reading the whole
+    // document…"), not the plain-chat compaction notice; the renderer clears it on the first token.
+    const notices = event.sender.send.mock.calls.filter((c) => c[0] === STREAM.compaction(h.conversationId))
+    expect(notices.map((c) => c[1])).toEqual([{ phase: 'start', kind: 'analysis' }])
+    expect(channels.indexOf(STREAM.compaction(h.conversationId))).toBeLessThan(channels.indexOf(STREAM.token(h.conversationId)))
     // The in-flight entry is released in `finally` — no stuck slot after the turn.
     expect(inFlightStreams.has(h.conversationId)).toBe(false)
     // Exactly one user turn + one assistant turn persisted (no duplicate / partial rows).
@@ -1120,6 +1127,38 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     expect(new Set(msg.citations!.map((c) => c.documentId)).size).toBeLessThan(1 + notes.length)
     // … yet a document in scope was never read. Teeth: compare against the documents drawn on
     // (`coverage.chunksTotal`) instead of the whole scope → no hint → red.
+    expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
+  })
+
+  // #736: retrieval also reads the old sections of a document whose re-index failed (they stay searchable),
+  // while the scope total counts the indexed documents only. Those sections used to count as read, so an
+  // answer that left indexed sections out could still reach the total and drop the hint.
+  it('#641/#736: sections of a document whose re-index failed do not count as read — the hint shows', async () => {
+    // Markdown, one short section per heading, so top-k can take six of them.
+    const sections = (tag: string, n: number): string =>
+      Array.from({ length: n }, (_, i) => `# Abschnitt ${tag}${i + 1}\n\nAusgaben Miete ${tag} ${i + 1}.`).join('\n\n')
+    const h = await makeHarness({
+      fullyChunked: true,
+      docFile: 'konto.md',
+      text: sections('a', 3),
+      extraDocs: [
+        { file: 'karte.md', text: sections('c', 3) },
+        { file: 'alt.md', text: sections('b', 12) }
+      ]
+    })
+    h.db.prepare("UPDATE documents SET status = 'failed' WHERE title = 'alt.md'").run()
+    const failed = (h.db.prepare("SELECT id FROM documents WHERE title = 'alt.md'").get() as { id: string }).id
+    const indexedSections = (
+      h.db.prepare("SELECT COUNT(*) AS n FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.status = 'indexed'").get() as { n: number }
+    ).n
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    const cited = msg.citations!.map((c) => c.documentId)
+    // The premise: the failed document's sections reached the prompt, enough of them to reach the indexed
+    // documents' total, yet an indexed section was left out.
+    expect(cited).toContain(failed)
+    expect(cited.length).toBeGreaterThanOrEqual(indexedSections)
+    expect(cited.filter((id) => id !== failed).length).toBeLessThan(indexedSections)
     expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
   })
 

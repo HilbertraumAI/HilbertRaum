@@ -26,7 +26,10 @@ import type { DocumentScope, Message } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
 import type { ExternalRetrievalArm } from '../../src/main/services/rag'
+import type { RuntimeChatOptions } from '../../src/main/services/runtime'
 import { createConversation } from '../../src/main/services/chat'
+import { updateSettings } from '../../src/main/services/settings'
+import { GPU_RERANK_SCOPE } from '../../src/main/services/rag/rerank-profile'
 import { resolveScope } from '../../src/main/services/collections'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
@@ -36,8 +39,9 @@ import { MEETING_PROTOCOL_INSTALL_ID } from '../../src/main/services/skills/anal
 import { skillInstallId } from '../../src/main/services/skills/registry'
 import { t } from '../../src/shared/i18n'
 import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
-import { scriptedRuntime } from '../helpers/scripted-runtime'
+import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { archiveCandidate, testArm } from '../helpers/zim-retrieval-fixtures'
@@ -45,9 +49,15 @@ import { archiveCandidate, testArm } from '../helpers/zim-retrieval-fixtures'
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 /** An instruction skill with no analysis engine: its fence shapes any answer, so the #80 classifier may
- *  offer it in a packs-only chat too. The classifier below always picks it. */
+ *  offer it in a packs-only chat too. */
 const PLAIN_LANGUAGE = skillInstallId('app', 'plain-language')
 const MODEL_ANSWER = 'Model answer.'
+
+/** The classifier stub: the document skill whenever the grammar admits it (#733), else the fence-only skill. */
+function pickSkill(options: RuntimeChatOptions | undefined): string {
+  const allowed = (options?.responseSchema as { properties: { skill: { enum: string[] } } } | undefined)?.properties.skill.enum ?? []
+  return allowed.includes(MEETING_PROTOCOL_INSTALL_ID) ? MEETING_PROTOCOL_INSTALL_ID : PLAIN_LANGUAGE
+}
 
 /** `n` numbered lines, each with a deadline and the two gases the control question asks about. */
 const lines = (n: number): string =>
@@ -68,6 +78,8 @@ interface Harness {
   /** `gross.txt`: 600 lines, too large to read whole at 4,096 tokens; nothing extracted, no tree. */
   large: string
   armCalls: () => number
+  /** Model calls so far (the answer and the #80 classification each count one). */
+  modelCalls: () => number
 }
 
 let h: Harness
@@ -97,10 +109,11 @@ async function makeHarness(): Promise<Harness> {
   record.run(randomUUID(), notes, chunkIds[0], 'date', '2026-01-15', '2026-01-15', 'hash-714', now)
   seedReadyTree(w.db, notes, chunkIds, { summary: 'Summary: deadlines and greenhouse gases.' })
 
+  const calls: ScriptedCall[] = []
   const runtime = {
     ...scriptedRuntime(
-      (call) => (call.options?.responseSchemaName === 'skill_pointer' ? JSON.stringify({ skill: PLAIN_LANGUAGE }) : MODEL_ANSWER),
-      [],
+      (call) => (call.options?.responseSchemaName === 'skill_pointer' ? JSON.stringify({ skill: pickSkill(call.options) }) : MODEL_ANSWER),
+      calls,
       { tokens: 'whole' }
     ),
     contextWindow: () => 4096
@@ -114,7 +127,7 @@ async function makeHarness(): Promise<Harness> {
   const zim = { makeArm: (_db: Db, packIds: readonly string[] | null | undefined) => (packIds?.length ? arm : null) }
   registerBuiltinSkillAnalysisHandlers()
   registerRagIpc({ ...ctx, zim } as unknown as AppContext)
-  return { db: w.db, notes, small, large, armCalls: () => armCalls }
+  return { db: w.db, notes, small, large, armCalls: () => armCalls, modelCalls: () => calls.length }
 }
 
 const PACK_ONLY: DocumentScope = { collectionIds: [], documentIds: [], packIds: ['pack-1'], documentsOff: true }
@@ -168,11 +181,38 @@ describe('askDocuments — the listing needs extract data IN scope (`extractions
 })
 
 describe('askDocuments — the tree route needs a ready deep index IN scope (`readyTreeCountInScope`, #714)', () => {
-  // In a documents-off chat the tree is never read either way (`wholeReadDocumentId` needs one routable
-  // document). The route still decides whether the #80 classifier runs: a low-confidence route classifies,
-  // `tree-summary` never does. So the offer is the one thing this check changes there. The offered skill
-  // has no analysis engine, only a fence that shapes the pack answer, so its offer stays honest with
-  // documents off (unlike a document skill's, whose engine needs a document in scope).
+  // Since #736 a tree route the tree cannot answer is labelled and classified as the route without it, so a
+  // miscounted tree changes the answer in one place only: one document that fits is read whole either way,
+  // and the route alone decides whether the #80 classifier runs (a low-confidence route classifies,
+  // `tree-summary` never does). The deep index outside the scope (`notes`), or on a document being
+  // re-indexed (#736), must not count.
+  it.each([
+    { name: 'outside the scope', scope: () => only(h.small) },
+    {
+      name: 'on an in-scope document being re-indexed (#736)',
+      scope: () => {
+        h.db.prepare("UPDATE documents SET status = 'extracting' WHERE id = ?").run(h.notes)
+        return { collectionIds: [], documentIds: [h.small, h.notes] }
+      }
+    }
+  ])('a deep index $name: the summary-and-list ask is read whole and classified', async ({ scope }) => {
+    const { msg } = await ask(scope(), SUMMARY_LIST_ASK)
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(new Set(citedDocuments(msg))).toEqual(new Set([h.small]))
+    expect(msg.skillOffer).toMatchObject({ source: 'classifier' })
+  })
+
+  // #736: two answerable documents, one with a deep index. The router picks the tree, but there is no
+  // multi-document tree read, so top-k answers: it is labelled and classified as without the deep index.
+  it('two documents, one with a deep index: top-k, led by the heads-up, with the classifier offer (#736)', async () => {
+    const { msg } = await ask({ collectionIds: [], documentIds: [h.notes, h.large] }, SUMMARY_LIST_ASK)
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(msg.content.startsWith(t('en', 'analysis.partialAnswerHint'))).toBe(true)
+    expect(msg.skillOffer).toMatchObject({ source: 'classifier' })
+  })
+
+  // The offered skill has no analysis engine, only a fence that shapes the pack answer, so its offer stays
+  // honest with documents off (a document skill's would not: #733 below).
   it('documents off, one pack: a summary-and-list ask carries the classifier offer', async () => {
     const { msg, armCalls, noDocuments } = await ask(PACK_ONLY, SUMMARY_LIST_ASK)
     expect(noDocuments).toBe(true)
@@ -180,11 +220,55 @@ describe('askDocuments — the tree route needs a ready deep index IN scope (`re
     expect(sourceKinds(msg)).toEqual(['archive'])
     expect(msg.skillOffer).toMatchObject({ installId: PLAIN_LANGUAGE, source: 'classifier' })
   })
+})
 
-  it('a large document without a deep index: the answer leads with the may-miss-items heads-up', async () => {
-    const { msg } = await ask(only(h.large), SUMMARY_LIST_ASK)
-    expect(msg.coverage?.mode).toBe('relevance')
-    expect(msg.content.startsWith(t('en', 'analysis.partialAnswerHint'))).toBe(true)
+// #733 — an offer must be a real capability (#133). A document skill's `intends()` reads the wording only,
+// and the W2 pre-pass that makes it honest acts only on a document in scope, so with no answerable document
+// the accept would re-run the same answer under the skill's stamp. A meeting ask that hits the
+// meeting-protocol vocabulary; the classifier stub picks that skill whenever the grammar admits it.
+describe('askDocuments — the classifier offers no document skill without an answerable document (#733)', () => {
+  const MEETING_ASK = 'Fasse alle Punkte der Besprechung zusammen'
+
+  it.each([
+    { name: 'documents off, one pack', scope: () => PACK_ONLY },
+    {
+      name: 'a chat whose only document failed to re-index',
+      scope: () => {
+        h.db.prepare("UPDATE documents SET status = 'failed' WHERE id = ?").run(h.large)
+        return only(h.large)
+      }
+    }
+  ])('$name: the fence-only skill is offered, the document skill is not', async ({ scope }) => {
+    const { msg } = await ask(scope(), MEETING_ASK)
+    expect(msg.skillOffer).toMatchObject({ installId: PLAIN_LANGUAGE, source: 'classifier' })
+  })
+
+  // With no section in scope and no pack every answer is the fixed no-context reply, which no skill changes:
+  // no offer, and no model call.
+  it.each([
+    { name: 'documents off, no pack', scope: () => DOCUMENTS_OFF },
+    {
+      name: 'a chat whose only document failed to import',
+      scope: () => {
+        // Failed before it was chunked: no section of it exists.
+        const now = new Date().toISOString()
+        h.db
+          .prepare("INSERT INTO documents (id, title, status, created_at, updated_at) VALUES ('kaputt', 'kaputt.txt', 'failed', ?, ?)")
+          .run(now, now)
+        return only('kaputt')
+      }
+    }
+  ])('$name: no classification, no offer', async ({ scope }) => {
+    const calls0 = h.modelCalls()
+    const { msg } = await ask(scope(), MEETING_ASK)
+    expect(msg.content).toBe(t('en', 'main.rag.noContext'))
+    expect(msg.skillOffer).toBeUndefined()
+    expect(h.modelCalls() - calls0).toBe(0)
+  })
+
+  it('an answerable document in scope: the document skill is offered (control)', async () => {
+    const { msg } = await ask(only(h.large), MEETING_ASK)
+    expect(msg.skillOffer).toMatchObject({ installId: MEETING_PROTOCOL_INSTALL_ID, source: 'classifier' })
   })
 })
 
@@ -200,5 +284,45 @@ describe('askDocuments — a legacy document outside the scope blocks nothing (`
     expect(msg.content).toBe(MODEL_ANSWER)
     expect(msg.skillId).toBe(MEETING_PROTOCOL_INSTALL_ID)
     expect(msg.coverage?.mode).toBe('capped')
+  })
+})
+
+// #737 — the ask site reads the reranker's demotion itself (`ctx.reranker.gpuDemoted()`, #495): the occupancy
+// snapshot cannot supply it. A session whose reranker fell back to the processor must ask the pack arm for the
+// capped candidate slice, not the wide GPU scope the measurement machine's card otherwise resolves.
+describe('askDocuments — a demoted reranker narrows the pack arm to the capped slice (#737)', () => {
+  it.each([
+    { demoted: false, scope: GPU_RERANK_SCOPE },
+    { demoted: true, scope: 'capped' }
+  ])('reranker demoted $demoted: the arm is built for $scope', async ({ demoted, scope }) => {
+    const w = makeSkillsWorld('routing-scope-rerank')
+    // The measurement machine's card (RTX 3080 Ti) beside the committed 4B: the wide scope resolves.
+    updateSettings(w.db, {
+      gpuMode: 'auto',
+      gpuAutoDisabled: false,
+      gpuProbe: {
+        devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
+        probedAt: new Date().toISOString()
+      }
+    })
+    const runtime = { ...scriptedRuntime(MODEL_ANSWER, [], { tokens: 'whole' }), modelId: 'qwen3.5-4b-ud-q4kxl' }
+    const reranker = {
+      id: 'reranker',
+      rerank: async (_q: string, docs: string[]) => docs.map((_, index) => ({ index, score: 0 })),
+      gpuDemoted: () => demoted
+    }
+    const seen: unknown[] = []
+    const arm: ExternalRetrievalArm = async () => testArm(archiveCandidate(0, 'Methan ist ein Treibhausgas.'))
+    const zim = {
+      makeArm: (_db: Db, packIds: readonly string[] | null | undefined, opts?: { candidateScope?: unknown }) => {
+        seen.push(opts?.candidateScope)
+        return packIds?.length ? arm : null
+      }
+    }
+    const { ctx } = makeRagAskContext(w, runtime)
+    registerRagIpc({ ...ctx, manifestsDir: CATALOG_MANIFESTS, reranker, zim } as unknown as AppContext)
+    const conv = createConversation(w.db, { mode: 'documents', scope: PACK_ONLY })
+    await invoke(handlers, IPC.askDocuments, conv.id, 'Was ist Methan?', null)
+    expect(seen).toEqual([scope])
   })
 })

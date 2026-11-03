@@ -544,9 +544,10 @@ an expandable snippet of the cited chunk text. The plain chat path is unchanged.
 
 ## 9. Tested behaviour (Phase 6)
 
-- **Grounded prompt:** spec §7.8 template shape (rules, `Question:`, numbered excerpts), the
+- **Grounded prompt:** the user turn's shape (`Question:`, numbered excerpts), the
   `[Sn] File: X | Page: 4` / `| Section: Y` source format, the page→section→none meta
-  fallback, and the trailing `Answer:`.
+  fallback, and the trailing `Answer:`; the rules are absent from the user turn and present in
+  `GROUNDED_SYSTEM_PROMPT`, whose system message is byte-stable across turns (RT-2, §8).
 - **Retrieval:** returns the matching chunk for a question (`MockEmbedder`) with resolved
   citations + snippet; sequential `[Sn]` labelling in score order; **dedup by
   document/page**; **top_k_final + max_context_tokens** trimming; min-similarity filtering.
@@ -780,12 +781,32 @@ measures ~3 ms). Legacy rows (`fts_rowid` NULL) keep the exact old predicate via
 `_legacy` fallback triggers — a separate trigger rather than an OR because a constant conjunct
 on a virtual-table scan is evaluated per row, not short-circuited at plan time — so correctness
 never regresses, including under a rolled-back binary (triggers live in the DB file). A
-one-time idempotent migration (`ensureFtsRowidSync`, db.ts — sentinel: the live AD trigger's
-SQL) rewrites old workspaces' triggers and backfills the handles in one FTS scan; the
+one-time idempotent migration (`ensureFtsRowidSync`, db.ts) rewrites old workspaces' triggers
+and backfills the handles in one FTS scan, DROPs + CREATEs + backfill in one transaction; the
 `messages` twins keep the compaction `kind` guards (§15.3 R8/DATA-1) and park checkpoint rows
 at a permanently-NULL handle. Pinned by `tests/integration/fts-rowid-sync.test.ts` (timing
 bound, `EXPLAIN QUERY PLAN` rowid-lookup vs scan shape, migration idempotence, NULL-fallback
-parity).
+parity, torn-state healing, the atomic fresh create).
+
+**One transaction per index create, and a heal check that reads every trigger (#737).** The
+fresh create of `chunks_fts` / `messages_fts` (the table, its five triggers, the bulk fill and the
+handle backfill) commits as ONE transaction. It used to be a bare multi-statement `exec`, which
+node:sqlite commits statement by statement, plus a separately committed backfill, and the create
+is skipped whenever the table exists. So a failure part-way kept its prefix for good. Measured
+with a SIGKILL mid fill on a 300k-chunk pre-FTS workspace: 11 `chunks_fts*` objects committed,
+0 rows, and every later open left all 300k chunks out of keyword search with NULL handles. The
+same kill now commits nothing, and the next open indexes all of them. `ensureFtsRowidSync` judges
+a table current only when every trigger its canonical DDL creates exists and carries that DDL's
+style markers (`fts_rowid`; `new.kind` on the messages ai/au/au_legacy), at one `sqlite_master`
+read per table. Before, it read the AD trigger alone, so any tear that kept AD stayed torn (ai +
+ad only: an edited row's FTS entry went stale), and so did an unguarded `messages_fts_ai` beside a
+current AD. Markers, not bytes: a body that differs only in spacing or comments counts as current,
+so no other build's text of the same set is rewritten on every open. What no open can repair is
+index ENTRIES a pre-#737 build already lost (a bulk fill or a handle backfill that never
+committed; rows written while a trigger was missing): the triggers are made whole, but nothing
+re-reads the base table. The open's prune of an already-indexed checkpoint (§15.3 R8) is pinned
+on a hand-built legacy shape in `chat-compaction.test.ts`; on every shipped workspace it deletes
+nothing.
 
 **Embedder-visibility rule (the §10 honesty story, reconciled):** keyword hits are
 restricted to chunks that have a vector under the ACTIVE embedder. Hybrid search can
@@ -1732,7 +1753,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   (`{ text, scopeChunkTotal }`): `rag:ask` counts the routable documents' sections in one query
   (`scopeSectionTotals`, beside `documentsInScope` — the same document set) and `generateGroundedAnswer`
   leads with the hint only when the distinct
-  document sections that reached the prompt are fewer. The comparison is with the whole scope, not with
+  sections of those documents that reached the prompt are fewer (#736: retrieval also reads the old
+  sections of a document being re-indexed or whose re-index failed; they used to count as read). The comparison is with the whole scope, not with
   the documents drawn on, so a document retrieval never reached still counts as missed; a scope with a
   legacy, partly chunked document (`fully_chunked` NULL) passes `Infinity`, because its stored sections
   are not its whole text. The wording now promises only what the deep index adds to a chat answer, a
@@ -1797,8 +1819,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   coverage, leaf provenance). Without its own ready tree it stays top-k, never an unasked-for chunk
   map-reduce: the document's own tree is re-checked with `answerWholeDocFromTree`'s gate
   (`wholeDocTreeMaterial` — `ready` AND a usable summary), because the router counts ready trees over
-  the whole scope, a document being re-indexed keeps `ready` until its chunk transaction, and a
-  degenerate ready tree would make the tree decline.
+  the whole scope and a degenerate ready tree would make the tree decline. (When the tree does not
+  answer, the turn is labelled as top-k since #736 — see the next bullet.)
   Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
   read (since #649, for list asks: an aggregation ask over one fitting document is read whole). **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
   knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
@@ -1821,6 +1843,31 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   fictional 12-page report's summary read 6 of 12 sections on master, with and without a ready deep
   index (pages 5–10); the fix answered from the tree, 12 of 12 (6.5 s). Tree answers stay abstractive:
   one of the two runs gave the report's end date wrong, which the §14.4 depth caveat (L2) already covers.
+- **A tree route the deep index cannot answer is labelled as top-k — AS BUILT (#736, 2026-11-03).**
+  `routeQuestion` picks `tree-summary` for a summary ask whenever `readyTreeCountInScope` finds a ready
+  deep index in scope, but the tree answers only where `wholeReadDocumentId` takes it: ONE answerable
+  document, no knowledge packs, its own usable tree. Everywhere else top-k answered under a
+  high-confidence decision, so a summary ask with a quantifier ("Fasse jeden Abschnitt zusammen",
+  otherwise `relevance / low / partial`) lost the #641 heads-up — 2 of 9 sections read and nothing said
+  — and skipped the #80 classification. Reproduced in five shapes: another document being re-indexed
+  (its old tree stays `ready` until the chunk transaction — the issue), another document whose re-index
+  failed before that transaction (it keeps the tree for good), any second answerable document with a
+  deep index (no multi-document tree read), a pack chat, a ready tree without a usable summary. The fix
+  (owner call, as recommended): the final answer path decides the tree read first, inside the chat slot,
+  and a `tree-summary` decision whose read does not happen is replaced by the router's own decision
+  without the tree (`routeQuestion({ …, treeAvailable: false })` — always a relevance decision, since
+  compare and coverage-extract precede the tree step); the notice and the classifier read that routed
+  decision. A whole read of a fitting document keeps the tree decision, as before. `readyTreeCountInScope`
+  also counts `indexed` documents only (the issue's own fix; a ready tree implies chunks). The same
+  window fed the notice a second defect: its section count compared every retrieved section with the
+  indexed documents' total, so old sections of a failed or re-indexing document counted as read and could
+  hide it (2 of 6 indexed sections read, no heads-up). `scopeSectionTotals` now returns its documents
+  and only their sections count (owner call: both sides count the indexed documents; the residual — every
+  indexed section read while such a document's leftovers were not — gets no heads-up). The listing route
+  needed no change: `extractionsExistInScope` and `aggregateExtractions` read every document's extract
+  rows, the same set their coverage line counts, which is honest by its own wording. Tests:
+  `rag-whole-read.test.ts` (the five shapes), `rag-routing-scope.test.ts` (each count filter through
+  the classifier, the multi-document row), `rag-skill-analysis.test.ts` (the section count).
 - **A quantifier asks for a list only at the head of a request; a yes/no question is a lookup — AS
   BUILT (#644, 2026-10-12).** After #641 every quantifier (all/every/each, alle/jede/sämtliche) still
   counted as a list request wherever it stood. Once a deep index with extract data existed, "Gilt die
@@ -2342,8 +2389,9 @@ Nothing leaves the device: summarization is a local chat-model call, no new netw
 ### 15.1 L0 — the context window source of truth (§L0/§4.1, fix G1)
 
 Prompt assembly used to trim against `settings.contextTokens` (default 4096), but the sidecar is
-launched with `manifest.recommendedContextTokens || settings.contextTokens` as `--ctx-size` — the two
-can diverge, so we trimmed to the wrong window (too-tight wastes capacity; too-loose risks the 400).
+launched with `manifest.recommendedContextTokens || settings.contextTokens` as `--ctx-size` (today
+`launchContextTokens`, the user's `contextTokensOverride` first — §15.8) — the two can diverge, so
+we trimmed to the wrong window (too-tight wastes capacity; too-loose risks the 400).
 Fix: a new **OPTIONAL** `ModelRuntime.contextWindow(): number` accessor
 ([`runtime/index.ts`](../apps/desktop/src/main/services/runtime/index.ts)) reports the launched window —
 implemented on the three production runtimes (`LlamaRuntime` stores `opts.contextTokens`; `MockRuntime`
@@ -2352,7 +2400,8 @@ and the delegating `LadderRuntime` return theirs; fixed for a runtime's lifetime
 runtime that can't report one degrades gracefully. `RuntimeManager.status()` surfaces it as
 `RuntimeStatus.contextWindow?` (absent when not running). The exported helper
 `effectiveContextWindow(runtime, settings)` ([`chat.ts`](../apps/desktop/src/main/services/chat.ts)) =
-`runtime.contextWindow?.() ?? settings.contextTokens` (falls back when unreported/≤0); both
+the reported `runtime.contextWindow?.()` when > 0, else `settings.contextTokensOverride ??
+settings.contextTokens` (the override half since §15.8); both
 `generateAssistantMessage` and `generateGroundedAnswer` budget through it. `assemblyBudget = window −
 CHAT_RESPONSE_RESERVE_TOKENS` (reserve = 1024, unchanged). For the shipped Qwen models
 `recommendedContextTokens` IS the launched window, so the budget is unchanged today — this just stops
@@ -2413,7 +2462,8 @@ else summarize the region older than the protected tail (folding the prior check
 - **R8 — keep checkpoints out of search/export:** the `messages_fts_ai` AFTER INSERT trigger carries
   `WHEN new.kind IS NOT 'compaction'` (fresh DBs); on a pre-feature DB `ensureMessagesFtsKindFilter`
   prunes any already-indexed checkpoint row and CODE-4's `ensureFtsRowidSync` installs the guarded
-  trigger (the canonical set, same open); the FTS backfill SELECT is also kind-filtered.
+  trigger (the canonical set, same open — its check requires the guard on `messages_fts_ai`, #737,
+  §11); the FTS backfill SELECT is also kind-filtered.
 
 ### 15.4 Summary representation + the summarizer call (§4.5/§4.6/§4.8, R3/R4/R6/R11/R-RAG)
 
@@ -2453,8 +2503,8 @@ All user-visible strings go through `shared/i18n` (en + de, parity test enforced
 English (R12).
 - **Context meter (§5.1).** `ContextUsage {usedTokens, window}` (`shared/types.ts`) +
   `getConversationContextUsage(db, runtime|null, convId)` — a pure read that assembles via
-  `buildChatMessages` over `effectiveContextWindow` (falls back to `settings.contextTokens` with no
-  runtime) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
+  `buildChatMessages` over `effectiveContextWindow` (with no runtime: `settings.contextTokensOverride ??
+  settings.contextTokens`) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
   renderer refreshes on conversation switch + after each completed turn. `renderer/chat/ContextMeter.tsx`
   is a thin composer-footer gauge: calm <75% / amber 75–89% / near-full ≥90% of the percent it shows
   (#742: the bands read the raw ratio before, so 74.6% showed "75%" calm and without the heads-up). Since
@@ -2486,8 +2536,10 @@ English (R12).
   defaults-merge IS the migration — no schema change; silent drop-oldest is strictly worse than a visible
   summary). `compactionEnabled(db)` gates BOTH the `ensureCompacted` pre-pass AND the checkpoint READ in
   assembly + the marker reader — **chosen behaviour: when off, any existing checkpoint is ignored and the
-  FULL history replays (pure L1) = byte-identical to the pre-feature app.** An explicit user
-  `contextTokens` cap is always respected (`effectiveContextWindow` only ever falls BACK to it).
+  FULL history replays (pure L1) = byte-identical to the pre-feature app.** The user's context-size
+  pick (`contextTokensOverride`) is always respected: `launchContextTokens` launches with it ahead of
+  the manifest's window, so it is the window `effectiveContextWindow` reports; the legacy
+  `settings.contextTokens` is no cap, only the last fallback (no override and no recommended window).
 
 ### 15.6 Deferred — Phase 3 `/tokenize` (D-c) + the R7/R10 guardrails
 

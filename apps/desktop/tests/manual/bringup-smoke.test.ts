@@ -15,10 +15,11 @@ import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 //   HILBERTRAUM_SMOKE_MODEL=<one .gguf filename>   # optional: smoke a single model
 //   npx vitest run tests/manual/bringup-smoke.test.ts
 //
-// Against the REAL pinned b9585 build + a real challenger GGUF this proves the §4.3
-// chat/depth bring-up per model:
+// Against the REAL pinned llama-server build (`model-manifests/runtime-sources.yaml`; the Phase-28
+// run was on b9585) + a real challenger GGUF this proves the §4.3 chat/depth bring-up per model:
 //   - the GGUF loads and `/health` reports ready  -> the embedded chat template renders
-//     through `--jinja` on b9585 (no runtime bump needed; the §3.1 claim, live)
+//     through `--jinja` on the pinned build (on b9585 in Phase 28 no runtime bump was needed;
+//     the §3.1 claim, live)
 //   - a German question is answered IN German with the correct fact, and streaming yields
 //     tokens incrementally
 //   - NO chat-template artifacts leak into the answer (role/turn markers for ChatML,
@@ -79,7 +80,7 @@ function assertClean(answer: string): void {
   }
 }
 
-describe.skipIf(!enabled)('Phase-28 challenger bring-up smoke (manual, real b9585)', () => {
+describe.skipIf(!enabled)('Phase-28 challenger bring-up smoke (manual, pinned llama-server)', () => {
   const binPath = enabled ? resolveLlamaServerPath(ROOT, process.platform, {}) : null
 
   for (const model of models) {
@@ -98,7 +99,7 @@ describe.skipIf(!enabled)('Phase-28 challenger bring-up smoke (manual, real b958
           contextTokens: 2048
         }
         const runtime = createLlamaRuntime(opts, { binPath: binPath!, healthTimeoutMs: PATIENT_MS })
-        await runtime.start() // throws if the GGUF won't load / template won't render on b9585
+        await runtime.start() // throws if the GGUF won't load / template won't render on the pinned build
         try {
           // --- Balanced: thinking explicitly OFF -> direct German answer, zero reasoning.
           const balReasoning: string[] = []

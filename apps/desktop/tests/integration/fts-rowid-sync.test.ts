@@ -58,6 +58,14 @@ function triggerSql(db: Db, name: string): string | undefined {
   return row?.sql
 }
 
+/** name → SQL of every trigger on `table` (on chunks/messages: exactly the FTS sync set). */
+function triggerSet(db: Db, table: 'chunks' | 'messages'): Record<string, string> {
+  const rows = db
+    .prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name = ? ORDER BY name")
+    .all(table) as unknown as Array<{ name: string; sql: string }>
+  return Object.fromEntries(rows.map((r) => [r.name, r.sql]))
+}
+
 function eqpDetail(db: Db, sql: string): string {
   const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as unknown as Array<{ detail: string }>
   return rows.map((r) => r.detail).join(' | ')
@@ -325,7 +333,7 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
     expect(() => openDatabase(path)).toThrow(/torn-mid-upgrade/)
 
     // Rollback proof: NOTHING of the half-run upgrade committed — the OLD (pre-fix) AD
-    // trigger is intact and no _legacy twin exists, so the sentinel will retry.
+    // trigger is intact and no _legacy twin exists, so the check will retry.
     const inspect = openRawDb(path)
     const ad = inspect
       .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='chunks_fts_ad'")
@@ -349,7 +357,32 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
     expect(searchMessages(db, 'zork')).toHaveLength(1)
   })
 
-  it('a torn trigger state (AD dropped, handles lost) self-heals on the next open instead of failing silently forever', () => {
+  // The first row is the worst tear a non-atomic upgrade could have left: the sentinel (AD)
+  // trigger and its AU sibling gone, and the backfill lost (NULL handles). Pre-flip, the
+  // sentinel's `!row` branch bailed there permanently. #737: the check still read AD alone, so a
+  // tear that KEPT AD was never healed — what a fresh create's exec leaves when it dies after its
+  // second CREATE TRIGGER (ai + ad committed, au missing: an edited row's FTS entry goes stale),
+  // or an AI without the compaction guard beside a current AD. The check now reads every trigger.
+  it.each([
+    [
+      'AD dropped, handles lost',
+      'DROP TRIGGER chunks_fts_ad; DROP TRIGGER chunks_fts_au; DROP TRIGGER messages_fts_ad; UPDATE chunks SET fts_rowid = NULL;'
+    ],
+    [
+      'only ai + ad left, as a torn fresh create leaves them, handles lost — #737',
+      `DROP TRIGGER chunks_fts_ad_legacy; DROP TRIGGER chunks_fts_au; DROP TRIGGER chunks_fts_au_legacy;
+       DROP TRIGGER messages_fts_ad_legacy; DROP TRIGGER messages_fts_au; DROP TRIGGER messages_fts_au_legacy;
+       UPDATE chunks SET fts_rowid = NULL;`
+    ],
+    [
+      'messages_fts_ai current but for the compaction guard, beside a current-style AD — #737',
+      `DROP TRIGGER messages_fts_ai;
+       CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
+         INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+         UPDATE messages SET fts_rowid = last_insert_rowid() WHERE id = new.id;
+       END;`
+    ]
+  ])('a torn trigger state (%s) self-heals on the next open instead of failing silently forever', (_label, tear) => {
     const path = join(tempRoot('ftsrowid-torn'), 'test.sqlite')
     const db = openDatabase(path)
     const now = new Date().toISOString()
@@ -357,22 +390,109 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
     db.prepare(
       `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at) VALUES ('c1','d1',0,'alpha text','a.txt',?)`
     ).run(now)
-    // Simulate the worst torn state a non-atomic upgrade could have left: the sentinel (AD)
-    // trigger and its AU sibling gone, and the backfill lost (NULL handles). Pre-flip, the
-    // sentinel's `!row` branch bailed here permanently.
-    db.exec('DROP TRIGGER chunks_fts_ad; DROP TRIGGER chunks_fts_au; DROP TRIGGER messages_fts_ad;')
-    db.prepare('UPDATE chunks SET fts_rowid = NULL').run()
+    db.exec(tear)
     db.close()
 
     const healed = openDatabase(path)
-    expect(triggerSql(healed, 'chunks_fts_ad')).toContain('rowid = old.fts_rowid')
-    expect(triggerSql(healed, 'chunks_fts_au')).toContain('rowid = old.fts_rowid')
-    expect(triggerSql(healed, 'messages_fts_ad')).toContain('rowid = old.fts_rowid')
+    // Both trigger sets are whole again, byte-identical to what a fresh workspace gets.
+    const canonical = freshDb()
+    expect(triggerSet(healed, 'chunks')).toEqual(triggerSet(canonical, 'chunks'))
+    expect(triggerSet(healed, 'messages')).toEqual(triggerSet(canonical, 'messages'))
     // The re-run backfill re-stamped the lost handles…
     const c1 = healed.prepare("SELECT fts_rowid FROM chunks WHERE id = 'c1'").get() as unknown as { fts_rowid: number | null }
     expect(c1.fts_rowid).not.toBeNull()
+    // …an edit is mirrored, not left behind as a stale entry…
+    healed.prepare("UPDATE chunks SET text = 'beta text' WHERE id = 'c1'").run()
+    expect(chunkFtsRows(healed).map((r) => r.text)).toEqual(['beta text'])
+    // …a checkpoint written now stays out of conversation search…
+    const conv = createConversation(healed, {})
+    healed.prepare(
+      `INSERT INTO messages (id, conversation_id, role, content, created_at, kind) VALUES ('cp1', ?, 'system', 'secret summary', ?, 'compaction')`
+    ).run(conv.id, now)
+    expect(searchMessages(healed, 'secret')).toHaveLength(0)
     // …and deletes maintain the index again (the silent-ghost-hits failure is repaired).
     healed.prepare("DELETE FROM chunks WHERE id = 'c1'").run()
     expect(chunkFtsRows(healed)).toHaveLength(0)
   })
+
+  it('a healthy workspace is not rewritten on reopen: a current trigger in other bytes still counts as current (#737)', () => {
+    const path = join(tempRoot('ftsrowid-healthy'), 'test.sqlite')
+    openDatabase(path).close()
+    // One trigger per set re-created with the same body plus a comment: current by every check,
+    // but distinguishable from the canonical text an upgrade would write back over it.
+    const raw = openRawDb(path)
+    for (const name of ['chunks_fts_ad', 'messages_fts_ai']) {
+      const sql = triggerSql(raw, name) as string
+      raw.exec(`DROP TRIGGER ${name}; ${sql.replace(' BEGIN\n', ' BEGIN\n  /* #737: the same body in other bytes */\n')};`)
+    }
+    raw.close()
+
+    const again = openDatabase(path)
+    expect(triggerSql(again, 'chunks_fts_ad')).toContain('/* #737: the same body in other bytes */')
+    expect(triggerSql(again, 'messages_fts_ai')).toContain('/* #737: the same body in other bytes */')
+  })
+
+  // #737: the fresh create (FTS table + five triggers + the bulk fill) ran as one bare multi-statement
+  // exec and its handle backfill committed separately. node:sqlite commits statement by statement, so
+  // a failure part-way committed a prefix that no later open revisits (the table exists): an empty
+  // index under committed triggers, or every handle NULL forever. Both now commit as ONE transaction.
+  // Two honest injections: a trigger that already holds a canonical name (the exec dies at that
+  // CREATE, before the fill) and an `UPDATE` trigger that aborts the backfill (after the fill).
+  const freshCreateFailures: Array<['chunks' | 'messages', string, string, RegExp]> = [
+    ['chunks', 'a trigger CREATE fails before the bulk fill', 'chunks_fts_au', /chunks_fts_au already exists/],
+    ['chunks', 'the handle backfill fails after the fill', 'boom', /boom-in-backfill/],
+    ['messages', 'a trigger CREATE fails before the bulk fill', 'messages_fts_au', /messages_fts_au already exists/],
+    ['messages', 'the handle backfill fails after the fill', 'boom', /boom-in-backfill/]
+  ]
+  it.each(freshCreateFailures)(
+    'a pre-keyword-search workspace whose %s index create fails (%s) commits none of it, and the next open indexes every row (#737)',
+    (target, _how, injected, error) => {
+      const injection =
+        injected === 'boom'
+          ? `CREATE TRIGGER boom AFTER UPDATE ON ${target} BEGIN SELECT RAISE(ABORT, 'boom-in-backfill'); END;`
+          : `CREATE TRIGGER ${injected} AFTER UPDATE ON ${target} BEGIN SELECT 1; END;`
+      // Rows in both tables and no FTS table at all (pre-Phase-21 chunks, pre-Phase-31 messages).
+      const path = legacyDbPath('ftsrowid-prefts-fail', (old) =>
+        old.exec(`
+CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, original_path TEXT, stored_path TEXT,
+  mime_type TEXT, size_bytes INTEGER, sha256 TEXT, status TEXT NOT NULL, error_message TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE chunks (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, chunk_index INTEGER NOT NULL,
+  text TEXT NOT NULL, source_label TEXT NOT NULL, page_number INTEGER, section_label TEXT,
+  token_count INTEGER, created_at TEXT NOT NULL);
+CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL, model_id TEXT, mode TEXT NOT NULL DEFAULT 'chat');
+CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+  content TEXT NOT NULL, created_at TEXT NOT NULL, token_count INTEGER, citations_json TEXT);
+INSERT INTO documents (id, title, status, created_at, updated_at) VALUES ('d1','a.txt','indexed','2026-01-01','2026-01-01');
+INSERT INTO chunks (id, document_id, chunk_index, text, source_label, created_at)
+  VALUES ('c1','d1',0,'legacy invoice text','a.txt','2026-01-01'), ('c2','d1',1,'legacy solar text','a.txt','2026-01-01');
+INSERT INTO conversations (id, title, created_at, updated_at) VALUES ('v1','t','2026-01-01','2026-01-01');
+INSERT INTO messages (id, conversation_id, role, content, created_at)
+  VALUES ('m1','v1','user','old zork question','2026-01-01'), ('m2','v1','assistant','old zork answer','2026-01-01');
+${injection}`)
+      )
+
+      expect(() => openDatabase(path)).toThrow(error)
+
+      // Rolled back whole: no FTS table, no shadow table, none of the five triggers.
+      const raw = openRawDb(path)
+      const left = raw
+        .prepare('SELECT name FROM sqlite_master WHERE name LIKE ? ORDER BY name')
+        .all(`${target}_fts%`) as unknown as Array<{ name: string }>
+      expect(left.map((r) => r.name).filter((n) => n !== injected)).toEqual([])
+      raw.exec(`DROP TRIGGER ${injected}`)
+      raw.close()
+
+      // The next open runs the create again, whole: every row indexed once, each handle on its own entry.
+      const db = openDatabase(path)
+      const key = target === 'chunks' ? 'chunk_id' : 'message_id'
+      const indexed = db
+        .prepare(`SELECT b.id, f.${key} AS entry FROM ${target} b LEFT JOIN ${target}_fts f ON f.rowid = b.fts_rowid ORDER BY b.id`)
+        .all()
+      const ids = target === 'chunks' ? ['c1', 'c2'] : ['m1', 'm2']
+      expect(indexed).toEqual(ids.map((id) => ({ id, entry: id })))
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM ${target}_fts`).get()).toEqual({ n: 2 })
+    }
+  )
 })

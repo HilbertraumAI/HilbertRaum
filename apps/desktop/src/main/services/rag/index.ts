@@ -1480,8 +1480,9 @@ Answer:`
 }
 
 /**
- * Build the runtime message list for a grounded answer: the base system prompt, the prior
- * conversation history, and the current (last) user turn REPLACED by the grounded prompt.
+ * Build the runtime message list for a grounded answer: the grounded system prompt (the base prompt
+ * plus the grounding rules, RT-2; the grounded-data mode passes its own), the prior conversation
+ * history, and the current (last) user turn REPLACED by the grounded prompt.
  * The DB keeps the raw question for the transcript; only the model sees the grounded form.
  */
 export function buildGroundedChatMessages(
@@ -1610,14 +1611,16 @@ export interface GroundedAnswerOptions {
   answerPrefix?: string
   /**
    * #641: an app-authored notice that leads the answer, after `answerPrefix`, ONLY when the
-   * relevance retrieval left part of the scope out — fewer distinct document sections reached
-   * the prompt than `scopeChunkTotal`, the section count of the documents in scope (Infinity
-   * when one of them was never fully chunked: no answer can have read all of it). The #37/#38
-   * deep-index hint and the #641 partial-answer label ride it: decided before retrieval, the hint
-   * told a 2-section letter whose answer had read both sections that the answer was partial.
-   * The whole-document and compare paths read the documents themselves and ignore it.
+   * relevance retrieval left part of the scope out — fewer distinct sections of `scopeDocumentIds`
+   * reached the prompt than `scopeChunkTotal`, their section count (Infinity when one of them was
+   * never fully chunked: no answer can have read all of it). #736: retrieval also returns the old
+   * sections of a document being re-indexed, or whose re-index failed; they are not in that set, so
+   * they no longer count as read. The #37/#38 deep-index hint and the #641 partial-answer label ride
+   * it: decided before retrieval, the hint told a 2-section letter whose answer had read both
+   * sections that the answer was partial. The whole-document and compare paths read the documents
+   * themselves and ignore it.
    */
-  partialCoverageNotice?: { text: string; scopeChunkTotal: number }
+  partialCoverageNotice?: { text: string; scopeChunkTotal: number; scopeDocumentIds: ReadonlySet<string> }
   /**
    * Knowledge packs (ZIM wave): the query-time archive arm for this conversation's scope,
    * built by the IPC layer from `RetrievalScope.packIds` (absent/empty scope ⇒ undefined —
@@ -1968,8 +1971,11 @@ export async function generateGroundedAnswer(
     }
     // #641: the notice is true only when the prompt missed sections of the scope — compared with
     // the whole scope, not just the documents drawn on, so an unread document counts as missed.
-    if (opts.partialCoverageNotice && distinctCitedChunks < opts.partialCoverageNotice.scopeChunkTotal) {
-      partialNotice = opts.partialCoverageNotice.text
+    // #736: both sides count the same documents.
+    const notice = opts.partialCoverageNotice
+    if (notice) {
+      const scopeRead = new Set(docChunks.filter((c) => notice.scopeDocumentIds.has(c.documentId)).map((c) => c.chunkId))
+      if (scopeRead.size < notice.scopeChunkTotal) partialNotice = notice.text
     }
   }
 

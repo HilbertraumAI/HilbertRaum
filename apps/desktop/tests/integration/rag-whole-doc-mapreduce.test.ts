@@ -16,7 +16,6 @@ import { describe, it, expect } from 'vitest'
 import { ANALYSIS_RESPONSE_RESERVE_TOKENS, CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
 import { retrieveWholeDocument, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
 import type { ChatMessage } from '../../src/main/services/runtime'
-import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
 import { finishScriptedRuntime, recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import {
   answerWholeDoc,
@@ -229,7 +228,7 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
     expect(contUser).toContain('Teil eins des Ergebnisses.') // the anchor = the tail produced so far
   })
 
-  it('a runtime that returns length on every pass → exactly MAX_REDUCE_CONTINUATIONS extra passes, then an honest output-truncated stamp', async () => {
+  it('a runtime that returns length on every pass → exactly 2 extra passes, then an honest output-truncated stamp', async () => {
     const h = await makeHarness(90)
     const runtime = finishScriptedRuntime([
       { reply: 'Eins. ', finish: 'length' },
@@ -238,9 +237,9 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
     ], CTX)
     const msg = await answerWholeDoc(h, runtime)
 
-    // Exactly one reduce + MAX_REDUCE_CONTINUATIONS continuations: the runaway cap prevents a further pass
-    // even though EVERY pass reported 'length'.
-    expect(runtime.calls).toBe(1 + MAX_REDUCE_CONTINUATIONS)
+    // Exactly one reduce + 2 continuations: the runaway cap prevents a further pass even though EVERY pass
+    // reported 'length'. A literal, not MAX_REDUCE_CONTINUATIONS, so raising the documented cap goes red (#737).
+    expect(runtime.calls).toBe(3)
     expect(msg.content).toContain('Eins.')
     expect(msg.content).toContain('Zwei.')
     expect(msg.content).toContain('Drei.')

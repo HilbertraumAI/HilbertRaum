@@ -483,12 +483,16 @@ export async function withChatStream(
     }
     return assistant
   } catch (err) {
-    // REL-3: a user Stop that landed while we were waiting to acquire the slot rejects the
-    // acquire BEFORE generation began. That is a clean cancellation, not a failure: resolve
-    // exactly like an in-generation Stop that produced no token — emit `done` with an empty
-    // message, never `chat:error` (the renderer surfaces a toast on any invoke rejection).
-    // An in-generation Stop never reaches here (generateAssistantMessage swallows the abort
-    // and returns the partial); this only fires for a Stop during the pre-generation park.
+    // REL-3: an abort (a Stop, a model stop or switch, lock or quit — the reasons in
+    // chat/ended-early.ts) that lands BEFORE generation began. That is a clean cancellation, not a
+    // failure: resolve exactly like an in-generation Stop that produced no token — emit `done` with
+    // an empty message, never `chat:error` (the renderer surfaces a toast on any invoke rejection).
+    // An in-generation abort never reaches here (generation swallows it and returns the partial).
+    // Two pre-generation paths do: the slot park (the acquire rejects), and an abort thrown by a
+    // step inside `runFn` before anything streamed (document search, the reranker, a knowledge-pack
+    // arm, the categorizer). On a re-ask, `withRegenerateGuard` has already restored the previous
+    // answer and rethrown (#600), so this `done` carries an empty message while the persisted tail
+    // is that restored answer — an open gap; the renderer re-lists after the invoke resolves.
     if (controller.signal.aborted) {
       const assistant = emptyAssistantMessage(conversationId)
       if (!event.sender.isDestroyed()) {

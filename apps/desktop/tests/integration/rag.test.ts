@@ -17,6 +17,7 @@ import {
   ragSettingsFrom,
   retrieve,
   NO_DOCUMENT_CONTEXT_ANSWER,
+  REINDEX_NEEDED_ANSWER,
   type GroundedAnswerOptions,
   type RagRetrievalSettings,
   type RetrievedChunk
@@ -30,7 +31,7 @@ import {
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
-import { MAX_REDUCE_CONTINUATIONS, streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
+import { streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
 import { SKILL_GUARD_LINE, stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
 import { DATA_END, GROUNDED_DATA_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
@@ -516,9 +517,17 @@ describe('generateGroundedAnswer', () => {
     expect(msgs[1].citations).toBeUndefined()
   })
 
-  it('answers "not found in your documents" without calling the model on an empty corpus', async () => {
+  // Both empty-retrieval answers are fixed, skip the model, and persist NO coverage; the stale half
+  // was pinned nowhere (#737).
+  it.each([
+    // "Not found in your documents".
+    { name: 'an empty corpus', staleModelId: null, answer: NO_DOCUMENT_CONTEXT_ANSWER },
+    // Indexed under another embedder, so retrieval sees nothing and the honest answer is a re-index.
+    { name: 'a corpus another embedder indexed', staleModelId: 'old-model', answer: REINDEX_NEEDED_ANSWER }
+  ])('$name gets its fixed answer without calling the model or persisting coverage', async ({ staleModelId, answer }) => {
     const db = openFreshDb('rag')
     const embedder = new MockEmbedder()
+    if (staleModelId) await seedEmbeddedDoc(db, embedder, 'old.txt', ['anything at all'], { modelId: staleModelId })
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'anything?' })
 
@@ -526,13 +535,16 @@ describe('generateGroundedAnswer', () => {
     const chatSpy = vi.spyOn(rt, 'chatStream')
     const msg = await generateGroundedAnswer(db, rt, embedder, conv.id, 'anything?', SETTINGS)
 
-    expect(msg.content).toBe(NO_DOCUMENT_CONTEXT_ANSWER)
+    expect(msg.content).toBe(answer)
     expect(msg.citations).toBeUndefined()
     expect(msg.coverage).toBeUndefined()
+    const persisted = listMessages(db, conv.id).at(-1)
+    expect(persisted?.content).toBe(answer)
+    expect(persisted?.coverage).toBeUndefined()
     expect(chatSpy).not.toHaveBeenCalled()
   })
 
-  // TEST-3 (full-audit-2026-06-29, Phase 3): the COMPLEMENT of the empty-corpus test above.
+  // TEST-3 (full-audit-2026-06-29, Phase 3): the COMPLEMENT of the empty-retrieval rows above.
   // generateGroundedAnswer awaits retrieve and early-returns NO_DOCUMENT_CONTEXT/REINDEX_NEEDED on
   // empty chunks — so a regression wrapping retrieve in `try/catch → []` would make a transient embed
   // fault MASQUERADE as "no documents" (a falsely-empty corpus). This asserts the fault PROPAGATES out
@@ -663,7 +675,9 @@ describe('generateGroundedAnswer', () => {
     ])
     const msg = await askGrounded(runtime)
 
-    expect(runtime.calls).toBe(1 + MAX_REDUCE_CONTINUATIONS) // bounded: the first stream + 2 continuations
+    // Bounded: the first stream + 2 continuations. A literal, not MAX_REDUCE_CONTINUATIONS: the script
+    // repeats its last pass and the seam dedup swallows it, so a raised cap would stay green (#737).
+    expect(runtime.calls).toBe(3)
     expect(msg.truncated).toBe(true) // exhausted while still cut ⇒ honest output-truncated stamp
     expect(msg.content).toBe('alpha beta gamma delta') // 'beta'/'gamma' seams de-duplicated, not doubled
   })

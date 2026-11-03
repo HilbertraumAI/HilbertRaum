@@ -50,6 +50,19 @@ describe('getConversationContextUsage (§5.1)', () => {
     const usage = getConversationContextUsage(db, null, conv.id)
     expect(usage.window).toBe(getSettings(db).contextTokens) // default 4096
   })
+
+  // #737: with no runtime up, the user's context-size override (the window the next start launches with) wins over
+  // the legacy setting, and the history is fitted to it.
+  it('honours the context-size override when no runtime reports a window (#737)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'm' })
+    appendTurns(db, conv.id, 14, 200) // ~5.6k estimated tokens: more than the default 4096 window keeps
+    const legacy = getConversationContextUsage(db, null, conv.id)
+    updateSettings(db, { contextTokensOverride: 16384 })
+    const usage = getConversationContextUsage(db, null, conv.id)
+    expect(usage.window).toBe(16384)
+    expect(usage.usedTokens).toBeGreaterThan(legacy.usedTokens) // fitted to the wider window, not the 4096 one
+  })
 })
 
 describe('getConversationSummaryMarker (§5.3, D-b)', () => {

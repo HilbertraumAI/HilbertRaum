@@ -1228,7 +1228,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
   window. A summary question over such a longer document uses its deep index when one is built (#642);
   without one it is still answered from the most relevant passages, with no hint to build the index,
-  and a summary question over several documents never uses the deep index. Raising the context size
+  and a summary question over several documents, or in a chat with knowledge packs, never uses the deep
+  index (since #736 such an answer gets the same "may miss items" heads-up as without a deep index: when
+  the question asks about each or all of something and the passages left part of the documents out).
+  Raising the context size
   raises what counts as "fits": on a CPU a 32k window can mean a ~20,000-token prompt, and minutes of
   prefill, for every question about a 30-page document. An off-topic question about a document read
   whole now costs a model call (the model says the document does not cover it) where the passage search
@@ -1984,9 +1987,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   otherwise subject to the same model requirement and honesty notes as an inline custom set.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
-  request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
-  parallel slots, so this is an app-side product decision (predictable latency, no
-  context-memory splitting), not a server constraint; revisit only with evidence.
+  request. This began as an app-side product decision (predictable latency, no
+  context-memory splitting): the R-T1 probe found the b9585 of the time serving concurrent
+  requests on parallel slots. Since #319 the chat server runs one slot (`-np 1`), so a second
+  request would queue at the server too; revisit only with evidence.
 - **A failed single-document re-index or delete reports on the shared error banner, not on the
   row** (issue #194). The clicked row shows a spinner and its own success toast names the document,
   and a failure banner is prefixed with the title — but there is no per-row error surface.

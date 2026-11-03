@@ -52,7 +52,7 @@ import {
   type ClassifyCandidate
 } from '../services/analysis/classify'
 import { makeQueryExpander } from '../services/zim/expand'
-import { isAggregationShaped, isTotalAsk, routeQuestion } from '../services/analysis/router'
+import { isAggregationShaped, isTotalAsk, routeQuestion, type RouteDecision } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -117,7 +117,8 @@ import type { Db } from '../services/db'
  * companion instead, since step 4-5 ruling (e)(i)) packed FEWER gold blocks than today's
  * `capped`/no-rerank baseline (`allPacked` 26→22, `anyPacked` 42→33 — see
  * `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17). Exported for
- * `tests/unit/rerank-profile-wiring.test.ts` — the one production call site this function has.
+ * `tests/unit/rerank-profile-wiring.test.ts` and `tests/integration/reranker-callbacks-composition.test.ts`;
+ * its one production call site is the ask handler below.
  *
  * `occupancy` (Wave 8 ruling (a)/(b)(G)/NF-1) is a REQUIRED parameter, not optional: the resolved
  * posture depends on the committed chat model and its in-flight/pending state and the
@@ -145,6 +146,17 @@ export function resolveAskCandidateScope(
   }
   const posture = resolveRerankerDevicePosture(settings, manifestsDir, occupancy)
   return rerankScopeFor(resolveRerankProfile(input), input, posture)
+}
+
+/** #733: does the scope hold any section at all, whatever its document's status (retrieval reads the old
+ *  sections of a failed re-index too)? Without one, and without a pack, retrieval can find nothing. */
+function sectionsExistInScope(db: Db, scope: RetrievalScope): boolean {
+  const filter = buildScopeFilter(scope, 'c.document_id')
+  const where = filter ? ` WHERE ${filter.sql}` : ''
+  const row = db
+    .prepare(`SELECT 1 FROM chunks c${where} LIMIT 1`)
+    .get(...(filter ? filter.params : [])) as unknown as { 1: number } | undefined
+  return row != null
 }
 
 /** Does any in-scope document have precomputed structured-extract data (a `__scan__` marker)?
@@ -224,13 +236,18 @@ function wholeReadDocumentId(
   return null
 }
 
-/** Count in-scope documents with a READY deep-index tree (enables the tree-summary route). */
+/**
+ * Count in-scope ANSWERABLE documents with a READY deep-index tree (enables the tree-summary route). #736: a
+ * document being re-indexed keeps its old tree `ready` until its chunk transaction, and a re-index that failed
+ * before it keeps it for good, so only `indexed` documents count — the set `documentsInScope` routes over (a
+ * ready tree implies chunks). Still a scope-wide hint: whether the tree answers is `wholeReadDocumentId`'s call.
+ */
 function readyTreeCountInScope(db: Db, scope: RetrievalScope): number {
   const filter = buildScopeFilter(scope, 'd.id')
   const where = filter ? ` AND ${filter.sql}` : ''
   const row = db
     .prepare(
-      `SELECT COUNT(*) AS n FROM documents d WHERE d.tree_status = 'ready'${where}`
+      `SELECT COUNT(*) AS n FROM documents d WHERE d.status = 'indexed' AND d.tree_status = 'ready'${where}`
     )
     .get(...(filter ? filter.params : [])) as unknown as { n: number }
   return row?.n ?? 0
@@ -799,12 +816,13 @@ export function registerRagIpc(ctx: AppContext): void {
       // falls through to the final grounded answer below: the relevance path, or the whole
       // read of a single fitting document (#643 / #642).
       const routableDocs = documentsInScope(ctx.db, scope, { requireChunks: true })
-      const decision = routeQuestion({
+      const routeInput = {
         question: text,
         documentCount: routableDocs.length,
         treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
         extractAvailable: extractionsExistInScope(ctx.db, scope)
-      })
+      }
+      const decision = routeQuestion(routeInput)
 
       // #80 P3 (STR-1 §5.2): the ONE bounded skill-pointer classification, run ONLY on the two
       // trigger classes `isClassificationTrigger` pins — (a) aggregation-shaped coverage-extract
@@ -825,6 +843,8 @@ export function registerRagIpc(ctx: AppContext): void {
       // via the A4 classMatches inversion. Without this check an accepted offer whose handler misses
       // the question re-ran the SAME engine, stamped the skill's provenance glyph on an answer its
       // engine never touched, and re-classified with that skill excluded — offer ping-pong.
+      // #733: the W2 pre-pass acts only on an answerable document in scope, so `intends()` counts only then;
+      // with documents off or nothing indexed the accept would re-run the same answer under the skill's stamp.
       const wouldSkillEngage = (installId: string): boolean => {
         const record = getSkill(ctx.db, installId)
         if (!record) return false
@@ -832,7 +852,7 @@ export function registerRagIpc(ctx: AppContext): void {
           getSkillAnalysisHandler(installId) ?? manifestAnalysisHandler(record.kind, record.manifest.analysis)
         if (!handler) return true
         const input = { question: text, scope, db: ctx.db }
-        if (handler.intends?.(input) === true) return true
+        if (routableDocs.length > 0 && handler.intends?.(input) === true) return true
         if (handler.applies(input)) return true
         return (
           typeof handler.classMatches === 'function' &&
@@ -842,8 +862,11 @@ export function registerRagIpc(ctx: AppContext): void {
         )
       }
 
-      const classifierOffer = async (signal: AbortSignal): Promise<SkillOffer | null> => {
-        if (!isClassificationTrigger(decision, text)) return null
+      const classifierOffer = async (signal: AbortSignal, routed: RouteDecision): Promise<SkillOffer | null> => {
+        if (!isClassificationTrigger(routed, text)) return null
+        // #733: with no section in scope and no pack (documents off, an empty project, a document that never
+        // indexed) every answer is the fixed no-context reply, which no skill changes.
+        if (!scope.packIds?.length && !sectionsExistInScope(ctx.db, scope)) return null
         // Candidates = the shared offer gate, minus the turn's own skill, minus (#133) any skill
         // whose engine would NOT engage this question+scope — an offer must be a real capability,
         // not a provenance-stamped re-run of the same answer.
@@ -874,18 +897,22 @@ export function registerRagIpc(ctx: AppContext): void {
       // too large for that, with a ready deep index, takes the tree. See `wholeReadDocumentId`.
       // Both are decided inside the chat slot (below), against the document as the answer reads
       // it — not before a wait for a yielding document task.
-      const partialCoverageNoticeFor = (wholeRead: boolean): GroundedAnswerOptions['partialCoverageNotice'] => {
+      const partialCoverageNoticeFor = (
+        wholeRead: boolean,
+        routed: RouteDecision
+      ): GroundedAnswerOptions['partialCoverageNotice'] => {
         const scopeSections =
           !wholeRead &&
-          decision.confidence === 'low' &&
-          (decision.fallback === 'coverage' || decision.fallback === 'partial') &&
+          routed.confidence === 'low' &&
+          (routed.fallback === 'coverage' || routed.fallback === 'partial') &&
           routableDocs.length > 0
             ? scopeSectionTotals(ctx.db, scope)
             : null
         return scopeSections
           ? {
-              text: tMain(decision.fallback === 'coverage' ? 'analysis.wholeDocHint' : 'analysis.partialAnswerHint'),
-              scopeChunkTotal: scopeSections.partlyChunked ? Number.POSITIVE_INFINITY : scopeSections.sections
+              text: tMain(routed.fallback === 'coverage' ? 'analysis.wholeDocHint' : 'analysis.partialAnswerHint'),
+              scopeChunkTotal: scopeSections.partlyChunked ? Number.POSITIVE_INFINITY : scopeSections.sections,
+              scopeDocumentIds: scopeSections.documentIds
             }
           : undefined
       }
@@ -900,7 +927,8 @@ export function registerRagIpc(ctx: AppContext): void {
         sendCompaction: SendCompaction,
         sendUsage: SendUsage,
         wholeReadId: string | null,
-        offer: SkillOffer | null
+        offer: SkillOffer | null,
+        routed: RouteDecision
       ): Promise<Message> => {
         const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
           signal,
@@ -943,7 +971,7 @@ export function registerRagIpc(ctx: AppContext): void {
           // every ordinary route into this path (byte-unchanged). #649: a whole read of a total
           // leads with its own heads-up after the scope notice.
           answerPrefix: groundedPrefix(wholeReadId != null),
-          partialCoverageNotice: partialCoverageNoticeFor(wholeReadId != null),
+          partialCoverageNotice: partialCoverageNoticeFor(wholeReadId != null, routed),
           onToken: sendToken
         })
         if (offer) {
@@ -998,13 +1026,13 @@ export function registerRagIpc(ctx: AppContext): void {
             // so the two sources can never double-offer. The listing itself stays deterministic;
             // only aggregation-shaped turns pay the one bounded classification call (plain
             // list/count turns keep 0 model calls). Classified BEFORE the answer is emitted.
-            const offer = deterministicOffer ?? (aggregationAsk ? await classifierOffer(signal) : null)
+            const offer = deterministicOffer ?? (aggregationAsk ? await classifierOffer(signal, decision) : null)
             // #649: an aggregation ask (a sum, categories) over ONE document that fits the window is read
             // whole instead (#643's rule, decided here in the slot): the model sees every section and can add
             // them up, which the listing cannot (#54). The offer above rides along. A plain list ask keeps the
             // listing, and so does a document too long to read whole.
             const wholeReadId = aggregationAsk ? wholeReadFor(false) : null
-            if (wholeReadId) return groundedAnswer(signal, sendToken, sendCompaction, sendUsage, wholeReadId, offer)
+            if (wholeReadId) return groundedAnswer(signal, sendToken, sendCompaction, sendUsage, wholeReadId, offer, decision)
             const listing = aggregateExtractions(ctx.db, scope, recordType)
             const listingAnswer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params), {
               aggregationAsk
@@ -1032,6 +1060,13 @@ export function registerRagIpc(ctx: AppContext): void {
         'Document answer failed',
         // F2: defer the regenerate delete into the runFn (slot held) + restore when it fails (#600: any reason).
         withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction, sendUsage) => {
+          // #736: a `tree-summary` route holds only when the tree (or a whole read of the one document) answers,
+          // decided here, before the classification a tree route never runs. Anywhere else top-k answers, so the turn
+          // is labelled and classified as the router routes it without the deep index: several documents, a chat
+          // with knowledge packs, a document whose own deep index cannot answer.
+          const treeRoute = decision.engine === 'tree-summary'
+          const treeRead = treeRoute ? wholeReadFor(true) : null
+          const routed = treeRoute && treeRead == null ? routeQuestion({ ...routeInput, treeAvailable: false }) : decision
           // #80 P3 trigger (b): a LOW-CONFIDENCE fallback (the router detected an intent it
           // provably cannot serve — a coverage ask with no extract data, a compare without two
           // docs) runs the one bounded classification BEFORE the grounded answer streams; a
@@ -1039,8 +1074,8 @@ export function registerRagIpc(ctx: AppContext): void {
           // fallthrough never classifies). The offer is attached to the persisted answer
           // afterwards (update-in-place of the offer column only) — it never touches the
           // answer content or the stream.
-          const offer = await classifierOffer(signal)
-          return groundedAnswer(signal, sendToken, sendCompaction, sendUsage, wholeReadFor(decision.engine === 'tree-summary'), offer)
+          const offer = await classifierOffer(signal, routed)
+          return groundedAnswer(signal, sendToken, sendCompaction, sendUsage, treeRoute ? treeRead : wholeReadFor(false), offer, routed)
         }),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )

@@ -538,7 +538,9 @@ Explicit `maxTokens`/`temperature` win over mode-derived values.
 `/v1/chat/completions`, ALWAYS sent explicitly (the runtime default is thinking ON for capable
 templates — verified on b9585, and on the b11146 pin: `reasoning_content` deltas, no `<think>` in
 content, #512). Chat sidecars spawn with **`CHAT_SERVER_ARGS` = `--jinja --reasoning-format
-deepseek`** (pins the mechanism's preconditions; embedder excluded). Reasoning streams as
+deepseek -lv 4 -np 1`** (the first two pin the mechanism's preconditions; `-lv 4` prints the
+load log the placement parser reads; `-np 1` = one server slot, #319; chat only — the embedder,
+reranker, translation and vision sidecars keep their own args). Reasoning streams as
 separate `delta.reasoning_content` frames → `RuntimeChatOptions.onReasoning(delta)` →
 `chat:reasoning:<id>`; the generator yields answer text only.
 ✅ **D6:** `stripThinkBlocks` (services/chat.ts) scrubs `<think>…</think>` (incl. an unclosed
@@ -701,10 +703,16 @@ head's own weights + KV.
   chunks keyed by chunk id), trims to `topKFinal` under `maxContextTokens` (chunker's
   `approxTokenCount`; top chunk always kept), assigns `[S1]…` labels **per query (not
   stored)**.
-- **`buildGroundedPrompt(question, chunks)`** — pure; spec §7.8 template verbatim (rules +
-  `Question:` + numbered `Document excerpts:` as `[Sn] File: X | Page: 4` / `| Section: Y` +
-  quoted text + trailing `Answer:`). `buildGroundedChatMessages` replaces the **last user
-  turn** with the grounded prompt; system stays `BASE_SYSTEM_PROMPT`.
+- **`buildGroundedPrompt(question, chunks, skillFence?, truncation?, analysisBlock?)`** — pure;
+  builds the grounded **user turn** only: `Question:` + the optional skill fence, partial-document
+  notice and analysis block (the share-safe PII pre-scan) + `Document excerpts:` (numbered
+  `[Sn] File: X | Page: 4` / `| Section: Y` + quoted text, the spec §7.8 source-context format,
+  fenced by `EXCERPT_BEGIN` / `EXCERPT_END` + `EXCERPT_GUARD_LINE`, #228) + trailing `Answer:`.
+  The rules are not in it: `GROUNDING_RULES` ride in the **system** message
+  `GROUNDED_SYSTEM_PROMPT` = `BASE_SYSTEM_PROMPT` + `GROUNDING_RULES` (RT-2, so `cache_prompt`
+  reuses them across turns). `buildGroundedChatMessages` sends that system prompt (grounded-data
+  mode passes `GROUNDED_DATA_SYSTEM_PROMPT`) and replaces the **last user turn** with the
+  grounded prompt.
 - **`generateGroundedAnswer(...)`** — streams via the runtime and persists the assistant turn
   **with `Citation[]`** (→ `citations_json`). **Empty corpus / weak retrieval → runtime NOT
   called**; persists `NO_DOCUMENT_CONTEXT_ANSWER`, no citations.

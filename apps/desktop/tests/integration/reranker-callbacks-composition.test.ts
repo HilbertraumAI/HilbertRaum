@@ -18,8 +18,9 @@ import { CARDS, CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 
 // Wave 8 ruling (b)(G)/NF-1 (step 4-8, the Wave 8 analysis's finding that a composition test
 // through `compose-services.ts` -> `reranker/factory.ts` alone cannot see an omission at
-// `main/index.ts` or at the ask site, `registerRagIpc.ts:262`): this file targets the exported
-// closure FACTORY and `composeServices`'s own signature directly, with type-level proof
+// `main/index.ts` or at the ask site, the ask handler's `resolveAskCandidateScope` call in
+// `registerRagIpc.ts`): this file targets the exported closure FACTORY and
+// `composeServices`'s own signature directly, with type-level proof
 // (`@ts-expect-error`, which fails `npm run typecheck` if a wire becomes optional again)
 // alongside a functional check that the wired callbacks actually reach the sidecar.
 
@@ -79,7 +80,7 @@ describe('Wave 8 NF-1: the required-wiring type-level proof', () => {
     acceptsContext({ ...base, pendingModelSwitches: undefined })
   })
 
-  it('resolveAskCandidateScope (the ask site, registerRagIpc.ts:262-area) refuses a call omitting occupancy', () => {
+  it("resolveAskCandidateScope (the ask handler's call in registerRagIpc.ts) refuses a call omitting occupancy", () => {
     // The type-level proof: `@ts-expect-error` fails `npm run typecheck` if `occupancy` becomes
     // optional again. Wrapped in `expect(...).toThrow()` because TS only strips types -- the
     // call itself still runs (and crashes on the missing 4th argument), which the runtime

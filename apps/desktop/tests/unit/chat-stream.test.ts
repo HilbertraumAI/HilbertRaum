@@ -9,11 +9,14 @@ import {
 } from '../../src/main/services/runtime/llama'
 import { EmptyCompletionError } from '../../src/main/services/chat'
 import { EmbedderError } from '../../src/main/services/embeddings/errors'
+import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { ModelSlotArbiter, RESUME_AFTER_CHAT_DELAY_MS } from '../../src/main/services/analysis/model-slot-arbiter'
 import { inFlightStreams, streamBuffers, streamSettled } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
 import { type Message } from '../../src/shared/types'
 import { deferred } from '../helpers/deferred'
 import { within } from '../helpers/hang-budget'
+import { slotClock } from '../helpers/slot-clock'
 
 // `assertChatStreamReady`'s guard preamble (unknown conversation, no runtime, doc-task
 // busy, stream-in-flight) reads a real DB + ctx and is exercised end-to-end by the
@@ -250,18 +253,30 @@ describe('withChatStream (M-A2)', () => {
   // #634: a document question's search step failed. Before #634 the banner showed the raw reason —
   // "The operation timed out." in any UI language, or llama-server's stderr tail with the weight
   // file's absolute path. Each kind maps to copy that names the search model, on both channels.
+  // #530 (#737): the link just before them — the OS refused to start the engine the question needs —
+  // maps to the engine copy; the loader's diagnostic (the missing library, the exit code) stays local.
+  const searchFailure = (kind: 'timeout' | 'start' | 'failed' | 'interrupted') => () =>
+    new EmbedderError(kind, 'The search model could not start (exit:code 1)')
   it.each([
-    { kind: 'timeout', key: 'main.chat.searchModelTimeout' },
-    { kind: 'start', key: 'main.chat.searchModelCannotStart' },
-    { kind: 'failed', key: 'main.chat.searchModelFailed' },
-    { kind: 'interrupted', key: 'main.chat.searchModelFailed' }
-  ] as const)('maps a $kind search-model failure to $key on the error event AND the rejection (#634)', async ({ kind, key }) => {
+    { label: 'a timeout search-model failure', cause: searchFailure('timeout'), key: 'main.chat.searchModelTimeout' },
+    { label: 'a start search-model failure', cause: searchFailure('start'), key: 'main.chat.searchModelCannotStart' },
+    { label: 'a failed search-model failure', cause: searchFailure('failed'), key: 'main.chat.searchModelFailed' },
+    { label: 'an interrupted search-model failure', cause: searchFailure('interrupted'), key: 'main.chat.searchModelFailed' },
+    {
+      label: 'an engine the OS refuses to start',
+      cause: () => new EngineCannotRunError('llama-server', {
+        family: 'llama_cpp', reason: 'library-missing', os: 'linux', name: 'libgomp.so.1', exit: 'exit code 127'
+      }),
+      key: 'main.engine.cannotRun'
+    }
+  ] as const)('maps $label to $key on the error event AND the rejection (#634, #530)', async ({ cause, key }) => {
     const { event, sent } = fakeEvent()
     const friendly = t('en', key)
     const rejection = await withChatStream(event, 'c1', 'label', async () => {
-      throw new EmbedderError(kind, 'The search model could not start (exit:code 1)')
+      throw cause()
     }).catch((e: Error) => e.message)
     expect(rejection).toBe(friendly)
+    expect(rejection).not.toMatch(/libgomp|exit/) // the raw diagnostic never reaches the user
     expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
     expect(inFlightStreams.has('c1')).toBe(false)
   })
@@ -356,6 +371,29 @@ describe('withChatStream (M-A2)', () => {
     expect(sent.map((s) => s.channel)).toEqual(['chat:done:c1'])
     expect(inFlightStreams.has('c1')).toBe(false)
     expect(streamBuffers.has('c1')).toBe(false)
+  })
+
+  // #737: a turn that DID get the slot gives it back in `finally`, whether its run resolved or threw, so a
+  // deep-index build is never left parked behind a finished turn. The real arbiter on the fake clock: the release
+  // arms the post-chat resume. The throw is a plain Error, not an abort — on an abort the arbiter's own listener
+  // gives the slot back and would hide a missing release.
+  it.each([
+    ['resolves', async (): Promise<Message> => msg('done')],
+    ['throws', async (): Promise<Message> => {
+      throw new Error('boom')
+    }]
+  ] as const)('gives the model slot back when the run %s, so the paused build resumes (#737)', async (_label, run) => {
+    const { event } = fakeEvent()
+    const clock = slotClock()
+    const arbiter = new ModelSlotArbiter(clock.deps)
+    arbiter.registerBuild('job1')
+    const stream = withChatStream(event, 'c1', 'label', run, (signal) => arbiter.acquireForChat(signal))
+    expect(arbiter.shouldYield()).toBe(true) // the turn asked the build to pause
+    const parked = arbiter.reacquire('job1') // the build parks at its node boundary, handing the slot over
+    await stream.catch(() => undefined)
+    expect(clock.pending()).toBe(1) // the release armed the resume
+    clock.advance(RESUME_AFTER_CHAT_DELAY_MS)
+    await within(parked, 'the paused build resuming after the turn gave the slot back')
   })
 
   // R1 (full-audit-2026-06-30, Phase C): the wrapper publishes a per-stream "settled" promise the
