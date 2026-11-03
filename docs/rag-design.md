@@ -804,7 +804,17 @@ current AD. Markers, not bytes: a body that differs only in spacing or comments 
 so no other build's text of the same set is rewritten on every open. What no open can repair is
 index ENTRIES a pre-#737 build already lost (a bulk fill or a handle backfill that never
 committed; rows written while a trigger was missing): the triggers are made whole, but nothing
-re-reads the base table. The open's prune of an already-indexed checkpoint (§15.3 R8) is pinned
+re-reads the base table. No repair is built (#779, owner call), because no published build can
+leave that state behind. A bulk fill copies a table that existed before its keyword index, and
+both indexes arrived in the project's first two days (`chunks_fts` in b8feb461, 2026-06-10, first
+tagged v0.1.3; `messages_fts` in af1f31f8, 2026-06-11, first tagged v0.1.6). The repository was
+private until 2026-07-12. The first release is v0.1.50 (that day), and the one earlier build
+handed out, the v0.1.46 tester pre-release (2026-07-10, see CHANGELOG), came a month after both
+indexes. Every workspace such a build created had both indexes from its first open, and their
+fills copied empty tables. Only a workspace created by a build from before those commits (tags
+v0.1.0–v0.1.2, and up to v0.1.5 for `messages_fts`), whose first open on a later build was then
+killed during the fill, can be in that state. Vector search still
+finds its rows. The open's prune of an already-indexed checkpoint (§15.3 R8) is pinned
 on a hand-built legacy shape in `chat-compaction.test.ts`; on every shipped workspace it deletes
 nothing.
 
@@ -2130,7 +2140,11 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   sibling of the aggregation hint; dedupe: deterministic wins, the classifier is skipped). Under
   the mock runtime the classification always degrades (the mock ignores `responseSchema`) — a
   tested invariant, so dev/mock behaviour is byte-identical to the pre-#80 build. The prose hints
-  above remain as the degradation path.
+  above remain as the degradation path. **#779:** a class-(b) classification runs before retrieval, so the
+  grounded answer can still turn out to be the fixed no-context or re-index reply (`isNoContextAnswer`). A
+  fence-only offer (a skill with no analysis handler) is then dropped, since accepting it re-runs the same
+  top-k search and the same fixed reply; an offer of a skill with an analysis engine stays (architecture.md
+  §5.2 "as built", the #733 / #779 notes).
 - **"Whole document" wording gate (RAG-1, backend audit 2026-06-27):** `buildListingAnswer` says
   *"across the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
   chunking invariant holds AND every in-scope chunk actually carries a `__scan__` marker. `fullyChunked`
@@ -2502,9 +2516,11 @@ checkpoint exists; byte-identical to before when none does.
 All user-visible strings go through `shared/i18n` (en + de, parity test enforced); internal prompts stay
 English (R12).
 - **Context meter (§5.1).** `ContextUsage {usedTokens, window}` (`shared/types.ts`) +
-  `getConversationContextUsage(db, runtime|null, convId)` — a pure read that assembles via
-  `buildChatMessages` over `effectiveContextWindow` (with no runtime: `settings.contextTokensOverride ??
-  settings.contextTokens`) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
+  `getConversationContextUsage(db, runtime|null, manifestsDir, convId)` — a pure read that assembles via
+  `buildChatMessages` over `contextWindowOrNextLaunch` (the running runtime's `effectiveContextWindow`; with no
+  runtime, the window the next start launches with: `launchContextTokens` over the active model's manifest, so the
+  override, else the manifest's recommended size, else `settings.contextTokens` — #779, the doc-task budget's rule)
+  and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
   renderer refreshes on conversation switch + after each completed turn. `renderer/chat/ContextMeter.tsx`
   is a thin composer-footer gauge: calm <75% / amber 75–89% / near-full ≥90% of the percent it shows
   (#742: the bands read the raw ratio before, so 74.6% showed "75%" calm and without the heads-up). Since
@@ -2646,7 +2662,10 @@ context size."* All four observations were real seams:
 - **One window for every area.** Doc tasks budgeted against bare `settings.contextTokens` while chat/RAG
   budgeted against the launched window — the literal "different context sizes in different areas". The
   `DocTaskManager.getContextTokens` dep (main/index.ts) now returns `effectiveContextWindow(active, s)`
-  when a runtime is up (fallback: the override-aware next-start value).
+  when a runtime is up (fallback: the override-aware next-start value). **#779:** that rule now has one
+  spelling, `contextWindowOrNextLaunch` (chat.ts), which the resting meter takes too — with no model running
+  it used to fill against the override or the legacy setting while the next start launched at the
+  manifest's recommended size.
 - **User-settable context size.** `settings.contextTokensOverride` (nullable; DEFAULT null = automatic),
   clamped by `updateSettings` into `[MIN_CONTEXT_TOKENS 2048, MAX_CONTEXT_TOKENS_OVERRIDE 131072]` with
   junk rejected (the null default defeats the generic type check). The chat launch
@@ -3131,7 +3150,13 @@ the figures they support are quoted in the text.
   no-context answer; a legacy answer that cited an archive but carries no outcomes shows an
   explicit "outcome not recorded" line instead of silence. A whole-document, compare or
   grounded-data answer produces `skipped/mode` for every selected pack via `packTitles` —
-  packs are still not queried on those paths, but the answer now SAYS so.
+  packs are still not queried on those paths, but the answer now SAYS so. **#734:** so do the
+  coverage-extract listing and a tool skill's template answer (both deterministic, both read
+  the documents only). Owner call: the D45 "isn't fully indexed" refusal and the W2 routing
+  answer ("select one / two documents") record no outcome, and neither does a `routing`
+  handler's button pointer (redaction, document edit), which reaches the template path but reads
+  no content. None of them makes a document claim, so a "not searched" line would qualify an
+  answer that was never given.
 - **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
   `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
   'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**

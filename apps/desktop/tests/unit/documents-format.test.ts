@@ -36,13 +36,19 @@ describe('friendlyMimeLabel', () => {
   })
 })
 
-describe('formatSize — DR-9 GB tier', () => {
-  it('formats GB-scale sizes with the locale decimal', () => {
-    // TEETH: without the GB tier these return "2048.0 MB" / "1536,0 MB".
-    expect(formatSize(2 * 1024 ** 3, 'en')).toBe('2.0 GB')
-    expect(formatSize(1.5 * 1024 ** 3, 'de')).toBe('1,5 GB')
-    // The lower tiers are unchanged.
-    expect(formatSize(2048, 'en')).toBe('2.0 KB')
-    expect(formatSize(5 * 1024 * 1024, 'en')).toBe('5.0 MB')
+describe('formatSize — decimal units (#768) and the DR-9 GB tier', () => {
+  // Decimal like every disk size in the app: in 1024 steps these would read 2.0 KB, 4.1 MB, 2.3 GB, 1,4 GB.
+  // Without the GB tier the last two would read "2500.0 MB" / "1500,0 MB" (DR-9).
+  it.each([
+    [512, 'en', '512 B'],
+    [2_048, 'en', '2.0 KB'],
+    [4_285_975, 'en', '4.3 MB'],
+    [2_500_000_000, 'en', '2.5 GB'],
+    [1_500_000_000, 'de', '1,5 GB'],
+    // A size that rounds to the next unit reads in it, never "1000.0 KB" / "1000.0 MB".
+    [999_960, 'en', '1.0 MB'],
+    [999_960_000, 'en', '1.0 GB']
+  ] as const)('%d bytes read %s as %s', (bytes, lang, shown) => {
+    expect(formatSize(bytes, lang)).toBe(shown)
   })
 })

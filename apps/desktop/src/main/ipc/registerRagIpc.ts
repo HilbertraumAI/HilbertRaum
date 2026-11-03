@@ -24,6 +24,7 @@ import {
   generateGroundedAnswer,
   generateGroundedDataAnswer,
   type GroundedAnswerOptions,
+  isNoContextAnswer,
   modePackOutcomes,
   ragSettingsFrom,
   WHOLE_READ_SECTION_FRAMING_TOKENS,
@@ -34,11 +35,12 @@ import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import {
   BANK_STATEMENT_INSTALL_ID,
   getSkillAnalysisHandler,
-  manifestAnalysisHandler
+  manifestAnalysisHandler,
+  type SkillAnalysisHandler
 } from '../services/skills/analysis'
 import { offerableSkillCandidates } from '../services/skills/suggest'
 import { documentsInScope, scopeSectionTotals } from '../services/skills/scope-documents'
-import { getSkill } from '../services/skills/registry'
+import { getSkill, type SkillRecord } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
 import { isNeedleShaped, isSmallTalk } from '../services/skills/vocabulary'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
@@ -193,6 +195,22 @@ function allInScopeDocsFullyChunked(db: Db, scope: RetrievalScope): boolean {
     )
     .get(...(filter ? filter.params : [])) as unknown as { n: number }
   return (row?.n ?? 0) === 0
+}
+
+/**
+ * A skill's analysis engine, in precedence order (full-doc-skills Phase 3 / A3, see the turn-skill
+ * lookup in the handler): the app registry's handler, else the engine its manifest declares
+ * (`analysis: whole-doc | compare`, honoured for instruction skills only — SEC-1). Undefined means a
+ * fence-only skill: its fence shapes the prompt, and no engine reads beyond top-k. One spelling for the
+ * turn's own skill, the #133 engagement filter and the #779 no-context offer drop.
+ */
+function skillAnalysisHandler(
+  installId: string,
+  record: Pick<SkillRecord, 'kind' | 'manifest'> | null
+): SkillAnalysisHandler | undefined {
+  return (
+    getSkillAnalysisHandler(installId) ?? (record ? manifestAnalysisHandler(record.kind, record.manifest.analysis) : undefined)
+  )
 }
 
 /**
@@ -424,11 +442,7 @@ export function registerRagIpc(ctx: AppContext): void {
       //      skill resolves to `undefined` here (it declares no analysis engine and runs no tools — SEC-1).
       // When neither yields a handler, or `applies()` is false (off-topic / multi-doc), this whole block is
       // skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
-      const skillRecord = skill ? getSkill(ctx.db, skill.installId) : null
-      const analysisHandler = skill
-        ? getSkillAnalysisHandler(skill.installId) ??
-          (skillRecord ? manifestAnalysisHandler(skillRecord.kind, skillRecord.manifest.analysis) : undefined)
-        : undefined
+      const analysisHandler = skill ? skillAnalysisHandler(skill.installId, getSkill(ctx.db, skill.installId)) : undefined
 
       // W2 doc-count-fallthrough routing (audit §2.1/§3.4): a tool/whole-doc skill reads ONE document
       // (two, for compare) at a time, so a multi-document scope can't be analysed exhaustively. When the
@@ -447,7 +461,9 @@ export function registerRagIpc(ctx: AppContext): void {
         const turnSkill = skill
         const inScope = documentsInScope(ctx.db, scope, { requireChunks: true })
         // A deterministic routing answer over the LOCKED stream (skill-stamped, no coverage/citations —
-        // it makes no document claim). Same shape as the refuse/listing paths; no model call.
+        // it makes no document claim). Same shape as the refuse/listing paths; no model call. #734 (owner
+        // call): it records no pack outcome either. It answers nothing, so a ticked pack's "not searched"
+        // would describe an answer that does not exist.
         const routeAnswer = (label: string, answer: string): Promise<Message> =>
           withChatStream(
             event,
@@ -552,6 +568,8 @@ export function registerRagIpc(ctx: AppContext): void {
         // the exhaustive/compare branch reuse one body. A `routing` handler is EXEMPT: it reads no content.
         // F2: on regenerate the destructive delete runs inside the runFn (slot held), restored when it
         // fails with nothing in its place (#600: any thrown reason) — symmetric with the chat channel.
+        // #734 (owner call): no pack outcome. The refusal makes no document claim, so there is no answer
+        // for a ticked pack's "not searched" to qualify.
         const refusePartial = (): Promise<Message> =>
           withChatStream(
             event,
@@ -780,7 +798,12 @@ export function registerRagIpc(ctx: AppContext): void {
                   citations: result.citations,
                   coverage: result.coverage,
                   skillId: turnSkill.installId,
-                  autoFired: turnSkill.autoFired === true
+                  autoFired: turnSkill.autoFired === true,
+                  // #734 (#301 P4): the template answer is built from the document by the skill's tools and
+                  // never queries a pack, like the grounded-data narration above, so every ticked pack is
+                  // told `skipped / mode`. A `routing` handler's button pointer (redaction, document edit)
+                  // reads no content and makes no document claim: none, like the W2 routing answer.
+                  packOutcomes: analysisHandler.mode === 'routing' ? undefined : modePackOutcomes(ctx.db, scope.packIds)
                 })
                 // Phase 2 (result-tables §4): persist the answer's structured table keyed by the
                 // just-appended message and light the flag on the returned object, so the renderer's
@@ -848,8 +871,7 @@ export function registerRagIpc(ctx: AppContext): void {
       const wouldSkillEngage = (installId: string): boolean => {
         const record = getSkill(ctx.db, installId)
         if (!record) return false
-        const handler =
-          getSkillAnalysisHandler(installId) ?? manifestAnalysisHandler(record.kind, record.manifest.analysis)
+        const handler = skillAnalysisHandler(installId, record)
         if (!handler) return true
         const input = { question: text, scope, db: ctx.db }
         if (routableDocs.length > 0 && handler.intends?.(input) === true) return true
@@ -920,7 +942,7 @@ export function registerRagIpc(ctx: AppContext): void {
       // The grounded answer: top-k relevance, or the whole read of `wholeReadId` (#643 / #642; #649: also an
       // aggregation ask the router sent to coverage-extract). The offer is attached to the persisted answer
       // afterwards (update-in-place of the offer column only) — it never touches the answer content or the
-      // stream.
+      // stream — unless the answer is the fixed no-context reply and the offered skill is fence-only (#779).
       const groundedAnswer = async (
         signal: AbortSignal,
         sendToken: SendToken,
@@ -974,7 +996,15 @@ export function registerRagIpc(ctx: AppContext): void {
           partialCoverageNotice: partialCoverageNoticeFor(wholeReadId != null, routed),
           onToken: sendToken
         })
-        if (offer) {
+        // #779: the offer is classified BEFORE retrieval, so retrieval can still end in the fixed no-context
+        // (or re-index) reply. A fence-only skill re-runs the same top-k search under its fence: accepting it
+        // would only bring back that fixed reply, so it is not offered there. A skill with an analysis engine
+        // stays offered — its engine reads beyond top-k.
+        const fenceOnlyOnNoContext =
+          offer != null &&
+          isNoContextAnswer(msg.content) &&
+          skillAnalysisHandler(offer.installId, getSkill(ctx.db, offer.installId)) == null
+        if (offer && !fenceOnlyOnNoContext) {
           setMessageSkillOffer(ctx.db, msg.id, offer)
           msg.skillOffer = offer
         }
@@ -1045,7 +1075,10 @@ export function registerRagIpc(ctx: AppContext): void {
               content: answer,
               skillId: skill?.installId,
               autoFired: skill?.autoFired === true,
-              skillOffer: offer
+              skillOffer: offer,
+              // #734 (#301 P4): the listing is built from the documents' extract and never queries a
+              // pack, so every ticked pack gets `skipped / mode` rather than looking like it found nothing.
+              packOutcomes: modePackOutcomes(ctx.db, scope.packIds)
             })
           }),
           // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even

@@ -54,6 +54,17 @@ const EXTRA_FILE_NOTICES = {
 }
 const WEIGHT_SHARD_RE = /-\d{5}-of-\d{5}\./
 
+/** `isRealSha256` (apps/desktop/src/shared/manifest.ts), as the scripts spell it. */
+const REAL_SHA256_RE = /^[a-f0-9]{64}$/
+
+/**
+ * What a local-test entry's line says instead of a license URL (#768). A manifest with no
+ * `download` block and a placeholder hash is a model someone added by hand for local tests:
+ * prepare-drive fetches nothing for it and the sell gate refuses an unverifiable weight, so
+ * there is no URL to print, and the line must not leave the reader looking for one.
+ */
+const LOCAL_TEST_NOTE = 'no license URL recorded: a local-test entry; no drive ships or downloads this weight'
+
 /** Recursively list *.yaml/*.yml under dir in deterministic order. */
 function walkYaml(dir) {
   const out = []
@@ -146,6 +157,7 @@ export function buildDriveNotices(repoRoot) {
       // The upstream repo is the download URL up to the file path (HF `/resolve/` form).
       upstream: url ? String(url).split('/resolve/')[0] : null,
       licenseUrl: parsed.download?.license_url ? String(parsed.download.license_url) : null,
+      localTest: !parsed.download && !REAL_SHA256_RE.test(String(parsed.sha256 ?? '')),
       reviewStatus: parsed.license_review?.status ? String(parsed.license_review.status) : 'missing',
       // #310 `files[]`: the additional required files, for the per-file attribution below.
       extraFiles: Array.isArray(parsed.files)
@@ -373,10 +385,12 @@ export function buildDriveNotices(repoRoot) {
   lines.push('')
   lines.push('One attribution line per model manifest shipped under `model-manifests/` (the')
   lines.push('manifests are always on the drive; whether a weight is pre-loaded varies by drive).')
-  lines.push('Grouped by the license each manifest declares; each line\'s license URL is the')
-  lines.push('manifest\'s recorded `download.license_url`. A `license_review.status` other than')
-  lines.push('`approved` is noted on the line — such a model is never pre-loaded on a sold drive')
-  lines.push('(the sell gate requires an approved review for every manifest).')
+  lines.push('Grouped by the license each manifest declares; each line\'s license URL, where one')
+  lines.push('is recorded, is the manifest\'s `download.license_url`. A local-test entry (no')
+  lines.push('`download` block, no real checksum) is one no drive ships or downloads, and its line')
+  lines.push('says so instead. A `license_review.status` other than `approved` is noted on the')
+  lines.push('line — such a model is never pre-loaded on a sold drive (the sell gate requires an')
+  lines.push('approved review for every model a drive ships).')
   for (const license of licenseKeys) {
     const group = byLicense.get(license)
     lines.push('')
@@ -392,8 +406,8 @@ export function buildDriveNotices(repoRoot) {
       lines.push('review time (as published upstream — the `licenses/README.md` convention).')
     } else {
       lines.push('Not covered by a permissive text reproduced in this file — see each line\'s')
-      lines.push('license URL for the governing terms and the manifest\'s `license_review` block')
-      lines.push('for the review record.')
+      lines.push('license URL, where one is recorded, for the governing terms and the manifest\'s')
+      lines.push('`license_review` block for the review record.')
     }
     lines.push('')
     for (const m of group) {
@@ -406,8 +420,10 @@ export function buildDriveNotices(repoRoot) {
         )
       }
       lines.push(
-        `- ${m.name} (\`${m.id}\`) — upstream: ${m.upstream ?? '(no download block — see the manifest)'}` +
+        `- ${m.name} (\`${m.id}\`)` +
+          (m.localTest ? '' : ` — upstream: ${m.upstream ?? '(no download block — see the manifest)'}`) +
           ` — license: ${m.license}${m.licenseUrl ? ` (${m.licenseUrl})` : ''}` +
+          (m.localTest ? ` — ${LOCAL_TEST_NOTE}` : '') +
           (mitCopyright ? ` — ${mitCopyright}` : '') +
           (m.reviewStatus === 'approved' ? '' : ` — license_review.status: ${m.reviewStatus}`)
       )

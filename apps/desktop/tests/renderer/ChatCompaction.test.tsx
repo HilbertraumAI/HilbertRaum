@@ -7,11 +7,13 @@ import type { CompactionNotice } from '../../src/shared/ipc'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { chatScreenStubs, conversationRow, deferred, fakeChatStream, renderChatScreen } from '../helpers/chat-screen'
 import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
+import { t } from '../../src/shared/i18n'
 
 // Phase 2 UX (context-compaction plan §5.1–§5.3), the screen wiring: the selected conversation's usage
-// read reaches the composer's memory meter (its copy is ContextMeter.test.tsx's), the transcript summary
-// marker sits before the first turn the checkpoint does not subsume, and the one-shot "working on it"
-// notice shows by kind and clears on the first answer token.
+// read reaches the composer's memory meter (its copy is ContextMeter.test.tsx's) and climbs while an answer
+// streams, the transcript summary marker sits before the first turn the checkpoint does not subsume, and the
+// one-shot "working on it" notice shows by kind and clears on the first answer token. The other one-shot
+// per-send notice, the filename auto-scope toast, sits here too.
 
 afterEach(() => {
   try {
@@ -50,6 +52,79 @@ describe('ChatScreen — context-usage meter (§5.1)', () => {
     // copy (the token figures, the amber will-summarize heads-up) are ContextMeter.test.tsx's.
     expect(await screen.findByRole('meter')).toHaveAttribute('aria-valuenow', '80')
     expect(getConversationContextUsage).toHaveBeenCalledWith('c1')
+  })
+
+  // #743: while THIS conversation's answer streams, the meter climbs on top of the resting read. Until main
+  // reports the turn's real assembled prompt it adds an estimate of the question; that report then replaces
+  // the base (it already holds the question, and a document turn's excerpts); the streamed answer's estimate
+  // rides on top. The estimate is ⌈words × 1.95⌉ + 8 per turn (ChatScreen's `liveTokensFromWords`, mirroring
+  // chat.ts `messageTokens`). A 100-token window makes the percentage the token count.
+  it('climbs while an answer streams, then settles on the resting read main reports after the turn', async () => {
+    const user = userEvent.setup()
+    const stream = fakeChatStream()
+    const reply = deferred<Message>()
+    let resting: ContextUsage = { usedTokens: 40, window: 100 }
+    stubApi(
+      chatScreenStubs({
+        ...stream.stubs,
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Compaction chat' })]),
+        getConversationContextUsage: vi.fn(async () => resting),
+        sendChatMessage: vi.fn(() => reply.promise)
+      })
+    )
+    renderChatScreen()
+    await selectConversation(user, 'Compaction chat')
+    expect(await screen.findByRole('meter')).toHaveAttribute('aria-valuenow', '40')
+
+    await user.type(screen.getByPlaceholderText('Message…'), 'one two three four five six seven eight nine ten')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(stream.subscribed()).toBe(true))
+    // The question's estimate: 40 + (⌈10 × 1.95⌉ + 8 = 28).
+    expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow', '68')
+
+    // Main's real prompt usage replaces the base; the question is in it, so it is not added again.
+    stream.contextUsage({ usedTokens: 50, window: 100 })
+    expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow', '50')
+
+    // A streamed one-word answer: 50 + (⌈1 × 1.95⌉ + 8 = 10), once the buffered token is painted.
+    stream.token('Paris')
+    await waitFor(() => expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow', '60'))
+
+    // The turn settles: the live figures go, and the meter shows main's fresh resting read.
+    resting = { usedTokens: 70, window: 100 }
+    await act(async () => reply.resolve(assistantMsg('a9', 'Paris')))
+    await waitFor(() => expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow', '70'))
+  })
+})
+
+// #743: the filename auto-scope notice (rag §10.1 rule 5). A documents question that names an indexed file is
+// answered from that file alone, and main says so once, before the first token (registerRagIpc, STREAM.scope).
+// Main sends it only when the question matched a file, never with an empty list (`detectFilenameScope` answers
+// null instead), so the screen's empty-list guard has no row.
+describe('ChatScreen — the filename auto-scope notice', () => {
+  it('toasts every file a documents answer was narrowed to', async () => {
+    const user = userEvent.setup()
+    const stream = fakeChatStream()
+    const reply = deferred<Message>()
+    stubApi(
+      chatScreenStubs({
+        ...stream.stubs,
+        listConversations: vi.fn(async () => [
+          makeConversation({ title: 'Doc chat', mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
+        ]),
+        askDocuments: vi.fn(() => reply.promise)
+      })
+    )
+    renderChatScreen()
+    await selectConversation(user, 'Doc chat')
+    await user.type(screen.getByPlaceholderText(/ask about your documents/i), 'compare a.pdf and b.pdf')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(stream.subscribed()).toBe(true))
+
+    stream.scopeNotice({ titles: ['a.pdf', 'b.pdf'] })
+    expect(await screen.findByText(t('en', 'chat.scopeNotice', { titles: 'a.pdf, b.pdf' }))).toBeInTheDocument()
+
+    await act(async () => reply.resolve(assistantMsg('a9', 'done')))
   })
 })
 

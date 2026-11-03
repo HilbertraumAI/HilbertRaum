@@ -2,11 +2,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { Collection, Conversation } from '../../src/shared/types'
+import type { Conversation } from '../../src/shared/types'
 import { knowledgePack, packsEventEmitter } from '../helpers/knowledge-pack-fixtures'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
-import { makeConversation, makeDocumentInfo } from '../helpers/chat-fixtures'
+import { makeCollection, makeConversation, makeDocumentInfo } from '../helpers/chat-fixtures'
 
 // #301 P3b, finding L7 (plan §9.17 (e)3) — the Chat half of T13, modelled on
 // ChatScopeToolsRefresh.test.tsx's CH-2 pattern.
@@ -20,21 +20,6 @@ import { makeConversation, makeDocumentInfo } from '../helpers/chat-fixtures'
 // Differs from makeConversation: documents mode + an explicit docs-only scope (no D71 dialog).
 function conv(over: Partial<Conversation> = {}): Conversation {
   return makeConversation({ title: 'Doc Q&A', mode: 'documents', scope: { collectionIds: [], documentIds: [] }, ...over })
-}
-
-function collection(over: Partial<Collection>): Collection {
-  return {
-    id: 'lib',
-    name: 'Library',
-    type: 'library',
-    description: null,
-    builtin: true,
-    color: null,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    archivedAt: null,
-    ...over
-  } as Collection
 }
 
 afterEach(() => {
@@ -59,7 +44,7 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
       chatScreenStubs({
         listConversations: vi.fn(async () => [docConv]),
         listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
-        listCollections: vi.fn(async () => [collection({})]),
+        listCollections: vi.fn(async () => [makeCollection()]),
         listKnowledgePacks,
         onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
       })
@@ -94,7 +79,7 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
       chatScreenStubs({
         listConversations: vi.fn(async () => [docConv]),
         listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
-        listCollections: vi.fn(async () => [collection({})]),
+        listCollections: vi.fn(async () => [makeCollection()]),
         listKnowledgePacks,
         onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
       })
@@ -139,7 +124,7 @@ describe('ChatScreen — mounted-consumer refresh on packs:changed (#301 P3b, T1
       chatScreenStubs({
         listConversations: vi.fn(async () => [docConv]),
         listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
-        listCollections: vi.fn(async () => [collection({})]),
+        listCollections: vi.fn(async () => [makeCollection()]),
         listKnowledgePacks,
         onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
       })

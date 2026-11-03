@@ -168,6 +168,31 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
   })
 })
 
+// #768: the gemma group sent the reader to "each line's license URL", and two of its lines had none. A line without a URL
+// must not promise one, and only a manifest with neither a download block nor a real hash is called a local-test entry:
+// a line telling a legal reader that no drive ships a weight a drive does ship would be the worse error.
+describe('buildDriveNotices model lines (#768)', () => {
+  const REAL = 'a'.repeat(64)
+  it.each<[string, boolean, Record<string, unknown>]>([
+    ['no download block and a placeholder hash', true, { sha256: 'local-unverified' }],
+    ['no download block but a real hash', false, { sha256: REAL }],
+    [
+      'a download block and a placeholder hash',
+      false,
+      {
+        sha256: 'REPLACE_WITH_REAL_HASH',
+        download: { url: 'https://example.test/x/resolve/main/a.gguf', sha256: 'REPLACE_WITH_REAL_HASH', license_url: 'https://example.test/l' }
+      }
+    ]
+  ])('a manifest with %s is a local-test line: %s', (_title, localTest, fields) => {
+    const f = noticesFixture()
+    Object.assign(f.manifests.alpha, fields, { license_review: { status: 'pending' } })
+    const line = buildFrom(f).split('\n').find((l) => l.includes('(`alpha`)'))
+    expect(line?.includes('— no license URL recorded: a local-test entry; no drive ships or downloads this weight')).toBe(localTest)
+    expect(line, 'a non-approved review stays on the line').toContain('— license_review.status: pending')
+  })
+})
+
 describe('buildDriveNotices refuses to write an incomplete file (LIC-1)', () => {
   it('builds the fixture, and a weight shard needs no pinned line (the positive behind the refusals)', () => {
     const f = noticesFixture()

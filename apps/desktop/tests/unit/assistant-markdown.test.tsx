@@ -22,16 +22,22 @@ describe('AssistantMarkdown security posture', () => {
     expect(a.getAttribute('rel')).toContain('noreferrer')
   })
 
+  // Sanitize strips `javascript:` and `data:` hrefs. streamdown 2.7's schema lets `mailto:` and `tel:`
+  // through, and relative and fragment hrefs too, so for those the `a` override is the only gate (#743).
   it.each([
     ['javascript:', '[x](javascript:alert(1))'],
-    ['data:', '[x](data:text/html,<script>1</script>)']
+    ['data:', '[x](data:text/html,<script>1</script>)'],
+    ['mailto:', '[x](mailto:x@y.z)'],
+    ['tel:', '[x](tel:+491234)'],
+    ['relative', '[x](/etc/passwd)'],
+    ['fragment', '[x](#x)']
   ])('renders a %s link as inert text, not a clickable anchor', (_scheme, text) => {
     const { container } = render(<AssistantMarkdown text={text} />)
-    // Sanitize strips both schemes, and the `a` override (SafeLink) downgrades a non-http(s) href to a
-    // <span>: no anchor at all, so never a live js/data href.
+    // The `a` override downgrades a non-http(s) href to a <span>: no anchor at all, never a live href.
     expect(container.querySelector('a')).toBeNull()
     expect(screen.queryByRole('link')).toBeNull()
-    expect(container.textContent).toContain('x')
+    // The link text alone: the markdown was read as a link, not left as literal brackets.
+    expect(container.textContent).toBe('x')
   })
 
   it('never emits a <script> element from raw HTML in model output', () => {
@@ -238,9 +244,10 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.querySelector('.katex-display')).toBeNull() // inline, not display
   })
 
-  it('does NOT convert bracket delimiters inside code', () => {
+  // Both CommonMark fence characters: the `~~~` fence is an alternative of CODE_SPLIT_RE's own (#743).
+  it.each(['```', '~~~'])('does NOT convert bracket delimiters inside code (a %s fence)', (fence) => {
     const { container } = render(
-      <AssistantMarkdown text={'```\n\\[ \\pi \\]\n```\n\nand inline `\\( x \\)` too'} />
+      <AssistantMarkdown text={fence + '\n\\[ \\pi \\]\n' + fence + '\n\nand inline `\\( x \\)` too'} />
     )
     expect(container.querySelector('.katex')).toBeNull()
     expect(container.querySelector('code')?.textContent).toContain('\\[ \\pi \\]')
@@ -384,8 +391,8 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.textContent).toContain('$5 and the')
   })
 
-  it('STREAMING: a $ tail inside an unclosed code fence stays verbatim (#501)', () => {
-    const { container } = render(<AssistantMarkdown text={'```\n$x^2'} streaming />)
+  it.each(['```', '~~~'])('STREAMING: a $ tail inside an unclosed %s code fence stays verbatim (#501, #743)', (fence) => {
+    const { container } = render(<AssistantMarkdown text={fence + '\n$x^2'} streaming />)
     expect(container.querySelector('.katex')).toBeNull()
     expect(container.querySelector('code')?.textContent?.trim(), 'verbatim').toBe('$x^2')
   })
@@ -579,6 +586,29 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.querySelector('.katex')).toBeNull()
     expect(container.textContent).toContain('$$ x $$')
     expect(container.textContent).toContain('$$ y $$')
+  })
+
+  // #743: CODE_SPLIT_RE's odd parts are code. The `$$` count that finds a dangling opener and the
+  // `[` shield both walk the prose parts only, and an inline code span ends at its line.
+  it('STREAMING: a $$ inside inline code does not pair with the formula streaming after it (#743)', () => {
+    const shown = rendered('In bash `$$` is the PID.\n\n$$ x = \\frac{1}{2', true)
+    expect(shown.display).toBe(1)
+    expect(shown.errors).toBe(0)
+    expect(shown.tex.map((t) => t?.trim())).toEqual(['x = \\frac{1}{2}'])
+    expect(shown.container.querySelector('[data-streamdown="inline-code"]')?.textContent).toBe('$$')
+  })
+
+  it('STREAMING: a [ inside inline code stays as written; the bracket shield skips code (#743)', () => {
+    const shown = rendered('Code: `$$[a$$` here', true)
+    expect(shown.math).toBe(0)
+    expect(shown.container.querySelector('[data-streamdown="inline-code"]')?.textContent).toBe('$$[a$$')
+  })
+
+  it('STATIC: two stray backticks around a formula are no code span; the formula typesets (#743)', () => {
+    // A code span never crosses a blank line, so the normaliser must not read one across lines.
+    const shown = rendered('A ` here.\n\n\\[ x^2 \\]\n\nanother ` here')
+    expect(shown.display).toBe(1)
+    expect(shown.tex).toEqual(['x^2'])
   })
 
   it('the app and rehype-katex resolve one katex install, not two copies of it (#698)', () => {

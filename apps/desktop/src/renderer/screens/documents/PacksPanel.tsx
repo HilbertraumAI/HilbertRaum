@@ -6,7 +6,8 @@ import type {
   KnowledgePacksChangedEvent
 } from '@shared/types'
 import type { KnowledgePackCollision } from '@shared/types'
-import type { MessageKey } from '@shared/i18n'
+import type { MessageKey, UiLanguage } from '@shared/i18n'
+import { fmtPackSize } from '@shared/format'
 import {
   Badge,
   Button,
@@ -78,11 +79,9 @@ function languageName(uiLang: string, code: string): string {
   }
 }
 
-function formatSize(bytes: number | null): string | null {
-  if (bytes == null || bytes <= 0) return null
-  const gb = bytes / (1024 * 1024 * 1024)
-  if (gb >= 0.95) return `${gb.toFixed(1)} GB`
-  return `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`
+/** A pack's size on the drive, or null when unknown (`fmtPackSize`, #768). */
+function formatSize(bytes: number | null, lang: UiLanguage): string | null {
+  return bytes == null || bytes <= 0 ? null : fmtPackSize(bytes, lang)
 }
 
 /** The tools-install job's download percentage, or null with no known total (indeterminate) —
@@ -265,7 +264,7 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
     const parts: string[] = []
     if (p.language) parts.push(languageName(lang, p.language))
     if (p.articleCount != null) parts.push(tCount('packs.articleCount', p.articleCount))
-    const size = formatSize(p.sizeBytes)
+    const size = formatSize(p.sizeBytes, lang)
     if (size) parts.push(size)
     if (p.zimDate) parts.push(p.zimDate)
     return parts.join(' · ')
@@ -279,7 +278,7 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
       tCount('packs.summary.enabled', list.filter((p) => p.enabled).length)
     ]
     const bytes = list.reduce((sum, p) => sum + (p.available && p.sizeBytes ? p.sizeBytes : 0), 0)
-    const size = formatSize(bytes)
+    const size = formatSize(bytes, lang)
     if (size) parts.push(t('packs.summary.size', { size }))
     return parts.join(' · ')
   }
@@ -524,6 +523,7 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
           }}
           onCancel={() => setToolsDialogOpen(false)}
           t={t}
+          lang={lang}
         />
       )}
     </div>

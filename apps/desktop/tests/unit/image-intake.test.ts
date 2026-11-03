@@ -14,7 +14,7 @@ import {
   jpegPixelCount,
   pngPixelCount
 } from '../../src/shared/image-headers'
-import { jpegHeader, pngHeader } from '../helpers/image-fixtures'
+import { jpegFrom, jpegHeader, jpegSegment, pngHeader, sofPayload } from '../helpers/image-fixtures'
 
 // #118 / #124 intake-pipeline pure parts. `decodeImage` itself needs `createImageBitmap` (jsdom
 // has none — exactly why the old post-decode 4096 px reject survived unnoticed), so the decisions
@@ -30,6 +30,38 @@ describe('shared image-headers (moved from vision/limits for the renderer prescr
     expect(decodedPixelCount(pngHeader(2, 2), 'image/png')).toBe(4)
     expect(decodedPixelCount(new Uint8Array([1, 2, 3]), 'image/png')).toBeNull()
     expect(decodedPixelCount(pngHeader(2, 2), 'image/webp')).toBeNull() // no WEBP parser — by design
+  })
+
+  // #743: a phone JPEG does not start with its frame. APP1/Exif comes first and carries a thumbnail that is
+  // a JPEG of its own, then the quantization and Huffman tables, then the frame. The walk must step over
+  // each segment by its length (a byte scan finds the thumbnail's SOF0 first) and must not read DHT (0xC4,
+  // inside the SOF range) as a frame.
+  const exifWithThumbnail = jpegSegment(0xe1, [
+    ...[0x45, 0x78, 0x69, 0x66, 0x00, 0x00], // "Exif\0\0"
+    ...[0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08], // big-endian TIFF header, IFD0 at offset 8
+    ...[0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // IFD0: no entries, no next IFD (the thumbnail's tags are left out)
+    ...jpegFrom(jpegSegment(0xc0, sofPayload(160, 120))) // the 160×120 thumbnail: SOI, SOF0, EOI
+  ])
+  const quantTable = jpegSegment(0xdb, [0x00, ...new Array<number>(64).fill(1)])
+  // The standard luminance DC table: 16 code-length counts, then its 12 symbols.
+  const huffmanTable = jpegSegment(0xc4, [
+    0x00, // table class DC, id 0
+    ...[0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+    ...Array.from({ length: 12 }, (_, i) => i)
+  ])
+
+  it.each([
+    ['baseline (SOF0)', 0xc0],
+    ['progressive (SOF2)', 0xc2]
+  ])('reads a %s phone JPEG past its Exif thumbnail and tables: the frame is 4032×3024 (#743)', (_kind, sof) => {
+    const photo = jpegFrom(
+      exifWithThumbnail,
+      quantTable,
+      huffmanTable,
+      [0xff, 0xff], // fill bytes before a marker (T.81 B.1.1.2)
+      jpegSegment(sof, sofPayload(4032, 3024))
+    )
+    expect(jpegPixelCount(photo)).toBe(4032 * 3024)
   })
 })
 

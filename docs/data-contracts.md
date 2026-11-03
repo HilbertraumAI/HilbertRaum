@@ -511,6 +511,15 @@ on `chat:error:<id>` as the friendly localized `main.chat.streamError` copy (sti
 string). The structural server reason goes to the local log only — never to the renderer.
 **Regenerate:** `sendChatMessage` with `options.regenerate = true` deletes the last assistant
 message and re-streams from existing history (no new user turn).
+**What `done` carries when a re-ask ends with no new answer (#779, additive — channel shape unchanged):**
+the previous answer is restored, and `done` (and the invoke's resolved value) is that restored `Message`
+— for a Stop before the first token (CB-2) and for an abort thrown before anything streamed (a Stop,
+model stop, lock or quit during document search, the reranker, a knowledge-pack arm or the
+categorizer). A non-abort failure restores it too but stays an error (`chat:error:<id>`, the invoke
+rejects). One documented twin carries an empty `Message` instead: a Stop while the re-ask is still parked
+waiting for the chat slot behind a deep-index build. Nothing was deleted then, so the previous answer
+stands untouched; the renderer re-lists the conversation after the invoke resolves and does not read the
+`done` payload (it never subscribes to `onDone`).
 **Send again (#613, additive):** `sendChatMessage(conversationId, '', { resendMessageId })` and
 `askDocuments(conversationId, '', skillInstallId, false, pinnedDocumentId, resendMessageId)` answer the
 conversation's unanswered last question: the user turn with that id, which must still be the last visible
@@ -1241,13 +1250,17 @@ head's own weights + KV.
   unverified, error }` (`unverified` = placeholder-hash download, the model stays UNVERIFIED);
   `ModelInfo.download?: ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved,
   withdrawn? }` (`withdrawn` = the manifest's #196 note; the card shows it INSTEAD of a Download
-  button, and `DownloadManager.start` refuses such a manifest before any request).
+  button, and `DownloadManager.start` refuses such a manifest before any request). `sizeBytes` is
+  every file the model downloads, summed from their `download` blocks (a vision model's projector
+  and any `files:` entry with the weight, #768), or null when any of them declares no `size_bytes`.
 ✅ **`services/downloads.ts`** — `DownloadGates { policyAllows, settingAllows }`,
   `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
   `DownloadManager({ fetchImpl?, log?, audit?, onModelInstalled? })` with `start({rootPath, manifest,
   gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
   (keeps the `.part`), `activeJob()` (held until the run settles, so a cancelled job stays there until
-  it has, #752), and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`.
+  it has, #752), and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`. `start()` also refuses, before
+  any job exists, a download whose bytes still to fetch exceed the drive's free space
+  (`main.download.notEnoughSpace`, #768).
   `list()` returns snapshots of the active job (if any) plus every retained terminal job that is
   still UNRESOLVED and not dismissed, in creation order — never a verified `done`, never a
   `cancelled` one. `dismiss(jobId)` records the id (unknown ids are a no-op) so `list()` stops
@@ -2347,7 +2360,10 @@ therefore also rides `listMessages`, `getLatestMessage`, the `DeletedMessage` sn
 with zero citations; a legacy turn that cites an archive but carries none shows an explicit
 "outcome not recorded" line. A whole-document, compare or grounded-data answer produces
 `skipped/mode` for every selected pack — packs are still not queried on those paths, but
-the answer now says so.
+the answer now says so. Since #734 the coverage-extract listing and a tool skill's template
+answer do too. The D45 refusal, the W2 routing answer and a `routing` handler's button pointer
+(redaction, document edit) record none (owner call, #734): they make no document claim, so their
+`pack_outcomes_json` stays NULL with packs ticked.
 
 **Manual harness env (P5, finding L8):** the real-tool smoke (`tests/manual/zim-real.test.ts`)
 is gated by `HILBERTRAUM_ZIM_SMOKE`; once requested, `HILBERTRAUM_ZIM_TOOLS_DIR` /

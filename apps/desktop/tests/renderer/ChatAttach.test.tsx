@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
+import { join } from 'node:path'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   DEFAULT_SETTINGS,
+  type Conversation,
   type DocumentInfo,
+  type DocumentScope,
   type ImportJob,
   type ImportJobStatus,
-  type Message
+  type Message,
+  type PickDocumentsResult
 } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { assistantMsg, makeConversation, makeDocumentInfo, makeSkillInfo, userMsg } from '../helpers/chat-fixtures'
@@ -25,7 +29,8 @@ import { en, t } from '../../src/shared/i18n'
 
 // Phase C renderer tests: the net-new chat attach / drag-drop intake (plan §11.2 H1),
 // plain-chat drop routing (§13.5 H2), the in-flight pending chip → live attachment
-// transition (N4), and the read-only "Files in this chat" affordance (§13.1).
+// transition (N4), the read-only "Files in this chat" affordance (§13.1), the paperclip's
+// picker path (D1) and the one-time narrow choice on an existing chat (D71).
 
 const job: ImportJob = { jobId: 'j1', documentIds: ['d1'] }
 const jobDone: ImportJobStatus = { jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }
@@ -294,6 +299,136 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     expect(await screen.findByText(/couldn't add that/i)).toBeInTheDocument()
     // Nothing was imported — a zero-path drop must not start a phantom import.
     expect(importDocuments).not.toHaveBeenCalled()
+  })
+})
+
+// #743: the paperclip, the keyboard-reachable way to attach. The main-process picker returns the chosen paths
+// with a one-time token, and the import carries that token (D1): main then imports exactly what was picked
+// instead of hardening raw paths, as it does for a drop.
+describe('ChatScreen — the paperclip attaches through the file picker (D1)', () => {
+  // The renderer passes the picker's paths through untouched, so any path will do.
+  const picked = join('Documents', 'contract.pdf')
+
+  function stubPicker(pick: PickDocumentsResult) {
+    const pickDocuments = vi.fn(async (_mode?: 'files' | 'folder') => pick)
+    const createConversation = vi.fn(async () => createdDocsChat())
+    const importDocuments = vi.fn(async () => job)
+    stubApi(
+      chatScreenStubs({
+        pickDocuments,
+        createConversation,
+        importDocuments,
+        getImportJob: vi.fn(async () => ({ ...jobDone, done: false }))
+      })
+    )
+    return { pickDocuments, createConversation, importDocuments }
+  }
+
+  it('imports the picked files into a new documents chat, with the picker token', async () => {
+    const { pickDocuments, importDocuments } = stubPicker({ token: 'pick-1', paths: [picked] })
+    renderChatScreen()
+    await userEvent.click(await screen.findByRole('button', { name: t('en', 'chat.attach.button') }))
+
+    expect(pickDocuments).toHaveBeenCalledWith('files')
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith([picked], {
+        destination: { kind: 'conversation', conversationId: 'c2' },
+        pickerToken: 'pick-1'
+      })
+    )
+  })
+
+  // Two checks stop an empty pick: the paperclip's own and attachFiles' (which also serves the drop). Either
+  // one alone keeps this row green; without both, a cancel made a new documents chat.
+  it('a cancelled pick starts nothing: no chat is created, nothing is imported', async () => {
+    const { pickDocuments, createConversation, importDocuments } = stubPicker({ token: 'pick-2', paths: [] })
+    renderChatScreen()
+    await userEvent.click(await screen.findByRole('button', { name: t('en', 'chat.attach.button') }))
+
+    // Let the click's continuation after the picker resolves run before reading the negatives.
+    await act(async () => {
+      await pickDocuments.mock.results[0]!.value
+    })
+    await act(async () => {})
+    expect(createConversation).not.toHaveBeenCalled()
+    expect(importDocuments).not.toHaveBeenCalled()
+    expect(screen.getByPlaceholderText('Message…')).toBeInTheDocument() // still a plain chat composer
+  })
+})
+
+// D71 (#26) and CH-13 (#148) at the screen (#743): a file attached to an EXISTING documents chat that still
+// answers from the whole library brings a one-time choice. "Just this file" persists an empty explicit scope
+// (main then unions the chat's attachments in, so the library drops out); "Whole library" keeps the default.
+// Either answer is remembered for the conversation; Esc only closes the dialog, so the next file asks again.
+// Which callback each control fires is ScopeNarrowDialog.test.tsx's. Every import here finishes, so the
+// second file is not turned away as a second pending import (CR-3).
+describe('ChatScreen — the one-time narrow choice on attaching to a whole-library chat (D71, CH-13)', () => {
+  interface NarrowRow {
+    answer: (user: ReturnType<typeof userEvent.setup>) => Promise<void>
+    /** What each setConversationScope call persisted for the chat. */
+    scopeWrites: DocumentScope[]
+    asksAgain: boolean
+  }
+  // [title, row] tuples titled with `%s`: vitest quotes an object row's `$label` and cuts it at 40 characters.
+  it.each<[string, NarrowRow]>([
+    [
+      '"Just this file" narrows the chat to its files, and the next file is not asked about',
+      {
+        answer: (user) => user.click(screen.getByRole('button', { name: t('en', 'chat.scope.narrowJust') })),
+        scopeWrites: [{ collectionIds: [], documentIds: [] }],
+        asksAgain: false
+      }
+    ],
+    [
+      '"Whole library" keeps the library, and the next file is not asked about',
+      {
+        answer: (user) => user.click(screen.getByRole('button', { name: t('en', 'chat.scope.narrowWhole') })),
+        scopeWrites: [],
+        asksAgain: false
+      }
+    ],
+    [
+      'Esc decides nothing: the dialog closes, and the next file asks again',
+      { answer: (user) => user.keyboard('{Escape}'), scopeWrites: [], asksAgain: true }
+    ]
+  ])('%s', async (_title, row) => {
+    const user = userEvent.setup()
+    // The library default: no explicit scope, no project anchor. A write is what main persists and lists next.
+    let scope: DocumentScope | null = null
+    const chat = (): Conversation => makeConversation({ title: 'Library chat', mode: 'documents', scope })
+    const setConversationScope = vi.fn(async (_id: string, next: DocumentScope | null) => {
+      scope = next
+      return chat()
+    })
+    const importDocuments = vi.fn(async () => job)
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        listConversations: vi.fn(async () => [chat()]),
+        importDocuments,
+        getImportJob: vi.fn(async () => jobDone),
+        setConversationScope
+      })
+    )
+    renderChatScreen()
+    await user.click(await screen.findByText('Library chat'))
+    const narrowTitle = t('en', 'chat.scope.narrowTitle')
+
+    bridge.drop(chatMain(), 'invoice.pdf', '/tmp/invoice.pdf')
+    expect(await screen.findByRole('dialog', { name: narrowTitle })).toBeInTheDocument()
+    await row.answer(user)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(setConversationScope.mock.calls).toEqual(row.scopeWrites.map((written) => ['c1', written]))
+
+    // The first file is in (the live region says so), and a second one arrives.
+    expect(await screen.findByText(t('en', 'chat.attach.added', { name: 'invoice.pdf' }))).toBeInTheDocument()
+    bridge.drop(chatMain(), 'second.pdf', '/tmp/second.pdf')
+    // The prompt is decided in the step that announces the file as processing.
+    expect(await screen.findByText(t('en', 'chat.attach.processing', { name: 'second.pdf' }))).toBeInTheDocument()
+    expect(importDocuments).toHaveBeenCalledTimes(2)
+    await waitFor(() =>
+      expect(screen.queryAllByRole('dialog', { name: narrowTitle })).toHaveLength(row.asksAgain ? 1 : 0)
+    )
   })
 })
 

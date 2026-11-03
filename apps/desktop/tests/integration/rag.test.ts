@@ -620,7 +620,7 @@ describe('generateGroundedAnswer', () => {
     appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
 
     const rt = runtime()
-    const resting = getConversationContextUsage(db, rt, conv.id)
+    const resting = getConversationContextUsage(db, rt, null, conv.id)
     let usage: { usedTokens: number; window: number } | null = null
     await generateGroundedAnswer(db, rt, embedder, conv.id, question, SETTINGS, {
       onPromptUsage: (u) => {

@@ -18,6 +18,17 @@ vi.mock('streamdown', () => ({
   defaultRehypePlugins: { raw: () => undefined, sanitize: () => undefined }
 }))
 
+// MessageBlock is not exported, so its own memo is counted through its action row (#743):
+// `MessageActions` is no memo and MessageBlock hands it fresh arrows, so it renders exactly when
+// MessageBlock does. The parse counts cannot see that memo: the memoized AssistantMarkdown inside
+// the block still skips the parse when the block re-renders.
+const actionRowRenders = vi.hoisted(() => new Map<string, number>())
+vi.mock('../../src/renderer/chat/MessageActions', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../src/renderer/chat/MessageActions')>()
+  const { countMemoRenders } = await import('../helpers/render-counter')
+  return { ...m, MessageActions: countMemoRenders(m.MessageActions, () => 'row', actionRowRenders) }
+})
+
 const sdMock = Streamdown as unknown as Mock
 /** How many times Streamdown was handed exactly `text` (a persisted turn or a live flush). */
 const parses = (text: string): number =>
@@ -26,6 +37,7 @@ const parses = (text: string): number =>
 afterEach(() => {
   cleanup()
   sdMock.mockClear()
+  actionRowRenders.clear()
 })
 
 // transcriptProps' handlers are module-level, so every render below gets the same function objects
@@ -42,6 +54,17 @@ describe('Transcript — streaming memoization (FE-1)', () => {
     expect(parses('**Hello** world')).toBe(1)
     rerender(<Transcript {...props} streamText="one two three four five" />)
     expect(parses('**Hello** world')).toBe(1)
+  })
+
+  it('does not re-render a prior message’s block when only streamText changes (MessageBlock’s memo, #743)', () => {
+    const props = transcriptProps({ messages: [makeMessage()], streamingHere: true })
+    const { rerender } = render(<Transcript {...props} streamText="one" />)
+    rerender(<Transcript {...props} streamText="one two" />)
+    rerender(<Transcript {...props} streamText="one two three" />)
+    expect(actionRowRenders.get('row'), 'the settled answer’s block rendered once').toBe(1)
+    // Positive control: a prop the block does take re-renders it, and the counter sees that.
+    rerender(<Transcript {...props} streamText="one two three" actionsDisabled />)
+    expect(actionRowRenders.get('row')).toBe(2)
   })
 
   it('hands Streamdown the same objects on every flush; only the text changes (#685)', () => {

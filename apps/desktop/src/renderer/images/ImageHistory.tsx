@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button, ConfirmDialog, Spinner } from '../components'
 import { useT } from '../i18n'
-import { formatSize } from './ImagePreview'
+import { fmtDiskSize } from '@shared/format'
 import type { UiLanguage } from '@shared/i18n'
 import type { ImageSessionSummary } from '@shared/types'
 
@@ -64,7 +64,7 @@ export function ImageHistory({
         {sessions.length > 0 && (
           <>
             <span className="image-history-total">
-              {t('images.history.total', { size: formatSize(totalBytes, lang) })}
+              {t('images.history.total', { size: fmtDiskSize(totalBytes, lang) })}
             </span>
             <Button
               variant="ghost"
@@ -118,7 +118,7 @@ export function ImageHistory({
                     <span>{tCount('images.history.turns', s.turnCount)}</span>
                     {/* #122: per-entry stored size — what deleting this row gives back. */}
                     <span className="image-history-dot" aria-hidden="true">·</span>
-                    <span>{formatSize(s.sizeBytes, lang)}</span>
+                    <span>{fmtDiskSize(s.sizeBytes, lang)}</span>
                     {formatDate(s.updatedAt, lang) && (
                       <>
                         <span className="image-history-dot" aria-hidden="true">·</span>
@@ -170,7 +170,7 @@ export function ImageHistory({
         }}
         onCancel={() => setPendingClear(false)}
       >
-        <p>{t('images.history.clear.body', { size: formatSize(totalBytes, lang) })}</p>
+        <p>{t('images.history.clear.body', { size: fmtDiskSize(totalBytes, lang) })}</p>
       </ConfirmDialog>
     </section>
   )

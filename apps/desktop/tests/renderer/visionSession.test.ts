@@ -102,6 +102,32 @@ describe('visionSession — L6a busy guard (F-26)', () => {
   })
 })
 
+// #743: an analyze main refuses at once settles its turn as failed with a code AnswerThread maps to copy,
+// and gives the composer back. Main's two refusals: the IPC call rejects (registerImagesIpc's
+// `requireUnlocked` throws during a lock), or it answers a terminal failed job (vision/index.ts `analyze`:
+// `failedJob(code)` with validateAnalyzeRequest's code; registerImagesIpc adds the request's `sessionId`).
+describe('visionSession — an analyze main refuses at once (#743)', () => {
+  it.each([
+    [
+      'the IPC call rejects',
+      'runtimeFailed',
+      () => Promise.reject(new Error('The workspace is locked. Unlock it to continue.'))
+    ],
+    [
+      'main answers a failed job',
+      'tooLarge',
+      async (): Promise<ImageJob> => ({ jobId: 'refused', state: 'failed', error: 'tooLarge', sessionId: null })
+    ]
+  ] as const)('%s: the turn fails as %s and analyzing ends', async (_how, code, refuse) => {
+    stubApi(visionStream({ analyze: refuse }).api)
+    selectImage(selectedImage())
+
+    expect(await analyze('question')).toBe('started')
+    expect(getVisionSession().turns).toEqual([expect.objectContaining({ state: 'failed', error: code })])
+    expect(getVisionSession()).toMatchObject({ analyzing: false, activeJobId: null })
+  })
+})
+
 // PF-7c (full-audit 2026-07-10, closes carried-forward PERF-5): the store used to notify per token
 // with a freshly mapped `turns` array — every token re-rendered the Images screen. Tokens now
 // buffer through the STREAM_FLUSH_MS window ChatScreen uses too: a burst inside one

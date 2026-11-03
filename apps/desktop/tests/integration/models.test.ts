@@ -1097,6 +1097,42 @@ describe('recommendModelIdByRam', () => {
   })
 })
 
+// #768: the confirmation dialog states `download.sizeBytes`. A vision model downloads its projector too, so once the
+// committed manifest declared both sizes the weight's alone would have offered 1.9 of its 3.3 GB.
+describe('buildModelList — the download size the confirmation states (#768)', () => {
+  const source = (file: string, size: number | undefined): Record<string, unknown> => ({
+    url: `https://example.test/${file}`,
+    sha256: 'REPLACE_WITH_REAL_HASH',
+    ...(size === undefined ? {} : { size_bytes: size })
+  })
+  it.each<[string, number | undefined, number | null]>([
+    ['both files declare their size: the sum', 300, 1300],
+    ['the projector declares none: unknown, not the weight alone', undefined, null]
+  ])('a vision model where %s', async (_title, projectorSize, expected) => {
+    const dir = manifestsDirWith(
+      rawManifest({
+        id: 'vl',
+        role: 'vision',
+        family: 'qwen2.5-vl',
+        local_path: 'models/vision/vl.gguf',
+        download: source('vl.gguf', 1000),
+        mmproj: {
+          local_path: 'models/vision/mmproj.gguf',
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          download: source('mmproj.gguf', projectorSize)
+        }
+      })
+    )
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: tempRoot('root'),
+      developerMode: true,
+      machineRamGb: PINNED_RAM_GB
+    })
+    expect(models[0].download?.sizeBytes).toBe(expected)
+  })
+})
+
 describe('buildModelList — RAM gate', () => {
   it('flags models above the machine RAM and recommends the best RAM fit', async () => {
     const dir = manifestsDirWith(

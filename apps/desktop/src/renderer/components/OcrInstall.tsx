@@ -1,5 +1,6 @@
 import type { OcrInstallJob, OcrInstallStatus, OcrRefreshOutcome } from '@shared/types'
 import type { UiLanguage } from '@shared/i18n'
+import { fmtDiskSize } from '@shared/format'
 import { Button } from './Button'
 import { ConfirmDialog } from './Dialog'
 import { Progress } from './Progress'
@@ -21,12 +22,6 @@ export interface OcrInstallView {
   live: boolean
   error: string | null
   cancel: () => Promise<void>
-}
-
-/** Decimal separator follows the UI language (the Documents `formatSize` rule). */
-function formatMb(bytes: number, lang: UiLanguage): string {
-  const mb = bytes / (1024 * 1024)
-  return `${mb.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })} MB`
 }
 
 const LANGUAGE_KEYS = {
@@ -92,7 +87,7 @@ export function OcrInstallDialog({
         <dt>{t('ocr.install.confirm.languages')}</dt>
         <dd>{missing.map((l) => languageName(l.lang, t)).join(', ')}</dd>
         <dt>{t('models.confirm.size')}</dt>
-        <dd>{formatMb(status.totalBytes, lang)}</dd>
+        <dd>{fmtDiskSize(status.totalBytes, lang)}</dd>
         <dt>{t('models.confirm.license')}</dt>
         <dd>{status.license}</dd>
         <dt>{t('models.confirm.from')}</dt>

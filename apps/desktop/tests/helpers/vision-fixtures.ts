@@ -84,13 +84,14 @@ export function imageSessionDetail(over: Partial<ImageSessionDetail> = {}): Imag
   }
 }
 
-/** The picker path (D2): `imageChooseImage` hands back a token for `name`, `imageReadBytes` its 4 bytes. */
-export function pickedImage(name = 'receipt.png'): {
+/** The picker path (D2): `imageChooseImage` hands back a token for `name` (main's `stat` size: `sizeBytes`),
+ *  `imageReadBytes` its 4 bytes. */
+export function pickedImage(name = 'receipt.png', sizeBytes = 4): {
   imageChooseImage: Mock<PreloadApi['imageChooseImage']>
   imageReadBytes: Mock<PreloadApi['imageReadBytes']>
 } {
   return {
-    imageChooseImage: vi.fn<PreloadApi['imageChooseImage']>(async () => ({ token: `tok-${name}`, name, sizeBytes: 4 })),
+    imageChooseImage: vi.fn<PreloadApi['imageChooseImage']>(async () => ({ token: `tok-${name}`, name, sizeBytes })),
     imageReadBytes: vi.fn<PreloadApi['imageReadBytes']>(async () => new Uint8Array([1, 2, 3, 4]))
   }
 }

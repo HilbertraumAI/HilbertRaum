@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { IpcMainInvokeEvent } from 'electron'
 import {
   appendMessage,
   createConversation,
@@ -8,10 +9,13 @@ import {
   persistAssistantMessage
 } from '../../src/main/services/chat'
 import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
-import { withRegenerateGuard } from '../../src/main/ipc/chat-stream'
+import { withChatStream, withRegenerateGuard } from '../../src/main/ipc/chat-stream'
 import type { ChatStreamRunFn } from '../../src/main/ipc/chat-stream'
+import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { STREAM } from '../../src/shared/ipc'
 import type { CoverageInfo, Message } from '../../src/shared/types'
 import { openFreshDb } from '../helpers/db-fixtures'
+import { makeEvent } from '../helpers/ipc'
 
 // CB-2 — a regenerate deletes the prior reply INSIDE the stream (F2) and, before this fix, restored
 // it only on a NON-abort failure. A user Stop BEFORE the first token resolves (does not throw) with
@@ -155,27 +159,41 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
     expect(listMessages(db, conv.id).map((m) => m.content)).toEqual(['q', 'the new answer'])
   })
 
+  // #779: driven through `withChatStream`, which picks `done` or `error` and what `done` carries.
   it.each([
     ['the Stop button', endedEarlyAbortReason('user')],
     ['a model stop', endedEarlyAbortReason('model')]
-  ])('%s while documents are still being searched for a re-ask: the previous answer comes back', async (_l, reason) => {
+  ])('%s while documents are still being searched for a re-ask: the previous answer comes back, and done carries it', async (_l, reason) => {
     // Retrieval, the reranker and a knowledge-pack arm rethrow an abort (rag/index.ts) — nothing was
-    // streamed or saved. The guard used to skip every abort here, so the previous answer was lost.
+    // streamed or saved. The guard used to skip every abort here, so the previous answer was lost (#600);
+    // then it restored the answer but rethrew, and `done` carried an empty message (#779).
     const db = openFreshDb('regenerate')
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
     const original = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'kept' })
-    const signal = abortedWith(reason)
+    const event = makeEvent()
 
-    const wrapped = withRegenerateGuard(db, conv.id, true, async () => {
-      const err = new Error('The operation was aborted.')
-      err.name = 'AbortError'
-      throw err
-    })
-    await expect(wrapped(signal, noop, noop, noop, noop, noop)).rejects.toThrow('aborted')
+    const result = await withChatStream(
+      event as unknown as IpcMainInvokeEvent,
+      conv.id,
+      'Document answer failed',
+      withRegenerateGuard(db, conv.id, true, async () => {
+        // What the Stop button and the model-stop hook do: abort the turn's registered controller. The
+        // search step then rethrows the abort.
+        inFlightStreams.get(conv.id)!.abort(reason)
+        const err = new Error('The operation was aborted.')
+        err.name = 'AbortError'
+        throw err
+      })
+    )
 
+    expect(result).toMatchObject({ id: original.id, content: 'kept' })
+    const sends = event.sender.send.mock.calls
+    expect(sends.map((c) => c[0])).toEqual([STREAM.done(conv.id)]) // a cancellation: no chat:error
+    expect(sends[0][1]).toMatchObject({ id: original.id, content: 'kept' })
     const history = listMessages(db, conv.id)
     expect(history.map((m) => m.id)).toEqual([history[0].id, original.id])
+    expect(history[0].endedEarly).toBeUndefined() // answered: the question is not marked "Not answered"
   })
 
   it('a turn that ended before the first word marks the question "Not answered" with its cause (#612)', async () => {

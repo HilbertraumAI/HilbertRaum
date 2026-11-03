@@ -63,7 +63,7 @@ download:
   # again (issue 196; model-policy.md "Withdrawn upstream sources"). The url/sha256/size above
   # still describe the weight already on existing drives, which keeps verifying normally.
   # No " #" in this value: the fetch scripts' flat-YAML parser strips inline comments.
-  withdrawn: "2026-08-20: unsloth removed the static K-quants from Qwen3.8-27B-GGUF in their Dynamic 3.0 restructure (HTTP 404 verified 2026-08-20). Successor candidate UD-Q4_K_M awaits the measurement wave of issue 196."
+  withdrawn: "2026-08-20: unsloth removed the static K-quants from Qwen3.8-27B-GGUF in their Dynamic 3.0 restructure (HTTP 404 verified 2026-08-20). Successor in the catalog: Qwen3.8 27B UD-Q4_K_M."
 bundled_on_preconfigured_drive: false
 # TEXT-ONLY USE: upstream Qwen3.8 is a vision-language model, but this chat manifest ships only
 # the language GGUF and no mmproj/projector, which is all our chat pipeline uses.

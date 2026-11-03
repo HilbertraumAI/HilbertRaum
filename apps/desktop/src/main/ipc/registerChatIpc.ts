@@ -213,15 +213,16 @@ export function registerChatIpc(ctx: AppContext): void {
 
   // Resting-state context-window usage for the composer meter (context-compaction plan §5.1).
   // Read-only, no model call: the assembled-prompt estimate over the launched window. With no runtime
-  // up it falls back to the context-size override, else settings.contextTokens. Returns null for an
-  // unknown conversation so the renderer hides the meter rather than showing a system-prompt-only
-  // sliver for a vanished chat.
+  // up it is the window the next start launches with — the active model's manifest read from
+  // `ctx.manifestsDir`, the same rule as the doc-task budget (#779). Returns null for an unknown
+  // conversation so the renderer hides the meter rather than showing a system-prompt-only sliver
+  // for a vanished chat.
   ipcHandle(
     IPC.getConversationContextUsage,
     (_e, conversationId: string): ContextUsage | null => {
       requireUnlocked()
       if (!getConversation(ctx.db, conversationId)) return null
-      return getConversationContextUsage(ctx.db, ctx.runtime.active(), conversationId)
+      return getConversationContextUsage(ctx.db, ctx.runtime.active(), ctx.manifestsDir, conversationId)
     }
   )
 

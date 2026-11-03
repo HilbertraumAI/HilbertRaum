@@ -3,8 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // IPC-layer test for the STREAM.compaction notice (context-compaction plan §5.2): the one-shot
 // ephemeral "summarizing…" event must fire EXACTLY once, only when the compaction pre-pass actually
 // summarizes for the turn — wired through `withChatStream`'s `sendCompaction` notifier. Its sibling,
-// the STREAM.usage meter reading, is pinned here too (#737). Only the Electron IPC transport is faked
-// (tests/helpers/ipc.ts); the real chat service + a temp DB run underneath.
+// the STREAM.usage meter reading, is pinned here too (#737), and so is the resting meter read's window with no
+// model running (#779). Only the Electron IPC transport is faked (tests/helpers/ipc.ts); the real chat service + a
+// temp DB run underneath.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -19,20 +20,23 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type { Db } from '../../src/main/services/db'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
+import { updateSettings } from '../../src/main/services/settings'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { appendTurns, compactionRuntime } from '../helpers/compaction-fixtures'
+import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-function makeCtx(db: Db, runtime: ModelRuntime): AppContext {
+function makeCtx(db: Db, runtime: ModelRuntime | null, manifestsDir: string | null = null): AppContext {
   return {
     trustedSenders: ANY_SENDER,
     db,
+    manifestsDir,
     workspace: { isUnlocked: () => true },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId }
+    runtime: { active: () => runtime, activeModelId: () => runtime?.modelId ?? null }
   } as unknown as AppContext
 }
 
@@ -90,5 +94,22 @@ describe('registerChatIpc — STREAM.usage meter reading (§5.1)', () => {
     expect(usageSends[0][1]).toMatchObject({ window: 8000 }) // the launched window
     expect(usageSends[0][1].usedTokens).toBeGreaterThan(0)
     expect(channels.indexOf(STREAM.token(conv.id))).toBeGreaterThan(channels.indexOf(STREAM.usage(conv.id)))
+  })
+})
+
+// #779: the resting read (`getConversationContextUsage`) with no model running reaches the manifests through the
+// handler's context, so the meter shows the window the next start launches with. The window rule itself is owned by
+// chat-compaction-ux.test.ts; this row pins the wiring.
+describe('registerChatIpc — the resting meter read (§5.1)', () => {
+  it("with no model running, reads the active model's recommended window (#779)", async () => {
+    const db = openFreshDb('compaction-ipc')
+    const manifestsDir = manifestsDirWith(rawManifest({ id: 'recommends-16k', recommended_context_tokens: 16384 }))
+    updateSettings(db, { activeModelId: 'recommends-16k' })
+    const conv = createConversation(db, { modelId: 'm' })
+    registerChatIpc(makeCtx(db, null, manifestsDir))
+
+    const { result } = await invoke(handlers, IPC.getConversationContextUsage, conv.id)
+
+    expect(result).toMatchObject({ window: 16384 })
   })
 })

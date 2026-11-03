@@ -1,24 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { validateAnalyzeRequest, VISION_MAX_IMAGE_BYTES, VISION_MAX_IMAGE_PIXELS } from '../../src/main/services/vision/limits'
 import { decodedPixelCount } from '../../src/shared/image-headers'
-import { pngHeader } from '../helpers/image-fixtures'
+import { jpegHeader, pngHeader } from '../helpers/image-fixtures'
 
 // D4 (vuln-scan-2026-06-21): the authoritative main-side guard must defuse a decompression bomb
 // (small file, enormous decoded bitmap) by parsing the image HEADER for width*height — the byte
 // cap alone passes a <20 MiB PNG/JPEG that decodes to billions of pixels and OOMs the sidecar.
-
-/** A minimal JPEG: SOI + a baseline SOF0 segment carrying height then width (big-endian u16). */
-function jpegHeader(w: number, h: number): Uint8Array {
-  return new Uint8Array([
-    0xff, 0xd8, // SOI
-    0xff, 0xc0, // SOF0
-    0x00, 0x11, // segment length
-    0x08, // sample precision
-    (h >> 8) & 0xff, h & 0xff, // height
-    (w >> 8) & 0xff, w & 0xff, // width
-    0x03, 0, 0, 0, 0, 0, 0, 0, 0 // components (unparsed tail)
-  ])
-}
 
 describe('validateAnalyzeRequest pixel budget (D4)', () => {
   const Q = 'what is in this image?'

@@ -199,7 +199,9 @@ export type ChatStreamRunFn = (
  *  - a re-ask that THROWS restores its snapshot whenever nothing was saved in its place, abort or
  *    not. An abort thrown before anything streamed (document search, the reranker, a knowledge-pack
  *    arm, the categorizer) used to skip the restore and lose the previous answer, the Stop button
- *    included (reachable through "Answer without it" / "Run with <skill>" in a document chat);
+ *    included (reachable through "Answer without it" / "Run with <skill>" in a document chat). #779:
+ *    after restoring, an abort RESOLVES with the restored answer, like CB-2's Stop before the first
+ *    token, so `chat:done` carries the answer the transcript shows; any other failure rethrows (F2);
  *  - a turn that ended early with no answer at all marks its question "Not answered", with its cause
  *    (`markUnansweredQuestion`, which touches the last row only when it IS the question).
  *    A Stop during the pre-generation slot handoff (REL-3) ends before this wrapper runs and is not
@@ -324,7 +326,15 @@ function regenerateGuarded(db: Db, conversationId: string, runFn: ChatStreamRunF
       // Restore whenever the re-ask threw with nothing saved in its place (#600: aborts included).
       // Every path that saves a partial resolves instead of throwing; the tail check keeps a saved
       // answer from ever sitting next to a restored one should that change.
-      if (deleted && getRegenerableAssistantMessageId(db, conversationId) == null) restoreMessage(db, deleted)
+      if (deleted && getRegenerableAssistantMessageId(db, conversationId) == null) {
+        restoreMessage(db, deleted)
+        // #779: an abort (a Stop, a model stop, lock or quit while documents were still being searched)
+        // is a cancellation, not a failure. Resolve with the restored answer, as CB-2 does above, so
+        // `chat:done` carries the answer the transcript shows rather than an empty one. A non-abort
+        // failure still rethrows (F2): `withChatStream` sends `chat:error` and the invoke rejects.
+        const restored = signal.aborted ? getLatestMessage(db, conversationId) : null
+        if (restored) return restored
+      }
       throw err
     }
   }
@@ -490,9 +500,13 @@ export async function withChatStream(
     // An in-generation abort never reaches here (generation swallows it and returns the partial).
     // Two pre-generation paths do: the slot park (the acquire rejects), and an abort thrown by a
     // step inside `runFn` before anything streamed (document search, the reranker, a knowledge-pack
-    // arm, the categorizer). On a re-ask, `withRegenerateGuard` has already restored the previous
-    // answer and rethrown (#600), so this `done` carries an empty message while the persisted tail
-    // is that restored answer — an open gap; the renderer re-lists after the invoke resolves.
+    // arm, the categorizer). On a re-ask the second one no longer arrives here: `withRegenerateGuard`
+    // restores the previous answer and resolves with it (#779), so `done` carries that answer. The
+    // remaining twin is a Stop while a re-ask is still parked waiting for the chat slot behind a
+    // deep-index build: the acquire rejects BEFORE the guard runs, so nothing was deleted and the
+    // previous answer stands untouched, while this `done` carries an empty message. Kept as is: the
+    // renderer re-lists the conversation after the invoke resolves and reads no `done` payload (it
+    // never subscribes to `onDone`).
     if (controller.signal.aborted) {
       const assistant = emptyAssistantMessage(conversationId)
       if (!event.sender.isDestroyed()) {

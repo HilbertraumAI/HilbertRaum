@@ -3,7 +3,7 @@ import { Banner, Button, ErrorBanner, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { runAndSurface } from '../../lib/errors'
-import { fmt1 } from '../../lib/format'
+import { fmt1 } from '@shared/format'
 import { formatSize } from '../documents/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import { engineProblemDiagKey, engineProblemTechnicalDetail } from '@shared/engine-problem'
@@ -131,7 +131,7 @@ function accelerationLabel(
   return t('diag.accel.cpu')
 }
 
-// fmt1 (one-decimal locale number) is shared with the Chat starting panel — lib/format.
+// fmt1 (one-decimal locale number) is shared with the Chat starting panel — shared/format.
 
 /** Locale-aware plain number (throughput: MB/s, tokens/s) — keeps the measured value
  *  as-is but routes the decimal separator + grouping through the UI language (M-U5,

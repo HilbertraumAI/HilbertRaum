@@ -14,7 +14,9 @@ import {
   writeCheckpoint
 } from '../../src/main/services/chat'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
+import type { ContextUsage } from '../../src/shared/types'
 import { openFreshDb } from '../helpers/db-fixtures'
+import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 import { WIDE_WINDOW, appendTurns, compactionRuntime } from '../helpers/compaction-fixtures'
 import { recordingRuntime } from '../helpers/scripted-runtime'
 
@@ -33,35 +35,56 @@ describe('getConversationContextUsage (§5.1)', () => {
     const rt = compactionRuntime({ window: 8000 })
 
     appendTurns(db, conv.id, 4, 20)
-    const small = getConversationContextUsage(db, rt, conv.id)
+    const small = getConversationContextUsage(db, rt, null, conv.id)
     expect(small.window).toBe(8000)
     expect(small.usedTokens).toBeGreaterThan(0)
 
     appendTurns(db, conv.id, 10, 50)
-    const bigger = getConversationContextUsage(db, rt, conv.id)
+    const bigger = getConversationContextUsage(db, rt, null, conv.id)
     expect(bigger.window).toBe(8000)
     expect(bigger.usedTokens).toBeGreaterThan(small.usedTokens)
   })
 
-  it('falls back to settings.contextTokens when no runtime reports a window', () => {
+  // #737 / #779: with no model running the meter fills against the window the NEXT start launches with
+  // (`launchContextTokens` over the active model's manifest): the user's context-size override, else the manifest's
+  // recommended size, else the legacy setting. The scratch manifests dir holds one chat model recommending 16,384
+  // tokens; `settings.contextTokens` stays at its default 4,096.
+  const RECOMMENDS_16K = 'recommends-16k'
+  interface RestingChat {
+    db: Db
+    manifestsDir: string
+    /** The resting meter with no model running, reading the manifests from `dir`. */
+    read: (dir: string | null) => ContextUsage
+  }
+  function restingChat(activeModelId: string | null): RestingChat {
     const db = freshDb()
-    const conv = createConversation(db, { modelId: 'm' })
-    appendTurns(db, conv.id, 2, 10)
-    const usage = getConversationContextUsage(db, null, conv.id)
-    expect(usage.window).toBe(getSettings(db).contextTokens) // default 4096
-  })
-
-  // #737: with no runtime up, the user's context-size override (the window the next start launches with) wins over
-  // the legacy setting, and the history is fitted to it.
-  it('honours the context-size override when no runtime reports a window (#737)', () => {
-    const db = freshDb()
+    const manifestsDir = manifestsDirWith(rawManifest({ id: RECOMMENDS_16K, recommended_context_tokens: 16384 }))
+    updateSettings(db, { activeModelId })
     const conv = createConversation(db, { modelId: 'm' })
     appendTurns(db, conv.id, 14, 200) // ~5.6k estimated tokens: more than the default 4096 window keeps
-    const legacy = getConversationContextUsage(db, null, conv.id)
-    updateSettings(db, { contextTokensOverride: 16384 })
-    const usage = getConversationContextUsage(db, null, conv.id)
+    return { db, manifestsDir, read: (dir) => getConversationContextUsage(db, null, dir, conv.id) }
+  }
+
+  it("uses the active model's recommended window when no model is running, and fits the history to it (#779)", () => {
+    const { db, manifestsDir, read } = restingChat(RECOMMENDS_16K)
+    expect(getSettings(db).contextTokens).toBe(4096)
+    const usage = read(manifestsDir)
     expect(usage.window).toBe(16384)
-    expect(usage.usedTokens).toBeGreaterThan(legacy.usedTokens) // fitted to the wider window, not the 4096 one
+    expect(usage.usedTokens).toBeGreaterThan(read(null).usedTokens) // fitted to 16,384, not to the legacy 4,096
+  })
+
+  it('honours the context-size override ahead of the manifest when no model is running (#737, #779)', () => {
+    const { db, manifestsDir, read } = restingChat(RECOMMENDS_16K)
+    updateSettings(db, { contextTokensOverride: 8192 })
+    expect(read(manifestsDir).window).toBe(8192)
+  })
+
+  it.each([
+    ['no model is active', null],
+    ['the active model has no manifest', 'not-in-the-dir']
+  ])('falls back to settings.contextTokens when no model is running and %s (#779)', (_label, activeModelId) => {
+    const { db, manifestsDir, read } = restingChat(activeModelId)
+    expect(read(manifestsDir).window).toBe(getSettings(db).contextTokens)
   })
 })
 

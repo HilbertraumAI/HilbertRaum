@@ -714,6 +714,8 @@ export interface ModelVerifyProgress {
 /** What the per-download confirmation shows (from the manifest `download` block). */
 export interface ModelDownloadInfo {
   url: string
+  /** Every file the model downloads, summed from their `download` blocks (a vision model's
+   *  projector too, #768); null when any file's `size_bytes` is undeclared. */
   sizeBytes: number | null
   licenseUrl: string | null
   /**
@@ -3623,7 +3625,8 @@ export interface RuntimeStatus {
  * Context-window usage for the composer meter (context-compaction plan §5.1). `usedTokens` is the
  * assembled-prompt ESTIMATE (the word-based over-counting estimate, sum over the final assembled
  * message list — deliberately approximate, labelled as such in the UI); `window` is the real
- * launched context window (`effectiveContextWindow`). The renderer derives the % + calm/amber/
+ * launched context window (`effectiveContextWindow`), or with no model running the window the next
+ * start launches with (`contextWindowOrNextLaunch`, #779). The renderer derives the % + calm/amber/
  * near-full tone from the two.
  */
 export interface ContextUsage {

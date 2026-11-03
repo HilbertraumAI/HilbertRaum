@@ -5,28 +5,13 @@ import userEvent from '@testing-library/user-event'
 import type { ComponentProps } from 'react'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
 import { t, type UiLanguage } from '../../src/shared/i18n'
-import type { Collection } from '../../src/shared/types'
-import { makeDocumentInfo } from '../helpers/chat-fixtures'
+import { makeCollection, makeDocumentInfo } from '../helpers/chat-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
 
 // Audit FE-6 — the pending-attachment chips are keyed by name+index so each chip's key is unique
 // (two cross-folder files can share a base name) AND content-aware. The teeth test below pins the
 // uniqueness: a name-ONLY key (the regression a literal reading of FE-6 invites) collides on
 // duplicate base names and trips React's duplicate-key warning.
-
-function libraryCollection(): Collection {
-  return {
-    id: 'lib',
-    name: 'Library',
-    type: 'library',
-    description: null,
-    builtin: true,
-    color: null,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    archivedAt: null
-  }
-}
 
 /** The popover over an empty library and the legacy (null) scope; override per row. */
 const renderPopover = (
@@ -78,7 +63,7 @@ describe('ScopePopover — attach-chat reset label (CODE-31)', () => {
     const onChangeScope = vi.fn()
     renderPopover({
       docs: [makeDocumentInfo({ id: 'a' })],
-      collections: [libraryCollection()],
+      collections: [makeCollection()],
       scope: { collectionIds: ['lib'], documentIds: [] },
       onChangeScope,
       attachments: [makeDocumentInfo({ id: 'att1', title: 'statement.pdf' })]
@@ -101,7 +86,7 @@ describe('ScopePopover — attach-chat reset label (CODE-31)', () => {
     const user = userEvent.setup()
     renderPopover({
       docs: [makeDocumentInfo({ id: 'a' })],
-      collections: [libraryCollection()],
+      collections: [makeCollection()],
       scope: { collectionIds: ['lib'], documentIds: [] }
     })
     await user.click(screen.getByRole('button'))
@@ -149,7 +134,7 @@ describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
   it('treats a Library-only scope as the whole library, naming the corpus size (not the bare word "Library")', () => {
     renderPopover({
       docs: [makeDocumentInfo({ id: 'a' })],
-      collections: [libraryCollection()],
+      collections: [makeCollection()],
       scope: { collectionIds: ['lib'], documentIds: [] }
     })
     const source = t('en', 'chat.scope.wholeLibrary.one', { count: 1 })

@@ -22,6 +22,7 @@ import { parseDocumentScope } from './collections'
 import { buildFtsMatchQuery } from './fts'
 import { approxTokenCount } from './ingestion/chunker'
 import { getSettings } from './settings'
+import { findManifestById, launchContextTokens } from './models'
 import {
   approxPromptTokens,
   buildSkillFence,
@@ -1554,8 +1555,8 @@ export function messageTokens(m: ChatMessage): number {
  * setting alone risks an over-window HTTP 400 (window larger than the setting → we'd trim
  * too tight, wasting capacity) or, the other way, an overflow. So we budget against the
  * value the runtime actually reports, falling back to the override, then the setting, only
- * when the runtime can't report one (no model running — the meter passes `{}` — or a bare test
- * stub without `contextWindow()`).
+ * when a running runtime can't report one (a bare test stub without `contextWindow()`). With
+ * no model running, callers take `contextWindowOrNextLaunch` below instead (#779).
  */
 export function effectiveContextWindow(
   runtime: Pick<ModelRuntime, 'contextWindow'>,
@@ -1563,11 +1564,29 @@ export function effectiveContextWindow(
 ): number {
   const reported = runtime.contextWindow?.()
   if (reported != null && reported > 0) return reported
-  // No launched window to report (no model running, or a bare test stub): honour the user's
-  // context-size override (when set, the value the next start launches with) before the legacy
-  // fallback. Without one the next start takes the manifest's recommended size
-  // (`launchContextTokens`), which this fallback does not know, so the no-model meter can differ.
+  // No launched window to report (a bare test stub): honour the user's context-size override
+  // before the legacy fallback. This runtime-only fallback has no manifest to read; a caller with
+  // no model running uses `contextWindowOrNextLaunch`, which does.
   return settings.contextTokensOverride ?? settings.contextTokens
+}
+
+/**
+ * The context window to budget against when a model may not be running: the running runtime's
+ * launched window (`effectiveContextWindow`), else the window the NEXT start launches with —
+ * `launchContextTokens` over the ACTIVE model's manifest (`settings.activeModelId`), the one
+ * precedence `startModelRuntime` uses. With no manifest found (no manifests dir, a null or unknown
+ * active id) that is the user's override, else the legacy setting. The ONE spelling of this rule:
+ * the composer meter (`getConversationContextUsage`, #779) and the no-runtime doc-task budget
+ * (main/index.ts, full-audit 2026-07-10 BE-5) both take it, so neither plans against a window the
+ * next start will not use.
+ */
+export function contextWindowOrNextLaunch(
+  runtime: Pick<ModelRuntime, 'contextWindow'> | null,
+  settings: { contextTokens: number; contextTokensOverride?: number | null; activeModelId: string | null },
+  manifestsDir: string | null
+): number {
+  if (runtime) return effectiveContextWindow(runtime, settings)
+  return launchContextTokens(settings, findManifestById(manifestsDir, settings.activeModelId))
 }
 
 /**
@@ -1575,18 +1594,20 @@ export function effectiveContextWindow(
  * read, no model call: assembles the conversation exactly as a turn would (`buildChatMessages` —
  * which honours the compaction toggle + any checkpoint) over the real launched `window`, then sums
  * the per-message ESTIMATE. `usedTokens` is therefore the same over-counting estimate the budget
- * uses (labelled approximate in the UI). `runtime` may be null (no model running) — the window then
- * takes `effectiveContextWindow`'s fallback: the user's context-size override, else
- * `settings.contextTokens`. The skill fence is intentionally omitted: at rest there is no pending
- * turn/skill, and the meter is approximate.
+ * uses (labelled approximate in the UI). `runtime` may be null (no model running) — the window is
+ * then the one the next start launches with (`contextWindowOrNextLaunch` over `manifestsDir`,
+ * #779), so the resting meter fills against the window the next turn will really have. The skill
+ * fence is intentionally omitted: at rest there is no pending turn/skill, and the meter is
+ * approximate.
  */
 export function getConversationContextUsage(
   db: Db,
   runtime: Pick<ModelRuntime, 'contextWindow'> | null,
+  manifestsDir: string | null,
   conversationId: string
 ): ContextUsage {
   const settings = getSettings(db)
-  const window = effectiveContextWindow(runtime ?? {}, settings)
+  const window = contextWindowOrNextLaunch(runtime, settings, manifestsDir)
   const messages = buildChatMessages(db, conversationId, window)
   const usedTokens = messages.reduce((sum, m) => sum + messageTokens(m), 0)
   return { usedTokens, window }

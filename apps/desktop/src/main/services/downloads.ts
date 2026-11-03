@@ -1,10 +1,13 @@
 import { existsSync, renameSync, statSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { tMain } from './i18n'
+import { dirname } from 'node:path'
+import { mainUiLanguage, tMain } from './i18n'
 import type { ModelManifest } from '../../shared/manifest'
 import type { DownloadJob } from '../../shared/types'
 import { isUnresolvedDownloadResult } from '../../shared/downloads'
+import { fmt1 } from '../../shared/format'
+import { freeBytes } from './disk-space'
 import {
   planModelDownloads,
   downloadToFile,
@@ -151,7 +154,8 @@ export class DownloadManager {
    * Validate every gate and start downloading one model in the background. Returns the
    * initial job snapshot (poll `get(jobId)` for progress). Throws — with a friendly,
    * cause-specific message — when a gate is closed, another download is running, the
-   * manifest has no upstream source, or the weight is already present + verified.
+   * manifest has no upstream source, the weight is already present + verified, or the
+   * drive has no room for the bytes still to fetch (#768).
    */
   async start(opts: StartDownloadOptions): Promise<DownloadJob> {
     this.pruneTerminalJobs()
@@ -207,6 +211,9 @@ export class DownloadManager {
             : tMain('main.download.presentUnverified')
         )
       }
+      // #768: refused before the job exists, so a download that cannot fit is never audited as
+      // started and never requested, instead of failing on ENOSPC partway through.
+      await assertRoomFor(toDownload)
 
       const modelId = tasks[0].id
       const plannedTotal = sumSizes(toDownload)
@@ -688,6 +695,39 @@ export class DownloadManager {
     // Pin the combined received total to this file's true on-disk size before the next file.
     job.receivedBytes = baseBytes + statSync(task.dest).size
   }
+}
+
+/**
+ * Refuse a download whose bytes still to fetch exceed the free space where the weights land
+ * (#768). Still to fetch: each file's declared size less its kept `.part`, which the run resumes
+ * (a complete one is verified in place and needs nothing). No check when any file's size is
+ * undeclared or the free space cannot be read, and no headroom on top: the owner's call, the
+ * same gentle posture as preflight's low-space note. The drive's files live under one root, so
+ * the first file's folder (or its nearest existing parent) answers for all of them.
+ */
+async function assertRoomFor(tasks: ModelDownloadTask[]): Promise<void> {
+  let needed = 0
+  for (const task of tasks) {
+    if (task.sizeBytes == null) return
+    const kept = statSync(partPath(task.dest), { throwIfNoEntry: false })?.size ?? 0
+    needed += Math.max(0, task.sizeBytes - kept)
+  }
+  const free = await freeBytes(dirname(tasks[0].dest))
+  if (free == null || needed <= free) return
+  const lang = mainUiLanguage()
+  // Both figures in the unit the size needs, so a projector or the rest of a resume reads "40.0 MB"
+  // rather than "0.1 GB" — decimal, one decimal, like every disk size (`fmtDiskSize`). And they must
+  // never read alike: free space rounds down to the tenth; the size rounds as shown elsewhere,
+  // unless that prints the same tenth as the free space, and then up — which always differs, since
+  // needed > free.
+  const [unit, label]: [number, string] =
+    needed >= 1e9 ? [1e9, 'GB'] : needed >= 1e6 ? [1e6, 'MB'] : [1e3, 'KB']
+  const shown = (bytes: number): string => `${fmt1(bytes / unit, lang)} ${label}`
+  const tenth = unit / 10
+  const freeShown = shown(Math.floor(free / tenth) * tenth)
+  let neededShown = shown(needed)
+  if (neededShown === freeShown) neededShown = shown(Math.ceil(needed / tenth) * tenth)
+  throw new Error(tMain('main.download.notEnoughSpace', { needed: neededShown, free: freeShown }))
 }
 
 /** Null-safe sum of task byte sizes — null if ANY size is unknown (the bar drops the total). */

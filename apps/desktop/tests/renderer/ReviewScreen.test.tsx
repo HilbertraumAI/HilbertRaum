@@ -9,6 +9,7 @@ import { t } from '../../src/shared/i18n'
 import type { EvidenceReviewItemPatch } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
+import { fakeMatchMedia, removeMatchMedia } from '../helpers/match-media'
 
 // EP-1 plan §7.3/§7.4/§7.6 — the review workspace itself: the create→decide→note→
 // summary→ready journey over stubApi, the whole-document honesty wording (asserted by
@@ -636,31 +637,13 @@ describe('ReviewScreen — keyboard-only walk (spec §28.10, export lands P3)', 
 })
 
 describe('ReviewScreen — narrow-window evidence drawer (spec §11.1)', () => {
-  function stubNarrowViewport(): void {
-    // jsdom has no matchMedia; a matching stub flips the screen into drawer mode.
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      writable: true,
-      value: (query: string) => ({
-        matches: true,
-        media: query,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-        addListener: () => {},
-        removeListener: () => {},
-        onchange: null,
-        dispatchEvent: () => false
-      })
-    })
-  }
-
   afterEach(() => {
-    // Remove the stub so other suites keep the no-matchMedia (wide) default.
-    delete (window as { matchMedia?: unknown }).matchMedia
+    // Remove the fake so other tests keep the no-matchMedia (wide) default.
+    removeMatchMedia()
   })
 
   it('opens the evidence drawer from an item and RESTORES FOCUS to the opener on close', async () => {
-    stubNarrowViewport()
+    fakeMatchMedia(true) // a narrow window flips the screen into drawer mode
     const detail = makeDetail()
     stubReviewApi({ getEvidenceReview: vi.fn(async () => detail) })
     render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)

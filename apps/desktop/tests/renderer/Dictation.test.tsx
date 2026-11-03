@@ -316,6 +316,29 @@ describe('the live "no signal" hint while recording', () => {
     expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
   })
 
+  // #743: one loud sample inside the window restarts the silence clock; the hint waits a full window from
+  // the next silent sample, not from the first one.
+  it('restarts its clock when sound comes in before the window closes (#743)', async () => {
+    const { afterMs, pollMs } = DEFAULT_NO_SIGNAL_TIMING
+    const user = userEvent.setup()
+    stubApi({ transcribeDictation: vi.fn(async () => 'text') })
+    const level = { value: 0 }
+    render(<Harness />)
+    await startRecording(user, fakeCapture(new Uint8Array([1]), fakeAnalyser(level)).start)
+
+    await advance(EDGE - 2 * pollMs) // silent from the first sample (at one poll) through 1.75 s
+    level.value = 0.2
+    await advance(pollMs) // one loud sample at 2 s, the last one inside the window
+    level.value = 0
+    await advance(pollMs) // 2.25 s: where the first clock would have shown the hint
+    expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
+
+    await advance(afterMs - 1) // just short of a full window from the restart (at 2.25 s)
+    expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
+    await advance(1)
+    expect(screen.getByText(noSignalText())).toBeInTheDocument()
+  })
+
   it('never appears while there is signal, and is gone once recording stops', async () => {
     const user = userEvent.setup()
     stubApi({ transcribeDictation: vi.fn(async () => 'text') })

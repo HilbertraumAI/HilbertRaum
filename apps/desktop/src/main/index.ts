@@ -19,7 +19,7 @@ import {
   disableSpellCheckerDownloads
 } from './window-security'
 import { getSettings } from './services/settings'
-import { effectiveContextWindow } from './services/chat'
+import { contextWindowOrNextLaunch } from './services/chat'
 import { loadPolicy, buildPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
@@ -94,7 +94,7 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
+import { resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import {
@@ -599,13 +599,10 @@ function initBackend(): void {
     // model's manifest, the one precedence startModelRuntime uses. The old fallback skipped
     // the manifest's recommended window, so maybeEnqueueTreeBuild's size gate planned against
     // the legacy 4096 default instead of the real 32k+ window and over-marked documents
-    // tree_status='pending' (full-audit 2026-07-10 BE-5).
-    getContextTokens: () => {
-      const s = getSettings(workspace.requireDb())
-      const active = runtime.active()
-      if (active) return effectiveContextWindow(active, s)
-      return launchContextTokens(s, findManifestById(manifestsDir, s.activeModelId))
-    },
+    // tree_status='pending' (full-audit 2026-07-10 BE-5). `contextWindowOrNextLaunch` is that
+    // rule's one spelling, shared with the composer meter (#779).
+    getContextTokens: () =>
+      contextWindowOrNextLaunch(runtime.active(), getSettings(workspace.requireDb()), manifestsDir),
     getStoreDir: () => documentsDir(paths.workspacePath),
     // The embedder stays captured (an index embedded by one embedder is unusable with another);
     // the OCR engine is read LIVE off ctx (#410, the getTranslator argument above): an in-app

@@ -214,7 +214,8 @@ export function findManifestById(
  * recommended window, falling back to the legacy setting for a manifest without one
  * (`recommended_context_tokens: 0`) — or when no manifest resolves at all. This is the
  * ONE spelling of that precedence: `startModelRuntime` launches with it, and the
- * no-runtime doc-task budget fallback mirrors it (full-audit 2026-07-10 BE-5 — the two
+ * no-runtime window (`contextWindowOrNextLaunch` in chat.ts — the doc-task budget and, since
+ * #779, the composer meter) mirrors it (full-audit 2026-07-10 BE-5 — the two
  * used to be spelled independently and disagreed, so with no runtime up the tree-build
  * size gate planned against the legacy 4096 default instead of the 32k+ window the next
  * start would actually use, over-marking documents `tree_status='pending'`).
@@ -1390,6 +1391,27 @@ export function recommendChatModelId(
   return recommendModelIdByRam(manifests, memory.ramGb, 'chat', speedSignal)
 }
 
+/**
+ * Every byte a model downloads, as its manifest declares them: the weight, a vision model's
+ * projector and each extra file, each from its own `download` block (the validator makes them
+ * all-or-nothing). Null when any one is undeclared, and the dialog then shows `size_on_disk_gb`.
+ * The weight's size alone understated a two-file model in its own confirmation (#768: 1.9 of
+ * the vision model's 3.3 GB once its manifest declared both sizes).
+ */
+function declaredDownloadBytes(manifest: ModelManifest): number | null {
+  const blocks = [
+    manifest.download,
+    ...(manifest.mmproj ? [manifest.mmproj.download] : []),
+    ...(manifest.files ?? []).map((f) => f.download)
+  ]
+  let total = 0
+  for (const block of blocks) {
+    if (block?.sizeBytes == null) return null
+    total += block.sizeBytes
+  }
+  return total
+}
+
 function toModelInfo(
   manifest: ModelManifest,
   state: ModelState,
@@ -1403,7 +1425,7 @@ function toModelInfo(
   const download: ModelDownloadInfo | undefined = manifest.download
     ? {
         url: manifest.download.url,
-        sizeBytes: manifest.download.sizeBytes,
+        sizeBytes: declaredDownloadBytes(manifest),
         licenseUrl: manifest.download.licenseUrl,
         licenseApproved: manifest.licenseReview.status === 'approved',
         // #196: a known-dead upstream source. Surfaced so the card explains WHY there is no

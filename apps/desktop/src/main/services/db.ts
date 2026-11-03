@@ -880,7 +880,9 @@ const CANONICAL_FTS_TRIGGERS = {
  * index ENTRIES. Rows written while a trigger was missing, and the bulk fill or handle backfill a
  * pre-#737 fresh create lost, stay unindexed (or on the legacy scan path): the triggers are made
  * whole, but nothing re-reads the base table. Since #737 ensureChunksFts/ensureMessagesFts
- * commit as one transaction too, so no build from here on leaves those states behind.
+ * commit as one transaction too, so no build from here on leaves those states behind. No repair
+ * is built (#779): only a workspace created before either index existed (tags v0.1.0–v0.1.5,
+ * before any build was handed out) can have lost entries — rag-design.md §11.
  */
 function ensureFtsRowidSync(db: Db): void {
   const liveTriggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name = ?")

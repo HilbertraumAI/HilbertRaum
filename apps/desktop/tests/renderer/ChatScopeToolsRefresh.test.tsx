@@ -4,7 +4,6 @@ import { screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   DEFAULT_SETTINGS,
-  type Collection,
   type Conversation,
   type DocumentScope,
   type ImportJob,
@@ -14,7 +13,7 @@ import {
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { chatDropBridge, chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
 import { hangBudgetMs } from '../helpers/hang-budget'
-import { makeSkillInfo, makeConversation, makeDocumentInfo } from '../helpers/chat-fixtures'
+import { makeSkillInfo, makeCollection, makeConversation, makeDocumentInfo } from '../helpers/chat-fixtures'
 
 // CH-1 + CH-2 (frontend audit 2026-08-09, issues #139/#140).
 //
@@ -30,21 +29,6 @@ import { makeSkillInfo, makeConversation, makeDocumentInfo } from '../helpers/ch
 
 function conv(over: Partial<Conversation> = {}): Conversation {
   return makeConversation({ title: 'Doc Q&A', mode: 'documents', scope: { collectionIds: [], documentIds: [] }, ...over })
-}
-
-function collection(over: Partial<Collection>): Collection {
-  return {
-    id: 'lib',
-    name: 'Library',
-    type: 'library',
-    description: null,
-    builtin: true,
-    color: null,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    archivedAt: null,
-    ...over
-  } as Collection
 }
 
 function skill(): SkillInfo {
@@ -90,8 +74,8 @@ describe('ChatScreen — scope-popover rapid toggles do not race (CH-1, #139)', 
         listConversations: vi.fn(async () => [{ ...docConv, scope: persistedScope }]),
         listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
         listCollections: vi.fn(async () => [
-          collection({}),
-          collection({ id: 'proj1', name: 'Tax 2025', type: 'project', builtin: false })
+          makeCollection(),
+          makeCollection({ id: 'proj1', name: 'Tax 2025', type: 'project', builtin: false })
         ]),
         setConversationScope
       })
@@ -144,7 +128,7 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
       chatScreenStubs({
         listConversations: vi.fn(async () => [docConv]),
         listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
-        listCollections: vi.fn(async () => [collection({})]),
+        listCollections: vi.fn(async () => [makeCollection()]),
         listSkills: vi.fn(async () => [skill()]),
         // The skill's #46 info card was already seen, so the first pick opens no card (and writes no
         // settings): this row is about the run-bar offer, not the card.
@@ -190,7 +174,7 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
         ...drops.stubs,
         listConversations: vi.fn(async () => [docConv]),
         listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd0', title: 'lease.pdf' })]),
-        listCollections: vi.fn(async () => [collection({})]),
+        listCollections: vi.fn(async () => [makeCollection()]),
         listSkills: vi.fn(async () => [skill()]),
         // As in the row above: the info card was already seen, and the pick clears the saved default.
         getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: ['bank-statement'] })),

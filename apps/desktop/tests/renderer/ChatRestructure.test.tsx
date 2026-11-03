@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { screen, cleanup, waitFor } from '@testing-library/react'
+import { screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { t } from '../../src/shared/i18n'
 import type { PreloadApi } from '../../src/preload'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { runtimeStatus } from '../helpers/status'
 import { assistantMsg, makeConversation, makeDocumentInfo, userMsg } from '../helpers/chat-fixtures'
-import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { chatScreenStubs, flushFakeTimers, renderChatScreen } from '../helpers/chat-screen'
+import { fakeMatchMedia, removeMatchMedia } from '../helpers/match-media'
 
 // Phase 25 (guidelines §3) structural tests: the teaching empty state, the header
-// mode segmented control, conversation-list collapse persistence (localStorage),
-// per-message hover actions (Try again / Copy / Save → toasts), the header "⋯"
-// overflow ("Save this conversation"), and the no-model empty state.
+// mode segmented control, conversation-list collapse persistence (localStorage) and its
+// narrow-window fold, per-message hover actions (Try again / Copy / Save → toasts), the
+// header "⋯" overflow ("Save this conversation"), and the no-model empty state.
 
 // The persisted key itself, not the export: a rename would silently reset every user's choice.
 const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
@@ -104,6 +105,40 @@ describe('ChatScreen — conversation-list collapse persistence', () => {
     await user.click(screen.getByRole('button', { name: 'Show conversation list' }))
     expect(await screen.findByText('My first chat')).toBeInTheDocument()
     expect(window.localStorage.getItem(LIST_COLLAPSED_KEY)).toBe('0')
+  })
+})
+
+// #743: below the 1,150 px breakpoint the history column folds away to give the transcript room, whatever the
+// stored choice says, and the stored choice is never written for it. "Show" opens it for this session only;
+// widening the window ends that, so the next narrowing folds it again.
+describe('ChatScreen — the history column folds away on a narrow window', () => {
+  afterEach(() => {
+    removeMatchMedia()
+  })
+
+  it('folds away without touching the stored choice; Show peeks it open, and widening ends the peek', async () => {
+    const user = userEvent.setup()
+    const viewport = fakeMatchMedia(true) // a window narrower than the breakpoint
+    stubApi(chatScreenStubs({ listConversations: vi.fn(async () => [makeConversation({ title: 'My first chat' })]) }))
+    renderChatScreen()
+
+    // Nothing is stored, so a wide window would show the list; the narrow one folds it away.
+    expect(await screen.findByRole('button', { name: 'Show conversation list' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Hide conversation list' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show conversation list' }))
+    expect(await screen.findByText('My first chat')).toBeInTheDocument()
+    expect(window.localStorage.getItem(LIST_COLLAPSED_KEY)).toBeNull()
+
+    // Wide again: the stored choice (none, so open) governs.
+    viewport.set(false)
+    expect(screen.getByText('My first chat')).toBeInTheDocument()
+
+    // Narrow again: the peek ended with the wide window.
+    viewport.set(true)
+    expect(screen.queryByText('My first chat')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show conversation list' })).toBeInTheDocument()
+    expect(window.localStorage.getItem(LIST_COLLAPSED_KEY)).toBeNull()
   })
 })
 
@@ -205,10 +240,30 @@ describe('ChatScreen — no-model empty state (M-U3)', () => {
 
     // The shared EmptyState renders the title as a heading.
     expect(await screen.findByRole('heading', { name: t('en', 'chat.noModel.title') })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: t('en', 'chat.noModel.recheck') })).toBeInTheDocument()
     // #527: "Open AI Model" read as "OpenAI model" — the button names where it goes, and goes there.
     await userEvent.click(screen.getByRole('button', { name: t('en', 'chat.noModel.open') }))
     expect(onNavigate).toHaveBeenCalledWith('models')
+  })
+
+  // #743: the screen also re-reads the runtime every RUNTIME_POLL_MS (2,500 ms) by itself. The fake clock never
+  // moves here, so only the click can bring the composer.
+  it('"Re-check" reads the runtime again and opens the composer once a model is running', async () => {
+    vi.useFakeTimers()
+    const getRuntimeStatus = vi
+      .fn<PreloadApi['getRuntimeStatus']>()
+      .mockResolvedValueOnce(
+        runtimeStatus({ running: false, modelId: null, port: null, healthy: false, message: 'no model' })
+      )
+      .mockResolvedValue(runtimeStatus())
+    stubApi(chatScreenStubs({ getRuntimeStatus }))
+    renderChatScreen()
+    await flushFakeTimers()
+    expect(screen.getByRole('heading', { name: t('en', 'chat.noModel.title') })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'chat.noModel.recheck') }))
+    await flushFakeTimers()
+    expect(screen.getByPlaceholderText('Message…')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: t('en', 'chat.noModel.title') })).not.toBeInTheDocument()
   })
 })
 

@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
-import { readdir, stat, statfs } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DriveStatus } from '../../shared/types'
+import { freeBytes } from './disk-space'
 import { IMAGES_DIR_NAME } from './workspace-vault'
 
 // Workspace / drive manager (spec §7.2 drive detector + §7.9 workspace manager).
@@ -91,15 +92,6 @@ function isWritable(dir: string): boolean {
     return true
   } catch {
     return false
-  }
-}
-
-async function freeBytes(dir: string): Promise<number | null> {
-  try {
-    const s = await statfs(dir)
-    return Number(s.bavail) * Number(s.bsize)
-  } catch {
-    return null
   }
 }
 

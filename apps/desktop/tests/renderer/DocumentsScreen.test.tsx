@@ -522,7 +522,7 @@ describe('DocumentsScreen', () => {
       importPreflight: vi.fn(async () => ({
         fileCount: 1,
         audioFileCount: 1,
-        audioBytes: 600 * 1024 * 1024
+        audioBytes: 600_000_000 // decimal (#768): in 1024 steps 572.2 MB
       })),
       importDocuments,
       getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }))

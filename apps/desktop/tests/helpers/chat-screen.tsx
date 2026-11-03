@@ -4,7 +4,7 @@ import { vi, type Mock } from 'vitest'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import type { PreloadApi } from '../../src/preload'
-import type { AnswerSpeed, CompactionNotice } from '../../src/shared/ipc'
+import type { AnswerSpeed, CompactionNotice, ScopeNotice } from '../../src/shared/ipc'
 import { DEFAULT_SETTINGS, type ContextUsage } from '../../src/shared/types'
 import { dropFiles } from './drop'
 import { appStatus, runtimeStatus } from './status'
@@ -76,7 +76,7 @@ export function chatScreenStubs(over: Partial<PreloadApi> = {}): Partial<Preload
     // App-wide subscriptions (mount).
     onRuntimeNotice: vi.fn<PreloadApi['onRuntimeNotice']>(() => unsubscribed),
     onKnowledgePacksChanged: vi.fn<PreloadApi['onKnowledgePacksChanged']>(() => unsubscribed),
-    // Per-send stream subscriptions (`fakeChatStream().stubs` replaces the first five).
+    // Per-send stream subscriptions (`fakeChatStream().stubs` replaces all six).
     onToken: vi.fn<PreloadApi['onToken']>(() => unsubscribed),
     onReasoning: vi.fn<PreloadApi['onReasoning']>(() => unsubscribed),
     onCompaction: vi.fn<PreloadApi['onCompaction']>(() => unsubscribed),
@@ -89,7 +89,8 @@ export function chatScreenStubs(over: Partial<PreloadApi> = {}): Partial<Preload
 
 /** The fake stream: spread `stubs` into `chatScreenStubs`, then emit into the send's live listeners. */
 export interface ChatStreamFake {
-  /** onToken / onReasoning / onCompaction / onContextUsage / onAnswerSpeed, each recording the listener a send subscribes. */
+  /** onToken / onReasoning / onCompaction / onContextUsage / onAnswerSpeed / onScopeNotice, each recording the listener
+   *  a send subscribes. */
   stubs: Partial<PreloadApi>
   /** One answer token (`STREAM.token`). */
   token(t: string): void
@@ -101,6 +102,8 @@ export interface ChatStreamFake {
   contextUsage(u: ContextUsage): void
   /** The finished answer's speed figures; main sends them right before `done` (`STREAM.speed`). */
   answerSpeed(s: AnswerSpeed): void
+  /** A documents answer narrowed to the file(s) its question named (`STREAM.scope`); main sends it before any token. */
+  scopeNotice(n: ScopeNotice): void
   /** True while a send has an onToken listener subscribed: the "the send reached the stream" gate. */
   subscribed(): boolean
 }
@@ -147,19 +150,22 @@ export function fakeChatStream(): ChatStreamFake {
   const compaction = streamChannel<CompactionNotice>('compaction')
   const contextUsage = streamChannel<ContextUsage>('contextUsage')
   const answerSpeed = streamChannel<AnswerSpeed>('answerSpeed')
+  const scopeNotice = streamChannel<ScopeNotice>('scopeNotice')
   return {
     stubs: {
       onToken: vi.fn<PreloadApi['onToken']>(token.subscribe),
       onReasoning: vi.fn<PreloadApi['onReasoning']>(reasoning.subscribe),
       onCompaction: vi.fn<PreloadApi['onCompaction']>(compaction.subscribe),
       onContextUsage: vi.fn<PreloadApi['onContextUsage']>(contextUsage.subscribe),
-      onAnswerSpeed: vi.fn<PreloadApi['onAnswerSpeed']>(answerSpeed.subscribe)
+      onAnswerSpeed: vi.fn<PreloadApi['onAnswerSpeed']>(answerSpeed.subscribe),
+      onScopeNotice: vi.fn<PreloadApi['onScopeNotice']>(scopeNotice.subscribe)
     },
     token: token.emit,
     reasoning: reasoning.emit,
     compaction: compaction.emit,
     contextUsage: contextUsage.emit,
     answerSpeed: answerSpeed.emit,
+    scopeNotice: scopeNotice.emit,
     subscribed: token.live
   }
 }

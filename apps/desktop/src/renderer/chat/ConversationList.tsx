@@ -86,9 +86,9 @@ export function groupConversations(conversations: Conversation[], now: Date = ne
  * A creation-anchor project section (document-organization plan §13.4/N8): conversations
  * grouped by their `collection_id` anchor. A chat whose composite scope spans several
  * sources still groups under its single anchor; unanchored/dangling chats fall into the
- * "Other / Library" section. Exported for tests.
+ * "Other / Library" section.
  */
-export interface ProjectSection {
+interface ProjectSection {
   /** The anchor project, or null for the "Other / Library" catch-all. */
   project: Collection | null
   conversations: Conversation[]
@@ -100,7 +100,7 @@ export interface ProjectSection {
  * Returns null when NO conversation is anchored to a live project — the caller then falls
  * back to plain date grouping (the common, project-free case; keeps the existing UX intact).
  */
-export function groupByProject(
+function groupByProject(
   conversations: Conversation[],
   collections: Collection[]
 ): ProjectSection[] | null {

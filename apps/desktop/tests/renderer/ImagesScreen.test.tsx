@@ -5,8 +5,9 @@ import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { clearVisionSession, getVisionSession } from '../../src/renderer/lib/visionSession'
-import { decodeImage, DOWNSCALE_TARGET } from '../../src/renderer/images/decode'
-import type { VisionStatus, VisionUnavailableReason } from '../../src/shared/types'
+import { decodeImage, DOWNSCALE_TARGET, ImageDecodeError, MAX_IMAGE_BYTES } from '../../src/renderer/images/decode'
+import type { PreloadApi } from '../../src/preload'
+import type { ImageSessionSummary, VisionStatus, VisionUnavailableReason } from '../../src/shared/types'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { dropFiles } from '../helpers/drop'
 import {
@@ -14,8 +15,10 @@ import {
   imageSessionDetail,
   imageSessionSummary,
   pickedImage,
+  VISION_AVAILABLE,
   visionScreenStubs,
-  visionStream
+  visionStream,
+  type VisionStream
 } from '../helpers/vision-fixtures'
 import { t } from '../../src/shared/i18n'
 
@@ -84,6 +87,22 @@ describe('ImagesScreen — availability (§5.6)', () => {
     expect(screen.getByText(t('en', 'images.avail.ocrPointer'))).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: t('en', 'images.avail.cta') }))
     expect(onNavigate).toHaveBeenCalledWith('models:images')
+  })
+
+  // #743: the status is read on mount and again whenever the window regains focus, so a vision model that
+  // landed while the screen stayed open opens the drop zone without a remount.
+  it('re-reads the vision status on window focus: a model that landed meanwhile opens the drop zone (#743)', async () => {
+    const imageGetStatus = vi.fn(async (): Promise<VisionStatus> => unavailable('no-model'))
+    stubApi(visionScreenStubs({ imageGetStatus }))
+    render(<ImagesScreen onNavigate={vi.fn()} />)
+    expect(await screen.findByText(t('en', 'images.avail.noModel'))).toBeInTheDocument()
+
+    imageGetStatus.mockImplementation(async () => VISION_AVAILABLE)
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(await findImageZone()).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'images.avail.noModel'))).not.toBeInTheDocument()
   })
 })
 
@@ -226,6 +245,84 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
     expect(screen.getByText(t('en', 'images.drop.title'))).toBeInTheDocument()
     expect(decodeMock).not.toHaveBeenCalled()
   })
+})
+
+// #743: the three ways an image reaches decodeImage, each with its own catch that maps the failure to the
+// banner — a drop (handleFile → decodeAndSelect), the picker (handleChoose, after imageReadBytes) and
+// reopening a saved entry the stored-bytes fast path cannot take (no persisted dimensions, #121) — and the
+// byte cap the drop and the picker check before any of that. decode.test.ts owns which code the pipeline
+// throws; these rows own what the screen makes of it.
+describe('ImagesScreen — decode failures and the byte cap (#743)', () => {
+  type Arrival = 'dropped' | 'picked' | 'reopened'
+
+  /** Mount the screen and return `offer(sizeBytes)`, which brings one image in by `how`: a dropped File or a
+   *  picked file of `sizeBytes` (main's `stat` size), or the history entry `receipt.png` reopened. */
+  async function mountFor(how: Arrival): Promise<(sizeBytes?: number) => Promise<void>> {
+    const user = userEvent.setup()
+    const picks = pickedImage('shot.png')
+    stubApi(
+      visionScreenStubs({
+        ...picks,
+        listImageSessions: vi.fn(async () => [imageSessionSummary()]),
+        getImageSession: vi.fn(async () => imageSessionDetail({ width: null, height: null }))
+      })
+    )
+    render(<ImagesScreen onNavigate={vi.fn()} />)
+    await screen.findByText('receipt.png') // the history read landed
+    return async (sizeBytes = 4) => {
+      if (how === 'dropped') {
+        const file = new File([new Uint8Array([1, 2, 3, 4])], 'shot.png', { type: 'image/png' })
+        // The pre-check reads `size` alone, and the decode is mocked: four bytes stand in for a large file.
+        Object.defineProperty(file, 'size', { value: sizeBytes })
+        const zone = await findImageZone()
+        await act(async () => {
+          dropFiles(zone, [file])
+        })
+      } else if (how === 'picked') {
+        picks.imageChooseImage.mockResolvedValueOnce({ token: `tok-${sizeBytes}`, name: 'shot.png', sizeBytes })
+        await user.click(screen.getByRole('button', { name: 'or choose an image' }))
+      } else {
+        await user.click(screen.getByText('receipt.png'))
+      }
+    }
+  }
+
+  const ARRIVALS = ['dropped', 'picked', 'reopened'] as const
+  // What decodeImage throws: its typed refusal (the #118 prescreen, the re-encoded byte cap) carries its own
+  // code; anything else (a createImageBitmap or blob read failure) is "couldn't be opened".
+  const FAILURES = [
+    ["ImageDecodeError('tooLarge')", () => new ImageDecodeError('tooLarge'), 'images.err.tooLarge'],
+    ['a plain Error', () => new Error('createImageBitmap failed'), 'images.err.decodeFailed']
+  ] as const
+
+  it.each(ARRIVALS.flatMap((how) => FAILURES.map(([what, error, key]) => [how, what, error, key] as const)))(
+    'a %s image whose decode throws %s shows that copy and stays on the landing view',
+    async (how, _what, error, key) => {
+      const offer = await mountFor(how)
+      decodeMock.mockRejectedValueOnce(error())
+      await offer()
+      expect(await screen.findByText(t('en', key))).toBeInTheDocument()
+      expect(decodeMock).toHaveBeenCalledTimes(1) // the banner came from the decode, not an earlier guard
+      expect(screen.queryByAltText('Selected image')).not.toBeInTheDocument()
+      expect(screen.getByText(t('en', 'images.drop.title'))).toBeInTheDocument()
+    }
+  )
+
+  it.each(['dropped', 'picked'] as const)(
+    'a %s image one byte over the cap is refused as too large before any decode; one exactly at the cap is decoded',
+    async (how) => {
+      const offer = await mountFor(how)
+      await offer(MAX_IMAGE_BYTES + 1)
+      expect(await screen.findByText(t('en', 'images.err.tooLarge'))).toBeInTheDocument()
+      expect(decodeMock).not.toHaveBeenCalled() // refused at the pre-check: nothing reached the decode
+      expect(screen.getByText(t('en', 'images.drop.title'))).toBeInTheDocument()
+
+      await offer(MAX_IMAGE_BYTES)
+      expect(await screen.findByAltText('Selected image')).toBeInTheDocument()
+      expect(decodeMock).toHaveBeenCalledTimes(1)
+      expect(screen.queryByText(t('en', 'images.err.tooLarge'))).not.toBeInTheDocument()
+    }
+  )
 })
 
 describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
@@ -574,8 +671,9 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     stubApi(
       visionScreenStubs({
         listImageSessions: vi.fn(async () => [
-          imageSessionSummary({ id: 's1', title: 'a.png', sizeBytes: 2 * 1024 * 1024 }),
-          imageSessionSummary({ id: 's2', title: 'b.png', sizeBytes: 1024 * 1024 })
+          // Decimal megabytes (#768): in 1024 steps these read 1.9 MB and a 2.9 MB total.
+          imageSessionSummary({ id: 's1', title: 'a.png', sizeBytes: 2_000_000 }),
+          imageSessionSummary({ id: 's2', title: 'b.png', sizeBytes: 1_000_000 })
         ])
       })
     )
@@ -631,6 +729,113 @@ describe('ImagesScreen — history (image-understanding history)', () => {
     expect(screen.queryByText('Image history cleared')).not.toBeInTheDocument()
     // The entry is still listed — the list refresh reflects the true state.
     expect(screen.getByText('receipt.png')).toBeInTheDocument()
+  })
+})
+
+// #743: deleting the saved analysis that is open, or clearing the whole history, resets the vision store
+// (deleteSession / clearHistory): a follow-up still running on that session is cancelled instead of
+// completing into a session main has just shredded. Delete and Clear live on the list view only, so what
+// shows is the running row going away and the store emptying. A run with no saved session yet is left alone.
+describe('ImagesScreen — deleting or clearing the open saved analysis (#743)', () => {
+  type User = ReturnType<typeof userEvent.setup>
+
+  /** The history holds `receipt.png` (s1) and `extra`; delete and clear change what the next list read returns. */
+  function historyStubs(s: VisionStream, extra: ImageSessionSummary[] = []): Partial<PreloadApi> {
+    let saved = [imageSessionSummary(), ...extra]
+    return {
+      ...s.api,
+      listImageSessions: vi.fn(async () => saved),
+      getImageSession: vi.fn(async () => imageSessionDetail()),
+      deleteImageSession: vi.fn(async (id: string) => {
+        saved = saved.filter((x) => x.id !== id)
+      }),
+      clearImageSessions: vi.fn(async () => {
+        const n = saved.length
+        saved = []
+        return n
+      })
+    }
+  }
+
+  function renderWithToasts(): void {
+    render(
+      <ToastProvider>
+        <ImagesScreen onNavigate={vi.fn()} />
+      </ToastProvider>
+    )
+  }
+
+  /** Ask in the open detail view, wait until the job is wired, then go Back to the list (the run keeps going). */
+  async function askThenBack(user: User, s: VisionStream): Promise<void> {
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'And the total?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.wired('j1')).toBe(true))
+    await user.click(screen.getByRole('button', { name: '‹ Back to analyses' }))
+    await screen.findByText(t('en', 'images.history.running'))
+  }
+
+  /** s1 reopened from the history, a follow-up running on it as j1, then Back to the list. */
+  async function followUpRunningOnS1(extra: ImageSessionSummary[] = []): Promise<{ s: VisionStream; user: User }> {
+    const user = userEvent.setup()
+    // registerImagesIpc answers a follow-up with the session it appends to.
+    const s = visionStream({ analyze: async () => ({ jobId: 'j1', state: 'queued', sessionId: 's1' }) })
+    stubApi(historyStubs(s, extra))
+    renderWithToasts()
+    await user.click(await screen.findByText('receipt.png'))
+    await screen.findByText('A receipt.')
+    await askThenBack(user, s)
+    expect(getVisionSession()).toMatchObject({ sessionId: 's1', activeJobId: 'j1' })
+    return { s, user }
+  }
+
+  async function deleteEntry(user: User, title: string): Promise<void> {
+    await user.click(screen.getByRole('button', { name: `Delete ${title}` }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }))
+  }
+
+  async function clearAll(user: User): Promise<void> {
+    await user.click(screen.getByRole('button', { name: 'Clear history' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear history' }))
+  }
+
+  it.each([
+    ['deleting it', (user: User) => deleteEntry(user, 'receipt.png'), 'images.history.deleted'],
+    ['clearing the history', clearAll, 'images.history.cleared']
+  ] as const)('%s cancels the follow-up running on it and empties the store', async (_what, action, toastKey) => {
+    const { s, user } = await followUpRunningOnS1()
+    await action(user)
+    // The toast comes after the reset: settle on it, then read what the reset did.
+    expect(await screen.findByText(t('en', toastKey))).toBeInTheDocument()
+    expect(s.cancel).toHaveBeenCalledWith('j1')
+    expect(screen.queryByText(t('en', 'images.history.running'))).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'or choose an image' })).toBeEnabled()
+    expect(getVisionSession()).toMatchObject({ selected: null, sessionId: null, activeJobId: null, analyzing: false })
+  })
+
+  it('deleting a different saved analysis leaves the open one running', async () => {
+    const { s, user } = await followUpRunningOnS1([imageSessionSummary({ id: 's2', title: 'b.png' })])
+    await deleteEntry(user, 'b.png')
+    expect(await screen.findByText(t('en', 'images.history.deleted'))).toBeInTheDocument()
+    expect(s.cancel).not.toHaveBeenCalled()
+    expect(screen.getByText(t('en', 'images.history.running'))).toBeInTheDocument()
+    expect(getVisionSession()).toMatchObject({ sessionId: 's1', activeJobId: 'j1', analyzing: true })
+  })
+
+  it('clearing the history leaves a fresh analysis with no saved session yet running', async () => {
+    const user = userEvent.setup()
+    // A fresh image: main answers with no session (it creates one on the first completed answer).
+    const s = visionStream()
+    stubApi({ ...historyStubs(s), ...pickedImage('shot.png') })
+    renderWithToasts()
+    await user.click(await screen.findByRole('button', { name: 'or choose an image' }))
+    await screen.findByAltText('Selected image')
+    await askThenBack(user, s)
+
+    await clearAll(user)
+    expect(await screen.findByText(t('en', 'images.history.cleared'))).toBeInTheDocument()
+    expect(s.cancel).not.toHaveBeenCalled()
+    expect(screen.getByText(t('en', 'images.history.running'))).toBeInTheDocument()
+    expect(getVisionSession()).toMatchObject({ sessionId: null, activeJobId: 'j1', analyzing: true })
   })
 })
 

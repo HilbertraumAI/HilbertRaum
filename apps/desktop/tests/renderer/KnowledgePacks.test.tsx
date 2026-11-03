@@ -642,10 +642,10 @@ describe('PacksPanel', () => {
     stubApi({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
-        pack({ sizeBytes: 2 * 1024 * 1024 * 1024 }),
-        pack({ id: 'p-off', title: 'Off pack', enabled: false, sizeBytes: 512 * 1024 * 1024 }),
+        pack({ sizeBytes: 2_000_000_000 }),
+        pack({ id: 'p-off', title: 'Off pack', enabled: false, sizeBytes: 500_000_000 }),
         pack({ id: 'p-noindex', title: 'No index', searchable: 'no', sizeBytes: null }),
-        pack({ id: 'p-gone', title: 'Gone pack', available: false, unavailableReason: 'missing', sizeBytes: 9 * 1024 * 1024 * 1024 })
+        pack({ id: 'p-gone', title: 'Gone pack', available: false, unavailableReason: 'missing', sizeBytes: 9_000_000_000 })
       ]
     })
     const user = userEvent.setup()
@@ -655,7 +655,7 @@ describe('PacksPanel', () => {
       </I18nProvider>
     )
     await screen.findByText('Klimawandel von Wikipedia')
-    // 4 packs, 3 enabled; the size counts only the archives that are present (2 GB + 0.5 GB).
+    // 4 packs, 3 enabled; the size counts only the archives that are present (2 GB + 0.5 GB, decimal like every disk size, #768).
     expect(screen.getByText('4 packs · 3 enabled · 2.5 GB on this drive')).toBeInTheDocument()
     const asks = screen.getAllByRole('button', { name: 'Ask this pack' })
     expect(asks).toHaveLength(4)

@@ -29,6 +29,7 @@ import {
 // - F17 (#687): `downloadCaps` records the `maxBytes` the manager hands `downloadToFile`. The role
 //   defaults are ≥ 4 GiB, so a real body-size bracket around the cap is out of reach here.
 // - `verifyHook` holds or faults a verify, the #687 way (BE-4, F-13), calling through to the real one.
+// - `freeBytes` is the free space `statfs` reports for the drive (#768); unset, the real volume's.
 type VerifyFn = typeof import('../../src/main/services/assets').verifyDownloadedFile
 type VerifyHook = (real: VerifyFn, ...args: Parameters<VerifyFn>) => ReturnType<VerifyFn>
 
@@ -36,7 +37,8 @@ const seams = vi.hoisted(() => ({
   downloadCaps: [] as Array<number | undefined>,
   verifyHook: null as VerifyHook | null,
   /** Runs before each real `rm`: a row holds the delete of a bad `.part`, or faults it. */
-  rmHook: null as (() => Promise<void>) | null
+  rmHook: null as (() => Promise<void>) | null,
+  freeBytes: null as number | 'unreadable' | null
 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const orig = await importOriginal<typeof import('node:fs/promises')>()
@@ -45,6 +47,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     rm: async (...args: Parameters<typeof orig.rm>) => {
       await seams.rmHook?.()
       return orig.rm(...args)
+    },
+    // The real call runs first, so a path that does not exist still throws as it does on a drive.
+    statfs: async (...args: Parameters<typeof orig.statfs>) => {
+      const real = await orig.statfs(...args)
+      if (seams.freeBytes === 'unreadable') throw new Error('statfs: not supported on this volume')
+      return seams.freeBytes === null ? real : { ...real, bavail: seams.freeBytes, bsize: 1 }
     }
   }
   return { ...mocked, default: mocked }
@@ -65,6 +73,7 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
 afterEach(() => {
   seams.verifyHook = null
   seams.rmHook = null
+  seams.freeBytes = null
 })
 
 // Phase 18 — the in-app model downloader (architecture.md "In-app model downloader"). Everything
@@ -283,6 +292,72 @@ describe('download gates', () => {
     expect((await waitForTerminal(mgr, next.jobId)).status).toBe('done')
     expect(range.ranges).toEqual(['bytes=6-'])
     expect(readFileSync(weightPath(root, m), 'utf8')).toBe(BODY)
+  })
+
+  // #768: before this check a drive with 13.5 GB free took a 14.4 GB download and stopped on ENOSPC near the end. The
+  // refusal comes with the others, before the job exists: nothing is listed, audited or requested.
+  describe('free space on the drive (#768)', () => {
+    it.each([
+      ['clearly short', 14_439_363_584, 13_500_000_000, '14.4 GB', '13.5 GB'],
+      // Rounded half, 14.39 GB free would read 14.4 GB, the size itself: free space rounds down.
+      ['free rounds down, never up to the size', 14_439_363_584, 14_390_000_000, '14.4 GB', '14.3 GB'],
+      // Both in the same tenth: the size rounds up instead, so the two figures still differ.
+      ['the size and the free space in the same tenth', 14_439_363_584, 14_420_000_000, '14.5 GB', '14.4 GB'],
+      // Under a gigabyte (a projector, the rest of a resume) both read in MB, not "0.1 GB" against "0.0 GB".
+      ['a shortfall under a gigabyte', 40_000_000, 15_000_000, '40.0 MB', '15.0 MB']
+    ])('refuses a download larger than the free space (%s), naming both figures, before any job, audit or request', async (_title, sizeBytes, freeBytes, needed, free) => {
+      seams.freeBytes = freeBytes
+      const fetchSpy = vi.fn()
+      const audit = vi.fn()
+      const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, audit })
+      const big = downloadManifest({
+        download: {
+          url: 'https://example.test/big.gguf',
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          size_bytes: sizeBytes,
+          license_url: 'https://example.test/license'
+        }
+      })
+      await expect(mgr.start({ rootPath: tempRoot('downloads'), manifest: big, gates: OPEN_GATES })).rejects.toThrow(
+        tMain('main.download.notEnoughSpace', { needed, free })
+      )
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(audit).not.toHaveBeenCalled()
+      expect(mgr.list()).toEqual([])
+      expect(mgr.activeJob()).toBeNull()
+    })
+
+    it('counts a kept .part as fetched: free space for exactly the rest is enough, and the download resumes', async () => {
+      const m = verifiedManifest(BODY)
+      const root = tempRoot('downloads')
+      writeDriveFile(root, `${m.localPath}.part`, BODY.slice(0, 12))
+      seams.freeBytes = BODY.length - 12 // the whole file would not fit; no headroom is asked for on top
+      const { fetch, ranges } = rangeFetch(BODY, { honourRange: true })
+      const mgr = new DownloadManager({ fetchImpl: fetch })
+      const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+      expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+      expect(ranges).toEqual(['bytes=12-'])
+    })
+
+    const unsizedProjector = (): ModelManifest => {
+      const v = visionManifest(G, P)
+      return { ...v, mmproj: { ...v.mmproj!, download: { ...v.mmproj!.download!, sizeBytes: null } } }
+    }
+    it.each<[string, { manifest: () => ModelManifest; free: number | 'unreadable' }]>([
+      // The GGUF's declared 10 bytes alone are more than the 1 byte free: an unknown size is not a zero.
+      ['a file of the model declares no size', { manifest: unsizedProjector, free: 1 }],
+      ['the drive cannot report its free space', { manifest: () => verifiedManifest(BODY), free: 'unreadable' }]
+    ])('does not check when %s, and the download runs', async (_title, row) => {
+      seams.freeBytes = row.free
+      const { fetch } = routedFetch({
+        'https://example.test/qwen3-4b.gguf': BODY,
+        'https://example.test/vl.gguf': G,
+        'https://example.test/vl-mmproj.gguf': P
+      })
+      const mgr = new DownloadManager({ fetchImpl: fetch })
+      const job = await mgr.start({ rootPath: tempRoot('downloads'), manifest: row.manifest(), gates: OPEN_GATES })
+      expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+    })
   })
 })
 

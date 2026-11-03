@@ -16,7 +16,7 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 
 /** #339 P8-2: a `kiwix_tools` `EngineOptionalFamily` fixture — the pinned facts the consent
  *  dialog states. `sizeBytes: 18301924` is the exact figure the dialog's Size row must round
- *  to "17 MB" (18301924 / 1024 / 1024 ≈ 17.45). */
+ *  to "18 MB" (18301924 / 1e6 ≈ 18.30, decimal like every disk size, #768). */
 function engineOptionalFamily(over: Partial<EngineOptionalFamily> = {}): EngineOptionalFamily {
   return {
     family: 'kiwix_tools',
@@ -114,7 +114,7 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
     expect(within(dialog).getByText('Install the knowledge-pack tools?')).toBeInTheDocument()
 
     // Size / License / From — every fact comes from the fixture's `EngineOptionalFamily`.
-    expect(within(dialog).getByText('17 MB')).toBeInTheDocument()
+    expect(within(dialog).getByText('18 MB')).toBeInTheDocument()
     const licenseDt = within(dialog).getByText('License')
     expect(licenseDt.nextElementSibling?.textContent).toContain('GPL-3.0-or-later')
     const licenseLink = within(dialog).getByRole('link', { name: 'read the license' })

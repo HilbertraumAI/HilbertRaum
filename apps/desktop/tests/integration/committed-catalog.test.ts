@@ -135,6 +135,29 @@ describe('committed catalog — rules over every manifest', () => {
     }
   })
 
+  // #768: the AI Model card shows a withdrawal note verbatim, in the German UI too. "Successor candidate UD-Q4_K_M
+  // awaits the measurement wave of issue 196" outlived that wave by ten weeks, so a note names its successor only in the
+  // one form a row can check, by the display name of a manifest every file of which can still be downloaded.
+  it('a withdrawal note names its successor by the display name of a live downloadable manifest (#768)', () => {
+    const live = new Set(
+      committedManifests()
+        .filter((m) => {
+          const blocks = [m.download, ...(m.mmproj ? [m.mmproj.download] : []), ...(m.files ?? []).map((f) => f.download)]
+          return blocks.every((d) => d !== undefined && d.withdrawn === undefined)
+        })
+        .map((m) => m.displayName)
+    )
+    const named = committedManifests().flatMap((m) =>
+      m.download?.withdrawn && /successor/i.test(m.download.withdrawn) ? [{ id: m.id, note: m.download.withdrawn }] : []
+    )
+    expect(named.length, 'the withdrawn Qwen3.8 quants name theirs; drop this row if they go').toBeGreaterThan(0)
+    for (const { id, note } of named) {
+      const successor = /Successor in the catalog: (.+)\.$/.exec(note)?.[1]
+      expect(successor, `${id}: write "Successor in the catalog: <display_name>." at the end of the note`).toBeDefined()
+      expect(live.has(successor!), `${id}: "${successor}" is not the display name of a live downloadable manifest`).toBe(true)
+    }
+  })
+
   it('every committed manifest names a runtime and format the app can run', () => {
     for (const m of committedManifests()) {
       expect(isSupportedRuntimeFormat(m.runtime, m.format), `${m.id}: ${m.runtime}/${m.format}`).toBe(true)
@@ -975,30 +998,32 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
   // F-16 — size_on_disk_gb must be decimal GB (size_bytes / 1e9), the catalog-wide convention
   // (ledgered: full-audit DOC-3 at architecture.md fixed this exact GiB-mislabel class once, and
   // BUILD_STATE DOC-2 normalized the Qwen3.5 27B/35B pair). A GiB value is ~6.9% low, which on a
-  // multi-GB weight is >1 GB — far outside rounding. Only manifests carrying a real single-file
-  // download block with a byte count are checked (the vision manifest's size_on_disk_gb is a
-  // composite of two files — GGUF + mmproj — with no single download.size_bytes, so it is
-  // excluded by the numeric-sizeBytes guard). Tolerance 0.15 GB clears every honest rounding
-  // (largest gap in the catalog: qwen3.5-0.8b, 0.7 vs 0.639 = 0.061) yet reddens on a GiB mislabel
-  // of any sizable weight (the F-16 pair was off by 1.12 / 1.31 GB).
-  it('size_on_disk_gb matches size_bytes/1e9 (decimal GB) for every real download block', () => {
+  // multi-GB weight is >1 GB — far outside rounding. A model's size is all its files: the vision
+  // manifest's size_on_disk_gb covers GGUF + mmproj, the transcriber's its weight + VAD file, and
+  // since #768 every file of every downloadable manifest declares its size_bytes, so none is left
+  // out. Tolerance 0.15 GB clears every honest rounding (largest gap in the catalog: qwen3.5-0.8b,
+  // 0.7 vs 0.639 = 0.061) yet reddens on a GiB mislabel of any sizable weight (the F-16 pair was off
+  // by 1.12 / 1.31 GB).
+  it('size_on_disk_gb matches the declared bytes/1e9 (decimal GB) of every downloadable model', () => {
     const TOLERANCE_GB = 0.15
     const unsized: string[] = []
     for (const m of committedManifests()) {
-      const sizeBytes = m.download?.sizeBytes
-      if (sizeBytes == null || sizeBytes <= 0) {
-        if (m.download) unsized.push(m.id)
+      if (!m.download) continue
+      const blocks = [m.download, ...(m.mmproj ? [m.mmproj.download] : []), ...(m.files ?? []).map((f) => f.download)]
+      const sizes = blocks.map((d) => d?.sizeBytes ?? 0)
+      if (sizes.some((s) => s <= 0)) {
+        unsized.push(m.id)
         continue
       }
-      const decimalGb = sizeBytes / 1e9
+      const decimalGb = sizes.reduce((a, b) => a + b, 0) / 1e9
       expect(
         Math.abs(m.sizeOnDiskGb - decimalGb),
         `${m.id}: size_on_disk_gb (${m.sizeOnDiskGb}) must be decimal GB = size_bytes/1e9 ` +
           `(${decimalGb.toFixed(3)}); a gap this large means GiB was recorded instead of GB`
       ).toBeLessThan(TOLERANCE_GB)
     }
-    // An exact list: a floor would let a later manifest drop its size_bytes once a new one had been added.
-    expect(unsized).toEqual(['qwen2.5-vl-3b-instruct-q4'])
+    // Exact, and empty since #768: modelWeightMaxBytes falls back to the role ceiling for a file with no size.
+    expect(unsized).toEqual([])
   })
 })
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { EvidencePane } from '../../src/renderer/review/EvidencePane'
 import { ReviewSummaryView } from '../../src/renderer/review/ReviewSummaryView'
@@ -17,6 +17,7 @@ import {
 import type { EvidenceSourceSnapshot } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceReview'
+import { fakeMatchMedia, removeMatchMedia, type MatchMediaFake } from '../helpers/match-media'
 
 // Presentation-state and copy defects on the review surface — none of them can move data,
 // all of them mislead the person doing the reviewing:
@@ -102,41 +103,15 @@ describe('summary export toggle — disclosure state follows the gate (AUD-09)',
 })
 
 describe('narrow-window evidence drawer — closed on leaving narrow mode (AUD-10)', () => {
-  let narrow = true
-  let listeners: Set<() => void>
+  let viewport: MatchMediaFake
 
   beforeEach(() => {
-    narrow = true
-    listeners = new Set()
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      writable: true,
-      value: (query: string) => ({
-        get matches() {
-          return narrow
-        },
-        media: query,
-        addEventListener: (_event: string, fn: () => void) => listeners.add(fn),
-        removeEventListener: (_event: string, fn: () => void) => listeners.delete(fn),
-        addListener: () => {},
-        removeListener: () => {},
-        onchange: null,
-        dispatchEvent: () => false
-      })
-    })
+    viewport = fakeMatchMedia(true)
   })
 
   afterEach(() => {
-    delete (window as { matchMedia?: unknown }).matchMedia
+    removeMatchMedia()
   })
-
-  /** Resize the window across the drawer breakpoint, the way the media query reports it. */
-  function setNarrow(next: boolean): void {
-    act(() => {
-      narrow = next
-      for (const fn of [...listeners]) fn()
-    })
-  }
 
   it('widening the window closes the drawer for good — narrowing again does not re-open it', async () => {
     stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
@@ -152,13 +127,13 @@ describe('narrow-window evidence drawer — closed on leaving narrow mode (AUD-1
 
     // Wide again (the user un-snaps the window): the drawer is gone and the evidence pane
     // is back inline.
-    setNarrow(false)
+    viewport.set(false)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(document.querySelector('.review-evidence-pane')).not.toBeNull()
 
     // Narrow again — a Windows snap is enough. Nothing was clicked, so nothing may open:
     // a drawer appearing here is a modal focus trap the user never asked for.
-    setNarrow(true)
+    viewport.set(true)
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(document.querySelector('.review-evidence-pane')).toBeNull()
 

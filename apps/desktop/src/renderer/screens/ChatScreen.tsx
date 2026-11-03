@@ -39,7 +39,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { ocrRemedyKind } from '../lib/ocrRemedy'
 import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
-import { fmt1 } from '../lib/format'
+import { fmt1 } from '@shared/format'
 import {
   ATTACH_POLL_MS,
   RUNTIME_POLL_MS,
@@ -140,7 +140,7 @@ const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
 /** Below this viewport width the history column auto-collapses (responsive; the
  *  persisted desktop preference is untouched — widening restores the user's choice). */
-export const LIST_AUTO_COLLAPSE_PX = 1150
+const LIST_AUTO_COLLAPSE_PX = 1150
 
 /** #39: how long a turn must stay chunk-less (no answer token, no reasoning delta) before the
  *  calm "the first answer takes a little longer" hint may appear under the pending bubble —
@@ -2548,7 +2548,8 @@ export function ChatScreen({
           streamText={streamText}
           streamThinking={streamThinking}
           // #39: the calm "first answer takes a little longer" line under the pending bubble.
-          // Rendered inside the streaming bubble only, so it can never outlive the turn.
+          // Rendered inside the streaming bubble only; the stream's `finally` retires it with the
+          // turn, which is what keeps it out of a bubble recovered for another chat (#743).
           warmupHint={warmupHint}
           thinkingOpen={thinkingOpen}
           onThinkingOpenChange={setThinkingOpen}

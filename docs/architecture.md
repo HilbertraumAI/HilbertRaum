@@ -1592,7 +1592,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
           `endedEarly`, not the signal, so a stop landing after a complete answer was saved keeps it;
         - a re-ask that threw with nothing saved restores its predecessor for any reason. Before,
           aborts were skipped, so a Stop during document search lost the answer — reachable through
-          "Answer without it" / "Run with <skill>";
+          "Answer without it" / "Run with <skill>". **#779:** after that restore an abort resolves
+          with the restored answer (CB-2's shape), so `chat:done` carries it instead of an empty
+          message; any other failure still rethrows to `chat:error`;
         - a turn left with no answer marks its question (`markUnansweredQuestion`, last visible row
           only).
       - **A crash** surfaces as `RuntimeConnectionLostError`, raised by `LlamaRuntime.chatStream` on
@@ -5944,6 +5946,19 @@ Model card shows the note instead of a Download button, and the `fetch-models` t
 model with a loud line. Nothing about an already-installed weight changes: it verifies and runs as
 before. Schema + rules: model-policy.md "Withdrawn upstream sources"; the case that produced it:
 model-benchmarks.md §9.5.
+
+**And a refusal for a download that cannot fit (#768, 2026-11-03).** `start()` refuses when the
+bytes still to fetch exceed the free space of the drive the weights land on. It runs after the
+withdrawn / license / already-present refusals and before the job exists, so a refusal creates no
+job, audits no `model_download_started` and requests nothing. Still to fetch = Σ over the files to
+fetch of max(0, `size_bytes` − its kept `.part`), since the run resumes a `.part`. There is no check
+when any file's size is undeclared or the free space cannot be read, and no headroom on top (owner
+call: the same gentle posture as preflight's low-space note). The free space is `statfs` at the
+files' nearest existing folder, ultimately the drive root (`services/disk-space.ts` `freeBytes`,
+shared with the drive status). `main.download.notEnoughSpace` names both figures, decimal with one
+decimal, in the unit the size needs (GB as the confirmation dialog shows it; MB for a projector or
+the rest of a resume), and says what to do. The two never read alike: free space rounds down to the
+tenth, and the size rounds up when it would otherwise print the same tenth. Before it, a drive with 13.5 GB free took a 14.4 GB download and stopped on ENOSPC near the end.
 
 **Mechanics:** `services/downloads.ts` `DownloadManager` — a job state machine over the
 REUSED `assets.ts` seams (`planModelDownloads` + optional `hashStore`; `downloadToFile`,
@@ -11892,7 +11907,14 @@ review found are refinements inside the architecture (§3 below), not a change o
 > nothing indexed a document skill's accept re-ran the same answer under its stamp. A handler-less
 > skill keeps passing (its fence shapes a pack answer), but a chat with no section in scope and no pack
 > (documents off, an empty project, a document that never indexed) is not classified at all: every answer
-> there is the fixed no-context reply, which no skill changes. Since
+> there is the fixed no-context reply, which no skill changes. *#779 (2026-11-03):* where sections are in
+> scope the classification still runs before retrieval, and retrieval can then find nothing: the answer is
+> the fixed no-context or re-index reply (`isNoContextAnswer`, `rag/index.ts`). The grounded path then drops
+> the offer when the offered skill is fence-only (no analysis handler, the same `skillAnalysisHandler` lookup
+> `wouldSkillEngage` uses): its accept would re-run the same top-k search and the same fixed reply. A skill
+> with an analysis engine stays offered, because that engine reads beyond top-k. The coverage-extract listing
+> never produces that reply, and the deterministic offer names the bank skill, whose engine is registered, so
+> the drop never touches either. Since
 > #736 the classifier also reads the route that actually answered (a tree route the tree cannot answer
 > classifies as without the deep index). **(3) restore fidelity (#132/#135)** — `deleteLastAssistantMessage`/
 > `restoreMessage` now carry `skill_offer_json`, so the F2/CB-2 restore legs keep the offer (the
