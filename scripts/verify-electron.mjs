@@ -27,10 +27,13 @@
 //   does mean a broken install. This repo's documented Electron-43 fallback ladder includes
 //   ^41.7.2, so a version-blind script would silently lose the NTFS protection on that path.
 //
-// What this script still catches on EVERY version: the genuine half-extract — `path.txt` (or
-// `dist/version`) present, but the platform binary missing or zero-length. npm will not re-run
-// a postinstall for an already-installed package, so on Electron < 42 a second `npm install`
-// cannot repair that; and on >= 42 a half-written dist/ makes the lazy path fail opaquely.
+// What this script still catches on EVERY version: the genuine half-extract — `path.txt`
+// present, but `dist/version` or the platform binary missing, or the binary zero-length. npm
+// will not re-run a postinstall for an already-installed package, so on Electron < 42 a second
+// `npm install` cannot repair that; and on >= 42 a half-written dist/ makes the lazy path fail
+// opaquely. On >= 42 an absent `path.txt` returns null whatever dist/ holds, a `dist/version`
+// included (#769): Electron's own install.js reads that state as "not installed" and downloads
+// and extracts again on first use, so there is nothing for this script to repair.
 //
 // Escape hatches (skip the check entirely):
 //   HILBERTRAUM_SKIP_ELECTRON_CHECK=1   (manual override — what CI sets)
