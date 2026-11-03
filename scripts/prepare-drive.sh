@@ -249,7 +249,7 @@ if [[ $WITH_ASSETS -eq 1 ]]; then
   # natural DIY invocation (--with-assets with neither --accept-license nor --dry-run — every
   # default-set model is already license-approved) this array is EMPTY, and Bash 3.2 + `set -u`
   # (macOS stock /bin/bash) aborts an unguarded empty-array expansion with "unbound variable"
-  # (M23 — the same class guarded in fetch-models.sh:161 / verify-models.sh). Expand it via the
+  # (M23 — the same class guarded in fetch-models.sh / verify-models.sh). Expand it via the
   # `${arr[@]+"${arr[@]}"}` idiom so an empty array vanishes instead of erroring (F-03).
   COMMON_MODEL_ARGS=()
   [[ $ACCEPT_LICENSE -eq 1 ]] && COMMON_MODEL_ARGS+=(--accept-license)
