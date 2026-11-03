@@ -1984,9 +1984,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   otherwise subject to the same model requirement and honesty notes as an inline custom set.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
-  request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
-  parallel slots, so this is an app-side product decision (predictable latency, no
-  context-memory splitting), not a server constraint; revisit only with evidence.
+  request. This began as an app-side product decision (predictable latency, no
+  context-memory splitting): the R-T1 probe found the b9585 of the time serving concurrent
+  requests on parallel slots. Since #319 the chat server runs one slot (`-np 1`), so a second
+  request would queue at the server too; revisit only with evidence.
 - **A failed single-document re-index or delete reports on the shared error banner, not on the
   row** (issue #194). The clicked row shows a spinner and its own success toast names the document,
   and a failure banner is prefixed with the title — but there is no per-row error surface.

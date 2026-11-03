@@ -544,9 +544,10 @@ an expandable snippet of the cited chunk text. The plain chat path is unchanged.
 
 ## 9. Tested behaviour (Phase 6)
 
-- **Grounded prompt:** spec §7.8 template shape (rules, `Question:`, numbered excerpts), the
+- **Grounded prompt:** the user turn's shape (`Question:`, numbered excerpts), the
   `[Sn] File: X | Page: 4` / `| Section: Y` source format, the page→section→none meta
-  fallback, and the trailing `Answer:`.
+  fallback, and the trailing `Answer:`; the rules are absent from the user turn and present in
+  `GROUNDED_SYSTEM_PROMPT`, whose system message is byte-stable across turns (RT-2, §8).
 - **Retrieval:** returns the matching chunk for a question (`MockEmbedder`) with resolved
   citations + snippet; sequential `[Sn]` labelling in score order; **dedup by
   document/page**; **top_k_final + max_context_tokens** trimming; min-similarity filtering.
@@ -2342,8 +2343,9 @@ Nothing leaves the device: summarization is a local chat-model call, no new netw
 ### 15.1 L0 — the context window source of truth (§L0/§4.1, fix G1)
 
 Prompt assembly used to trim against `settings.contextTokens` (default 4096), but the sidecar is
-launched with `manifest.recommendedContextTokens || settings.contextTokens` as `--ctx-size` — the two
-can diverge, so we trimmed to the wrong window (too-tight wastes capacity; too-loose risks the 400).
+launched with `manifest.recommendedContextTokens || settings.contextTokens` as `--ctx-size` (today
+`launchContextTokens`, the user's `contextTokensOverride` first — §15.8) — the two can diverge, so
+we trimmed to the wrong window (too-tight wastes capacity; too-loose risks the 400).
 Fix: a new **OPTIONAL** `ModelRuntime.contextWindow(): number` accessor
 ([`runtime/index.ts`](../apps/desktop/src/main/services/runtime/index.ts)) reports the launched window —
 implemented on the three production runtimes (`LlamaRuntime` stores `opts.contextTokens`; `MockRuntime`
@@ -2352,7 +2354,8 @@ and the delegating `LadderRuntime` return theirs; fixed for a runtime's lifetime
 runtime that can't report one degrades gracefully. `RuntimeManager.status()` surfaces it as
 `RuntimeStatus.contextWindow?` (absent when not running). The exported helper
 `effectiveContextWindow(runtime, settings)` ([`chat.ts`](../apps/desktop/src/main/services/chat.ts)) =
-`runtime.contextWindow?.() ?? settings.contextTokens` (falls back when unreported/≤0); both
+the reported `runtime.contextWindow?.()` when > 0, else `settings.contextTokensOverride ??
+settings.contextTokens` (the override half since §15.8); both
 `generateAssistantMessage` and `generateGroundedAnswer` budget through it. `assemblyBudget = window −
 CHAT_RESPONSE_RESERVE_TOKENS` (reserve = 1024, unchanged). For the shipped Qwen models
 `recommendedContextTokens` IS the launched window, so the budget is unchanged today — this just stops
@@ -2453,8 +2456,8 @@ All user-visible strings go through `shared/i18n` (en + de, parity test enforced
 English (R12).
 - **Context meter (§5.1).** `ContextUsage {usedTokens, window}` (`shared/types.ts`) +
   `getConversationContextUsage(db, runtime|null, convId)` — a pure read that assembles via
-  `buildChatMessages` over `effectiveContextWindow` (falls back to `settings.contextTokens` with no
-  runtime) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
+  `buildChatMessages` over `effectiveContextWindow` (with no runtime: `settings.contextTokensOverride ??
+  settings.contextTokens`) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
   renderer refreshes on conversation switch + after each completed turn. `renderer/chat/ContextMeter.tsx`
   is a thin composer-footer gauge: calm <75% / amber 75–89% / near-full ≥90% of the percent it shows
   (#742: the bands read the raw ratio before, so 74.6% showed "75%" calm and without the heads-up). Since
@@ -2486,8 +2489,10 @@ English (R12).
   defaults-merge IS the migration — no schema change; silent drop-oldest is strictly worse than a visible
   summary). `compactionEnabled(db)` gates BOTH the `ensureCompacted` pre-pass AND the checkpoint READ in
   assembly + the marker reader — **chosen behaviour: when off, any existing checkpoint is ignored and the
-  FULL history replays (pure L1) = byte-identical to the pre-feature app.** An explicit user
-  `contextTokens` cap is always respected (`effectiveContextWindow` only ever falls BACK to it).
+  FULL history replays (pure L1) = byte-identical to the pre-feature app.** The user's context-size
+  pick (`contextTokensOverride`) is always respected: `launchContextTokens` launches with it ahead of
+  the manifest's window, so it is the window `effectiveContextWindow` reports; the legacy
+  `settings.contextTokens` is no cap, only the last fallback (no override and no recommended window).
 
 ### 15.6 Deferred — Phase 3 `/tokenize` (D-c) + the R7/R10 guardrails
 

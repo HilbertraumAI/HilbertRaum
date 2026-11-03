@@ -381,10 +381,10 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
        env-gated `HILBERTRAUM_*` manual smokes — a pin bump or a new model manifest can change any
        of them while CI stays green:
        - (a) the **real llama-server SSE wire contract** — `reasoning_content` deltas,
-         `finish_reason` (`stop`/`length`), and error-frame shapes. The parser is well covered but
-         only against hand-authored fixtures, now provenance-pinned to the b9849 output shape in
-         `read-chat-sse.test.ts` + `llama-runtime.test.ts` (**re-verify those frames on a runtime
-         pin bump**).
+         `finish_reason` (`stop`/`length`), and error-frame shapes. Content + `stop` frames are pinned
+         by real b11146 captures (`chat-sse-timings-b11146.txt` #512, `vision-sse-b11146.txt` #518);
+         reasoning, `length` and error frames only by hand-authored fixtures in `read-chat-sse.test.ts`
+         + `llama-runtime.test.ts` (**re-verify those frames on a runtime pin bump**).
        - (b) **real-model + RAG answer quality** (grounding, citations, refusal discipline).
        - (c) **`ragMinSimilarity` vs the real E5 distance distribution** (the mock embedder's
          distances are synthetic).
@@ -399,7 +399,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
          assertions moved with them. Standing rule: re-capture on every runtime pin bump (TS-3(a)).
        - (i) **real-server mid-stream error-frame smoke (F-02 / §Q Q-2, audit-2026-07-16)** —
          Phase 4 made `readChatSSE` REJECT on an in-band error frame (`data: {"error":{…}}` or a
-         bare `error: {…}` field line), pinned only against hand-authored b9849-shaped fixtures.
+         bare `error: {…}` field line), pinned only by hand-authored fixtures (shapes from b9849, TA-4).
          Force a REAL llama-server mid-stream failure (tiny `--ctx-size` + context-shift disabled,
          `HILBERTRAUM_*` env) and verify the reader rejects and the friendly `main.chat.streamError`
          copy surfaces (never raw model/runtime text). Also watch the PARTIAL-frame case: an error
@@ -527,7 +527,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     Wave narrative: [`docs/build-log.md`](docs/build-log.md). Still open:
 
     - the **CODE-9/TQ-6 manual-smoke-only coverage inventory** lives in item 7's TS-3 bullet
-      (the labelled (a)–(g) sub-list; SSE fixtures carry b9849 provenance comments —
+      (the labelled (a)–(g) sub-list; SSE fixtures carry provenance comments, pin b11146 —
       re-verify on a runtime pin bump);
     - **fix-when-touched polish candidates** (all Low; mechanisms in §47): SettingsScreen mounted-guard narrowing
       (CODE-7) · the `generateGroundedAnswer` canned-answer persist guard (CODE-18) ·
