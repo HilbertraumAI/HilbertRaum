@@ -31,3 +31,28 @@ export function jpegHeader(width: number, height: number) {
     0x03, 0, 0, 0, 0, 0, 0, 0, 0 // components (unparsed tail)
   ])
 }
+
+// A JPEG laid out segment by segment, the way a camera writes one: APP1/Exif (with its own thumbnail JPEG),
+// the quantization and Huffman tables, then the frame (#743). `jpegHeader` puts the SOF at offset 2 and so
+// never makes `jpegPixelCount` walk a segment.
+
+/** One marker segment: 0xFF, `marker`, the big-endian length (the payload plus its own two bytes), the payload. */
+export function jpegSegment(marker: number, payload: readonly number[]): number[] {
+  const len = payload.length + 2
+  return [0xff, marker, (len >> 8) & 0xff, len & 0xff, ...payload]
+}
+
+/** A Start-Of-Frame payload: precision 8, height then width (big-endian u16), three components (Y 2×2, Cb, Cr). */
+export function sofPayload(width: number, height: number): number[] {
+  return [
+    0x08,
+    (height >> 8) & 0xff, height & 0xff,
+    (width >> 8) & 0xff, width & 0xff,
+    0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01
+  ]
+}
+
+/** SOI, then `parts` in order (segments, fill bytes, an embedded file's bytes), then EOI. No scan data. */
+export function jpegFrom(...parts: readonly (readonly number[])[]) {
+  return new Uint8Array([0xff, 0xd8, ...parts.flat(), 0xff, 0xd9])
+}
