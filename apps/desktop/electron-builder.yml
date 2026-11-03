@@ -12,7 +12,7 @@
 # a network dependency: nothing is contacted, and a build never opens it on its own.
 #
 # node:sqlite REQUIREMENT: the packaged main process needs Electron >= 37 (Node 22.x);
-# `electron` is pinned to ^39.8.5 in devDependencies, so the bundled runtime has node:sqlite.
+# `electron` is pinned to ^43.8.3 in devDependencies, so the bundled runtime has node:sqlite.
 # A stripped/older runtime would lose it — do not downgrade Electron.
 #
 # Producing the actual artifact is a MANUAL step (R2/R5): see docs/packaging.md.
@@ -87,10 +87,10 @@ directories:
 # What goes inside app.asar. electron-builder ships production `dependencies`
 # automatically (pdfjs-dist / mammoth / papaparse / yaml — the externalized parser libs),
 # so the lazy require()s resolve at runtime. In this npm workspace those packages are
-# HOISTED to the repo-root node_modules; `includeSubNodeModules: true` makes the collector
-# follow hoisted/nested trees so mammoth's transitive deps come along too. ALWAYS smoke-test
-# a PDF/DOCX/CSV import from the produced .exe — a missing externalized dep only surfaces at
-# runtime, not in the green gate (see docs/packaging.md + BUILD_STATE R2).
+# HOISTED to the repo-root node_modules; electron-builder 26's collector follows hoisted/nested
+# trees by default (see the includeSubNodeModules NOTE below), so mammoth's transitive deps
+# come along too. ALWAYS smoke-test a PDF/DOCX/CSV import from the produced .exe — a missing
+# externalized dep only surfaces at runtime, not in the green gate (see docs/packaging.md + BUILD_STATE R2).
 files:
   - out/**/*
   # CODE-1 (full-audit 2026-07-12b): `npm run preview:build` / `screenshot` emit the dev-only
@@ -108,8 +108,8 @@ files:
   # hidden-window rasterizer, not with node-canvas). pdf.js itself `require`s it at its first import
   # in the main process; packaged, that fails, pdf.js warns twice on stderr and carries on, since the
   # main process needs only a DOMMatrix, which parsers/dommatrix-polyfill.ts supplies (#685,
-  # tests/integration/pdf-parser-packaged.test.ts). `includeSubNodeModules: true` would
-  # otherwise follow the hoisted tree and bundle the win32 `.node` into app.asar, breaking
+  # tests/integration/pdf-parser-packaged.test.ts). The dependency collector would otherwise
+  # follow the hoisted tree and bundle the win32 `.node` into app.asar, breaking
   # the pure-JS / cross-OS portable posture (a Windows .node on a macOS/Linux drive).
   # Exclude every platform variant. tests/integration/packaging.test.ts asserts this stays.
   - '!**/node_modules/@napi-rs/canvas*/**'

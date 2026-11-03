@@ -194,7 +194,7 @@ Key config points:
   electron-builder still maps the option (an unmapped name is ignored silently). Since #562 the block
   also sets four more fuses; see "Electron fuses" below.
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
-  (`electron` is pinned `^39.8.5`). A downgraded/stripped runtime would lose it — do not downgrade.
+  (`electron` is pinned `^43.8.3`). A downgraded/stripped runtime would lose it — do not downgrade.
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
   electron-builder 26 cannot auto-detect it from `apps/desktop` — so `electron-builder.yml` pins
   **`electronVersion`** explicitly (keep it in sync with the `electron` devDependency when bumping).
