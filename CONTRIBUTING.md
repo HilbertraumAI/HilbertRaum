@@ -249,6 +249,13 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **The bash legs on a Windows desk** need `C:\Program Files\Git\bin` first on `PATH` and `HILBERTRAUM_SCRIPT_SH_LEG=1`: from
   PowerShell, plain `bash` is WSL's and fails every `.sh` row. Run those suites on their own. Git Bash's forks are slow under
   load, and inside a full run the builder's gate row can reach the 60 s child kill. No CI leg runs them that way.
+- **A script row runs on `scriptRoot()`**, a drive root named `Kit [1]`: a `[` read as a wildcard by a non-literal
+  PowerShell path made `fetch-models` fall back to the repo's catalog (#767). **A row that really downloads** also passes
+  `env: downloadEnv()` (no aria2c on `PATH`: every CI image ships it and it reads no `file://` URL; every proxy variable
+  names a dead port) and `scriptsDir: isolatedScripts()` (a copy of the scripts with no repo catalog beside it). Run an
+  old or mutated script the same way, or dry: a pre-fix `fetch-models.ps1` on a bracketed root started a real 1.6 GB
+  download from the repo's catalog. The shipped `.ps1` scripts carry no PowerShell download line (`script-drift`):
+  a `WebClient` one got a copy of `fetch-models.ps1` quarantined by Norton.
 - **Prove a cache hit with a swap behind the cache, not a counter.** Rewrite the file with the same size
   and mtime: a stale value proves no read, and it needs no probe in production (`policy.test.ts`, F-30).
   Keep a changed-signature row beside it, or a cache that never re-reads passes.
