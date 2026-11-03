@@ -117,7 +117,8 @@ import type { Db } from '../services/db'
  * companion instead, since step 4-5 ruling (e)(i)) packed FEWER gold blocks than today's
  * `capped`/no-rerank baseline (`allPacked` 26→22, `anyPacked` 42→33 — see
  * `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17). Exported for
- * `tests/unit/rerank-profile-wiring.test.ts` — the one production call site this function has.
+ * `tests/unit/rerank-profile-wiring.test.ts` and `tests/integration/reranker-callbacks-composition.test.ts`;
+ * its one production call site is the ask handler below.
  *
  * `occupancy` (Wave 8 ruling (a)/(b)(G)/NF-1) is a REQUIRED parameter, not optional: the resolved
  * posture depends on the committed chat model and its in-flight/pending state and the

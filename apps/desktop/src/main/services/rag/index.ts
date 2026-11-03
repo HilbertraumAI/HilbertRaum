@@ -1480,8 +1480,9 @@ Answer:`
 }
 
 /**
- * Build the runtime message list for a grounded answer: the base system prompt, the prior
- * conversation history, and the current (last) user turn REPLACED by the grounded prompt.
+ * Build the runtime message list for a grounded answer: the grounded system prompt (the base prompt
+ * plus the grounding rules, RT-2; the grounded-data mode passes its own), the prior conversation
+ * history, and the current (last) user turn REPLACED by the grounded prompt.
  * The DB keeps the raw question for the transcript; only the model sees the grounded form.
  */
 export function buildGroundedChatMessages(
