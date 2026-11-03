@@ -243,6 +243,28 @@ describe('desktop package license matches the repo license (TQ-4)', () => {
   })
 })
 
+// #769: release.yml compares the tag with apps/desktop/package.json's version alone, and electron-builder stamps that one
+// into the artifact, so a bump that misses the root package.json or the lockfile would ship unnoticed.
+describe('the release version is one number (#769)', () => {
+  it('the root and desktop package.json and the lockfile carry the same version', () => {
+    const version = (...rel: string[]): unknown => (JSON.parse(repoText(...rel)) as { version?: string }).version
+    const lock = JSON.parse(repoText('package-lock.json')) as { version?: string; packages: Record<string, { version?: string }> }
+    const desktop = version('apps', 'desktop', 'package.json')
+    expect(desktop).toMatch(/^\d+\.\d+\.\d+$/)
+    expect({
+      'package.json': version('package.json'),
+      'package-lock.json version': lock.version,
+      'package-lock.json packages[""]': lock.packages['']?.version,
+      'package-lock.json packages["apps/desktop"]': lock.packages['apps/desktop']?.version
+    }).toEqual({
+      'package.json': desktop,
+      'package-lock.json version': desktop,
+      'package-lock.json packages[""]': desktop,
+      'package-lock.json packages["apps/desktop"]': desktop
+    })
+  })
+})
+
 // PR #30 (portable-build-cleanup): electron-builder derives the per-platform executable /
 // AppImage name from the npm package name, which in this workspace is the scoped
 // "@hilbertraum/desktop" → "@hilbertraumdesktop"; the '@' is an unsafe path char and the build
@@ -314,22 +336,6 @@ describe('electron-builder.yml electronVersion tracks the electron devDependency
     return entry!.version!
   }
 
-  /** The `^x.y.z` range declared in apps/desktop/package.json devDependencies. */
-  function declaredElectronRange(): string {
-    const pkg = JSON.parse(repoText('apps', 'desktop', 'package.json')) as {
-      devDependencies?: Record<string, string>
-    }
-    const range = pkg.devDependencies?.electron
-    expect(range, 'apps/desktop declares an electron devDependency').toBeTruthy()
-    return range!
-  }
-
-  const parse3 = (v: string): [number, number, number] => {
-    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v)
-    expect(m, `"${v}" is a plain three-part version`).not.toBeNull()
-    return [Number(m![1]), Number(m![2]), Number(m![3])]
-  }
-
   it('electronVersion EQUALS the electron version pinned in package-lock.json', () => {
     // `electronVersion: 43.0` is valid YAML and parses to the number 43 — electron-builder
     // would then look for a nonexistent "43" release. Two dots keep it a string; no String() here.
@@ -341,19 +347,8 @@ describe('electron-builder.yml electronVersion tracks the electron devDependency
     ).toBe(lockedElectronVersion())
   })
 
-  it('electronVersion satisfies the caret range declared in apps/desktop/package.json', () => {
-    const range = declaredElectronRange()
-    const caret = /^\^(\d+\.\d+\.\d+)$/.exec(range)
-    // If the range form ever changes, fail loudly rather than silently stop checking.
-    expect(caret, `electron devDependency "${range}" is a plain caret range`).not.toBeNull()
-    const [fMaj, fMin, fPat] = parse3(caret![1])
-    const [pMaj, pMin, pPat] = parse3(String(builderConfig().electronVersion))
-    expect(pMaj, 'same major as the declared floor').toBe(fMaj)
-    const atOrAbove =
-      pMin > fMin || (pMin === fMin && pPat >= fPat)
-    expect(atOrAbove, `${pMaj}.${pMin}.${pPat} is at or above the ${caret![1]} floor`).toBe(true)
-  })
-
+  // A row holding electronVersion to the declared caret range retired with #770 (owner call): `npm ci` installs the
+  // lockfile's version, which can only satisfy that range, so the row above is the guard.
   it('the INSTALLED electron agrees too, when node_modules is present', (ctx) => {
     const manifest = join(REPO_ROOT, 'node_modules', 'electron', 'package.json')
     if (!existsSync(manifest)) {

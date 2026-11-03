@@ -36,7 +36,8 @@ executableName: HilbertRaum
 # shipped Electron 37 from a build whose devDep said 39 because this line was left behind, and a
 # human caught it by luck (DEP-1 §4(b)). Since wave DEP-4 that is guarded automatically:
 # tests/integration/packaging.test.ts asserts this value equals the electron version pinned in
-# package-lock.json and satisfies the declared caret range. Edit both or the green gate fails.
+# package-lock.json (which `npm ci` installs, so it satisfies the declared range). Edit both or
+# the green gate fails.
 electronVersion: 43.8.3
 
 # Electron fuses (#560, #562), flipped in the packaged binary by @electron/fuses before signing.
