@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join, relative, sep } from 'node:path'
 import { buildPolicyJson } from '../../src/main/services/drive'
 import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
-import { SCRIPT_LEGS, extractScriptArray, outputOf, powershellEnv, scriptRoot } from '../helpers/script-legs'
+import { SCRIPT_LEGS, extractScriptArray, outputOf, scriptRoot } from '../helpers/script-legs'
 import { writeDriveFile } from '../helpers/manifest-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
 
@@ -68,9 +68,14 @@ for (const leg of SCRIPT_LEGS) {
 
     // M22: the .ps1 writes its config through .NET, which resolves a relative path against the PROCESS directory, and that
     // does not follow Set-Location. So the defect shows only from a shell whose location moved; the files tell, not the exit.
+    // The command first sets 5.1's own module path, as SCRIPT_LEGS does for a -File run (a CI runner exports PowerShell 7's).
     it('a relative target lands under the shell location, config included (M22)', () => {
       const location = scriptRoot('orch-rel-')
       const elsewhere = mkdtempSync(join(tmpdir(), 'hilbertraum-orch-cwd-'))
+      const modules = [
+        join(process.env.ProgramFiles ?? 'C:\\Program Files', 'WindowsPowerShell', 'Modules'),
+        join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')
+      ].join(';')
       const r =
         leg.ext === 'ps1'
           ? spawnSync(
@@ -81,9 +86,10 @@ for (const leg of SCRIPT_LEGS) {
                 '-ExecutionPolicy',
                 'Bypass',
                 '-Command',
-                `Set-Location -LiteralPath '${location}'; & '${join(REPO_ROOT, 'scripts', preparer)}' -Target rel-drive`
+                `$env:PSModulePath = '${modules}'; Set-Location -LiteralPath '${location}'; ` +
+                  `& '${join(REPO_ROOT, 'scripts', preparer)}' -Target rel-drive`
               ],
-              { encoding: 'utf8', cwd: elsewhere, env: powershellEnv(process.env), windowsHide: true, timeout: testBudgetMs(60_000) }
+              { encoding: 'utf8', cwd: elsewhere, windowsHide: true, timeout: testBudgetMs(60_000) }
             )
           : leg.run(preparer, [f('Target'), 'rel-drive'], { cwd: location })
       for (const rel of ['workspace', 'model-manifests/runtime-sources.yaml', 'config/drive.json', 'config/policy.json']) {

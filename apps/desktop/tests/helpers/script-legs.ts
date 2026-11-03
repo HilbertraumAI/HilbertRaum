@@ -67,7 +67,7 @@ function childEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
  * autoload and every hashing script dies with CommandNotFoundException. Replace it, case-insensitively as Windows env names
  * are, with 5.1's own default module path, which is what any user's machine gives the script.
  */
-export function powershellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function powershellEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) if (!/^psmodulepath$/i.test(k)) env[k] = v
   const sysRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
