@@ -19,10 +19,11 @@ import { LlamaServer, combineSignals, type LlamaServerOptions } from './sidecar'
 // prompt format. Fully offline: the only socket is loopback to the sidecar.
 
 /**
- * Args every CHAT sidecar gets (verified against the pinned llama.cpp b9585 source;
+ * Args every CHAT sidecar gets (first verified against the llama.cpp b9585 source; the argv was
+ * re-verified on the current pin b11146 under #512 — `model-manifests/runtime-sources.yaml`;
  * rationale in architecture.md "Chat & streaming"):
  *   --jinja                      the kwargs-driven thinking switch only acts in the
- *                                jinja template path (b9585 default is already jinja;
+ *                                jinja template path (b9585 already defaulted to jinja;
  *                                pinned explicitly so the mechanism's precondition is
  *                                stated in code, not assumed from upstream defaults)
  *   --reasoning-format deepseek  thinking output streams as separate
@@ -95,9 +96,9 @@ export const CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format', 'deepseek', '-
  * Physical-batch cap for the chat sidecar's prompt prefill (RT-1, perf audit 2026-06-18).
  * llama-server defaults `--batch-size`/`--ubatch-size` to 512, which chunks prefill — the
  * dominant time-to-first-token cost — into 512-token pieces. We raise it to the context size
- * but cap at 2048 (a low-risk validated start on the pinned b9585; the whole prompt can't exceed
- * n_ctx anyway, so `min(ctx, 2048)` never over-allocates the batch). Mirrors the reranker, which
- * raises its batch to the context for the same reason (reranker/llama.ts:96-115).
+ * but cap at 2048 (a low-risk start, validated on b9585, the pin at the time; the whole prompt
+ * can't exceed n_ctx anyway, so `min(ctx, 2048)` never over-allocates the batch). Mirrors the
+ * reranker, which raises its batch to the context for the same reason (reranker/llama.ts:96-115).
  */
 export const CHAT_MAX_PHYSICAL_BATCH = 2048
 
@@ -134,9 +135,10 @@ export type LlamaRuntimeDeps = Pick<
  *   deep      thinking ON + temperature 0.6 (Qwen3's documented thinking-mode
  *             sampling), uncapped
  *
- * `enableThinking` is ALWAYS explicit: at the pinned b9585 the server defaults to
- * `--reasoning auto`, which turns thinking ON for any template that supports it
- * (all four bundled Qwen3 models) — omitting the kwarg would make every mode think.
+ * `enableThinking` is ALWAYS explicit: the server defaults to `--reasoning auto` (verified on
+ * b9585; thinking still ON by default on the b11146 pin, #512), which turns thinking ON for any
+ * template that supports it (all four bundled Qwen3 models) — omitting the kwarg would make every
+ * mode think.
  * Explicit `RuntimeChatOptions.maxTokens`/`temperature` win over these values.
  */
 export interface ModeRequestParams {
@@ -172,9 +174,9 @@ interface ChatCompletionChunk {
     finish_reason?: string | null
   }>
   /**
-   * llama-server's per-request timing block (#290/#291). At the pinned b9849 it rides the
-   * `finish_reason` chunk itself — pinned by the captured transcript
-   * `tests/fixtures/chat-sse-timings-b9849.txt` (#298). The reader still tolerates it on ANY
+   * llama-server's per-request timing block (#290/#291). It rides the `finish_reason` chunk
+   * itself — pinned by the captured transcripts `tests/fixtures/chat-sse-timings-b9849.txt` (#298)
+   * and `chat-sse-timings-b11146.txt` (the current pin, #512). The reader still tolerates it on ANY
    * chunk, including one with no `choices`, so a future server that moves it keeps working.
    */
   timings?: RuntimeTimings
@@ -192,10 +194,10 @@ interface ChatCompletionChunk {
  * in-band ERROR frame, or nothing.
  *
  * F-02 (audit 2026-07-16): llama-server reports a mid-generation failure IN-BAND on the open
- * stream and then closes it without `[DONE]`. Two carrier shapes exist at the pinned b9849 —
- * the same pair the repo verified for the translation reader (TA-4 M3, architecture.md
- * "translation audit"): a `data: {"error":{message,type,…}}` frame and a bare `error: {…}`
- * SSE FIELD line. Both used to fall through as keep-alives (`{}`), so the reader ended
+ * stream and then closes it without `[DONE]`. Two carrier shapes exist on b9849 (no capture of
+ * either on the current pin b11146) — the same pair the repo verified for the translation reader
+ * (TA-4 M3, architecture.md "translation audit"): a `data: {"error":{message,type,…}}` frame and a
+ * bare `error: {…}` SSE FIELD line. Both used to fall through as keep-alives (`{}`), so the reader ended
  * cleanly and a partial answer persisted as complete. Both now map to `streamError`. An
  * `error:` field line with an unparseable payload is still an error (a present error field is
  * never a keep-alive), surfaced content-free. RE-VERIFY both shapes against a captured smoke
@@ -539,10 +541,11 @@ export function readWithIdleTimeout<T>(
  * the same way, and runs once the server has sent a progress event (see `IdleWatchdog`).
  *
  * #290/#291: the server's top-level `timings` block is remembered from whichever chunk carries it
- * (the `finish_reason` chunk at the pinned b9849 — captured in `tests/fixtures/chat-sse-timings-b9849.txt`,
- * #298; a chunk with no `choices` is tolerated too) and handed up with the finish reason ONCE, at the `[DONE]` sentinel or the clean
- * close. Deferring the hand-up to the sentinel (instead of firing on the `finish_reason` chunk) is
- * what lets a trailing timings-only chunk still be attached; no consumer observes the difference —
+ * (the `finish_reason` chunk — captured in `tests/fixtures/chat-sse-timings-b9849.txt`, #298, and
+ * `chat-sse-timings-b11146.txt`, #512; a chunk with no `choices` is tolerated too) and handed up
+ * with the finish reason ONCE, at the `[DONE]` sentinel or the clean close. Deferring the hand-up
+ * to the sentinel (instead of firing on the `finish_reason` chunk) is what lets a trailing
+ * timings-only chunk still be attached; no consumer observes the difference —
  * every caller reads the captured value after the stream completes, and the finish chunk's delta is
  * empty. A stream that never reaches the sentinel (abort, error frame, idle watchdog) hands up
  * nothing, exactly as before.
@@ -702,8 +705,8 @@ export class LlamaRuntime implements ModelRuntime {
    * Stream assistant tokens from the OpenAI-compatible endpoint. `messages` map
    * directly to role/content; `maxTokens`/`temperature` map to `max_tokens`/
    * `temperature` (explicit values win over the mode mapping). The answer-depth
-   * `mode` maps to `chat_template_kwargs.enable_thinking` — verified per-request
-   * support at the pinned b9585 — plus the per-mode sampling defaults; with
+   * `mode` maps to `chat_template_kwargs.enable_thinking` — per-request support verified
+   * on b9585 and on the b11146 pin (#512) — plus the per-mode sampling defaults; with
    * thinking on, reasoning deltas surface via `options.onReasoning`, never in the
    * yielded answer stream. Aborts the fetch + generator on `options.signal`.
    */

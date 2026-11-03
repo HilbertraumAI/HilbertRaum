@@ -1548,13 +1548,14 @@ export function messageTokens(m: ChatMessage): number {
 
 /**
  * The REAL context-window budget for prompt assembly (§L0). The runtime is launched with
- * `manifest.recommendedContextTokens || settings.contextTokens` as llama-server's
+ * `launchContextTokens` (the user's `contextTokensOverride`, else
+ * `manifest.recommendedContextTokens || settings.contextTokens`) as llama-server's
  * `--ctx-size`, which can DIVERGE from `settings.contextTokens` — trimming against the
  * setting alone risks an over-window HTTP 400 (window larger than the setting → we'd trim
  * too tight, wasting capacity) or, the other way, an overflow. So we budget against the
- * value the runtime actually reports, falling back to the setting only when the runtime
- * can't report one (no model running — the meter passes `{}` — or a bare test stub without
- * `contextWindow()`).
+ * value the runtime actually reports, falling back to the override, then the setting, only
+ * when the runtime can't report one (no model running — the meter passes `{}` — or a bare test
+ * stub without `contextWindow()`).
  */
 export function effectiveContextWindow(
   runtime: Pick<ModelRuntime, 'contextWindow'>,

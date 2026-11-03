@@ -30,8 +30,10 @@ class FakeChild extends EventEmitter implements ChildProcessLike {
 }
 
 // Fixture provenance (CODE-9/TQ-6, full-audit 2026-07-11): the SSE frames throughout this file are
-// hand-authored to the llama-server (b9849) output shape — content/reasoning_content deltas,
-// `finish_reason` (stop/length), and `[DONE]`. CI green does NOT evidence the real wire contract
+// hand-authored to the llama-server output shape — content/reasoning_content deltas,
+// `finish_reason` (stop/length), and `[DONE]`; no captured file is read here. The content + `stop`
+// shape matches the real captures on the current pin b11146 (`chat-sse-timings-b11146.txt`, #512); the
+// reasoning and `length` shapes have no capture. CI green does NOT evidence the real wire contract
 // (see BUILD_STATE §5 TS-3 inventory); re-verify against a captured smoke transcript on a runtime pin bump.
 function chatChunk(content: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`

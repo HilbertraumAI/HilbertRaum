@@ -13,7 +13,8 @@ import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 //   HILBERTRAUM_THINKING_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/chat/*.gguf>
 //   npx vitest run tests/manual/thinking-smoke.test.ts
 //
-// Against the REAL pinned b9585 build + a real Qwen3 GGUF this proves the D5 mechanism
+// Against the REAL pinned llama-server build (`model-manifests/runtime-sources.yaml`; first run
+// on b9585, D5 re-verified on b11146 under #512) + a real Qwen3 GGUF this proves the D5 mechanism
 // end-to-end: `chat_template_kwargs.enable_thinking` is honoured per request, Deep mode
 // streams its reasoning as separate `delta.reasoning_content` frames (never inline
 // `<think>` tags in the answer), and Balanced produces a direct answer with NO
@@ -43,7 +44,7 @@ function firstChatModel(root: string): string | null {
   return ggufs.length ? ggufs[0].path : null
 }
 
-describe.skipIf(!enabled)('Thinking-mode smoke (manual, real b9585 + real Qwen3)', () => {
+describe.skipIf(!enabled)('Thinking-mode smoke (manual, pinned llama-server + real Qwen3)', () => {
   const binPath = enabled ? resolveLlamaServerPath(ROOT, process.platform, {}) : null
   const modelPath = enabled ? firstChatModel(ROOT) : null
   const opts: RuntimeStartOptions = {

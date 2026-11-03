@@ -273,8 +273,9 @@ export function cpuRequestCeilingFor(settings: AppSettings | null): number {
  * built from. Every dependency is REQUIRED (no optional field): a composition test targets this
  * factory with `// @ts-expect-error` cases proving so, because a composition test that only
  * reaches `compose-services.ts` → `reranker/factory.ts` cannot see an omission at `main/index.ts`
- * or at the ask site (`registerRagIpc.ts:262`) — the analysis's finding NF-1. `main/index.ts`
- * calls this ONCE and threads both returned callbacks into `composeServices`.
+ * or at the ask site (the ask handler's `resolveAskCandidateScope` call in `registerRagIpc.ts`) —
+ * the analysis's finding NF-1. `main/index.ts` calls this ONCE and threads both returned
+ * callbacks into `composeServices`.
  */
 export interface RerankerCallbackDeps {
   /** The chat runtime manager — only the three read-only methods the posture needs. */
@@ -313,8 +314,8 @@ export function createRerankerCallbacks(deps: RerankerCallbackDeps): {
  * Wave 8 ruling (a)/(b)(T) — build one `RerankerOccupancySnapshot` from the runtime manager, the
  * pending-switch counter and a live translator getter. Exported so `createRerankerCallbacks`
  * (the sidecar's own posture seam) and `registerRagIpc.ts`'s ask-site call to
- * `resolveAskCandidateScope` (`:262`-area) build the occupancy snapshot the SAME way — never two
- * independent re-derivations that could drift.
+ * `resolveAskCandidateScope` (in the ask handler) build the occupancy snapshot the SAME way —
+ * never two independent re-derivations that could drift.
  */
 export function snapshotRerankerOccupancy(
   runtimeManager: Pick<RuntimeManager, 'activeModelId' | 'status' | 'active'>,

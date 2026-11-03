@@ -7,14 +7,18 @@ import type { ChatMessage } from '../../src/main/services/runtime'
 
 // MANUAL R-T1 probe (Phase 33, wave-3 plan §14) — NOT CI.
 //
-// Question: what does the REAL pinned b9585 llama-server do, at our default spawn args
-// (no `--parallel`), when a second /v1/chat/completions arrives while one is streaming?
+// Question: what does the REAL llama-server (the drive's binary, i.e. the pinned build) do, at
+// the app's chat spawn args, when a second /v1/chat/completions arrives while one is streaming?
 // Queued? Served on a parallel slot? Rejected?
 //
+// The 2026-06-11 run (b9585, whose spawn args then had no slot flag) printed PARALLEL slot —
+// recorded in architecture.md "Functionality wave 3 — design record" §14 (R-T1). That verdict is
+// historical: `createLlamaRuntime` always appends `CHAT_SERVER_ARGS`, which carries `-np 1` (one
+// server slot) since #319, so a rerun today is expected to print QUEUED.
+//
 // INFORMATIONAL ONLY: D26 already resolved concurrency app-side (strict one-at-a-time —
-// the app never sends two requests). This probe confirms the app-side guard is airtight
-// (what WOULD happen if it weren't) and banks the facts for a future parallelism
-// revisit. Findings recorded in architecture.md "Functionality wave 3 — design record" §14 (R-T1).
+// the app never sends two requests). This probe shows what WOULD happen if the app-side guard
+// failed and banks the facts for a future parallelism revisit.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
 // HILBERTRAUM_CONCURRENCY_PROBE points at a provisioned drive root (the HILBERTRAUM_GPU_SMOKE shape):
@@ -48,7 +52,7 @@ interface StreamObservation {
   error: string | null
 }
 
-describe.skipIf(!enabled)('R-T1: llama-server b9585 concurrent-request behavior (manual)', () => {
+describe.skipIf(!enabled)('R-T1: llama-server concurrent-request behavior (manual, pinned build)', () => {
   it(
     'observes a second chat request issued while the first streams',
     { timeout: 600_000 },
