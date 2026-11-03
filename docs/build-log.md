@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-03 — the closed 2026-10-13 #671 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #736 entry). Its records are unchanged:
+the translation record's "#671 amendment" it pointed to. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#671 — a translation start's own GPU buffers say where it ran, never the offload line (`fix/671-translate-gpu-evidence`).** On a PC with no usable card the GPU posture
+printed `offloaded 49/49 layers to GPU`, so the Translate screen claimed the card; `--device none` prints the same, so every processor start (all of #473's causes, every 8 GB card) showed "49 of 49
+layers on the card" on the Performance row. The runtime reads its log with the chat placement parser and records `gpuBuffers` (#653's `holdsGpuBuffers`); the hint, the row, `gpuOccupied` and `yieldGpu`
+follow it. Real app (b11146, TranslateGemma, card hidden / visible): master "GPU, 49/49" and "49 von 49 Schichten auf der Karte" twice; the fix says processor, no split. Record: translation record
+"#671 amendment". Open: a GPU-less PC whose model lands in ggml's `AMX` buffer reads as unknown and keeps the "graphics card" hint._
+
 ## 2026-11-03 — the closed 2026-10-13 #670 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #745 entry). Its records are unchanged:
