@@ -637,14 +637,15 @@ The drive root ships an obvious, double-clickable launcher (spec §6 names). Sou
 | OS | File | What it does |
 |---|---|---|
 | Windows | `Start HilbertRaum.cmd` | `%~dp0` → drive root → set `HILBERTRAUM_DRIVE_ROOT` → spawn the portable `.exe`. |
-| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. |
+| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, publishes that folder only when an `.app` landed in it (#769), and runs the bundle from there. An extracted `.app` at the root runs in place. |
 | Linux | `start-hilbertraum.sh` | same, next to the AppImage. |
 | all | `READ ME FIRST.txt` | friendly first-run + SmartScreen/Gatekeeper instructions. |
 
 All three launchers refuse to start while more than one app artifact of their kind sits at the
 drive root (two portable `.exe`s, two AppImages, two `.app.zip`s, or an extracted `.app` beside a
 zip), naming the files to delete and never deleting anything themselves (#235); `--check`
-(`/check` on Windows) resolves the app and exits without starting it.
+(`/check` on Windows) prints the drive root, the manifests folder the app will read and the app it
+resolved, and exits without starting it.
 `tests/integration/launcher-execution.test.ts` executes all three in scratch roots.
 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from

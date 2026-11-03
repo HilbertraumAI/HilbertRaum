@@ -61,6 +61,7 @@ if defined CHECK setlocal enabledelayedexpansion
 if defined CHECK echo.
 if defined CHECK echo   HilbertRaum launcher check
 if defined CHECK echo   Drive root : !HILBERTRAUM_DRIVE_ROOT!
+if defined CHECK echo   Manifests  : !HILBERTRAUM_MANIFESTS_DIR!
 if defined CHECK echo   App        : !APP!
 if defined CHECK echo   Nothing was started.
 if defined CHECK echo.

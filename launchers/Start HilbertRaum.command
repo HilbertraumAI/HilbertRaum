@@ -80,6 +80,7 @@ if [ "$CHECK" = 1 ]; then
   echo
   echo "  HilbertRaum launcher check"
   echo "  Drive root : $DIR"
+  echo "  Manifests  : $HILBERTRAUM_MANIFESTS_DIR"
   if [ -n "$APP" ]; then
     echo "  App        : $APP"
   else
@@ -122,6 +123,23 @@ if [ -z "$APP" ]; then
       rm -rf "$PARTIAL"
       exit 1
     fi
+    # An archive can unpack cleanly and still hold no .app (a zip made without
+    # --keepParent). Refuse it here: published, it would be run from the cache on
+    # every later start and never unpacked again (#769).
+    UNPACKED_APP=0
+    for candidate in "$PARTIAL"/*.app; do
+      if [ -d "$candidate" ]; then UNPACKED_APP=1; break; fi
+    done
+    if [ "$UNPACKED_APP" = 0 ]; then
+      echo
+      echo "  Unpacked '$ZIP' but found no .app inside it."
+      echo "  The file is damaged or is not a HilbertRaum app archive. Copy the"
+      echo "  release's .app.zip to the drive again, then start again."
+      echo "  See docs/troubleshooting.md for help."
+      echo
+      rm -rf "$PARTIAL"
+      exit 1
+    fi
     # Only publish the cache once extraction fully succeeded, so an interrupted
     # first run cannot leave a half-unpacked bundle that looks complete. If a
     # parallel launch published first, use its copy (mv onto an existing dir would
@@ -137,9 +155,11 @@ if [ -z "$APP" ]; then
     if [ -d "$candidate" ]; then APP="$candidate"; break; fi
   done
 
+  # Only a cache published before #769's check above, or emptied by hand, lacks the bundle.
   if [ -z "$APP" ]; then
     echo
-    echo "  Unpacked '$ZIP' but found no .app inside it."
+    echo "  The app unpacked earlier into '$CACHE' is incomplete."
+    echo "  Delete that folder, then start again: the app is unpacked afresh."
     echo "  See docs/troubleshooting.md for help."
     echo
     exit 1

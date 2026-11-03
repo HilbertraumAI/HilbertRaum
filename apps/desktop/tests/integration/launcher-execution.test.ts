@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, delimiter, join } from 'node:path'
 import { REPO_ROOT } from '../helpers/repo-files'
 import { bashLegSkipped, outputOf } from '../helpers/script-legs'
 import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
@@ -11,8 +11,9 @@ import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 // its own location, so each case copies the launcher into a scratch root beside 0-byte app
 // artifacts. Two app versions on one drive must be refused, naming both, before anything is
 // started or written; `--check` (`.sh` / `.command`) and `/check` (`.cmd`) resolve the app and
-// exit without starting it — the single-artifact control. The `.cmd` leg runs on Windows, the
-// two bash legs elsewhere (Git Bash on a Windows dev box: HILBERTRAUM_SCRIPT_SH_LEG=1).
+// exit without starting it — the single-artifact control. The `.command`'s ditto-zip cache path
+// runs under a `ditto` stub. The `.cmd` leg runs on Windows, the two bash legs elsewhere (Git Bash
+// on a Windows dev box: HILBERTRAUM_SCRIPT_SH_LEG=1).
 
 const LAUNCHERS = join(REPO_ROOT, 'launchers')
 const CMD = 'Start HilbertRaum.cmd'
@@ -48,9 +49,15 @@ function expectDriveEnv(recorded: string, root: string): void {
   expect(manifestsDir).toBe(`${driveRoot}/model-manifests`)
 }
 
-/** The line --check prints (troubleshooting.md "Two app versions on the drive"). */
-function expectDriveRootLine(out: string, root: string): void {
-  expect(out.split(/\r?\n/).find((l) => l.includes('Drive root :')), out).toContain(basename(root))
+/**
+ * The lines --check prints (troubleshooting.md "Two app versions on the drive"). `Manifests  :` reads back the variable the
+ * app gets, so a launcher that points the app at another drive's manifests fails here; the `.cmd` launch itself is never run.
+ */
+function expectCheckLines(out: string, root: string): void {
+  const lines = out.split(/\r?\n/)
+  expect(lines.find((l) => l.includes('Drive root :')), out).toContain(basename(root))
+  const manifests = lines.find((l) => l.includes('Manifests  :'))?.trimEnd().replace(/\\/g, '/') ?? ''
+  expect(manifests.split('/').slice(-2), out).toEqual([basename(root), 'model-manifests'])
 }
 
 /** 0-byte artifacts, the NEWER name created first so a creation-order pick cannot pass. */
@@ -119,7 +126,7 @@ describe.skipIf(process.platform !== 'win32')('Start HilbertRaum.cmd (Windows)',
     expect(r.status, out).toBe(0)
     expect(out).toContain(two[1])
     expect(out).toMatch(NOT_STARTED)
-    expectDriveRootLine(out, root)
+    expectCheckLines(out, root)
   })
 
   it('/check with no app fails with the existing not-found message', () => {
@@ -128,13 +135,6 @@ describe.skipIf(process.platform !== 'win32')('Start HilbertRaum.cmd (Windows)',
     const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(out).toMatch(/Could not find the HilbertRaum app/)
-  })
-})
-
-describe('Start HilbertRaum.cmd variables', () => {
-  // A real .cmd launch is not testable (architecture.md B9) and /check does not print this one.
-  it('points the app at the manifests on its own drive', () => {
-    expect(readFileSync(join(LAUNCHERS, CMD), 'utf8')).toMatch(/^set "HILBERTRAUM_MANIFESTS_DIR=%~dp0model-manifests"\r?$/m)
   })
 })
 
@@ -185,7 +185,17 @@ describe.skipIf(bashLegSkipped)('start-hilbertraum.sh (Linux)', () => {
     expect(out).toContain(two[1])
     expect(out).toMatch(NOT_STARTED)
     expect(launched(root, two[1])).toBe(false)
-    expectDriveRootLine(out, root)
+    expectCheckLines(out, root)
+  })
+
+  // The other two launchers have this row; this one words its message for an AppImage (#769).
+  it.each([[[]], [['--check']]])('with no AppImage (arguments %j) it fails with its not-found message', (args) => {
+    const root = scratchRoot(SH)
+    const r = runBash(root, SH, args)
+    const out = outputOf(r)
+    expect(r.status, out).toBe(1)
+    expect(out).toMatch(/Could not find the HilbertRaum AppImage on this drive/)
+    expect(out).not.toMatch(NOT_STARTED)
   })
 
   it('with one AppImage and no argument it starts it (no unbound-variable abort)', () => {
@@ -281,7 +291,7 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
     expect(r.status, out).toBe(0)
     expect(out).toContain('HilbertRaum.app')
     expect(out).toMatch(NOT_STARTED)
-    expectDriveRootLine(out, root)
+    expectCheckLines(out, root)
   })
 
   it("with one extracted .app and no argument it starts the bundle with the drive's variables", () => {
@@ -300,5 +310,112 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
     const out = outputOf(r)
     expect(r.status, out).not.toBe(0)
     expect(out).toMatch(/Could not find the HilbertRaum app/)
+  })
+
+  // The normal Mac path: exFAT holds no symlinks, so the drive carries the ditto-zip and the launcher unpacks it once into
+  // $HOME/Library/Caches (#769). A `ditto` stub first on PATH stands in for macOS's own, so the bash legs reach this path
+  // without a Mac: it logs each call and, by DITTO_MODE, unpacks a stub bundle (ok), fails (fail) or unpacks nothing (empty).
+  describe('unpacking the .app.zip into the local cache', () => {
+    const zip = zips[1]
+    const cached = basename(zip, '.zip')
+    const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH'
+
+    interface Drive {
+      root: string
+      caches: string
+      run(mode: 'ok' | 'fail' | 'empty'): SpawnSyncReturns<string>
+      dittoCalls(): string[]
+    }
+
+    function zipDrive(): Drive {
+      const root = scratchRoot(COMMAND)
+      writeFileSync(join(root, zip), '')
+      const home = scratchHome()
+      const stubs = mkdtempSync(join(tmpdir(), 'hilbertraum-launcher-ditto-'))
+      const app = join(stubs, 'app', 'HilbertRaum')
+      mkdirSync(join(stubs, 'app'))
+      stubApp(app, 'launched.txt')
+      const log = join(stubs, 'ditto.log')
+      writeFileSync(log, '')
+      writeFileSync(
+        join(stubs, 'ditto'),
+        [
+          '#!/bin/bash',
+          'echo "$*" >> "$DITTO_LOG"',
+          'case "$DITTO_MODE" in fail) exit 1 ;; empty) exit 0 ;; esac',
+          'mkdir -p "$4/HilbertRaum.app/Contents/MacOS"',
+          'cp "$DITTO_APP" "$4/HilbertRaum.app/Contents/MacOS/HilbertRaum"',
+          ''
+        ].join('\n')
+      )
+      chmodSync(join(stubs, 'ditto'), 0o755)
+      return {
+        root,
+        caches: join(home, 'Library', 'Caches', 'HilbertRaum'),
+        // The inherited key, whatever its case: Windows env names are case-insensitive, and Git Bash converts a Windows
+        // `Path` itself (a `C:` entry in a POSIX PATH would split at its colon).
+        run: (mode) =>
+          runBash(root, COMMAND, [], {
+            HOME: home,
+            [pathKey]: `${stubs}${delimiter}${process.env[pathKey] ?? ''}`,
+            DITTO_LOG: log,
+            DITTO_MODE: mode,
+            DITTO_APP: app
+          }),
+        dittoCalls: () => readFileSync(log, 'utf8').split('\n').filter(Boolean)
+      }
+    }
+
+    it("unpacks the zip once, publishes it in $HOME's cache and starts the cached bundle with the drive's variables; the next start reuses it", () => {
+      const drive = zipDrive()
+      const first = drive.run('ok')
+      expect(first.status, outputOf(first)).toBe(0)
+      expect(drive.dittoCalls()).toEqual([expect.stringContaining(zip)])
+      expect(readdirSync(drive.caches)).toEqual([cached])
+      const record = join(drive.caches, cached, 'HilbertRaum.app', 'Contents', 'MacOS', 'launched.txt')
+      expectDriveEnv(readFileSync(record, 'utf8'), drive.root)
+
+      rmSync(record)
+      const second = drive.run('ok')
+      expect(second.status, outputOf(second)).toBe(0)
+      expect(drive.dittoCalls()).toHaveLength(1)
+      expectDriveEnv(readFileSync(record, 'utf8'), drive.root)
+    })
+
+    it('sweeps a partial unpack that a killed run left behind', () => {
+      const drive = zipDrive()
+      mkdirSync(join(drive.caches, `${cached}.partial.999`, 'HilbertRaum.app'), { recursive: true })
+      const r = drive.run('ok')
+      expect(r.status, outputOf(r)).toBe(0)
+      expect(readdirSync(drive.caches)).toEqual([cached])
+    })
+
+    // An archive that unpacks to no .app (a zip made without --keepParent) used to be published as the cache, and every
+    // later start then refused it without unpacking again (#769).
+    it.each([
+      ['fails', 'fail', /Could not unpack '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip'/],
+      ['unpacks no .app', 'empty', /found no \.app inside it/]
+    ] as const)('when ditto %s it publishes nothing, leaves no partial, and the next start unpacks again', (_, mode, message) => {
+      const drive = zipDrive()
+      for (const attempt of [1, 2]) {
+        const r = drive.run(mode)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toMatch(message)
+        expect(readdirSync(drive.caches), `attempt ${attempt}`).toEqual([])
+        expect(drive.dittoCalls()).toHaveLength(attempt)
+      }
+    })
+
+    it('refuses a cache with no .app (published before #769), naming the folder to delete, and unpacks nothing', () => {
+      const drive = zipDrive()
+      mkdirSync(join(drive.caches, cached), { recursive: true })
+      const r = drive.run('ok')
+      const out = outputOf(r)
+      expect(r.status, out).toBe(1)
+      expect(out).toMatch(new RegExp(`'.*Library/Caches/HilbertRaum/${cached.replace(/\./g, '\\.')}' is incomplete`))
+      expect(out).not.toMatch(/Could not start the app binary/)
+      expect(drive.dittoCalls()).toEqual([])
+    })
   })
 })
