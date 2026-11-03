@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { cleanup, fireEvent, act } from '@testing-library/react'
+import { ATTACH_POLL_MS } from '../../src/renderer/screens/ChatScreen'
 import type { Conversation, DocumentInfo, ImportJob, ImportJobStatus } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import {
@@ -73,9 +74,9 @@ describe('ChatScreen — FE-1 setState-after-unmount guards (import poll)', () =
       drops.drop(document.querySelector('.chat-main')!, 'invoice.pdf', '/tmp/invoice.pdf')
       await flushFakeTimers()
 
-      // First poll tick — watchAttachJob's interval is a bare 400 in ChatScreen.tsx (no exported constant).
+      // First poll tick of watchAttachJob's interval.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(400)
+        await vi.advanceTimersByTimeAsync(ATTACH_POLL_MS)
       })
       expect(getImportJob).toHaveBeenCalledTimes(1) // the tick is parked in flight
       const listDocsBefore = listDocuments.mock.calls.length

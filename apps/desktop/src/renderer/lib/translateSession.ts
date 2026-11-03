@@ -120,8 +120,8 @@ export function getTranslateSession(): TranslateSessionSnapshot {
 
 // Deltas update the output PER TOKEN — deliberately unbatched. The TranslateGemma sidecar
 // decodes at the measured ~4 tok/s, so this is ~4 store notifications/sec — no re-render pressure
-// that a flush buffer would relieve (the ChatScreen's STREAM_FLUSH_MS batching — which
-// visionSession adopted too at PF-7c — exists for the far faster chat/vision decodes). Keeping it
+// that a flush buffer would relieve (the STREAM_FLUSH_MS batching — ChatScreen's, which
+// visionSession shares since PF-7c — exists for the far faster chat/vision decodes). Keeping it
 // per-token keeps the store authoritative + synchronous, which the `adoptActiveJob` seed and the
 // renderer tests read directly.
 /** Wire the three per-job stream channels for `jobId` into the store. */

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { screen, cleanup, fireEvent, act } from '@testing-library/react'
-import { STREAM_FLUSH_MS } from '../../src/renderer/screens/ChatScreen'
+import { STREAM_FLUSH_MS } from '../../src/renderer/lib/polling'
 import type { Message } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'

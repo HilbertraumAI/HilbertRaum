@@ -118,14 +118,11 @@ describe('ChatScreen — stream recovery (T-1)', () => {
   it('CR-5: a documents conversation recovered while listConversations threw still sends via askDocuments', async () => {
     vi.useFakeTimers()
     try {
-      // Mount refresh (#0) succeeds and populates `conversations` with the documents conv; the
-      // re-select fetch (#1) THROWS, so setMode is never called → the screen `mode` stays 'chat'.
-      let convCall = 0
-      const listConversations = vi.fn(async () => {
-        const i = convCall++
-        if (i === 1) throw new Error('list fetch failed')
-        return [docConv('Doc chat 1')]
-      })
+      // The mount refresh succeeds and populates `conversations` with the documents conv; the re-select's
+      // own fetch THROWS, so setMode is never called → the screen `mode` stays 'chat'. The re-select is
+      // released by hand after mount settles, so the rejection lands on its call whatever else mount reads.
+      const listConversations = vi.fn<PreloadApi['listConversations']>(async () => [docConv('Doc chat 1')])
+      const ids = deferred<string[]>()
       // Nothing actually in flight (getActiveStream → null, the stub default) → no recovery lock, so the
       // composer is free to send.
       const askDocuments = vi.fn(async () => assistantMsg('a1', 'the answer'))
@@ -134,13 +131,16 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       stubApi(
         chatScreenStubs({
           listConversations,
-          listActiveStreamConversations: vi.fn(async () => ['c1']),
+          listActiveStreamConversations: vi.fn(() => ids.promise),
           askDocuments,
           sendChatMessage
         })
       )
 
       renderChatScreen()
+      await flushFakeTimers() // mount: the conversation list lands
+      listConversations.mockRejectedValueOnce(new Error('list fetch failed'))
+      await act(async () => ids.resolve(['c1']))
       await flushFakeTimers()
 
       // The screen mode stayed 'chat' (the re-select fetch failed to mirror it) — the CHAT placeholder,
@@ -166,17 +166,12 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       const ids = deferred<string[]>()
       const listActiveStreamConversations = vi.fn(() => ids.promise)
       const getActiveStream = vi.fn(async (_id: string) => null)
+      const listConversations = vi.fn<PreloadApi['listConversations']>(async () => [
+        makeConversation({ title: 'Chat 1' }),
+        makeConversation({ id: 'c2', title: 'Chat 2' })
+      ])
 
-      stubApi(
-        chatScreenStubs({
-          listConversations: vi.fn(async () => [
-            makeConversation({ title: 'Chat 1' }),
-            makeConversation({ id: 'c2', title: 'Chat 2' })
-          ]),
-          listActiveStreamConversations,
-          getActiveStream
-        })
-      )
+      stubApi(chatScreenStubs({ listConversations, listActiveStreamConversations, getActiveStream }))
 
       renderChatScreen()
       await flushFakeTimers()
@@ -185,13 +180,53 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       // The user hand-picks c2 before the re-select (which would land on c1) resolves.
       fireEvent.click(conversationRow('Chat 2'))
       await flushFakeTimers()
+      const listsBefore = listConversations.mock.calls.length
 
       // Now the parked lookup resolves, naming c1 as the streaming conversation.
       await act(async () => ids.resolve(['c1']))
       await flushFakeTimers()
 
       // Teeth: the `activeIdRef.current != null` guards keep the user on c2 — the recovery effect only
-      // ever polls c2. Remove the guard and the re-select stamps activeId back to c1 (→ getActiveStream('c1')).
+      // ever polls c2. Remove both and the re-select stamps activeId back to c1 (→ getActiveStream('c1')).
+      expect(getActiveStream).toHaveBeenCalledWith('c2')
+      expect(getActiveStream).not.toHaveBeenCalledWith('c1')
+      // The guard right after this lookup stops the re-select before it fetches the list for a choice it
+      // will not make. Without it the guard after that fetch still keeps the user on c2 (the next row), so
+      // the fetch is all it changes (#743).
+      expect(listConversations).toHaveBeenCalledTimes(listsBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not yank the user off a conversation they hand-picked while the re-select fetches the list (#743)', async () => {
+    vi.useFakeTimers()
+    try {
+      // The lookup names c1 at once; the re-select's own list fetch is parked, and the user hand-picks
+      // c2 meanwhile. Only the guard after that fetch can keep the user on c2 now.
+      const ids = deferred<string[]>()
+      const parkedList = deferred<Conversation[]>()
+      const getActiveStream = vi.fn(async (_id: string) => null)
+      const conversations = [makeConversation({ title: 'Chat 1' }), makeConversation({ id: 'c2', title: 'Chat 2' })]
+      const listConversations = vi.fn<PreloadApi['listConversations']>(async () => conversations)
+
+      stubApi(chatScreenStubs({ listConversations, listActiveStreamConversations: vi.fn(() => ids.promise), getActiveStream }))
+
+      renderChatScreen()
+      await flushFakeTimers() // mount: the conversation list lands
+      listConversations.mockImplementationOnce(() => parkedList.promise)
+      const listsBefore = listConversations.mock.calls.length
+      await act(async () => ids.resolve(['c1']))
+      await flushFakeTimers()
+      expect(listConversations).toHaveBeenCalledTimes(listsBefore + 1) // the re-select's fetch, parked
+
+      fireEvent.click(conversationRow('Chat 2'))
+      await flushFakeTimers()
+      await act(async () => parkedList.resolve(conversations))
+      await flushFakeTimers()
+
+      // Teeth: delete the `activeIdRef.current != null` check after the list fetch → the re-select
+      // stamps c1 over the user's pick (→ getActiveStream('c1')).
       expect(getActiveStream).toHaveBeenCalledWith('c2')
       expect(getActiveStream).not.toHaveBeenCalledWith('c1')
     } finally {

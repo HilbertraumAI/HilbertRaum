@@ -19,3 +19,10 @@ export const STREAM_RECOVER_POLL_MS = 300
  * bounded-failure-budget pattern keeps a live recovery over an IPC hiccup.
  */
 export const STREAM_RECOVER_FAILURE_BUDGET = 3
+
+/**
+ * Streamed answer text is buffered and painted on this cadence instead of per token: one store
+ * notify / re-render per window. Shared by ChatScreen and the Images screen's vision store
+ * (PF-7c), both fast decodes; the Translate store stays per token (~4 tok/s, translateSession.ts).
+ */
+export const STREAM_FLUSH_MS = 40

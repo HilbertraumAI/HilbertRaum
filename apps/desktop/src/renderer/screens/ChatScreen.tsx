@@ -40,7 +40,12 @@ import { ocrRemedyKind } from '../lib/ocrRemedy'
 import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
-import { RUNTIME_POLL_MS, STREAM_RECOVER_FAILURE_BUDGET, STREAM_RECOVER_POLL_MS } from '../lib/polling'
+import {
+  RUNTIME_POLL_MS,
+  STREAM_FLUSH_MS,
+  STREAM_RECOVER_FAILURE_BUDGET,
+  STREAM_RECOVER_POLL_MS
+} from '../lib/polling'
 import { useEventCallback } from '../lib/useEventCallback'
 import { useT, type I18n } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, useToast } from '../components'
@@ -136,9 +141,9 @@ const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
  *  persisted desktop preference is untouched — widening restores the user's choice). */
 export const LIST_AUTO_COLLAPSE_PX = 1150
 
-/** Streamed tokens are batched and flushed on this cadence instead of per-token.
- *  Exported so the renderer buffering test (ChatStreamBuffering) advances the shipped window. */
-export const STREAM_FLUSH_MS = 40
+/** How often the attach-import poll (`watchAttachJob`) reads the import job's status.
+ *  Exported for the renderer test's timer advance (ChatUnmount). */
+export const ATTACH_POLL_MS = 400
 
 /** #39: how long a turn must stay chunk-less (no answer token, no reasoning delta) before the
  *  calm "the first answer takes a little longer" hint may appear under the pending bubble —
@@ -2146,12 +2151,12 @@ export function ChatScreen({
   // failed file surfaces the friendly per-file error and writes no link (N4).
   function watchAttachJob(jobId: string, convId: string, documentIds: string[], fileNames: string[]): void {
     if (attachPollRef.current) clearInterval(attachPollRef.current)
-    // FE-7: the 400 ms tick reads ONLY the small `getImportJob` status. The attachment list
+    // FE-7: the ATTACH_POLL_MS tick reads ONLY the small `getImportJob` status. The attachment list
     // (and, at completion, the full document list) refreshes when a file actually finishes — the
     // job's completed/failed count changes, which is exactly when the FK-guarded link row that
     // reveals it as a "Files in this chat" entry is written — instead of re-fetching it every tick.
     let lastSettled = -1
-    // CH-6 (#148): reentrancy latch — the 400 ms interval wraps an async body; a slow tick
+    // CH-6 (#148): reentrancy latch — the poll interval wraps an async body; a slow tick
     // (refreshAttachments / listDocuments awaiting) must not overlap the next one (the
     // DOC-6/TA-3 pattern).
     let ticking = false
@@ -2216,7 +2221,7 @@ export function ChatScreen({
       } finally {
         ticking = false
       }
-    }, 400)
+    }, ATTACH_POLL_MS)
   }
 
   // Attach files to a chat. Routing (§13.5): a documents chat takes them directly; an

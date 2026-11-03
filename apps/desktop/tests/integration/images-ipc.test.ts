@@ -473,6 +473,23 @@ describe('registerImagesIpc — history persistence', () => {
     expect(readdirSync(imagesPath)).toHaveLength(1)
   })
 
+  // The renderer's vision store also guards a blank `done` (visionSession), a shape this pins main never
+  // sends: an empty answer is a failure the user can act on, and no history entry is stored (#745).
+  it('a blank answer fails the job with emptyResponse: an error event, no done, nothing stored', async () => {
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer(' \n ') })
+    const { ctx, imagesPath } = ctxWithDb()
+    registerImagesIpc(ctx, service)
+
+    const { event, result } = await invoke(handlers, IPC.imageAnalyze, histReq())
+    const job = result as ImageJob
+    const terminal = await waitForImgSend(event, job.jobId)
+    expect(terminal).toMatchObject({ state: 'failed', error: 'emptyResponse' })
+    expect(event.sender.send).not.toHaveBeenCalledWith(STREAM.imgDone(job.jobId), expect.anything())
+
+    expect((await invoke(handlers, IPC.imageListSessions)).result).toEqual([])
+    expect(existsSync(imagesPath) ? readdirSync(imagesPath) : []).toEqual([])
+  })
+
   it('a busy-REJECTED analyze persists nothing', async () => {
     const { analyzer, release } = gatedAnalyzer()
     const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
