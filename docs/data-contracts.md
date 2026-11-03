@@ -2361,8 +2361,9 @@ with zero citations; a legacy turn that cites an archive but carries none shows 
 "outcome not recorded" line. A whole-document, compare or grounded-data answer produces
 `skipped/mode` for every selected pack — packs are still not queried on those paths, but
 the answer now says so. Since #734 the coverage-extract listing and a tool skill's template
-answer do too. The D45 refusal and the W2 routing answer record none (owner call, #734): they
-make no document claim, so their `pack_outcomes_json` stays NULL with packs ticked.
+answer do too. The D45 refusal, the W2 routing answer and a `routing` handler's button pointer
+(redaction, document edit) record none (owner call, #734): they make no document claim, so their
+`pack_outcomes_json` stays NULL with packs ticked.
 
 **Manual harness env (P5, finding L8):** the real-tool smoke (`tests/manual/zim-real.test.ts`)
 is gated by `HILBERTRAUM_ZIM_SMOKE`; once requested, `HILBERTRAUM_ZIM_TOOLS_DIR` /

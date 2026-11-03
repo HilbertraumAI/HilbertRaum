@@ -398,8 +398,8 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
 })
 
 // #301 P4 / #715 / #734: an answer that reads the documents and never queries a pack tells each ticked pack so
-// (`skipped / mode`); without it the answer reads as "the pack found nothing". Owner call (#734): the two replies that
-// make no document claim, the D45 refusal and the W2 routing answer, record no outcome at all. `coverage` and
+// (`skipped / mode`); without it the answer reads as "the pack found nothing". Owner call (#734): the replies that make
+// no document claim (the D45 refusal, the W2 routing answer, a routing handler's button pointer) record no outcome. `coverage` and
 // `contains` pin the path each row reaches, so a row cannot pass on another path.
 describe('askDocuments — a ticked knowledge pack on the answers that never query it (#734)', () => {
   const SKIPPED = [{ packId: 'pack-ticked', title: null, status: 'skipped', reason: 'mode', found: 0, admitted: 0 }]
@@ -449,6 +449,15 @@ describe('askDocuments — a ticked knowledge pack on the answers that never que
       skillId: BANK_INSTALL_ID,
       coverage: undefined,
       contains: t('en', 'skills.analysis.selectOne', { count: 2 }),
+      outcomes: undefined
+    },
+    {
+      name: "a routing skill's button pointer records none",
+      harness: { ...packed, fullyChunked: true, routingSkill: { id: 'document-redaction', tool: 'redact_document' } },
+      question: 'anonymize this document',
+      skillId: 'app:document-redaction',
+      coverage: undefined,
+      contains: t('en', 'skills.redactionRouting.answer', { button: t('en', 'chat.skill.tool.redactDocument') }),
       outcomes: undefined
     },
     {

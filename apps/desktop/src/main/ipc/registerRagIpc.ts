@@ -801,8 +801,9 @@ export function registerRagIpc(ctx: AppContext): void {
                   autoFired: turnSkill.autoFired === true,
                   // #734 (#301 P4): the template answer is built from the document by the skill's tools and
                   // never queries a pack, like the grounded-data narration above, so every ticked pack is
-                  // told `skipped / mode`.
-                  packOutcomes: modePackOutcomes(ctx.db, scope.packIds)
+                  // told `skipped / mode`. A `routing` handler's button pointer (redaction, document edit)
+                  // reads no content and makes no document claim: none, like the W2 routing answer.
+                  packOutcomes: analysisHandler.mode === 'routing' ? undefined : modePackOutcomes(ctx.db, scope.packIds)
                 })
                 // Phase 2 (result-tables §4): persist the answer's structured table keyed by the
                 // just-appended message and light the flag on the returned object, so the renderer's

@@ -3153,8 +3153,10 @@ the figures they support are quoted in the text.
   packs are still not queried on those paths, but the answer now SAYS so. **#734:** so do the
   coverage-extract listing and a tool skill's template answer (both deterministic, both read
   the documents only). Owner call: the D45 "isn't fully indexed" refusal and the W2 routing
-  answer ("select one / two documents") record no outcome. Neither makes a document claim, so
-  a "not searched" line would qualify an answer that was never given.
+  answer ("select one / two documents") record no outcome, and neither does a `routing`
+  handler's button pointer (redaction, document edit), which reaches the template path but reads
+  no content. None of them makes a document claim, so a "not searched" line would qualify an
+  answer that was never given.
 - **D-Z5 — synthetic identity, honest exclusions.** Archive chunks carry
   `chunkId 'zim:<packId>:<path>#<n>'`, `documentId 'zim:<packId>'`, `sourceKind:
   'archive'`. Their citations carry `packId`/`archiveTitle`/`articlePath` and **no**

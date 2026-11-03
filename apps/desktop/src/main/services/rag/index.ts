@@ -1730,8 +1730,9 @@ export function wholeDocumentFitBudgetTokens(
  * pack — the whole-document read, both compare paths and the grounded-DATA narration (#301 P4,
  * finding M6; plan §9.21 (e)5), and since #734 the coverage-extract listing and a tool skill's
  * template answer. Without them such an answer would silently look like "the packs you ticked
- * found nothing", which is a different and untrue claim. The two deterministic replies that make
- * no document claim, the D45 refusal and the W2 routing answer, record none (#734 owner call).
+ * found nothing", which is a different and untrue claim. The deterministic replies that make no
+ * document claim — the D45 refusal, the W2 routing answer and a `routing` handler's button
+ * pointer — record none (#734 owner call).
  *
  * A DB-only title lookup (`packTitles`, no disk, no sidecar): an id with no registration row
  * keeps a null title and renders as "a removed pack". Returns undefined for an empty selection
