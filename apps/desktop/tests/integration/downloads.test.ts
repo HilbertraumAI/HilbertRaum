@@ -297,8 +297,14 @@ describe('download gates', () => {
   // #768: before this check a drive with 13.5 GB free took a 14.4 GB download and stopped on ENOSPC near the end. The
   // refusal comes with the others, before the job exists: nothing is listed, audited or requested.
   describe('free space on the drive (#768)', () => {
-    it('refuses a download larger than the free space, naming both figures, before any job, audit or request', async () => {
-      seams.freeBytes = 13_500_000_000
+    it.each([
+      ['clearly short', 13_500_000_000, '14.4 GB', '13.5 GB'],
+      // Rounded half, 14.39 GB free would read 14.4 GB, the size itself: free space rounds down.
+      ['free rounds down, never up to the size', 14_390_000_000, '14.4 GB', '14.3 GB'],
+      // Both in the same tenth: the size rounds up instead, so the two figures still differ.
+      ['the size and the free space in the same tenth', 14_420_000_000, '14.5 GB', '14.4 GB']
+    ])('refuses a download larger than the free space (%s), naming both figures, before any job, audit or request', async (_title, freeBytes, needed, free) => {
+      seams.freeBytes = freeBytes
       const fetchSpy = vi.fn()
       const audit = vi.fn()
       const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, audit })
@@ -311,7 +317,7 @@ describe('download gates', () => {
         }
       })
       await expect(mgr.start({ rootPath: tempRoot('downloads'), manifest: big, gates: OPEN_GATES })).rejects.toThrow(
-        tMain('main.download.notEnoughSpace', { needed: '14.4 GB', free: '13.5 GB' })
+        tMain('main.download.notEnoughSpace', { needed, free })
       )
       expect(fetchSpy).not.toHaveBeenCalled()
       expect(audit).not.toHaveBeenCalled()

@@ -715,9 +715,13 @@ async function assertRoomFor(tasks: ModelDownloadTask[]): Promise<void> {
   const free = await freeBytes(dirname(tasks[0].dest))
   if (free == null || needed <= free) return
   const lang = mainUiLanguage()
-  throw new Error(
-    tMain('main.download.notEnoughSpace', { needed: fmtDiskGb(needed, lang), free: fmtDiskGb(free, lang) })
-  )
+  // The two figures must never read alike. Free space rounds down to the tenth; the size rounds as
+  // the dialog shows it, unless that prints the same tenth as the free space, and then up — which
+  // always differs, since needed > free.
+  const freeShown = fmtDiskGb(Math.floor(free / 1e8) * 1e8, lang)
+  let neededShown = fmtDiskGb(needed, lang)
+  if (neededShown === freeShown) neededShown = fmtDiskGb(Math.ceil(needed / 1e8) * 1e8, lang)
+  throw new Error(tMain('main.download.notEnoughSpace', { needed: neededShown, free: freeShown }))
 }
 
 /** Null-safe sum of task byte sizes — null if ANY size is unknown (the bar drops the total). */
