@@ -6,7 +6,7 @@ import { mainUiLanguage, tMain } from './i18n'
 import type { ModelManifest } from '../../shared/manifest'
 import type { DownloadJob } from '../../shared/types'
 import { isUnresolvedDownloadResult } from '../../shared/downloads'
-import { fmtDiskGb } from '../../shared/format'
+import { fmt1 } from '../../shared/format'
 import { freeBytes } from './disk-space'
 import {
   planModelDownloads,
@@ -715,12 +715,18 @@ async function assertRoomFor(tasks: ModelDownloadTask[]): Promise<void> {
   const free = await freeBytes(dirname(tasks[0].dest))
   if (free == null || needed <= free) return
   const lang = mainUiLanguage()
-  // The two figures must never read alike. Free space rounds down to the tenth; the size rounds as
-  // the dialog shows it, unless that prints the same tenth as the free space, and then up — which
-  // always differs, since needed > free.
-  const freeShown = fmtDiskGb(Math.floor(free / 1e8) * 1e8, lang)
-  let neededShown = fmtDiskGb(needed, lang)
-  if (neededShown === freeShown) neededShown = fmtDiskGb(Math.ceil(needed / 1e8) * 1e8, lang)
+  // Both figures in the unit the size needs, so a projector or the rest of a resume reads "40.0 MB"
+  // rather than "0.1 GB" — decimal, one decimal, like every disk size (`fmtDiskSize`). And they must
+  // never read alike: free space rounds down to the tenth; the size rounds as shown elsewhere,
+  // unless that prints the same tenth as the free space, and then up — which always differs, since
+  // needed > free.
+  const [unit, label]: [number, string] =
+    needed >= 1e9 ? [1e9, 'GB'] : needed >= 1e6 ? [1e6, 'MB'] : [1e3, 'KB']
+  const shown = (bytes: number): string => `${fmt1(bytes / unit, lang)} ${label}`
+  const tenth = unit / 10
+  const freeShown = shown(Math.floor(free / tenth) * tenth)
+  let neededShown = shown(needed)
+  if (neededShown === freeShown) neededShown = shown(Math.ceil(needed / tenth) * tenth)
   throw new Error(tMain('main.download.notEnoughSpace', { needed: neededShown, free: freeShown }))
 }
 

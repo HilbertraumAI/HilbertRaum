@@ -44,7 +44,10 @@ describe('formatSize — decimal units (#768) and the DR-9 GB tier', () => {
     [2_048, 'en', '2.0 KB'],
     [4_285_975, 'en', '4.3 MB'],
     [2_500_000_000, 'en', '2.5 GB'],
-    [1_500_000_000, 'de', '1,5 GB']
+    [1_500_000_000, 'de', '1,5 GB'],
+    // A size that rounds to the next unit reads in it, never "1000.0 KB" / "1000.0 MB".
+    [999_960, 'en', '1.0 MB'],
+    [999_960_000, 'en', '1.0 GB']
   ] as const)('%d bytes read %s as %s', (bytes, lang, shown) => {
     expect(formatSize(bytes, lang)).toBe(shown)
   })

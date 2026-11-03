@@ -25,8 +25,9 @@ export function fmtDiskGb(bytes: number, lang: UiLanguage): string {
  *  language download, which each used to divide by 1024 under the same decimal-looking labels. */
 export function fmtDiskSize(bytes: number, lang: UiLanguage): string {
   if (bytes < 1e3) return `${bytes} B`
-  if (bytes < 1e6) return `${fmt1(bytes / 1e3, lang)} KB`
-  if (bytes < 1e9) return `${fmt1(bytes / 1e6, lang)} MB`
+  // Each tier ends where its one decimal would round up to 1000.0, so 999,960 bytes read "1.0 MB".
+  if (bytes < 999_950) return `${fmt1(bytes / 1e3, lang)} KB`
+  if (bytes < 999_950_000) return `${fmt1(bytes / 1e6, lang)} MB`
   return fmtDiskGb(bytes, lang)
 }
 
