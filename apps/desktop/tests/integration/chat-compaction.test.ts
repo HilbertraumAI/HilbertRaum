@@ -487,11 +487,14 @@ describe('RAG assembly — checkpoint from raw turns, live citations intact (R-R
 })
 
 describe('migration (R13) + FTS exclusion (R8)', () => {
-  function oldStyleDbPath(conversationId: string, messageId: string): string {
+  function oldStyleDbPath(conversationId: string, messageId: string, indexedCheckpointId?: string): string {
     return legacyDbPath('oldschema', (raw) => {
       raw.exec('PRAGMA foreign_keys = ON;')
       // The messages schema as it stood BEFORE the kind/covers columns existed, plus the OLD
-      // FTS insert trigger (no kind guard) — exactly what an upgraded DB starts from.
+      // FTS insert trigger (no kind guard) — exactly what an upgraded DB starts from. With
+      // `indexedCheckpointId`, a `kind` column too and a checkpoint the unguarded trigger indexed:
+      // no shipped binary wrote that (the column and the guard shipped together), but it is the
+      // shape the open's prune exists for, the index being search's only kind filter.
       raw.exec(
         `CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
            updated_at TEXT NOT NULL, model_id TEXT, mode TEXT NOT NULL DEFAULT 'chat');`
@@ -499,7 +502,7 @@ describe('migration (R13) + FTS exclusion (R8)', () => {
       raw.exec(
         `CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
            content TEXT NOT NULL, created_at TEXT NOT NULL, token_count INTEGER, citations_json TEXT,
-           FOREIGN KEY (conversation_id) REFERENCES conversations(id));`
+           ${indexedCheckpointId ? 'kind TEXT,' : ''} FOREIGN KEY (conversation_id) REFERENCES conversations(id));`
       )
       raw.exec('CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);')
       raw.exec(
@@ -514,6 +517,13 @@ describe('migration (R13) + FTS exclusion (R8)', () => {
       raw.prepare(
         'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)'
       ).run(messageId, conversationId, 'user', 'legacy findme message', now)
+      if (indexedCheckpointId) {
+        raw.prepare(
+          `INSERT INTO messages (id, conversation_id, role, content, created_at, kind) VALUES (?, ?, 'system', ?, ?, 'compaction')`
+        ).run(indexedCheckpointId, conversationId, 'SECRETCHECKPOINT legacy summary', now)
+        // The premise: the unguarded trigger indexed it.
+        expect(raw.prepare('SELECT COUNT(*) AS n FROM messages_fts WHERE message_id = ?').get(indexedCheckpointId)).toEqual({ n: 1 })
+      }
     })
   }
 
@@ -536,5 +546,13 @@ describe('migration (R13) + FTS exclusion (R8)', () => {
     })
     expect(searchMessages(db, 'SECRETCHECKPOINT')).toHaveLength(0)
     expect(listMessages(db, convId)).toHaveLength(1) // still just the one real turn
+  })
+
+  it('prunes a checkpoint the unguarded legacy trigger already indexed: not searchable, no FTS handle (#737)', () => {
+    const cpId = randomUUID()
+    const db = openDatabase(oldStyleDbPath(randomUUID(), randomUUID(), cpId))
+    expect(searchMessages(db, 'SECRETCHECKPOINT')).toHaveLength(0)
+    expect(db.prepare('SELECT fts_rowid FROM messages WHERE id = ?').get(cpId)).toEqual({ fts_rowid: null })
+    expect(searchMessages(db, 'findme')).toHaveLength(1) // the plain turn beside it stays searchable
   })
 })
