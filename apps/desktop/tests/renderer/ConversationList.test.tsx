@@ -7,16 +7,17 @@ import { t } from '../../src/shared/i18n'
 import {
   SEARCH_MARK_END,
   SEARCH_MARK_START,
+  type Collection,
   type Conversation,
   type ConversationSearchResult
 } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
-import { makeConversation } from '../helpers/chat-fixtures'
+import { makeCollection, makeConversation } from '../helpers/chat-fixtures'
 
-// The conversation list's pure helpers (`splitSnippet`, `groupConversations`) and, Phase 31, its
-// search box: typing swaps the column to full-text results (matched terms highlighted via the
-// SEARCH_MARK markers, never HTML), picking a result opens its conversation, and the friendly
-// no-matches copy (spec §11.4).
+// The conversation list's pure helpers (`splitSnippet`, `groupConversations`), its project sections
+// (plan §13.4) and, Phase 31, its search box: typing swaps the column to full-text results (matched
+// terms highlighted via the SEARCH_MARK markers, never HTML), picking a result opens its
+// conversation, and the friendly no-matches copy (spec §11.4).
 
 function result(over: Partial<ConversationSearchResult> = {}): ConversationSearchResult {
   return {
@@ -36,7 +37,7 @@ function result(over: Partial<ConversationSearchResult> = {}): ConversationSearc
 
 function renderList(
   conversations: Conversation[],
-  onSelect: (c: Conversation) => void = () => {}
+  { onSelect = () => {}, collections }: { onSelect?: (c: Conversation) => void; collections?: Collection[] } = {}
 ): void {
   render(
     <ConversationList
@@ -44,6 +45,7 @@ function renderList(
       activeId={null}
       streaming={false}
       mode="chat"
+      collections={collections}
       onSelect={onSelect}
       onNew={() => {}}
       onDelete={() => {}}
@@ -104,6 +106,57 @@ describe('groupConversations — date grouping', () => {
   })
 })
 
+// Creation-anchor project sections (document-organization plan §13.4/N8, #743): a chat anchored to
+// a live project groups under it, everything else under "Other / Library"; with no chat anchored to
+// a live project the list keeps its plain date groups.
+describe('ConversationList — project sections (plan §13.4)', () => {
+  const project = (id: string, name: string, over: Partial<Collection> = {}): Collection =>
+    makeCollection({ id, name, type: 'project', builtin: false, ...over })
+  const collections = [
+    makeCollection(),
+    project('p-zeta', 'Zeta'),
+    project('p-alpha', 'Alpha'),
+    project('p-old', 'Old project', { archivedAt: '2026-02-01T00:00:00Z' })
+  ]
+  const chat = (title: string, collectionId: string | null): Conversation =>
+    makeConversation({ id: title, title, collectionId })
+
+  /** The list's top-level groups in order, each with the chats under it. */
+  const sections = (): Array<[string | null, string[]]> =>
+    [...document.querySelectorAll('.chat-conv-list > [role="group"]')].map((group) => [
+      group.getAttribute('aria-label'),
+      [...group.querySelectorAll('button.chat-conv')].map((row) => row.textContent ?? '')
+    ])
+
+  it('groups chats under their live projects by name, and the rest under Other / Library', () => {
+    // Zeta's chat comes first, so only the sort puts Alpha first.
+    renderList(
+      [
+        chat('in zeta', 'p-zeta'),
+        chat('in alpha', 'p-alpha'),
+        chat('in the archived project', 'p-old'),
+        chat('in the library', 'lib'),
+        chat('unanchored', null),
+        chat('dangling', 'p-deleted')
+      ],
+      { collections }
+    )
+    expect(sections()).toEqual([
+      ['Alpha', ['in alpha']],
+      ['Zeta', ['in zeta']],
+      ['Other / Library', ['in the archived project', 'in the library', 'unanchored', 'dangling']]
+    ])
+  })
+
+  it('keeps the plain date groups when no chat is anchored to a live project', () => {
+    // Each chat carries an anchor the sections ignore: an archived project, the Library, none.
+    renderList([chat('in the archived project', 'p-old'), chat('in the library', 'lib'), chat('unanchored', null)], {
+      collections
+    })
+    expect(sections()).toEqual([['Earlier', ['in the archived project', 'in the library', 'unanchored']]])
+  })
+})
+
 describe('ConversationList — search (Phase 31)', () => {
   it('typing searches and shows highlighted results; picking one opens the conversation', async () => {
     vi.useFakeTimers()
@@ -111,7 +164,7 @@ describe('ConversationList — search (Phase 31)', () => {
     const onSelect = vi.fn()
     const searchConversations = vi.fn(async () => [result()])
     stubApi({ searchConversations })
-    renderList([c], onSelect)
+    renderList([c], { onSelect })
 
     // Type "liability" one key at a time with NO time passing between keys (fake timers): each
     // zero-time hop runs whatever is already due, so a per-keystroke or zero-delay search would

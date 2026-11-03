@@ -1,13 +1,15 @@
-// Typed renderer fixtures: `SkillInfo`, `Conversation`, `Message`, `Citation` and `DocumentInfo` factories
-// (override any field). Pure data. Some suites assert the DEFAULTS in the DOM ('Bank statement helper', 'My chat'
-// — SkillPerTurn, SkillInfoFirstPick, SkillRunLifecycle), so changing a default here means updating those
+// Typed renderer fixtures: `SkillInfo`, `Conversation`, `Message`, `Citation`, `DocumentInfo` and `Collection`
+// factories (override any field). Pure data. Some suites assert the DEFAULTS in the DOM ('Bank statement helper',
+// 'My chat' — SkillPerTurn, SkillInfoFirstPick, SkillRunLifecycle), so changing a default here means updating those
 // assertions; other suites wrap these with their own literals.
 //
 // The message / citation / document factories (chat-ui campaign) replace the local copies the chat suites
 // carried: `msg` / `userMsg` / `assistantMsg` / `message` in ~19 renderer files, the byte-identical `cites(n)` of
 // CitationMarkers and SourcesProvenance, and the `doc` / `docInfo` / `indexedDoc` DocumentInfo literals. Optional
 // fields stay ABSENT unless a test overrides them, so a row that needs `tokenCount: null` or `lifecycle` says so.
-import type { Citation, Conversation, DocumentInfo, Message, SkillInfo } from '../../src/shared/types'
+// `makeCollection` (#743) replaces the Library `collection` / `libraryCollection` copies of ChatPacksRefresh,
+// ChatScopeToolsRefresh and ScopePopover.
+import type { Citation, Collection, Conversation, DocumentInfo, Message, SkillInfo } from '../../src/shared/types'
 
 /** A bundled-looking instruction skill (`app:bank-statement`); override any field. Typed (no `as SkillInfo` cast). */
 export function makeSkillInfo(over: Partial<SkillInfo> = {}): SkillInfo {
@@ -97,6 +99,22 @@ export function makeDocumentInfo(over: Partial<DocumentInfo> = {}): DocumentInfo
     chunkCount: 3,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
+    ...over
+  }
+}
+
+/** The built-in Library `lib`; override any field (a project: `{ id, name, type: 'project', builtin: false }`). */
+export function makeCollection(over: Partial<Collection> = {}): Collection {
+  return {
+    id: 'lib',
+    name: 'Library',
+    type: 'library',
+    description: null,
+    builtin: true,
+    color: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    archivedAt: null,
     ...over
   }
 }
