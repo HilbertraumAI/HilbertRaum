@@ -804,7 +804,17 @@ current AD. Markers, not bytes: a body that differs only in spacing or comments 
 so no other build's text of the same set is rewritten on every open. What no open can repair is
 index ENTRIES a pre-#737 build already lost (a bulk fill or a handle backfill that never
 committed; rows written while a trigger was missing): the triggers are made whole, but nothing
-re-reads the base table. The open's prune of an already-indexed checkpoint (§15.3 R8) is pinned
+re-reads the base table. No repair is built (#779, owner call), because no published build can
+leave that state behind. A bulk fill copies a table that existed before its keyword index, and
+both indexes arrived in the project's first two days (`chunks_fts` in b8feb461, 2026-06-10, first
+tagged v0.1.3; `messages_fts` in af1f31f8, 2026-06-11, first tagged v0.1.6). The repository was
+private until 2026-07-12. The first release is v0.1.50 (that day), and the one earlier build
+handed out, the v0.1.46 tester pre-release (2026-07-10, see CHANGELOG), came a month after both
+indexes. Every workspace such a build created had both indexes from its first open, and their
+fills copied empty tables. Only a workspace created by a build from before those commits (tags
+v0.1.0–v0.1.2, and up to v0.1.5 for `messages_fts`), whose first open on a later build was then
+killed during the fill, can be in that state. Vector search still
+finds its rows. The open's prune of an already-indexed checkpoint (§15.3 R8) is pinned
 on a hand-built legacy shape in `chat-compaction.test.ts`; on every shipped workspace it deletes
 nothing.
 
