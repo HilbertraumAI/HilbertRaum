@@ -11894,7 +11894,14 @@ review found are refinements inside the architecture (§3 below), not a change o
 > nothing indexed a document skill's accept re-ran the same answer under its stamp. A handler-less
 > skill keeps passing (its fence shapes a pack answer), but a chat with no section in scope and no pack
 > (documents off, an empty project, a document that never indexed) is not classified at all: every answer
-> there is the fixed no-context reply, which no skill changes. Since
+> there is the fixed no-context reply, which no skill changes. *#779 (2026-11-03):* where sections are in
+> scope the classification still runs before retrieval, and retrieval can then find nothing: the answer is
+> the fixed no-context or re-index reply (`isNoContextAnswer`, `rag/index.ts`). The grounded path then drops
+> the offer when the offered skill is fence-only (no analysis handler, the same `skillAnalysisHandler` lookup
+> `wouldSkillEngage` uses): its accept would re-run the same top-k search and the same fixed reply. A skill
+> with an analysis engine stays offered, because that engine reads beyond top-k. The coverage-extract listing
+> never produces that reply, and the deterministic offer names the bank skill, whose engine is registered, so
+> the drop never touches either. Since
 > #736 the classifier also reads the route that actually answered (a tree route the tree cannot answer
 > classifies as without the deep index). **(3) restore fidelity (#132/#135)** — `deleteLastAssistantMessage`/
 > `restoreMessage` now carry `skill_offer_json`, so the F2/CB-2 restore legs keep the offer (the

@@ -2140,7 +2140,11 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   sibling of the aggregation hint; dedupe: deterministic wins, the classifier is skipped). Under
   the mock runtime the classification always degrades (the mock ignores `responseSchema`) — a
   tested invariant, so dev/mock behaviour is byte-identical to the pre-#80 build. The prose hints
-  above remain as the degradation path.
+  above remain as the degradation path. **#779:** a class-(b) classification runs before retrieval, so the
+  grounded answer can still turn out to be the fixed no-context or re-index reply (`isNoContextAnswer`). A
+  fence-only offer (a skill with no analysis handler) is then dropped, since accepting it re-runs the same
+  top-k search and the same fixed reply; an offer of a skill with an analysis engine stays (architecture.md
+  §5.2 "as built", the #733 / #779 notes).
 - **"Whole document" wording gate (RAG-1, backend audit 2026-06-27):** `buildListingAnswer` says
   *"across the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
   chunking invariant holds AND every in-scope chunk actually carries a `__scan__` marker. `fullyChunked`

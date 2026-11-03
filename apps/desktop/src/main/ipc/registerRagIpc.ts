@@ -24,6 +24,7 @@ import {
   generateGroundedAnswer,
   generateGroundedDataAnswer,
   type GroundedAnswerOptions,
+  isNoContextAnswer,
   modePackOutcomes,
   ragSettingsFrom,
   WHOLE_READ_SECTION_FRAMING_TOKENS,
@@ -34,11 +35,12 @@ import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import {
   BANK_STATEMENT_INSTALL_ID,
   getSkillAnalysisHandler,
-  manifestAnalysisHandler
+  manifestAnalysisHandler,
+  type SkillAnalysisHandler
 } from '../services/skills/analysis'
 import { offerableSkillCandidates } from '../services/skills/suggest'
 import { documentsInScope, scopeSectionTotals } from '../services/skills/scope-documents'
-import { getSkill } from '../services/skills/registry'
+import { getSkill, type SkillRecord } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
 import { isNeedleShaped, isSmallTalk } from '../services/skills/vocabulary'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
@@ -193,6 +195,22 @@ function allInScopeDocsFullyChunked(db: Db, scope: RetrievalScope): boolean {
     )
     .get(...(filter ? filter.params : [])) as unknown as { n: number }
   return (row?.n ?? 0) === 0
+}
+
+/**
+ * A skill's analysis engine, in precedence order (full-doc-skills Phase 3 / A3, see the turn-skill
+ * lookup in the handler): the app registry's handler, else the engine its manifest declares
+ * (`analysis: whole-doc | compare`, honoured for instruction skills only — SEC-1). Undefined means a
+ * fence-only skill: its fence shapes the prompt, and no engine reads beyond top-k. One spelling for the
+ * turn's own skill, the #133 engagement filter and the #779 no-context offer drop.
+ */
+function skillAnalysisHandler(
+  installId: string,
+  record: Pick<SkillRecord, 'kind' | 'manifest'> | null
+): SkillAnalysisHandler | undefined {
+  return (
+    getSkillAnalysisHandler(installId) ?? (record ? manifestAnalysisHandler(record.kind, record.manifest.analysis) : undefined)
+  )
 }
 
 /**
@@ -424,11 +442,7 @@ export function registerRagIpc(ctx: AppContext): void {
       //      skill resolves to `undefined` here (it declares no analysis engine and runs no tools — SEC-1).
       // When neither yields a handler, or `applies()` is false (off-topic / multi-doc), this whole block is
       // skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
-      const skillRecord = skill ? getSkill(ctx.db, skill.installId) : null
-      const analysisHandler = skill
-        ? getSkillAnalysisHandler(skill.installId) ??
-          (skillRecord ? manifestAnalysisHandler(skillRecord.kind, skillRecord.manifest.analysis) : undefined)
-        : undefined
+      const analysisHandler = skill ? skillAnalysisHandler(skill.installId, getSkill(ctx.db, skill.installId)) : undefined
 
       // W2 doc-count-fallthrough routing (audit §2.1/§3.4): a tool/whole-doc skill reads ONE document
       // (two, for compare) at a time, so a multi-document scope can't be analysed exhaustively. When the
@@ -848,8 +862,7 @@ export function registerRagIpc(ctx: AppContext): void {
       const wouldSkillEngage = (installId: string): boolean => {
         const record = getSkill(ctx.db, installId)
         if (!record) return false
-        const handler =
-          getSkillAnalysisHandler(installId) ?? manifestAnalysisHandler(record.kind, record.manifest.analysis)
+        const handler = skillAnalysisHandler(installId, record)
         if (!handler) return true
         const input = { question: text, scope, db: ctx.db }
         if (routableDocs.length > 0 && handler.intends?.(input) === true) return true
@@ -920,7 +933,7 @@ export function registerRagIpc(ctx: AppContext): void {
       // The grounded answer: top-k relevance, or the whole read of `wholeReadId` (#643 / #642; #649: also an
       // aggregation ask the router sent to coverage-extract). The offer is attached to the persisted answer
       // afterwards (update-in-place of the offer column only) — it never touches the answer content or the
-      // stream.
+      // stream — unless the answer is the fixed no-context reply and the offered skill is fence-only (#779).
       const groundedAnswer = async (
         signal: AbortSignal,
         sendToken: SendToken,
@@ -974,7 +987,15 @@ export function registerRagIpc(ctx: AppContext): void {
           partialCoverageNotice: partialCoverageNoticeFor(wholeReadId != null, routed),
           onToken: sendToken
         })
-        if (offer) {
+        // #779: the offer is classified BEFORE retrieval, so retrieval can still end in the fixed no-context
+        // (or re-index) reply. A fence-only skill re-runs the same top-k search under its fence: accepting it
+        // would only bring back that fixed reply, so it is not offered there. A skill with an analysis engine
+        // stays offered — its engine reads beyond top-k.
+        const fenceOnlyOnNoContext =
+          offer != null &&
+          isNoContextAnswer(msg.content) &&
+          skillAnalysisHandler(offer.installId, getSkill(ctx.db, offer.installId)) == null
+        if (offer && !fenceOnlyOnNoContext) {
           setMessageSkillOffer(ctx.db, msg.id, offer)
           msg.skillOffer = offer
         }

@@ -238,6 +238,16 @@ export const NO_DOCUMENT_CONTEXT_ANSWER = t('en', 'main.rag.noContext')
 export const REINDEX_NEEDED_ANSWER = t('en', 'main.rag.reindexNeeded')
 
 /**
+ * Is this answer one of the two fixed replies above — retrieval found nothing to ground on, so the
+ * model was never called? Both persist verbatim (persist-canonical English), so the content is the
+ * reply's identity, as it is for the renderer's display map. #779: `askDocuments` drops a fence-only
+ * skill offer from such a reply, because accepting it would only re-run the same fixed reply.
+ */
+export function isNoContextAnswer(content: string): boolean {
+  return content === NO_DOCUMENT_CONTEXT_ANSWER || content === REINDEX_NEEDED_ANSWER
+}
+
+/**
  * True when the corpus is invisible to `embeddingModelId`: at least one indexed document
  * has chunks, but not a single one of those documents has any vector under the active
  * model. Drives the `REINDEX_NEEDED_ANSWER` variant — a per-document partial mismatch

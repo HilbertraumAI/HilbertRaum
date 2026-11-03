@@ -14,7 +14,9 @@ import { randomUUID } from 'node:crypto'
 //   - silent degrade: a prose reply (the mock-runtime class) produces the byte-identical answer
 //     with NO offer;
 //   - trigger b: a low-confidence fallback classifies BEFORE the grounded answer streams and the
-//     offer rides the persisted message; the step-5 fallthrough NEVER classifies (0 extra calls);
+//     offer rides the persisted message; the step-5 fallthrough NEVER classifies (0 extra calls); when
+//     retrieval then finds nothing (the fixed no-context reply) a fence-only offer is dropped and an engaging
+//     one kept (#779);
 //   - the offer gate: a disabled skill is out of the enum AND out of the deterministic offer.
 // Faked transport (tests/helpers/ipc.ts); real temp DB + mock embedder underneath.
 
@@ -28,7 +30,8 @@ vi.mock('electron', () => ({
 
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
+import { seedSettings, updateSettings } from '../../src/main/services/settings'
+import { NO_DOCUMENT_CONTEXT_ANSWER, REINDEX_NEEDED_ANSWER } from '../../src/main/services/rag'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { createConversation, listMessages } from '../../src/main/services/chat'
@@ -154,6 +157,26 @@ const AMOUNT_AGG_ASK = 'kategorisiere alle transaktionen und erstelle eine summe
 const PARTY_AGG_ASK = 'gruppiere die Parteien nach Vertrag'
 const ORDINARY_ASK = 'what does the contract say about termination?'
 
+/** #779: two scopes that hold a section yet give the low-confidence AMOUNT_AGG_ASK nothing to ground on, so the
+ *  answer is a fixed reply with no model call. The section shares no word with the question (no keyword hit). */
+const NO_CONTEXT_WORLDS = [
+  {
+    name: 'no section matches the question',
+    // A similarity floor no vector hit reaches.
+    seed: (db: Db): Promise<string> => {
+      updateSettings(db, { ragMinSimilarity: 0.99 })
+      return seedEmbeddedDoc(db, new MockEmbedder(), 'notes.pdf', ['Zahlung 12,50 EUR an Acme.'])
+    },
+    answer: NO_DOCUMENT_CONTEXT_ANSWER
+  },
+  {
+    name: 'another embedder indexed the document',
+    seed: (db: Db): Promise<string> =>
+      seedEmbeddedDoc(db, new MockEmbedder(), 'notes.pdf', ['Zahlung 12,50 EUR an Acme.'], { modelId: 'old-embedder' }),
+    answer: REINDEX_NEEDED_ANSWER
+  }
+]
+
 async function ask(
   db: Db,
   workspacePath: string,
@@ -252,6 +275,24 @@ describe('askDocuments — the #80 offer cascade', () => {
     })
     expect(msg.content).toContain(tr('analysis.wholeDocHint')) // the #37/#38 hint still leads
     expect(listMessages(db, msg.conversationId).at(-1)?.skillOffer).toEqual(msg.skillOffer)
+  })
+
+  // #779: trigger (b) classifies BEFORE retrieval, and retrieval can then find nothing: the answer is the fixed
+  // no-context (or re-index) reply. Both skills are fence-only in this block (no handler is registered yet), and a
+  // fence-only skill re-runs the same top-k search, so accepting it would bring back the same fixed reply: no offer.
+  it.each(NO_CONTEXT_WORLDS)('trigger (b), $name: the fixed reply carries no fence-only offer (#779)', async ({ seed, answer }) => {
+    const { db, workspacePath, skillsDirs } = freshWorld()
+    const docId = await seed(db)
+    const rt = scriptedRuntime(['{"skill":"app:bank-statement"}'])
+
+    const msg = await ask(db, workspacePath, rt, skillsDirs, AMOUNT_AGG_ASK, docId)
+
+    // The classification ran with the skill in its enum and picked it; the fixed reply made no model call.
+    expect(rt.calls).toBe(1)
+    expect(rt.options[0]?.responseSchema?.properties?.skill?.enum).toContain('app:bank-statement')
+    expect(msg.content).toBe(answer)
+    expect(msg.skillOffer).toBeUndefined()
+    expect(listMessages(db, msg.conversationId).at(-1)?.skillOffer).toBeUndefined()
   })
 
   it('the step-5 fallthrough NEVER classifies: an ordinary question makes exactly one (unconstrained) call', async () => {
@@ -401,5 +442,23 @@ describe('askDocuments — the #133 engagement filter (real handlers)', () => {
     // Bank: "gruppiere" is category-shaped ⇒ `intends()` holds (the W2 pre-pass handles any doc-count
     // miss honestly) — KEPT.
     expect(rt.options[0]?.responseSchema?.properties?.skill?.enum).toEqual(['app:bank-statement', 'none'])
+  })
+
+  // #779, the other half: the same no-context turn as the fence-only row above, but Bank Statement Analysis now has
+  // its real engine, which reads the whole statement rather than top-k. Accepting it can answer what retrieval could
+  // not, so the offer stays on the fixed reply.
+  it('trigger (b), no section matches the question: a skill whose engine engages stays offered (#779)', async () => {
+    registerBuiltinSkillAnalysisHandlers()
+    const { db, workspacePath, skillsDirs } = freshWorld()
+    const { seed, answer } = NO_CONTEXT_WORLDS[0]!
+    const docId = await seed(db)
+    const rt = scriptedRuntime(['{"skill":"app:bank-statement"}'])
+
+    const msg = await ask(db, workspacePath, rt, skillsDirs, AMOUNT_AGG_ASK, docId)
+
+    expect(rt.calls).toBe(1)
+    expect(msg.content).toBe(answer)
+    expect(msg.skillOffer).toEqual({ installId: 'app:bank-statement', title: 'Bank Statement Analysis', source: 'classifier' })
+    expect(listMessages(db, msg.conversationId).at(-1)?.skillOffer).toEqual(msg.skillOffer)
   })
 })
