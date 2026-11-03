@@ -39,7 +39,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { ocrRemedyKind } from '../lib/ocrRemedy'
 import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
-import { fmt1 } from '../lib/format'
+import { fmt1 } from '@shared/format'
 import {
   ATTACH_POLL_MS,
   RUNTIME_POLL_MS,

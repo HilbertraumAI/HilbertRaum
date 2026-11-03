@@ -1318,7 +1318,7 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
 
     await user.click(await screen.findByRole('button', { name: 'Download' }))
     const dialog = within(screen.getByRole('dialog'))
-    expect(dialog.getByText('2.7 GB')).toBeInTheDocument() // 2.9e9 bytes ≈ 2.7 GiB
+    expect(dialog.getByText('2.9 GB')).toBeInTheDocument() // 2.9e9 bytes: decimal GB, as the card's figures are (#768)
     expect(dialog.getByText(/apache-2\.0/)).toBeInTheDocument()
     expect(dialog.getByText('https://example.test/qwen3-4b.gguf')).toBeInTheDocument()
     expect(dialog.queryByText(/accept this model’s license/)).not.toBeInTheDocument()
@@ -1332,6 +1332,29 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     expect(
       await screen.findByRole('button', { name: 'Download' }, { timeout: 3000 })
     ).toBeInTheDocument()
+  })
+
+  // #768: one decimal from 10 GB up as below it. This weight's 14,439,363,584 bytes read "13 GB" in its dialog (GiB,
+  // rounded whole) beside a card saying 14.4: under by 1.4 GB, the direction that lets a too-full drive look fine.
+  it('states a 14.4 GB weight as 14.4 GB on its card and in its dialog (#768)', async () => {
+    stub({
+      models: [
+        model({
+          sizeOnDiskGb: 14.4,
+          download: {
+            url: 'https://example.test/qwen3-4b.gguf',
+            sizeBytes: 14_439_363_584,
+            licenseUrl: 'https://example.test/license',
+            licenseApproved: true
+          }
+        })
+      ]
+    })
+    const user = userEvent.setup()
+    render(<ModelsScreen />)
+    expect(await screen.findByText(/Uses 14\.4 GB of drive space\./)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Download' }))
+    expect(within(screen.getByRole('dialog')).getByText('14.4 GB')).toBeInTheDocument()
   })
 
   it('requires the explicit license acknowledgement when the review is not approved', async () => {

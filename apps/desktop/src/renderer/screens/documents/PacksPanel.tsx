@@ -78,11 +78,12 @@ function languageName(uiLang: string, code: string): string {
   }
 }
 
+/** A pack's size on the drive: decimal units like every disk size in the app (#768, GB = 1e9). */
 function formatSize(bytes: number | null): string | null {
   if (bytes == null || bytes <= 0) return null
-  const gb = bytes / (1024 * 1024 * 1024)
+  const gb = bytes / 1e9
   if (gb >= 0.95) return `${gb.toFixed(1)} GB`
-  return `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`
+  return `${Math.max(1, Math.round(bytes / 1e6))} MB`
 }
 
 /** The tools-install job's download percentage, or null with no known total (indeterminate) —

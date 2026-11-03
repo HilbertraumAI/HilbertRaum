@@ -14,7 +14,7 @@ import {
   type RuntimeStatus
 } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
-import { fmt1 } from '../../src/renderer/lib/format'
+import { fmt1 } from '../../src/shared/format'
 import { effectiveReadSample } from '../helpers/benchmark-records'
 import { deferred } from '../helpers/deferred'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'

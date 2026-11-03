@@ -39,6 +39,7 @@ import type {
   RuntimeStatus
 } from '@shared/types'
 import { isUnresolvedDownloadResult } from '@shared/downloads'
+import { fmt1, fmtDiskGb } from '@shared/format'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 
 // "AI Model" screen (guidelines §2/§3 principle: singular mental model).
@@ -79,18 +80,15 @@ const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; i
   running: { labelKey: 'models.state.running', tone: 'accent', icon: '▶' }
 }
 
-/** Bytes → a friendly GB string; the decimal separator follows the UI language. */
+/**
+ * A disk size → "14.4 GB": the declared bytes when known, else the manifest's `size_on_disk_gb`.
+ * Decimal GB with one decimal, the separator from the UI language (#768: it divided by 1024³ and
+ * rounded from 10 GB up to a whole number, so a card reading 14.4 offered "13 GB" in its dialog).
+ */
 function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): string {
-  const gb = bytes != null ? bytes / 1024 ** 3 : fallbackGb
-  const rounded = gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10
-  return `${rounded.toLocaleString(lang, { useGrouping: false })} GB`
+  return bytes != null ? fmtDiskGb(bytes, lang) : `${fmt1(fallbackGb, lang)} GB`
 }
 
-/**
- * A GB number that is ALREADY a GB value (manifest fields, not bytes) → locale string
- * (M-U5). Unlike `fmtGb` this does not round the manifest figure away; it only routes
- * the decimal separator + grouping through the UI language (German "4,5 GB").
- */
 /**
  * The licence link as rendered — its href and the host shown beside it — or null when it must
  * not render as a link (#236): the manifest validator already refuses a non-https `license_url`,
@@ -109,6 +107,11 @@ function licenseLink(url: string | null | undefined): { href: string; host: stri
   }
 }
 
+/**
+ * A GB number that is ALREADY a GB value (manifest fields, not bytes) → locale string
+ * (M-U5). Unlike `fmtGb` this does not round the manifest figure away; it only routes
+ * the decimal separator + grouping through the UI language (German "4,5 GB").
+ */
 function fmtGbNum(gb: number, lang: UiLanguage): string {
   return `${gb.toLocaleString(lang)} GB`
 }

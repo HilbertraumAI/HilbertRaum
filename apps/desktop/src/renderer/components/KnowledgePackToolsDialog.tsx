@@ -25,11 +25,12 @@ export interface KnowledgePackToolsDialogProps {
   t?: Translator
 }
 
-/** GB/MB size string — same rounding as `PacksPanel.tsx`'s `formatSize` (GB from ~0.95 GB up). */
+/** GB/MB size string — same rounding as `PacksPanel.tsx`'s `formatSize` (GB from ~0.95 GB up),
+ *  in the same decimal units (#768, MB = 1e6). */
 function formatFamilySize(bytes: number): string {
-  const gb = bytes / (1024 * 1024 * 1024)
+  const gb = bytes / 1e9
   if (gb >= 0.95) return `${gb.toFixed(1)} GB`
-  return `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`
+  return `${Math.max(1, Math.round(bytes / 1e6))} MB`
 }
 
 /** The one licence this dialog is scoped to links to the canonical GNU text. */
