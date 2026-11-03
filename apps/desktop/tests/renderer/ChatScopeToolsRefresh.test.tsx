@@ -1,22 +1,20 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react'
+import { screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { ToastProvider } from '../../src/renderer/components'
-import type {
-  Collection,
-  Conversation,
-  DocumentInfo,
-  DocumentScope,
-  ImportJob,
-  ImportJobStatus,
-  RuntimeStatus,
-  SkillInfo
+import {
+  DEFAULT_SETTINGS,
+  type Collection,
+  type Conversation,
+  type DocumentScope,
+  type ImportJob,
+  type ImportJobStatus,
+  type SkillInfo
 } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatDropBridge, chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
 import { hangBudgetMs } from '../helpers/hang-budget'
-import { makeSkillInfo, makeConversation } from '../helpers/chat-fixtures'
+import { makeSkillInfo, makeConversation, makeDocumentInfo } from '../helpers/chat-fixtures'
 
 // CH-1 + CH-2 (frontend audit 2026-08-09, issues #139/#140).
 //
@@ -32,29 +30,6 @@ import { makeSkillInfo, makeConversation } from '../helpers/chat-fixtures'
 
 function conv(over: Partial<Conversation> = {}): Conversation {
   return makeConversation({ title: 'Doc Q&A', mode: 'documents', scope: { collectionIds: [], documentIds: [] }, ...over })
-}
-
-const runningStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-function docInfo(id: string, title: string): DocumentInfo {
-  return {
-    id,
-    title,
-    originalPath: null,
-    mimeType: 'application/pdf',
-    sizeBytes: 10,
-    status: 'indexed',
-    errorMessage: null,
-    chunkCount: 1,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z'
-  } as DocumentInfo
 }
 
 function collection(over: Partial<Collection>): Collection {
@@ -79,16 +54,18 @@ function skill(): SkillInfo {
   })
 }
 
-const unsub = (): (() => void) => () => {}
-
 // The run-bar offer button for a read-only tool (SkillRunBar labels it from the tool name).
 const RUN_BUTTON = { name: 'Extract transactions' }
 const RUNNABLE = { name: 'extract_transactions', requiresConfirmation: false }
 
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 describe('ChatScreen — scope-popover rapid toggles do not race (CH-1, #139)', () => {
@@ -108,19 +85,18 @@ describe('ChatScreen — scope-popover rapid toggles do not race (CH-1, #139)', 
           })
         })
     )
-    stubApi({
-      listConversations: vi.fn(async () => [{ ...docConv, scope: persistedScope }]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
-      listCollections: vi.fn(async () => [
-        collection({}),
-        collection({ id: 'proj1', name: 'Tax 2025', type: 'project', builtin: false })
-      ]),
-      listAttachments: vi.fn(async () => []),
-      setConversationScope
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [{ ...docConv, scope: persistedScope }]),
+        listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
+        listCollections: vi.fn(async () => [
+          collection({}),
+          collection({ id: 'proj1', name: 'Tax 2025', type: 'project', builtin: false })
+        ]),
+        setConversationScope
+      })
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Doc Q&A'))
 
     // Open the picker and tick Library, then the project, BEFORE the first write resolves.
@@ -164,23 +140,25 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
     const listRunnableTools = vi.fn(async () =>
       scopeWritten ? { tools: [RUNNABLE], documentIds: ['d1'] } : { tools: [], documentIds: [] }
     )
-    stubApi({
-      listConversations: vi.fn(async () => [docConv]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d1', 'contract.pdf')]),
-      listCollections: vi.fn(async () => [collection({})]),
-      listAttachments: vi.fn(async () => []),
-      listSkills: vi.fn(async () => [skill()]),
-      suggestSkills: vi.fn(async () => []),
-      listSkillRuns: vi.fn(async () => []),
-      listRunnableTools,
-      setConversationScope: vi.fn(async () => {
-        scopeWritten = true
-        return docConv
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [docConv]),
+        listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd1', title: 'contract.pdf' })]),
+        listCollections: vi.fn(async () => [collection({})]),
+        listSkills: vi.fn(async () => [skill()]),
+        // The skill's #46 info card was already seen, so the first pick opens no card (and writes no
+        // settings): this row is about the run-bar offer, not the card.
+        getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: ['bank-statement'] })),
+        // A pick in a saved conversation clears its saved default skill (U3).
+        setConversationDefaultSkill: vi.fn(async () => {}),
+        listRunnableTools,
+        setConversationScope: vi.fn(async () => {
+          scopeWritten = true
+          return docConv
+        })
       })
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
+    )
+    renderChatScreen()
     await user.click(await screen.findByText('Doc Q&A'))
     // Pick the skill — the effect resolves the offer once for (skill, conversation).
     await user.click(await screen.findByRole('button', { name: /^skill:/i }))
@@ -206,30 +184,26 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
     )
     const job: ImportJob = { jobId: 'j1', documentIds: ['d9'] }
     const jobDone: ImportJobStatus = { jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }
-    const droppedPaths = new WeakMap<object, string>()
-    stubApi({
-      listConversations: vi.fn(async () => [docConv]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [docInfo('d0', 'lease.pdf')]),
-      listCollections: vi.fn(async () => [collection({})]),
-      listAttachments: vi.fn(async () => []),
-      listSkills: vi.fn(async () => [skill()]),
-      suggestSkills: vi.fn(async () => []),
-      listSkillRuns: vi.fn(async () => []),
-      listRunnableTools,
-      importDocuments: vi.fn(async () => job),
-      getImportJob: vi.fn(async () => {
-        jobSettled = true
-        return jobDone
-      }),
-      getDroppedFilePath: vi.fn((file: File): string => droppedPaths.get(file) ?? '')
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} />
-      </ToastProvider>
+    const drops = chatDropBridge()
+    stubApi(
+      chatScreenStubs({
+        ...drops.stubs,
+        listConversations: vi.fn(async () => [docConv]),
+        listDocuments: vi.fn(async () => [makeDocumentInfo({ id: 'd0', title: 'lease.pdf' })]),
+        listCollections: vi.fn(async () => [collection({})]),
+        listSkills: vi.fn(async () => [skill()]),
+        // As in the row above: the info card was already seen, and the pick clears the saved default.
+        getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: ['bank-statement'] })),
+        setConversationDefaultSkill: vi.fn(async () => {}),
+        listRunnableTools,
+        importDocuments: vi.fn(async () => job),
+        getImportJob: vi.fn(async () => {
+          jobSettled = true
+          return jobDone
+        })
+      })
     )
+    renderChatScreen()
     await user.click(await screen.findByText('Doc Q&A'))
     await user.click(await screen.findByRole('button', { name: /^skill:/i }))
     await user.click(await screen.findByRole('menuitemradio', { name: /bank statement helper/i }))
@@ -241,9 +215,7 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
     // pick time (before the link row existed), so the run button never appeared.
     const target = document.querySelector('.chat-main')
     if (!target) throw new Error('no .chat-main drop target')
-    const file = { name: 'statement.pdf' }
-    droppedPaths.set(file, '/tmp/statement.pdf')
-    fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
+    drops.drop(target, 'statement.pdf', '/tmp/statement.pdf')
 
     expect(await screen.findByRole('button', RUN_BUTTON, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
   })

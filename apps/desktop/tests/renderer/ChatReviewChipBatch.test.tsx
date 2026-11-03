@@ -1,16 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { act, render, waitFor, cleanup } from '@testing-library/react'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import type {
-  AppSettings,
-  AppStatus,
-  Conversation,
-  EvidenceReviewSummary,
-  Message,
-  RuntimeStatus
-} from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { act, waitFor, cleanup } from '@testing-library/react'
+import type { Conversation, EvidenceReviewSummary, Message } from '../../src/shared/types'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
 
 // AUD-12 — the chat transcript's evidence-review chip state costs ONE IPC round trip per
 // conversation open, no matter how long the history is.
@@ -30,46 +24,20 @@ import { stubApi } from '../helpers/renderer'
 
 const HISTORY_ANSWERS = 40
 
-const idleStatus: RuntimeStatus = {
-  running: true,
-  modelId: 'm1',
-  port: 1234,
-  healthy: true,
-  message: 'ok'
-}
-
-const conversation: Conversation = {
-  id: 'c1',
-  title: 'Long documents chat',
-  createdAt: '2026-07-18T09:00:00.000Z',
-  updatedAt: '2026-07-18T10:00:00.000Z',
-  modelId: 'm1',
-  mode: 'documents',
-  scopeDocumentIds: null,
-  collectionId: null,
-  scope: null
-} as Conversation
+const conversation = (): Conversation =>
+  makeConversation({ title: 'Long documents chat', modelId: 'm1', mode: 'documents' })
 
 /** `HISTORY_ANSWERS` cited assistant answers (each with its question turn) — every answer is
  *  review-eligible, so the pre-batch shape would have made one round trip per answer. */
 function longHistory(): Message[] {
   const messages: Message[] = []
   for (let i = 1; i <= HISTORY_ANSWERS; i++) {
-    messages.push({
-      id: `q${i}`,
-      conversationId: 'c1',
-      role: 'user',
-      content: `Question ${i}?`,
-      createdAt: '2026-07-18T09:00:00.000Z'
-    })
-    messages.push({
-      id: `a${i}`,
-      conversationId: 'c1',
-      role: 'assistant',
-      content: `Answer ${i}. [S1]`,
-      createdAt: '2026-07-18T10:00:00.000Z',
-      citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12, snippet: 'Either…' }]
-    })
+    messages.push(userMsg(`q${i}`, `Question ${i}?`))
+    messages.push(
+      assistantMsg(`a${i}`, `Answer ${i}. [S1]`, {
+        citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12, snippet: 'Either…' }]
+      })
+    )
   }
   return messages
 }
@@ -88,29 +56,14 @@ function summary(messageId: string, over: Partial<EvidenceReviewSummary> = {}): 
   }
 }
 
-function baseStubs(messages: Message[]) {
-  return {
-    listConversations: vi.fn(async () => [conversation]),
-    listMessages: vi.fn(async () => messages),
-    getRuntimeStatus: vi.fn(async () => idleStatus),
-    listDocuments: vi.fn(async () => []),
-    listCollections: vi.fn(async () => []),
-    listSkills: vi.fn(async () => []),
-    listSkillRuns: vi.fn(async () => []),
-    listAttachments: vi.fn(async () => []),
-    getAppStatus: vi.fn(async () => ({ dictationAvailable: false }) as AppStatus),
-    getActiveStream: vi.fn(async () => null),
-    listActiveStreamConversations: vi.fn(async () => []),
-    getConversationContextUsage: vi.fn(async () => null),
-    getConversationSummary: vi.fn(async () => null),
-    getSettings: vi.fn(async () => ({}) as AppSettings),
-    onRuntimeNotice: vi.fn(() => () => {})
-  }
-}
-
 afterEach(() => {
-  cleanup()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 /**
@@ -143,18 +96,19 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
       summary('a7', { status: 'ready' })
     ])
     const getEvidenceReviewForMessage = vi.fn(async () => null)
-    const stubs = baseStubs(messages)
-    stubApi({
-      ...stubs,
-      getEvidenceReviewSummariesForConversation,
-      getEvidenceReviewForMessage
-    })
-
-    render(
-      <ChatScreen onNavigate={() => {}} initialConversationId="c1" onOpenReview={() => {}} />
+    const listMessages = vi.fn(async () => messages)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [conversation()]),
+        listMessages,
+        getEvidenceReviewSummariesForConversation,
+        getEvidenceReviewForMessage
+      })
     )
 
-    await waitFor(() => expect(stubs.listMessages).toHaveBeenCalledWith('c1'))
+    renderChatScreen({ initialConversationId: 'c1', onOpenReview: () => {} })
+
+    await waitFor(() => expect(listMessages).toHaveBeenCalledWith('c1'))
     // Gate on the chip-state read having HAPPENED (on either channel), never on a sleep…
     await waitFor(() =>
       expect(
@@ -186,16 +140,16 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
       throw new Error('Workspace is locked.')
     })
     const getEvidenceReviewForMessage = vi.fn(async () => null)
-    const stubs = baseStubs(messages)
-    stubApi({
-      ...stubs,
-      getEvidenceReviewSummariesForConversation,
-      getEvidenceReviewForMessage
-    })
-
-    render(
-      <ChatScreen onNavigate={() => {}} initialConversationId="c1" onOpenReview={() => {}} />
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [conversation()]),
+        listMessages: vi.fn(async () => messages),
+        getEvidenceReviewSummariesForConversation,
+        getEvidenceReviewForMessage
+      })
     )
+
+    renderChatScreen({ initialConversationId: 'c1', onOpenReview: () => {} })
 
     await waitFor(() =>
       expect(

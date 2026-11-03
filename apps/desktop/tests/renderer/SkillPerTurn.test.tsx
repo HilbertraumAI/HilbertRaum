@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import type { Conversation, RuntimeStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { DEFAULT_SETTINGS, type Conversation } from '../../src/shared/types'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
 import { makeSkillInfo as skill, makeConversation as conv } from '../helpers/chat-fixtures'
 
 // U3 (audit §4.3): the ChatScreen wiring for per-turn skill application. A composer pick applies for
@@ -14,14 +14,14 @@ import { makeSkillInfo as skill, makeConversation as conv } from '../helpers/cha
 // reload against the user's visible session choice (the confirmed keep-checkbox-shadow finding). The
 // pure picker component is covered in SkillChat.test.tsx; here we prove the real screen behavior.
 
-function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
-}
-
 afterEach(() => {
-  cleanup()
-  vi.restoreAllMocks()
-  window.localStorage.clear()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    cleanup()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  }
 })
 
 /** Common stub set + the setConversationDefaultSkill spy; mounts ChatScreen and selects the conv. */
@@ -30,18 +30,17 @@ async function mountWithConversation(
   setConversationDefaultSkill = vi.fn(async () => {})
 ): Promise<{ setConversationDefaultSkill: ReturnType<typeof vi.fn>; user: ReturnType<typeof userEvent.setup> }> {
   const user = userEvent.setup()
-  stubApi({
-    listConversations: vi.fn(async () => [c]),
-    getRuntimeStatus: vi.fn(async () => status()),
-    listMessages: vi.fn(async () => []),
-    listDocuments: vi.fn(async () => []),
-    listSkills: vi.fn(async () => [skill()]),
-    suggestSkills: vi.fn(async () => []),
-    listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
-    listAttachments: vi.fn(async () => []),
-    setConversationDefaultSkill
-  })
-  render(<ChatScreen onNavigate={() => {}} />)
+  stubApi(
+    chatScreenStubs({
+      listConversations: vi.fn(async () => [c]),
+      listSkills: vi.fn(async () => [skill()]),
+      // The skill's #46 info card was already seen, so a first pick opens no card (and writes no
+      // settings): these rows are about the saved default, not the card.
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: ['bank-statement'] })),
+      setConversationDefaultSkill
+    })
+  )
+  renderChatScreen()
   // Select the conversation so its saved default (if any) becomes the active skill.
   await user.click(await screen.findByText('My chat'))
   return { setConversationDefaultSkill, user }
