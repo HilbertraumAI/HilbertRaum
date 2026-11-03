@@ -23,15 +23,13 @@ import {
   type TranslateJob,
   type ImportJob
 } from '../../src/shared/types'
-import type { DecodedImage } from '../../src/renderer/images/decode'
 import { appShellStubs } from '../helpers/app-shell'
 import { stubApi } from '../helpers/renderer'
+import { selectedImage } from '../helpers/vision-fixtures'
 
 // F-41 (audit-2026-07-16): the stubApi payloads are typed against the real PreloadApi bridge
 // contract (no blanket `} as never)` erasure) — a rename of any mocked method now reddens
-// typecheck. Payloads that are DELIBERATELY partial (a "keep the shell calm" AppStatus/
-// PreflightResult, or a preview-only DecodedImage without `bytes`) carry a narrow, named
-// `as unknown as <Type>` at exactly that value, not a blanket cast.
+// typecheck.
 
 // TA-2 / H3: the renderer session-store purge must fire at the REAL lock seam. A screen-effect
 // purge was dead code (lock unmounts the screen before the effect could observe `locked`); the
@@ -90,7 +88,7 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     void translateDroppedFiles([new File(['%PDF'], 'secret.pdf', { type: 'application/pdf' })], CHOICE)
     await adoptActiveJob()
     loadSession(
-      { decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as unknown as DecodedImage, name: 'secret.png', sizeBytes: 42 },
+      selectedImage('secret.png', { sizeBytes: 42 }),
       [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
       'sess1'
     )
@@ -134,7 +132,7 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
 
     // Seed one session store so the "stores NOT purged" half has teeth.
     loadSession(
-      { decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as unknown as DecodedImage, name: 'secret.png', sizeBytes: 42 },
+      selectedImage('secret.png', { sizeBytes: 42 }),
       [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
       'sess1'
     )

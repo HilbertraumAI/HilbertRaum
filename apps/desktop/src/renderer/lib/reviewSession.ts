@@ -740,9 +740,3 @@ export function purgeReviewSession(): void {
   state = INITIAL
   notify()
 }
-
-/** Test-only: drop module state AND listeners between renderer tests. */
-export function resetReviewSessionForTests(): void {
-  purgeReviewSession()
-  listeners.clear()
-}

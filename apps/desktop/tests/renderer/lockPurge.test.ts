@@ -14,19 +14,18 @@ import {
 import {
   getVisionSession,
   loadSession,
-  clearVisionSession,
-  type SelectedImage
+  clearVisionSession
 } from '../../src/renderer/lib/visionSession'
 import type { ImageTurn } from '../../src/renderer/images'
-import type { DecodedImage } from '../../src/renderer/images/decode'
 import {
   getReviewSessionSnapshot,
   openReviewSession,
   editReviewItem,
-  resetReviewSessionForTests
+  purgeReviewSession
 } from '../../src/renderer/lib/reviewSession'
 import { stubApi } from '../helpers/renderer'
 import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
+import { selectedImage } from '../helpers/vision-fixtures'
 import type { DocTaskStatus, ImportJob, StartSkillRunResult } from '../../src/shared/types'
 
 // TA-2 / H3: the renderer lock purge used to be a dead screen effect (gated on a component-state
@@ -43,21 +42,13 @@ const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
 
 const RUNNING_TRANSLATE = { jobId: 'j9', state: 'translating' as const, text: 'geheim' }
 
-function fakeImage(): SelectedImage {
-  return {
-    decoded: { dataUrl: 'data:image/png;base64,AA', mimeType: 'image/png', width: 1, height: 1 } as unknown as DecodedImage,
-    name: 'secret.png',
-    sizeBytes: 42
-  }
-}
-
 const HIST_TURN: ImageTurn = { id: 't1', question: 'what is this?', answer: 'a secret', state: 'done', error: null }
 
 afterEach(() => {
   clearTranslateSession()
   clearFileTranslate()
   clearVisionSession()
-  resetReviewSessionForTests()
+  purgeReviewSession()
   vi.restoreAllMocks()
 })
 
@@ -87,7 +78,7 @@ describe('purgeSessionStores — the real lock seam (TA-2)', () => {
     expect(getTranslateSession().output).toBe('geheim')
     expect(getTranslateSession().activeJobId).toBe('j9')
 
-    loadSession(fakeImage(), [HIST_TURN], 'sess1')
+    loadSession(selectedImage('secret.png', { sizeBytes: 42 }), [HIST_TURN], 'sess1')
     expect(getVisionSession().selected).not.toBeNull()
     expect(getVisionSession().turns).toHaveLength(1)
 

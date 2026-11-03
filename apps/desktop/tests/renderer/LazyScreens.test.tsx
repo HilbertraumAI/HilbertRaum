@@ -4,7 +4,7 @@ import { render, screen, cleanup, within, fireEvent } from '@testing-library/rea
 import { App } from '../../src/renderer/App'
 import { t } from '../../src/shared/i18n'
 import type { Conversation, Message } from '../../src/shared/types'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { appShellStubs } from '../helpers/app-shell'
 import { modelsScreenStubs } from '../helpers/model-fixtures'
 import { stubApi } from '../helpers/renderer'
@@ -20,7 +20,7 @@ import { makeDetail } from '../helpers/evidenceReview'
 
 afterEach(() => {
   cleanup()
-  resetReviewSessionForTests()
+  purgeReviewSession()
 })
 
 function stubAppShell(): void {

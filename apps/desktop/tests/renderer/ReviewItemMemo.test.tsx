@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen, __reviewItemRowRenderCounts } from '../../src/renderer/screens/ReviewScreen'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 
@@ -13,7 +13,7 @@ import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 // immutable snapshots) per keystroke; the probe map pins that only the edited row re-renders.
 
 beforeEach(() => {
-  resetReviewSessionForTests()
+  purgeReviewSession()
   __reviewItemRowRenderCounts.clear()
 })
 

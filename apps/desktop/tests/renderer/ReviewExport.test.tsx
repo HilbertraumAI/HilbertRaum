@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
+import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceExportRecord } from '../../src/shared/types'
@@ -19,7 +19,7 @@ import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/e
 // `exportEvidencePack` is in the stub sets, and the afterEach fails on anything unmocked.
 
 beforeEach(() => {
-  resetReviewSessionForTests()
+  purgeReviewSession()
 })
 
 afterEach(() => {
