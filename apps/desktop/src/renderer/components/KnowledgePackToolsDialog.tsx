@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { EngineOptionalFamily } from '@shared/types'
+import type { UiLanguage } from '@shared/i18n'
+import { fmtPackSize } from '@shared/format'
 import { ConfirmDialog } from './Dialog'
 import { englishTranslator, type Translator } from './translator'
 
@@ -23,14 +25,8 @@ export interface KnowledgePackToolsDialogProps {
   onCancel: () => void
   /** Bound translate fn (i18n record §5 ⑤); English default, like every other shared component. */
   t?: Translator
-}
-
-/** GB/MB size string — same rounding as `PacksPanel.tsx`'s `formatSize` (GB from ~0.95 GB up),
- *  in the same decimal units (#768, MB = 1e6). */
-function formatFamilySize(bytes: number): string {
-  const gb = bytes / 1e9
-  if (gb >= 0.95) return `${gb.toFixed(1)} GB`
-  return `${Math.max(1, Math.round(bytes / 1e6))} MB`
+  /** The UI language, for the size's decimal separator (like `OcrInstall`'s). */
+  lang: UiLanguage
 }
 
 /** The one licence this dialog is scoped to links to the canonical GNU text. */
@@ -58,7 +54,8 @@ export function KnowledgePackToolsDialog({
   blockedReason,
   onConfirm,
   onCancel,
-  t = englishTranslator
+  t = englishTranslator,
+  lang
 }: KnowledgePackToolsDialogProps): JSX.Element {
   const [ack, setAck] = useState(false)
   // Reset the tick every time the dialog opens — a stale acknowledgement must never survive a
@@ -81,7 +78,7 @@ export function KnowledgePackToolsDialog({
       <dl className="kv">
         <dt>{t('models.confirm.size')}</dt>
         <dd>
-          {family.sizeBytes != null ? formatFamilySize(family.sizeBytes) : t('packs.tools.sizeUnknown')}
+          {family.sizeBytes != null ? fmtPackSize(family.sizeBytes, lang) : t('packs.tools.sizeUnknown')}
         </dd>
         <dt>{t('models.confirm.license')}</dt>
         <dd>

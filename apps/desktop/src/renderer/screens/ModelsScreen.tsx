@@ -1875,6 +1875,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           }}
           onCancel={() => setPackToolsDialogOpen(false)}
           t={t}
+          lang={lang}
         />
       )}
 

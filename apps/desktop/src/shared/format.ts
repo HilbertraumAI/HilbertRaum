@@ -29,3 +29,11 @@ export function fmtDiskSize(bytes: number, lang: UiLanguage): string {
   if (bytes < 1e9) return `${fmt1(bytes / 1e6, lang)} MB`
   return fmtDiskGb(bytes, lang)
 }
+
+/** A knowledge pack's or its tools' size: GB with one decimal from ~0.95 GB up, else whole MB (never
+ *  below 1), decimal like every disk size (#768). One definition for the Knowledge-packs panel and the
+ *  tools-install dialog, so the two surfaces state a family's size the same way. */
+export function fmtPackSize(bytes: number, lang: UiLanguage): string {
+  if (bytes >= 0.95e9) return fmtDiskGb(bytes, lang)
+  return `${Math.max(1, Math.round(bytes / 1e6))} MB`
+}
