@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { parse as parseYaml } from 'yaml'
-import { validateRuntimeSources, type OcrSources } from '../../src/shared/runtime-sources'
+import type { OcrSources } from '../../src/shared/runtime-sources'
 import { OCR_PINS, ocrPinRelPath } from '../../src/main/services/ocr-install'
+import { committedRuntimeSources } from '../helpers/catalog'
+import { docTableRows } from '../helpers/doc-tables'
 
 // #410 — OCR_PINS (services/ocr-install.ts) is the CODE-side anchor for what the in-app
 // installer fetches; the committed model-manifests/runtime-sources.yaml `ocr:` block
@@ -15,14 +14,10 @@ import { OCR_PINS, ocrPinRelPath } from '../../src/main/services/ocr-install'
 
 const MiB = 1024 * 1024
 
-const repoRoot = join(__dirname, '../../../../')
-
 function shippedOcrBlock(): OcrSources {
-  const raw = parseYaml(readFileSync(join(repoRoot, 'model-manifests', 'runtime-sources.yaml'), 'utf8'))
-  const result = validateRuntimeSources(raw)
-  expect(result.ok, result.errors.join('; ')).toBe(true)
-  expect(result.ocr).toBeDefined()
-  return result.ocr as OcrSources
+  const { ocr } = committedRuntimeSources()
+  expect(ocr).toBeDefined()
+  return ocr as OcrSources
 }
 
 describe('OCR_PINS matches the committed runtime-sources.yaml ocr: block (#410)', () => {
@@ -71,24 +66,18 @@ interface PolicyTableRow {
 /**
  * The asset table of docs/model-policy.md "The OCR asset class": one entry per row whose first cell is a backticked
  * `ocr/<lang>.traineddata.gz`, with the backticked sha256 of its second cell and the `(<n> bytes)` count of its third.
- * Rows are split on `|`, so re-aligning the columns does not break the parse; a hash or count that cannot be read stays
- * `undefined` and fails the comparison below.
+ * Re-aligning the columns does not break the parse (`docTableRows` splits on `|`); a hash or count that cannot be read
+ * stays `undefined` and fails the comparison below.
  */
 function policyTableRows(): PolicyTableRow[] {
-  const md = readFileSync(join(repoRoot, 'docs', 'model-policy.md'), 'utf8')
-  const start = md.indexOf('\n## The OCR asset class')
-  expect(start, 'docs/model-policy.md has a "The OCR asset class" section').toBeGreaterThanOrEqual(0)
-  const end = md.indexOf('\n## ', start + 1)
   const rows: PolicyTableRow[] = []
-  for (const line of md.slice(start, end === -1 ? undefined : end).split(/\r?\n/)) {
-    if (!line.trimStart().startsWith('|')) continue
-    const cells = line.split('|').map((c) => c.trim())
-    const asset = /^`ocr\/([a-z]+)\.traineddata\.gz`$/.exec(cells[1] ?? '')
+  for (const cells of docTableRows('## The OCR asset class', 'docs', 'model-policy.md')) {
+    const asset = /^`ocr\/([a-z]+)\.traineddata\.gz`$/.exec(cells[0] ?? '')
     if (!asset) continue
-    const bytes = /\(([\d,]+) bytes\)/.exec(cells[3] ?? '')?.[1]
+    const bytes = /\(([\d,]+) bytes\)/.exec(cells[2] ?? '')?.[1]
     rows.push({
       lang: asset[1],
-      sha256: /^`([a-f0-9]{64})`$/.exec(cells[2] ?? '')?.[1],
+      sha256: /^`([a-f0-9]{64})`$/.exec(cells[1] ?? '')?.[1],
       sizeBytes: bytes === undefined ? undefined : Number(bytes.replace(/,/g, ''))
     })
   }
