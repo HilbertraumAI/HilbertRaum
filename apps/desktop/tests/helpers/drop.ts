@@ -1,7 +1,7 @@
 import { fireEvent } from '@testing-library/react'
 
 // File drag-and-drop for renderer suites (chat-ui campaign). Replaces the local copies: the drop-zone
-// suites' `dataTransfer()` (ImageDropZone, TranslateDropZone), ImagesScreen's `fireDrop`, TranslateScreen's
+// suite's `dataTransfer()` (now FileDropZone.test), ImagesScreen's `fireDrop`, TranslateScreen's
 // `dropOnZone`, and — through chat-screen.tsx's `chatDropBridge` — the chat suites' drops (ChatAttach,
 // ChatBackToConversation, ChatUnmount, ChatScopeToolsRefresh).
 //

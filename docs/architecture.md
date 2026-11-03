@@ -268,7 +268,7 @@ noted below.
   pattern). PF-7b: the doc-task store's 400 ms poll ports the skillruns `sameRun` no-change gate
   (SKA-39 precedent) — an identical tick sets nothing and the snapshot identity stays stable.
   PF-7c (**closes the carried-forward PERF-5**, see the 2026-06-30 ledger): `visionSession` batches
-  token deltas through a 40 ms flush buffer (the ChatScreen `STREAM_FLUSH_MS` precedent; settle
+  token deltas through a 40 ms flush buffer (ChatScreen's `STREAM_FLUSH_MS`, one constant in `lib/polling.ts` since #745; settle
   paths flush first so no token is lost, discard paths drop the buffer), and ImagesScreen got the
   FE-3 `useEventCallback` sweep over `onCopy`/`onTryAgain`/`onStop` — a settled `TurnRow` no longer
   re-renders while a sibling turn streams (render-count-pinned like the DocRow PERF-5 memo
