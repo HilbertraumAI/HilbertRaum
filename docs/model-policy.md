@@ -488,6 +488,12 @@ download:
 Rules and behaviour:
 - **A non-empty, dated string** — never a bare `true`. The note is shown to the user and read by a
   maintainer months later; the validator rejects an empty value or a boolean.
+- **A successor is named by its display name, at the end** (#768): `Successor in the catalog:
+  <display_name>.` — the three Qwen3.8 notes end `Successor in the catalog: Qwen3.8 27B UD-Q4_K_M.`
+  (and `UD-Q5_K_M`, `UD-Q6_K`). The card shows the note verbatim, and their earlier tail, "Successor
+  candidate UD-… awaits the measurement wave of issue 196", stayed on screen ten weeks after that
+  wave closed. `committed-catalog.test.ts` checks that a note mentioning a successor uses this form
+  and that the name belongs to a manifest whose every file can still be downloaded.
 - **The rest of the block stays.** `url`/`sha256`/`size_bytes`/`license_url` remain the provenance
   record of the file existing drives carry, and that local copy keeps verifying normally. A
   withdrawn source **never** disturbs an installed weight (the planner still reports

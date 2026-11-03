@@ -135,6 +135,29 @@ describe('committed catalog — rules over every manifest', () => {
     }
   })
 
+  // #768: the AI Model card shows a withdrawal note verbatim, in the German UI too. "Successor candidate UD-Q4_K_M
+  // awaits the measurement wave of issue 196" outlived that wave by ten weeks, so a note names its successor only in the
+  // one form a row can check, by the display name of a manifest every file of which can still be downloaded.
+  it('a withdrawal note names its successor by the display name of a live downloadable manifest (#768)', () => {
+    const live = new Set(
+      committedManifests()
+        .filter((m) => {
+          const blocks = [m.download, ...(m.mmproj ? [m.mmproj.download] : []), ...(m.files ?? []).map((f) => f.download)]
+          return blocks.every((d) => d !== undefined && d.withdrawn === undefined)
+        })
+        .map((m) => m.displayName)
+    )
+    const named = committedManifests().flatMap((m) =>
+      m.download?.withdrawn && /successor/i.test(m.download.withdrawn) ? [{ id: m.id, note: m.download.withdrawn }] : []
+    )
+    expect(named.length, 'the withdrawn Qwen3.8 quants name theirs; drop this row if they go').toBeGreaterThan(0)
+    for (const { id, note } of named) {
+      const successor = /Successor in the catalog: (.+)\.$/.exec(note)?.[1]
+      expect(successor, `${id}: write "Successor in the catalog: <display_name>." at the end of the note`).toBeDefined()
+      expect(live.has(successor!), `${id}: "${successor}" is not the display name of a live downloadable manifest`).toBe(true)
+    }
+  })
+
   it('every committed manifest names a runtime and format the app can run', () => {
     for (const m of committedManifests()) {
       expect(isSupportedRuntimeFormat(m.runtime, m.format), `${m.id}: ${m.runtime}/${m.format}`).toBe(true)
