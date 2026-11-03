@@ -63,22 +63,24 @@ field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1
 # (the SECOND file of a vision model, DIST-2: verify BOTH files, mirroring services/models.ts).
 field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
-# Extract the indented body of a top-level `mmproj:` mapping (lines until the next column-0 key).
-mmproj_block_of() { awk '/^mmproj:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
-
-# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
-# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — lines until the next
-# column-0 key. Mirrors mmproj_block_of; emitted AFTER local_path/sha256/download/mmproj in
+# Extract the indented body of a top-level `<key>:` mapping (lines until the next column-0 key);
+# field_in then reads it. Two blocks are read this way: `mmproj:` (the SECOND file of a vision
+# model, DIST-2) and `files:` (the ADDITIONAL required files of a multi-file weight, #310, e.g. a
+# GGUF shard set's shards 2..N). `files:` is emitted AFTER local_path/sha256/download/mmproj in
 # every manifest (model-policy.md key-order rule), so it never poisons the flat top-level reads.
-files_block_of() { awk '/^files:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+block_of() { awk -v key="$2" '$0 ~ ("^" key ":[[:space:]]*$") {f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
 
-# Split a `files:` block (as text, e.g. from files_block_of) into one TAB-separated record per
-# list member: local_path, sha256, download.url, download.size_bytes (raw — comments/quotes are
-# stripped by the caller via clean_value). A member starts at its own `- local_path:` line and
-# runs to the next one (or the end of the block).
+# The field separator of the `files:` member records: the ASCII unit separator, not a tab. A tab
+# is IFS whitespace, so `read` collapsed an empty field and shifted the rest left (#767).
+SEP=$'\037'
+
+# Split a `files:` block (as text, from block_of) into one SEP-separated record per list member:
+# local_path, sha256, download.url, download.size_bytes (raw — comments/quotes are stripped by
+# the caller via clean_value). A member starts at its own `- local_path:` line and runs to the
+# next one (or the end of the block).
 files_member_records() {
   printf '%s\n' "$1" | awk '
-    function emit() { if (started) printf "%s\t%s\t%s\t%s\n", lp, sha, durl, dsize }
+    function emit() { if (started) printf "%s\037%s\037%s\037%s\n", lp, sha, durl, dsize }
     /^[[:space:]]*-[[:space:]]*local_path:/ {
       emit()
       started = 1; indl = 0
@@ -127,7 +129,7 @@ any_file_present() {
   [[ -f "$TARGET/$1" ]] && return 0
   [[ -n "$2" && -f "$TARGET/$2" ]] && return 0
   [[ -z "$3" ]] && return 1
-  while IFS=$'\t' read -r f_local _ _ _; do
+  while IFS="$SEP" read -r f_local _ _ _; do
     [[ -n "$f_local" && -f "$TARGET/$(clean_value "$f_local")" ]] && return 0
   done < <(files_member_records "$3")
   return 1
@@ -164,14 +166,12 @@ while IFS= read -r mf; do
 done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
          ! -name 'runtime-sources.yaml' ! -name 'runtime-sources.yml' | sort)
 
-# Bash 3.2 + `set -u`: expanding an EMPTY array aborts with "unbound variable" (M23).
-if [[ ${#MANIFEST_FILES[@]} -eq 0 ]]; then
-  echo "No model manifests found under $MANIFESTS_DIR — nothing to verify." >&2
-  if [[ $STRICT -eq 1 ]]; then exit 1; fi
-  exit 0
-fi
+# No manifests is not an early exit: --generate still writes `entries: []` (as the .ps1 and the
+# app's buildChecksumsJson do), and --strict / --kit still fail below (#767).
+[[ ${#MANIFEST_FILES[@]} -eq 0 ]] && echo "No model manifests found under '$MANIFESTS_DIR' — nothing to verify." >&2
 
-for mf in "${MANIFEST_FILES[@]}"; do
+# Bash 3.2 + `set -u`: expanding an EMPTY array aborts with "unbound variable" (M23).
+for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
   id="$(field "$mf" id)"
   local_path="$(field "$mf" local_path)"
   sha="$(field "$mf" sha256 | tr '[:upper:]' '[:lower:]')"
@@ -180,14 +180,14 @@ for mf in "${MANIFEST_FILES[@]}"; do
   [[ -z "$local_path" ]] && continue
 
   # A vision model is TWO files: the language GGUF + the mmproj projector (DIST-2).
-  mmproj_block="$(mmproj_block_of "$mf")"
+  mmproj_block="$(block_of "$mf" mmproj)"
   mmproj_local="$(field_in "$mmproj_block" local_path)"
   mmproj_sha="$(field_in "$mmproj_block" sha256 | tr '[:upper:]' '[:lower:]')"
 
   # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
   # 2..N), each verified with an " (file N/M)" label — M is the primary plus every declared
   # file (mmproj is reported separately and does not count towards M).
-  files_block="$(files_block_of "$mf")"
+  files_block="$(block_of "$mf" files)"
   total_files=1
   if [[ -n "$files_block" ]]; then
     file_count="$(files_member_records "$files_block" | grep -c '^' || true)"
@@ -205,7 +205,11 @@ for mf in "${MANIFEST_FILES[@]}"; do
     fi
   fi
 
-  if [[ "$format" != "$(supported_format_for "$runtime")" ]]; then
+  # A runtime the table does not name, or none at all, is UNSUPPORTED (the app's
+  # isSupportedRuntimeFormat): compared with an empty answer, a manifest with neither runtime nor
+  # format passed as supported (#767).
+  supported_format="$(supported_format_for "$runtime")"
+  if [[ -z "$supported_format" || "$format" != "$supported_format" ]]; then
     total_weights=$((total_weights + 1))
     [[ $STRICT -eq 1 ]] && echo "STRICT: $id is UNSUPPORTED (must be VERIFIED)" >&2
     printf '  %-12s %s\n' "UNSUPPORTED" "$id"
@@ -216,7 +220,7 @@ for mf in "${MANIFEST_FILES[@]}"; do
   [[ -n "$mmproj_local" ]] && verify_file "$id" " (mmproj)" "$TARGET/$mmproj_local" "$mmproj_sha"
   if [[ -n "$files_block" ]]; then
     file_n=2
-    while IFS=$'\t' read -r f_local f_sha _ _; do
+    while IFS="$SEP" read -r f_local f_sha _ _; do
       [[ -z "$f_local" ]] && continue
       f_local="$(clean_value "$f_local")"
       f_sha="$(clean_value "$f_sha" | tr '[:upper:]' '[:lower:]')"
@@ -256,16 +260,16 @@ if [[ $GENERATE -eq 1 ]]; then
     echo '  "algorithm": "sha256",'
     echo '  "entries": ['
     first=1
-    for mf in "${MANIFEST_FILES[@]}"; do
+    for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
       id="$(field "$mf" id)"; local_path="$(field "$mf" local_path)"
       [[ -z "$local_path" ]] && continue
-      mmproj_local="$(field_in "$(mmproj_block_of "$mf")" local_path)"
+      mmproj_local="$(field_in "$(block_of "$mf" mmproj)" local_path)"
       emit_entry "$id" "$local_path"
       [[ -n "$mmproj_local" ]] && emit_entry "$id" "$mmproj_local"
       # #310: one entry per ADDITIONAL declared file, same order as manifestFiles().
-      files_block="$(files_block_of "$mf")"
+      files_block="$(block_of "$mf" files)"
       if [[ -n "$files_block" ]]; then
-        while IFS=$'\t' read -r f_local _ _ _; do
+        while IFS="$SEP" read -r f_local _ _ _; do
           [[ -z "$f_local" ]] && continue
           emit_entry "$id" "$(clean_value "$f_local")"
         done < <(files_member_records "$files_block")

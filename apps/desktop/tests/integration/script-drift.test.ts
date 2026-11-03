@@ -488,10 +488,10 @@ describe('TS ↔ shell-script drift (verify-models gates)', () => {
 })
 
 // --- Provisioning-script error/repair structure (AUD-05 + AUD-24) --------------------
-// These scripts have no Node, no test harness and no CI leg of their own — they run once, on a
-// maintainer's machine, against multi-GB downloads. The three properties below are structural
-// (they hold or don't by the shape of the source), so a text guard is the only automated check
-// available and is worth far more than nothing.
+// These scripts have no Node — they run once, on a maintainer's machine, against multi-GB
+// downloads. The properties below are structural (they hold or don't by the shape of the source),
+// so a text guard is the cheapest automated check. fetch-models' AUD-24 delete rule is no longer
+// read here but run, over real `file://` downloads on both twins: script-fetch-models.test.ts (#769).
 
 /** Source lines with pure-comment lines dropped (`#` after optional leading whitespace). */
 function codeLines(rel: string): { n: number; text: string }[] {
@@ -532,86 +532,6 @@ describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', 
       'use `Write-Host -ForegroundColor Red` + an explicit `exit`/`continue` instead — a ' +
         'Write-Error here terminates the script (and any parent that invoked it with `&`)'
     ).toEqual([])
-  })
-})
-
-describe('fetch-models — the mismatch re-download deletes only when resume cannot help (AUD-24)', () => {
-  // A checksum "mismatch" covers two different files: a SHORT cross-run partial (resume is the
-  // whole point — a multi-GB weight on a flaky link must not restart from zero) and a file that
-  // is complete and WRONG (resuming that one requests a byte range at/past the resource length,
-  // an unsatisfiable HTTP 416, so every retry transfers nothing). So the redo deletes the
-  // destination first, but ONLY when the bytes on disk already reach the manifest's expected
-  // size. If that delete ever escapes its size guard, every interrupted multi-GB download in
-  // the wild restarts from zero — an expensive, silent regression with no error to notice.
-  //
-  // Asserted structurally: inside the mismatch region (from the mismatch test to the download
-  // call), the size comparison must appear BEFORE the first delete, which is only true while
-  // the delete is nested inside the guard.
-  it('fetch-models.ps1 compares the on-disk size before its first Remove-Item', () => {
-    const src = repoText('scripts/fetch-models.ps1')
-    const region = src.indexOf("$state -eq 'mismatch' -and $expectedSize -match")
-    expect(region, 'the size-guarded mismatch branch in fetch-models.ps1 not found').toBeGreaterThanOrEqual(0)
-    const download = src.indexOf('Invoke-Download', region)
-    expect(download, 'the download call after the mismatch branch not found').toBeGreaterThan(region)
-    const body = src.slice(region, download)
-    const compare = body.indexOf('-ge [long]$expectedSize')
-    const remove = body.indexOf('Remove-Item')
-    expect(compare, 'the on-disk-vs-expected size comparison is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the pre-download delete is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the delete escaped its size guard — it must stay nested inside it').toBeGreaterThan(compare)
-  })
-
-  it('fetch-models.sh compares the on-disk size before its first rm -f', () => {
-    const src = repoText('scripts/fetch-models.sh')
-    const region = src.indexOf('"$state" == mismatch && "$expected_size" =~')
-    expect(region, 'the size-guarded mismatch branch in fetch-models.sh not found').toBeGreaterThanOrEqual(0)
-    const download = src.indexOf('if ! download ', region)
-    expect(download, 'the download call after the mismatch branch not found').toBeGreaterThan(region)
-    const body = src.slice(region, download)
-    const compare = body.indexOf('on_disk >= expected_size')
-    const remove = body.indexOf('rm -f')
-    expect(compare, 'the on-disk-vs-expected size comparison is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the pre-download delete is gone').toBeGreaterThanOrEqual(0)
-    expect(remove, 'the delete escaped its size guard — it must stay nested inside it').toBeGreaterThan(compare)
-  })
-
-  // The guard above FAILS OPEN: with no expected size it does not delete and the old
-  // resume-onto-a-wrong-file behaviour returns. So a dropped call-site argument disables the fix
-  // for every model with nothing erroring anywhere — the highest-value assertion in this file.
-  /** Split a shell/PowerShell call's argument list into tokens ('' and "" runs stay whole). */
-  const callArgs = (line: string, fn: string): string[] => {
-    let rest = line.slice(line.indexOf(fn) + fn.length)
-    const chain = rest.indexOf('||')
-    if (chain >= 0) rest = rest.slice(0, chain)
-    return [...rest.matchAll(/'[^']*'|"[^"]*"|[^\s;{}]+/g)].map((m) => m[0])
-  }
-
-  it('every Invoke-HandleFile call in fetch-models.ps1 still passes the expected size', () => {
-    const calls = codeLines('scripts/fetch-models.ps1').filter(
-      ({ text }) => text.includes('Invoke-HandleFile') && !text.trim().startsWith('function ')
-    )
-    expect(calls.length, 'expected the gguf + mmproj call sites').toBeGreaterThanOrEqual(2)
-    for (const { n, text } of calls) {
-      const args = callArgs(text, 'Invoke-HandleFile')
-      expect(args.length, `fetch-models.ps1:${n}: argument count`).toBe(8)
-      expect(args[7], `fetch-models.ps1:${n}: the 8th argument must be the manifest size`).toMatch(
-        /^\$[A-Za-z0-9_]*[Ss]ize[A-Za-z0-9_]*$/
-      )
-    }
-  })
-
-  it('every handle_file call in fetch-models.sh still passes the expected size', () => {
-    const calls = codeLines('scripts/fetch-models.sh').filter(
-      ({ text }) => text.includes('handle_file "') && !text.trim().startsWith('handle_file()')
-    )
-    expect(calls.length, 'expected the gguf + mmproj call sites').toBeGreaterThanOrEqual(2)
-    for (const { n, text } of calls) {
-      const args = callArgs(text, 'handle_file')
-      expect(args.length, `fetch-models.sh:${n}: argument count`).toBe(8)
-      expect(args[7], `fetch-models.sh:${n}: the 8th argument must be the manifest size`).toMatch(
-        /^"\$[a-z0-9_]*size[a-z0-9_]*"$/i
-      )
-    }
   })
 })
 

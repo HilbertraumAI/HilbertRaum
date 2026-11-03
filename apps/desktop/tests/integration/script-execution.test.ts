@@ -8,7 +8,7 @@ import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import { DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJson } from '../../src/main/services/drive'
 import { REPO_ROOT, repoText } from '../helpers/repo-files'
-import { SCRIPT_LEGS, outputOf } from '../helpers/script-legs'
+import { SCRIPT_LEGS, outputOf, scriptRoot } from '../helpers/script-legs'
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
 
@@ -271,8 +271,12 @@ const FILES_LINES = [
   '      size_bytes: 9'
 ]
 
+/** A model with no top-level `download` block. */
+const sourceless = (id: string, extra: string[] = []): string =>
+  manifestYaml({ id, localPath: `models/chat/${id}.gguf`, sha256: REAL_SHA }, extra)
+
 function modelsTarget(manifests: string[], driveFiles: Record<string, string> = {}): string {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-models-'))
+  const root = scriptRoot('script-models-')
   mkdirSync(join(root, 'model-manifests'), { recursive: true })
   manifests.forEach((y, i) => writeFileSync(join(root, 'model-manifests', `m${i}.yaml`), y))
   for (const [rel, content] of Object.entries(driveFiles)) writeDriveFile(root, rel, content)
@@ -506,7 +510,7 @@ for (const leg of SCRIPT_LEGS) {
 
       /** A three-file shard model (shard 1 + two declared siblings) plus a single-file model. */
       function buildTempDrive(withThirdShard: boolean): { root: string; manifests: ModelManifest[] } {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-verify-'))
+        const root = scriptRoot('script-verify-')
         mkdirSync(join(root, 'model-manifests'), { recursive: true })
         mkdirSync(join(root, 'models', 'chat'), { recursive: true })
 
@@ -581,9 +585,47 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
-    // Real manifests, the real script, no network: a dry run stops short of every download. Each row has
-    // an absent primary and a size_bytes: the flat parsers differ past those two, and that is a defect
-    // of its own, not a shape to pin here.
+    // #767: the .ps1 died on a manifest with no runtime (a null table index) and reported nothing after it, and it
+    // compared a missing format with the missing answer for a runtime it does not know; the .sh compared an empty format
+    // with an empty answer. Each passed a manifest the app calls unsupported, or stopped the run.
+    describe('verify-models answers as the app does (#767)', () => {
+      const verifier = `verify-models.${leg.ext}`
+      const present = (id: string): string => manifestYaml({ id, localPath: `models/chat/${id}.gguf`, sha256: sha256(id) })
+
+      it('no runtime, or no format beside a runtime the app does not run, is UNSUPPORTED, and the next model is still verified', () => {
+        const ids = ['n-model', 'o-model', 'u-model', 'z-model']
+        // z-model sits in a role directory, as on a prepared drive: the .ps1 walk filters by hand what -Include ignores.
+        const root = modelsTarget(
+          [
+            present('n-model').replace('runtime: llama_cpp\n', ''),
+            present('o-model').replace('runtime: llama_cpp\n', '').replace('format: gguf\n', ''),
+            present('u-model').replace('runtime: llama_cpp', 'runtime: other_cpp').replace('format: gguf\n', '')
+          ],
+          {
+            ...Object.fromEntries(ids.map((id) => [`models/chat/${id}.gguf`, id])),
+            'model-manifests/chat/z-model.yaml': present('z-model')
+          }
+        )
+        const r = leg.run(verifier, [f('Target'), root])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        expect(out).toMatch(/UNSUPPORTED\s+n-model/)
+        expect(out).toMatch(/UNSUPPORTED\s+o-model/)
+        expect(out).toMatch(/UNSUPPORTED\s+u-model/)
+        expect(out).toMatch(/VERIFIED\s+z-model/)
+      })
+
+      it('--generate with no manifest writes the empty entries list buildChecksumsJson writes', async () => {
+        const root = modelsTarget([])
+        const r = leg.run(verifier, [f('Target'), root, f('Generate')])
+        expect(r.status, outputOf(r)).toBe(0)
+        const written = JSON.parse(readFileSync(join(root, 'config', 'checksums.json'), 'utf8')) as ChecksumsJson
+        expect(written.entries).toEqual((await buildChecksumsJson(root, [])).entries)
+      })
+    })
+
+    // Real manifests, the real script, no network: a dry run stops short of every download. The real
+    // downloads (resume, the size-guarded delete, aria2) are script-fetch-models.test.ts.
     describe('fetch-models plans offline (--dry-run)', () => {
       interface PlanRow {
         manifests: string[]
@@ -592,9 +634,19 @@ for (const leg of SCRIPT_LEGS) {
         status: number
         contains: string[]
         absent?: string[]
+        /** Every error the validator gives a manifest of the row is a `BLOCK  <id>: <error>` line (#767). */
+        refused?: true
       }
       const pending = [fetchable('p-model', { status: 'pending' })]
       const verified = { 'models/chat/v-model.gguf': 'bytes' }
+      // A present verified primary and one files: member: one PSCustomObject has no .Count under PowerShell 5.1, so
+      // the .ps1 read the absent member as nothing to fetch and passed the license gate and the withdrawn skip (#767).
+      const onDisk = { 'models/chat/s-model.gguf': 'bytes' }
+      const withMember = (o: { status?: string; withdrawn?: string } = {}): string[] => [
+        fetchable('s-model', { ...o, sha: sha256('bytes'), extra: FILES_LINES })
+      ]
+      const MMPROJ_NO_DOWNLOAD = ['mmproj:', '  local_path: models/vision/h-mm.gguf', `  sha256: ${REAL_SHA}`]
+      const FILES_NO_DOWNLOAD = ['files:', '  - local_path: models/chat/h-2.gguf', `    sha256: ${REAL_SHA}`]
       const rows: Array<[string, PlanRow]> = [
         [
           'plans an absent approved model: its fetch line, URL and path',
@@ -710,6 +762,94 @@ for (const leg of SCRIPT_LEGS) {
             status: 0,
             contains: ['fetch  s-model (file 2/2)', 'https://example.invalid/s-2.gguf', '-> models/chat/s-2.gguf']
           }
+        ],
+        [
+          'one absent files: member beside a verified primary still meets the license gate (#767)',
+          {
+            manifests: withMember({ status: 'pending' }),
+            files: onDisk,
+            status: 1,
+            contains: ['BLOCK  s-model', 'One or more models failed'],
+            absent: ['fetch  s-model']
+          }
+        ],
+        [
+          'one absent files: member beside a verified primary still meets the withdrawn skip (#767)',
+          {
+            manifests: withMember({ withdrawn: '2026-11-02: removed upstream, issue 196' }),
+            files: onDisk,
+            status: 0,
+            contains: ['SKIP   s-model: upstream source withdrawn'],
+            absent: ['fetch  s-model']
+          }
+        ],
+        [
+          // A tab is IFS whitespace: the .sh collapsed the empty size field and read the member's state as its size.
+          'a verified files: member with no size_bytes is skipped, not fetched (#767)',
+          {
+            manifests: [
+              fetchable('s-model', {
+                sha: sha256('bytes'),
+                extra: FILES_LINES.filter((l) => !l.includes('size_bytes')).map((l) => l.replace(REAL_SHA, sha256('second')))
+              })
+            ],
+            files: { ...onDisk, 'models/chat/s-2.gguf': 'second' },
+            status: 0,
+            contains: ['skip   s-model (present + verified)', 'skip   s-model (file 2/2) (present + verified)'],
+            absent: ['fetch  s-model', 'redo']
+          }
+        ],
+        [
+          '--only with an id no manifest carries exits 2 and names it (#767)',
+          {
+            manifests: [fetchable('a-model')],
+            extra: [f('Only'), 'zz-model'],
+            status: 2,
+            contains: ["No model manifest with id 'zz-model'"],
+            absent: ['fetch  a-model']
+          }
+        ],
+        [
+          '--only with a model that declares no download block exits 2 (#767)',
+          {
+            manifests: [sourceless('n-model'), fetchable('a-model')],
+            extra: [f('Only'), 'n-model'],
+            status: 2,
+            contains: ["Model 'n-model' declares no download block"],
+            absent: ['fetch  ']
+          }
+        ],
+        // Half a download pair, which the validator refuses: the scripts fetched the half that had a source, and with
+        // no top-level download read another file's url as the primary's (#767).
+        [
+          'half a pair: a top-level download and no mmproj.download is refused, --accept-license or not, and the run goes on (#767)',
+          {
+            manifests: [fetchable('h-model', { status: 'pending', extra: MMPROJ_NO_DOWNLOAD }), fetchable('a-model')],
+            extra: [f('AcceptLicense')],
+            status: 1,
+            refused: true,
+            contains: ['fetch  a-model', 'Planned 2 | fetched 0 | skipped 0'],
+            absent: ['fetch  h-model', 'note   h-model']
+          }
+        ],
+        [
+          'half a pair: an mmproj.download and no top-level download is refused (#767)',
+          { manifests: [sourceless('h-model', MMPROJ_LINES)], status: 1, refused: true, contains: [], absent: ['fetch  h-model'] }
+        ],
+        [
+          'half a pair: a top-level download and no files[0].download is refused, whatever is on disk (#767)',
+          {
+            manifests: [fetchable('h-model', { sha: sha256('bytes'), extra: FILES_NO_DOWNLOAD })],
+            files: { 'models/chat/h-model.gguf': 'bytes' },
+            status: 1,
+            refused: true,
+            contains: [],
+            absent: ['fetch  h-model', 'skip   h-model']
+          }
+        ],
+        [
+          'half a pair: a files[0].download and no top-level download is refused (#767)',
+          { manifests: [sourceless('h-model', FILES_LINES)], status: 1, refused: true, contains: [], absent: ['fetch  h-model'] }
         ]
       ]
 
@@ -720,6 +860,14 @@ for (const leg of SCRIPT_LEGS) {
         expect(r.status, out).toBe(row.status)
         for (const text of row.contains) expect(out).toContain(text)
         for (const text of row.absent ?? []) expect(out).not.toContain(text)
+        if (row.refused) {
+          const refusals = row.manifests.flatMap((yaml) => {
+            const doc = parseYaml(yaml) as { id: string }
+            return validateManifest(doc).errors.map((error) => `BLOCK  ${doc.id}: ${error}`)
+          })
+          expect(refusals.length, 'the row must hold a manifest the validator refuses').toBeGreaterThan(0)
+          for (const line of refusals) expect(out).toContain(line)
+        }
         // A dry run writes nothing, and leaves what is there alone.
         if (!row.files) expect(existsSync(join(root, 'models'))).toBe(false)
         for (const [rel, content] of Object.entries(row.files ?? {})) {
