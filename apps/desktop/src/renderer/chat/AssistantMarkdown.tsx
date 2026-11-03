@@ -580,9 +580,10 @@ const mdComponents = {
   // markdown element already comes out semantic (<em>, <code>, <h1>, <li>, <table>, …).
   strong: ({ children }: { children?: ReactNode }) => <strong>{children}</strong>,
   // Whitelist http(s) only (audit L1): a model could emit a `javascript:`/`data:` href.
-  // rehype-sanitize already strips dangerous schemes and the CSP + window-open handler block
-  // execution/navigation, so this is belt-and-suspenders — a disallowed scheme renders as
-  // inert text, not a link.
+  // rehype-sanitize strips those two, and the CSP + window-open handler block execution and
+  // navigation, but streamdown's schema lets `mailto:`, `tel:`, `streamdown:`, relative and
+  // fragment hrefs through, so for those this override is the only gate (#743). A disallowed
+  // href renders as inert text, not a link.
   a: ({ href, children }: { href?: string; children?: ReactNode }) =>
     isSafeHttpUrl(href) ? (
       <a href={href} target="_blank" rel="noreferrer">
