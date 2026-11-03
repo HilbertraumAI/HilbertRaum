@@ -11883,7 +11883,13 @@ review found are refinements inside the architecture (§3 below), not a change o
 > the dispatch gate: handler-less instruction skills always engage via the fence; a tool/analysis
 > candidate needs `intends()` — the W2 pre-pass handles doc-count misses honestly — or `applies()`
 > or the A4 inversion), ending the silent identical re-run with a mis-stamped provenance glyph and
-> the offer ping-pong. **(3) restore fidelity (#132/#135)** — `deleteLastAssistantMessage`/
+> the offer ping-pong. *#733 (2026-11-03):* the W2 pre-pass acts only on an answerable document, so
+> `intends()` counts only with one in scope (`documentsInScope`, chunks required); with documents off or
+> nothing indexed a document skill's accept re-ran the same answer under its stamp. A handler-less
+> skill keeps passing (its fence shapes a pack answer), but a chat with documents off and no pack is not
+> classified at all: every answer there is the fixed no-context reply, which no skill changes. Since
+> #736 the classifier also reads the route that actually answered (a tree route the tree cannot answer
+> classifies as without the deep index). **(3) restore fidelity (#132/#135)** — `deleteLastAssistantMessage`/
 > `restoreMessage` now carry `skill_offer_json`, so the F2/CB-2 restore legs keep the offer (the
 > result-tables class). The accept flow itself is now end-to-end pinned on both sides (#135):
 > main (`rag-classify-offer.test.ts` accept/refusal/self-exclusion/engagement blocks, the restore

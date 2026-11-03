@@ -1228,7 +1228,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
   window. A summary question over such a longer document uses its deep index when one is built (#642);
   without one it is still answered from the most relevant passages, with no hint to build the index,
-  and a summary question over several documents never uses the deep index. Raising the context size
+  and a summary question over several documents, or in a chat with knowledge packs, never uses the deep
+  index (since #736 such an answer gets the same "may miss items" heads-up as without a deep index: when
+  the question asks about each or all of something and the passages left part of the documents out).
+  Raising the context size
   raises what counts as "fits": on a CPU a 32k window can mean a ~20,000-token prompt, and minutes of
   prefill, for every question about a 30-page document. An off-topic question about a document read
   whole now costs a model call (the model says the document does not cover it) where the passage search

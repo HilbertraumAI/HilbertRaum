@@ -1733,7 +1733,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   (`{ text, scopeChunkTotal }`): `rag:ask` counts the routable documents' sections in one query
   (`scopeSectionTotals`, beside `documentsInScope` — the same document set) and `generateGroundedAnswer`
   leads with the hint only when the distinct
-  document sections that reached the prompt are fewer. The comparison is with the whole scope, not with
+  sections of those documents that reached the prompt are fewer (#736: retrieval also reads the old
+  sections of a document being re-indexed or whose re-index failed; they used to count as read). The comparison is with the whole scope, not with
   the documents drawn on, so a document retrieval never reached still counts as missed; a scope with a
   legacy, partly chunked document (`fully_chunked` NULL) passes `Infinity`, because its stored sections
   are not its whole text. The wording now promises only what the deep index adds to a chat answer, a
@@ -1798,8 +1799,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   coverage, leaf provenance). Without its own ready tree it stays top-k, never an unasked-for chunk
   map-reduce: the document's own tree is re-checked with `answerWholeDocFromTree`'s gate
   (`wholeDocTreeMaterial` — `ready` AND a usable summary), because the router counts ready trees over
-  the whole scope, a document being re-indexed keeps `ready` until its chunk transaction, and a
-  degenerate ready tree would make the tree decline.
+  the whole scope and a degenerate ready tree would make the tree decline. (When the tree does not
+  answer, the turn is labelled as top-k since #736 — see the next bullet.)
   Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
   read (since #649, for list asks: an aggregation ask over one fitting document is read whole). **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
   knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
@@ -1822,6 +1823,31 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   fictional 12-page report's summary read 6 of 12 sections on master, with and without a ready deep
   index (pages 5–10); the fix answered from the tree, 12 of 12 (6.5 s). Tree answers stay abstractive:
   one of the two runs gave the report's end date wrong, which the §14.4 depth caveat (L2) already covers.
+- **A tree route the deep index cannot answer is labelled as top-k — AS BUILT (#736, 2026-11-03).**
+  `routeQuestion` picks `tree-summary` for a summary ask whenever `readyTreeCountInScope` finds a ready
+  deep index in scope, but the tree answers only where `wholeReadDocumentId` takes it: ONE answerable
+  document, no knowledge packs, its own usable tree. Everywhere else top-k answered under a
+  high-confidence decision, so a summary ask with a quantifier ("Fasse jeden Abschnitt zusammen",
+  otherwise `relevance / low / partial`) lost the #641 heads-up — 2 of 9 sections read and nothing said
+  — and skipped the #80 classification. Reproduced in five shapes: another document being re-indexed
+  (its old tree stays `ready` until the chunk transaction — the issue), another document whose re-index
+  failed before that transaction (it keeps the tree for good), any second answerable document with a
+  deep index (no multi-document tree read), a pack chat, a ready tree without a usable summary. The fix
+  (owner call, as recommended): the final answer path decides the tree read first, inside the chat slot,
+  and a `tree-summary` decision whose read does not happen is replaced by the router's own decision
+  without the tree (`routeQuestion({ …, treeAvailable: false })` — always a relevance decision, since
+  compare and coverage-extract precede the tree step); the notice and the classifier read that routed
+  decision. A whole read of a fitting document keeps the tree decision, as before. `readyTreeCountInScope`
+  also counts `indexed` documents only (the issue's own fix; a ready tree implies chunks). The same
+  window fed the notice a second defect: its section count compared every retrieved section with the
+  indexed documents' total, so old sections of a failed or re-indexing document counted as read and could
+  hide it (2 of 6 indexed sections read, no heads-up). `scopeSectionTotals` now returns its documents
+  and only their sections count (owner call: both sides count the indexed documents; the residual — every
+  indexed section read while such a document's leftovers were not — gets no heads-up). The listing route
+  needed no change: `extractionsExistInScope` and `aggregateExtractions` read every document's extract
+  rows, the same set their coverage line counts, which is honest by its own wording. Tests:
+  `rag-whole-read.test.ts` (the five shapes), `rag-routing-scope.test.ts` (each count filter through
+  the classifier, the multi-document row), `rag-skill-analysis.test.ts` (the section count).
 - **A quantifier asks for a list only at the head of a request; a yes/no question is a lookup — AS
   BUILT (#644, 2026-10-12).** After #641 every quantifier (all/every/each, alle/jede/sämtliche) still
   counted as a list request wherever it stood. Once a deep index with extract data existed, "Gilt die
