@@ -1399,7 +1399,11 @@ export function recommendChatModelId(
  * the vision model's 3.3 GB once its manifest declared both sizes).
  */
 function declaredDownloadBytes(manifest: ModelManifest): number | null {
-  const blocks = [manifest.download, ...(manifest.mmproj ? [manifest.mmproj.download] : []), ...(manifest.files ?? []).map((f) => f.download)]
+  const blocks = [
+    manifest.download,
+    ...(manifest.mmproj ? [manifest.mmproj.download] : []),
+    ...(manifest.files ?? []).map((f) => f.download)
+  ]
   let total = 0
   for (const block of blocks) {
     if (block?.sizeBytes == null) return null

@@ -697,7 +697,6 @@ export class DownloadManager {
   }
 }
 
-/** Null-safe sum of task byte sizes — null if ANY size is unknown (the bar drops the total). */
 /**
  * Refuse a download whose bytes still to fetch exceed the free space where the weights land
  * (#768). Still to fetch: each file's declared size less its kept `.part`, which the run resumes
@@ -721,6 +720,7 @@ async function assertRoomFor(tasks: ModelDownloadTask[]): Promise<void> {
   )
 }
 
+/** Null-safe sum of task byte sizes — null if ANY size is unknown (the bar drops the total). */
 function sumSizes(tasks: ModelDownloadTask[]): number | null {
   let total = 0
   for (const t of tasks) {
