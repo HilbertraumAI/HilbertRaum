@@ -482,6 +482,14 @@ function codeLines(rel: string): { n: number; text: string }[] {
     .filter(({ text }) => !text.trim().startsWith('#'))
 }
 
+const PROVISIONING_PS1 = [
+  'scripts/build-commercial-drive.ps1',
+  'scripts/fetch-runtime.ps1',
+  'scripts/fetch-models.ps1',
+  'scripts/prepare-drive.ps1',
+  'scripts/verify-models.ps1'
+]
+
 describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', () => {
   // Under `$ErrorActionPreference = 'Stop'` — which all of these set — `Write-Error` is promoted
   // from a non-terminating record to a SCRIPT-TERMINATING exception. Three consequences, all of
@@ -490,14 +498,6 @@ describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', 
   // exit, so the process died with code 1 and callers keying on 2 mis-read the outcome; and
   // (c) the exception propagated OUT of a parent script's `& .\child.ps1` call and killed the
   // parent too. The fix is `Write-Host -ForegroundColor Red` plus an explicit `exit`.
-  const PROVISIONING_PS1 = [
-    'scripts/build-commercial-drive.ps1',
-    'scripts/fetch-runtime.ps1',
-    'scripts/fetch-models.ps1',
-    'scripts/prepare-drive.ps1',
-    'scripts/verify-models.ps1'
-  ]
-
   it.each(PROVISIONING_PS1)('%s never uses Write-Error (it is script-terminating under Stop)', (rel) => {
     // Comment lines are dropped first: the scripts legitimately NAME Write-Error in the
     // explanatory comments that record exactly this reasoning.
@@ -509,6 +509,45 @@ describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', 
       'use `Write-Host -ForegroundColor Red` + an explicit `exit`/`continue` instead — a ' +
         'Write-Error here terminates the script (and any parent that invoked it with `&`)'
     ).toEqual([])
+  })
+})
+
+describe('provisioning scripts — every path is literal (#767)', () => {
+  // A drive root is any folder a user picks, and `[` is legal in one: a `-Path` (or positional) argument is a wildcard, so
+  // `Test-Path '…\Kit [1]'` found nothing and fetch-models fell back to the repo's catalog, verify-models reported 36
+  // missing weights, the builder called a complete drive NOT SELLABLE. Every row of the script suites now runs on such a
+  // root (`scriptRoot()`); this scan covers the branches no row reaches. A cmdlet fed by a pipeline binds -LiteralPath
+  // from each object's PSPath. Invoke-WebRequest has no literal -OutFile in 5.1, so it is out altogether.
+  const PATH_CMDLET = /\b(Test-Path|Get-Content|Get-ChildItem|Get-Item|Get-FileHash|Remove-Item|Copy-Item|Move-Item|Rename-Item|Expand-Archive|Resolve-Path|Set-Content|Add-Content|Out-File|Invoke-WebRequest)\b/g
+
+  /** Each path cmdlet call whose own segment (to the next `|`, `;` or `}`) names no -LiteralPath and is not pipeline-fed. */
+  function nonLiteralCalls(lines: { n: number; text: string }[]): string[] {
+    const offenders: string[] = []
+    lines.forEach(({ n, text }, i) => {
+      for (const m of text.matchAll(PATH_CMDLET)) {
+        const before = text.slice(0, m.index).trimEnd()
+        const fed = before.endsWith('|') || (before === '' && (lines[i - 1]?.text.trimEnd().endsWith('|') ?? false))
+        const segment = text.slice(m.index).split(/[|;}]/)[0]
+        if (m[1] === 'Invoke-WebRequest' || (!fed && !segment.includes('-LiteralPath'))) offenders.push(`${n}: ${text.trim()}`)
+      }
+    })
+    return offenders
+  }
+
+  it('the scan tells a literal or pipeline-fed call from a wildcard one', () => {
+    const lines = [
+      'if (Test-Path -LiteralPath $a) { Remove-Item $b }',
+      'Get-ChildItem -LiteralPath $d -Force |',
+      '  Remove-Item -Recurse -Force',
+      '$h = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash',
+      'Get-Content $f -Raw',
+      'Invoke-WebRequest -Uri $u -OutFile $f -UseBasicParsing'
+    ].map((text, i) => ({ n: i + 1, text }))
+    expect(nonLiteralCalls(lines)).toEqual([`1: ${lines[0].text}`, `5: ${lines[4].text}`, `6: ${lines[5].text}`])
+  })
+
+  it.each(PROVISIONING_PS1)('%s passes every path as -LiteralPath', (rel) => {
+    expect(nonLiteralCalls(codeLines(rel)), 'a `[` in the drive root reads as a wildcard: use -LiteralPath').toEqual([])
   })
 })
 
