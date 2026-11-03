@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
 }))
 
 import { IPC } from '../../src/shared/ipc'
-import type { Message } from '../../src/shared/types'
+import type { IngestionStatus, Message } from '../../src/shared/types'
 import type { Db } from '../../src/main/services/db'
 import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
@@ -58,16 +58,19 @@ async function makeHarness(o: {
   fileName?: string
   contextWindow: number
   packIds?: string[]
-  /** A second scoped document mid re-index: `processing`, its old deep index still `ready` (until the
-   *  chunk transaction marks it stale), so the router sees a ready tree no answerable document has. */
-  reindexingTreeDoc?: boolean
+  /** A second scoped document with a ready deep index, in this status: `indexed` (a second answerable
+   *  document), `extracting` (mid re-index: the old deep index stays `ready` until the chunk transaction
+   *  marks it stale) or `failed` (a re-index that failed before that transaction keeps it, and its old
+   *  sections stay searchable). */
+  otherTreeDoc?: IngestionStatus
 }): Promise<Harness> {
   const w = makeSkillsWorld('wholeread')
   const docId = await ingestTextFile(w, o.fileName ?? 'abrechnung.txt', o.text)
   const documentIds = [docId]
-  if (o.reindexingTreeDoc) {
+  if (o.otherTreeDoc) {
     const other = await ingestTextFile(w, 'notiz.txt', statement(20))
-    w.db.prepare("UPDATE documents SET status = 'processing', tree_status = 'ready' WHERE id = ?").run(other)
+    seedReadyTree(w.db, other, chunkIdsOf(w.db, other), { summary: 'Summary: a short note.' })
+    w.db.prepare('UPDATE documents SET status = ? WHERE id = ?').run(o.otherTreeDoc, other)
     documentIds.push(other)
   }
   const runtime = recordingRuntime('Model answer.', { contextWindow: o.contextWindow })
@@ -172,9 +175,9 @@ describe('askDocuments — a summary ask with a ready deep index reads the tree 
     { name: 'fits, ready deep index → the whole document, not the tree', contextWindow: 16384, tree: true, mode: 'capped' },
     // The ready tree belongs to the other document, which is being re-indexed: this one has none, so
     // the whole-document path would run an unasked-for chunk map-reduce over it.
-    { name: "too large, another document's deep index → top-k", contextWindow: 4096, tree: false, mode: 'relevance', reindexingTreeDoc: true }
-  ])('$name', async ({ contextWindow, tree, mode, reindexingTreeDoc }) => {
-    const h = await makeHarness({ text: EIGHT_SECTIONS, contextWindow, reindexingTreeDoc })
+    { name: "too large, another document's deep index → top-k", contextWindow: 4096, tree: false, mode: 'relevance', otherTreeDoc: 'extracting' as const }
+  ])('$name', async ({ contextWindow, tree, mode, otherTreeDoc }) => {
+    const h = await makeHarness({ text: EIGHT_SECTIONS, contextWindow, otherTreeDoc })
     if (tree) readyTree(h, tree !== 'empty')
 
     const msg = await ask(h, 'Fasse die Abrechnung zusammen')
@@ -186,5 +189,34 @@ describe('askDocuments — a summary ask with a ready deep index reads the tree 
       const prompt = h.runtime.lastMessages[h.runtime.lastMessages.length - 1].content
       expect(prompt).toContain('monthly rent payments of 800 EUR')
     }
+  })
+})
+
+// #736 — the tree route is a promise the answer must keep. `routeQuestion` sends a summary ask to
+// `tree-summary` whenever an answerable document in scope has a ready deep index, but the tree is read only
+// for ONE document, in a chat without knowledge packs, whose own deep index holds a usable summary
+// (`wholeReadDocumentId`). Everywhere else top-k answers, and it used to answer as a confident tree answer:
+// "summarize each section" over 2 of 9 sections lost #641's "may miss items" heads-up. Now such a turn is
+// labelled (and classified) as the router routes it without the deep index: `relevance / low / partial`.
+describe('askDocuments — a summary ask the deep index cannot answer is labelled as top-k (#736)', () => {
+  it.each([
+    // The issue: a re-index keeps the old deep index `ready` until its chunk transaction.
+    { name: 'another document being re-indexed keeps its old deep index', otherTreeDoc: 'extracting' as const },
+    // A re-index that failed before its chunk transaction keeps it for good.
+    { name: 'another document whose re-index failed keeps its old deep index', otherTreeDoc: 'failed' as const },
+    // Two answerable documents: there is no multi-document tree read.
+    { name: 'another answerable document has a deep index', otherTreeDoc: 'indexed' as const },
+    // The tree read never queries a knowledge pack, so a pack chat keeps top-k.
+    { name: 'its own deep index, in a chat with knowledge packs', tree: true, packIds: ['pack-1'] },
+    // `answerWholeDocFromTree` would decline it.
+    { name: 'its own deep index without a usable summary', tree: 'empty' as const }
+  ])('$name: top-k, led by the heads-up', async ({ otherTreeDoc, tree, packIds }) => {
+    const h = await makeHarness({ text: EIGHT_SECTIONS, contextWindow: 4096, otherTreeDoc, packIds })
+    if (tree) readyTree(h, tree !== 'empty')
+
+    const msg = await ask(h, 'Fasse jeden Abschnitt zusammen')
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(msg.coverage!.chunksCovered).toBeLessThan(h.chunkIds.length)
+    expect(msg.content.startsWith(t('en', 'analysis.partialAnswerHint'))).toBe(true)
   })
 })
