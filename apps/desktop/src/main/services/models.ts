@@ -1391,6 +1391,23 @@ export function recommendChatModelId(
   return recommendModelIdByRam(manifests, memory.ramGb, 'chat', speedSignal)
 }
 
+/**
+ * Every byte a model downloads, as its manifest declares them: the weight, a vision model's
+ * projector and each extra file, each from its own `download` block (the validator makes them
+ * all-or-nothing). Null when any one is undeclared, and the dialog then shows `size_on_disk_gb`.
+ * The weight's size alone understated a two-file model in its own confirmation (#768: 1.9 of
+ * the vision model's 3.3 GB once its manifest declared both sizes).
+ */
+function declaredDownloadBytes(manifest: ModelManifest): number | null {
+  const blocks = [manifest.download, ...(manifest.mmproj ? [manifest.mmproj.download] : []), ...(manifest.files ?? []).map((f) => f.download)]
+  let total = 0
+  for (const block of blocks) {
+    if (block?.sizeBytes == null) return null
+    total += block.sizeBytes
+  }
+  return total
+}
+
 function toModelInfo(
   manifest: ModelManifest,
   state: ModelState,
@@ -1404,7 +1421,7 @@ function toModelInfo(
   const download: ModelDownloadInfo | undefined = manifest.download
     ? {
         url: manifest.download.url,
-        sizeBytes: manifest.download.sizeBytes,
+        sizeBytes: declaredDownloadBytes(manifest),
         licenseUrl: manifest.download.licenseUrl,
         licenseApproved: manifest.licenseReview.status === 'approved',
         // #196: a known-dead upstream source. Surfaced so the card explains WHY there is no

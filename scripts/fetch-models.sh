@@ -277,8 +277,8 @@ for mf in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
   # The primary file's source: the top-level `download:` block only, never another file's (#767).
   dl_block="$(block_of "$mf" download)"
   url="$(field_in "$dl_block" url)"
-  # Optional (30 of the committed manifests carry it) — used only to tell a complete-but-wrong
-  # file apart from a resumable partial in handle_file.
+  # Optional (every committed manifest with a download block carries it since #768) — used
+  # only to tell a complete-but-wrong file apart from a resumable partial in handle_file.
   size_bytes="$(field_in "$dl_block" size_bytes)"
   license_url="$(field_in "$dl_block" license_url)"
   license="$(field "$mf" license)"

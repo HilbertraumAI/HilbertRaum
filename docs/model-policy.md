@@ -454,6 +454,14 @@ for the `files:` rule, and the validator rules under the vision role for `mmproj
 (25 %, floor 128 MiB; BUG dl-size-cap-2026-07-03) — so a file a little larger than the declared size
 still downloads; the SHA verify is the integrity control.
 
+Declare it on **every file**, the projector and each `files:` entry too. Since #768 it also feeds
+the confirmation dialog's size (all of a model's files, summed) and the downloader's free-space
+refusal, and a file without it skips that check and gets the role's ceiling as its cap (40 GiB for
+`vision`). The vision manifest was the last that declared none; its two sizes were read from Hugging
+Face's LFS metadata on 2026-11-03, each file's OID equal to its pinned `sha256`, and since #768
+`committed-catalog.test.ts` compares `size_on_disk_gb` with the sum of every file's `size_bytes`
+and expects no downloadable manifest without them.
+
 **Field scope: `size_bytes` is DRIFT-TOLERANT by design — it is the one manifest number the code
 does not assume is exact.** Everywhere else the rule holds without qualification (manifest numbers
 are measured, never estimated), and `size_bytes` should still be the real byte count: capture it with
@@ -1062,9 +1070,11 @@ mmproj:                                 # REQUIRED iff role: vision
   download:                             # same atomic single-file fetch as the GGUF (two jobs, one modelId)
     url: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf?download=true
     sha256: b9160fe9d814d1fadf68395677468534778b39ac33c2e7561b7b218626e60d5e
+    size_bytes: 1338428128              # each file declares its own (#768)
 download:
   url: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf?download=true
   sha256: d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12
+  size_bytes: 1929901056
 ```
 
 Validator rules (added in `shared/manifest.ts`): `mmproj` is **required iff `role: vision`**;

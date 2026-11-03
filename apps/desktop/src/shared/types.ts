@@ -714,6 +714,8 @@ export interface ModelVerifyProgress {
 /** What the per-download confirmation shows (from the manifest `download` block). */
 export interface ModelDownloadInfo {
   url: string
+  /** Every file the model downloads, summed from their `download` blocks (a vision model's
+   *  projector too, #768); null when any file's `size_bytes` is undeclared. */
   sizeBytes: number | null
   licenseUrl: string | null
   /**

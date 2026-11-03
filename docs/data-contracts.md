@@ -1250,13 +1250,17 @@ head's own weights + KV.
   unverified, error }` (`unverified` = placeholder-hash download, the model stays UNVERIFIED);
   `ModelInfo.download?: ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved,
   withdrawn? }` (`withdrawn` = the manifest's #196 note; the card shows it INSTEAD of a Download
-  button, and `DownloadManager.start` refuses such a manifest before any request).
+  button, and `DownloadManager.start` refuses such a manifest before any request). `sizeBytes` is
+  every file the model downloads, summed from their `download` blocks (a vision model's projector
+  and any `files:` entry with the weight, #768), or null when any of them declares no `size_bytes`.
 ✅ **`services/downloads.ts`** — `DownloadGates { policyAllows, settingAllows }`,
   `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
   `DownloadManager({ fetchImpl?, log?, audit?, onModelInstalled? })` with `start({rootPath, manifest,
   gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
   (keeps the `.part`), `activeJob()` (held until the run settles, so a cancelled job stays there until
-  it has, #752), and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`.
+  it has, #752), and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`. `start()` also refuses, before
+  any job exists, a download whose bytes still to fetch exceed the drive's free space
+  (`main.download.notEnoughSpace`, #768).
   `list()` returns snapshots of the active job (if any) plus every retained terminal job that is
   still UNRESOLVED and not dismissed, in creation order — never a verified `done`, never a
   `cancelled` one. `dismiss(jobId)` records the id (unknown ids are a no-op) so `list()` stops

@@ -327,8 +327,8 @@ foreach ($mf in $manifestFiles) {
   # The primary file's source: the top-level `download:` block only, never another file's (#767).
   $dlBlock = Get-Block $text 'download'
   $url = Get-ManifestField $dlBlock 'url'
-  # Optional (30 of the committed manifests carry it) -- used only to tell a complete-but-wrong
-  # file apart from a resumable partial in Invoke-HandleFile.
+  # Optional (every committed manifest with a download block carries it since #768) -- used
+  # only to tell a complete-but-wrong file apart from a resumable partial in Invoke-HandleFile.
   $sizeBytes = Get-ManifestField $dlBlock 'size_bytes'
   $licenseUrl = Get-ManifestField $dlBlock 'license_url'
   $license = Get-ManifestField $text 'license'
