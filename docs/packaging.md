@@ -564,10 +564,10 @@ does not change which models `--with-assets` fetches (a parity test,
 `tests/integration/script-orchestration.test.ts` runs both twins' `--with-assets --dry-run` and checks that each fetches these ids, then both runtimes and the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
-`Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
-`aria2c` when it is installed; `fetch-runtime` uses `curl`/`Invoke-WebRequest` only. With no curl,
-`fetch-models.ps1` falls back to .NET's `WebClient`, not `Invoke-WebRequest`, whose `-OutFile` has
-no literal form in PowerShell 5.1 and fails on a `[` in the drive path (#767).
+.NET's `WebClient`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
+`aria2c` when it is installed; `fetch-runtime` uses `curl` only. With no curl, both `.ps1` scripts
+fall back to .NET's `WebClient`, not `Invoke-WebRequest`, whose `-OutFile` has no literal form in
+PowerShell 5.1 and fails on a `[` in the drive path (#767); the `.sh` twins fall back to `wget`.
 
 **Resilient downloads (flaky-connection hardening).** `curl`'s own `--retry` does not retry a
 **mid-transfer drop** (exit 18/56/28) on older curl, so a beta tester whose link dropped during a
