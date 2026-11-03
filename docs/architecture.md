@@ -408,6 +408,14 @@ never fabricate a platform property the renderer could read directly).
   importable paths (now any browser-origin drag, and — pre-FE-A — *every* drop) was indistinguishable
   from "nothing happened." It now surfaces a friendly banner (`chat.attach.dropUnsupported`, EN+DE)
   when a drop carried Files but yielded no path, matching the Images screen's drop feedback.
+- **#742 — a busy chat refuses the drag instead of swallowing the drop.** While an answer is being
+  written or a file is still being added (`attachBusy`: the states `attachFiles` turns a file away in,
+  and the paperclip is disabled / withheld), `onDragOver` used to show the copy cursor, and the drop then
+  vanished. It now still `preventDefault`s (left alone, Chromium's navigate-on-drop would try to open
+  the file as a page, which the #560 navigation guard blocks just as silently) but sets
+  `dropEffect = 'none'` and shows no overlay: the OS shows its no-drop cursor and, per the HTML drag
+  model, a release ends the drag with a `dragleave`, not a `drop`. `onDrop` keeps a busy guard as the
+  backstop. Pinned in `ChatAttach.test.tsx` ("a file drag is refused while the chat is busy").
 - **Tests / verification.** `ChatAttach.test.tsx` now drives the **real bridge shape** — the dropped
   `File` carries no `.path` and a WeakMap stands in for webUtils' File→path resolution — every drop
   row drops a path-less `File` (the empty-composer row also asserts the `getDroppedFilePath` call,
@@ -1673,7 +1681,14 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         abort with `'lock'`; quit locks the workspace too, so it shares the cause. The model-stop hook
         keeps `'model'`.
       - **`persistAssistantMessage`** stamps whatever cause the turn's signal carries, so all four
-        streamed answer paths are covered. A bare abort carries none.
+        streamed answer paths are covered. A bare abort carries none. Since #742 it stamps none on a
+        `truncated` reply: runtimes report a finish reason only for a stream that ran to its end
+        (`readChatSSE` at `[DONE]` or a clean close; the continuation engine reports none on a Stop), so
+        such a reply was cut by the ceiling before any abort. On today's paths only microtasks separate
+        the stream's end from the persist, so the IPC-dispatched abort cannot land there; the rule makes
+        "one note, never both" hold by construction rather than by that timing. Its twin, a COMPLETE reply
+        ('stop') stamped "Reply stopped" by an abort in that same window, is left as is: one label, not
+        two, and equally unreachable today.
       - **`withRegenerateGuard`.** It marks an unanswered question with any cause, and restores the
         predecessor for `'model'` and `'lock'` (`RESTORES_PREVIOUS_ANSWER`). A lock runs that while
         its teardown awaits the turn's settle (R1), so the database is still open.
@@ -1961,7 +1976,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         - only once the recovery effect's tick has found nothing in flight for this conversation
           (`idleCheckedId`). A fresh remount mid-reply lists the question main is still answering a
           moment before that tick flips `recovering`, and a click there met `streamInFlight` and broke
-          into a working reply;
+          into a working reply. A tick that gave up after `STREAM_RECOVER_FAILURE_BUDGET` failed reads
+          (CH-4) unlocks the composer but found nothing out, so it leaves the gate shut (#742);
         - never under an optimistic bubble (`isOptimistic`): a failed send whose refresh also failed
           keeps one, and main has no question with its id;
         - a routed question (the Summarize / Categorize relay, documents mode) keeps its run's skill and
@@ -2063,7 +2079,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     with a `cur === ''` guard (newer in-flight typing wins) so a routine pre-persist reject
     (DOC_TASK_BUSY / no model / slot held) never eats a typed question, while a stopped-partial /
     errored-after-persist turn does not duplicate. **CR-4** confirms a *recovered* stop in the recovery
-    tick's completed branch (no local `stream()` finally there — M-U2 parity). **CR-5** branches the send
+    tick's completed branch (no local `stream()` finally there — M-U2 parity). The local finally confirms
+    a stop only when the send came back (`sendSucceeded`): a stopped send resolves, so a failed one is a
+    real failure that beat the Stop to main, and its banner already explains the end (#742). **CR-5** branches the send
     on the conversation's own mode (`conversations.find(...)?.mode ?? mode`) so a reattach that failed to
     mirror `mode` still routes a documents send through `askDocuments`. **CR-6/CR-7** clear the error
     banner on `activeId` change (effect ordered before the history load) and add the sibling

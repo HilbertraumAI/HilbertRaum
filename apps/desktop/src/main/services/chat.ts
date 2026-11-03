@@ -1936,7 +1936,11 @@ export function persistAssistantMessage(db: Db, input: AppendMessageInput, signa
   // #600/#612: a partial cut by a model stop, the Stop button, lock or quit is marked "Reply stopped" —
   // here, once, for every answer path that persists through this helper (plain chat and the three
   // grounded sites), keyed on the turn's own abort reason. A bare abort carries no cause and no marker.
-  const cause = input.endedEarly == null ? endedEarlyCause(signal) : undefined
+  // #742: never on a reply cut at the ceiling. Runtimes report a finish reason only for a stream that
+  // ran to its end (and the continuation engine reports none on a Stop), so a truncated reply was cut
+  // before any abort: an abort landing after it cut nothing, and the row keeps its one true note
+  // ("Reply cut off", never also "Reply stopped" — design-guidelines §11.21).
+  const cause = input.endedEarly == null && input.truncated !== true ? endedEarlyCause(signal) : undefined
   if (cause) input = { ...input, endedEarly: cause }
   try {
     return appendMessage(db, input)

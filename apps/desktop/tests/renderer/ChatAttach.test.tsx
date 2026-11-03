@@ -1,17 +1,25 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { screen, cleanup, waitFor, act } from '@testing-library/react'
+import { screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DEFAULT_SETTINGS, type DocumentInfo, type ImportJob, type ImportJobStatus } from '../../src/shared/types'
+import {
+  DEFAULT_SETTINGS,
+  type DocumentInfo,
+  type ImportJob,
+  type ImportJobStatus,
+  type Message
+} from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
-import { makeConversation, makeDocumentInfo, makeSkillInfo, userMsg } from '../helpers/chat-fixtures'
+import { assistantMsg, makeConversation, makeDocumentInfo, makeSkillInfo, userMsg } from '../helpers/chat-fixtures'
 import {
   chatDropBridge,
   chatScreenStubs,
   conversationRow,
+  deferred,
   renderChatScreen,
   type ChatDropBridge
 } from '../helpers/chat-screen'
+import { fileDataTransfer } from '../helpers/drop'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { en, t } from '../../src/shared/i18n'
 
@@ -286,6 +294,71 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     expect(await screen.findByText(/couldn't add that/i)).toBeInTheDocument()
     // Nothing was imported — a zero-path drop must not start a phantom import.
     expect(importDocuments).not.toHaveBeenCalled()
+  })
+})
+
+// #742: while an answer is being written, or a file is still being added (CR-3's one pending import),
+// the chat refuses a file drag. It still claims the drag (preventDefault, so Chromium does not try to open
+// the file as a page) but answers dropEffect 'none' — the OS no-drop cursor — with no "drop here" overlay.
+// It used to show the copy cursor, then drop the file without a word. Each row's idle drag is the control.
+describe('ChatScreen — a file drag is refused while the chat is busy (#742)', () => {
+  /** Drag one file over the chat surface: whether the handler claimed it, the effect it set, the overlay. */
+  function dragOver(): { claimed: boolean; dropEffect: string; overlay: boolean } {
+    // Seeded 'move', which the chat never writes, so both 'copy' and 'none' below are the handler's own.
+    const dataTransfer = { ...fileDataTransfer([new File([], 'notes.pdf')]), dropEffect: 'move' }
+    const claimed = !fireEvent.dragOver(chatMain(), { dataTransfer })
+    const overlay = document.querySelector('.chat-drop-overlay') != null
+    fireEvent.dragLeave(chatMain())
+    return { claimed, dropEffect: dataTransfer.dropEffect, overlay }
+  }
+  const accepted = { claimed: true, dropEffect: 'copy', overlay: true }
+  const refused = { claimed: true, dropEffect: 'none', overlay: false }
+
+  it('while an answer is being written', async () => {
+    const user = userEvent.setup()
+    const reply = deferred<Message>()
+    const importDocuments = vi.fn(async () => job)
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
+        sendChatMessage: vi.fn(() => reply.promise),
+        importDocuments
+      })
+    )
+    renderChatScreen()
+    await user.click(await screen.findByText('Chat 1'))
+    expect(dragOver()).toEqual(accepted)
+
+    await user.type(screen.getByRole('textbox'), 'hello')
+    await user.keyboard('{Enter}')
+    await screen.findByRole('button', { name: 'Stop' })
+    expect(dragOver()).toEqual(refused)
+    bridge.drop(chatMain(), 'notes.pdf', '/tmp/notes.pdf') // jsdom delivers the drop a browser would not
+    expect(importDocuments).not.toHaveBeenCalled()
+
+    await act(async () => reply.resolve(assistantMsg('a1', 'done')))
+    expect(dragOver()).toEqual(accepted)
+  })
+
+  it('while a file is still being added', async () => {
+    const importDocuments = vi.fn(async () => job)
+    stubApi(
+      chatScreenStubs({
+        ...bridge.stubs,
+        createConversation: vi.fn(async () => createdDocsChat()),
+        importDocuments,
+        getImportJob: vi.fn(async () => ({ ...jobDone, done: false })) // never finishes: stays pending
+      })
+    )
+    renderChatScreen()
+    expect(dragOver()).toEqual(accepted)
+
+    bridge.drop(chatMain(), 'invoice.pdf', '/tmp/invoice.pdf')
+    expect(await screen.findByText(/processing invoice\.pdf/i)).toBeInTheDocument() // the sr-only status
+    expect(dragOver()).toEqual(refused)
+    bridge.drop(chatMain(), 'second.pdf', '/tmp/second.pdf')
+    expect(importDocuments).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -3,9 +3,17 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { screen, cleanup, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Conversation, Message } from '../../src/shared/types'
+import type { PreloadApi } from '../../src/preload'
 import { t } from '../../src/shared/i18n'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
-import { chatScreenStubs, conversationRow, deferred, flushFakeTimers, renderChatScreen } from '../helpers/chat-screen'
+import {
+  chatScreenStubs,
+  conversationRow,
+  deferred,
+  flushFakeTimers,
+  renderChatScreen,
+  type Deferred
+} from '../helpers/chat-screen'
 import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
 
 // T-2 (audit chat-docs-2026-07-07): assert the invariant that keeps CR-9 safe. `onStop` targets
@@ -16,7 +24,8 @@ import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixture
 // the streaming conversation. Reachability pointer: if a future change ever enables mid-stream
 // switching, this disabled-row assertion reddens first — the signal to re-check `onStop`'s target.
 // The file also holds CR-2 (a switch remounts the transcript, pinned to the bottom of the new
-// conversation) and M-U2 (a local Stop is confirmed with a toast).
+// conversation) and M-U2 (a local Stop is confirmed with a toast — not when the send failed, #742, nor
+// when the Stop itself failed, CH-5).
 
 afterEach(() => {
   try {
@@ -133,11 +142,10 @@ describe('ChatScreen — transcript scroll resets on conversation switch (CR-2)'
 // M-U2 (moved here from ChatRestructure by the chat-ui test campaign): a user-requested stop is confirmed,
 // so a truncated reply is not mistaken for a complete one.
 describe('ChatScreen — Stop confirmation (M-U2)', () => {
-  it('toasts a "Stopped" confirmation when the user stops a live stream', async () => {
+  /** Send "hello" in Chat 1, held open so the Stop button shows, then press Stop. Returns the held send. */
+  async function sendThenStop(stopGeneration: PreloadApi['stopGeneration']): Promise<Deferred<Message>> {
     const user = userEvent.setup()
-    // Hold the send open so the Stop button is visible; it resolves after Stop is pressed.
     const reply = deferred<Message>()
-    const stopGeneration = vi.fn(async () => {})
     stubApi(
       chatScreenStubs({
         listConversations: vi.fn(async () => [makeConversation({ title: 'Chat 1' })]),
@@ -151,13 +159,37 @@ describe('ChatScreen — Stop confirmation (M-U2)', () => {
     await user.click(conversationRow('Chat 1'))
     await user.type(screen.getByRole('textbox'), 'hello')
     await user.keyboard('{Enter}')
-
-    // Streaming: the composer now shows Stop. Pressing it requests a stop…
     await user.click(await screen.findByRole('button', { name: 'Stop' }))
     expect(stopGeneration).toHaveBeenCalledWith('c1')
+    return reply
+  }
+  /** The send has settled: the stream's `finally`, which decides the toast, has run. */
+  const settled = (): Promise<HTMLElement> => screen.findByRole('button', { name: 'Send' })
 
-    // …and main ends a user-stopped stream normally: it persists the partial and resolves (chat.ts:1816-1820).
+  it('toasts a "Stopped" confirmation when the user stops a live stream', async () => {
+    const reply = await sendThenStop(vi.fn(async () => {}))
+    // Main ends a user-stopped stream normally: it persists the partial and resolves (chat.ts, the abort catch).
     await act(async () => reply.resolve(assistantMsg('a1', 'partial')))
     expect(await screen.findByText(t('en', 'chat.stopped'))).toBeInTheDocument()
+  })
+
+  // #742: the toast is for a stop that ended the answer. A send that FAILED anyway — a real failure that
+  // reached main before the Stop did — is explained by its banner, and a "Stopped" toast beside it is false.
+  it('shows no "Stopped" toast when the send failed: its banner explains the end (#742)', async () => {
+    const reply = await sendThenStop(vi.fn(async () => {}))
+    await act(async () => reply.reject(new Error('The AI model stopped before the answer was finished.')))
+    await settled()
+    expect(screen.getByText('The AI model stopped before the answer was finished.')).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'chat.stopped'))).not.toBeInTheDocument()
+  })
+
+  // CH-5 (#148; a #743 gap): a Stop that fails says so, and forgets the stop — so the answer then finishing
+  // normally is not confirmed as stopped.
+  it('a failed Stop shows its error, and the answer then finishing gets no "Stopped" toast', async () => {
+    const reply = await sendThenStop(vi.fn(async () => Promise.reject(new Error('Could not stop the answer.'))))
+    expect(await screen.findByText('Could not stop the answer.')).toBeInTheDocument()
+    await act(async () => reply.resolve(assistantMsg('a1', 'the whole answer')))
+    await settled()
+    expect(screen.queryByText(t('en', 'chat.stopped'))).not.toBeInTheDocument()
   })
 })

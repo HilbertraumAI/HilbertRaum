@@ -837,10 +837,12 @@ this conversation: {pct}% full (about {used} of {window} tokens)."* + the amber-
 fills up, older messages are summarized automatically to make room."* (DE mirror) — keeping the
 approximate-token honesty. **No-jargon rule (§ "Words"):** the word *context*/*Kontext* stays OUT of the
 visible label (it named the machinery, not the user's mental model). The calm/amber/near-full tone bands
-and the 0.85 compaction trigger are unchanged — only the reading changed. Coverage (#24) is a separate,
+and the 0.85 compaction trigger are unchanged — only the reading changed. The bands (calm < 75 %, amber
+75–89 %, near-full ≥ 90 %) and the heads-up read the **shown** percent, so the number, its colour and
+the heads-up always agree (#742: the raw ratio left 74.6 % reading "75%" calm). Coverage (#24) is a separate,
 answer-anchored statement and is deliberately NOT folded into this widget. Pinned by
 `tests/renderer/ContextMeter.test.tsx` (meter-not-progressbar, visible EN/DE label, amber/near-full
-copy, null-window guard) + the updated `ChatCompaction.test.tsx`.
+copy, the shown-percent bands, null-window guard) + the updated `ChatCompaction.test.tsx`.
 
 ### 11.10 One action on the model card — "Use this model" (IMPLEMENTED 2026-07-07, beta-feedback #27 / D70)
 
@@ -1628,7 +1630,8 @@ written. Engineering record: `architecture.md` CB-5 "#600 amendment". Code cites
      switched before this reply was finished."
    - It is deliberately not "Reply cut off". That label means the model ran out of room, and its
      context-window advice would be wrong here. Older app versions show it on any unknown cause, so
-     the marker lives in its own field, which they ignore.
+     the marker lives in its own field, which they ignore. The two never share a reply: one the model
+     had already cut at its limit keeps "Reply cut off" alone, since a stop after that cut nothing (#742).
 2. **A question with no answer says why.** If the model had not written a word yet (common on CPU:
    reading a long question takes minutes), the question gets the same quiet note: "Not answered —
    the AI model was stopped." (DE „Nicht beantwortet – das KI-Modell wurde beendet.“). It shows only

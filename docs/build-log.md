@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-02 — the closed 2026-10-13 #660 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-02 (preamble budget, making room for the #742 entry). Its records are unchanged:
+the sidecar topic docs it corrected in place. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-13 — **#660 — the sidecar docs and comments say what the code does; ingestion's unused `embeddingModelId` override is gone (`docs/660-sidecar-doc-drift`).** Every stale statement
+the sidecar-services campaign (PR #661) listed is fixed in place: a resident-cache purge "on embedder (re)init" (the lock is its only caller), rows tagged with `activeEmbeddingModelId` (always
+`embedder.id`), the reranker's `--device none` as its only launch (the `cpu` posture's since step 4-4), vision's `{path,…}` picker, "ephemeral" / "never on disk" (the encrypted history), D4's
+"original bytes", translation's "b9849 defaults" (b11146 measured here: `-ngl auto`, `--fit on`, `n_slots = 4` + unified KV, as on b9849). Six more found on the way (`shared/ipc.ts`, the `embeddings`
+table row, two translation-record lines, §11.4's #473 gate, the RUNTIME-5/6 legend). #659's `IngestionDeps.embeddingModelId` item done here (no production caller). Open: #659's other items, #671._
+
 ## 2026-11-02 — the closed 2026-10-13 #662 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-02 (preamble budget, making room for the #766 entry). Its record is unchanged:

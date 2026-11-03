@@ -99,16 +99,20 @@ describe('ContextMeter — memory gauge, not a progress bar (#25, D69)', () => {
     expect(meter?.getAttribute('aria-valuetext')).toBe(expected)
   })
 
-  it('at/above 90% carries the near-full tone class', () => {
-    const container = renderMeter('en', usage(90)) // exactly 90% — the near-full boundary
-    const meter = container.querySelector('.context-meter')
-    expect(meter?.className).toContain('context-meter-near-full')
-    expect(meter?.getAttribute('aria-valuenow')).toBe('90')
-    // One percent below stays amber.
-    cleanup()
-    const below = renderMeter('en', usage(89)).querySelector('.context-meter')
-    expect(below?.className).toContain('context-meter-amber')
-    expect(below?.className).not.toContain('context-meter-near-full')
+  // #742: the tone and the heads-up read the percent the meter SHOWS. The raw ratio left 74.6% reading
+  // "75%" in the calm tone with no heads-up, and 89.6% reading "90%" in amber.
+  it.each([
+    [744, '74', 'calm', false],
+    [746, '75', 'amber', true],
+    [894, '89', 'amber', true],
+    [896, '90', 'near-full', true],
+    [900, '90', 'near-full', true]
+  ] as const)('%s of 1000 tokens shows %s percent in the %s tone (#742)', (used, shown, tone, headsUp) => {
+    const meter = renderMeter('en', usage(used, 1000)).querySelector('.context-meter')
+    expect(meter?.querySelector('.context-meter-pct')?.textContent).toBe(`${shown}%`)
+    expect(meter?.getAttribute('aria-valuenow')).toBe(shown)
+    expect(meter?.className).toBe(`context-meter context-meter-${tone}`)
+    expect(meter?.getAttribute('title')?.includes(t('en', 'chat.context.willSummarize'))).toBe(headsUp)
   })
 
   it('renders nothing when the window is unknown (<= 0)', () => {
