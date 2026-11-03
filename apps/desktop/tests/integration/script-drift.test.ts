@@ -202,30 +202,11 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
 
 // --- Kiwix-tools corresponding-source bundle (#339 P8-4) ----------------------------
 // The builder twins gained their own un-numbered step (-KiwixSourceDir/--kiwix-source-dir):
-// install the source bundle via the new node helper, then fetch the kiwix_tools binaries for
+// install the source bundle via the node helper, then fetch the kiwix_tools binaries for
 // the three Kit platforms with EXPLICIT archs. Both re-spell the platform list as literals —
-// the same drift risk as every other matrix in this file.
+// the same drift risk as every other matrix in this file. SOURCE FIRST is behaviour, run in
+// script-orchestration.test.ts: a source dir without the archives fetches no kiwix-tools.
 describe('TS ↔ shell-script drift (kiwix source bundle, #339 P8-4)', () => {
-  it.each([
-    ['scripts/build-commercial-drive.ps1', '& $kiwixNodeCmd.Source @kiwixInstallArgs', "Family = 'kiwix_tools'"],
-    ['scripts/build-commercial-drive.sh', 'node "${KIWIX_INSTALL_ARGS[@]}"', '--family kiwix_tools']
-  ])('%s invokes install-kiwix-source-bundle.mjs before any kiwix_tools fetch', (rel, call, fetch) => {
-    const code = codeLines(rel).map((l) => l.text)
-    const callAt = code.findIndex((l) => l.includes(call))
-    expect(callAt, `${rel}: the install call is gone`).toBeGreaterThanOrEqual(0)
-    expect(code.findIndex((l) => l.includes(fetch)), 'SOURCE FIRST').toBeGreaterThan(callAt)
-  })
-
-  it('build-commercial-drive.ps1 declares $KiwixSourceDir', () => {
-    expect(repoText('scripts/build-commercial-drive.ps1')).toMatch(/\[string\]\s*\$KiwixSourceDir/)
-  })
-
-  it('build-commercial-drive.sh handles --kiwix-source-dir', () => {
-    const src = repoText('scripts/build-commercial-drive.sh')
-    expect(src).toContain('--kiwix-source-dir)')
-    expect(src).toContain('KIWIX_SOURCE_DIR')
-  })
-
   /** ps1: `@{ Os = 'win'; Arch = 'x64' }` rows inside the kiwix fetch loop. */
   function ps1KiwixPlatforms(): Set<string> {
     const src = repoText('scripts/build-commercial-drive.ps1')
@@ -509,12 +490,8 @@ describe('provisioning scripts — warn-and-continue error reporting (AUD-05)', 
   // exit, so the process died with code 1 and callers keying on 2 mis-read the outcome; and
   // (c) the exception propagated OUT of a parent script's `& .\child.ps1` call and killed the
   // parent too. The fix is `Write-Host -ForegroundColor Red` plus an explicit `exit`.
-  //
-  // build-commercial-drive.ps1 is deliberately NOT in this list: its `Run` helper still has one
-  // `Write-Error …; exit 1` pair whose exit CODE is already 1, so the terminating behaviour is
-  // currently harmless there. It carries the same hazard and should be converted, but that is a
-  // separate change — adding it here now would redden on an untouched file.
   const PROVISIONING_PS1 = [
+    'scripts/build-commercial-drive.ps1',
     'scripts/fetch-runtime.ps1',
     'scripts/fetch-models.ps1',
     'scripts/prepare-drive.ps1',
@@ -636,6 +613,87 @@ describe('one commercial gate — builder + fetch-runtime literals (#233, #234)'
     // The flag is tested within the 25 lines that precede the marker write.
     const window = src.slice(Math.max(0, markerWrite - 2000), markerWrite)
     expect(window.split('\n').slice(-25).join('\n')).toContain(flag)
+  })
+})
+
+// #769: one name per flag across the twins: `-AcceptLicense` in the .ps1's param() is `--accept-license` among the .sh's
+// case arms. A flag added to one twin alone is a command that works on one OS and stops at "Unknown argument" on the other.
+describe('twin scripts take the same flags', () => {
+  const kebab = (name: string): string => `--${name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}`
+
+  /**
+   * A .ps1's `param(...)` names, kebab-cased. Strings, comments and the `[...]` attributes and types go first, so
+   * `[Parameter(Mandatory = $true)]` names no `$true` and a default `@('a', 'b')` is no list of names; a name right after
+   * a `=` is a default's value, not a parameter.
+   */
+  function ps1Flags(src: string): string[] {
+    const start = src.search(/^param\(/im)
+    if (start < 0) throw new Error('no param( block')
+    let depth = 0
+    let end = -1
+    let quote = ''
+    for (let i = start + 'param'.length; i < src.length && end < 0; i++) {
+      const c = src[i]
+      if (quote) {
+        if (c === quote) quote = ''
+      } else if (c === "'" || c === '"') quote = c
+      else if (c === '#') i = src.includes('\n', i) ? src.indexOf('\n', i) : src.length
+      else if (c === '(') depth++
+      else if (c === ')' && --depth === 0) end = i
+    }
+    if (end < 0) throw new Error('param( block not closed')
+    let body = src
+      .slice(start + 'param('.length, end)
+      .replace(/'[^']*'|"[^"]*"/g, "''")
+      .replace(/#.*$/gm, '')
+    while (/\[[^[\]]*\]/.test(body)) body = body.replace(/\[[^[\]]*\]/g, ' ')
+    return [...body.matchAll(/(?<!=\s*)\$([A-Za-z_]\w*)(?=\s*(?:[=,]|$))/g)].map((m) => kebab(m[1])).sort()
+  }
+
+  /** A .sh's long flags: its case arms (`--x)`, `--x=*)`, `-h|--help)`) and any `== "--x"` test, less `--help`. */
+  function shFlags(src: string): string[] {
+    const flags = new Set<string>()
+    for (const line of src.split('\n')) {
+      if (line.trim().startsWith('#')) continue
+      const arm = /^\s*([-\w|=*]+)\)/.exec(line)
+      for (const alt of arm?.[1].split('|') ?? []) if (alt.startsWith('--')) flags.add(alt.replace(/=\*$/, ''))
+      for (const m of line.matchAll(/==\s*"(--[\w-]+)"/g)) flags.add(m[1])
+    }
+    flags.delete('--help') // PowerShell answers -? and Get-Help on its own
+    return [...flags].sort()
+  }
+
+  const TWINS = readdirSync(join(REPO_ROOT, 'scripts'))
+    .filter((f) => f.endsWith('.ps1') && existsSync(join(REPO_ROOT, 'scripts', f.replace(/\.ps1$/, '.sh'))))
+    .map((f) => f.replace(/\.ps1$/, ''))
+
+  it('finds the twins, and reads both spellings of an example', () => {
+    expect(TWINS).toEqual(expect.arrayContaining(['build-commercial-drive', 'fetch-models', 'prepare-drive', 'setup-dev']))
+    const ps1 = [
+      'param(',
+      '  [Parameter(Mandatory = $true)] [string] $Target,',
+      "  [string[]] $Platforms = @('a', 'b'),",
+      '  [bool] $Keep = $true, # a comment (with a paren',
+      '  [switch] $DryRun',
+      ')',
+      '$Ignored = 1'
+    ].join('\n')
+    expect(ps1Flags(ps1)).toEqual(['--dry-run', '--keep', '--platforms', '--target'])
+    const sh = [
+      'case "$1" in',
+      '  --target) T="$2"; shift 2 ;;',
+      '  --target=*) T="${1#*=}"; shift ;;',
+      '  --dry-run|-n) D=1; shift ;;',
+      '  -h|--help) exit 0 ;;',
+      '  *) exit 2 ;;',
+      'esac',
+      '[[ "${1:-}" == "--keep" ]] && K=1'
+    ].join('\n')
+    expect(shFlags(sh)).toEqual(['--dry-run', '--keep', '--target'])
+  })
+
+  it.each(TWINS)('%s: the .ps1 param() names are the .sh flags', (base) => {
+    expect(shFlags(repoText(`scripts/${base}.sh`))).toEqual(ps1Flags(repoText(`scripts/${base}.ps1`)))
   })
 })
 

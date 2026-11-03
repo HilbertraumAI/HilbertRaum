@@ -69,6 +69,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Every path cmdlet below takes -LiteralPath: in a target such as 'Kit [1]' the brackets are part of
+# the name, and a plain -Path reads them as a wildcard that matches nothing (#767).
 
 # The models -WithAssets provisions by default (fast setup): the default chat model plus the
 # embeddings model, reranker, Whisper transcriber, and the Qwen2.5-VL image-description model,
@@ -186,11 +188,11 @@ Write-Host ''
 $ManifestSrc = Join-Path $RepoRoot 'model-manifests'
 $ManifestDst = Join-DrivePath 'model-manifests'
 Write-Host 'Model manifests:'
-if (Test-Path $ManifestSrc) {
+if (Test-Path -LiteralPath $ManifestSrc) {
   if ($DryRun) {
     Write-Host "  copy $ManifestSrc -> $ManifestDst (*.yaml/*.yml)"
   } else {
-    Copy-Item -Path (Join-Path $ManifestSrc '*') -Destination $ManifestDst -Recurse -Force
+    Get-ChildItem -LiteralPath $ManifestSrc -Force | Copy-Item -Destination $ManifestDst -Recurse -Force
     Write-Host "  copied manifests to model-manifests/"
   }
 } else {
@@ -205,11 +207,11 @@ Write-Host ''
 $AppSkillSrc = Join-Path $RepoRoot 'app-skills'
 $AppSkillDst = Join-DrivePath 'app-skills'
 Write-Host 'App skills:'
-if (Test-Path $AppSkillSrc) {
+if (Test-Path -LiteralPath $AppSkillSrc) {
   if ($DryRun) {
     Write-Host "  copy $AppSkillSrc -> $AppSkillDst (product skills)"
   } else {
-    Copy-Item -Path (Join-Path $AppSkillSrc '*') -Destination $AppSkillDst -Recurse -Force
+    Get-ChildItem -LiteralPath $AppSkillSrc -Force | Copy-Item -Destination $AppSkillDst -Recurse -Force
     Write-Host "  copied app skills to app-skills/"
   }
 } else {
@@ -223,9 +225,9 @@ $DocFiles = @('docs/user-guide.md', 'docs/troubleshooting.md', 'PRIVACY.md')
 Write-Host 'User docs:'
 foreach ($rel in $DocFiles) {
   $src = Join-Path $RepoRoot $rel
-  if (Test-Path $src) {
+  if (Test-Path -LiteralPath $src) {
     if ($DryRun) { Write-Host "  copy $rel -> docs/" }
-    else { Copy-Item -Path $src -Destination $DocsDst -Force; Write-Host "  copied $rel" }
+    else { Copy-Item -LiteralPath $src -Destination $DocsDst -Force; Write-Host "  copied $rel" }
   }
 }
 Write-Host ''
@@ -246,9 +248,9 @@ $LicenseArtifacts = @(
 Write-Host 'License notices:'
 foreach ($lic in $LicenseArtifacts) {
   $src = Join-Path $RepoRoot $lic
-  if (Test-Path $src) {
+  if (Test-Path -LiteralPath $src) {
     if ($DryRun) { Write-Host "  copy $lic -> drive root" }
-    else { Copy-Item -Path $src -Destination (Join-Path $Target $lic) -Force; Write-Host "  copied $lic" }
+    else { Copy-Item -LiteralPath $src -Destination (Join-Path $Target $lic) -Force; Write-Host "  copied $lic" }
   } else {
     Write-Host "  WARNING: $lic not found at the repo root (run from a repo clone)" -ForegroundColor Yellow
   }
@@ -260,7 +262,7 @@ function Write-JsonFile([string]$relPath, $obj) {
   $full = Join-DrivePath $relPath
   $json = ($obj | ConvertTo-Json -Depth 6)
   if ($DryRun) { Write-Host "  + $relPath"; return }
-  if ((Test-Path $full) -and -not $Force) {
+  if ((Test-Path -LiteralPath $full) -and -not $Force) {
     Write-Host "  skip $relPath (exists; use -Force to overwrite)" -ForegroundColor Yellow
     return
   }

@@ -560,8 +560,8 @@ NOT in `assets.ts`**: it lives only in `scripts/prepare-drive.ps1`
 (`$DefaultModelIds`) and `scripts/prepare-drive.sh` (`DEFAULT_MODEL_IDS`), and must be kept in sync
 **between those two shells** and with the manifests under `model-manifests/` — editing `assets.ts`
 does not change which models `--with-assets` fetches (a parity test,
-`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match, that every id is a committed manifest `--with-assets` can fetch,
-and that both fetch the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+`tests/unit/prepare-drive-default-set.test.ts`, asserts the two shells' lists match and that every id is a committed manifest `--with-assets` can fetch;
+`tests/integration/script-orchestration.test.ts` runs both twins' `--with-assets --dry-run` and checks that each fetches these ids, then both runtimes and the `ocr` family, so a Windows-vs-mac/linux drive can't silently drift on OCR provisioning). (`scripts/` also holds two **benchmark/RAM-calibration** helpers
 that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
 (co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
@@ -687,9 +687,10 @@ green gate does not sign** (it never invokes electron-builder).
 ### The `build-commercial-drive` master pipeline
 
 One self-contained, dual-shell script (`scripts/build-commercial-drive.{ps1,sh}`) runs the ordered
-steps. Its step plan mirrors the canonical, unit-tested `planCommercialDrive`; the final "is this
-sellable?" verdict comes from **calling** `assertCommercialDrive` itself (both in
-`apps/desktop/src/main/services/commercial-drive.ts`; see "The builders **refuse to proceed**" below, #233).
+steps; the order lives in the two twins alone (`tests/integration/script-orchestration.test.ts` runs
+their dry pipeline). The final "is this sellable?" verdict comes from **calling** `assertCommercialDrive`
+itself (`apps/desktop/src/main/services/commercial-drive.ts`; see "The builders **refuse to proceed**"
+below, #233).
 
 ```
 prepare-drive  --force            # commercial policy (encrypted, plaintext off, no phone-home)
@@ -732,7 +733,8 @@ scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license
 
 The builders **refuse to proceed** when a differently named `HilbertRaum-*` artifact (or an extracted
 `.app`) already sits at the drive root — delete the old build first (#233; the launchers must never
-find two). `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
+find two) — and when an `--app-artifact` path does not exist. Both refusals come before step 1, so no
+download runs first (#769: the missing artifact used to surface at step 4). `--platforms` declares the platforms the kit is sold for (default all three: `win-x64`,
 `mac-arm64`, `linux-x64` — decision #229 on its default); the kit's label names them and the gate
 requires the artifact + launcher for each and none for any other. Every `fetch-runtime` run gets
 `--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
@@ -784,7 +786,10 @@ declared platform has exactly one app artifact of the version being built plus i
 canonical gate is `assertCommercialDrive(...)`, and since PR #271 both scripts **call it** (through the
 built `apps/desktop/out/tools/assert-commercial-drive.mjs`; `npm run build` produces it, `node` runs it):
 `SELLABLE` is printed only from its verdict, the scripts' own native checks are a pre-flight, not a
-second gate. **"Every
+second gate. Run by hand, the tool takes `--target <root> --platforms <list> --app-version <v> [--json]`
+and exits 0 (sellable, or `--help`), 1 (not sellable) or 2 (a usage error, an unknown platform
+included); `--json` prints the verdict as one `{ ok, problems, checks }` line on stdout and sends any
+log line to stderr (#767). **"Every
 weight VERIFIED" spans every shipped runtime family (2026-07-01):** the verifier + `verify-models.{ps1,sh}`
 gate on the canonical `(runtime → format)` support table (`models.ts` `SUPPORTED_RUNTIME_FORMATS`), so the
 bundled **ggml / whisper_cpp** transcriber verifies by SHA-256 like any GGUF — previously it was reported

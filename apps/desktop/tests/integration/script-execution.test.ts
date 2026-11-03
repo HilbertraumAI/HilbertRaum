@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
-import { DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
+import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
 import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJson } from '../../src/main/services/drive'
 import { REPO_ROOT, repoText } from '../helpers/repo-files'
 import { SCRIPT_LEGS, outputOf, scriptRoot } from '../helpers/script-legs'
@@ -17,7 +17,9 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // any download (a dry run, a placeholder hash refused, or the install skipped), the builder
 // cases run only its verify-only gate or its up-front refusal, and prepare-drive runs without
 // its assets flag, so it fetches nothing. The .ps1 leg runs on Windows, the .sh leg elsewhere
-// (CI runs `npm test` on both).
+// (CI runs `npm test` on both). The prepare-drive and builder rows run on a `scriptRoot()`, whose
+// name holds a space and a `[` (#767). The dry pipelines that reach the child scripts live in
+// script-orchestration.test.ts.
 
 const GATE_TOOL = join(REPO_ROOT, 'apps', 'desktop', 'out', 'tools', 'assert-commercial-drive.mjs')
 const toolBuilt = existsSync(GATE_TOOL)
@@ -162,7 +164,7 @@ const SELLABLE_BUILDS = [
 
 /** A drive that passes every check for win-x64, with one bundled weight and no ocr: block, so a row can flip one input. */
 function sellableDrive(): string {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-sellable-'))
+  const root = scriptRoot('script-sellable-')
   const yaml: string[] = []
   for (const family of ['llama_cpp', 'whisper_cpp']) {
     const builds = SELLABLE_BUILDS.filter((b) => b.family === family)
@@ -193,6 +195,8 @@ function sellableDrive(): string {
     'model-manifests/drive-model.yaml',
     manifestYaml({ id: 'drive-model', localPath: 'models/chat/drive-model.gguf', sha256: weight }, [BUNDLED])
   )
+  // A real drive keeps its manifests in per-role folders, and a folder is what a manifest walk must skip.
+  mkdirSync(join(root, 'model-manifests', 'vision'))
   writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
   mkdirSync(join(root, 'user-skills'))
@@ -312,6 +316,50 @@ it.runIf(process.env.CI && process.platform === 'darwin')('bash on PATH is the s
   expect(spawnSync('bash', ['--version'], { encoding: 'utf8' }).stdout).toMatch(/^GNU bash, version 3\.2\./)
 })
 
+// The gate tool's own command line (#769): the builders call it with three flags, a maintainer by hand with any.
+describe.skipIf(!toolBuilt)('assert-commercial-drive command line', () => {
+  const gate = (args: string[]) => spawnSync(process.execPath, [GATE_TOOL, ...args], { encoding: 'utf8', timeout: testBudgetMs(60_000) })
+  const declared = (root: string, platforms = 'win-x64'): string[] => ['--target', root, '--platforms', platforms, '--app-version', APP_VERSION]
+
+  it.each<[string, () => string[], string]>([
+    ['no argument', () => [], '--target is required'],
+    ['an unknown argument', () => ['--bogus'], 'unknown argument: --bogus'],
+    ['--target with no value', () => ['--target'], '--target needs a value'],
+    // It reached the gate, which came back NOT SELLABLE (exit 1) for a drive that is fine.
+    ['an unknown platform', () => declared(sellableDrive(), 'win-x64,win-arm64'), 'unknown platform "win-arm64"']
+  ])('%s is a usage error: exit 2, the cause and the usage on stderr', (_title, args, cause) => {
+    const r = gate(args())
+    expect(r.status, outputOf(r)).toBe(2)
+    expect(r.stderr).toContain(cause)
+    expect(r.stderr).toContain('usage: node assert-commercial-drive.mjs')
+    expect(r.stdout).toBe('')
+  })
+
+  it.each(['-h', '--help'])('%s prints the usage on stdout and exits 0', (help) => {
+    const r = gate([help])
+    expect(r.status, outputOf(r)).toBe(0)
+    expect(r.stdout).toContain('usage: node assert-commercial-drive.mjs')
+    expect(r.stderr).toBe('')
+  })
+
+  // #767: verifying a weight logs a line through console.log, and it landed on stdout ahead of the object.
+  it('--json keeps stdout to the one verdict object while a weight is hashed', async () => {
+    const root = sellableDrive()
+    const r = gate([...declared(root), '--json'])
+    expect(r.status, outputOf(r)).toBe(0)
+    expect(r.stderr).toContain('Model checksum hashed')
+    const lines = r.stdout.trim().split(/\r?\n/)
+    expect(lines).toHaveLength(1)
+    const verdict = JSON.parse(lines[0]) as { ok: boolean; problems: string[]; checks: Record<string, boolean> }
+    expect(Object.keys(verdict).sort()).toEqual(['checks', 'ok', 'problems'])
+    expect(verdict.ok).toBe(true)
+    expect(verdict.problems).toEqual([])
+    const inProcess = await assertCommercialDrive(root, [], null, null, null)
+    expect(Object.keys(verdict.checks)).toEqual(Object.keys(inProcess.checks))
+    expect(Object.values(verdict.checks).every((v) => v === true)).toBe(true)
+  })
+})
+
 for (const leg of SCRIPT_LEGS) {
   describe.skipIf(leg.skip)(`script execution — ${leg.name}`, () => {
     const builder = `build-commercial-drive.${leg.ext}`
@@ -323,7 +371,7 @@ for (const leg of SCRIPT_LEGS) {
     describe('prepare-drive keeps an existing config', () => {
       it('skips an edited config file on a re-run and rewrites it only with the force flag', () => {
         const preparer = `prepare-drive.${leg.ext}`
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-prep-'))
+        const root = scriptRoot('script-prep-')
         const configFile = (name: string): string => join(root, 'config', name)
         const first = leg.run(preparer, [f('Target'), root])
         expect(first.status, outputOf(first)).toBe(0)
@@ -346,7 +394,7 @@ for (const leg of SCRIPT_LEGS) {
 
     describe('prepare-drive lays out a drive', () => {
       it('creates every layout dir and copies the notices, manifests, skills and docs (LIC-1)', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-layout-'))
+        const root = scriptRoot('script-layout-')
         const r = leg.run(`prepare-drive.${leg.ext}`, [f('Target'), root])
         expect(r.status, outputOf(r)).toBe(0)
         for (const dir of DRIVE_LAYOUT_DIRS) expect(existsSync(join(root, ...dir.split('/'))), dir).toBe(true)
@@ -363,7 +411,7 @@ for (const leg of SCRIPT_LEGS) {
 
     describe('build-commercial-drive verify-only gate (#233)', () => {
       it.skipIf(!toolBuilt)('runs the canonical gate offline and prints NOT SELLABLE for an empty target', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-gate-'))
+        const root = scriptRoot('script-gate-')
         const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
@@ -381,7 +429,7 @@ for (const leg of SCRIPT_LEGS) {
       })
 
       it('rejects an unknown platform label before doing anything (exit 2)', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-plat-'))
+        const root = scriptRoot('script-plat-')
         const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-arm64'])
         expect(r.status, outputOf(r)).toBe(2)
         expect(outputOf(r)).toContain('win-arm64')
@@ -389,7 +437,7 @@ for (const leg of SCRIPT_LEGS) {
       })
 
       it('refuses to proceed when a differently named app artifact already sits at the root', () => {
-        const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-prior-'))
+        const root = scriptRoot('script-prior-')
         writeFileSync(join(root, 'HilbertRaum-0.1.58-portable.exe'), 'old')
         const src = mkdtempSync(join(tmpdir(), 'hilbertraum-script-artifact-'))
         const artifact = join(src, 'HilbertRaum-0.1.59-portable.exe')
@@ -398,7 +446,7 @@ for (const leg of SCRIPT_LEGS) {
         const out = outputOf(r)
         expect(r.status, out).toBe(1)
         expect(out).toContain('HilbertRaum-0.1.58-portable.exe')
-        expect(out).not.toContain('[1]') // refused before step 1 ran
+        expect(out).not.toMatch(/^\[1\] /m) // refused before step 1 ran (the root's own name holds a "[1]")
         expect(existsSync(join(root, 'HilbertRaum-0.1.59-portable.exe'))).toBe(false)
       })
     })
@@ -1177,7 +1225,7 @@ for (const leg of SCRIPT_LEGS) {
       it.skipIf(!toolBuilt)(
         'a dry run reaches the canonical verdict: NOT SELLABLE on an empty target',
         () => {
-          const root = mkdtempSync(join(tmpdir(), 'hilbertraum-script-dry-'))
+          const root = scriptRoot('script-dry-')
           const r = leg.run(builder, [f('Target'), root, f('AcceptLicense'), f('DryRun')], { timeoutMs: 240_000 })
           const out = outputOf(r)
           expect(r.status, out).toBe(1)
