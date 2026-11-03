@@ -604,7 +604,11 @@ process on every start (architecture.md "In-app model downloader"):
    checkbox is additionally required (the in-app mirror of `--accept-license`).
 
 When gate 1 or 2 fails, the AI Model screen says **why** (disabled by the drive's policy vs. the
-Settings toggle). Mechanics (`services/downloads.ts`, reusing the `assets.ts` seams):
+Settings toggle). A download that cannot fit is refused before anything is fetched (#768): when the
+bytes still to fetch (each file's `size_bytes`, less a kept `.part` the run would resume) exceed the
+drive's free space, the start fails with both figures in decimal GB and the advice to free up space
+or pick a smaller model. A file with no declared `size_bytes`, or a drive that cannot report its free
+space, skips the check, so declaring `size_bytes` on every file is what makes it work. Mechanics (`services/downloads.ts`, reusing the `assets.ts` seams):
 async-with-polling job (`downloadModel`/`getDownloadJob`/`cancelDownload` IPC), **one download at a
 time**, bytes land in `<weight>.part` and are renamed into place **only after the SHA-256
 verifies**; a mismatch deletes the partial and fails the job; a placeholder manifest hash completes

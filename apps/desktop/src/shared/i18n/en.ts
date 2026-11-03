@@ -2787,6 +2787,9 @@ export const en = {
     'yet, so it cannot be verified — capture one with verify-models --generate.',
   'main.download.licenseFirst':
     'Please review and accept the model’s license ({license}) before downloading.',
+  'main.download.notEnoughSpace':
+    'There is not enough free space on this drive: the download needs {needed}, and {free} is ' +
+    'free. Free up space on the drive, or pick a smaller model.',
   'main.download.unknownJob': 'Unknown download job.',
   'main.download.checksumMismatch':
     'The downloaded file did not match its expected checksum, so it was discarded. ' +

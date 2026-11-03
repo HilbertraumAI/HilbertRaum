@@ -2762,6 +2762,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.download.licenseFirst':
     'Bitte sieh dir die Lizenz des Modells an ({license}) und akzeptiere sie, bevor du es ' +
     'herunterlädst.',
+  'main.download.notEnoughSpace':
+    'Auf diesem Laufwerk ist nicht genug Speicherplatz frei: Der Download braucht {needed}, ' +
+    'frei sind {free}. Gib auf dem Laufwerk Speicherplatz frei oder wähle ein kleineres Modell.',
   'main.download.unknownJob': 'Unbekannter Download.',
   'main.download.checksumMismatch':
     'Die heruntergeladene Datei entsprach nicht der erwarteten Prüfsumme und wurde deshalb ' +

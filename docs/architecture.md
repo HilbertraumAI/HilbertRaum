@@ -5947,6 +5947,18 @@ model with a loud line. Nothing about an already-installed weight changes: it ve
 before. Schema + rules: model-policy.md "Withdrawn upstream sources"; the case that produced it:
 model-benchmarks.md §9.5.
 
+**And a refusal for a download that cannot fit (#768, 2026-11-03).** `start()` refuses when the
+bytes still to fetch exceed the free space of the drive the weights land on. It runs after the
+withdrawn / license / already-present refusals and before the job exists, so a refusal creates no
+job, audits no `model_download_started` and requests nothing. Still to fetch = Σ over the files to
+fetch of max(0, `size_bytes` − its kept `.part`), since the run resumes a `.part`. There is no check
+when any file's size is undeclared or the free space cannot be read, and no headroom on top (owner
+call: the same gentle posture as preflight's low-space note). The free space is `statfs` at the
+files' nearest existing folder, ultimately the drive root (`services/disk-space.ts` `freeBytes`,
+shared with the drive status). `main.download.notEnoughSpace` names both figures in decimal GB with
+one decimal (`shared/format.ts` `fmtDiskGb`, the figure the confirmation dialog shows) and says what
+to do. Before it, a drive with 13.5 GB free took a 14.4 GB download and stopped on ENOSPC near the end.
+
 **Mechanics:** `services/downloads.ts` `DownloadManager` — a job state machine over the
 REUSED `assets.ts` seams (`planModelDownloads` + optional `hashStore`; `downloadToFile`,
 extended additively with `signal`/`headers`/`append`/`onResponse`; `verifyDownloadedFile`).
