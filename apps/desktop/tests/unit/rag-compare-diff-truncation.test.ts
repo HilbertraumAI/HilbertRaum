@@ -3,12 +3,18 @@ import type { Db } from '../../src/main/services/db'
 import {
   retrieveCompareDiff,
   buildCompareDiffPrompt,
+  generateGroundedAnswer,
+  ragSettingsFrom,
   wholeDocumentFitBudgetTokens,
   TOKENS_PER_WORD
 } from '../../src/main/services/rag'
+import { appendMessage, createConversation, listMessages } from '../../src/main/services/chat'
+import { MockEmbedder } from '../../src/main/services/embeddings'
 import { wordDiff, renderChangesForModel, renderRedline, DIFF_RENDER_MAX } from '../../src/main/services/diff'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
+import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import { openFreshDb } from '../helpers/db-fixtures'
+import { recordingRuntime } from '../helpers/scripted-runtime'
 
 // Audit SK-2 (skills-audit-2026-07-07): the model-facing diff renderers cap the change list at
 // DIFF_RENDER_MAX and drop the LATER changes; before this fix the chat compare path passed no `max`
@@ -145,5 +151,39 @@ describe('retrieveCompareDiff — the budget covers changes + redline JOINTLY (C
     expect(result!.redlineText).toBe('')
     expect(result!.truncated).toBe(false) // the change list itself is complete — the prompt may say so
     expect(payloadTokens(result!)).toBeLessThanOrEqual(budget)
+  })
+})
+
+// #737: the OTHER cause of a capped list — the token budget (`fitChangesToBudget`) — pinned end to end
+// through the chat compare entry, so the flag has to reach both the prompt and the persisted coverage.
+describe('generateGroundedAnswer — a budget-capped change list is PARTIAL in the prompt and coverage (#737)', () => {
+  it('under the render cap but over a 4096-token budget ⇒ a PARTIAL prompt and capped, truncated coverage', async () => {
+    const nChanges = DIFF_RENDER_MAX - 50 // under the render cap, so only the budget can cut the list
+    const question = 'what changed?'
+    // Premise: the complete list over-runs the budget the compare path derives from the window.
+    const full = wordDiff(stream(nChanges, 'A'), stream(nChanges, 'B'))!
+    expect(full.changes.length).toBe(nChanges)
+    const fullTokens = approxTokenCount(renderChangesForModel(full.changes, { max: nChanges }).text) * TOKENS_PER_WORD
+    expect(fullTokens).toBeGreaterThan(wholeDocumentFitBudgetTokens(4096, question, null))
+
+    const db = openFreshDb('cmpdiff')
+    seedDoc(db, 'docA', stream(nChanges, 'A'))
+    seedDoc(db, 'docB', stream(nChanges, 'B'))
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+    const runtime = recordingRuntime('ok', { contextWindow: 4096 })
+    // The option registerRagIpc passes for a two-document compare.
+    await generateGroundedAnswer(db, runtime, new MockEmbedder(), conv.id, question, ragSettingsFrom(DEFAULT_SETTINGS), {
+      wholeDocumentCompare: { documentIds: ['docA', 'docB'] }
+    })
+
+    const userTurn = runtime.lastMessages[runtime.lastMessages.length - 1].content
+    expect(userTurn).toContain('A deterministic word-level comparison of two documents produced the changes below.')
+    expect(userTurn).toContain('This list is PARTIAL')
+    expect(userTurn).not.toContain('complete and exact')
+    expect(userTurn).toMatch(/\(\+\d+ further change\(s\) not listed\)/)
+    expect(userTurn).not.toContain(`"A${nChanges - 1}"`) // the last change is one of those dropped
+    expect(listMessages(db, conv.id).at(-1)?.coverage).toMatchObject({ mode: 'capped', truncated: true })
+    db.close()
   })
 })
