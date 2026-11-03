@@ -140,7 +140,7 @@ const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
 /** Below this viewport width the history column auto-collapses (responsive; the
  *  persisted desktop preference is untouched — widening restores the user's choice). */
-export const LIST_AUTO_COLLAPSE_PX = 1150
+const LIST_AUTO_COLLAPSE_PX = 1150
 
 /** #39: how long a turn must stay chunk-less (no answer token, no reasoning delta) before the
  *  calm "the first answer takes a little longer" hint may appear under the pending bubble —
