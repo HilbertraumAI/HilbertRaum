@@ -296,6 +296,11 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     const channels = event.sender.send.mock.calls.map((c) => c[0])
     expect(channels).toContain(STREAM.token(h.conversationId))
     expect(channels).toContain(STREAM.done(h.conversationId))
+    // #743: the silent extraction step is announced first with the 'analysis' kind ("Reading the whole
+    // document…"), not the plain-chat compaction notice; the renderer clears it on the first token.
+    const notices = event.sender.send.mock.calls.filter((c) => c[0] === STREAM.compaction(h.conversationId))
+    expect(notices.map((c) => c[1])).toEqual([{ phase: 'start', kind: 'analysis' }])
+    expect(channels.indexOf(STREAM.compaction(h.conversationId))).toBeLessThan(channels.indexOf(STREAM.token(h.conversationId)))
     // The in-flight entry is released in `finally` — no stuck slot after the turn.
     expect(inFlightStreams.has(h.conversationId)).toBe(false)
     // Exactly one user turn + one assistant turn persisted (no duplicate / partial rows).

@@ -28,6 +28,8 @@ import type { Db } from '../../src/main/services/db'
 import type { ExternalRetrievalArm } from '../../src/main/services/rag'
 import type { RuntimeChatOptions } from '../../src/main/services/runtime'
 import { createConversation } from '../../src/main/services/chat'
+import { updateSettings } from '../../src/main/services/settings'
+import { GPU_RERANK_SCOPE } from '../../src/main/services/rag/rerank-profile'
 import { resolveScope } from '../../src/main/services/collections'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
@@ -37,6 +39,7 @@ import { MEETING_PROTOCOL_INSTALL_ID } from '../../src/main/services/skills/anal
 import { skillInstallId } from '../../src/main/services/skills/registry'
 import { t } from '../../src/shared/i18n'
 import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
+import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
@@ -267,5 +270,45 @@ describe('askDocuments — a legacy document outside the scope blocks nothing (`
     expect(msg.content).toBe(MODEL_ANSWER)
     expect(msg.skillId).toBe(MEETING_PROTOCOL_INSTALL_ID)
     expect(msg.coverage?.mode).toBe('capped')
+  })
+})
+
+// #737 — the ask site reads the reranker's demotion itself (`ctx.reranker.gpuDemoted()`, #495): the occupancy
+// snapshot cannot supply it. A session whose reranker fell back to the processor must ask the pack arm for the
+// capped candidate slice, not the wide GPU scope the measurement machine's card otherwise resolves.
+describe('askDocuments — a demoted reranker narrows the pack arm to the capped slice (#737)', () => {
+  it.each([
+    { demoted: false, scope: GPU_RERANK_SCOPE },
+    { demoted: true, scope: 'capped' }
+  ])('reranker demoted $demoted: the arm is built for $scope', async ({ demoted, scope }) => {
+    const w = makeSkillsWorld('routing-scope-rerank')
+    // The measurement machine's card (RTX 3080 Ti) beside the committed 4B: the wide scope resolves.
+    updateSettings(w.db, {
+      gpuMode: 'auto',
+      gpuAutoDisabled: false,
+      gpuProbe: {
+        devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
+        probedAt: new Date().toISOString()
+      }
+    })
+    const runtime = { ...scriptedRuntime(MODEL_ANSWER, [], { tokens: 'whole' }), modelId: 'qwen3.5-4b-ud-q4kxl' }
+    const reranker = {
+      id: 'reranker',
+      rerank: async (_q: string, docs: string[]) => docs.map((_, index) => ({ index, score: 0 })),
+      gpuDemoted: () => demoted
+    }
+    const seen: unknown[] = []
+    const arm: ExternalRetrievalArm = async () => testArm(archiveCandidate(0, 'Methan ist ein Treibhausgas.'))
+    const zim = {
+      makeArm: (_db: Db, packIds: readonly string[] | null | undefined, opts?: { candidateScope?: unknown }) => {
+        seen.push(opts?.candidateScope)
+        return packIds?.length ? arm : null
+      }
+    }
+    const { ctx } = makeRagAskContext(w, runtime)
+    registerRagIpc({ ...ctx, manifestsDir: CATALOG_MANIFESTS, reranker, zim } as unknown as AppContext)
+    const conv = createConversation(w.db, { mode: 'documents', scope: PACK_ONLY })
+    await invoke(handlers, IPC.askDocuments, conv.id, 'Was ist Methan?', null)
+    expect(seen).toEqual([scope])
   })
 })
