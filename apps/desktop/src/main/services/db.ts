@@ -789,97 +789,118 @@ END;
 `
 
 /**
- * CODE-4 — populate `fts_rowid` for rows that predate the handle (the one-time backfill half
- * of the migration; also used by the fresh-create paths, whose bulk `INSERT … SELECT` into the
- * FTS table bypasses the AI trigger). ONE scan of the FTS table builds the id→rowid map (the
- * per-row correlated-subquery alternative would be the very O(N²) scan this migration removes),
- * then PK-targeted updates run inside a single transaction (the `backfillOcrMeta` pattern) —
- * unless `ownTransaction` is false, in which case the CALLER's already-open transaction covers
- * the updates (`ensureFtsRowidSync` bundles DDL + backfill into one atomic commit; a nested
- * BEGIN would throw). Rows with no FTS entry (compaction messages; a genuinely orphaned row)
- * keep NULL and stay on the legacy-trigger path — correct, just slow, and never re-scanned per
- * open (the caller's trigger-DDL sentinel is the run-once guard). `target` is a compile-time
- * union, so the interpolation cannot become an injection point.
+ * Run `body` inside ONE transaction: COMMIT when it returns, ROLLBACK when it throws (best-effort —
+ * the original failure is what propagates). Outside a transaction a multi-statement `db.exec`
+ * commits statement by statement (a failure part-way leaves the prefix committed), so FTS DDL that
+ * must land together with its backfill goes through here. Never nest it: a nested BEGIN throws.
  */
-function backfillFtsRowids(db: Db, target: 'chunks' | 'messages', ownTransaction = true): void {
-  const fts = target === 'chunks' ? 'chunks_fts' : 'messages_fts'
-  const key = target === 'chunks' ? 'chunk_id' : 'message_id'
-  const rows = db
-    .prepare(`SELECT rowid AS r, ${key} AS id FROM ${fts}`)
-    .all() as unknown as Array<{ r: number; id: string }>
-  if (rows.length === 0) return
-  // `AND fts_rowid IS NULL` keeps this idempotent-safe: a handle the triggers already stamped
-  // (rows written after the trigger rewrite, before this backfill ran) is never clobbered.
-  const update = db.prepare(`UPDATE ${target} SET fts_rowid = ? WHERE id = ? AND fts_rowid IS NULL`)
-  if (!ownTransaction) {
-    for (const row of rows) update.run(row.r, row.id)
-    return
-  }
+function inOneTransaction(db: Db, body: () => void): void {
   db.exec('BEGIN')
   try {
-    for (const row of rows) update.run(row.r, row.id)
+    body()
     db.exec('COMMIT')
   } catch (err) {
-    db.exec('ROLLBACK')
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* keep the original failure as the thrown error */
+    }
     throw err
   }
 }
 
 /**
+ * CODE-4 — populate `fts_rowid` for rows that predate the handle (the one-time backfill half
+ * of the migration; also used by the fresh-create paths, whose bulk `INSERT … SELECT` into the
+ * FTS table bypasses the AI trigger). ONE scan of the FTS table builds the id→rowid map (the
+ * per-row correlated-subquery alternative would be the very O(N²) scan this migration removes),
+ * then PK-targeted updates run inside the CALLER's transaction: every caller commits its DDL and
+ * this backfill as one (`inOneTransaction`), so the handles are never lost apart from the
+ * triggers that stamp and read them (#737). Rows with no FTS entry (compaction messages; a
+ * genuinely orphaned row) keep NULL and stay on the legacy-trigger path — correct, just slow, and
+ * never re-scanned per open (the caller's trigger check is the run-once guard). `target` is a
+ * compile-time union, so the interpolation cannot become an injection point.
+ */
+function backfillFtsRowids(db: Db, target: 'chunks' | 'messages'): void {
+  const fts = target === 'chunks' ? 'chunks_fts' : 'messages_fts'
+  const key = target === 'chunks' ? 'chunk_id' : 'message_id'
+  const rows = db
+    .prepare(`SELECT rowid AS r, ${key} AS id FROM ${fts}`)
+    .all() as unknown as Array<{ r: number; id: string }>
+  // `AND fts_rowid IS NULL` keeps this idempotent-safe: a handle the triggers already stamped
+  // (rows written after the trigger rewrite, before this backfill ran) is never clobbered.
+  const update = db.prepare(`UPDATE ${target} SET fts_rowid = ? WHERE id = ? AND fts_rowid IS NULL`)
+  for (const row of rows) update.run(row.r, row.id)
+}
+
+// #737 — what "current" means for a live FTS sync trigger: it carries every style marker its
+// canonical body carries. `fts_rowid` is CODE-4's handle (every canonical trigger stamps, targets
+// or gates on it); `new.kind` is the R8/DATA-1 guard that keeps a checkpoint out of the index
+// (messages ai/au/au_legacy). Markers, not bytes: a body that differs only in spacing or comments
+// still counts, so no other build's text of the same set is rewritten on every open.
+const FTS_STYLE_MARKERS = ['fts_rowid', 'new.kind']
+
+/** A canonical set as name → the style markers its trigger carries, parsed from the DDL itself
+ *  (each statement runs from `CREATE TRIGGER <name>` to an `END;` line). */
+function canonicalTriggerMarkers(ddl: string): Map<string, string[]> {
+  const markers = new Map<string, string[]>()
+  for (const [statement, name] of ddl.matchAll(/^CREATE TRIGGER (\w+)[\s\S]*?^END;$/gm)) {
+    markers.set(name, FTS_STYLE_MARKERS.filter((m) => statement.includes(m)))
+  }
+  return markers
+}
+
+const CANONICAL_FTS_TRIGGERS = {
+  chunks: { ddl: CHUNKS_FTS_TRIGGERS, markers: canonicalTriggerMarkers(CHUNKS_FTS_TRIGGERS) },
+  messages: { ddl: MESSAGES_FTS_TRIGGERS, markers: canonicalTriggerMarkers(MESSAGES_FTS_TRIGGERS) }
+} as const
+
+/**
  * CODE-4 (full audit 2026-07-11) — upgrade a pre-fix workspace to the rowid-targeted trigger
- * sets (see the CHUNKS_FTS_TRIGGERS comment for the why + measurements). Idempotent via the
- * `ensureMessagesFtsKindFilter` sentinel idiom: skips only when the live AD trigger already
- * carries `fts_rowid`, and backfills the handles exactly once (in the same open). Runs AFTER
- * the FTS ensures + the kind-filter prune, so (a) the tables/columns exist, (b) a
- * pre-compaction / pre-DATA-1 workspace's unguarded ai/au are replaced here by the guarded
- * canonical set, and (c) the compaction-row prune has already run, so the backfill can never map
- * a checkpoint row (its FTS entry is gone by now).
+ * sets (see the CHUNKS_FTS_TRIGGERS comment for the why + measurements), and heal a torn set.
+ * Idempotent: a table whose live triggers already make up its whole canonical set — every
+ * trigger the canonical DDL creates exists and carries its style markers (FTS_STYLE_MARKERS) —
+ * is left alone, for one sqlite_master read per table; any other state rewrites all five and
+ * backfills the handles, in the same open. Runs AFTER the FTS ensures + the kind-filter prune,
+ * so (a) the tables/columns exist, (b) a pre-compaction / pre-DATA-1 workspace's unguarded ai/au
+ * are replaced here by the guarded canonical set, and (c) the compaction-row prune has already
+ * run, so the backfill can never map a checkpoint row (its FTS entry is gone by now).
  *
  * Crash-atomicity (CODE-4 review follow-up): the DROPs + CREATEs + backfill run inside ONE
  * transaction (trigger DDL is transactional in SQLite), so a process kill mid-upgrade rolls
- * back to the intact pre-migration state and the sentinel simply retries on the next open —
+ * back to the intact pre-migration state and the check simply retries on the next open —
  * a bare multi-statement `db.exec` auto-commits per statement, which could tear the trigger
  * set (e.g. AD dropped but never recreated: deletes silently stop maintaining the index) and
- * could commit the sentinel-matching CREATEs with the backfill lost (the whole corpus parked
- * on the legacy scan path forever). And the sentinel deliberately treats a MISSING AD trigger
- * as "must upgrade" (`row?.sql`, NOT the kind-filter idiom's `!row` early-return — there a
- * missing trigger is unreachable by construction; here it is exactly the torn state): the DDL
- * uses DROP TRIGGER IF EXISTS throughout, so re-running against ANY torn trigger state —
- * including one left by the non-atomic fresh-create execs in ensureChunksFts/ensureMessagesFts
- * — is safe, making the migration self-healing rather than a permanent silent failure.
+ * could commit the CREATEs with the backfill lost (the whole corpus parked on the legacy scan
+ * path forever). The DDL uses DROP TRIGGER IF EXISTS throughout, so the rewrite is safe from
+ * ANY trigger state.
+ *
+ * What it heals (#737): any set missing a trigger or holding one in an older style — a torn
+ * upgrade, a torn fresh create from a build before #737 (whose exec committed statement by
+ * statement, ai first), an AI without the compaction guard beside a current AD. Until #737 the
+ * check read the AD trigger alone, so every tear that kept AD stayed torn. What it cannot heal:
+ * index ENTRIES. Rows written while a trigger was missing, and the bulk fill or handle backfill a
+ * pre-#737 fresh create lost, stay unindexed (or on the legacy scan path): the triggers are made
+ * whole, but nothing re-reads the base table. Since #737 ensureChunksFts/ensureMessagesFts
+ * commit as one transaction too, so no build from here on leaves those states behind.
  */
 function ensureFtsRowidSync(db: Db): void {
-  const upgrade = (adTrigger: string, triggerNames: string[], ddl: string, target: 'chunks' | 'messages'): void => {
-    const row = db
-      .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name = ?")
-      .get(adTrigger) as unknown as { sql: string } | undefined
-    if (row?.sql.includes('fts_rowid')) return
-    db.exec('BEGIN')
-    try {
-      db.exec(triggerNames.map((n) => `DROP TRIGGER IF EXISTS ${n};`).join('\n') + ddl)
-      backfillFtsRowids(db, target, /* ownTransaction */ false)
-      db.exec('COMMIT')
-    } catch (err) {
-      try {
-        db.exec('ROLLBACK')
-      } catch {
-        /* keep the original failure as the thrown error */
-      }
-      throw err
-    }
+  const liveTriggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name = ?")
+  for (const target of ['chunks', 'messages'] as const) {
+    const { ddl, markers } = CANONICAL_FTS_TRIGGERS[target]
+    const live = new Map(
+      (liveTriggers.all(target) as unknown as Array<{ name: string; sql: string }>).map((r) => [r.name, r.sql])
+    )
+    const current = [...markers].every(([name, required]) => {
+      const sql = live.get(name)
+      return sql !== undefined && required.every((m) => sql.includes(m))
+    })
+    if (current) continue
+    inOneTransaction(db, () => {
+      db.exec([...markers.keys()].map((n) => `DROP TRIGGER IF EXISTS ${n};`).join('\n') + ddl)
+      backfillFtsRowids(db, target)
+    })
   }
-  upgrade(
-    'chunks_fts_ad',
-    ['chunks_fts_ai', 'chunks_fts_ad', 'chunks_fts_au', 'chunks_fts_ad_legacy', 'chunks_fts_au_legacy'],
-    CHUNKS_FTS_TRIGGERS,
-    'chunks'
-  )
-  upgrade(
-    'messages_fts_ad',
-    ['messages_fts_ai', 'messages_fts_ad', 'messages_fts_au', 'messages_fts_ad_legacy', 'messages_fts_au_legacy'],
-    MESSAGES_FTS_TRIGGERS,
-    'messages'
-  )
 }
 
 // The FTS5 keyword index over chunk text, used by hybrid retrieval (rag-design §11).
@@ -896,14 +917,20 @@ function ensureChunksFts(db: Db): void {
     .prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_fts'")
     .get() as unknown as { name: string } | undefined
   if (exists) return
-  db.exec(`
+  // #737: the table, its triggers, the bulk fill and the handle backfill commit as ONE
+  // transaction. A bare multi-statement exec commits statement by statement, and the guard above
+  // never revisits a table that exists, so a failure part-way used to leave its prefix for good:
+  // triggers over an empty index, or every handle NULL.
+  inOneTransaction(db, () => {
+    db.exec(`
 CREATE VIRTUAL TABLE chunks_fts USING fts5(text, chunk_id UNINDEXED);
 ${CHUNKS_FTS_TRIGGERS}
 INSERT INTO chunks_fts(text, chunk_id) SELECT text, id FROM chunks;
 `)
-  // The bulk INSERT above writes the FTS table directly (no chunks trigger fires), so a
-  // pre-FTS workspace's existing chunks still carry a NULL handle — stamp them now (CODE-4).
-  backfillFtsRowids(db, 'chunks')
+    // The bulk INSERT above writes the FTS table directly (no chunks trigger fires), so a
+    // pre-FTS workspace's existing chunks still carry a NULL handle — stamp them now (CODE-4).
+    backfillFtsRowids(db, 'chunks')
+  })
 }
 
 // The FTS5 index over message text, used by conversation search.
@@ -925,24 +952,28 @@ function ensureMessagesFts(db: Db): void {
     .prepare("SELECT name FROM sqlite_master WHERE name = 'messages_fts'")
     .get() as unknown as { name: string } | undefined
   if (exists) return
-  db.exec(`
+  // As in ensureChunksFts: one transaction (#737), and the bulk INSERT bypasses the AI trigger —
+  // stamp the handles (CODE-4).
+  inOneTransaction(db, () => {
+    db.exec(`
 CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);
 ${MESSAGES_FTS_TRIGGERS}
 INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages WHERE kind IS NOT 'compaction';
 `)
-  // As in ensureChunksFts: the bulk INSERT bypasses the AI trigger — stamp the handles (CODE-4).
-  backfillFtsRowids(db, 'messages')
+    backfillFtsRowids(db, 'messages')
+  })
 }
 
 /**
  * R8 (context-compaction-plan §8) — on a workspace whose `messages_fts_ai` predates the compaction
  * guard, prune any checkpoint row already in the index (defence in depth: no shipped binary can
- * index one). The guarded trigger itself arrives with `ensureFtsRowidSync` in the same open: every
- * such workspace's `messages_fts_ad` predates CODE-4, so that upgrade recreates all five message
- * triggers from `MESSAGES_FTS_TRIGGERS`. That rests on one invariant of the file: the canonical set
- * writes the guarded `ai` before `ad` (one `exec` on a fresh create, one transaction on the
- * upgrade), so an `ad` that carries `fts_rowid` implies a guarded `ai`. Runs after
- * `ensureMessagesFts` so the table + the `kind` column already exist.
+ * index one, and `searchMessages` has no kind filter of its own — the index is the guard). The
+ * guarded trigger itself arrives with `ensureFtsRowidSync` in the same open: its check requires
+ * the `new.kind` guard on `messages_fts_ai`, so whenever this gate opens, that upgrade recreates
+ * all five message triggers from `MESSAGES_FTS_TRIGGERS` (#737 — before, it rested on the
+ * canonical set writing `ai` before `ad`, and an unguarded `ai` beside a current `ad` kept the
+ * guard off for good). Runs after `ensureMessagesFts` so the table + the `kind` column already
+ * exist.
  */
 function ensureMessagesFtsKindFilter(db: Db): void {
   const row = db

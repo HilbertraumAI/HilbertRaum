@@ -781,12 +781,32 @@ measures ~3 ms). Legacy rows (`fts_rowid` NULL) keep the exact old predicate via
 `_legacy` fallback triggers — a separate trigger rather than an OR because a constant conjunct
 on a virtual-table scan is evaluated per row, not short-circuited at plan time — so correctness
 never regresses, including under a rolled-back binary (triggers live in the DB file). A
-one-time idempotent migration (`ensureFtsRowidSync`, db.ts — sentinel: the live AD trigger's
-SQL) rewrites old workspaces' triggers and backfills the handles in one FTS scan; the
+one-time idempotent migration (`ensureFtsRowidSync`, db.ts) rewrites old workspaces' triggers
+and backfills the handles in one FTS scan, DROPs + CREATEs + backfill in one transaction; the
 `messages` twins keep the compaction `kind` guards (§15.3 R8/DATA-1) and park checkpoint rows
 at a permanently-NULL handle. Pinned by `tests/integration/fts-rowid-sync.test.ts` (timing
 bound, `EXPLAIN QUERY PLAN` rowid-lookup vs scan shape, migration idempotence, NULL-fallback
-parity).
+parity, torn-state healing, the atomic fresh create).
+
+**One transaction per index create, and a heal check that reads every trigger (#737).** The
+fresh create of `chunks_fts` / `messages_fts` (the table, its five triggers, the bulk fill and the
+handle backfill) commits as ONE transaction. It used to be a bare multi-statement `exec`, which
+node:sqlite commits statement by statement, plus a separately committed backfill, and the create
+is skipped whenever the table exists. So a failure part-way kept its prefix for good. Measured
+with a SIGKILL mid fill on a 300k-chunk pre-FTS workspace: 11 `chunks_fts*` objects committed,
+0 rows, and every later open left all 300k chunks out of keyword search with NULL handles. The
+same kill now commits nothing, and the next open indexes all of them. `ensureFtsRowidSync` judges
+a table current only when every trigger its canonical DDL creates exists and carries that DDL's
+style markers (`fts_rowid`; `new.kind` on the messages ai/au/au_legacy), at one `sqlite_master`
+read per table. Before, it read the AD trigger alone, so any tear that kept AD stayed torn (ai +
+ad only: an edited row's FTS entry went stale), and so did an unguarded `messages_fts_ai` beside a
+current AD. Markers, not bytes: a body that differs only in spacing or comments counts as current,
+so no other build's text of the same set is rewritten on every open. What no open can repair is
+index ENTRIES a pre-#737 build already lost (a bulk fill or a handle backfill that never
+committed; rows written while a trigger was missing): the triggers are made whole, but nothing
+re-reads the base table. The open's prune of an already-indexed checkpoint (§15.3 R8) is pinned
+on a hand-built legacy shape in `chat-compaction.test.ts`; on every shipped workspace it deletes
+nothing.
 
 **Embedder-visibility rule (the §10 honesty story, reconciled):** keyword hits are
 restricted to chunks that have a vector under the ACTIVE embedder. Hybrid search can
@@ -2442,7 +2462,8 @@ else summarize the region older than the protected tail (folding the prior check
 - **R8 — keep checkpoints out of search/export:** the `messages_fts_ai` AFTER INSERT trigger carries
   `WHEN new.kind IS NOT 'compaction'` (fresh DBs); on a pre-feature DB `ensureMessagesFtsKindFilter`
   prunes any already-indexed checkpoint row and CODE-4's `ensureFtsRowidSync` installs the guarded
-  trigger (the canonical set, same open); the FTS backfill SELECT is also kind-filtered.
+  trigger (the canonical set, same open — its check requires the guard on `messages_fts_ai`, #737,
+  §11); the FTS backfill SELECT is also kind-filtered.
 
 ### 15.4 Summary representation + the summarizer call (§4.5/§4.6/§4.8, R3/R4/R6/R11/R-RAG)
 
