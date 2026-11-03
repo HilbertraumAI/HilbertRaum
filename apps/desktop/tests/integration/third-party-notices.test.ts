@@ -11,7 +11,7 @@ import {
   OFL_1_1_LICENSE
 } from '../../../../scripts/lib/extra-notices.mjs'
 import { buildThirdPartyNotices } from '../../../../scripts/lib/third-party-notices.mjs'
-import { packedNodeModules } from '../helpers/asar-layout'
+import { packedNodeModules, type LockPackages } from '../helpers/asar-layout'
 import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
 
 // LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~224 npm packages
@@ -136,8 +136,8 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     // The freshness gate above recomputes the shipped set through the generator's own lib, so a bug in that walk passes both
     // sides. This row re-reads each required peer from the shipped set's lockfile entries and checks it against shipped NAMES.
     // On today's tree every required peer is also a normal dependency (56 edges, none peer-only), so this fires on a negated
-    // peer; the fold itself is proved by the fixture row below. electron-builder's collector follows dependencies +
-    // optionalDependencies only, so a pure peer would be noticed but not packed: `names exactly the packages…` goes red.
+    // peer; a peer-only one makes computeShippedPackages throw (#768, the fixture row below). electron-builder's collector
+    // follows dependencies + optionalDependencies only, so a pure peer would be noticed but not packed.
     const lock = lockPackages()
     const shipped = computeShippedPackages(REPO_ROOT)
     const shippedNames = new Set(shipped.map((p) => p.name))
@@ -156,39 +156,42 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     ).toEqual([])
   })
 
-  it('computes the shipped set: required peers in, optional peers and negated packages out, one entry per name@version, code-unit order', () => {
+  /** The shipped set of a scratch repo: this lockfile, and one package negation in electron-builder.yml. */
+  function shippedFrom(packages: LockPackages): ReturnType<typeof computeShippedPackages> {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-shipped-'))
     mkdirSync(join(root, 'apps', 'desktop'), { recursive: true })
     writeFileSync(
       join(root, 'apps', 'desktop', 'electron-builder.yml'),
       stringify({ files: ['out/**/*', '!**/node_modules/negated/**'] })
     )
-    writeFileSync(
-      join(root, 'package-lock.json'),
-      JSON.stringify({
-        packages: {
-          'apps/desktop': { name: 'app', dependencies: { alpha: '*', Zeta: '*', negated: '*' } },
-          'node_modules/alpha': {
-            version: '1.0.0',
-            license: 'MIT',
-            dependencies: { dup: '*', multi: '*' },
-            optionalDependencies: { maybe: '*' },
-            peerDependencies: { 'req-peer': '*', 'opt-peer': '*' },
-            peerDependenciesMeta: { 'opt-peer': { optional: true } }
-          },
-          'node_modules/Zeta': { version: '1.0.0', dependencies: { dup: '*', multi: '*' } },
-          'node_modules/dup': { version: '4.0.0' },
-          'node_modules/Zeta/node_modules/dup': { version: '4.0.0' },
-          'node_modules/multi': { version: '1.0.0' },
-          'node_modules/Zeta/node_modules/multi': { version: '2.0.0' },
-          'node_modules/maybe': { version: '1.1.0' },
-          'node_modules/req-peer': { version: '2.0.0' },
-          'node_modules/opt-peer': { version: '3.0.0' },
-          'node_modules/negated': { version: '9.0.0' }
-        }
-      })
-    )
-    const shipped = computeShippedPackages(root)
+    writeFileSync(join(root, 'package-lock.json'), JSON.stringify({ packages }))
+    return computeShippedPackages(root)
+  }
+
+  // alpha's required peer is also Zeta's dependency (every required peer of today's tree is reached that way, TQ-3).
+  const shippedFixture = (): LockPackages => ({
+    'apps/desktop': { name: 'app', dependencies: { alpha: '*', Zeta: '*', negated: '*' } },
+    'node_modules/alpha': {
+      version: '1.0.0',
+      license: 'MIT',
+      dependencies: { dup: '*', multi: '*' },
+      optionalDependencies: { maybe: '*' },
+      peerDependencies: { 'req-peer': '*', 'opt-peer': '*' },
+      peerDependenciesMeta: { 'opt-peer': { optional: true } }
+    },
+    'node_modules/Zeta': { version: '1.0.0', dependencies: { dup: '*', multi: '*', 'req-peer': '*' } },
+    'node_modules/dup': { version: '4.0.0' },
+    'node_modules/Zeta/node_modules/dup': { version: '4.0.0' },
+    'node_modules/multi': { version: '1.0.0' },
+    'node_modules/Zeta/node_modules/multi': { version: '2.0.0' },
+    'node_modules/maybe': { version: '1.1.0' },
+    'node_modules/req-peer': { version: '2.0.0' },
+    'node_modules/opt-peer': { version: '3.0.0' },
+    'node_modules/negated': { version: '9.0.0' }
+  })
+
+  it('computes the shipped set: dependency and optional edges in, an optional peer and negated packages out, one entry per name@version, code-unit order', () => {
+    const shipped = shippedFrom(shippedFixture())
     expect(shipped.map((p) => `${p.name}@${p.version}`)).toEqual([
       'Zeta@1.0.0',
       'alpha@1.0.0',
@@ -200,6 +203,16 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     ])
     expect(shipped.find((p) => p.name === 'alpha')?.lockLicense).toBe('MIT')
     expect(shipped.find((p) => p.name === 'dup')?.lockLicense).toBeNull()
+  })
+
+  // #768, owner call: npm installs a required peer, electron-builder does not pack one, so the notices would name a
+  // package app.asar lacks. A peer that no dependency edge reaches is refused, with the fix.
+  it('refuses a required peer that only a peer edge reaches, naming it and the fix (#768)', () => {
+    const packages = shippedFixture()
+    packages['node_modules/Zeta'].dependencies = { dup: '*', multi: '*' }
+    expect(() => shippedFrom(packages)).toThrow(
+      /^req-peer is a required peer of alpha@1\.0\.0 that no dependency edge reaches: .* Add req-peer to the dependencies of apps\/desktop\/package\.json\.$/
+    )
   })
 
   // DEP-6: a license file inside a path the build excludes does not ship, so the generator skips it (`shipsFile`).

@@ -29,6 +29,7 @@ import { dirname, join } from 'node:path'
 export interface LockPackage {
   name?: string
   version?: string
+  license?: string
   dependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
