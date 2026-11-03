@@ -1592,7 +1592,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
           `endedEarly`, not the signal, so a stop landing after a complete answer was saved keeps it;
         - a re-ask that threw with nothing saved restores its predecessor for any reason. Before,
           aborts were skipped, so a Stop during document search lost the answer — reachable through
-          "Answer without it" / "Run with <skill>";
+          "Answer without it" / "Run with <skill>". **#779:** after that restore an abort resolves
+          with the restored answer (CB-2's shape), so `chat:done` carries it instead of an empty
+          message; any other failure still rethrows to `chat:error`;
         - a turn left with no answer marks its question (`markUnansweredQuestion`, last visible row
           only).
       - **A crash** surfaces as `RuntimeConnectionLostError`, raised by `LlamaRuntime.chatStream` on

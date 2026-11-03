@@ -511,6 +511,15 @@ on `chat:error:<id>` as the friendly localized `main.chat.streamError` copy (sti
 string). The structural server reason goes to the local log only — never to the renderer.
 **Regenerate:** `sendChatMessage` with `options.regenerate = true` deletes the last assistant
 message and re-streams from existing history (no new user turn).
+**What `done` carries when a re-ask ends with no new answer (#779, additive — channel shape unchanged):**
+the previous answer is restored, and `done` (and the invoke's resolved value) is that restored `Message`
+— for a Stop before the first token (CB-2) and for an abort thrown before anything streamed (a Stop,
+model stop, lock or quit during document search, the reranker, a knowledge-pack arm or the
+categorizer). A non-abort failure restores it too but stays an error (`chat:error:<id>`, the invoke
+rejects). One documented twin carries an empty `Message` instead: a Stop while the re-ask is still parked
+waiting for the chat slot behind a deep-index build. Nothing was deleted then, so the previous answer
+stands untouched; the renderer re-lists the conversation after the invoke resolves and does not read the
+`done` payload (it never subscribes to `onDone`).
 **Send again (#613, additive):** `sendChatMessage(conversationId, '', { resendMessageId })` and
 `askDocuments(conversationId, '', skillInstallId, false, pinnedDocumentId, resendMessageId)` answer the
 conversation's unanswered last question: the user turn with that id, which must still be the last visible
