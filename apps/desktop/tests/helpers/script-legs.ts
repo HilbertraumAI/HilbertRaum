@@ -1,7 +1,7 @@
 // The shipped `scripts/*.{ps1,sh}` run on a fresh machine with no Node, so each pair repeats its logic and the suites read
 // or run both. This is the shell half of those suites: the two legs, and the array parser the twin rows compare with.
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { testBudgetMs } from './hang-budget'
@@ -39,6 +39,8 @@ export interface RunOptions {
   /** Variables set on top of this process's environment. A `PATH` here replaces the inherited one, whatever its case. */
   env?: NodeJS.ProcessEnv
   cwd?: string
+  /** Runs the script from this folder instead of the repo's scripts/ (see `isolatedScripts`). */
+  scriptsDir?: string
 }
 
 export interface ScriptLeg {
@@ -90,7 +92,7 @@ export const SCRIPT_LEGS: ScriptLeg[] = [
     run: (script, args, opts = {}) =>
       spawnSync(
         'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(SCRIPTS, script), ...args],
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(opts.scriptsDir ?? SCRIPTS, script), ...args],
         {
           encoding: 'utf8',
           timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS,
@@ -106,7 +108,7 @@ export const SCRIPT_LEGS: ScriptLeg[] = [
     ext: 'sh',
     flag: (n) => `--${n.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()}`,
     run: (script, args, opts = {}) =>
-      spawnSync('bash', [join(SCRIPTS, script), ...args], {
+      spawnSync('bash', [join(opts.scriptsDir ?? SCRIPTS, script), ...args], {
         encoding: 'utf8',
         timeout: opts.timeoutMs ?? CHILD_TIMEOUT_MS,
         env: childEnv(opts.env),
@@ -138,11 +140,14 @@ function mirrorWithoutAria2(dir: string): string {
   return mirror
 }
 
+/** A proxy on a loopback port nothing listens on: curl, wget and aria2c fail an http(s) request at once; `file://` ignores it. */
+const DEAD_PROXY = 'http://127.0.0.1:9'
+
 /**
  * Overrides for a row that really downloads, from a `file://` URL. Every CI runner image ships aria2c, which the scripts
  * prefer and which reads no `file://` URL, so it leaves PATH: a Windows directory holding it (a choco shim folder) is
  * dropped, a POSIX one is mirrored without it. `firstDir` (a stub downloader) goes first. `STUB_NODE` names this node for
- * the stubs.
+ * the stubs. Every proxy variable names a dead port, so a row that went wrong cannot reach the network (CLAUDE.md).
  */
 export function downloadEnv(firstDir?: string): NodeJS.ProcessEnv {
   const dirs: string[] = []
@@ -151,5 +156,19 @@ export function downloadEnv(firstDir?: string): NodeJS.ProcessEnv {
     if (!ARIA2.some((n) => existsSync(join(dir, n)))) dirs.push(dir)
     else if (process.platform !== 'win32') dirs.push(mirrorWithoutAria2(dir))
   }
-  return { PATH: [...(firstDir ? [firstDir] : []), ...dirs].join(delimiter), STUB_NODE: process.execPath }
+  const proxies: NodeJS.ProcessEnv = {}
+  for (const name of ['http_proxy', 'https_proxy', 'all_proxy']) proxies[name] = proxies[name.toUpperCase()] = DEAD_PROXY
+  return { PATH: [...(firstDir ? [firstDir] : []), ...dirs].join(delimiter), STUB_NODE: process.execPath, ...proxies, no_proxy: '', NO_PROXY: '' }
+}
+
+/**
+ * A copy of the repo's shipped `*.ps1` / `*.sh` scripts, for rows that really download. Its parent holds no
+ * model-manifests/, so a script that misses the drive's own manifests or pin cannot fall back to the repo's catalog and
+ * fetch it: a pre-fix fetch-models on a `Kit [1]` root did exactly that, a real 1.6 GB download (#767).
+ */
+export function isolatedScripts(): string {
+  const dir = join(mkdtempSync(join(tmpdir(), 'hilbertraum-scripts-')), 'scripts')
+  mkdirSync(dir)
+  for (const name of readdirSync(SCRIPTS)) if (/\.(ps1|sh)$/.test(name)) copyFileSync(join(SCRIPTS, name), join(dir, name))
+  return dir
 }

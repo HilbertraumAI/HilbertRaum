@@ -10,14 +10,18 @@ import { committedManifests } from '../helpers/catalog'
 import { testBudgetMs } from '../helpers/hang-budget'
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
 import { REPO_ROOT } from '../helpers/repo-files'
-import { SCRIPT_LEGS, downloadEnv, outputOf, scriptRoot, type ScriptLeg } from '../helpers/script-legs'
+import { SCRIPT_LEGS, downloadEnv, isolatedScripts, outputOf, scriptRoot, type ScriptLeg } from '../helpers/script-legs'
 
 // fetch-models really downloading, from `file://` sources (#769): the size-guarded delete before a re-download (AUD-24),
 // resume of a short partial, the delete after a mismatch, and the aria2 keep branch, on both twins and into a drive root
 // with a space and a `[` in its name (#767). Every run passes `downloadEnv()`: every CI image ships aria2c, which the
-// scripts prefer and which reads no `file://` URL. script-execution.test.ts holds the dry-run plan rows.
+// scripts prefer and which reads no `file://` URL. script-execution.test.ts holds the dry-run plan rows. The scripts run
+// from a copy with no repo catalog beside it: a fetch-models that misses the drive's manifests falls back to the repo's,
+// and the pre-fix .ps1 on a `[` root started a real 1.6 GB download that way.
 
 vi.setConfig({ testTimeout: testBudgetMs(90_000) })
+
+const SCRIPTS_COPY = isolatedScripts()
 
 const ID = 'd-model'
 const PRIMARY = `models/chat/${ID}.gguf`
@@ -116,7 +120,7 @@ for (const leg of SCRIPT_LEGS) {
   describe.skipIf(leg.skip)(`fetch-models downloads — ${leg.name}`, () => {
     const f = leg.flag
     const fetchModels = (root: string, env = downloadEnv(), extra: string[] = []) =>
-      leg.run(`fetch-models.${leg.ext}`, [f('Target'), root, ...extra], { env })
+      leg.run(`fetch-models.${leg.ext}`, [f('Target'), root, ...extra], { env, scriptsDir: SCRIPTS_COPY })
 
     // A guard for every row below: a leaked aria2c fails each with a protocol error, far from the cause.
     it('under downloadEnv() no aria2c resolves, and one put first on PATH does', () => {
