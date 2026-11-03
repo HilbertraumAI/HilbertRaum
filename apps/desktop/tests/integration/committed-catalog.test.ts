@@ -828,8 +828,7 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
 
 describe('committed catalog — the single-manifest roles (TQ-2)', () => {
   // The role manifests churn far less than the chat waves; a presence + real-hash pin over EVERY declared file is the cheap
-  // half that catches deletion and hash mis-edits. License posture is deliberately NOT pinned here: TranslateGemma's `pending`
-  // is a standing owner decision (the mechanical sell-gate guard), and pinning statuses would freeze that.
+  // half that catches deletion and hash mis-edits. TranslateGemma's license posture has a row of its own below.
   it('each non-chat role ships exactly its one known manifest with a real hash', () => {
     const manifests = committedManifests()
     const expected: Record<string, { id: string; kinds: string[] }> = {
@@ -857,6 +856,21 @@ describe('committed catalog — the single-manifest roles (TQ-2)', () => {
     ])
     // Fetched with the weight: dictation needs both, and the wrapper finds this one by its name.
     expect(whisper!.files?.[0].download, 'the VAD file has a source').toBeDefined()
+  })
+
+  // #769 (owner call): `license_review.status` is the REDISTRIBUTION review a sold drive needs, and TranslateGemma's
+  // stays `pending` until the Gemma flow-down checklist its manifest note lists exists. Freezing it is the point: a flip
+  // is an owner decision, never a tidy-up. DRIVE-NOTICES.md prints the status, so its byte gate already shows a flip as
+  // a diff; this row carries the intent and says what the flip costs.
+  it('TranslateGemma\'s license review stays pending until a redistribution review is recorded (#769)', () => {
+    const tg = committedManifests().find((m) => m.id === 'translategemma-12b-it-q4')
+    expect(tg, 'translategemma manifest present').toBeDefined()
+    expect(
+      tg!.licenseReview.status,
+      'approving it drops the in-app license confirmation (ModelsScreen needsAck) and the downloaders\' license ' +
+        'refusal (services/assets.ts, fetch-models), and lets a Kit preload the weight past the sell gate ' +
+        '(services/commercial-drive.ts). Record the redistribution review in docs/model-policy.md first.'
+    ).toBe('pending')
   })
 })
 
