@@ -26,6 +26,7 @@ import {
   MIN_COMPACTABLE_TURNS,
   selfSummaryPrompt
 } from '../../src/main/services/chat/compaction'
+import { approxPromptTokens, buildSkillFence } from '../../src/main/services/skills/prompt'
 import {
   buildGroundedChatMessages,
   EXCERPT_BEGIN,
@@ -149,6 +150,37 @@ describe('ensureCompacted — CB-3 threshold cap + estimate fold-in', () => {
     expect(rt.summaryCalls).toHaveLength(1)
     const cp = getLatestCheckpoint(db, conv.id)
     expect(cp?.coversThroughRowid).toBeGreaterThan(preTurns[preTurns.length - 1].rowid) // a new, rolling checkpoint
+  })
+
+  it('the pre-sized skill fence counts toward the trigger: a history just under it compacts only with the fence (#737)', async () => {
+    // `generateAssistantMessage` hands the fence's cost to the pre-pass as `reservedTokens`, which moves only the
+    // TRIGGER. Twin turns over one history: bare, the estimate sits under the 4096 trigger; the fence carries it over.
+    const skill = { installId: 'user:big', title: 'Big', body: words(600) }
+    const build = (): { db: Db; convId: string } => {
+      const db = freshDb()
+      const conv = createConversation(db, { modelId: 'm' })
+      appendTurns(db, conv.id, 12, 90)
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: words(90) }) // the turn being answered
+      return { db, convId: conv.id }
+    }
+    const trigger = 4096 - CHAT_RESPONSE_RESERVE_TOKENS // 3072 = min(0.85·4096, 4096 − reserve)
+    const bare = sysTokens() + 13 * perTurn(90)
+    const fenceTokens = approxPromptTokens(buildSkillFence(skill).text ?? '')
+    expect(bare).toBeLessThan(trigger) // without the fence: no compaction
+    expect(bare + fenceTokens).toBeGreaterThanOrEqual(trigger) // with it: over the trigger
+
+    const a = build()
+    const rtA = compactionRuntime({ window: 4096 })
+    await generateAssistantMessage(a.db, rtA, a.convId, {})
+    expect(rtA.summaryCalls).toHaveLength(0)
+    expect(getLatestCheckpoint(a.db, a.convId)).toBeNull()
+
+    const b = build()
+    const rtB = compactionRuntime({ window: 4096 })
+    const reply = await generateAssistantMessage(b.db, rtB, b.convId, { skill })
+    expect(reply.skillId).toBe('user:big') // the fence fit its budget and was placed
+    expect(rtB.summaryCalls).toHaveLength(1)
+    expect(getLatestCheckpoint(b.db, b.convId)).not.toBeNull()
   })
 })
 
