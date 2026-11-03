@@ -306,9 +306,11 @@ Key config points:
   SIL-OFL-1.1 notice for the KaTeX fonts, MIT/BSD/ISC attribution). The committed file is
   **generated** — after any dependency change, regenerate with
   `node scripts/generate-third-party-notices.mjs` and commit the result;
-  `tests/integration/third-party-notices.test.ts` recomputes the shipped package set from
-  `package-lock.json` + the `files:` negations (shared logic in `scripts/lib/shipped-packages.mjs`)
-  and fails the gate while the file is stale. Electron's own `LICENSE.electron.txt` /
+  `tests/integration/third-party-notices.test.ts` runs the generator's own builder
+  (`scripts/lib/third-party-notices.mjs`, over the shipped set `scripts/lib/shipped-packages.mjs`
+  computes from `package-lock.json` + the `files:` negations) and fails the gate while the committed
+  file differs from a regeneration by a single byte (#769), as `drive-notices.test.ts` does for
+  `DRIVE-NOTICES.md`. The two builders share their text helpers (`scripts/lib/notice-text.mjs`, #770). Electron's own `LICENSE.electron.txt` /
   `LICENSES.chromium.html` are placed beside the executable by electron-builder itself.
 - **The project's own `LICENSE` ships as an `extraResource` too** (as `LICENSE.txt`, LIC-2
   full-audit 2026-07-12b): the root GPL-3.0-or-later text sits outside the `apps/desktop` build

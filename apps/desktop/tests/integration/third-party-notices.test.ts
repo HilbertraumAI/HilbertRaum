@@ -10,6 +10,7 @@ import {
   LEPTONICA_LICENSE,
   OFL_1_1_LICENSE
 } from '../../../../scripts/lib/extra-notices.mjs'
+import { buildThirdPartyNotices } from '../../../../scripts/lib/third-party-notices.mjs'
 import { packedNodeModules } from '../helpers/asar-layout'
 import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoText } from '../helpers/repo-files'
 
@@ -21,7 +22,8 @@ import { builderConfig, DESKTOP_ROOT, filesUnder, lockPackages, REPO_ROOT, repoT
 // extraResource. These tests keep it HONEST: the file's machine-readable package list must
 // exactly match the shipped set recomputed from package-lock.json + electron-builder.yml
 // (the same computation the generator uses — scripts/lib/shipped-packages.mjs), so any
-// dependency change fails the gate until the file is regenerated.
+// dependency change fails the gate until the file is regenerated, and the whole file must equal
+// what the generator's builder (scripts/lib/third-party-notices.mjs) writes (#769).
 
 const NOTICES = join(REPO_ROOT, 'THIRD-PARTY-NOTICES.md')
 const REGEN = 'run `node scripts/generate-third-party-notices.mjs` and commit the result'
@@ -34,6 +36,15 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
     expect(raw.includes(0), 'literal NUL byte in THIRD-PARTY-NOTICES.md').toBe(false)
     expect(raw.includes(0x0d), 'CR line ending in THIRD-PARTY-NOTICES.md').toBe(false)
     expect(raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf, 'UTF-8 BOM').toBe(false)
+  })
+
+  // #769: the rows below read parts of the file; this one holds every byte, so a hand edit of a license text or a
+  // generator change that nobody regenerated fails here.
+  it('is byte-identical to a regeneration from the lockfile + the installed packages (#769)', () => {
+    expect(
+      readFileSync(NOTICES, 'utf8'),
+      `THIRD-PARTY-NOTICES.md is STALE (a license text, the generator or the shipped set changed) — ${REGEN}`
+    ).toBe(buildThirdPartyNotices(REPO_ROOT))
   })
 
   it('its package list EXACTLY matches the shipped set from the lockfile + builder yml', () => {
