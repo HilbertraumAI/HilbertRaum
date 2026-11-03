@@ -276,11 +276,13 @@ if ($Family -eq 'ocr') {
         Write-Host '    download failed after retries' -ForegroundColor Red; $failed++; continue
       }
     } else {
-      # Same warn-and-continue contract as the curl branch: a failing Invoke-WebRequest is a
+      # Same warn-and-continue contract as the curl branch: a failing download is a
       # terminating error under $ErrorActionPreference = 'Stop', which would abort the whole
-      # batch at the first bad file instead of attempting the rest (AUD-05).
+      # batch at the first bad file instead of attempting the rest (AUD-05). .NET's WebClient,
+      # not Invoke-WebRequest: its -OutFile has no literal form in 5.1 and fails on a `[` in
+      # the drive root (#767).
       try {
-        Invoke-WebRequest -Uri $f.url -OutFile $dest -UseBasicParsing
+        (New-Object System.Net.WebClient).DownloadFile($f.url, $dest)
       } catch {
         Write-Host ("    download failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
         $failed++
@@ -501,7 +503,13 @@ if ($Curl) {
     Write-Host 'curl failed after retries' -ForegroundColor Red; exit 1
   }
 } else {
-  Invoke-WebRequest -Uri $build.url -OutFile $archive -UseBasicParsing
+  # Last resort: .NET's WebClient. Not Invoke-WebRequest: its -OutFile has no literal form in
+  # 5.1 and fails on a `[` in the drive root (#767). A failure is reported, not thrown (AUD-05).
+  try {
+    (New-Object System.Net.WebClient).DownloadFile($build.url, $archive)
+  } catch {
+    Write-Host ("download failed: {0}" -f $_.Exception.Message) -ForegroundColor Red; exit 1
+  }
 }
 
 $archiveVerified = $false
