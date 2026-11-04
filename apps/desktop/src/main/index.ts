@@ -680,7 +680,10 @@ function initBackend(): void {
     skills,
     // Wave 8 ruling (a): shared with `registerModelIpc.ts` (increments/decrements it) and the
     // posture-callback factory above (reads only its count).
-    pendingModelSwitches
+    pendingModelSwitches,
+    // #782: the IPC layer's notices (a download stopped because internet access was switched off)
+    // go out the way the runtime factories' do.
+    runtimeNotice: notifyRenderer
   }
   // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
   // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the

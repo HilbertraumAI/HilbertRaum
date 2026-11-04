@@ -33,7 +33,7 @@ import {
 } from './assets'
 import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
-import { assertDownloadAllowed, type DownloadGates } from './downloads'
+import { assertDownloadAllowed, NetworkSwitch, type DownloadGates } from './downloads'
 import { holdEngineSpawns } from './runtime/spawn-gate'
 import type { EngineProblemBuilds } from './runtime/engine-load'
 
@@ -559,6 +559,8 @@ interface InstallStep {
 export class EngineDownloadManager {
   private jobs = new Map<string, EngineDownloadJob>()
   private active: { jobId: string; controller: AbortController } | null = null
+  /** #782: the internet-access switch between this manager's gate checks. */
+  private readonly network = new NetworkSwitch()
   /**
    * False while a `run()` promise is still in flight (F-33). `job.status` flips to 'cancelled'
    * the instant `cancel()` is called, but the `run()` — and the tar child it awaits — can still
@@ -777,6 +779,31 @@ export class EngineDownloadManager {
     return { ...job }
   }
 
+  /**
+   * #782: internet access was switched off (`on` false) or back on. Off: an archive download in
+   * progress stops at once; a job checking an archive finishes that check and stops before its next
+   * download; one whose archives are all in (extracting) finishes its install. `onStopped` runs once,
+   * when (and if) the job stops. On before that: the job carries on. No start straddles the switch:
+   * `start()` makes its job before its first await.
+   */
+  networkSwitched(on: boolean, onStopped: () => void = () => undefined): void {
+    if (on) return this.network.switchedOn()
+    const active = this.active
+    this.network.switchedOff(active?.controller ?? null, onStopped)
+    const job = active ? this.jobs.get(active.jobId) : undefined
+    if (active && job && (job.status === 'queued' || job.status === 'downloading')) {
+      this.stopNetworkJob(job, active.controller)
+    }
+  }
+
+  /** Stop `job` for #782: it reads `cancelled`, and its run discards what it fetched, as a cancel's does. */
+  private stopNetworkJob(job: EngineDownloadJob, controller: AbortController): void {
+    job.status = 'cancelled'
+    controller.abort()
+    this.deps.log?.('Engine download stopped: internet access was switched off', { jobId: job.jobId })
+    this.network.stopped(controller)
+  }
+
   activeJob(): string | null {
     if (!this.active) return null
     const job = this.jobs.get(this.active.jobId)
@@ -918,6 +945,14 @@ export class EngineDownloadManager {
       // Fetch the release archive. No Range resume (an engine archive is far smaller than a
       // multi-GB weight, and a corrupt partial must never be extracted) — a fresh archive
       // each attempt; a stale one from a cancelled run is overwritten.
+      // A stop that landed while the job was still queued (behind the mkdir above) stands: the
+      // status below must not overwrite it, or the aborted fetch would read as a failure.
+      if (controller.signal.aborted) return 'aborted'
+      // #782: internet access went off while an earlier archive was checked: nothing new is fetched.
+      if (this.network.stopsAt(controller)) {
+        this.stopNetworkJob(job, controller)
+        return 'aborted'
+      }
       job.status = 'downloading'
       const result = await downloadToFile(plan.url, plan.zipDest, {
         fetchImpl: this.deps.fetchImpl,

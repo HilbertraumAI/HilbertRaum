@@ -41,7 +41,7 @@ import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../
 import { engineProblemFor, reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { updateSettings } from '../../src/main/services/settings'
 import { log } from '../../src/main/services/logging'
-import { bodyFetch } from '../helpers/download-fixtures'
+import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb, START_READS } from '../helpers/performance-fixture'
 import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
@@ -255,6 +255,21 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     expect(String(d.fetchSpy.mock.calls[0]?.[0])).toContain('download.kiwix.org')
     // The completed install re-probes the packs with the new bundle — exactly once.
     await vi.waitFor(() => expect(d.reconcile).toHaveBeenCalledTimes(1))
+  })
+
+  // #782: the registrar hands settings:update its engine manager (the switch itself: core-model-ipc).
+  it('switching internet access off stops the knowledge-pack tools install the IPC started', async () => {
+    const d = makeDrive()
+    d.fetchSpy.mockImplementation(hangingFetch('partial-archive'))
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
+    const started = result as EngineDownloadJob
+    await vi.waitFor(() => expect(d.manager.get(started.jobId).receivedBytes).toBeGreaterThan(0))
+    const onStopped = vi.fn()
+    d.ctx.installsNetworkSwitched?.(false, onStopped)
+    expect((await runToEnd(d.manager, started.jobId)).status).toBe('cancelled')
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(existsSync(join(kiwixDir(d.root), KIWIX_FILES[0]))).toBe(false)
+    expect(d.reconcile).not.toHaveBeenCalled()
   })
 
   it('the argument-less call still never fetches kiwix_tools, and installing the chat engine reconciles nothing', async () => {

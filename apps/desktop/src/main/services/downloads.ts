@@ -36,7 +36,9 @@ import { noteWeightWarmed } from './read-speed'
 //   the user's `allowNetwork` setting (default ON, but gated by the policy ceiling above), and a per-download confirmation in
 //   the renderer (with an explicit license acknowledgement when the manifest's
 //   `license_review.status` is not `approved`). `start()` re-checks the first two in
-//   the main process — a renderer bug can never start an unsanctioned download.
+//   the main process — a renderer bug can never start an unsanctioned download. The gates are
+//   read at the start only; switching internet access off later stops the job through
+//   `networkSwitched` (#782). A workspace lock does not (BE-2).
 // - The network bytes land in `<weightPath>.part`; the file is renamed into place ONLY
 //   after the hash verifies, so a crashed/cancelled download never leaves a half-weight
 //   where `computeInstallState` can see it. A cancelled/failed `.part` is KEPT and
@@ -73,6 +75,62 @@ export function assertDownloadAllowed(gates: DownloadGates): void {
   }
   if (!gates.settingAllows) {
     throw new Error(tMain('main.download.networkOff'))
+  }
+}
+
+/**
+ * #782: "Allow internet access" as one downloader sees it, between its gate checks. Each manager (models, the
+ * engine, OCR) holds one; the settings handler reports every real flip of the switch to it.
+ *
+ * - A switch-off is remembered for the run that was going, so a job in a local phase (a check, an extraction)
+ *   stops at its next network request (`stopsAt`); the manager stops a transfer at once itself.
+ * - A start captures `mark()` with its gates and asks `stillAllowed(mark)` after its awaits, so a start that
+ *   planned across a switch-off is refused while the switch is still off.
+ * - A switch back on withdraws a stop still waiting for its request.
+ */
+export class NetworkSwitch {
+  private offs = 0
+  private isOff = false
+  private due: { run: AbortController; onStopped: () => void } | null = null
+
+  /** Internet access went off. `run` is the controller of the manager's running job, if there is one. */
+  switchedOff(run: AbortController | null, onStopped: () => void): void {
+    this.offs++
+    this.isOff = true
+    this.due = run ? { run, onStopped } : null
+  }
+
+  /** Internet access went back on: a job that has not stopped yet carries on. */
+  switchedOn(): void {
+    this.isOff = false
+    this.due = null
+  }
+
+  /** Captured with the gates at the top of a start. */
+  mark(): number {
+    return this.offs
+  }
+
+  /** False when the switch went off after `mark` and is still off. */
+  stillAllowed(mark: number): boolean {
+    return this.offs === mark || !this.isOff
+  }
+
+  /** True when `run` must stop before its next network request. */
+  stopsAt(run: AbortController): boolean {
+    return this.due?.run === run
+  }
+
+  /** `run` stopped for the switch: its `onStopped` (the notice) runs once, and never throws out of here. */
+  stopped(run: AbortController): void {
+    if (this.due?.run !== run) return
+    const { onStopped } = this.due
+    this.due = null
+    try {
+      onStopped()
+    } catch {
+      /* the notice is best-effort; it must never fail the run that called it */
+    }
   }
 }
 
@@ -137,6 +195,8 @@ export class DownloadManager {
    * on the `.part`; a second start in that window would write to the same file.
    */
   private active: { jobId: string; controller: AbortController } | null = null
+  /** #782: the internet-access switch between this manager's gate checks. */
+  private readonly network = new NetworkSwitch()
   /** #314: terminal results the renderer dismissed. Session-only like `jobs`, and pruned
    *  alongside it so the set stays bounded by MAX_TERMINAL_JOBS. */
   private dismissed = new Set<string>()
@@ -160,6 +220,7 @@ export class DownloadManager {
   async start(opts: StartDownloadOptions): Promise<DownloadJob> {
     this.pruneTerminalJobs()
     assertDownloadAllowed(opts.gates)
+    const networkMark = this.network.mark()
     // Single-flight: `activeJob()` and the `this.active` assignment below straddle the
     // `await planModelDownloads(...)`, so two near-simultaneous start() invokes both observed
     // `activeJob() === null` and both launched a run (orphaning the first AbortController). The
@@ -214,6 +275,9 @@ export class DownloadManager {
       // #768: refused before the job exists, so a download that cannot fit is never audited as
       // started and never requested, instead of failing on ENOSPC partway through.
       await assertRoomFor(toDownload)
+      // #782: internet access was switched off while this start planned (the plan can hash a file
+      // already on the drive, for minutes), and is still off: the gates it began with no longer hold.
+      if (!this.network.stillAllowed(networkMark)) throw new Error(tMain('main.download.networkOff'))
 
       const modelId = tasks[0].id
       const plannedTotal = sumSizes(toDownload)
@@ -316,6 +380,35 @@ export class DownloadManager {
       this.deps.log?.('Model download cancelled', { modelId: job.modelId, jobId })
     }
     return { ...job }
+  }
+
+  /**
+   * #782: internet access was switched off (`on` false) or back on. Off: a transfer in progress stops
+   * at once; a job checking a file it already has finishes that file and stops before its next
+   * request, so a model whose bytes are all on the drive still installs; a start still planning is
+   * refused when its plan is done. The `.part` is kept, as for a cancel. `onStopped` runs once, when
+   * (and if) the job stops. On before that: the job carries on.
+   */
+  networkSwitched(on: boolean, onStopped: () => void = () => undefined): void {
+    if (on) return this.network.switchedOn()
+    const active = this.active
+    this.network.switchedOff(active?.controller ?? null, onStopped)
+    const job = active ? this.jobs.get(active.jobId) : undefined
+    if (active && job && (job.status === 'queued' || job.status === 'downloading')) {
+      this.stopNetworkJob(job, active.controller)
+    }
+  }
+
+  /** Stop `job` for #782: it reads `cancelled` and says why, and its run settles as a cancel's does. */
+  private stopNetworkJob(job: DownloadJob, controller: AbortController): void {
+    job.status = 'cancelled'
+    job.stoppedBy = 'networkOff'
+    controller.abort()
+    this.deps.log?.('Model download stopped: internet access was switched off', {
+      modelId: job.modelId,
+      jobId: job.jobId
+    })
+    this.network.stopped(controller)
   }
 
   /**
@@ -434,6 +527,12 @@ export class DownloadManager {
             continue
           }
           return settled === 'done'
+        }
+        // #782: internet access went off while this job checked a file it already had. That file
+        // finished; nothing new is requested.
+        if (this.network.stopsAt(controller)) {
+          this.stopNetworkJob(job, controller)
+          return false
         }
         let prefix = resumeFrom
         job.status = 'downloading'

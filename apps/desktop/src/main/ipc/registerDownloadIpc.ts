@@ -36,6 +36,9 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
       onModelInstalled: (modelId) => ctx.onModelInstalled?.(modelId)
     })
 
+  // #782: switching internet access off stops the running download (settings:update calls this).
+  ctx.downloadsNetworkSwitched = (on, onStopped) => downloads.networkSwitched(on, onStopped)
+
   // Both gates read at call time: the policy from disk (authoritative ceiling), the
   // setting from the (possibly locked → treated as off) workspace DB.
   const gates = (): DownloadGates => {

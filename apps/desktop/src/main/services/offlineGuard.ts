@@ -144,8 +144,9 @@ export function assertOfflinePosture(deps: AssertOfflinePostureDeps): () => void
       // breaks loopback IPC / the sidecar — strictly worse than logging. The offline
       // guarantee rests on the no-remote-code posture + the prod CSP; this is defence in
       // depth. The core path makes no remote calls, so a firing indicates a regression — or a
-      // download or install the user started, still running after a lock or after the network
-      // setting went off, opening a new connection (#758; known-limitations.md).
+      // download or install the user started, still running after a lock, opening a new
+      // connection (#758; known-limitations.md). Switching the network setting off stops such a
+      // job instead (#782).
       deps.warn('Offline posture: remote connection attempt detected (logged, not blocked)', { host })
       deps.onViolation?.(host)
     }

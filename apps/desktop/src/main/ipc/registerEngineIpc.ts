@@ -257,6 +257,13 @@ export function registerEngineIpc(
     })
   })
 
+  // #782: switching internet access off stops the running engine and OCR installs (settings:update
+  // calls this). Each manager runs one job at a time; both can run at once.
+  ctx.installsNetworkSwitched = (on, onStopped) => {
+    engine.networkSwitched(on, onStopped)
+    ocrInstaller.networkSwitched(on, onStopped)
+  }
+
   const gates = (): DownloadGates => {
     const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m), { isDev: ctx.isDev })
     const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork

@@ -24,6 +24,23 @@ import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../.
 export function registerCoreIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
 
+  // #782: the switch says "When off, the app makes no internet calls", and the downloaders read their
+  // gates only when a job starts. So switching it off stops what is using the network: a transfer at
+  // once, a job checking what it already has before its next request (each manager's
+  // `networkSwitched`); switching it back on first lets that job carry on. Each job that stops shows
+  // the notice; one that needs no more network finishes without it. A fault here never fails the
+  // save, which has already landed.
+  const networkSwitched = (on: boolean): void => {
+    const tell = (): void => ctx.runtimeNotice?.(tMain('main.download.stoppedNetworkOff'), 'models')
+    for (const report of [ctx.downloadsNetworkSwitched, ctx.installsNetworkSwitched]) {
+      try {
+        report?.(on, tell)
+      } catch (err) {
+        log.warn('Telling the downloads that internet access was switched failed', { on, error: String(err) })
+      }
+    }
+  }
+
   // F16 (audit-postmerge-2026-06-29): the settings get/update handlers touch ctx.db. The getter
   // fail-closes when locked but throws the raw English vault string; gate them with the localized
   // copy (parity with the other DB-touching handler groups). The status/policy/preflight/clipboard
@@ -177,7 +194,10 @@ export function registerCoreIpc(ctx: AppContext): void {
           getSettings(ctx.db)
         )
       : null
+    // #782: the same REAL-flip discipline for internet access — a same-value save reports nothing.
+    const networkBefore = 'allowNetwork' in patch ? getSettings(ctx.db).allowNetwork : null
     const result = updateSettings(ctx.db, patch)
+    if (networkBefore !== null && networkBefore !== result.allowNetwork) networkSwitched(result.allowNetwork)
     if (postureBefore && rerankerPostureInputsChanged(postureBefore, result)) {
       void ctx.reranker?.suspend?.().catch((err: unknown) => {
         log.warn('Reranker sidecar suspend after a posture-affecting settings change failed', {

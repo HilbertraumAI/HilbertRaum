@@ -84,4 +84,13 @@ describe('wiring pin: initBackend routes chat-stream speed through observeAnswer
     expect(initBackendCode).toMatch(/onGpuFailure: persistGpuFailure\b/)
     expect(initBackendCode).toMatch(/persistFailure: \(reason\) => \{[\s\S]*?persistGpuFailure\(reason\)/)
   })
+
+  // #782: the IPC layer's notice (a download stopped because internet access was switched off) reaches the windows only
+  // through `ctx.runtimeNotice`; without it the jobs still stop, but nobody is told. The chain past it: download-ipc.
+  it('ctx carries the runtime factories\' notice sender as runtimeNotice', () => {
+    const pin = /ctx = \{[\s\S]*?\bruntimeNotice: notifyRenderer\b[\s\S]*?\n {2}\}/
+    expect(initBackendCode).toMatch(/const notifyRenderer = \(/)
+    expect(initBackendCode).toMatch(pin)
+    expect(initBackendCode.replace(/\bruntimeNotice: notifyRenderer\b/, '')).not.toMatch(pin)
+  })
 })
