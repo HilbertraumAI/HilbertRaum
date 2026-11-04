@@ -21,7 +21,7 @@ import {
   type FetchFn,
   type OcrFileTask
 } from './assets'
-import { assertDownloadAllowed, type DownloadGates } from './downloads'
+import { assertDownloadAllowed, NetworkSwitch, type DownloadGates } from './downloads'
 import { ocrAssetsDir } from './ocr/factory'
 import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 
@@ -269,6 +269,8 @@ const MAX_TERMINAL_JOBS = 10
 export class OcrInstallManager {
   private readonly jobs = new Map<string, OcrInstallJob>()
   private active: { jobId: string; controller: AbortController } | null = null
+  /** #782: the internet-access switch between this manager's gate checks. */
+  private readonly network = new NetworkSwitch()
   /** Synchronous single-flight latch over the awaits inside `start()` (the downloads.ts rule). */
   private starting = false
   /** False while a `run()` is still settling — a cancelled job's activation may still be running. */
@@ -316,6 +318,7 @@ export class OcrInstallManager {
   async start(opts: StartOcrInstallOptions): Promise<OcrInstallJob> {
     this.pruneTerminalJobs()
     assertDownloadAllowed(opts.gates)
+    const networkMark = this.network.mark()
     if (this.activeJob() !== null || this.starting) {
       throw new OcrInstallError('main.ocr.alreadyRunning')
     }
@@ -335,6 +338,9 @@ export class OcrInstallManager {
       const toFetch = tasks.filter((t) => t.status === 'download')
       if (toFetch.length === 0) throw new OcrInstallError('main.ocr.alreadyInstalled')
       await prepareOcrFolder(opts.rootPath)
+      // #782: internet access was switched off while this start planned (the plan hashes the files
+      // already on the drive), and is still off: the gates it began with no longer hold.
+      if (!this.network.stillAllowed(networkMark)) throw new OcrInstallError('main.download.networkOff')
 
       const plan = toFetch.map((task) => ({
         task,
@@ -397,6 +403,31 @@ export class OcrInstallManager {
     return { ...job }
   }
 
+  /**
+   * #782: internet access was switched off (`on` false) or back on. Off: a file download in progress
+   * stops at once (its `.part` goes, as for a cancel); a job checking a file finishes that file and
+   * stops before its next download; one past its last download finishes; a start still planning is
+   * refused when its plan is done. `onStopped` runs once, when (and if) the job stops. On before
+   * that: the job carries on.
+   */
+  networkSwitched(on: boolean, onStopped: () => void = () => undefined): void {
+    if (on) return this.network.switchedOn()
+    const active = this.active
+    this.network.switchedOff(active?.controller ?? null, onStopped)
+    const job = active ? this.jobs.get(active.jobId) : undefined
+    if (active && job && (job.status === 'queued' || job.status === 'downloading')) {
+      this.stopNetworkJob(job, active.controller)
+    }
+  }
+
+  /** Stop `job` for #782: it reads `cancelled`, and its run cleans up as a cancel's does. */
+  private stopNetworkJob(job: OcrInstallJob, controller: AbortController): void {
+    job.status = 'cancelled'
+    controller.abort()
+    this.deps.log?.('OCR install stopped: internet access was switched off', { jobId: job.jobId })
+    this.network.stopped(controller)
+  }
+
   /** The live job's id — also while a cancelled job's run is still settling. */
   activeJob(): string | null {
     if (!this.active) return null
@@ -450,6 +481,8 @@ export class OcrInstallManager {
         this.fail(job, key, { lang: pin.lang, reason: 'folder' })
         return
       }
+      // #782: internet access went off while an earlier file was checked: nothing new is fetched.
+      if (!signal.aborted && this.network.stopsAt(controller)) this.stopNetworkJob(job, controller)
       if (signal.aborted) return aborted(part)
 
       job.status = 'downloading'

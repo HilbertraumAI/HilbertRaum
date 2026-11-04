@@ -763,6 +763,11 @@ export interface DownloadJob {
   unverified: boolean
   /** Friendly failure reason when status === 'failed'. */
   error: string | null
+  /**
+   * Why a `cancelled` job stopped when nobody pressed Cancel (#782): internet access was switched
+   * off while it still had bytes to fetch. Absent for a cancel the user asked for.
+   */
+  stoppedBy?: 'networkOff'
 }
 
 // ---- In-app engine (llama.cpp sidecar) downloader -----------------------------------

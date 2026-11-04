@@ -1176,6 +1176,26 @@ describe('ModelsScreen — search, tasks and model variants', () => {
     expect(cancel).toHaveBeenCalledWith('verifying-job')
   })
 
+  // #782: when switching internet access off stopped the download, nobody pressed Cancel, and the card says why.
+  it.each([
+    ['a cancel the user asked for', undefined, 'models.download.cancelled', 'models.download.stoppedNetworkOff'],
+    ['internet access switched off', 'networkOff' as const, 'models.download.stoppedNetworkOff', 'models.download.cancelled']
+  ] as const)('a download stopped by %s says so on its card', async (_title, stoppedBy, shown, notShown) => {
+    const user = userEvent.setup()
+    const m = model({ id: 'stopped-download', displayName: 'Stopped Q4' })
+    const running: DownloadJob = {
+      jobId: 'stopped-job', modelId: m.id, status: 'downloading',
+      receivedBytes: 10, totalBytes: 1000, unverified: false, error: null
+    }
+    const stopped: DownloadJob = { ...running, status: 'cancelled', ...(stoppedBy ? { stoppedBy } : {}) }
+    stub({ models: [m], downloadModel: vi.fn(async () => running), getDownloadJob: vi.fn(async () => stopped) })
+    render(<ModelsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    expect(await screen.findByText(t('en', shown), undefined, { timeout: 3000 })).toBeVisible()
+    expect(screen.queryByText(t('en', notShown))).not.toBeInTheDocument()
+  })
+
   // The screen polls once a second, so the check can finish behind a Cancel the user can still
   // click. The `done` that comes back stops the poll, and only the poll refreshed the cards.
   it('a Cancel that arrives after the check finished still shows the model as installed (#752)', async () => {

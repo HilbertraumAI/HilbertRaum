@@ -580,6 +580,104 @@ describe('job lifecycle (#410)', () => {
   })
 })
 
+// ---- #782: switching internet access off ----------------------------------------------
+
+describe('switching internet access off (#782)', () => {
+  /** A verifier that holds the check of call number `which` (0-based) until released. */
+  function gatedVerify(which: number): { verifyImpl: typeof verifyDownloadedFile; entered: Promise<void>; release: () => void } {
+    let calls = 0
+    let entered: () => void = () => undefined
+    let release: () => void = () => undefined
+    const enteredP = new Promise<void>((r) => (entered = r))
+    const gate = new Promise<void>((r) => (release = r))
+    const verifyImpl: typeof verifyDownloadedFile = async (path, sha) => {
+      if (calls++ === which) {
+        entered()
+        await gate
+      }
+      return verifyDownloadedFile(path, sha)
+    }
+    return { verifyImpl, entered: enteredP, release }
+  }
+  const requested = (spy: ReturnType<typeof vi.fn>): string[] => spy.mock.calls.map((c) => String(c[0]))
+
+  it('stops a file download at once, removes its .part, and tells once', async () => {
+    const root = tempRoot('ocr')
+    const mgr = new OcrInstallManager({ fetchImpl: hangingFetch('partial-bytes'), pins: FAKE_PINS })
+    const onStopped = vi.fn()
+    const job = await mgr.start(startOpts(root, manifestsDirWith(root, ocrYaml())))
+    await waitForStatus(mgr, job.jobId, 'downloading')
+
+    mgr.networkSwitched(false, onStopped)
+    expect((await runToEnd(mgr, job.jobId)).status).toBe('cancelled')
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(existsSync(join(root, 'ocr', 'deu.traineddata.gz.part'))).toBe(false)
+  })
+
+  it('a job checking its first file keeps that file and stops before the next request', async () => {
+    const root = tempRoot('ocr')
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const verify = gatedVerify(0)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS, verifyImpl: verify.verifyImpl })
+    const onStopped = vi.fn()
+    const job = await mgr.start(startOpts(root, manifestsDirWith(root, ocrYaml())))
+    await verify.entered
+
+    mgr.networkSwitched(false, onStopped)
+    expect(onStopped).not.toHaveBeenCalled() // the check needs no network: it runs on
+    verify.release()
+    expect((await runToEnd(mgr, job.jobId)).status).toBe('cancelled')
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(requested(fetchSpy)).toEqual(['https://example.test/deu.traineddata.gz'])
+    expect(readFileSync(join(root, 'ocr', 'deu.traineddata.gz'), 'utf8')).toBe(DEU_BYTES)
+    expect(existsSync(join(root, 'ocr', 'eng.traineddata.gz'))).toBe(false)
+  })
+
+  it('switched back on before the check ends, the job fetches its next file and finishes, untold', async () => {
+    const root = tempRoot('ocr')
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const verify = gatedVerify(0)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS, verifyImpl: verify.verifyImpl })
+    const onStopped = vi.fn()
+    const job = await mgr.start(startOpts(root, manifestsDirWith(root, ocrYaml())))
+    await verify.entered
+
+    mgr.networkSwitched(false, onStopped)
+    mgr.networkSwitched(true)
+    verify.release()
+    expect((await runToEnd(mgr, job.jobId)).status).toBe('done')
+    expect(onStopped).not.toHaveBeenCalled()
+    expect(requested(fetchSpy)).toHaveLength(2)
+  })
+
+  it('a job checking its last file finishes the install, and nothing is told', async () => {
+    const root = tempRoot('ocr')
+    const verify = gatedVerify(1)
+    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS, verifyImpl: verify.verifyImpl })
+    const onStopped = vi.fn()
+    const job = await mgr.start(startOpts(root, manifestsDirWith(root, ocrYaml())))
+    await verify.entered
+
+    mgr.networkSwitched(false, onStopped)
+    verify.release()
+    expect((await runToEnd(mgr, job.jobId)).status).toBe('done')
+    expect(onStopped).not.toHaveBeenCalled()
+  })
+
+  // The plan hashes the files already on the drive, after the gates were read.
+  it('a start whose planning straddles the switch is refused, and nothing is requested', async () => {
+    const root = tempRoot('ocr')
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
+    // start() runs synchronously to its first await (the plan), past its gate check; the switch lands there.
+    const starting = mgr.start(startOpts(root, manifestsDirWith(root, ocrYaml())))
+    mgr.networkSwitched(false)
+    await expect(starting).rejects.toThrow(tMain('main.download.networkOff'))
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mgr.activeJob()).toBeNull()
+  })
+})
+
 // ---- Single-flight ------------------------------------------------------------------------
 
 describe('single-flight (#410)', () => {
@@ -814,6 +912,19 @@ describe('OCR install via IPC (#410)', () => {
     expect(finalJob.outcome).toBe('activated')
     expect(d.ctx.ocrEngine).not.toBeNull()
     expect(d.ctx.ocrEngine?.languages).toEqual(['deu', 'eng'])
+  })
+
+  // #782: the registrar hands settings:update its OCR installer (the switch itself: core-model-ipc).
+  it('switching internet access off reaches the OCR install the IPC started', async () => {
+    const d = makeIpcDrive()
+    d.fetchSpy.mockImplementation(hangingFetch('partial-bytes'))
+    const { result } = await invoke(handlers, IPC.installOcr)
+    const started = result as OcrInstallJob
+    await waitForStatus(d.ocrInstaller, started.jobId, 'downloading')
+    const onStopped = vi.fn()
+    d.ctx.installsNetworkSwitched?.(false, onStopped)
+    expect((await runToEnd(d.ocrInstaller, started.jobId)).status).toBe('cancelled')
+    expect(onStopped).toHaveBeenCalledOnce()
   })
 
   it('cancelOcrInstall with a non-string id returns a failed unknown-job snapshot without throwing', async () => {

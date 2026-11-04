@@ -519,6 +519,128 @@ describe('DownloadManager multi-file weight (#310)', () => {
   })
 })
 
+// ---- #782: switching internet access off ----------------------------------------------
+// The switch says "When off, the app makes no internet calls". A transfer stops at once; a job checking a file it already
+// has finishes that file and stops before its next request; a job that needs no more network finishes. `onStopped` is
+// the notice, so it fires only for a job that really stopped. The settings handler's side is core-model-ipc's.
+
+describe('switching internet access off (#782)', () => {
+  it('stops a transfer in progress at once, keeps the .part for resume, says why, and tells once', async () => {
+    const m = verifiedManifest(BODY)
+    const root = tempRoot('downloads')
+    const mgr = new DownloadManager({ fetchImpl: hangingFetch('hello-') })
+    const onStopped = vi.fn()
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    await until(() => mgr.get(job.jobId).receivedBytes > 0, 'the first chunk')
+
+    mgr.networkSwitched(false, onStopped)
+    const done = await runToEnd(mgr, job.jobId)
+    expect(done).toMatchObject({ status: 'cancelled', stoppedBy: 'networkOff' })
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(readFileSync(partOf(weightPath(root, m)), 'utf8')).toBe('hello-')
+    expect(existsSync(weightPath(root, m))).toBe(false)
+  })
+
+  it('a job checking its first file finishes that file and stops before the next request', async () => {
+    const gguf = 'the-language-gguf-bytes'
+    const m = visionManifest(gguf, 'the-mmproj-projector-bytes')
+    const root = tempRoot('downloads')
+    const { fetch, urls } = routedFetch({
+      'https://example.test/vl.gguf': gguf,
+      'https://example.test/vl-mmproj.gguf': 'the-mmproj-projector-bytes'
+    })
+    const mgr = new DownloadManager({ fetchImpl: fetch })
+    const onStopped = vi.fn()
+    const verify = gateNextVerify()
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    await within(verify.entered, 'the GGUF verify')
+
+    mgr.networkSwitched(false, onStopped)
+    expect(onStopped).not.toHaveBeenCalled() // the check needs no network: it runs on
+    verify.release()
+    const done = await runToEnd(mgr, job.jobId)
+    expect(done).toMatchObject({ status: 'cancelled', stoppedBy: 'networkOff' })
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(urls).toEqual(['https://example.test/vl.gguf']) // the projector was never requested
+    expect(readFileSync(weightPath(root, m), 'utf8')).toBe(gguf) // the checked file is in place
+    expect(existsSync(mmprojPath(root, m))).toBe(false)
+  })
+
+  it('switched back on before the check ends, the job carries on to its next file, and nothing is told', async () => {
+    const gguf = 'the-language-gguf-bytes'
+    const mmproj = 'the-mmproj-projector-bytes'
+    const m = visionManifest(gguf, mmproj)
+    const root = tempRoot('downloads')
+    const { fetch, urls } = routedFetch({ 'https://example.test/vl.gguf': gguf, 'https://example.test/vl-mmproj.gguf': mmproj })
+    const mgr = new DownloadManager({ fetchImpl: fetch })
+    const onStopped = vi.fn()
+    const verify = gateNextVerify()
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    await within(verify.entered, 'the GGUF verify')
+
+    mgr.networkSwitched(false, onStopped)
+    mgr.networkSwitched(true)
+    verify.release()
+    const done = await waitForTerminal(mgr, job.jobId)
+    expect(done.status).toBe('done')
+    expect(onStopped).not.toHaveBeenCalled()
+    expect(urls).toEqual(['https://example.test/vl.gguf', 'https://example.test/vl-mmproj.gguf'])
+  })
+
+  it('a job checking its last file installs the model, and nothing is told', async () => {
+    const m = verifiedManifest(BODY)
+    const root = tempRoot('downloads')
+    const mgr = new DownloadManager({ fetchImpl: bodyFetch(BODY) })
+    const onStopped = vi.fn()
+    const verify = gateNextVerify()
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN_GATES })
+    await within(verify.entered, 'the verify')
+
+    mgr.networkSwitched(false, onStopped)
+    verify.release()
+    const done = await waitForTerminal(mgr, job.jobId)
+    expect(done.status).toBe('done')
+    expect(done.stoppedBy).toBeUndefined()
+    expect(onStopped).not.toHaveBeenCalled()
+    expect(readFileSync(weightPath(root, m), 'utf8')).toBe(BODY)
+  })
+
+  it('a job the user already cancelled is not marked or told', async () => {
+    const m = verifiedManifest(BODY)
+    const mgr = new DownloadManager({ fetchImpl: hangingFetch('hello-') })
+    const onStopped = vi.fn()
+    const job = await mgr.start({ rootPath: tempRoot('downloads'), manifest: m, gates: OPEN_GATES })
+    mgr.cancel(job.jobId)
+    mgr.networkSwitched(false, onStopped)
+    const done = await runToEnd(mgr, job.jobId)
+    expect(done.status).toBe('cancelled')
+    expect(done.stoppedBy).toBeUndefined()
+    expect(onStopped).not.toHaveBeenCalled()
+  })
+
+  // The plan can hash a file already on the drive for minutes, after the gates were read.
+  it('a start whose planning straddles the switch is refused, and nothing is requested', async () => {
+    const fetchSpy = vi.fn()
+    const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn })
+    // start() runs synchronously to its first await (the plan), past its gate check; the switch lands there.
+    const starting = mgr.start({ rootPath: tempRoot('downloads'), manifest: verifiedManifest(BODY), gates: OPEN_GATES })
+    mgr.networkSwitched(false)
+    await expect(starting).rejects.toThrow(tMain('main.download.networkOff'))
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mgr.activeJob()).toBeNull()
+    expect(mgr.list()).toEqual([])
+  })
+
+  it('a start whose planning straddles a switch off and back on goes ahead', async () => {
+    const mgr = new DownloadManager({ fetchImpl: bodyFetch(BODY) })
+    const starting = mgr.start({ rootPath: tempRoot('downloads'), manifest: verifiedManifest(BODY), gates: OPEN_GATES })
+    mgr.networkSwitched(false)
+    mgr.networkSwitched(true)
+    const job = await starting
+    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+  })
+})
+
 // ---- the job state machine ----------------------------------------------------------
 
 describe('DownloadManager jobs', () => {

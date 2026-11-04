@@ -1284,6 +1284,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.download.cancel': 'Download abbrechen',
   'models.download.cancelled':
     'Download abgebrochen — ein erneuter Start setzt fort, wo er aufgehört hat.',
+  'models.download.stoppedNetworkOff':
+    'Angehalten, weil der Internetzugriff ausgeschaltet wurde — ist er wieder an, setzt ein erneuter Start fort, wo er aufgehört hat.',
   'models.download.unverifiedBefore':
     'Heruntergeladen, aber das Manifest dieses Modells hat noch keine echte Prüfsumme, ' +
     'daher bleibt die Datei ungeprüft. Erzeuge eine mit ',
@@ -2749,6 +2751,8 @@ export const de: Record<keyof typeof en, string> = {
     'Modell-Downloads und Updates erlauben“ in den Einstellungen ein.',
   'main.download.alreadyRunning':
     'Es läuft bereits ein Download. Modelle werden einzeln heruntergeladen.',
+  'main.download.stoppedNetworkOff':
+    'Der Internetzugriff ist aus, deshalb wurde der laufende Download angehalten. Um ihn abzuschließen, schalte den Internetzugriff in den Einstellungen wieder ein.',
   'main.download.noSource': 'Das Modell „{modelId}“ hat keine Download-Quelle in seinem Manifest.',
   'main.download.sourceWithdrawn':
     'Der Anbieter von „{modelId}“ hat genau diese Datei entfernt, sie kann daher nicht mehr ' +

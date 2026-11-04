@@ -1253,7 +1253,8 @@ head's own weights + KV.
 ### In-app model downloader (Phase 18 live)
 ✅ **Types** (`shared/types.ts`): `DownloadJobStatus = 'queued'|'downloading'|'verifying'|'done'|
   'failed'|'cancelled'`; `DownloadJob { jobId, modelId, status, receivedBytes, totalBytes,
-  unverified, error }` (`unverified` = placeholder-hash download, the model stays UNVERIFIED);
+  unverified, error, stoppedBy? }` (`unverified` = placeholder-hash download, the model stays UNVERIFIED;
+  `stoppedBy: 'networkOff'` on a `cancelled` job that switching internet access off stopped, #782);
   `ModelInfo.download?: ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved,
   withdrawn? }` (`withdrawn` = the manifest's #196 note; the card shows it INSTEAD of a Download
   button, and `DownloadManager.start` refuses such a manifest before any request). `sizeBytes` is
@@ -1267,6 +1268,16 @@ head's own weights + KV.
   it has, #752), and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`. `start()` also refuses, before
   any job exists, a download whose bytes still to fetch exceed the drive's free space
   (`main.download.notEnoughSpace`, #768).
+  **`networkSwitched(on, onStopped?)`** (#782; the same method on `EngineDownloadManager` and
+  `OcrInstallManager`, all three over one `NetworkSwitch` from `downloads.ts`): internet access was
+  switched off (`on` false) or back on. Off: a `queued`/`downloading` job is cancelled at once; a job in
+  a local phase stops at its next network request; a start whose planning straddled the switch-off is
+  refused with `main.download.networkOff` while the switch is still off (model and OCR; the engine makes
+  its job before its first await). On withdraws a stop not yet due. `onStopped` runs once, for a job that
+  really stopped. Wiring: `AppContext.downloadsNetworkSwitched` (registerDownloadIpc) and
+  `installsNetworkSwitched` (registerEngineIpc: engine + OCR), called by `settings:update` on a real
+  `allowNetwork` flip with an `onStopped` that sends `AppContext.runtimeNotice(main.download.stoppedNetworkOff,
+  'models')` (index.ts assigns its notifier).
   `list()` returns snapshots of the active job (if any) plus every retained terminal job that is
   still UNRESOLVED and not dismissed, in creation order — never a verified `done`, never a
   `cancelled` one. `dismiss(jobId)` records the id (unknown ids are a no-op) so `list()` stops

@@ -989,7 +989,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
         {/* SH-2 (#145): always-mounted so the FIRST download failure is announced. */}
         <ErrorBanner message={mine?.status === 'failed' ? mine.error : null} t={t} />
         {mine?.status === 'cancelled' && (
-          <p className="hint">{t('models.download.cancelled')}</p>
+          <p className="hint">
+            {/* #782: nobody pressed Cancel; switching internet access off stopped it. */}
+            {t(mine.stoppedBy === 'networkOff' ? 'models.download.stoppedNetworkOff' : 'models.download.cancelled')}
+          </p>
         )}
         {mine?.status === 'done' && mine.unverified && (
           <Banner tone="warning">

@@ -716,16 +716,19 @@ password recovery — are documented in
   gates the Deep answer mode; `bundled_on_preconfigured_drive` picks what a Kit preloads, #766).
 - **In-app downloader accepted edges** (the downloader shipped — architecture.md
   "In-app model downloader"):
-  - **A download or install keeps running after a lock or after internet access is switched off,
-    and the offline tripwire records its new connections.** The network gates are read when a job
-    starts. A workspace lock leaves running jobs alone on purpose (BE-2: the weights live outside
-    the vault); switching "Allow internet access" off leaves them alone too, undecided (#782). The
-    tripwire asks at every remote connect whether the app is offline (#758), and a locked workspace
-    or the setting off reads as offline, so each connection such a job opens afterwards (a model's
-    next file, a redirect) shows as "Network attempt noticed" in Diagnostics → Activity. Before
-    #758 the tripwire was decided once at startup: on an encrypted workspace it recorded every
-    download the user accepted, and a restart did not help, since such a workspace always starts
-    locked.
+  - **A download or install keeps running after a lock, and the offline tripwire records its new
+    connections.** The network gates are read when a job starts. A workspace lock leaves running
+    jobs alone on purpose (BE-2: the weights live outside the vault). The tripwire asks at every
+    remote connect whether the app is offline (#758), and a locked workspace reads as offline, so
+    each connection such a job opens after the lock (a model's next file, a redirect) shows as
+    "Network attempt noticed" in Diagnostics → Activity. Before #758 the tripwire was decided once
+    at startup: on an encrypted workspace it recorded every download the user accepted, and a
+    restart did not help, since such a workspace always starts locked. Switching "Allow internet
+    access" off is different: it stops the job (#782, architecture.md "In-app model downloader").
+  - **A policy file edited while the app runs does not stop a running download or install.** The
+    Privacy screen reads `policy.json` live, but nothing watches the file, so a job already running
+    finishes; the next one is refused. The tripwire records the job's new connections. Owner call
+    (#782): an admin edits the policy before handing the drive out, not mid-download.
   - **Download job state is per-app-process.** The job runs in the main process and survives
     navigation; since #314 it also survives a **renderer reload** — the screen re-attaches on
     mount via `downloads:list` (the live job, or the most recent undismissed failed/unverified

@@ -382,6 +382,53 @@ describe('registerCoreIpc', () => {
       expect(suspend).not.toHaveBeenCalled()
     })
   })
+
+  // #782: switching internet access off stops the downloads and installs using it; back on withdraws a stop not yet
+  // due — a REAL flip only. What each manager does is its own suite's; the chain through a real download, notice
+  // included, is download-ipc's.
+  describe('updateSettings tells the downloaders about a REAL allowNetwork flip (#782)', () => {
+    function ctxWithDownloaders(allowNetwork: boolean, downloads = vi.fn()) {
+      const db = seededDb()
+      updateSettings(db, { allowNetwork })
+      const installs = vi.fn()
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        db,
+        workspace: { isUnlocked: () => true },
+        downloadsNetworkSwitched: downloads,
+        installsNetworkSwitched: installs
+      } as unknown as AppContext
+      registerCoreIpc(ctx)
+      return { downloads, installs }
+    }
+
+    it.each<[string, boolean, Partial<AppSettings>, boolean | null]>([
+      ['on → off reports off to both', true, { allowNetwork: false }, false],
+      ['off → on reports on to both', false, { allowNetwork: true }, true],
+      ['already off reports nothing', false, { allowNetwork: false }, null],
+      ['an unrelated key reports nothing', true, { theme: 'dark' }, null]
+    ])('%s', async (_title, before, patch, reported) => {
+      const { downloads, installs } = ctxWithDownloaders(before)
+      await invoke(handlers, IPC.updateSettings, patch)
+      for (const hook of [downloads, installs]) {
+        if (reported === null) expect(hook).not.toHaveBeenCalled()
+        else expect(hook.mock.calls.map((c) => c[0])).toEqual([reported])
+      }
+    })
+
+    it('a throwing hook neither skips the other nor fails the save, which has landed', async () => {
+      const { installs } = ctxWithDownloaders(
+        true,
+        vi.fn(() => {
+          throw new Error('boom')
+        })
+      )
+      const { result } = await invoke(handlers, IPC.updateSettings, { allowNetwork: false })
+      expect((result as AppSettings).allowNetwork).toBe(false)
+      expect(installs).toHaveBeenCalledOnce()
+    })
+  })
 })
 
 describe('registerModelIpc', () => {

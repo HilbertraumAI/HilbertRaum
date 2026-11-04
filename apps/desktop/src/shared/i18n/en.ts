@@ -1270,6 +1270,8 @@ export const en = {
   'models.download.progressNoTotal': 'Downloading… {received} so far',
   'models.download.cancel': 'Cancel download',
   'models.download.cancelled': 'Download cancelled — starting it again resumes where it stopped.',
+  'models.download.stoppedNetworkOff':
+    'Stopped because internet access was switched off — once it is back on, starting the download again resumes where it stopped.',
   // Split around the inline <code>verify-models --generate</code>.
   'models.download.unverifiedBefore':
     'Downloaded, but this model’s manifest has no real checksum yet so the file stays ' +
@@ -2777,6 +2779,8 @@ export const en = {
     'Internet access is turned off. Turn on “Allow internet access for model ' +
     'downloads and updates” in Settings first.',
   'main.download.alreadyRunning': 'Another download is already running. One model downloads at a time.',
+  'main.download.stoppedNetworkOff':
+    'Internet access is off, so the download that was running has stopped. To finish it, turn internet access back on in Settings.',
   'main.download.noSource': 'Model "{modelId}" has no download source in its manifest.',
   'main.download.sourceWithdrawn':
     'The publisher of "{modelId}" removed this exact file, so it can no longer be ' +

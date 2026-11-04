@@ -13,10 +13,15 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
-  }
+  },
+  // registerCoreIpc's module (the #782 row registers the settings handler too).
+  app: { getVersion: () => '0.0.0-test' },
+  clipboard: { writeText: () => undefined }
 }))
 
+import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
+import { tMain } from '../../src/main/services/i18n'
 import { DownloadManager } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
@@ -25,7 +30,7 @@ import { getSettings, seedSettings, updateSettings } from '../../src/main/servic
 import type { DownloadJob } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, until } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import { deferred } from '../helpers/deferred'
 import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
@@ -235,6 +240,26 @@ describe('downloadModel happy path (both gates open, injected fake fetch)', () =
     const finished = await waitForTerminal(job.jobId)
     expect(finished.status).toBe('cancelled')
     await runToEnd(manager, job.jobId)
+  })
+
+  // #782, end to end through the real settings handler: what the managers stop is theirs (downloads.test), the flip
+  // discipline core-model-ipc's; this is the chain — settings:update → the registrar's hook → the job, the notice.
+  it('switching internet access off stops the download the IPC started, says why, and tells the windows', async () => {
+    const manager = new DownloadManager({ fetchImpl: hangingFetch('partial-') })
+    const { ctx } = makeCtx({ allowNetwork: true })
+    const notices: Array<[string, string | undefined]> = []
+    ctx.runtimeNotice = (message, target) => notices.push([message, target])
+    registerDownloadIpc(ctx, manager)
+    registerCoreIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
+    const job = result as DownloadJob
+    await until(() => manager.get(job.jobId).receivedBytes > 0, 'the first chunk')
+    await invoke(handlers, IPC.updateSettings, { allowNetwork: false })
+    await runToEnd(manager, job.jobId)
+    const { result: polled } = await invoke(handlers, IPC.getDownloadJob, job.jobId)
+    expect(polled).toMatchObject({ status: 'cancelled', stoppedBy: 'networkOff' })
+    expect(notices).toEqual([[tMain('main.download.stoppedNetworkOff'), 'models']])
   })
 })
 

@@ -140,6 +140,21 @@ export interface AppContext {
    */
   cancelBenchmark?: () => void
   /**
+   * #782: internet access was switched off (`on` false) or back on — a real flip of the setting
+   * (`settings:update`). Off stops each manager's running job: a transfer at once, a job checking
+   * what it already has before its next request; `onStopped` runs when (and if) a job stops for it.
+   * On withdraws a stop that has not come due. Assigned by registerDownloadIpc (model downloads) and
+   * registerEngineIpc (engine and OCR installs). Optional (partial test contexts).
+   */
+  downloadsNetworkSwitched?: (on: boolean, onStopped: () => void) => void
+  installsNetworkSwitched?: (on: boolean, onStopped: () => void) => void
+  /**
+   * The one-line notice every window shows (`runtime:notice`); `target: 'models'` gives it a button
+   * to the AI Model screen. Assigned in index.ts, the same sender the runtime factories get.
+   * Optional (partial test contexts).
+   */
+  runtimeNotice?: (message: string, target?: 'models') => void
+  /**
    * In-flight ingestion probe (BE-1, ocr-audit 2026-07-18): true while the docs IPC import
    * loop or a re-index — the module-local `processing` set in registerDocsIpc, which assigns
    * this at registration time — is actively driving the document's row. The doc-task

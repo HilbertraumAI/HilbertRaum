@@ -1185,7 +1185,10 @@ to see where your data lives and confirm the app's network state. The only thing
 downloads are AI models, the AI engine, the optional knowledge-pack tools and the optional
 text-recognition (OCR) files — each one only after you confirm it, each one verified before use. That setting is on by default so you can
 fetch a model out of the box, including on a prepared commercial drive; every download is
-explicit and confirmed, and the core app — chat, documents, search — never goes online. (A link you confirm
+explicit and confirmed, and the core app — chat, documents, search — never goes online. Switching
+**Allow internet access** off stops a download that is running; a notice says so, and a model download
+resumes where it stopped once you switch it back on. A file that has already arrived and is only being
+checked still finishes. (A link you confirm
 in the dialog described in §6 is opened by your *browser*, not by the app.) Logs are stored
 **locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 

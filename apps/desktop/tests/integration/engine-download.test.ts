@@ -60,9 +60,9 @@ import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { verifierInert } from '../helpers/binary-fixtures'
 import { committedRuntimeSources } from '../helpers/catalog'
-import { bodyFetch, runToEnd } from '../helpers/download-fixtures'
+import { bodyFetch, hangingFetch, routedFetch, runToEnd } from '../helpers/download-fixtures'
 import { deferred } from '../helpers/deferred'
-import { hangBudgetMs, within } from '../helpers/hang-budget'
+import { hangBudgetMs, until, within } from '../helpers/hang-budget'
 import { repoText } from '../helpers/repo-files'
 import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
@@ -525,6 +525,145 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
 // installOne into the SAME extractTo while the wedged tar was still writing. The fix threads the
 // abort signal into ExtractFn (default extractWithTar gains a deadline + SIGKILL escalation) and
 // makes a not-yet-settled run() count as busy.
+// ---- #782: switching internet access off ----------------------------------------------
+// Phase 1 (every archive downloaded and checked) uses the network; phase 2 (extract, swap) does not. The switch stops a
+// download at once and a check before the next archive; an install whose archives are all in finishes, untold.
+describe('switching internet access off (#782)', () => {
+  const llamaDirOf = (rootPath: string): string => join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+  const zipsIn = (d: string): string[] => (existsSync(d) ? readdirSync(d).filter((f) => f.endsWith('.zip')) : [])
+
+  it('stops an archive download at once: nothing extracted, the archive gone, told once', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    let extracted = false
+    const mgr = new EngineDownloadManager({
+      fetchImpl: hangingFetch('partial-archive'),
+      extractImpl: async () => {
+        extracted = true
+      }
+    })
+    const onStopped = vi.fn()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await until(() => mgr.get(started.jobId).receivedBytes > 0, 'the first chunk')
+
+    mgr.networkSwitched(false, onStopped)
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(extracted).toBe(false)
+    expect(zipsIn(llamaDirOf(rootPath))).toEqual([])
+    expect(existsSync(runtimeMarkerPath(llamaDirOf(rootPath)))).toBe(false)
+  })
+
+  it('a job checking its first archive stops before the next is requested, and installs nothing', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const { fetch, urls } = routedFetch({
+      'https://example.test/llama_cpp.zip': BODY,
+      'https://example.test/whisper_cpp.zip': BODY
+    })
+    const entered = deferred()
+    const release = deferred()
+    let verifies = 0
+    let extracted = false
+    const mgr = new EngineDownloadManager({
+      fetchImpl: fetch,
+      extractImpl: async () => {
+        extracted = true
+      },
+      verifyImpl: async (path, sha) => {
+        if (verifies++ === 0) {
+          entered.resolve()
+          await release.promise
+        }
+        return verifyDownloadedFile(path, sha)
+      }
+    })
+    const onStopped = vi.fn()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await within(entered.promise, 'the first archive check')
+
+    mgr.networkSwitched(false, onStopped)
+    expect(onStopped).not.toHaveBeenCalled() // the check needs no network: it runs on
+    release.resolve()
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(urls).toHaveLength(1) // the second archive was never requested
+    expect(extracted).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).missingFamilies.sort()).toEqual(['llama_cpp', 'whisper_cpp'])
+  })
+
+  it('switched back on before the check ends, the job fetches its next archive and installs both, untold', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const { fetch, urls } = routedFetch({
+      'https://example.test/llama_cpp.zip': BODY,
+      'https://example.test/whisper_cpp.zip': BODY
+    })
+    const entered = deferred()
+    const release = deferred()
+    let verifies = 0
+    const mgr = new EngineDownloadManager({
+      fetchImpl: fetch,
+      extractImpl: familyExtract,
+      verifyImpl: async (path, sha) => {
+        if (verifies++ === 0) {
+          entered.resolve()
+          await release.promise
+        }
+        return verifyDownloadedFile(path, sha)
+      }
+    })
+    const onStopped = vi.fn()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await within(entered.promise, 'the first archive check')
+
+    mgr.networkSwitched(false, onStopped)
+    mgr.networkSwitched(true)
+    release.resolve()
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
+    expect(onStopped).not.toHaveBeenCalled()
+    expect(urls).toHaveLength(2)
+    expect(engineStatus(rootPath, manifestsDir).missingFamilies).toEqual([])
+  })
+
+  it('a job checking its last archive installs the engine, and nothing is told', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const entered = deferred()
+    const release = deferred()
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: fakeExtract,
+      verifyImpl: async (path, sha) => {
+        entered.resolve()
+        await release.promise
+        return verifyDownloadedFile(path, sha)
+      }
+    })
+    const onStopped = vi.fn()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await within(entered.promise, 'the archive check')
+
+    mgr.networkSwitched(false, onStopped)
+    release.resolve()
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
+    expect(onStopped).not.toHaveBeenCalled()
+    expect(existsSync(runtimeMarkerPath(llamaDirOf(rootPath)))).toBe(true)
+  })
+
+  // The job reads `queued` until its first archive's folder exists; the status set after that await
+  // used to overwrite a stop landing there, so the aborted fetch then failed the job.
+  it('a stop while the job is still queued reads cancelled, never failed, and nothing is requested', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const fetchSpy = vi.fn(okFetch)
+    const mgr = new EngineDownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, extractImpl: fakeExtract })
+    const onStopped = vi.fn()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    expect(mgr.get(started.jobId).status).toBe('queued')
+
+    mgr.networkSwitched(false, onStopped)
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    expect(onStopped).toHaveBeenCalledOnce()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
 describe('extraction bounds + concurrency (F-33)', () => {
   async function waitForStatus(
     mgr: EngineDownloadManager,

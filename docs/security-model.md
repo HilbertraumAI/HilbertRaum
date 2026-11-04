@@ -633,8 +633,9 @@ already exempts the sidecar). **Decision: keep detection-only.** Rationale:
 - A firing at all already indicates a regression worth investigating (the core path makes zero
   remote calls), and it is **recorded in the audit log**, so the operator sees it. One known
   exception (#758, owner call): a download or install the user started keeps running after a
-  workspace lock (by design, BE-2) or after the network setting goes off (#782), and each new
-  connection it opens then is recorded, because the app reports itself offline at that moment.
+  workspace lock (by design, BE-2), and each new connection it opens then is recorded, because the
+  app reports itself offline at that moment. Switching the network setting off does not leave such
+  a job running: it stops it (#782), so the tripwire has nothing to record there.
 
 OS-level network blocking remains explicitly **out of scope** (see "Out of scope (MVP)" below):
 offline is by design + policy/UX, not a kernel-level block. If a hard block is ever wanted, the
