@@ -20,7 +20,7 @@ import {
 } from './window-security'
 import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
-import { loadPolicy, buildPolicyStatus, isCommercialPolicy } from './services/policy'
+import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
@@ -884,18 +884,15 @@ function initBackend(): void {
   // Log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +
   // llama.cpp sidecar bind 127.0.0.1). The guard only logs; it never blocks. It is
-  // installed in ALL builds when offline (not just dev) so a production regression that
-  // tried to phone home would still be recorded in the local log.
-  // When the workspace is locked the allowNetwork setting is unreadable → treat as off.
-  const unlocked = workspace.isUnlocked()
-  const status = buildPolicyStatus(
-    paths.configPath,
-    unlocked ? getSettings(ctx.db).allowNetwork : false,
-    (m) => log.warn(m),
-    { isDev }
-  )
+  // installed in ALL builds (not just dev) so a production regression that tried to phone
+  // home would still be recorded in the local log.
+  // #758: installed for the whole session, it asks at every remote connect whether the app is
+  // offline RIGHT NOW — the reading `getPolicy` gives the Privacy screen, a locked workspace reading
+  // as offline. Decided once here, it stayed armed after an encrypted workspace's unlock (so every
+  // download the user accepted was recorded as a violation) and never armed on a plaintext one that
+  // went offline later.
   assertOfflinePosture({
-    posture: { offline: status.offlineMode, networkAllowed: status.networkAllowed },
+    readPosture: () => currentPolicyStatus(appCtx, (m) => log.warn(m)),
     log: (m, meta) => log.info(m, meta),
     warn: (m, meta) => log.warn(m, meta),
     // A tripped offline guard goes on the user's local audit record too.

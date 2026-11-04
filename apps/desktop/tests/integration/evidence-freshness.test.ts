@@ -80,7 +80,7 @@ beforeEach(() => {
   ipcState.handlers.clear()
   offlineViolations = []
   uninstallGuard = installOfflineNetworkGuard({
-    offline: true,
+    isOffline: () => true,
     onViolation: (host) => offlineViolations.push(host)
   })
 })

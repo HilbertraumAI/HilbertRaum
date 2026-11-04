@@ -56,7 +56,7 @@ let uninstallGuard: () => void = () => {}
 beforeEach(() => {
   offlineViolations = []
   uninstallGuard = installOfflineNetworkGuard({
-    offline: true,
+    isOffline: () => true,
     onViolation: (host) => offlineViolations.push(host)
   })
 })

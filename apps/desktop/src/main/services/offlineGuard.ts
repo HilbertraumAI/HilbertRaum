@@ -49,20 +49,33 @@ function extractHost(args: unknown[]): string | undefined {
 }
 
 export interface OfflineGuardOptions {
-  offline: boolean
+  /**
+   * Is the app offline right now? Asked at the connect, and only for a remote host (#758): the app's
+   * offline state changes during a session (an unlock, the network setting, the policy file), so a
+   * reading taken once at install recorded downloads the user accepted and missed a session that went
+   * offline later. A throw counts as offline.
+   */
+  isOffline: () => boolean
   /** Called (once per offending connect) when a remote host is targeted while offline. */
   onViolation?: (host: string) => void
 }
 
+/** `read()`, with a throw counting as offline: a posture that cannot be read is not permission. */
+function offlineNow(read: () => boolean): boolean {
+  try {
+    return read()
+  } catch {
+    return true
+  }
+}
+
 /**
- * Install a defensive tripwire over `net.Socket.prototype.connect`. While offline, any
- * connection to a remote host invokes `onViolation` (which logs). It NEVER blocks the
- * connection or throws — a wrong host guess must not break loopback IPC or the future
- * sidecar. A no-op when `offline` is false. Returns an uninstaller (restores the original).
+ * Install a defensive tripwire over `net.Socket.prototype.connect`. Any connection to a remote host
+ * while `isOffline()` says so invokes `onViolation` (which logs). It NEVER blocks the connection or
+ * throws — a wrong host guess must not break loopback IPC or the sidecars. Loopback is decided first,
+ * so the posture is read only for a remote host. Returns an uninstaller (restores the original).
  */
 export function installOfflineNetworkGuard(opts: OfflineGuardOptions): () => void {
-  if (!opts.offline) return () => {}
-
   const proto = net.Socket.prototype as unknown as {
     connect: (...args: unknown[]) => unknown
   }
@@ -70,7 +83,7 @@ export function installOfflineNetworkGuard(opts: OfflineGuardOptions): () => voi
   proto.connect = function patchedConnect(this: unknown, ...args: unknown[]): unknown {
     try {
       const host = extractHost(args)
-      if (host && !isLoopbackHost(host)) opts.onViolation?.(host)
+      if (host && !isLoopbackHost(host) && offlineNow(opts.isOffline)) opts.onViolation?.(host)
     } catch {
       /* a detector must never break the real connect */
     }
@@ -82,13 +95,19 @@ export function installOfflineNetworkGuard(opts: OfflineGuardOptions): () => voi
   }
 }
 
+/** The two `PolicyStatus` fields the self-check reads, so a `PolicyStatus` is a posture as it stands. */
 export interface OfflinePosture {
-  offline: boolean
+  offlineMode: boolean
   networkAllowed: boolean
 }
 
 export interface AssertOfflinePostureDeps {
-  posture: OfflinePosture
+  /**
+   * The app's offline posture right now: read once for the startup log line, then by the tripwire at
+   * every remote connect (#758). Production passes `currentPolicyStatus`, the reading `getPolicy`
+   * gives the Privacy screen. A throw reads as offline.
+   */
+  readPosture: () => OfflinePosture
   log: (msg: string, meta?: unknown) => void
   warn: (msg: string, meta?: unknown) => void
   /** Extra per-violation hook (feeds the audit log) — called alongside `warn`. */
@@ -96,27 +115,37 @@ export interface AssertOfflinePostureDeps {
 }
 
 /**
- * Startup self-check: log the offline posture and, while offline, install the tripwire.
- * It is a loopback-exempt safety net in ALL builds, not a dev-only diagnostic.
- * Defensive — only logs; returns an uninstaller for the guard (no-op if not installed).
+ * Startup self-check: log the offline posture as it stands at startup, and install the tripwire for
+ * the whole session. It is a loopback-exempt safety net in ALL builds, not a dev-only diagnostic.
+ * Defensive — only logs; returns an uninstaller for the guard.
  */
 export function assertOfflinePosture(deps: AssertOfflinePostureDeps): () => void {
-  const { posture } = deps
+  let atStartup: OfflinePosture
+  try {
+    atStartup = deps.readPosture()
+  } catch (err) {
+    // Fail closed, but say why: a reader that keeps throwing makes every remote connect read as offline.
+    deps.warn('Offline posture could not be read; treated as offline', {
+      error: err instanceof Error ? err.message : String(err)
+    })
+    atStartup = { offlineMode: true, networkAllowed: false }
+  }
   deps.log('Offline posture', {
-    offlineMode: posture.offline,
-    networkAllowed: posture.networkAllowed,
-    note: 'No network in the core path; loopback (127.0.0.1/localhost) is exempt.'
+    offlineMode: atStartup.offlineMode,
+    networkAllowed: atStartup.networkAllowed,
+    note: 'At startup; re-read at every remote connect. No network in the core path; loopback (127.0.0.1/localhost) is exempt.'
   })
-  if (!posture.offline) return () => {}
   return installOfflineNetworkGuard({
-    offline: true,
+    isOffline: () => deps.readPosture().offlineMode,
     onViolation: (host) => {
       // Detection-only, by decision (audit M-S1; security-model.md "Detection-only, not
       // enforcement"): the connect is LOGGED + AUDITED, not blocked. Blocking net.Socket
       // app-wide could turn a host-extraction edge case into a hard offline failure that
       // breaks loopback IPC / the sidecar — strictly worse than logging. The offline
       // guarantee rests on the no-remote-code posture + the prod CSP; this is defence in
-      // depth. The core path makes no remote calls, so a firing indicates a regression.
+      // depth. The core path makes no remote calls, so a firing indicates a regression — or a
+      // download or install the user started, still running after a lock or after the network
+      // setting went off, opening a new connection (#758; known-limitations.md).
       deps.warn('Offline posture: remote connection attempt detected (logged, not blocked)', { host })
       deps.onViolation?.(host)
     }

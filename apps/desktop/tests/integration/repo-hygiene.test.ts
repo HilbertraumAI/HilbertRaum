@@ -445,12 +445,6 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     // Startup language resolution: reads the uiLanguage setting iff the plaintext-dev workspace
     // is already open at boot. Runs before any lock can be in flight.
     'src/main/index.ts :: if (workspace.isUnlocked()) {',
-    // Startup offline-posture log: a locked DB makes `allowNetwork` unreadable → treated as off.
-    // A pure read that fail-closes; it never enables anything.
-    'src/main/index.ts :: const unlocked = workspace.isUnlocked()',
-    // `allowNetworkSetting()` — the network-ceiling READ. Locked ⇒ false (safe default). The
-    // module's real admission check (`requireUnlocked`) uses the predicate.
-    "src/main/ipc/registerCoreIpc.ts :: ctx.workspace.isUnlocked() ? getSettings(ctx.db).allowNetwork : false",
     // `getAppStatus` — the status surface itself. It must stay answerable DURING a teardown
     // (that is how the renderer learns to swap to the lock gate); it starts no work.
     'src/main/ipc/registerCoreIpc.ts :: const unlocked = ctx.workspace.isUnlocked()',
@@ -465,6 +459,10 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     // mid-teardown and would skip the disarm, stranding the session. The block also re-runs the
     // two eager post-unlock restarts after the disarm (#344), which DO check `workspaceAdmitsWork`.
     'src/main/ipc/registerWorkspaceIpc.ts :: if (ctx.workspace.isUnlocked()) {',
+    // `currentPolicyStatus` — the network-ceiling READ behind `getPolicy` and the offline
+    // tripwire (#758; it replaced `getPolicy`'s `allowNetworkSetting()` and the startup posture
+    // read). Locked ⇒ the setting reads as off (safe default); it reports, it starts no work.
+    'src/main/services/policy.ts :: const allowNetwork = src.workspace.isUnlocked() ? getSettings(src.db).allowNetwork : false',
     // Vision status: a display-only availability probe. Locked ⇒ fall back to the build's isDev
     // and a cache miss; it computes install state, it does not load a model.
     'src/main/services/vision/status.ts :: const unlocked = ctx.workspace.isUnlocked()',
