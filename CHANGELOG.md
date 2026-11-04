@@ -37,6 +37,14 @@ from its first public `1.0.0` release onward.
   it records in your Activity log when the app's main process tries to reach another computer. It
   only ever saw encrypted (HTTPS) attempts, so an unencrypted one would have gone unrecorded. Nothing
   in the app makes such a connection while offline; this closes a gap in the safeguard itself (#751).
+- **A download you accepted no longer shows up as "Network attempt noticed".** On an encrypted
+  workspace the offline safeguard decided once, when the app started, that the app was offline,
+  because the workspace was still locked. It then recorded every model, engine and text-recognition
+  download you accepted as an attempt to go online. It now checks at each connection whether the app
+  is offline at that moment, the way Settings → Privacy & data does. In turn, if you switch internet
+  access off during a session, the safeguard watches from then on. A download you started that is
+  still running when you lock the workspace or switch internet access off is still recorded when it
+  opens a new connection (#758).
 - **You can cancel a model download during its final check.** The Cancel button was greyed out for
   the whole check, which takes minutes on a slow drive. It now works and stops the check at once,
   and the file stays ready to pick up again. Starting a download in the moment after a cancel is

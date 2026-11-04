@@ -19,7 +19,8 @@ import {
 import {
   isLoopbackHost,
   installOfflineNetworkGuard,
-  assertOfflinePosture
+  assertOfflinePosture,
+  type OfflinePosture
 } from '../../src/main/services/offlineGuard'
 import type { PrivacyPolicy } from '../../src/shared/types'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
@@ -391,7 +392,7 @@ describe('offline self-check', () => {
       return this
     })
     const base = net.Socket.prototype.connect
-    const uninstall = installOfflineNetworkGuard({ offline: true, onViolation })
+    const uninstall = installOfflineNetworkGuard({ isOffline: () => true, onViolation })
     try {
       Reflect.apply(net.Socket.prototype.connect, new net.Socket(), args)
       // Detection only (security-model.md): the original connect runs whatever the verdict.
@@ -434,7 +435,7 @@ describe('offline self-check', () => {
       process.nextTick(() => this.destroy(new Error('no network in tests')))
       return this
     })
-    const uninstall = installOfflineNetworkGuard({ offline: true, onViolation })
+    const uninstall = installOfflineNetworkGuard({ isOffline: () => true, onViolation })
     try {
       await route()
     } finally {
@@ -449,14 +450,57 @@ describe('offline self-check', () => {
     }
   })
 
-  it('is a no-op when not offline (no patch installed)', () => {
-    const before = net.Socket.prototype.connect
-    const uninstall = installOfflineNetworkGuard({ offline: false })
-    expect(net.Socket.prototype.connect).toBe(before)
-    uninstall()
+  // #758: the app's offline state changes during a session, so the guard asks at the connect. Which
+  // posture the app is in, per vault and setting and policy file, is offline-tripwire-posture.test.ts's.
+  it('asks whether the app is offline at the connect, and only for a remote host (#758)', () => {
+    let offline = false
+    const isOffline = vi.fn(() => offline)
+    const onViolation = vi.fn()
+    const stub = vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) {
+      return this
+    })
+    const uninstall = installOfflineNetworkGuard({ isOffline, onViolation })
+    try {
+      new net.Socket().connect(8080, '127.0.0.1')
+      expect(isOffline).not.toHaveBeenCalled() // loopback is decided first: no posture read per sidecar connect
+      new net.Socket().connect(443, 'example.com')
+      expect(onViolation).not.toHaveBeenCalled() // online at that connect
+      offline = true
+      new net.Socket().connect(443, 'example.org')
+      expect(stub).toHaveBeenCalledTimes(3) // logged, not blocked
+    } finally {
+      uninstall()
+    }
+    expect(onViolation).toHaveBeenCalledOnce()
+    expect(onViolation).toHaveBeenCalledWith('example.org')
   })
 
-  it('assertOfflinePosture, offline: logs the posture, reports a remote connect through warn + onViolation, and its uninstaller restores connect', () => {
+  it('a posture that cannot be read counts as offline and breaks neither the connect nor the startup check (#758)', () => {
+    const log = vi.fn()
+    const warn = vi.fn()
+    const onViolation = vi.fn()
+    const stub = vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) {
+      return this
+    })
+    const unreadable = (): never => {
+      throw new Error('settings row unreadable')
+    }
+    const uninstall = assertOfflinePosture({ readPosture: unreadable, log, warn, onViolation })
+    try {
+      const socket = new net.Socket()
+      expect(socket.connect(443, 'example.com')).toBe(socket) // the real connect ran and returned
+      expect(stub).toHaveBeenCalledOnce()
+    } finally {
+      uninstall()
+    }
+    expect(log).toHaveBeenCalledWith('Offline posture', expect.objectContaining({ offlineMode: true, networkAllowed: false }))
+    // Fail closed, and the log says why — otherwise only a stream of violations would show for it.
+    expect(warn).toHaveBeenCalledWith('Offline posture could not be read; treated as offline', { error: 'settings row unreadable' })
+    expect(onViolation).toHaveBeenCalledOnce()
+    expect(onViolation).toHaveBeenCalledWith('example.com')
+  })
+
+  it('assertOfflinePosture logs the startup posture, reports a remote connect through warn + onViolation, and its uninstaller restores connect', () => {
     const log = vi.fn()
     const warn = vi.fn()
     const onViolation = vi.fn()
@@ -464,7 +508,8 @@ describe('offline self-check', () => {
       return this
     })
     const base = net.Socket.prototype.connect
-    const uninstall = assertOfflinePosture({ posture: { offline: true, networkAllowed: false }, log, warn, onViolation })
+    const readPosture = (): OfflinePosture => ({ offlineMode: true, networkAllowed: false })
+    const uninstall = assertOfflinePosture({ readPosture, log, warn, onViolation })
     try {
       new net.Socket().connect(443, 'example.com')
       new net.Socket().connect(8080, '127.0.0.1')
@@ -478,16 +523,6 @@ describe('offline self-check', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('remote connection attempt'), { host: 'example.com' })
     expect(onViolation).toHaveBeenCalledOnce()
     expect(onViolation).toHaveBeenCalledWith('example.com')
-  })
-
-  it('assertOfflinePosture, online: logs the posture and leaves connect unpatched', () => {
-    const log = vi.fn()
-    const before = net.Socket.prototype.connect
-    const uninstall = assertOfflinePosture({ posture: { offline: false, networkAllowed: true }, log, warn: vi.fn() })
-    expect(net.Socket.prototype.connect).toBe(before)
-    expect(log).toHaveBeenCalledWith('Offline posture', expect.objectContaining({ offlineMode: false, networkAllowed: true }))
-    uninstall()
-    expect(net.Socket.prototype.connect).toBe(before)
   })
 })
 

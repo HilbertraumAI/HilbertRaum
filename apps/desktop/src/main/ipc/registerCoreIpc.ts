@@ -6,7 +6,7 @@ import { buildDriveStatus } from '../services/workspace'
 import { getSettings, updateSettings } from '../services/settings'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
-import { buildPolicyStatus } from '../services/policy'
+import { buildPolicyStatus, currentPolicyStatus } from '../services/policy'
 import { applyLocalApiSettings } from '../services/local-api/lifecycle'
 import { LOCAL_API_SETTINGS_KEYS } from '../../shared/local-api'
 import { runPreflight } from '../services/preflight'
@@ -23,17 +23,13 @@ import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../.
 // and the policy-aware `offlineMode` (spec §9.1, §3.6).
 export function registerCoreIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
-  // The user's allowNetwork setting lives inside the (possibly locked) DB. When the
-  // workspace is locked we can't read it — fall back to the safe default (false), which
-  // keeps the offline ceiling intact until the workspace is unlocked.
-  const allowNetworkSetting = (): boolean =>
-    ctx.workspace.isUnlocked() ? getSettings(ctx.db).allowNetwork : false
 
   // F16 (audit-postmerge-2026-06-29): the settings get/update handlers touch ctx.db. The getter
   // fail-closes when locked but throws the raw English vault string; gate them with the localized
   // copy (parity with the other DB-touching handler groups). The status/policy/preflight/clipboard
   // and the pre-unlock diagnostics-log channels stay usable while locked BY DESIGN — they are
-  // workspace-agnostic or read their value safely (allowNetworkSetting() guards the locked case).
+  // workspace-agnostic or read their value safely (`currentPolicyStatus` reads a locked workspace's
+  // allowNetwork setting as off).
   const requireUnlocked = (): void => {
     // AUD-02: `workspaceAdmitsWork`, never a bare `isUnlocked()` — the workspace DB stays
     // OPEN for the whole multi-second lock teardown, so a bare check admits work that then
@@ -102,11 +98,10 @@ export function registerCoreIpc(ctx: AppContext): void {
     (): Promise<PreflightResult> => runPreflight({ rootPath: ctx.paths.rootPath })
   )
 
-  ipcHandle(IPC.getPolicy, (): PolicyStatus =>
-    buildPolicyStatus(ctx.paths.configPath, allowNetworkSetting(), (m) => log.warn(m), {
-      isDev: ctx.isDev
-    })
-  )
+  // The user's allowNetwork setting lives inside the (possibly locked) DB; a locked workspace reads
+  // as off, which keeps the offline ceiling intact until the unlock. The offline tripwire asks the
+  // same reader at every remote connect (#758), so it records a connection opened while this says offline.
+  ipcHandle(IPC.getPolicy, (): PolicyStatus => currentPolicyStatus(ctx, (m) => log.warn(m)))
 
   // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.
   ipcHandle(IPC.getLogTail, (): string[] => readLogTail())

@@ -1,5 +1,7 @@
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Db } from './db'
+import { getSettings } from './settings'
 import type {
   NetworkPolicy,
   ModelsPolicy,
@@ -377,6 +379,28 @@ export function buildPolicyStatus(
     // already carries `network.allowLocalApi` — the Settings card reads it there. A 1:1
     // copy would let fixtures set the same fact twice, inconsistently.
   }
+}
+
+/** What `currentPolicyStatus` reads: the drive's config dir, the build, and the workspace. */
+export interface PolicyStatusSources {
+  paths: { configPath: string }
+  isDev: boolean
+  workspace: { isUnlocked(): boolean }
+  /** The live workspace DB; read only while the workspace is unlocked. */
+  readonly db: Db
+}
+
+/**
+ * The effective network state right now, as the app reports it: the policy file read from disk
+ * (the ceiling) ∧ the user's `allowNetwork` setting, with a locked workspace reading as off — its
+ * setting is unreadable until the unlock. `getPolicy` returns it to the Privacy screen, and the
+ * offline tripwire asks it at every remote connect (#758), so the tripwire records a connection
+ * opened exactly while the app says it is offline (it sees sockets as they open, not each request on
+ * a kept-alive one).
+ */
+export function currentPolicyStatus(src: PolicyStatusSources, onWarn?: (msg: string) => void): PolicyStatus {
+  const allowNetwork = src.workspace.isUnlocked() ? getSettings(src.db).allowNetwork : false
+  return buildPolicyStatus(src.paths.configPath, allowNetwork, onWarn, { isDev: src.isDev })
 }
 
 // localApiEffectivelyEnabled lives in shared/local-api.ts (review 2026-08-18): the

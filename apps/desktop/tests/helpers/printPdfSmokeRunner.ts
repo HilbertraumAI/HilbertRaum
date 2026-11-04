@@ -147,7 +147,7 @@ async function main(): Promise<void> {
     })
     // Node-level tripwire: the app's REAL offline connect-guard, silent end to end.
     installOfflineNetworkGuard({
-      offline: true,
+      isOffline: () => true,
       onViolation: (host) => offlineViolations.push(host)
     })
     for (const job of jobs) {
