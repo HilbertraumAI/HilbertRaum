@@ -434,13 +434,25 @@ The renderer distinguishes "off by choice" from "disabled by policy" via `Policy
 AI Model screen uses the same distinction to explain why downloads are unavailable.
 
 ### 2. Startup self-check (`services/offlineGuard.ts`)
-At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and, while offline,
-installs a defensive tripwire over `net.Socket.prototype.connect` in **all builds** (so a production
-regression that tried to phone home would still be recorded locally). While offline, any connection to
-a **remote** host from the main process is logged as a violation, by whichever route it reached a socket:
-`fetch`, `http.request`, `net.connect` and TLS alike. (Until #751 only TLS was seen: the others pass
-Node's normalized argument array, which the guard did not read, so their host came back empty and counted
-as loopback.) Child processes, worker threads and Chromium's own network stack are outside it (§3 below).
+At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and installs a defensive
+tripwire over `net.Socket.prototype.connect` for the whole session, in **all builds** (so a production
+regression that tried to phone home would still be recorded locally). While the app is offline, any
+connection to a **remote** host from the main process is logged as a violation, by whichever route it
+reached a socket: `fetch`, `http.request`, `net.connect` and TLS alike. (Until #751 only TLS was seen: the
+others pass Node's normalized argument array, which the guard did not read, so their host came back empty
+and counted as loopback.) Child processes, worker threads and Chromium's own network stack are outside it
+(§3 below).
+
+**"Offline" is read at the connect (#758).** The tripwire asks at every connection to a remote host
+whether the app is offline at that moment, through `currentPolicyStatus` — the reading `getPolicy` gives
+the Privacy screen: the policy file read live (the ceiling) ∧ the `allowNetwork` setting, a locked
+workspace reading as offline because its setting cannot be read. Loopback is decided first, so the
+reading costs nothing on the sidecars' connections; a reading that throws counts as offline. Until #758
+the posture was decided once, at startup. An encrypted workspace starts locked, so the tripwire stayed
+armed after the unlock and recorded every download the user accepted, while a plaintext workspace that
+started online was never watched, even after its setting went off. The tripwire sees sockets as they
+open: a connection opened while online and reused later (Node's `fetch` keeps connections alive) is not
+seen again.
 
 **Loopback is not "network".** `127.0.0.0/8`, `::1`, and `localhost` are explicitly exempt — the dev
 renderer loads from `http://localhost` today and the Phase-10 `llama.cpp` sidecar binds `127.0.0.1`.
@@ -619,7 +631,10 @@ already exempts the sidecar). **Decision: keep detection-only.** Rationale:
   sidecar** — strictly worse than today's silent-log-plus-audit. A detector that is wrong merely
   logs noise; an enforcer that is wrong takes the app down offline.
 - A firing at all already indicates a regression worth investigating (the core path makes zero
-  remote calls), and it is **recorded in the audit log**, so the operator sees it.
+  remote calls), and it is **recorded in the audit log**, so the operator sees it. One known
+  exception (#758, owner call): a download or install the user started keeps running after a
+  workspace lock (by design, BE-2) or after the network setting goes off (#782), and each new
+  connection it opens then is recorded, because the app reports itself offline at that moment.
 
 OS-level network blocking remains explicitly **out of scope** (see "Out of scope (MVP)" below):
 offline is by design + policy/UX, not a kernel-level block. If a hard block is ever wanted, the

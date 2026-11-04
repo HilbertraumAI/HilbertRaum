@@ -1029,12 +1029,18 @@ head's own weights + KV.
 - **`resolveNetwork(policy, allowNetworkSetting)`** → `{ networkAllowedByPolicy, networkAllowed,
   offlineMode }` (effective = policy ∧ setting). **`buildPolicyStatus(configDir, allowNetworkSetting,
   onWarn?, opts?)`** → `PolicyStatus` (the `getPolicy()` IPC shape; `telemetryAllowed` hardcoded false).
+  **`currentPolicyStatus({ paths: { configPath }, isDev, workspace: { isUnlocked() }, db }, onWarn?)`**
+  → `PolicyStatus` right now: `buildPolicyStatus` over the `allowNetwork` setting, a locked workspace
+  reading as off (#758). `getPolicy` returns it and the offline tripwire asks it at each remote connect.
 ✅ **`services/offlineGuard.ts`** — `isLoopbackHost(host)` (127.0.0.0/8, ::1, localhost exempt),
-  `installOfflineNetworkGuard({ offline, onViolation })` (wraps `net.Socket.prototype.connect`, logs
+  `installOfflineNetworkGuard({ isOffline, onViolation })` (wraps `net.Socket.prototype.connect`, logs
   remote attempts on every route, Node's normalized argument array included (#751), **never blocks**,
-  returns an uninstaller; no-op when not offline), `assertOfflinePosture({ posture,
-  log, warn, onViolation? })` (startup self-check; logs posture, installs the guard in ALL builds when offline).
-✅ **IPC** `registerCoreIpc.ts`: `getPolicy` (`policy:get`) returns `buildPolicyStatus(...)`;
+  returns an uninstaller; always installs and asks `isOffline()` at the connect, only for a remote host,
+  a throw counting as offline (#758)), `assertOfflinePosture({ readPosture, log, warn, onViolation? })`
+  (startup self-check; logs the startup posture, installs the guard in ALL builds for the session, with
+  `readPosture().offlineMode` as its `isOffline`). `OfflinePosture` = `{ offlineMode, networkAllowed }`,
+  the two `PolicyStatus` fields it reads.
+✅ **IPC** `registerCoreIpc.ts`: `getPolicy` (`policy:get`) returns `currentPolicyStatus(ctx)` (#758);
   `getAppStatus.offlineMode`/`networkAllowed` now come from the policy resolution. Preload exposes
   `api.getPolicy` + `PreloadApi`. `main/index.ts` calls `assertOfflinePosture()` in `initBackend()`
   and applies the dev/prod CSP response header in `createWindow()`.

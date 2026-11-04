@@ -3813,8 +3813,11 @@ this legend keeps them **resolvable** (the doc-lifecycle "stable anchors" intent
 - **`AppStatus.offlineMode`** is now policy-aware (`= !networkAllowed`), with an added
   `networkAllowed` flag. `getPolicy` is exposed on the preload bridge.
 - **`services/offlineGuard.ts`** — `assertOfflinePosture()` runs at startup: logs the posture and
-  installs (in **all** builds, when offline — audit §8 M3) a defensive tripwire over
-  `net.Socket.prototype.connect` that **logs** any remote connection while offline. **Loopback
+  installs (in **all** builds — audit §8 M3) a defensive tripwire over
+  `net.Socket.prototype.connect` that **logs** any remote connection while offline. Since #758 it is
+  installed for the whole session and asks at each remote connect whether the app is offline
+  (`currentPolicyStatus`, the `getPolicy` reading; a locked workspace reads as offline); it was
+  decided once at startup before. **Loopback
   (`127.0.0.1`/`localhost`/`::1`) is exempt** (dev renderer + Phase-10 sidecar). The guard never
   blocks or throws. Boundary note: it covers Node sockets (http/https/fetch via undici); renderer
   traffic is blocked by the CSP; `electron.net` is not used in the core path.

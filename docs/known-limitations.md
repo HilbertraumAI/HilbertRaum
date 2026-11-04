@@ -13,9 +13,10 @@ password recovery — are documented in
 [`security-model.md`](security-model.md) ("Threat notes / known limitations"). In addition:
 
 - **The offline guard is detection-only and Node-socket-scoped.** It wraps
-  `net.Socket.prototype.connect`, logs remote connection attempts, and never blocks (blocking
-  app-wide risks breaking loopback IPC and the sidecars). Electron's own `net` module would bypass
-  it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
+  `net.Socket.prototype.connect`, logs remote connection attempts made while the app is offline (asked
+  at each connect, #758), and never blocks (blocking app-wide risks breaking loopback IPC and the
+  sidecars). It sees sockets as they open, not each request on a kept-alive one. Electron's own `net`
+  module would bypass it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
   a tripwire, not an enforcement layer.
 - **A system-wide llama.cpp config file on Linux and macOS still reaches the engines (#730).** The
   engines start without the host's `LLAMA_*` variables and with their config lookup redirected
@@ -715,10 +716,16 @@ password recovery — are documented in
   gates the Deep answer mode; `bundled_on_preconfigured_drive` picks what a Kit preloads, #766).
 - **In-app downloader accepted edges** (the downloader shipped — architecture.md
   "In-app model downloader"):
-  - **The startup offline tripwire is not re-evaluated mid-session.** Toggling `allowNetwork` on
-    and downloading in the same session leaves the (detection-only, never-blocking) guard
-    installed, so the sanctioned download is logged as a remote-connection notice. Cosmetic;
-    a restart re-derives the posture.
+  - **A download or install keeps running after a lock or after internet access is switched off,
+    and the offline tripwire records its new connections.** The network gates are read when a job
+    starts. A workspace lock leaves running jobs alone on purpose (BE-2: the weights live outside
+    the vault); switching "Allow internet access" off leaves them alone too, undecided (#782). The
+    tripwire asks at every remote connect whether the app is offline (#758), and a locked workspace
+    or the setting off reads as offline, so each connection such a job opens afterwards (a model's
+    next file, a redirect) shows as "Network attempt noticed" in Diagnostics → Activity. Before
+    #758 the tripwire was decided once at startup: on an encrypted workspace it recorded every
+    download the user accepted, and a restart did not help, since such a workspace always starts
+    locked.
   - **Download job state is per-app-process.** The job runs in the main process and survives
     navigation; since #314 it also survives a **renderer reload** — the screen re-attaches on
     mount via `downloads:list` (the live job, or the most recent undismissed failed/unverified
