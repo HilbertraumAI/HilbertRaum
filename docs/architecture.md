@@ -5994,7 +5994,28 @@ weights live outside the vault, and the persistent checksum cache (the job's onl
 touchpoint) is lock-aware: `createSettingsHashStore` takes a `() => Db` getter (never a raw
 handle pinned at IPC registration) and degrades to an in-memory fallback while the vault is
 closed, and `runOne` treats any cache fault as non-fatal — the cache is an optimization, so
-a download that verified while locked still reports `done` and fires `onModelInstalled`. Audit events
+a download that verified while locked still reports `done` and fires `onModelInstalled`.
+**Switching internet access off stops the job (#782).** The gates are read at the start only, and the switch's own
+copy says "When off, the app makes no internet calls"; the job kept running past it, while the chat-header
+indicator read **Local · Offline**. Owner calls (all as recommended, on #782): stop the job; stop **only the
+network part**; no confirmation on the switch, a notice instead; a policy file edited mid-session is out (nothing
+watches it, so a check between files would be half a fix; known-limitations.md). As built: `settings:update` sees
+a REAL flip (read before the write, the local-API discipline) and reports it to `ctx.downloadsNetworkSwitched`
+(assigned by `registerDownloadIpc`) and `ctx.installsNetworkSwitched` (`registerEngineIpc`: the engine and OCR
+installers), each isolated so one fault neither skips the other nor fails the save. Each manager's
+`networkSwitched(on, onStopped)`, over one shared `NetworkSwitch` (downloads.ts): off cancels a job `queued` or
+`downloading` at once (the model's `.part` kept, as for a cancel); a job in a local phase (the model's or OCR's
+check, the engine's archive check or extraction) runs on and stops at its next network request, so a model whose
+bytes are all on the drive still installs, and Resume — refused while the network is off — is never needed just
+to check a file already there. On before that request withdraws the stop. A start whose planning straddled a
+switch-off (the planner can hash a present file for minutes) is refused when its plan is done, unless the switch
+is back on by then (the engine makes its job before its first await, so it needs no such check). `onStopped` runs
+once, for a job that really stopped: `ctx.runtimeNotice` (index.ts's notifier) shows `main.download.stoppedNetworkOff` with
+the AI Model button. The model card reads `DownloadJob.stoppedBy: 'networkOff'` and says it was the switch, not a
+cancel; the engine, OCR and knowledge-pack-tools cards show no "cancelled" copy and return to their offer, whose
+button names the network as the reason. Found on the way and fixed: the engine set `downloading` after an `await
+mkdir`, so a stop landing while it was still `queued` was overwritten and the aborted fetch read as a failure. A lock
+still leaves the jobs running (BE-2). Audit events
 (`model_download_started/verified/failed`) flow through the injected
 `DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified". A failure's
 audit `reason` is `failureReason`'s content-free label, shared with the OCR installer, never the

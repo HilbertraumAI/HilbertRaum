@@ -97,6 +97,9 @@ stays bounded: every download is explicit and confirmed, and you can turn it off
 [x] Allow internet access for model downloads and updates
 ```
 
+Switching it off also stops a download or install that is running, and a notice says so. A
+model download resumes where it stopped once the setting is back on.
+
 Even with that setting on, network access is only used if a drive **policy** permits it. A
 `config/policy.json` can disable network entirely — it can only restrict, never expand, what the
 toggle allows. The effective state is `policy AND your setting`. Telemetry is **always off** and has

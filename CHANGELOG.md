@@ -43,8 +43,14 @@ from its first public `1.0.0` release onward.
   download you accepted as an attempt to go online. It now checks at each connection whether the app
   is offline at that moment, the way Settings → Privacy & data does. In turn, if you switch internet
   access off during a session, the safeguard watches from then on. A download you started that is
-  still running when you lock the workspace or switch internet access off is still recorded when it
-  opens a new connection (#758).
+  still running when you lock the workspace is still recorded when it opens a new connection (#758).
+- **Switching internet access off now stops a download that is running.** The setting says the app
+  makes no internet calls while it is off, but a model, engine or text-recognition download you had
+  already started kept going. A transfer now stops the moment you switch, and a notice says why. A
+  file that has already arrived and is only being checked still finishes, so a model whose download
+  is complete still installs; if more is left to fetch after it, the download stops there, and the
+  notice appears then. A model download resumes where it stopped once you switch internet access
+  back on (#782).
 - **You can cancel a model download during its final check.** The Cancel button was greyed out for
   the whole check, which takes minutes on a slow drive. It now works and stops the check at once,
   and the file stays ready to pick up again. Starting a download in the moment after a cancel is
