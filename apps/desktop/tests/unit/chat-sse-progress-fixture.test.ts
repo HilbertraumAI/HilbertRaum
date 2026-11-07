@@ -16,6 +16,8 @@ const PREFILL = fixture('chat-sse-progress-b11146.txt')
 const WEDGE = fixture('chat-sse-progress-stall-b11146.txt')
 // The previous pin, still on drives without the #516 update: the same request and prompt, truncated after the first token.
 const PREFILL_B9849 = fixture('chat-sse-progress-b9849.txt')
+// #729: the b12110 pin, its own 6,513-token prompt (b11146 beside it gave the same events and ping cadence).
+const PREFILL_B12110 = fixture('chat-sse-progress-b12110.txt')
 
 /** The fixture's socket reads: each `: +<ms> ms` line marks when the bytes below it arrived. */
 function reads(fixture: string): Array<{ at: number; bytes: string }> {
@@ -82,6 +84,30 @@ describe('readChatSSE on the captured b11146 prompt-progress transcripts (#598)'
     expect(first.at).toBeLessThan(1_000) // the 0 % event rides with the response headers (+28–34 ms)
     expect(first.bytes).toContain('"processed":0')
     expect(reads(text).filter((r) => r.bytes === ':\n\n').length).toBeGreaterThan(0) // pings between the batches
+  })
+
+  it('the b12110 capture has the same #598 shape: an event with the headers and after every 2048-token batch, pings between (#729)', () => {
+    const events = progressEvents(PREFILL_B12110)
+    expect(events.map((e) => e.prompt_progress.processed)).toEqual([0, 2048, 4096, 6144, 6513])
+    for (const e of events) {
+      expect(e.choices[0].delta).toEqual({ role: 'assistant', content: null })
+      expect(Object.keys(e.prompt_progress).sort()).toEqual(['cache', 'processed', 'time_ms', 'total'])
+    }
+    const first = reads(PREFILL_B12110)[0]
+    expect(first.at).toBeLessThan(1_000)
+    expect(first.bytes).toContain('"processed":0')
+    expect(PREFILL_B12110).toContain('"system_fingerprint":"b12110-cd959bae9"')
+    // A ping 30 s after the headers and after every silence of 30 s: what the stream clocks rest on.
+    const pings = reads(PREFILL_B12110).filter((r) => r.bytes === ':\n\n').map((r) => r.at)
+    expect(pings.length).toBeGreaterThanOrEqual(4)
+    expect(pings[0]).toBeGreaterThan(29_000)
+    expect(pings[0]).toBeLessThan(32_000)
+  })
+
+  it('replayed on its timeline, the b12110 169 s CPU prefill answers (#729)', async () => {
+    const r = await replay(PREFILL_B12110, reads(PREFILL_B12110).at(-1)!.at + 1)
+    expect(r.outcome()).toBe('ended')
+    expect(r.out.join('')).toBe('There are 152 distinct words in the list.')
   })
 
   it('replayed on its timeline, the legitimate 187 s CPU prefill answers — progress events are not the first token', async () => {

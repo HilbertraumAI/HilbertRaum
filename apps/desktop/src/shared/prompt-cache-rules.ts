@@ -43,7 +43,8 @@ export function promptCacheRamMib(totalRamBytes: number): number {
  * wins over the RAM ceiling), else `['--cache-ram', <promptCacheRamMib>]`.
  *
  * `-cram, --cache-ram N` — "set the maximum cache size in MiB (default: 8192, -1 - no limit,
- * 0 - disable)" — verbatim from the pinned b11146 binary's `--help`.
+ * 0 - disable)" — verbatim from b11146's `--help`. The b12110 pin (#729) adds "0 for decision
+ * models" to the default only; the value still means the same, and the app always passes it.
  */
 export function promptCacheServerArgs(opts: {
   disablePromptCache?: boolean

@@ -124,10 +124,19 @@ describe('classifyLoadFailure — what it must NOT claim', () => {
   // app's argv and stdio; paths → <drive>): a corrupt GGUF on the GPU and the CPU rung, a colour-coded
   // one, and a bad `--device`. Each names engine DLLs and drive paths, and none is a loader refusal —
   // neither where a spawn site classifies the tail nor where the session heal reads a stored error.
-  it.each(['broken-gguf-gpu', 'broken-gguf-cpu', 'broken-gguf-gpu-coloured', 'bad-device'])(
-    'returns null for the real b11146 start-failure tail "%s"',
+  // #729: the b12110 pin's tails too.
+  it.each([
+    'b11146-broken-gguf-gpu',
+    'b11146-broken-gguf-cpu',
+    'b11146-broken-gguf-gpu-coloured',
+    'b11146-bad-device',
+    'b12110-broken-gguf-gpu',
+    'b12110-broken-gguf-cpu',
+    'b12110-bad-device'
+  ])(
+    'returns null for the real start-failure tail "%s"',
     (name) => {
-      const stderr = readFileSync(join(__dirname, '..', 'fixtures', `start-failure-b11146-${name}.txt`), 'utf8')
+      const stderr = readFileSync(join(__dirname, '..', 'fixtures', `start-failure-${name}.txt`), 'utf8')
       const win = { platform: 'win32' as const, systemDllExists: () => true }
       expect(classifyLoadFailure({ exitCode: 1, signal: null, stderr, ...win })).toBeNull()
       const stored = `2026-10-03T16:26:00.000Z — llama-server exited before becoming healthy (code 1) — last output: ${stderr}`

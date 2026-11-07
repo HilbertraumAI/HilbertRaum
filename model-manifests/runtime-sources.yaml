@@ -31,65 +31,69 @@
 #     builds:
 #       - { os, arch, backend, url, sha256, extract_to }
 #
-# PINNED RELEASE: b11146 (2026-09-23, upstream commit 7fe450e1) — the build named by upstream's
-# STABLE release v0.5.0: the `v0.5.0` tag and `b11146` resolve to the same commit. BUMPED from
-# b9849 (2026-06-30, 799fcc0) under issue #512, which records what was verified on it (argv,
-# `--list-devices`, load log, SSE shape, error bodies, speed, the manual smokes) and the two
-# behaviour changes the app follows: the prompt cache now restores Qwen3.5 / Gemma 4 (the #399
-# family gate is replaced by the manifest field `disable_prompt_cache`), and an unauthenticated
-# `/v1/models` answers 401 (the app always sends its key). Since August 2026 upstream publishes
-# stable `vX.Y.Z` releases WITHOUT assets, each naming a nightly build, and marks every `bNNNNN`
-# tag `prerelease: true` (b9849 was not); fetch-runtime ignores that flag, so pinning the build
-# tag works as before. The sha256 values below are the OFFICIAL release-asset digests from the
-# ggml-org/llama.cpp GitHub Releases API (the `digest` field, one per asset), same five-asset
-# topology as before (win vulkan + win cpu, mac arm64 metal, linux vulkan + linux cpu), and ALL
-# FIVE were confirmed against a local download on 2026-09-27 (SHA-256 exact). The win assets
-# ran on the dev box and the linux-vulkan one on the RTX 3090 rig (#512); the mac one has not
-# been run. fetch-runtime re-SHA-256-verifies
-# each archive BEFORE extracting, so a wrong/changed digest deletes the archive and fails the run —
-# a bad binary can never silently install.
-# The Windows archive changed shape on this bump: the MS OpenMP redistributable
-# (libomp140.x86_64.dll) is replaced by LLVM's libomp.dll + LICENSE-LLVM-OpenMP, and
-# llama-template-analysis.exe is gone (licence record: docs/model-policy.md).
+# PINNED RELEASE: b12110 (2026-11-04, upstream commit cd959bae) — the build named by upstream's
+# STABLE release v0.9.0: the `v0.9.0` tag and `b12110` resolve to the same commit. BUMPED from
+# b11146 (v0.5.0, 2026-09-23, 7fe450e1) under issue #729: b11146 carries the llama-server context-
+# checkpoint bug that made a Gemma 4 answer depend on earlier requests to the same server
+# (upstream #30666, first in v0.8.0). Owner calls 2026-11-07: v0.9.0 rather than v0.8.0 (b11960),
+# merged no earlier than 2026-11-11. #729 records what was verified on it (argv, `--list-devices`,
+# load log, SSE shape, error bodies, auth, speed, the manual smokes, the grounded-QA gate).
+# The sha256 values below are the OFFICIAL release-asset digests from the ggml-org/llama.cpp
+# GitHub Releases API (the `digest` field, one per asset), same five-asset topology as before
+# (win vulkan + win cpu, mac arm64 metal, linux vulkan + linux cpu), and ALL FIVE were confirmed
+# against a local download on 2026-11-07 (SHA-256 exact). fetch-runtime re-SHA-256-verifies each
+# archive BEFORE extracting, so a wrong/changed digest deletes the archive and fails the run — a
+# bad binary can never silently install.
+# What changed in the archives since b11146: every one now carries `llama-connect` (v0.8.0+), the
+# separately built peer-to-peer tunnel that `llama-server --connect` starts. The installers leave
+# it out (`neverInstalled` in assets.ts SIDECAR_FAMILY_SPECS, mirrored in both fetch-runtime
+# twins); otherwise only the macOS/Linux library version suffixes moved (licence record:
+# docs/model-policy.md). The Windows executables now embed a manifest selecting the UTF-8 code page
+# and long paths (upstream #31329).
+# Since August 2026 upstream publishes stable `vX.Y.Z` releases WITHOUT assets, each naming a
+# nightly build, and marks every `bNNNNN` tag `prerelease: true`; fetch-runtime ignores that flag,
+# so pinning the build tag works as before.
 # To bump again: pin ONLY a build that an upstream stable `vX.Y.Z` release names (the release's
 # notes / `nightly-tag.txt` asset give the `bNNNNN`; confirm both tags resolve to one commit) —
 # a plain nightly needs an explicit, recorded exception here. Update version + per-OS asset URLs
 # (asset names vary by release), capture each asset's real SHA-256 (release `digest` metadata AND
-# a local download), re-verify the llama.cpp facts the app depends on (docs/architecture.md GPU
-# record "llama.cpp facts"), and promote it here as a deliberate, reviewed change.
+# a local download), diff the archive file lists against this pin's (a new executable is either
+# required or `neverInstalled`), re-verify the llama.cpp facts the app depends on
+# (docs/architecture.md GPU record "llama.cpp facts"), and promote it here as a deliberate,
+# reviewed change.
 
 llama_cpp:
-  version: b11146
+  version: b12110
   builds:
     - os: win
       arch: x64
       backend: vulkan
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-win-vulkan-x64.zip
-      sha256: 55a378aa095b466979d85075234f66d7655c7a7483222af0c006c0e55b4d7bd6
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-vulkan-x64.zip
+      sha256: 9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f
       extract_to: runtime/llama.cpp/win
     - os: win
       arch: x64
       backend: cpu
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-win-cpu-x64.zip
-      sha256: 14cf1303ca9ac3abd94816850532f9f9a69ac66fbaca3776fc6f9061c2fac1d1
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip
+      sha256: 98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2
       extract_to: runtime/llama.cpp/win/cpu
     - os: mac
       arch: arm64
       backend: metal
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-macos-arm64.tar.gz
-      sha256: 1ad3f9eff80edb9dbef4259ad564d1720612ef7eea48fa4afed0e54f5f3d5711
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-arm64.tar.gz
+      sha256: 4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662
       extract_to: runtime/llama.cpp/mac
     - os: linux
       arch: x64
       backend: vulkan
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-ubuntu-vulkan-x64.tar.gz
-      sha256: d3ce40fce7403cc93bcf5718fc46c6efb61ed9709f8e5d9f10c86bf0e30e8fb3
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-vulkan-x64.tar.gz
+      sha256: a5d741940956ec62e8783aee7e5a4c7c761af867d6f027c3277a51e1a3ac59b0
       extract_to: runtime/llama.cpp/linux
     - os: linux
       arch: x64
       backend: cpu
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-ubuntu-x64.tar.gz
-      sha256: c150306eb16b5ab696f76a8bdf810c35fd98a24e82158742e6fa28f420ff8410
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-x64.tar.gz
+      sha256: 368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55
       extract_to: runtime/llama.cpp/linux/cpu
 
 # SECOND SIDECAR FAMILY (Phase 36): whisper.cpp — the audio transcriber. ADDITIVE

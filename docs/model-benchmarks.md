@@ -1264,6 +1264,73 @@ Evidence: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue512-rig-cache
 was not merged; the run-start harness there now reads the build from the server log instead of
 writing a fixed label.
 
+**#729 amendment (2026-11-07): the b12110 pin (v0.9.0).** Measured on the GTX 1070 Ti box (i7-8700, 32 GB,
+Windows 11, Vulkan), b11146 against b12110, each the official archive as `fetch-runtime` installs it. Raw results:
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/issue729-*.txt`.
+
+*The bug the bump fixes.* `gemma4-e2b`, temperature 1 / seed 42 / top-k 20 / top-p 0.95 / presence 1.5, a German
+follow-up R that opens with a user turn, after an unrelated X on the same server:
+
+| build | flags | R after X == fresh R | R a third time == fresh R |
+|---|---|---|---|
+| b11146 | the issue's (`--cache-ram 0 --no-cache-prompt …`), card | no (token 0 `Wenn` −0.9346 → −0.8797, text from char 221) | no |
+| b12110 | the issue's, card | yes | yes |
+| b11146 | the app's argv, `cache_prompt: false`, card | no (the same numbers) | no |
+| b12110 | the app's argv, `cache_prompt: false`, card | yes | yes |
+| both | either, `--device none` | yes | yes |
+
+A fresh server gives the same R on both builds. On this processor the leftover checkpoint (b11146's log: `created
+context checkpoint 2 of 32` where b12110 starts again at `1 of 32`) does not move the logits; the #729 analysis saw it
+move them on the i9-14900K.
+
+*The pin bump's grounded-QA gate (§2 harness, 2026-11-07): PASSED* on the five catalog chat models this box holds
+(owner call: the other five on ps-work and the rig's MTP leg gate the next release tag):
+
+| model | EM | citation-correct | grounded | abstain (unans.) | `mean_f1` b11146 → b12110 | byte-identical answers |
+|---|---|---|---|---|---|---|
+| `gemma4-e2b` | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.337 → 0.336 | 96 / 100 |
+| `qwen3-4b` | 0.977 = | 0.988 = | 0.977 = | 0.800 = | 0.312 → 0.308 | 91 / 100 |
+| `qwen3.5-4b` | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.235 → 0.239 | 80 / 100 |
+| `qwen3.5-9b` | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.281 → 0.280 | 84 / 100 |
+| `qwen3-14b` (24/41 on the 8 GB card, its own run) | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.336 = | 94 / 100 |
+
+Two items flip, both answerable and neither a loss: `qwen3-4b` on `de-vhs-gebuehr` gave the invoice's 940 € as the
+course fee on b11146 (EM 0) and says the fee is not stated directly on b12110 (EM 0, an over-abstention); `qwen3.5-4b`
+on `en-coffee-redlight` is correct on both and only on b11146 tripped the scorer's abstention phrase list. The
+retrieved sources differ on 3 of 100 items between the two four-model runs, but **not because of the build**: the same
+three differ between two runs of b11146 (the four-model one and the 14B one), while both b12110 runs and the 14B b11146
+run agree on all 100. The harness's retrieval varies from run to run on near-ties, whatever the build. In isolation each
+build's E5 vectors and reranker scores are bit-identical run to run, and the builds differ by ≤ 0.0042 in rerank score
+with the same order (`issue729-probes.txt`). The `qwen3-4b` flip above sits on one of those three items, so it follows
+the retrieval order, not the engine. Evidence: `eval/results/i7-8700-729-b{11146,12110}-vulkan-*` and
+`…-729-14b-b{11146,12110}-vulkan-*`.
+
+*Prompt cache, 30 conversations each* (`prompt-cache-smoke.test.ts` with `HILBERTRAUM_PROMPT_CACHE_SMOKE_PROMPTS=30`,
+the app's chat argv, `--cache-ram 4088`, temperature 0, 120 tokens):
+
+| model | build | restored | restored answer == recompute | re-prefilled on return (conversation 0) |
+|---|---|---|---|---|
+| `gemma4-e2b` | b11146 | 30 / 30 | 29 / 30 (conversation 4, from char 28) | 48 of 1,879 |
+| `gemma4-e2b` | b12110 | 30 / 30 | 30 / 30 | 28 of 1,879 |
+| `qwen3.5-4b` | b11146 | 30 / 30 | 30 / 30 | 52 of 1,899 |
+| `qwen3.5-4b` | b12110 | 30 / 30 | 30 / 30 | 52 of 1,899 |
+
+So on this card a restored answer and its recompute agree in 59 of 60 conversations on b11146 and 60 of 60 on b12110;
+a single matching answer (the smoke's old protocol) was weak evidence, and the rate is now on record per build.
+
+*Speed* (builds alternated A B A B on the same card state; the app's chat argv; a ~1,850-token prompt, 256 tokens,
+temperature 0, `cache_prompt: false`; tok/s from the server's own timings):
+
+| model | prompt b11146 → b12110 | decode b11146 → b12110 | load |
+|---|---|---|---|
+| `qwen3-4b` | 496 / 495 → 499 / 499 | 57.1 / 57.0 → 56.0 / 56.0 | 2.9 → 2.6 s |
+| `gemma4-e2b` | 724 / 724 → **1,824 / 1,821** | 72.3 / 72.4 → 69.7 / 69.1 | 3.3 → 2.6 s |
+| `qwen3.5-9b` | 255 / 255 → 222 / 260 | 28.6 / 28.5 → 28.3 / 28.3 | 5.4–6.8 → 4.9 s |
+
+Gemma 4 E2B reads a prompt 2.5× faster (upstream #31356, "massive gains on pp for E2B and E4B"); decode is 1–4 %
+slower on this Pascal card on all three, repeatably. TranslateGemma on b12110: 10.0–10.6 tok/s at 39/49 on the card,
+3.3–3.4 on the processor (`translategemma-smoke`).
+
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
 spreads layers over every listed device — did not hold on the pinned b9849 build on either hybrid

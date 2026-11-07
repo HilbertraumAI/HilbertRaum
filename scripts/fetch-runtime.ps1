@@ -435,8 +435,27 @@ $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::Direc
 # `executables:` when present (its first entry is always the primary; llama_cpp/whisper_cpp
 # declare no `executables:`, so their required set stays the single binary it always was).
 $PrimaryBase = if ($Family -eq 'whisper_cpp') { 'whisper-cli' } elseif ($Family -eq 'kiwix_tools') { 'kiwix-serve' } else { 'llama-server' }
+# #729: executables the release archive carries that an install never keeps -- the same list as
+# assets.ts SIDECAR_FAMILY_SPECS `neverInstalled` (script-drift.test.ts). llama-connect is what
+# `llama-server --connect` starts (a peer-to-peer tunnel, v0.8.0+); llama-server looks for it beside
+# itself first. The list wins over the yaml's `executables:`, as in planRuntimeDownload.
+$NeverInstalledBases = if ($Family -eq 'llama_cpp') { @('llama-connect') } else { @() }
+# Remove them from the install dir: after a fresh extraction, and on the skip path, so an install made
+# before this rule (or copied by hand) loses its copy too. Get-Item -Force sees a dangling link as well.
+# -notcontains / -eq compare without case, as NTFS and APFS compare file names (assets.ts does the same).
+function Remove-NeverInstalled {
+  foreach ($base in $NeverInstalledBases) {
+    $leftOut = if ($build.os -eq 'win') { "$base.exe" } else { $base }
+    $leftOutPath = Join-Path $extractTo $leftOut
+    if (Get-Item -LiteralPath $leftOutPath -Force -ErrorAction SilentlyContinue) {
+      if ($DryRun) { Write-Host "  would leave out: $leftOut"; continue }
+      Remove-Item -Force -LiteralPath $leftOutPath
+      Write-Host "  left out: $leftOut"
+    }
+  }
+}
 $executableBases = @($PrimaryBase)
-foreach ($e in $familyExecutables) { if ($executableBases -notcontains $e) { $executableBases += $e } }
+foreach ($e in $familyExecutables) { if ($executableBases -notcontains $e -and $NeverInstalledBases -notcontains $e) { $executableBases += $e } }
 # Binary name(s) follow the SELECTED build's OS (we may be provisioning the mac/linux dir
 # from a Windows build machine), mirroring assets.ts sidecarBinaryName. $binaryName/$binaryPath
 # keep referring to the PRIMARY only -- the flatten step below locates the archive's nested
@@ -493,6 +512,7 @@ if (Test-Path -LiteralPath $binaryPath) {
   }
   if ($skip) {
     Write-Host "  skip ($binaryName already installed: $version/$($build.backend) per .hilbertraum-runtime.json)" -ForegroundColor Green
+    Remove-NeverInstalled
     exit 0
   }
   Write-Host "  $binaryName present but $why -- re-fetching $version/$($build.backend)" -ForegroundColor Yellow
@@ -664,6 +684,10 @@ if (-not (Test-Path -LiteralPath $binaryPath)) {
   Write-Host "  FAIL: $binaryName not found under $extractTo after extraction -- the release archive layout may have changed." -ForegroundColor Red
   exit 1
 }
+
+# #729: leave out what the family never keeps (mirrors runtime-download.ts install). A file that
+# cannot be removed stops the run here, before a marker claims the install.
+Remove-NeverInstalled
 
 # #339 P8-3: post-extract completeness check -- EVERY required file (every declared
 # executable + runtime file), not just the primary. Mirrors assets.ts requiredInstallFiles /

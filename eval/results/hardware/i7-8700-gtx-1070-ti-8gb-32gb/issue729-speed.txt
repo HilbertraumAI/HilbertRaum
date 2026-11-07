@@ -1,0 +1,21 @@
+# #729 speed, b11146 vs b12110 alternated A B A B on the same card state (GTX 1070 Ti, i7-8700, 32 GB), the app's chat argv
+# (rung 1, ctx 8192, -np 1, --cache-ram 4082), a ~1,850-token prompt, 256 generated tokens, temperature 0, cache_prompt false.
+# loadS = spawn to /health; pp / tg = the server's prompt_per_second / predicted_per_second. Script: speed729.mjs. 2026-11-07.
+
+== qwen3-4b-instruct-q4
+{"build":"11146","loadS":2.92,"promptN":1808,"pp":496.2,"predictedN":256,"tg":57.1}
+{"build":"12110","loadS":2.66,"promptN":1808,"pp":499,"predictedN":256,"tg":56}
+{"build":"11146","loadS":2.85,"promptN":1808,"pp":495.3,"predictedN":256,"tg":57}
+{"build":"12110","loadS":2.63,"promptN":1808,"pp":498.6,"predictedN":256,"tg":56}
+
+== gemma4-e2b-it-qat-q4
+{"build":"11146","loadS":3.38,"promptN":1869,"pp":723.6,"predictedN":256,"tg":72.3}
+{"build":"12110","loadS":2.53,"promptN":1869,"pp":1823.5,"predictedN":256,"tg":69.7}
+{"build":"11146","loadS":3.3,"promptN":1869,"pp":724.3,"predictedN":256,"tg":72.4}
+{"build":"12110","loadS":2.64,"promptN":1869,"pp":1821.2,"predictedN":256,"tg":69.1}
+
+== qwen3.5-9b-ud-q4kxl
+{"build":"11146","loadS":6.77,"promptN":1872,"pp":254.6,"predictedN":256,"tg":28.6}
+{"build":"12110","loadS":4.92,"promptN":1872,"pp":221.6,"predictedN":256,"tg":28.3}
+{"build":"11146","loadS":5.35,"promptN":1872,"pp":254.8,"predictedN":256,"tg":28.5}
+{"build":"12110","loadS":4.93,"promptN":1872,"pp":259.8,"predictedN":256,"tg":28.3}

@@ -13,7 +13,7 @@ import type { SpawnOptions } from 'node:child_process'
 // probe is driven entirely through the fake-spawn seam.
 
 // L19 (audit-2026-06-13): a captured-real-output regression fixture. This is the verbatim
-// `llama-server --list-devices` STDOUT captured on the CURRENT pin, b11146, on the dev box
+// `llama-server --list-devices` STDOUT captured on b11146 (the pin until #729), on the dev box
 // (i9-14900K / RTX 3080 Ti, 2026-09-27, #518; CRLF preserved — .gitattributes keeps it binary).
 // b11146 also prints `llama_server: initializing ...` on STDERR, which the probe never reads.
 // The b9585 capture it replaces (F-40, audit-2026-07-16) was two pins old and is retired: same
@@ -41,6 +41,19 @@ describe('parseListDevices', () => {
       { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 },
       // The iGPU reports unified memory: "free" above "total" is what the tool printed.
       { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
+    ])
+  })
+
+  // #729: the same probe on the b12110 pin, GTX 1070 Ti box (2026-11-07, the official
+  // llama-b12110-bin-win-vulkan-x64.zip as fetch-runtime installs it; CRLF preserved). Same shape as
+  // b11146 run beside it on that card: only the free figure differed. b12110 prints nothing on
+  // STDERR for the probe (b11146's `llama_server: initializing ...` is gone). The b11146 capture
+  // above stays: drives without the #516 update still run it.
+  it('parses the captured real b12110 --list-devices fixture (#729)', () => {
+    const text = readFileSync(join(__dirname, '..', 'fixtures', 'list-devices-b12110-vulkan-gtx1070ti.txt'), 'utf8')
+    expect(text).toContain('\r\n')
+    expect(parseListDevices(text)).toEqual([
+      { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1070 Ti', totalMb: 8273, freeMb: 6531 }
     ])
   })
 

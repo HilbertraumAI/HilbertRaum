@@ -465,8 +465,8 @@ detection helper only and must never gate an allowed-vs-blocked decision.
 **Sidecar requests are authenticated (local-api wave P1).** Loopback binding alone leaves a port any
 same-machine process can call, so every `llama-server` sidecar spawn (chat, embedder, reranker,
 vision, translation) now carries a fresh per-spawn API key, delivered via the **child-scoped env**
-(`LLAMA_API_KEY` — verified enforced on b9849 and again on the b11146 pin, where an unauthenticated
-`/v1/models` now answers 401 too; #512) and injected as a Bearer header at
+(`LLAMA_API_KEY` — verified enforced on b9849, again on b11146, where an unauthenticated
+`/v1/models` now answers 401 too (#512), and on the b12110 pin (#729)) and injected as a Bearer header at
 the single `LlamaServer.fetch()` chokepoint. The key is never placed in argv (readable in any
 process list, and llama-server echoes resolved params to stderr) and never set on the app's own
 `process.env` (other children would inherit it). **The one exception is the knowledge-pack sidecar
@@ -474,9 +474,11 @@ process list, and llama-server echoes resolved params to stderr) and never set o
 unauthenticated sidecar" below (residual R-9).** Key material is redacted AT THE STDERR DRAIN over
 a partial-line hold-back window — so neither the captured tail (→ error strings, `gpuLastError`,
 the audit trail, the app log, the support-log export) nor the streaming `onStderrData` observer
-can ever see the key, whole or chunk-split. On the b11146 pin upstream exempts only `/health` from auth — a local
-process can read liveness (`{"status":"ok"}`) and nothing else; `/v1/models`, `/props`, `/slots` and `/metrics` answer
-401 without the key (verified 2026-09-27, #512). On b9849 `/v1/models` was exempt too and exposed the loaded model's
+can ever see the key, whole or chunk-split. Since b11146 upstream exempts only `/health` (and `/v1/health`) from auth,
+besides the static web UI page — a local process can read liveness (`{"status":"ok"}`) and nothing else; `/v1/models`,
+`/props`, `/slots` and `/metrics` answer 401 without the key (verified 2026-09-27, #512). The same on the b12110 pin
+(2026-11-07, #729): 18 routes probed with and without the key on both builds give the same answers, and the endpoints
+v0.8.0 added answer 401 without it too (`POST /tts`, `/v1/realtime` including its websocket upgrade). On b9849 `/v1/models` was exempt too and exposed the loaded model's
 file path (metadata only, never content).
 Residual (recorded, accepted): an env-delivered key defends against cross-user and log/stderr
 exposure, not against a same-user debugger reading the child's environment.
@@ -494,6 +496,19 @@ config (`runtime/engine-env.ts`; architecture.md GPU record §3 "HOST CONFIGURAT
 fuses, this is defence in depth against a local attacker and a correctness fix for the accidental
 case. Residual: `/etc/llama.cpp/config.ini` on Linux and macOS is a fixed path no variable redirects.
 Writing it takes root.
+
+**The `--connect` tunnel program is never installed (#729).** Every llama.cpp archive since v0.8.0
+carries `llama-connect`, which `llama-server --connect` starts to make the server reachable from
+outside the machine over WebRTC. The app never passes `--connect`, the option has no negative form,
+and since #730 neither the environment nor a user-level config file can switch it on. llama-server
+looks for the program beside itself first and then on `PATH`, so the installers leave it out: the
+in-app installer and both `fetch-runtime` twins delete it after extraction, whatever the drive's
+yaml declares (`neverInstalled` in `assets.ts`); the twins also remove it from an install they find
+current, and the sell gate refuses a Kit that holds it anywhere under an engine folder. Residuals: the
+same root-only `/etc/llama.cpp/config.ini`, now together with a `llama-connect` the host itself put on
+its `PATH`; and a non-commercial drive whose current install already holds the file (made by hand, or
+before this rule) keeps it in the app until the engine is installed again, since the app removes it only
+when it extracts an archive.
 
 #### The fifth threat: same-machine processes (local-api wave)
 
@@ -532,8 +547,8 @@ running as you**. Two doors exist:
 - With the key requirement switched off (a confirmed user choice), any local program can use the
   model. The `Host`/`Origin`/content-type checks stay **unconditional** in that mode, so the
   browser remains locked out either way.
-- On the pinned sidecar build (b11146) only `/health` stays auth-exempt upstream, so a local process
-  can read liveness and nothing else. (On b9849 `/v1/models` was exempt too and exposed the loaded
+- On the pinned sidecar build (b12110, as on b11146 before it) only `/health` stays auth-exempt upstream,
+  so a local process can read liveness and nothing else. (On b9849 `/v1/models` was exempt too and exposed the loaded
   model's **file path** — metadata, never content; #512.)
 - What a connected app does with the answers it receives is outside HilbertRaum's control; this is
   stated to the user in the consent dialog, `PRIVACY.md`, and the user guide rather than pretended

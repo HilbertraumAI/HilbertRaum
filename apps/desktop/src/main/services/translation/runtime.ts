@@ -41,8 +41,9 @@ import type { TranslationCpuCause, TranslationDeviceStatus } from '../../../shar
  * single slot is correct — and it contains the Windows-Vulkan hang under PARALLEL translation load
  * (#25142, seen 2026-06-29 on Intel Arc). It also avoids the default `n_slots = 4` + unified-KV
  * context split that starved the vision sidecar (RUNTIME-5): found on b9849, still the default on
- * the b11146 pin (measured 2026-10-13, #660: `n_slots = 4, kv_unified = 'true'` without the flag,
- * `n_slots = 1, kv_unified = 'false'` with it).
+ * b11146 (measured 2026-10-13, #660: `n_slots = 4, kv_unified = 'true'` without the flag,
+ * `n_slots = 1, kv_unified = 'false'` with it) and on the b12110 pin (#729: the same `--help` defaults,
+ * and `n_slots = 1, kv_unified = 'false'` with the flag).
  */
 export const TRANSLATION_SLOT_ARGS = ['--parallel', '1'] as const
 

@@ -819,7 +819,7 @@ the ACTIVE model (`placement.model.contextTokens`) and for the RECOMMENDED one �
 chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
 `onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines
 only from log verbosity 4 up, verified 2026-09-05: 3 prints none, 5 adds the `--fit` dry-run
-pass; the b11146 pin prints the same lines at 4, #512): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices and the
+pass; the b11146 pin prints the same lines at 4, #512, and so does b12110, #729): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices and the
 backends' `<Backend>_Host` buffers are the CPU side), every `<device> KV buffer size`, the Metal
 budget line. The reading is recorded once the rung is healthy (`recordModelPlacement`, stamped
 with the backend, the launched context
@@ -1510,7 +1510,16 @@ commit references, and added the changelog entry.
   GTX 1070 Ti sit there too: `placement-b11146-gpuless-37of37-cpu.txt` (rung 1 with every Vulkan
   device hidden prints `offloaded 37/37 layers to GPU` with every buffer on the processor, so the
   offload line is no evidence of a card) and `placement-b11146-ngl0-0of37-compute.txt` (0 layers
-  offloaded, but a Vulkan0 compute buffer: the card still runs the prefill). Still unwitnessed by any
+  offloaded, but a Vulkan0 compute buffer: the card still runs the prefill). Since #729 five b12110 load logs from
+  the same card sit beside them (`placement-b12110-*.txt`: a full and a partial chat offload, a start with the card
+  hidden, TranslateGemma on the processor and at 39/49). Two things changed on that pin. `device_info` lists the
+  processor too (`- CPU : …`), which `isCpuDevice` keeps out of the device rows. And a start that runs on the processor
+  prints its mapped weights in some 100–200 small `CPU_Mapped` lines and no longer maps the share ggml repacks, so the
+  CPU-side weights the parser sums now match llama.cpp's own memory breakdown: the 4B forced to the processor reads
+  2,375.83 MiB (b11146: 2,362.55 mapped + 1,683.28 repacked = 4,045.83), TranslateGemma 6,956.41 (b11146: 11,866.94).
+  Only the Performance row's "needs" figure for a processor start moves with it: `loadedAtOnceMb` counts processor rows
+  by their file size, and GPU starts, full or partial, read the same model, KV and spill figures on both builds (the 4B,
+  9B, 14B and TranslateGemma measured; compute buffers differ by up to ±76 MiB, e.g. gemma4-e2b 456 → 380). Still unwitnessed by any
   capture, so still handwritten from ggml's naming convention: CUDA and Metal devices, a
   `<Backend>_Host` **KV** buffer (M7), and two GPUs both holding weights (HW4 / #332).
 - **HW3** — the P10 review passed EN/DE layout at 880/1024/1280 px in both themes, the German

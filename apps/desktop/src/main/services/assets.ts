@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
@@ -278,6 +278,11 @@ export interface RuntimeDownloadPlan {
   binaryPaths: string[]
   /** Every non-executable required file (the build's `runtime_files`), absolute; `[]` for most. */
   runtimeFilePaths: string[]
+  /**
+   * Archive members the install removes after the flatten, absolute (#729): the family's
+   * `neverInstalled` executables. `[]` for most families.
+   */
+  excludedPaths: string[]
   /** Expected SHA-256 of the zip (may be a placeholder). */
   sha256: string
   /** True when the zip hash is still a placeholder. */
@@ -330,7 +335,24 @@ export interface SidecarFamilySpec {
    * their permissive licences ride the notices files, not a consent step.
    */
   license?: string
+  /**
+   * Executables the release archive carries that an install never keeps (#729), base names like
+   * `binaryBase`. CODE-side on purpose, like `alsoRequired`: a user-writable drive yaml must not be
+   * able to bring one back. The fetch-runtime twins carry the same list (`script-drift.test.ts`).
+   */
+  neverInstalled?: readonly string[]
 }
+
+/**
+ * `llama-connect` (in every llama.cpp archive since v0.8.0) is what `llama-server --connect` starts:
+ * a peer-to-peer tunnel that makes the server reachable from outside the machine. The app never
+ * passes `--connect`, and since #730 neither the environment nor a user-level config file can switch
+ * it on; on Linux and macOS a root-written `/etc/llama.cpp/config.ini` still could (the documented
+ * #730 residual). llama-server looks for the program beside itself first, so it stays off the drive.
+ * It is also a separately built Rust program with its own licences, which the archive does not carry
+ * (docs/model-policy.md), and the sell gate refuses a Kit that holds it anywhere (commercial-drive.ts).
+ */
+export const LLAMA_CONNECT_BINARY_BASE = 'llama-connect'
 
 /**
  * Install order preserved: llama_cpp (the chat engine, whose absence forces demo mode) first,
@@ -338,7 +360,7 @@ export interface SidecarFamilySpec {
  * first REQUIRED family.
  */
 export const SIDECAR_FAMILY_SPECS: readonly SidecarFamilySpec[] = [
-  { family: 'llama_cpp', binaryBase: 'llama-server' },
+  { family: 'llama_cpp', binaryBase: 'llama-server', neverInstalled: [LLAMA_CONNECT_BINARY_BASE] },
   { family: 'whisper_cpp', binaryBase: WHISPER_BINARY_BASE },
   {
     family: 'kiwix_tools',
@@ -412,7 +434,12 @@ export function planRuntimeDownload(
    * list; the build's own `runtime_files` come from `build`. The required set is their union,
    * so an edited drive yaml can ADD requirements but never drop a spawned executable.
    */
-  files: { alsoRequired?: readonly string[]; declaredExecutables?: readonly string[] } = {}
+  files: {
+    alsoRequired?: readonly string[]
+    declaredExecutables?: readonly string[]
+    /** The spec's `neverInstalled` executables (#729): removed after extraction, never required. */
+    neverInstalled?: readonly string[]
+  } = {}
 ): RuntimeDownloadPlan {
   const extractTo = resolveWithinRoot(rootPath, build.extractTo)
   // Name the downloaded archive after the URL's basename so a .tar.gz (the format the
@@ -430,12 +457,19 @@ export function planRuntimeDownload(
   // by base name so a name listed in both stays one file. Every name is resolved INSIDE the
   // extract dir (a plain name cannot escape it; the validator guarantees plainness, and
   // `resolveWithinRoot` is the belt to that brace).
+  // A `neverInstalled` name stays out even when the yaml declares it (#729): the code-side list wins.
+  // Compared without case, as NTFS and APFS compare file names (and as the PowerShell twin does).
+  const never = files.neverInstalled ?? []
+  const isNever = (b: string): boolean => never.some((n) => n.toLowerCase() === b.toLowerCase())
   const bases: string[] = [binaryBase]
   for (const b of [...(files.alsoRequired ?? []), ...(files.declaredExecutables ?? [])]) {
-    if (!bases.includes(b)) bases.push(b)
+    if (!bases.includes(b) && !isNever(b)) bases.push(b)
   }
   const binaryPaths = bases.map((b) => resolveWithinRoot(extractTo, sidecarBinaryName(b, build.os)))
   const runtimeFilePaths = (build.runtimeFiles ?? []).map((f) => resolveWithinRoot(extractTo, f))
+  const excludedPaths = never
+    .filter((b) => b !== binaryBase)
+    .map((b) => resolveWithinRoot(extractTo, sidecarBinaryName(b, build.os)))
   return {
     version,
     os: build.os,
@@ -447,9 +481,41 @@ export function planRuntimeDownload(
     binaryPath,
     binaryPaths,
     runtimeFilePaths,
+    excludedPaths,
     sha256: build.sha256,
     placeholderHash: !isRealSha256(build.sha256)
   }
+}
+
+/**
+ * #729: every file under `dir` (recursively, never following a link, never entering `skipDirs`) whose
+ * name is one of `bases` or `<base>.exe`, compared without case — the sell gate's check that no
+ * `neverInstalled` executable ships, wherever an old or hand-made install left it. Paths relative to
+ * `dir`, posix separators.
+ */
+export function findNeverInstalledFiles(dir: string, bases: readonly string[], skipDirs: readonly string[] = []): string[] {
+  const names = new Set(bases.flatMap((b) => [b.toLowerCase(), `${b.toLowerCase()}.exe`]))
+  const skip = new Set(skipDirs.map((d) => resolve(d)))
+  const out: string[] = []
+  const walk = (current: string, rel: string): void => {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const full = join(current, e.name)
+      const relPath = rel ? `${rel}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        if (!skip.has(resolve(full))) walk(full, relPath)
+      } else if (names.has(e.name.toLowerCase())) {
+        out.push(relPath)
+      }
+    }
+  }
+  if (bases.length > 0) walk(dir, '')
+  return out.sort()
 }
 
 /** Every file an install must produce (#339 P8-1): the executables, then the runtime files. */

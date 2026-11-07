@@ -11,7 +11,7 @@ import { sseBody } from '../helpers/fake-sidecar'
 // partial-UTF-8-across-frames case (the German "Müller"/"Söhne" multibyte chars must
 // reconstruct even when a frame is split mid-codepoint).
 //
-// Fixture provenance (#518, 2026-09-27): re-taken on the CURRENT pin b11146 the way V1 made it —
+// Fixture provenance (#518, 2026-09-27): re-taken on b11146 (the pin until #729) the way V1 made it —
 // the K: test drive's `llama-server` with the app's vision argv (`--mmproj`, `--parallel 1`,
 // `--device none --no-mmproj-offload`, ctx 4096), one streamed `/v1/chat/completions` with
 // `cache_prompt: true` and a base64 `image_url` of `invoice-synthetic.png` (a content-free
@@ -48,5 +48,23 @@ describe('readChatSSE on the vision SSE fixture', () => {
     expect(oneByte).toBe(whole)
     expect(oneByte).not.toContain('�') // no replacement char ⇒ no mangled codepoint
     expect(oneByte).toContain('Müller & Söhne')
+  })
+})
+
+// #729: the same capture re-taken on the b12110 pin (2026-11-07, GTX 1070 Ti box, the scratch root's official
+// llama-b12110-bin-win-vulkan-x64.zip install): the app's vision argv (`--mmproj`, `--parallel 1`, `--device none
+// --no-mmproj-offload`, ctx 4096), one streamed request with `cache_prompt: true`, the question "Which language is this
+// document in, and who issued it? Answer in one sentence." and the same `invoice-synthetic.png`. Drives that have not
+// taken the #516 update still run b11146, so its capture above stays. The frames have the same shape on both builds.
+const FIXTURE_B12110 = readFileSync(join(__dirname, '../fixtures/vision/vision-sse-b12110.txt'), 'utf8')
+
+describe('readChatSSE on the b12110 vision capture (#729)', () => {
+  it('reconstructs the answer, whole and one byte per read, with the b12110 fingerprint', async () => {
+    const whole = await collect(sseBody(FIXTURE_B12110))
+    expect(whole).toBe('The document is in German and it is issued by Müller & Söhne GmbH.')
+    expect(await collect(sseBody(FIXTURE_B12110, 1))).toBe(whole)
+    expect(FIXTURE_B12110).toContain('"system_fingerprint":"b12110-cd959bae9"')
+    expect(FIXTURE_B12110).toContain('"timings":{')
+    expect(FIXTURE_B12110.trimEnd().endsWith('data: [DONE]')).toBe(true)
   })
 })
