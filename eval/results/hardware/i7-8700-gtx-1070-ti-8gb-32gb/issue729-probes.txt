@@ -40,3 +40,10 @@ Linux (WSL Ubuntu 24.04, glibc 2.39, libgomp from `apt-get download libgomp1`, C
 "0.9.0-dev (build 12110, commit cd959bae9)", print "Available devices: (none)" and embed (384 dims), like b11146.
 objdump -T: GLIBC 2.34, GLIBCXX 3.4.30, CXXABI 1.3.13, OPENSSL 3.0.0, GOMP 4.5 on both builds. fetch-runtime.sh on
 the real tarballs (WSL ext4): "left out: llama-connect", 20 version links kept, both markers b12110.
+
+Run-to-run noise (embed-rerank729.mjs run twice per build, the same texts, separate servers):
+b11146 vs b11146: rerank max |score difference| 0, same order 10/10, E5 min cosine 1.0000000
+b12110 vs b12110: rerank max |score difference| 0, same order 10/10, E5 min cosine 1.0000000
+b11146 vs b12110: rerank max |score difference| 4.20e-3, same order 10/10, E5 min cosine 0.9999999
+So each build is bit-identical with itself; the 0.0042 is the build's kernels. The gate's three-item retrieval difference
+between its b11146 runs is the harness's run-to-run variation, not either engine.

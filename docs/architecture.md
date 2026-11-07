@@ -4194,8 +4194,10 @@ followed an unrelated request (upstream #30666, first in v0.8.0). Re-verified on
   `qwen3.5-4b`, `qwen3.5-9b`): EM, citation-correct, grounded and unanswerable-abstention are identical on all
   four, `mean_f1` moves by at most 0.005, 80–96 of 100 answers are byte-identical. Two abstention flips, both on
   answerable items and neither a loss: qwen3-4b's wrong fee becomes "not stated directly", qwen3.5-4b's correct
-  answer stops tripping the scorer's phrase list. The retrieved sources differ on 3 of 100 items: near-ties the
-  reranker's ≤ 0.004 shift reorders, the gold document still first or second.
+  answer stops tripping the scorer's phrase list. `qwen3-14b` (partial offload, its own run): every column identical,
+  94 of 100 answers byte-identical. Three items' retrieved sources vary between two runs of the SAME build (b11146),
+  so that is the harness's run-to-run variation, not the bump; the E5 vectors are identical and the reranker shifts
+  by ≤ 0.0042 with the same order.
 - **Not verified here:** the MTP start (the Qwen3.8 27B needs the 24 GB rig), the other five catalog
   chat models' gate, and the macOS asset (hash-checked only); they gate the next release tag. The
   #729 analysis saw two early b11960 servers end mid-generation with no crash record on ps-work. Here about

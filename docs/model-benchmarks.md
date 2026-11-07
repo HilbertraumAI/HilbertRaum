@@ -1292,12 +1292,18 @@ move them on the i9-14900K.
 | `qwen3-4b` | 0.977 = | 0.988 = | 0.977 = | 0.800 = | 0.312 → 0.308 | 91 / 100 |
 | `qwen3.5-4b` | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.235 → 0.239 | 80 / 100 |
 | `qwen3.5-9b` | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.281 → 0.280 | 84 / 100 |
+| `qwen3-14b` (24/41 on the 8 GB card, its own run) | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.336 = | 94 / 100 |
 
 Two items flip, both answerable and neither a loss: `qwen3-4b` on `de-vhs-gebuehr` gave the invoice's 940 € as the
 course fee on b11146 (EM 0) and says the fee is not stated directly on b12110 (EM 0, an over-abstention); `qwen3.5-4b`
 on `en-coffee-redlight` is correct on both and only on b11146 tripped the scorer's abstention phrase list. The
-retrieved sources differ on 3 of 100 items: near-ties the reranker's ≤ 0.004 score shift reorders (the E5 vectors are
-identical to six decimals), the gold document still first or second. «14B» Evidence: `eval/results/i7-8700-729-b{11146,12110}-vulkan-*`.
+retrieved sources differ on 3 of 100 items between the two four-model runs, but **not because of the build**: the same
+three differ between two runs of b11146 (the four-model one and the 14B one), while both b12110 runs and the 14B b11146
+run agree on all 100. The harness's retrieval varies from run to run on near-ties, whatever the build. In isolation each
+build's E5 vectors and reranker scores are bit-identical run to run, and the builds differ by ≤ 0.0042 in rerank score
+with the same order (`issue729-probes.txt`). The `qwen3-4b` flip above sits on one of those three items, so it follows
+the retrieval order, not the engine. Evidence: `eval/results/i7-8700-729-b{11146,12110}-vulkan-*` and
+`…-729-14b-b{11146,12110}-vulkan-*`.
 
 *Prompt cache, 30 conversations each* (`prompt-cache-smoke.test.ts` with `HILBERTRAUM_PROMPT_CACHE_SMOKE_PROMPTS=30`,
 the app's chat argv, `--cache-ram 4088`, temperature 0, 120 tokens):
