@@ -24,7 +24,8 @@ password recovery — are documented in
   also reads the fixed path `/etc/llama.cpp/config.ini`, which no variable moves. Only an
   administrator can write it. Such a file could also switch on `--connect` (v0.8.0+), which then
   finds a `llama-connect` only if the host put one on its `PATH`: the installers never put it on the
-  drive (#729, `security-model.md`). Windows has no such fixed path. On Linux the redirect has one side
+  drive (#729, `security-model.md`; one already on a drive is removed by `fetch-runtime` or the next
+  engine install, and a Kit holding it fails the sell gate). Windows has no such fixed path. On Linux the redirect has one side
   effect: the Vulkan loader reads user-level layers from `$XDG_CONFIG_HOME/vulkan` too, so layers
   installed under `~/.config/vulkan` (overlays, capture tools) no longer load into the engines.
   Layers and drivers under `~/.local/share` and `/etc` still do.

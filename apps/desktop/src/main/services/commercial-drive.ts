@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import {
   isKitPlatform,
@@ -12,6 +12,7 @@ import {
 } from '../../shared/runtime-sources'
 import { isCommercialPolicy, loadPolicy } from './policy'
 import {
+  findNeverInstalledFiles,
   markerBinaryKey,
   planOcrDownloads,
   planRuntimeDownload,
@@ -471,6 +472,9 @@ export async function assertCommercialDrive(
       list.push(build)
       groups.set(build.extractTo, list)
     }
+    /** Every other group's install dir (absolute) — a nested one is that build's to report. */
+    const allExtractDirs = [...groups.keys()].map((d) => join(rootPath, ...d.split('/')))
+    const otherExtractDirs = (own: string): string[] => allExtractDirs.filter((d) => resolve(d) !== resolve(own))
     for (const builds of groups.values()) {
       // planRuntimeDownload escape-guards extract_to (the yaml on the DRIVE is
       // user-writable) — a tampered path is a failed check, not a crash.
@@ -495,6 +499,14 @@ export async function assertCommercialDrive(
       const marker = readRuntimeMarker(plans[0]!.plan.extractTo)
       const { build, plan } = plans.find((p) => marker !== null && p.build.arch === marker.arch) ?? plans[0]!
       const label = `${familyLabel} build ${build.os}/${build.arch} ${build.backend}`
+      // #729: an executable the family never keeps (`llama-connect`, the `--connect` tunnel) must not
+      // ship, wherever it landed under the install dir: an install made before the installers left it
+      // out, or a hand-copied one, would convey a program no licence record covers. The other builds'
+      // own dirs (the `cpu/` net under `<os>/`) report for themselves.
+      const stray = findNeverInstalledFiles(plan.extractTo, spec.neverInstalled ?? [], otherExtractDirs(plan.extractTo))
+      if (stray.length > 0) {
+        fail('current', `${label}: ${stray.join(', ')} under ${build.extractTo} must not ship — re-run fetch-runtime for this build`)
+      }
       const required = requiredInstallFiles(plan)
       const present = required.filter((p) => existsSync(p) && statSync(p).isFile())
       // An optional family that is ENTIRELY absent — no marker, none of its files — is not a

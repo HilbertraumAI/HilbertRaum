@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
@@ -346,9 +346,11 @@ export interface SidecarFamilySpec {
 /**
  * `llama-connect` (in every llama.cpp archive since v0.8.0) is what `llama-server --connect` starts:
  * a peer-to-peer tunnel that makes the server reachable from outside the machine. The app never
- * passes `--connect`, and since #730 nothing on the host can switch it on, but llama-server looks for
- * the program beside itself first, so it stays off the drive. It is also a separately built Rust
- * program with its own licences, which the archive does not carry (docs/model-policy.md).
+ * passes `--connect`, and since #730 neither the environment nor a user-level config file can switch
+ * it on; on Linux and macOS a root-written `/etc/llama.cpp/config.ini` still could (the documented
+ * #730 residual). llama-server looks for the program beside itself first, so it stays off the drive.
+ * It is also a separately built Rust program with its own licences, which the archive does not carry
+ * (docs/model-policy.md), and the sell gate refuses a Kit that holds it anywhere (commercial-drive.ts).
  */
 export const LLAMA_CONNECT_BINARY_BASE = 'llama-connect'
 
@@ -456,10 +458,12 @@ export function planRuntimeDownload(
   // extract dir (a plain name cannot escape it; the validator guarantees plainness, and
   // `resolveWithinRoot` is the belt to that brace).
   // A `neverInstalled` name stays out even when the yaml declares it (#729): the code-side list wins.
+  // Compared without case, as NTFS and APFS compare file names (and as the PowerShell twin does).
   const never = files.neverInstalled ?? []
+  const isNever = (b: string): boolean => never.some((n) => n.toLowerCase() === b.toLowerCase())
   const bases: string[] = [binaryBase]
   for (const b of [...(files.alsoRequired ?? []), ...(files.declaredExecutables ?? [])]) {
-    if (!bases.includes(b) && !never.includes(b)) bases.push(b)
+    if (!bases.includes(b) && !isNever(b)) bases.push(b)
   }
   const binaryPaths = bases.map((b) => resolveWithinRoot(extractTo, sidecarBinaryName(b, build.os)))
   const runtimeFilePaths = (build.runtimeFiles ?? []).map((f) => resolveWithinRoot(extractTo, f))
@@ -481,6 +485,37 @@ export function planRuntimeDownload(
     sha256: build.sha256,
     placeholderHash: !isRealSha256(build.sha256)
   }
+}
+
+/**
+ * #729: every file under `dir` (recursively, never following a link, never entering `skipDirs`) whose
+ * name is one of `bases` or `<base>.exe`, compared without case — the sell gate's check that no
+ * `neverInstalled` executable ships, wherever an old or hand-made install left it. Paths relative to
+ * `dir`, posix separators.
+ */
+export function findNeverInstalledFiles(dir: string, bases: readonly string[], skipDirs: readonly string[] = []): string[] {
+  const names = new Set(bases.flatMap((b) => [b.toLowerCase(), `${b.toLowerCase()}.exe`]))
+  const skip = new Set(skipDirs.map((d) => resolve(d)))
+  const out: string[] = []
+  const walk = (current: string, rel: string): void => {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const full = join(current, e.name)
+      const relPath = rel ? `${rel}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        if (!skip.has(resolve(full))) walk(full, relPath)
+      } else if (names.has(e.name.toLowerCase())) {
+        out.push(relPath)
+      }
+    }
+  }
+  if (bases.length > 0) walk(dir, '')
+  return out.sort()
 }
 
 /** Every file an install must produce (#339 P8-1): the executables, then the runtime files. */

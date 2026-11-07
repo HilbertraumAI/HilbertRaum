@@ -21,7 +21,7 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
 })
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -266,6 +266,20 @@ describe('EngineDownloadManager install flow', () => {
     expect(files.sort()).toEqual(['.hilbertraum-runtime.json', BIN_NAME, 'ggml.dll'].sort())
     const marker = JSON.parse(readFileSync(runtimeMarkerPath(dir), 'utf8'))
     expect(Object.keys(marker.binaries)).toEqual([BIN_NAME])
+  })
+
+  // A dangling link of that name goes too: `existsSync` follows links and would have missed it. POSIX only
+  // (creating a symlink on Windows needs a privilege the test runner does not have).
+  it.skipIf(process.platform === 'win32')('removes a dangling llama-connect link as well (#729)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const linkExtract: ExtractFn = async (_archive, destDir) => {
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      await symlink('not-in-the-archive', join(destDir, CONNECT))
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: linkExtract })
+    const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+    expect(job.status).toBe('done')
+    await expect(lstat(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, CONNECT))).rejects.toThrow()
   })
 
   it('a drive yaml that lists llama-connect under executables cannot bring it back or demand it (#729)', async () => {

@@ -10,6 +10,7 @@ import {
   selectRuntimeBuilds,
   planRuntimeDownload,
   requiredInstallFiles,
+  sidecarFamilySpec,
   verifyDownloadedFile,
   downloadToFile,
   formatAssetPlan,
@@ -776,6 +777,25 @@ describe('planRuntimeDownload', () => {
     expect(plan.runtimeFilePaths).toEqual([])
     expect(requiredInstallFiles(plan)).toEqual([plan.binaryPath])
   })
+
+  // #729: the llama family's neverInstalled (llama-connect) is excluded, never required, whatever case
+  // a drive yaml spells it in (NTFS and APFS would treat Llama-Connect.exe as the same file).
+  it.each(['llama-connect', 'Llama-Connect', 'LLAMA-CONNECT'])(
+    'a yaml that declares %s cannot make it required; it is removed instead (#729)',
+    (declared) => {
+      const root = tempDir('hilbertraum-rt-')
+      const build = selectRuntimeBuild(runtimeSources(), { os: 'win', arch: 'x64' })!
+      const spec = sidecarFamilySpec('llama_cpp')!
+      const plan = planRuntimeDownload(root, build, 'b12110', spec.binaryBase, {
+        alsoRequired: spec.alsoRequired,
+        declaredExecutables: ['llama-server', declared],
+        neverInstalled: spec.neverInstalled
+      })
+      const dir = join(root, 'runtime', 'llama.cpp', 'win')
+      expect(requiredInstallFiles(plan)).toEqual([join(dir, 'llama-server.exe')])
+      expect(plan.excludedPaths).toEqual([join(dir, 'llama-connect.exe')])
+    }
+  )
 
   it('resolves the extraction dir + binary path under the drive root', () => {
     const root = tempDir('hilbertraum-rt-')

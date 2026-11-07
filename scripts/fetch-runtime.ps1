@@ -440,6 +440,20 @@ $PrimaryBase = if ($Family -eq 'whisper_cpp') { 'whisper-cli' } elseif ($Family 
 # `llama-server --connect` starts (a peer-to-peer tunnel, v0.8.0+); llama-server looks for it beside
 # itself first. The list wins over the yaml's `executables:`, as in planRuntimeDownload.
 $NeverInstalledBases = if ($Family -eq 'llama_cpp') { @('llama-connect') } else { @() }
+# Remove them from the install dir: after a fresh extraction, and on the skip path, so an install made
+# before this rule (or copied by hand) loses its copy too. Get-Item -Force sees a dangling link as well.
+# -notcontains / -eq compare without case, as NTFS and APFS compare file names (assets.ts does the same).
+function Remove-NeverInstalled {
+  foreach ($base in $NeverInstalledBases) {
+    $leftOut = if ($build.os -eq 'win') { "$base.exe" } else { $base }
+    $leftOutPath = Join-Path $extractTo $leftOut
+    if (Get-Item -LiteralPath $leftOutPath -Force -ErrorAction SilentlyContinue) {
+      if ($DryRun) { Write-Host "  would leave out: $leftOut"; continue }
+      Remove-Item -Force -LiteralPath $leftOutPath
+      Write-Host "  left out: $leftOut"
+    }
+  }
+}
 $executableBases = @($PrimaryBase)
 foreach ($e in $familyExecutables) { if ($executableBases -notcontains $e -and $NeverInstalledBases -notcontains $e) { $executableBases += $e } }
 # Binary name(s) follow the SELECTED build's OS (we may be provisioning the mac/linux dir
@@ -498,6 +512,7 @@ if (Test-Path -LiteralPath $binaryPath) {
   }
   if ($skip) {
     Write-Host "  skip ($binaryName already installed: $version/$($build.backend) per .hilbertraum-runtime.json)" -ForegroundColor Green
+    Remove-NeverInstalled
     exit 0
   }
   Write-Host "  $binaryName present but $why -- re-fetching $version/$($build.backend)" -ForegroundColor Yellow
@@ -672,14 +687,7 @@ if (-not (Test-Path -LiteralPath $binaryPath)) {
 
 # #729: leave out what the family never keeps (mirrors runtime-download.ts install). A file that
 # cannot be removed stops the run here, before a marker claims the install.
-foreach ($base in $NeverInstalledBases) {
-  $leftOut = if ($build.os -eq 'win') { "$base.exe" } else { $base }
-  $leftOutPath = Join-Path $extractTo $leftOut
-  if (Test-Path -LiteralPath $leftOutPath) {
-    Remove-Item -Force -LiteralPath $leftOutPath
-    Write-Host "  left out: $leftOut"
-  }
-}
+Remove-NeverInstalled
 
 # #339 P8-3: post-extract completeness check -- EVERY required file (every declared
 # executable + runtime file), not just the primary. Mirrors assets.ts requiredInstallFiles /

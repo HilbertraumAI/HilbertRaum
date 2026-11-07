@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, readFileSync } from 'node:fs'
-import { mkdir, readdir, readlink, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readlink, rename, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
@@ -1157,10 +1157,11 @@ export class EngineDownloadManager {
     await this.flattenNestedBinary(plan)
     // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before
     // anything can start it. A file that cannot be removed fails the install like a bad archive.
+    // `lstat`, not `existsSync`: a dangling link of that name must go too.
     for (const p of plan.excludedPaths) {
-      if (!existsSync(p)) continue
+      const there = await lstat(p).then(() => true, () => false)
       await rm(p, { recursive: true, force: true })
-      this.deps.log?.('Left out of the engine install', { file: basename(p) })
+      if (there) this.deps.log?.('Left out of the engine install', { file: basename(p) })
     }
 
     // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already

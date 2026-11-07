@@ -6158,7 +6158,9 @@ code-side `SidecarFamilySpec.optional` is the one that actually decides, and a t
 two agree for every shipped family. Since #729 a spec can also name executables the archive carries
 but an install never keeps (`neverInstalled`; the llama family's `llama-connect`, the `--connect`
 tunnel): the installers delete them after the flatten, a yaml `executables` entry cannot make one
-required, and both `fetch-runtime` twins carry the same list (`script-drift.test.ts`). Record: `docs/model-policy.md` "Sidecar binaries —
+required (compared without case), both `fetch-runtime` twins carry the same list (`script-drift.test.ts`)
+and sweep an install they find current, and the sell gate refuses a Kit that holds one anywhere under an
+install dir (`findNeverInstalledFiles`). Record: `docs/model-policy.md` "Sidecar binaries —
 kiwix-tools" (the license side), `docs/data-contracts.md` (the type-level shape),
 `docs/rag-design.md` §17 D-Z17 (the family contract from the knowledge-packs side, including the
 R-1 closure statement).

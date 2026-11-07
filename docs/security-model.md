@@ -503,8 +503,12 @@ outside the machine over WebRTC. The app never passes `--connect`, the option ha
 and since #730 neither the environment nor a user-level config file can switch it on. llama-server
 looks for the program beside itself first and then on `PATH`, so the installers leave it out: the
 in-app installer and both `fetch-runtime` twins delete it after extraction, whatever the drive's
-yaml declares (`neverInstalled` in `assets.ts`). The residual is the same root-only
-`/etc/llama.cpp/config.ini`, now together with a `llama-connect` the host itself put on its `PATH`.
+yaml declares (`neverInstalled` in `assets.ts`); the twins also remove it from an install they find
+current, and the sell gate refuses a Kit that holds it anywhere under an engine folder. Residuals: the
+same root-only `/etc/llama.cpp/config.ini`, now together with a `llama-connect` the host itself put on
+its `PATH`; and a non-commercial drive whose current install already holds the file (made by hand, or
+before this rule) keeps it in the app until the engine is installed again, since the app removes it only
+when it extracts an archive.
 
 #### The fifth threat: same-machine processes (local-api wave)
 

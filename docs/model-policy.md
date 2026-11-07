@@ -677,8 +677,9 @@ archives carry is byte-identical to b11146's (llama.cpp's `LICENSE` in the macOS
 statically linked Rust program (upstream `ggml-org/llama-connect`) whose own dependency licences the
 archives do not carry. **It is never installed:** the in-app installer and both `fetch-runtime` twins
 delete it after extraction (`neverInstalled` in `assets.ts` `SIDECAR_FAMILY_SPECS`, mirrored in the
-scripts and held to it by `script-drift.test.ts`), so a drive never conveys it and no record is needed
-for it. Other archive changes, none licence-relevant: the macOS/Linux libraries carry new version
+scripts and held to it by `script-drift.test.ts`; the twins also sweep an install they find current),
+and the sell gate refuses a Kit that holds it anywhere under an engine folder, so a Kit never conveys it
+and no record is needed for it. Other archive changes, none licence-relevant: the macOS/Linux libraries carry new version
 suffixes (ggml 0.25.1 → 0.29.0, llama 0.5.0 → 0.9.0; nothing in the repo names them), and the Windows
 executables embed an application manifest (UTF-8 code page, long paths; upstream #31329). All five
 SHA-256 values are the official GitHub Releases API `digest` for tag `b12110` AND were confirmed

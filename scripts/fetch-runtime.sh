@@ -444,13 +444,33 @@ PRIMARY_BASE="llama-server"
 # itself first. The list wins over the yaml's `executables:`, as in planRuntimeDownload.
 declare -a NEVER_INSTALLED_BASES=()
 [[ "$FAMILY" == "llama_cpp" ]] && NEVER_INSTALLED_BASES=(llama-connect)
+# Names compare without case, as NTFS and APFS compare them (assets.ts and the .ps1 twin do the same).
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# remove_never_installed — remove them from the install dir: after a fresh extraction, and on the skip
+# path, so an install made before this rule (or copied by hand) loses its copy too. `-L` catches a
+# dangling link, which `-e` follows and misses. A dry run only says what it would remove.
+remove_never_installed() {
+  local base left_out
+  for base in ${NEVER_INSTALLED_BASES[@]+"${NEVER_INSTALLED_BASES[@]}"}; do
+    left_out="$base"
+    if [[ "${B_OS[$SEL]}" == "win" ]]; then left_out="$base.exe"; fi
+    if [[ -e "$EXTRACT_TO/$left_out" || -L "$EXTRACT_TO/$left_out" ]]; then
+      if [[ $DRY_RUN -eq 1 ]]; then echo "  would leave out: $left_out"; continue; fi
+      rm -f "$EXTRACT_TO/$left_out" || { echo "  FAIL: could not remove $left_out from $EXTRACT_TO" >&2; exit 1; }
+      echo "  left out: $left_out"
+    fi
+  done
+}
 declare -a EXEC_BASES=("$PRIMARY_BASE")
 if [[ -n "$FAMILY_EXECUTABLES" ]]; then
   while IFS= read -r e; do
     already=0
     for existing in "${EXEC_BASES[@]}"; do [[ "$existing" == "$e" ]] && already=1 && break; done
-    for never in ${NEVER_INSTALLED_BASES[@]+"${NEVER_INSTALLED_BASES[@]}"}; do [[ "$never" == "$e" ]] && already=1 && break; done
-    [[ $already -eq 0 ]] && EXEC_BASES+=("$e")
+    excluded=0
+    for never in ${NEVER_INSTALLED_BASES[@]+"${NEVER_INSTALLED_BASES[@]}"}; do
+      if [[ "$(lower "$never")" == "$(lower "$e")" ]]; then excluded=1; break; fi
+    done
+    [[ $already -eq 0 && $excluded -eq 0 ]] && EXEC_BASES+=("$e")
   done < <(flow_list_items "$FAMILY_EXECUTABLES")
 fi
 # Binary name(s) follow the SELECTED build's OS (mirrors assets.ts sidecarBinaryName).
@@ -521,7 +541,9 @@ if [[ -f "$BIN_PATH" ]]; then
     fi
   fi
   if [[ $SKIP -eq 1 ]]; then
-    echo "  skip ($BIN_NAME already installed: $VERSION/${B_BACKEND[$SEL]} per .hilbertraum-runtime.json)"; exit 0
+    echo "  skip ($BIN_NAME already installed: $VERSION/${B_BACKEND[$SEL]} per .hilbertraum-runtime.json)"
+    remove_never_installed
+    exit 0
   fi
   echo "  $BIN_NAME present but $WHY — re-fetching $VERSION/${B_BACKEND[$SEL]}"
 fi
@@ -690,13 +712,7 @@ fi
 
 # #729: leave out what the family never keeps (mirrors runtime-download.ts install). A file that
 # cannot be removed stops the run here, before a marker claims the install.
-for base in ${NEVER_INSTALLED_BASES[@]+"${NEVER_INSTALLED_BASES[@]}"}; do
-  left_out="$base"; [[ "${B_OS[$SEL]}" == "win" ]] && left_out="$base.exe"
-  if [[ -e "$EXTRACT_TO/$left_out" ]]; then
-    rm -f "$EXTRACT_TO/$left_out" || { echo "  FAIL: could not remove $left_out from $EXTRACT_TO" >&2; exit 1; }
-    echo "  left out: $left_out"
-  fi
-done
+remove_never_installed
 
 # #339 P8-3: post-extract completeness check — EVERY required file (every declared
 # executable + runtime file), not just the primary. Mirrors assets.ts requiredInstallFiles /

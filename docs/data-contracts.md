@@ -1943,9 +1943,13 @@ whole renderer-visible surface.
   `runtimeCurrent`/`runtimeHashed`).
   **#729 addition (no IPC change):** `SidecarFamilySpec` gains `neverInstalled?: readonly string[]` (base
   names, code-side; the llama family's `['llama-connect']`), and `RuntimeDownloadPlan` gains `excludedPaths:
-  string[]` (absolute, resolved inside the extract dir). A `neverInstalled` name is removed after the flatten,
-  is never part of the required set or the marker's `binaries` map, and wins over a yaml `executables` entry of
-  the same name; the `fetch-runtime` twins carry the same list (`script-drift.test.ts`).
+  string[]` (absolute, resolved inside the extract dir). A `neverInstalled` name is removed after the flatten
+  (a dangling link too), is never one of the required executables or the marker's `binaries` map, and wins over a
+  yaml `executables` entry of the same name, compared without case. A yaml `runtime_files` entry naming it makes
+  the install fail closed (removed, then missing), so a yaml can never bring it back. The `fetch-runtime` twins
+  carry the same list (`script-drift.test.ts`) and also remove it on a re-run that finds the install current.
+  `findNeverInstalledFiles(dir, bases, skipDirs)` (`assets.ts`) is the sell gate's recursive, case-insensitive
+  search: `assertCommercialDrive` fails `runtimeCurrent` for a Kit that holds one anywhere under an install dir.
   **#339 P8-2 additions (the consent step; the channel is unchanged, its PAYLOAD is new):**
   `downloadEngine` takes an OPTIONAL `EngineDownloadRequest = { families?: string[] }`. Absent
   (the preload sends NO payload — pinned by `preload-engine.test.ts`) = the default install,
