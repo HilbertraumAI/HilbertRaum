@@ -146,6 +146,69 @@ for (const leg of SCRIPT_LEGS) {
       expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: { 'llama-server.exe': sha256Of('new build') } })
     })
 
+    // #729: every llama.cpp archive since v0.8.0 carries llama-connect, the `llama-server --connect` tunnel.
+    it('a Windows zip carrying llama-connect.exe: installed without it, the marker records only the server (#729)', () => {
+      const archive = makeZip([
+        { name: 'llama-server.exe', data: Buffer.from('new build') },
+        { name: 'llama-connect.exe', data: Buffer.from('tunnel') },
+        { name: 'ggml.dll', data: Buffer.from('ggml') }
+      ])
+      const root = pinnedDrive(WIN, serve(`llama-${VERSION}-bin-win-vulkan-x64.zip`, archive), sha256Of(archive))
+      const r = fetchRuntime(root, [f('Os'), 'win'])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      expect(out).toContain('left out: llama-connect.exe')
+      const dir = join(root, ...WIN.extractTo.split('/'))
+      expect(listing(dir)).toEqual(['.hilbertraum-runtime.json', 'ggml.dll', 'llama-server.exe'])
+      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: { 'llama-server.exe': sha256Of('new build') } })
+    })
+
+    it('a nested linux tar.gz carrying llama-connect: it is left out after the flatten, even when the yaml lists it (#729)', () => {
+      const archive = nestedLinuxBuild([{ name: `llama-${VERSION}/llama-connect`, data: Buffer.from('tunnel'), mode: 0o755 }])
+      const root = pinnedDrive(LINUX, serve(`llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz`, archive), sha256Of(archive))
+      const yaml = join(root, 'model-manifests', 'runtime-sources.yaml')
+      writeFileSync(yaml, readFileSync(yaml, 'utf8').replace(`  version: ${VERSION}\n`, `  version: ${VERSION}\n  executables: [llama-server, llama-connect]\n`))
+      const r = fetchRuntime(root, [f('Os'), 'linux'])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      expect(out).toContain('left out: llama-connect')
+      const dir = join(root, ...LINUX.extractTo.split('/'))
+      expect(listing(dir)).toEqual(['.hilbertraum-runtime.json', 'libllama.so', 'libllama.so.0', 'libllama.so.0.0.1', 'llama-server'])
+      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'linux', arch: 'x64', binaries: { 'llama-server': sha256Of(SERVER) } })
+    })
+
+    // #729: an install already current (made before this rule, or copied by hand) loses its copy on a re-run, which
+    // otherwise only skips; a dry run says so and touches nothing.
+    it.each([
+      { name: 'a re-run', dry: false },
+      { name: 'a dry run', dry: true }
+    ])('$name over a current install that still holds llama-connect.exe skips the download and leaves it out (#729)', ({ dry }) => {
+      const archive = winBuild('new build')
+      const root = pinnedDrive(WIN, serve(`llama-${VERSION}-bin-win-vulkan-x64.zip`, archive), sha256Of(archive))
+      const dir = join(root, ...WIN.extractTo.split('/'))
+      installed(dir, { 'llama-server.exe': 'current build', 'llama-connect.exe': 'tunnel' }, VERSION)
+      const r = fetchRuntime(root, [f('Os'), 'win', ...(dry ? [f('DryRun')] : [])])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      expect(out).toContain('already installed')
+      expect(out).toContain(dry ? 'would leave out: llama-connect.exe' : 'left out: llama-connect.exe')
+      expect(existsSync(join(dir, 'llama-connect.exe'))).toBe(dry)
+      expect(readFileSync(join(dir, 'llama-server.exe'), 'utf8')).toBe('current build')
+    })
+
+    it('a yaml spelling it Llama-Connect cannot make it required: the twins compare without case, like the app (#729)', () => {
+      const archive = nestedLinuxBuild([{ name: `llama-${VERSION}/llama-connect`, data: Buffer.from('tunnel'), mode: 0o755 }])
+      const root = pinnedDrive(LINUX, serve(`llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz`, archive), sha256Of(archive))
+      const yaml = join(root, 'model-manifests', 'runtime-sources.yaml')
+      writeFileSync(yaml, readFileSync(yaml, 'utf8').replace(`  version: ${VERSION}\n`, `  version: ${VERSION}\n  executables: [llama-server, Llama-Connect]\n`))
+      const r = fetchRuntime(root, [f('Os'), 'linux'])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      const dir = join(root, ...LINUX.extractTo.split('/'))
+      expect(existsSync(join(dir, 'llama-connect'))).toBe(false)
+      expect(markerOf(dir)).toMatchObject({ binaries: { 'llama-server': sha256Of(SERVER) } })
+    })
+
     it('an archive that fails its pin: exit 1, the archive deleted, the installed build untouched (#769)', () => {
       const root = pinnedDrive(WIN, serve(`llama-${VERSION}-bin-win-vulkan-x64.zip`, winBuild('new build')), sha256Of('another archive'))
       const dir = join(root, ...WIN.extractTo.split('/'))

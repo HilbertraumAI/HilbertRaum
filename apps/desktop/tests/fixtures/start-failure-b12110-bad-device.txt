@@ -1,0 +1,13 @@
+0.00.009.814 I load_backend: loaded RPC backend from <drive>\runtime\llama.cpp\win\ggml-rpc.dll
+0.00.189.722 I load_backend: loaded Vulkan backend from <drive>\runtime\llama.cpp\win\ggml-vulkan.dll
+0.00.215.636 I load_backend: loaded CPU backend from <drive>\runtime\llama.cpp\win\ggml-cpu-haswell.dll
+error while handling argument "--device": invalid device: Vulkan7
+
+usage:
+-dev,  --device <dev1,dev2,..>          comma-separated list of devices to use for offloading (none = don't
+                                        offload)
+                                        use --list-devices to see a list of available devices
+                                        (env: LLAMA_ARG_DEVICE)
+
+
+to show complete usage, run with -h

@@ -798,7 +798,10 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
   it.each<[string, string, TranslationGpuDeps, Record<string, unknown>]>([
     ['a GPU-posture start with no usable graphics device', GPULESS_LOG, {}, { device: 'auto', gpuLayers: 49, totalLayers: 49, gpuBuffers: false }],
     ['a forced-CPU start beside a visible card', DEVNONE_LOG, { getGpuMode: () => 'off' }, { device: 'cpu', gpuLayers: 49, totalLayers: 49, gpuBuffers: false }],
-    ['a GPU-posture start the card took 39 layers of', PARTIAL_LOG, {}, { device: 'auto', gpuLayers: 39, totalLayers: 49, gpuBuffers: true }]
+    ['a GPU-posture start the card took 39 layers of', PARTIAL_LOG, {}, { device: 'auto', gpuLayers: 39, totalLayers: 49, gpuBuffers: true }],
+    // #729: the same two starts on the b12110 pin, which adds a CPU row to device_info.
+    ['a forced-CPU start beside a visible card (b12110)', 'placement-b12110-translategemma-devnone-49of49-cpu.txt', { getGpuMode: () => 'off' }, { device: 'cpu', gpuLayers: 49, totalLayers: 49, gpuBuffers: false }],
+    ['a GPU-posture start the card took 39 layers of (b12110)', 'placement-b12110-translategemma-partial-39of49.txt', {}, { device: 'auto', gpuLayers: 39, totalLayers: 49, gpuBuffers: true }]
   ])('%s: the split as printed, and whether the log put a buffer on a graphics device (#671)', async (_name, log, gpu, expected) => {
     const { spawn } = fakeSpawn(() => spawnedChild([fixture(log)]))
     const started: unknown[] = []

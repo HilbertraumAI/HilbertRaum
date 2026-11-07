@@ -20,7 +20,7 @@ import { LlamaServer, combineSignals, type LlamaServerOptions } from './sidecar'
 
 /**
  * Args every CHAT sidecar gets (first verified against the llama.cpp b9585 source; the argv was
- * re-verified on the current pin b11146 under #512 — `model-manifests/runtime-sources.yaml`;
+ * re-verified on b11146 under #512 and on the current pin b12110 under #729 — `model-manifests/runtime-sources.yaml`;
  * rationale in architecture.md "Chat & streaming"):
  *   --jinja                      the kwargs-driven thinking switch only acts in the
  *                                jinja template path (b9585 already defaulted to jinja;
@@ -136,7 +136,7 @@ export type LlamaRuntimeDeps = Pick<
  *             sampling), uncapped
  *
  * `enableThinking` is ALWAYS explicit: the server defaults to `--reasoning auto` (verified on
- * b9585; thinking still ON by default on the b11146 pin, #512), which turns thinking ON for any
+ * b9585; thinking still ON by default on b11146, #512, and on the b12110 pin, #729), which turns thinking ON for any
  * template that supports it (all four bundled Qwen3 models) — omitting the kwarg would make every
  * mode think.
  * Explicit `RuntimeChatOptions.maxTokens`/`temperature` win over these values.
@@ -176,7 +176,7 @@ interface ChatCompletionChunk {
   /**
    * llama-server's per-request timing block (#290/#291). It rides the `finish_reason` chunk
    * itself — pinned by the captured transcripts `tests/fixtures/chat-sse-timings-b9849.txt` (#298)
-   * and `chat-sse-timings-b11146.txt` (the current pin, #512). The reader still tolerates it on ANY
+   * `chat-sse-timings-b11146.txt` (#512) and `chat-sse-timings-b12110.txt` (the current pin, #729). The reader still tolerates it on ANY
    * chunk, including one with no `choices`, so a future server that moves it keeps working.
    */
   timings?: RuntimeTimings
@@ -195,7 +195,7 @@ interface ChatCompletionChunk {
  *
  * F-02 (audit 2026-07-16): llama-server reports a mid-generation failure IN-BAND on the open
  * stream and then closes it without `[DONE]`. Two carrier shapes exist on b9849 (no capture of
- * either on the current pin b11146) — the same pair the repo verified for the translation reader
+ * either on b11146 or the current pin b12110) — the same pair the repo verified for the translation reader
  * (TA-4 M3, architecture.md "translation audit"): a `data: {"error":{message,type,…}}` frame and a
  * bare `error: {…}` SSE FIELD line. Both used to fall through as keep-alives (`{}`), so the reader ended
  * cleanly and a partial answer persisted as complete. Both now map to `streamError`. An
@@ -387,7 +387,7 @@ export function isChatStreamError(err: unknown): boolean {
  * milliseconds, so a much tighter STREAM budget means "wedged". Reasoning deltas count as chunks,
  * so a long "thinking" phase is safe.
  *
- * #598: prefill has TWO clocks, because both pinned builds (b9849 and b11146 alike) write an SSE
+ * #598: prefill has TWO clocks, because every pinned build (b9849, b11146 and b12110 alike) writes an SSE
  * comment ping after every ~30 s of silence from their HTTP thread, which keeps pinging while the
  * compute loop is wedged (measured on b11146: one compute thread suspended for 151.7 s, a ping every
  * 30 s, `/health` 200 in 62 ms). So a ping proves the PROCESS is alive and nothing more:
@@ -437,9 +437,9 @@ const DEFAULT_IDLE: IdleWatchdog = {
   streamMs: STREAM_IDLE_MS
 }
 /**
- * #594/#598: the wait for the response HEADERS (`LlamaRuntime.chatStream`), 180 s (owner). Both
+ * #594/#598: the wait for the response HEADERS (`LlamaRuntime.chatStream`), 180 s (owner). The
  * pinned builds send the headers when the slot STARTS, before any prompt batch is decoded (upstream
- * `server-context.cpp`; measured: 14–26 ms on b11146, 18 ms on b9849), so this wait is tokenisation
+ * `server-context.cpp`; measured: 14–26 ms on b11146, 18 ms on b9849, 14–17 ms on b12110), so this wait is tokenisation
  * plus queueing for the one slot (`-np 1`). It is long only behind a cancelled request, whose
  * current batch must finish first — up to one batch, which can exceed this on a slow CPU (accepted).
  */
@@ -529,8 +529,8 @@ export function readWithIdleTimeout<T>(
  * rejects with `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop
  * still wins first.
  *
- * #594: both pinned builds send an SSE comment ping (`:`) after every ~30 s of silence
- * (`--sse-ping-interval`, default 30 — b9849 too, which the #594 record had wrong). A ping is the
+ * #594: every pinned build sends an SSE comment ping (`:`) after every ~30 s of silence
+ * (`--sse-ping-interval`, default 30 — b9849 too, which the #594 record had wrong; b12110 unchanged, #729). A ping is the
  * server's HTTP thread, not the model, so once the first chunk has landed it no longer resets the
  * stream budget: the budget counts the time spent WAITING since the last model output — any bytes
  * but blank lines and comments, a split line's start included — on the monotonic clock (time the
@@ -706,7 +706,7 @@ export class LlamaRuntime implements ModelRuntime {
    * directly to role/content; `maxTokens`/`temperature` map to `max_tokens`/
    * `temperature` (explicit values win over the mode mapping). The answer-depth
    * `mode` maps to `chat_template_kwargs.enable_thinking` — per-request support verified
-   * on b9585 and on the b11146 pin (#512) — plus the per-mode sampling defaults; with
+   * on b9585, on b11146 (#512) and on the b12110 pin (#729) — plus the per-mode sampling defaults; with
    * thinking on, reasoning deltas surface via `options.onReasoning`, never in the
    * yielded answer stream. Aborts the fetch + generator on `options.signal`.
    */

@@ -28,7 +28,7 @@ node scripts/generate-drive-notices.mjs
 
 ```
 runtime-family: kiwix_tools 3.8.1
-runtime-family: llama_cpp b11146
+runtime-family: llama_cpp b12110
 runtime-family: ocr 4.0.0_best_int
 runtime-family: whisper_cpp v1.8.6
 model: bge-reranker-v2-m3-f16 apache-2.0
@@ -69,11 +69,11 @@ model: whisper-small-multilingual mit
 
 ## Runtime binaries and data
 
-### llama.cpp b11146 — MIT
+### llama.cpp b12110 — MIT
 
 The `llama-server` binaries under `runtime/llama.cpp/<os>/` are prebuilt release
 assets of the MIT-licensed `ggml-org/llama.cpp` project
-(https://github.com/ggml-org/llama.cpp), pinned at release b11146
+(https://github.com/ggml-org/llama.cpp), pinned at release b12110
 (license review: `docs/model-policy.md`). The upstream archives ship no license
 file, so the MIT text was pinned in-repo at review time (`licenses/llama.cpp-MIT.txt`):
 

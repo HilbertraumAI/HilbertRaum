@@ -1,0 +1,23 @@
+# #729 repro — does a request R answer differently after an unrelated request X on the same llama-server?
+#
+# Machine: DESKTOPDIT, i7-8700 / GTX 1070 Ti 8 GB / 32 GB, Windows 11, NVIDIA 582.66. 2026-11-07.
+# Builds: the official llama-b11146 / llama-b12110 win-vulkan-x64 archives as fetch-runtime installs them.
+# Model: gemma4-e2b-it-qat-q4 (the catalog file). Sampling: temperature 1, seed 42, top_p 0.95, top_k 20, min_p 0,
+# presence_penalty 1.5, logprobs + top_logprobs 5, max_tokens 160, cache_prompt false.
+# R: a German follow-up (user, assistant, user) that opens with a user turn; X: an unrelated English request.
+# Per leg: server 1 answers R, X, R, R; server 2 (fresh) answers R. "issue" = the issue's flags (--parallel 1 --jinja
+# --reasoning off --no-context-shift --cache-ram 0 --fit off --no-cache-prompt --no-cache-idle-slots --n-gpu-layers 999,
+# ctx 73728 on the card, 16384 on CPU); "app" = the app's chat argv (ctx 8192, --cache-ram 4082). "cpu" adds --device none.
+# top0 = token 0's two most likely tokens and their logprobs. Script: repro729.mjs (session scratchpad).
+b11146 issue-gpu  fresh==restart true  R-after-X==fresh false  R-again==fresh false  first changed char 221  top0 fresh "Wenn" -0.9346 / "Bev" -1.3403  after X "Wenn" -0.8797 / "Bev" -1.4146
+b12110 issue-gpu  fresh==restart true  R-after-X==fresh true  R-again==fresh true  first changed char -1  top0 fresh "Wenn" -0.8979 / "Bev" -1.3704  after X "Wenn" -0.8979 / "Bev" -1.3704
+b11146 issue-cpu  fresh==restart true  R-after-X==fresh true  R-again==fresh true  first changed char -1  top0 fresh "Wenn" -0.8571 / "Bev" -1.4161  after X "Wenn" -0.8571 / "Bev" -1.4161
+b12110 issue-cpu  fresh==restart true  R-after-X==fresh true  R-again==fresh true  first changed char -1  top0 fresh "Wenn" -0.8571 / "Bev" -1.4161  after X "Wenn" -0.8571 / "Bev" -1.4161
+b11146 app-gpu    fresh==restart true  R-after-X==fresh false  R-again==fresh false  first changed char 221  top0 fresh "Wenn" -0.9346 / "Bev" -1.3403  after X "Wenn" -0.8797 / "Bev" -1.4146
+   checkpoint log (last 6): created context checkpoint 1 of 32, created context checkpoint 2 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32
+b12110 app-gpu    fresh==restart true  R-after-X==fresh true  R-again==fresh true  first changed char -1  top0 fresh "Wenn" -0.8979 / "Bev" -1.3704  after X "Wenn" -0.8979 / "Bev" -1.3704
+   checkpoint log (last 6): created context checkpoint 1 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32, created context checkpoint 1 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32
+b11146 app-cpu    fresh==restart true  R-after-X==fresh true  R-again==fresh true  first changed char -1  top0 fresh "Wenn" -0.8571 / "Bev" -1.4161  after X "Wenn" -0.8571 / "Bev" -1.4161
+   checkpoint log (last 6): created context checkpoint 1 of 32, created context checkpoint 2 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32
+b12110 app-cpu    fresh==restart true  R-after-X==fresh true  R-again==fresh true  first changed char -1  top0 fresh "Wenn" -0.8571 / "Bev" -1.4161  after X "Wenn" -0.8571 / "Bev" -1.4161
+   checkpoint log (last 6): created context checkpoint 1 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32, created context checkpoint 1 of 32, created context checkpoint 2 of 32, created context checkpoint 3 of 32

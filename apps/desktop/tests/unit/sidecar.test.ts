@@ -1066,6 +1066,33 @@ describe('failureSignature on real llama-server tails (#515)', () => {
   })
 })
 
+// #729: the same tails on the b12110 pin (GTX 1070 Ti box, the app's chat argv and stdio, paths → <drive>). b12110 adds a
+// CPU row to device_info and renames the last line's function (`server_run_i: exiting …`), and prints even its first line
+// uncoloured; the root-cause line the signature takes is unchanged. A drive whose cpu/ net was not updated runs rung 1 on
+// b12110 and rung 3 on b11146, so the two builds' tails must compare equal for the model to be blamed.
+describe('failureSignature on real b12110 tails (#729)', () => {
+  const EXIT = 'llama-server exited before becoming healthy (code 1) — last output: '
+  const tail = (build: string, name: string): string =>
+    readFileSync(join(__dirname, '..', 'fixtures', `start-failure-${build}-${name}.txt`), 'utf8').trim()
+  const ROOT_CAUSE =
+    'gguf_init_from_reader: this GGUF file is version 117901063 but this software only supports up to version 3'
+
+  it('the corrupt GGUF on the GPU and the CPU rung compares equal, and equal to the b11146 tails', () => {
+    const gpu = failureSignature(EXIT + tail('b12110', 'broken-gguf-gpu'))
+    expect(gpu).toBe(`exit:code 1 | ${ROOT_CAUSE}`)
+    expect(failureSignature(EXIT + tail('b12110', 'broken-gguf-cpu'))).toBe(gpu)
+    expect(failureSignature(EXIT + tail('b11146', 'broken-gguf-cpu'))).toBe(gpu)
+    expect(tail('b12110', 'broken-gguf-gpu')).toContain('- CPU     :')
+  })
+
+  it('an argument error is named by its own line and stays different from a load failure', () => {
+    const arg = failureSignature(EXIT + tail('b12110', 'bad-device'))
+    expect(arg).toBe('exit:code 1 | error while handling argument "--device": invalid device: Vulkan7')
+    expect(arg).toBe(failureSignature(EXIT + tail('b11146', 'bad-device')))
+    expect(arg).not.toBe(failureSignature(EXIT + tail('b12110', 'broken-gguf-cpu')))
+  })
+})
+
 describe('sidecar log output is never colour-coded (#515)', () => {
   it('every llama-server spawn passes --log-colors off (all five sidecars share buildArgs)', () => {
     const server = new LlamaServer({ binPath: '/bin/s', modelPath: '/m.gguf', contextTokens: 2048 })

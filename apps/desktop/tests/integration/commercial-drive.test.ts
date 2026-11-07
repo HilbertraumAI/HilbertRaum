@@ -787,6 +787,32 @@ describe('assertCommercialDrive', () => {
       expect(res.checks.runtimeHashed).toBe(true)
     })
 
+    // #729: an install made before the installers left llama-connect out, or a hand-copied one, still
+    // carries the --connect tunnel program; a Kit must not convey it, wherever it sits under an engine dir.
+    it.each([
+      { name: 'beside the server', at: ['win', 'llama-connect.exe'], build: 'win/x64 vulkan', reported: 'llama-connect.exe' },
+      { name: 'nested in a folder, any case', at: ['win', 'tools', 'Llama-Connect.EXE'], build: 'win/x64 vulkan', reported: 'tools/Llama-Connect.EXE' },
+      { name: 'in the cpu/ net (reported once, by that build)', at: ['win', 'cpu', 'llama-connect.exe'], build: 'win/x64 cpu', reported: 'llama-connect.exe' }
+    ])('fails a Kit whose engine still holds llama-connect $name (#729)', async ({ at, build, reported }) => {
+      const root = tempDir('hilbertraum-commercial-rt-connect-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      provisionApp(root)
+      const stray = join(root, 'runtime', 'llama.cpp', ...at)
+      mkdirSync(join(stray, '..'), { recursive: true })
+      writeFileSync(stray, 'tunnel')
+      const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(false)
+      const hits = res.problems.filter((p) => p.includes('must not ship'))
+      expect(hits).toEqual([expect.stringContaining(`build ${build}: ${reported} under runtime/llama.cpp/`)])
+      rmSync(stray)
+      expect((await assertCommercialDrive(root, [chat], sources(), null, null, kit())).ok).toBe(true)
+    })
+
     it('fails when a pinned build has NO install marker', async () => {
       const root = tempDir('hilbertraum-commercial-rt-missing-')
       writePolicy(root, buildPolicyJson())

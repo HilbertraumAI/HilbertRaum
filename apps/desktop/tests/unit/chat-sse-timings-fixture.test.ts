@@ -112,3 +112,34 @@ describe('readChatSSE on the b11146 re-capture (#512)', () => {
     }
   })
 })
+
+// #729: the same capture on the b12110 pin (gemma4-e2b on the GTX 1070 Ti, the app's chat argv and request body). The
+// shape is unchanged again, so the reader needs nothing new for the bump.
+const FIXTURE_B12110 = readFileSync(join(__dirname, '../fixtures/chat-sse-timings-b12110.txt'), 'utf8')
+
+describe('readChatSSE on the b12110 re-capture (#729)', () => {
+  it('has the same shape: content chunk, finish chunk WITH timings, [DONE]', () => {
+    const frames = FIXTURE_B12110.split('\n').filter((l) => l.startsWith('data:'))
+    expect(frames).toHaveLength(3)
+    expect(frames[0]).toContain('"finish_reason":null')
+    expect(frames[1]).toContain('"finish_reason":"stop"')
+    expect(frames[1]).toContain('"timings":{')
+    expect(frames[1]).toContain('"system_fingerprint":"b12110-cd959bae9"')
+    expect(frames[2]).toBe('data: [DONE]')
+  })
+
+  it('hands the finish reason + timings up once, whole or split mid-JSON', async () => {
+    for (const size of [undefined, 7, 64, 333]) {
+      const { answer, finishes } = await run(sseBody(FIXTURE_B12110, size))
+      expect(answer).toBe('.')
+      expect(finishes).toHaveLength(1)
+      expect(finishes[0].reason).toBe('stop')
+      const tm = finishes[0].timings!
+      // The server's own print_timing line: `eval time = 244.36 ms / 19 tokens (73.66 tokens per second)`.
+      expect(tm.predicted_n).toBe(19)
+      expect(tm.predicted_per_second).toBeCloseTo(73.661, 3)
+      expect(tm.prompt_n).toBe(15)
+      expect(tm.prompt_ms).toBeCloseTo(69.283, 3)
+    }
+  })
+})

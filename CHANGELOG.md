@@ -84,6 +84,15 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **The AI engine is updated to llama.cpp b12110 (the upstream v0.9.0 release).** It fixes an
+  engine bug that, in some request patterns, made a Gemma 4 answer on a graphics card depend on an
+  earlier, unrelated request to the same engine; HilbertRaum's own chat requests did not run into
+  it in our tests (#729). In our document-question tests the built-in chat models answer as
+  accurately as before, and documents you already added keep their search index: it does not need
+  to be rebuilt. Since v0.8.0 llama.cpp also ships a program that can open the engine to other
+  computers over the internet; HilbertRaum never installs it. On a graphics card the Gemma 4 E2B
+  model reads a long question or document about 2.5 times faster in our tests. A drive set up
+  with the previous engine offers **Update the AI engine** on the AI Model screen.
 - **Hand-written vision model manifests must give a download source for both files or neither.** A
   manifest with a source for only one of them never produced a working model, even after a clean
   download of several gigabytes. Such a manifest is now skipped, with a line in the log. The vision

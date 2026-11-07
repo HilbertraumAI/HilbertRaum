@@ -1,0 +1,161 @@
+# #729 prompt-cache smoke, 30 conversations per model and build (HILBERTRAUM_PROMPT_CACHE_SMOKE_PROMPTS=30), the app's chat
+# argv (createLlamaRuntime: -np 1, --cache-ram 4088 on this 32 GB box, ctx 8192, rung 1 on the GTX 1070 Ti), temperature 0,
+# 120 tokens, thinking off. 2026-11-07. Lines are the smoke's own [prompt-cache] output.
+#
+
+== b11146-gemma4-e2b-it-qat-q4
+[prompt-cache] model gemma4-e2b-it-qat-q4.gguf
+[prompt-cache] --cache-ram 4088 (RAM rule: 4088 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1836 of 1836 prompt tokens
+[prompt-cache] A returned after B: prompt_n 48 of 1879 (cache_n 1831) → RESTORED (2.6 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1879
+[prompt-cache] restored answer == reference (62 chars)
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] #1: prompt_n 52 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #2: prompt_n 53 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #3: prompt_n 52 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #4: prompt_n 52 of 1882 → RESTORED, restored != recompute
+[prompt-cache] #5: prompt_n 47 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #6: prompt_n 48 of 1878 → RESTORED, restored == recompute
+[prompt-cache] #7: prompt_n 53 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #8: prompt_n 53 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #9: prompt_n 48 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #10: prompt_n 47 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #11: prompt_n 48 of 1878 → RESTORED, restored == recompute
+[prompt-cache] #12: prompt_n 52 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #13: prompt_n 54 of 1885 → RESTORED, restored == recompute
+[prompt-cache] #14: prompt_n 53 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #15: prompt_n 53 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #16: prompt_n 54 of 1884 → RESTORED, restored == recompute
+[prompt-cache] #17: prompt_n 52 of 1881 → RESTORED, restored == recompute
+[prompt-cache] #18: prompt_n 54 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #19: prompt_n 52 of 1881 → RESTORED, restored == recompute
+[prompt-cache] #20: prompt_n 47 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #21: prompt_n 53 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #22: prompt_n 48 of 1878 → RESTORED, restored == recompute
+[prompt-cache] #23: prompt_n 48 of 1879 → RESTORED, restored == recompute
+[prompt-cache] #24: prompt_n 53 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #25: prompt_n 53 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #26: prompt_n 47 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #27: prompt_n 53 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #28: prompt_n 47 of 1876 → RESTORED, restored == recompute
+[prompt-cache] #29: prompt_n 48 of 1877 → RESTORED, restored == recompute
+[prompt-cache] SUMMARY over 30 conversations: restored 30 of 30; restored answer == recompute 29 of 30
+[prompt-cache] differing (conversation@first changed char): 4@28
+
+== b12110-gemma4-e2b-it-qat-q4
+[prompt-cache] model gemma4-e2b-it-qat-q4.gguf
+[prompt-cache] --cache-ram 4088 (RAM rule: 4088 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1836 of 1836 prompt tokens
+[prompt-cache] A returned after B: prompt_n 28 of 1879 (cache_n 1851) → RESTORED (1.5 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1879
+[prompt-cache] restored answer == reference (62 chars)
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] #1: prompt_n 28 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #2: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #3: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #4: prompt_n 28 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #5: prompt_n 28 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #6: prompt_n 28 of 1878 → RESTORED, restored == recompute
+[prompt-cache] #7: prompt_n 28 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #8: prompt_n 28 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #9: prompt_n 28 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #10: prompt_n 28 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #11: prompt_n 28 of 1878 → RESTORED, restored == recompute
+[prompt-cache] #12: prompt_n 28 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #13: prompt_n 28 of 1884 → RESTORED, restored == recompute
+[prompt-cache] #14: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #15: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #16: prompt_n 28 of 1884 → RESTORED, restored == recompute
+[prompt-cache] #17: prompt_n 28 of 1881 → RESTORED, restored == recompute
+[prompt-cache] #18: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #19: prompt_n 28 of 1881 → RESTORED, restored == recompute
+[prompt-cache] #20: prompt_n 28 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #21: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #22: prompt_n 28 of 1878 → RESTORED, restored == recompute
+[prompt-cache] #23: prompt_n 28 of 1879 → RESTORED, restored == recompute
+[prompt-cache] #24: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #25: prompt_n 28 of 1883 → RESTORED, restored == recompute
+[prompt-cache] #26: prompt_n 28 of 1877 → RESTORED, restored == recompute
+[prompt-cache] #27: prompt_n 28 of 1882 → RESTORED, restored == recompute
+[prompt-cache] #28: prompt_n 28 of 1876 → RESTORED, restored == recompute
+[prompt-cache] #29: prompt_n 28 of 1877 → RESTORED, restored == recompute
+[prompt-cache] SUMMARY over 30 conversations: restored 30 of 30; restored answer == recompute 30 of 30
+
+== b11146-qwen3.5-4b-ud-q4kxl
+[prompt-cache] model qwen3.5-4b-ud-q4kxl.gguf
+[prompt-cache] --cache-ram 4088 (RAM rule: 4088 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 52 of 1899 (cache_n 1847) → RESTORED (2.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1899
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] #1: prompt_n 49 of 1896 → RESTORED, restored == recompute
+[prompt-cache] #2: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #3: prompt_n 50 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #4: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #5: prompt_n 52 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #6: prompt_n 52 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #7: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #8: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #9: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #10: prompt_n 50 of 1896 → RESTORED, restored == recompute
+[prompt-cache] #11: prompt_n 52 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #12: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #13: prompt_n 51 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #14: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #15: prompt_n 52 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #16: prompt_n 52 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #17: prompt_n 49 of 1894 → RESTORED, restored == recompute
+[prompt-cache] #18: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #19: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #20: prompt_n 51 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #21: prompt_n 51 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #22: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #23: prompt_n 52 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #24: prompt_n 52 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #25: prompt_n 50 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #26: prompt_n 52 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #27: prompt_n 51 of 1896 → RESTORED, restored == recompute
+[prompt-cache] #28: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #29: prompt_n 51 of 1896 → RESTORED, restored == recompute
+[prompt-cache] SUMMARY over 30 conversations: restored 30 of 30; restored answer == recompute 30 of 30
+
+== b12110-qwen3.5-4b-ud-q4kxl
+[prompt-cache] model qwen3.5-4b-ud-q4kxl.gguf
+[prompt-cache] --cache-ram 4088 (RAM rule: 4088 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 52 of 1899 (cache_n 1847) → RESTORED (2.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1899
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] #1: prompt_n 49 of 1896 → RESTORED, restored == recompute
+[prompt-cache] #2: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #3: prompt_n 50 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #4: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #5: prompt_n 52 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #6: prompt_n 52 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #7: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #8: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #9: prompt_n 50 of 1895 → RESTORED, restored == recompute
+[prompt-cache] #10: prompt_n 50 of 1896 → RESTORED, restored == recompute
+[prompt-cache] #11: prompt_n 52 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #12: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #13: prompt_n 51 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #14: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #15: prompt_n 52 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #16: prompt_n 52 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #17: prompt_n 49 of 1894 → RESTORED, restored == recompute
+[prompt-cache] #18: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #19: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #20: prompt_n 51 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #21: prompt_n 51 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #22: prompt_n 51 of 1899 → RESTORED, restored == recompute
+[prompt-cache] #23: prompt_n 52 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #24: prompt_n 52 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #25: prompt_n 50 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #26: prompt_n 52 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #27: prompt_n 51 of 1896 → RESTORED, restored == recompute
+[prompt-cache] #28: prompt_n 52 of 1897 → RESTORED, restored == recompute
+[prompt-cache] #29: prompt_n 51 of 1896 → RESTORED, restored == recompute
+[prompt-cache] SUMMARY over 30 conversations: restored 30 of 30; restored answer == recompute 30 of 30

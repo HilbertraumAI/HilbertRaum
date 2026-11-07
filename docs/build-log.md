@@ -27,6 +27,26 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-07 — the closed 2026-10-29 #730 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-07 (preamble budget, making room for the #729 entry). Its record is unchanged:
+architecture.md GPU record §3 "HOST CONFIGURATION", security-model.md. The pin bump it waited for is #729 (b12110), whose entry
+carries the two residuals that stay open: `/etc/llama.cpp/config.ini` on Linux/macOS (documented), and the unmeasured Windows
+AMD/Intel, Linux and macOS legs. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-29 — **#730 — every llama.cpp program starts without the host's llama.cpp config files and `LLAMA_*` variables (`fix/730-engine-child-env`).** Since b11146 llama.cpp applies `%PROGRAMDATA%`/`%APPDATA%\llama.cpp\config.ini` (`/etc` and XDG elsewhere), then ~150 variables, then the command line. With the app's argv a host file or `LLAMA_ARG_*` moved chat from 36/36 to 0/36 GPU layers and the KV cache to q8_0, on b11146 and b11960.
+`runtime/engine-env.ts` drops `LLAMA_*`/`HF_*`/`MTMD_*` and points the OS's lookup variables below the engine binary (a path that cannot exist), for `LlamaServer`, the GPU probe and the load check. Three wiring rows fail on master; `gpu-smoke`'s new leg (control + `--help` variable check) failed without the fix on K:. Found while analysing #729: gemma4 answers depending on earlier requests are a llama-server checkpoint bug fixed upstream only in v0.8.0, and the app's own traffic does not reach it.
+#729 tracks the next pin bump, which waits for this fix (v0.8.0 adds `--connect`) and strips `llama-connect` from the archives. Record: architecture.md GPU record §3 "HOST CONFIGURATION", security-model.md.
+Open: `/etc/llama.cpp/config.ini` (Linux/macOS, documented); the Windows AMD/Intel, Linux and macOS legs are unmeasured._
+
+## 2026-11-07 — the closed 2026-10-29 #714 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-07 (preamble budget, making room for the #729 entry). Its record is unchanged:
+rag-design.md D-Z12. Its follow-ups are closed: #733 by PR #778, #734 by PR #781. Citations of that entry now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-29 — **#714 — the router's three scope counts are pinned through `rag:ask` (`test/714-routing-helper-scope`).** `extractionsExistInScope`, `readyTreeCountInScope`, `allInScopeDocsFullyChunked` (not `documentsInScope`, which T10 pins): no test caught any of them ignoring the scope. `rag-routing-scope.test.ts`: 7 rows, documents-off and ordinary scopes, each red under its helper's mutation. Record: rag-design.md D-Z12. Follow-ups: #733 (a documents-off chat is offered document skills that cannot act there), #734 (four deterministic answers record no pack outcome); not filed: six suites seed a ready tree by hand._
+
 ## 2026-11-03 — the closed 2026-10-14 #689 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-03 (preamble budget, making room for the #779/#768/#743 entry). Its record is unchanged:

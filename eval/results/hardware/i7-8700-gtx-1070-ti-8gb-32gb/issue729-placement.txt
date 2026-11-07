@@ -1,0 +1,23 @@
+# #729 load-log readings through the app's own placement parser (createPlacementParser), b11146 vs b12110
+#
+# Same machine and day. Chat starts: the app's chat argv (ctx 8192, rung 1 = auto offload unless noted); TranslateGemma: the
+# translation argv (ctx 4096). "gpuless" hides the card with GGML_VK_VISIBLE_DEVICES=7; "ngl0" adds -ngl 0; "devnone" adds
+# --device none. Figures in MiB. Script: placement729.ts + placement-runs.ps1 (session scratchpad).
+b11146 qwen3-4b-full      layers 37/37  gpuModel 2375.91 cpuModel 304.28 gpuKv 1152 cpuKv null gpuRs null gpuCompute 332.04 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b12110 qwen3-4b-full      layers 37/37  gpuModel 2375.91 cpuModel 304.28 gpuKv 1152 cpuKv null gpuRs null gpuCompute 340.05 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b11146 qwen3-4b-gpuless   layers 37/37  gpuModel null cpuModel 4045.83 gpuKv null cpuKv 1152 gpuRs null gpuCompute null devices [] gpuBuffers false modelBufferLines 2
+b12110 qwen3-4b-gpuless   layers 37/37  gpuModel null cpuModel 2375.83 gpuKv null cpuKv 1152 gpuRs null gpuCompute null devices [] gpuBuffers false modelBufferLines 110
+b11146 qwen3-4b-ngl0      layers 0/37   gpuModel null cpuModel 2375.91 gpuKv null cpuKv 1152 gpuRs null gpuCompute 369.62 devices [Vulkan0] gpuBuffers true modelBufferLines 1
+b12110 qwen3-4b-ngl0      layers 0/37   gpuModel null cpuModel 2375.91 gpuKv null cpuKv 1152 gpuRs null gpuCompute 340.02 devices [Vulkan0] gpuBuffers true modelBufferLines 1
+b11146 qwen3-4b-devnone   layers 37/37  gpuModel null cpuModel 4045.83 gpuKv null cpuKv 1152 gpuRs null gpuCompute null devices [Vulkan0] gpuBuffers false modelBufferLines 2
+b12110 qwen3-4b-devnone   layers 37/37  gpuModel null cpuModel 2375.83 gpuKv null cpuKv 1152 gpuRs null gpuCompute null devices [Vulkan0] gpuBuffers false modelBufferLines 110
+b11146 gemma4-e2b-full    layers 36/36  gpuModel 1341.76 cpuModel 2152.5 gpuKv 78 cpuKv null gpuRs null gpuCompute 456.07 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b12110 gemma4-e2b-full    layers 36/36  gpuModel 1341.76 cpuModel 2152.5 gpuKv 78 cpuKv null gpuRs null gpuCompute 380.1 devices [Vulkan0] gpuBuffers true modelBufferLines 3
+b11146 qwen3.5-9b         layers 33/33  gpuModel 5133.63 cpuModel 545.62 gpuKv 256 cpuKv null gpuRs 50.25 gpuCompute 416.06 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b12110 qwen3.5-9b         layers 33/33  gpuModel 5133.63 cpuModel 545.62 gpuKv 256 cpuKv null gpuRs 50.25 gpuCompute 480.08 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b11146 qwen3-14b-partial  layers 24/41  gpuModel 4940.06 cpuModel 3639 gpuKv 736 cpuKv 544 gpuRs null gpuCompute 607.82 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b12110 qwen3-14b-partial  layers 24/41  gpuModel 4940.06 cpuModel 3639 gpuKv 736 cpuKv 544 gpuRs null gpuCompute 647.83 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b11146 tg-auto            layers 39/49  gpuModel 5638.32 cpuModel 2105.69 gpuKv 596 cpuKv 140 gpuRs null gpuCompute 130.58 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b12110 tg-auto            layers 39/49  gpuModel 5638.32 cpuModel 2105.69 gpuKv 596 cpuKv 140 gpuRs null gpuCompute 121.65 devices [Vulkan0] gpuBuffers true modelBufferLines 2
+b11146 tg-devnone         layers 49/49  gpuModel null cpuModel 11866.94 gpuKv null cpuKv 736 gpuRs null gpuCompute null devices [Vulkan0] gpuBuffers false modelBufferLines 2
+b12110 tg-devnone         layers 49/49  gpuModel null cpuModel 6956.41 gpuKv null cpuKv 736 gpuRs null gpuCompute null devices [Vulkan0] gpuBuffers false modelBufferLines 194

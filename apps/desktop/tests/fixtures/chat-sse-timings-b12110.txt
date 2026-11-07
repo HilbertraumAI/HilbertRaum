@@ -1,0 +1,14 @@
+: Captured llama-server SSE tail — pinned b12110 (system_fingerprint b12110-cd959bae9), Windows Vulkan release,
+: /v1/chat/completions with the app's chat request body (stream:true, thinking off, cache_prompt:true, return_progress:true),
+: prompt "Write one sentence about privacy.", max_tokens 64, the app's chat argv (--ctx-size 8192 --threads 6 --log-colors off
+: --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 4082), gemma4-e2b-it-qat-q4,
+: rung 1 (36/36 on the GTX 1070 Ti), no MTP. Source: issue #729 (2026-11-07, i7-8700 / GTX 1070 Ti). Frames: the last content
+: chunk, the finish chunk carrying `timings` (no trailing choices-less chunk — the b9849 and b11146 shape), then [DONE]. The
+: progress events before the first token (processed 0, 1, 11, 15 — the same on b11146) are left out, as in the b11146
+: capture. The model path was scrubbed to <drive>/…; nothing else was edited. These colon lines are SSE comments.
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"."}}],"created":1794072410,"id":"chatcmpl-B8bJ2zHfl2925OLkuEeeVQc40dryhILH","model":"<drive>/models/chat/gemma4-e2b-it-qat-q4.gguf","system_fingerprint":"b12110-cd959bae9","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],"created":1794072410,"id":"chatcmpl-B8bJ2zHfl2925OLkuEeeVQc40dryhILH","model":"<drive>/models/chat/gemma4-e2b-it-qat-q4.gguf","system_fingerprint":"b12110-cd959bae9","object":"chat.completion.chunk","timings":{"cache_n":0,"prompt_n":15,"prompt_ms":69.283,"prompt_per_token_ms":4.6188666666666665,"prompt_per_second":216.50332693445722,"predicted_n":19,"predicted_ms":244.363,"predicted_per_token_ms":13.575722222222222,"predicted_per_second":73.66090611099061}}
+
+data: [DONE]
+

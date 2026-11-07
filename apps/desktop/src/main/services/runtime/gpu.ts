@@ -96,8 +96,8 @@ const PROBE_STDERR_MAX = 4000
 /**
  * Spawn `<binPath> --list-devices`, parse stdout, and resolve the device list. Bounded
  * by a kill-timeout; NEVER throws/rejects. An exit 0 is the machine's answer: the devices it
- * printed, or `[]` when it printed none (b11146 writes `(none)` under the header, b9849 the
- * header alone), which reads as "no usable GPU". A failed pre-spawn integrity check resolves
+ * printed, or `[]` when it printed none (b11146 and b12110 write `(none)` under the header, b9849
+ * the header alone), which reads as "no usable GPU". A failed pre-spawn integrity check resolves
  * `[]` too (owner call 3, #653: the integrity paths keep `[]`). For a tampered binary that is
  * right — it will not run here, for the probe or for the server. The verifier also reports a
  * transient read failure (an antivirus lock while hashing) as `mismatch`, and that one then reads
