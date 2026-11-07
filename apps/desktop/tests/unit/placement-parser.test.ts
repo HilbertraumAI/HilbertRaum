@@ -357,6 +357,42 @@ describe('holdsGpuBuffers / gpuBufferEvidence — a buffer under a device the lo
   })
 })
 
+// #729: the b12110 pin's load logs, captured on the GTX 1070 Ti box (the app's chat or translation argv, the
+// official archive). Two changes from b11146: `device_info` lists the processor too (`- CPU : …`), which is no card;
+// and a start that runs on the processor prints its mapped weights in ~100–200 small `CPU_Mapped` pieces and no longer
+// maps the part ggml repacks, so the CPU-side weights now add up to what llama.cpp's own memory breakdown shows. The
+// same 4B on b11146 (card hidden, or --device none) read 2,362.55 mapped + 1,683.28 repacked = 4,045.83; GPU starts
+// read the same figures on both builds (measured: full and partial offloads of the 4B, 9B, 14B and TranslateGemma).
+describe('the b12110 load logs (#729)', () => {
+  it('a full offload: the card row only, every figure as on b11146', () => {
+    const r = feed(fixture('placement-b12110-full-37of37.txt')).reading()
+    expect(r).toMatchObject({ gpuLayers: 37, totalLayers: 37, gpuModelMb: 2375.91, cpuModelMb: 304.28, gpuKvMb: 1152, cpuKvMb: null, gpuFreeAtStartMb: 7499 })
+    expect(r.devices.map((d) => d.label)).toEqual(['Vulkan0'])
+    expect(fixture('placement-b12110-full-37of37.txt')).toMatch(/ - CPU +: Intel\(R\) Core\(TM\) i7-8700/)
+  })
+
+  it('a start with no usable card: the CPU row is no device, and the weights are the breakdown’s, not mapped + repacked', () => {
+    const text = fixture('placement-b12110-gpuless-37of37-cpu.txt')
+    const p = feed(text)
+    expect(p.reading()).toMatchObject({ gpuLayers: 37, totalLayers: 37, gpuModelMb: null, cpuModelMb: 2375.83, cpuKvMb: 1152, gpuFreeAtStartMb: null })
+    expect(p.reading().devices).toEqual([])
+    expect(p.holdsGpuBuffers()).toBe(false)
+    expect(p.gpuBufferEvidence()).toBe(false)
+    expect((text.match(/CPU_Mapped model buffer size/g) ?? []).length).toBeGreaterThan(50)
+  })
+
+  it('a partial offload: the spill (CPU-side weights + KV) is the figure b11146 reads', () => {
+    const r = feed(fixture('placement-b12110-partial-24of41.txt')).reading()
+    expect(r).toMatchObject({ gpuLayers: 24, totalLayers: 41, gpuModelMb: 4940.06, cpuModelMb: 3639, gpuKvMb: 736, cpuKvMb: 544 })
+  })
+
+  it('TranslateGemma forced to the processor: 6,956.41 MiB of weights where b11146 read 11,866.94', () => {
+    const r = feed(fixture('placement-b12110-translategemma-devnone-49of49-cpu.txt')).reading()
+    expect(r.cpuModelMb).toBe(6956.41)
+    expect(feed(fixture('placement-b11146-translategemma-devnone-49of49-cpu.txt')).reading().cpuModelMb).toBe(11866.94)
+  })
+})
+
 describe('the committed load logs carry no request or prompt content (DR3)', () => {
   /** #653, #671: load-only captures (cut at the first `all slots are idle`, before any request). */
   const LOAD_ONLY = [
@@ -365,7 +401,13 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
     // #671: the translation sidecar's own argv (TranslateGemma, `translationServerArgs`).
     'placement-b11146-translategemma-gpuless-49of49-cpu.txt',
     'placement-b11146-translategemma-partial-39of49.txt',
-    'placement-b11146-translategemma-devnone-49of49-cpu.txt'
+    'placement-b11146-translategemma-devnone-49of49-cpu.txt',
+    // #729: the b12110 pin's.
+    'placement-b12110-full-37of37.txt',
+    'placement-b12110-gpuless-37of37-cpu.txt',
+    'placement-b12110-partial-24of41.txt',
+    'placement-b12110-translategemma-devnone-49of49-cpu.txt',
+    'placement-b12110-translategemma-partial-39of49.txt'
   ]
   const NAMES = [
     'placement-b9849-partial-20of33-hybrid.txt',

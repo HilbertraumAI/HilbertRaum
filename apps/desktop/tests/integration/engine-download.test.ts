@@ -244,6 +244,45 @@ describe('EngineDownloadManager install flow', () => {
     expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(true)
   })
 
+  // #729: every llama.cpp archive since v0.8.0 carries `llama-connect`, the program `llama-server
+  // --connect` starts (a peer-to-peer tunnel). llama-server looks for it beside itself first.
+  const CONNECT = process.platform === 'win32' ? 'llama-connect.exe' : 'llama-connect'
+  const connectExtract: ExtractFn = async (_archive, destDir) => {
+    const nested = join(destDir, 'llama-btest')
+    await mkdir(nested, { recursive: true })
+    await writeFile(join(nested, BIN_NAME), 'binary')
+    await writeFile(join(nested, CONNECT), 'tunnel')
+    await writeFile(join(nested, 'ggml.dll'), 'lib')
+  }
+
+  it('leaves llama-connect out of the install, after the flatten, and the marker records only the server (#729)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: connectExtract })
+    const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+    expect(job.status).toBe('done')
+    const dir = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    // Every file under the install (the flatten leaves its emptied release folder, as it always has).
+    const files = readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name)
+    expect(files.sort()).toEqual(['.hilbertraum-runtime.json', BIN_NAME, 'ggml.dll'].sort())
+    const marker = JSON.parse(readFileSync(runtimeMarkerPath(dir), 'utf8'))
+    expect(Object.keys(marker.binaries)).toEqual([BIN_NAME])
+  })
+
+  it('a drive yaml that lists llama-connect under executables cannot bring it back or demand it (#729)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const yamlPath = join(manifestsDir, 'runtime-sources.yaml')
+    writeFileSync(
+      yamlPath,
+      readFileSync(yamlPath, 'utf8').replace('version: btest\n', 'version: btest\n  executables: [llama-server, llama-connect]\n')
+    )
+    expect(readFileSync(yamlPath, 'utf8')).toContain('llama-connect')
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: connectExtract })
+    const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, CONNECT))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(true)
+  })
+
   // F17 (audit-postmerge-2026-06-29): the engine downloader passed NO maxBytes, so a redirected /
   // Content-Length-less archive endpoint fell through to the multi-GiB backstop. Assert it now
   // applies the bounded per-family ceiling.

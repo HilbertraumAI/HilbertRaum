@@ -155,7 +155,11 @@ function availableEngines(
     if (!sources) continue
     const build = selectHostBuild(sources, platform, arch)
     if (!build) continue
-    const files = { alsoRequired: spec.alsoRequired, declaredExecutables: sources.executables }
+    const files = {
+      alsoRequired: spec.alsoRequired,
+      declaredExecutables: sources.executables,
+      neverInstalled: spec.neverInstalled
+    }
     const plan = planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, files)
     const cpuBuild =
       build.backend === 'cpu'
@@ -1151,6 +1155,13 @@ export class EngineDownloadManager {
     const extract = this.deps.extractImpl ?? extractWithTar
     await extract(plan.zipDest, plan.extractTo, signal)
     await this.flattenNestedBinary(plan)
+    // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before
+    // anything can start it. A file that cannot be removed fails the install like a bad archive.
+    for (const p of plan.excludedPaths) {
+      if (!existsSync(p)) continue
+      await rm(p, { recursive: true, force: true })
+      this.deps.log?.('Left out of the engine install', { file: basename(p) })
+    }
 
     // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already
     // refuses `..` members and the archive hash is verified before extraction, but a

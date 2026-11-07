@@ -8,7 +8,7 @@ import {
   buildPolicyJson
 } from '../../src/main/services/drive'
 import { SUPPORTED_RUNTIME_FORMATS } from '../../src/main/services/models'
-import { sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
+import { SIDECAR_FAMILY_SPECS, sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
 import { isRealSha256 } from '../../src/shared/manifest'
 import { KIT_PLATFORMS, type RuntimeFamily } from '../../src/shared/runtime-sources'
 import { DRIVE_LICENSE_ARTIFACTS, KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
@@ -189,6 +189,19 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
       .map((s) => s.trim().replace(/^'|'$/g, ''))
       .sort()
     expect(families).toEqual([...yamlBuildFamilies(), 'ocr'].sort())
+  })
+
+  // #729: the executables an install never keeps (llama-connect) are one code-side list in
+  // assets.ts and a copy in each twin; a family added on one side only would ship it from the other.
+  it('both fetch-runtime twins leave out exactly the neverInstalled executables of SIDECAR_FAMILY_SPECS', () => {
+    const expected = Object.fromEntries(
+      SIDECAR_FAMILY_SPECS.filter((s) => s.neverInstalled?.length).map((s) => [s.family, [...s.neverInstalled!]])
+    )
+    expect(expected).toEqual({ llama_cpp: ['llama-connect'] })
+    const ps = [...repoText('scripts/fetch-runtime.ps1').matchAll(/\$NeverInstalledBases = if \(\$Family -eq '(\w+)'\) \{ @\(([^)]*)\) \}/g)]
+    expect(Object.fromEntries(ps.map((m) => [m[1], m[2].split(',').map((s) => s.trim().replace(/^'|'$/g, ''))]))).toEqual(expected)
+    const sh = [...repoText('scripts/fetch-runtime.sh').matchAll(/\[\[ "\$FAMILY" == "(\w+)" \]\] && NEVER_INSTALLED_BASES=\(([^)]*)\)/g)]
+    expect(Object.fromEntries(sh.map((m) => [m[1], m[2].trim().split(/\s+/)]))).toEqual(expected)
   })
 
   it('fetch-runtime.sh --family case allow-list matches the yaml build families + ocr', () => {

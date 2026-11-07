@@ -550,6 +550,8 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
   it.each<[string, string, -1 | 0 | 1 | null]>([
     ['b9849', 'b11146', -1],
     ['b11146', 'b11146', 0],
+    // #729: a drive still on b11146 reads OLDER than the b12110 pin, so the app offers the update (#516).
+    ['b11146', 'b12110', -1],
     ['b11200', 'b11146', 1],
     ['v1.8.6', 'v1.8.10', -1],
     ['1.8.6', 'v1.8.6', 0],
@@ -626,8 +628,8 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
 
   it('validates (incl. the duplicate-triple check)', () => {
     // Pin bumped b9585 → b9849 (Qwen3.5 compatibility gate, 2026-07-01), then b9849 → b11146
-    // (= upstream stable v0.5.0, #512, 2026-09-27).
-    expect(committed().version).toBe('b11146')
+    // (= upstream stable v0.5.0, #512, 2026-09-27), then b11146 → b12110 (= v0.9.0, #729).
+    expect(committed().version).toBe('b12110')
   })
 
   it('is vulkan-first on win/linux with the cpu safety net at <os>/cpu', () => {

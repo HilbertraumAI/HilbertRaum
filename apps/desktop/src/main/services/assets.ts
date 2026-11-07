@@ -278,6 +278,11 @@ export interface RuntimeDownloadPlan {
   binaryPaths: string[]
   /** Every non-executable required file (the build's `runtime_files`), absolute; `[]` for most. */
   runtimeFilePaths: string[]
+  /**
+   * Archive members the install removes after the flatten, absolute (#729): the family's
+   * `neverInstalled` executables. `[]` for most families.
+   */
+  excludedPaths: string[]
   /** Expected SHA-256 of the zip (may be a placeholder). */
   sha256: string
   /** True when the zip hash is still a placeholder. */
@@ -330,7 +335,22 @@ export interface SidecarFamilySpec {
    * their permissive licences ride the notices files, not a consent step.
    */
   license?: string
+  /**
+   * Executables the release archive carries that an install never keeps (#729), base names like
+   * `binaryBase`. CODE-side on purpose, like `alsoRequired`: a user-writable drive yaml must not be
+   * able to bring one back. The fetch-runtime twins carry the same list (`script-drift.test.ts`).
+   */
+  neverInstalled?: readonly string[]
 }
+
+/**
+ * `llama-connect` (in every llama.cpp archive since v0.8.0) is what `llama-server --connect` starts:
+ * a peer-to-peer tunnel that makes the server reachable from outside the machine. The app never
+ * passes `--connect`, and since #730 nothing on the host can switch it on, but llama-server looks for
+ * the program beside itself first, so it stays off the drive. It is also a separately built Rust
+ * program with its own licences, which the archive does not carry (docs/model-policy.md).
+ */
+export const LLAMA_CONNECT_BINARY_BASE = 'llama-connect'
 
 /**
  * Install order preserved: llama_cpp (the chat engine, whose absence forces demo mode) first,
@@ -338,7 +358,7 @@ export interface SidecarFamilySpec {
  * first REQUIRED family.
  */
 export const SIDECAR_FAMILY_SPECS: readonly SidecarFamilySpec[] = [
-  { family: 'llama_cpp', binaryBase: 'llama-server' },
+  { family: 'llama_cpp', binaryBase: 'llama-server', neverInstalled: [LLAMA_CONNECT_BINARY_BASE] },
   { family: 'whisper_cpp', binaryBase: WHISPER_BINARY_BASE },
   {
     family: 'kiwix_tools',
@@ -412,7 +432,12 @@ export function planRuntimeDownload(
    * list; the build's own `runtime_files` come from `build`. The required set is their union,
    * so an edited drive yaml can ADD requirements but never drop a spawned executable.
    */
-  files: { alsoRequired?: readonly string[]; declaredExecutables?: readonly string[] } = {}
+  files: {
+    alsoRequired?: readonly string[]
+    declaredExecutables?: readonly string[]
+    /** The spec's `neverInstalled` executables (#729): removed after extraction, never required. */
+    neverInstalled?: readonly string[]
+  } = {}
 ): RuntimeDownloadPlan {
   const extractTo = resolveWithinRoot(rootPath, build.extractTo)
   // Name the downloaded archive after the URL's basename so a .tar.gz (the format the
@@ -430,12 +455,17 @@ export function planRuntimeDownload(
   // by base name so a name listed in both stays one file. Every name is resolved INSIDE the
   // extract dir (a plain name cannot escape it; the validator guarantees plainness, and
   // `resolveWithinRoot` is the belt to that brace).
+  // A `neverInstalled` name stays out even when the yaml declares it (#729): the code-side list wins.
+  const never = files.neverInstalled ?? []
   const bases: string[] = [binaryBase]
   for (const b of [...(files.alsoRequired ?? []), ...(files.declaredExecutables ?? [])]) {
-    if (!bases.includes(b)) bases.push(b)
+    if (!bases.includes(b) && !never.includes(b)) bases.push(b)
   }
   const binaryPaths = bases.map((b) => resolveWithinRoot(extractTo, sidecarBinaryName(b, build.os)))
   const runtimeFilePaths = (build.runtimeFiles ?? []).map((f) => resolveWithinRoot(extractTo, f))
+  const excludedPaths = never
+    .filter((b) => b !== binaryBase)
+    .map((b) => resolveWithinRoot(extractTo, sidecarBinaryName(b, build.os)))
   return {
     version,
     os: build.os,
@@ -447,6 +477,7 @@ export function planRuntimeDownload(
     binaryPath,
     binaryPaths,
     runtimeFilePaths,
+    excludedPaths,
     sha256: build.sha256,
     placeholderHash: !isRealSha256(build.sha256)
   }

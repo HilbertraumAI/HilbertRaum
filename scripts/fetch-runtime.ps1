@@ -435,8 +435,13 @@ $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::Direc
 # `executables:` when present (its first entry is always the primary; llama_cpp/whisper_cpp
 # declare no `executables:`, so their required set stays the single binary it always was).
 $PrimaryBase = if ($Family -eq 'whisper_cpp') { 'whisper-cli' } elseif ($Family -eq 'kiwix_tools') { 'kiwix-serve' } else { 'llama-server' }
+# #729: executables the release archive carries that an install never keeps -- the same list as
+# assets.ts SIDECAR_FAMILY_SPECS `neverInstalled` (script-drift.test.ts). llama-connect is what
+# `llama-server --connect` starts (a peer-to-peer tunnel, v0.8.0+); llama-server looks for it beside
+# itself first. The list wins over the yaml's `executables:`, as in planRuntimeDownload.
+$NeverInstalledBases = if ($Family -eq 'llama_cpp') { @('llama-connect') } else { @() }
 $executableBases = @($PrimaryBase)
-foreach ($e in $familyExecutables) { if ($executableBases -notcontains $e) { $executableBases += $e } }
+foreach ($e in $familyExecutables) { if ($executableBases -notcontains $e -and $NeverInstalledBases -notcontains $e) { $executableBases += $e } }
 # Binary name(s) follow the SELECTED build's OS (we may be provisioning the mac/linux dir
 # from a Windows build machine), mirroring assets.ts sidecarBinaryName. $binaryName/$binaryPath
 # keep referring to the PRIMARY only -- the flatten step below locates the archive's nested
@@ -663,6 +668,17 @@ if (-not (Test-Path -LiteralPath $binaryPath)) {
 if (-not (Test-Path -LiteralPath $binaryPath)) {
   Write-Host "  FAIL: $binaryName not found under $extractTo after extraction -- the release archive layout may have changed." -ForegroundColor Red
   exit 1
+}
+
+# #729: leave out what the family never keeps (mirrors runtime-download.ts install). A file that
+# cannot be removed stops the run here, before a marker claims the install.
+foreach ($base in $NeverInstalledBases) {
+  $leftOut = if ($build.os -eq 'win') { "$base.exe" } else { $base }
+  $leftOutPath = Join-Path $extractTo $leftOut
+  if (Test-Path -LiteralPath $leftOutPath) {
+    Remove-Item -Force -LiteralPath $leftOutPath
+    Write-Host "  left out: $leftOut"
+  }
 }
 
 # #339 P8-3: post-extract completeness check -- EVERY required file (every declared

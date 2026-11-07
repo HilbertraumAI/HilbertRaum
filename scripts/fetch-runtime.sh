@@ -438,11 +438,18 @@ EXTRACT_TO="$TARGET/${B_EXTRACT[$SEL]}"
 PRIMARY_BASE="llama-server"
 [[ "$FAMILY" == "whisper_cpp" ]] && PRIMARY_BASE="whisper-cli"
 [[ "$FAMILY" == "kiwix_tools" ]] && PRIMARY_BASE="kiwix-serve"
+# #729: executables the release archive carries that an install never keeps — the same list as
+# assets.ts SIDECAR_FAMILY_SPECS `neverInstalled` (script-drift.test.ts). llama-connect is what
+# `llama-server --connect` starts (a peer-to-peer tunnel, v0.8.0+); llama-server looks for it beside
+# itself first. The list wins over the yaml's `executables:`, as in planRuntimeDownload.
+declare -a NEVER_INSTALLED_BASES=()
+[[ "$FAMILY" == "llama_cpp" ]] && NEVER_INSTALLED_BASES=(llama-connect)
 declare -a EXEC_BASES=("$PRIMARY_BASE")
 if [[ -n "$FAMILY_EXECUTABLES" ]]; then
   while IFS= read -r e; do
     already=0
     for existing in "${EXEC_BASES[@]}"; do [[ "$existing" == "$e" ]] && already=1 && break; done
+    for never in ${NEVER_INSTALLED_BASES[@]+"${NEVER_INSTALLED_BASES[@]}"}; do [[ "$never" == "$e" ]] && already=1 && break; done
     [[ $already -eq 0 ]] && EXEC_BASES+=("$e")
   done < <(flow_list_items "$FAMILY_EXECUTABLES")
 fi
@@ -680,6 +687,16 @@ if [[ ! -f "$BIN_PATH" ]]; then
   echo "  FAIL: $BIN_NAME not found under $EXTRACT_TO after extraction — the release archive layout may have changed." >&2
   exit 1
 fi
+
+# #729: leave out what the family never keeps (mirrors runtime-download.ts install). A file that
+# cannot be removed stops the run here, before a marker claims the install.
+for base in ${NEVER_INSTALLED_BASES[@]+"${NEVER_INSTALLED_BASES[@]}"}; do
+  left_out="$base"; [[ "${B_OS[$SEL]}" == "win" ]] && left_out="$base.exe"
+  if [[ -e "$EXTRACT_TO/$left_out" ]]; then
+    rm -f "$EXTRACT_TO/$left_out" || { echo "  FAIL: could not remove $left_out from $EXTRACT_TO" >&2; exit 1; }
+    echo "  left out: $left_out"
+  fi
+done
 
 # #339 P8-3: post-extract completeness check — EVERY required file (every declared
 # executable + runtime file), not just the primary. Mirrors assets.ts requiredInstallFiles /

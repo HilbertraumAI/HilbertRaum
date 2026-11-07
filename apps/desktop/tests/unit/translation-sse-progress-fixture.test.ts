@@ -16,6 +16,8 @@ import { sidecarBody } from '../helpers/fake-sidecar'
 const fixture = (name: string): string => readFileSync(join(__dirname, '../fixtures', name), 'utf8')
 const PREFILL = fixture('translation-sse-progress-b11146.txt')
 const PREFILL_B9849 = fixture('translation-sse-progress-b9849.txt')
+// #729: the b12110 pin, with the real TranslateGemma and an 843-token window (b11146 gave the same progress frames).
+const PREFILL_B12110 = fixture('translation-sse-progress-b12110.txt')
 const PREFILL_WEDGE = fixture('translation-sse-progress-stall-b11146.txt')
 const DECODE_WEDGE = fixture('translation-sse-decode-stall-b11146.txt')
 
@@ -76,7 +78,8 @@ describe('readCompletionSSE on the captured /completion transcripts (#605)', () 
 
   it.each([
     ['b11146', PREFILL],
-    ['b9849', PREFILL_B9849]
+    ['b9849', PREFILL_B9849],
+    ['b12110', PREFILL_B12110]
   ])('the %s capture has the #605 shape: a text-less progress frame with the headers and after every 512-token batch, pings between', (_pin, text) => {
     const progress = frames(text).filter((f) => f.frame.prompt_progress)
     expect(progress.length).toBeGreaterThanOrEqual(3) // a window's prefill is no longer one silent batch
@@ -101,6 +104,12 @@ describe('readCompletionSSE on the captured /completion transcripts (#605)', () 
     const r = await replay(PREFILL, lastRead)
     expect(r.outcome()).toBe('pending') // truncated after the 12th token: the reader waits for the rest
     expect(r.out.join('')).toBe('Invoice No. 1000 was forwarded to accounting')
+  })
+
+  it('replayed on its timeline, the b12110 capture streams to its stop frame — no clock runs out (#729)', async () => {
+    const r = await replay(PREFILL_B12110, reads(PREFILL_B12110).at(-1)!.at + 1)
+    expect(r.outcome()).toBe('ended')
+    expect(r.out.join('')).toBe('§ 1. The lease agreement can be terminated by either party with a notice period of three months, effective at the')
   })
 
   it('the captured prefill wedge ends 10 min after its last progress frame although the pings keep coming', async () => {

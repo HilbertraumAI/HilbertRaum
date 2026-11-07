@@ -1,0 +1,2 @@
+Available devices:
+  Vulkan0: NVIDIA GeForce GTX 1070 Ti (8273 MiB, 6531 MiB free)

@@ -109,18 +109,21 @@ describe('the GPU start ladder', () => {
   // log) both yield to this start's own GPU buffers. A card start reported as "cpu" poisons the chat
   // header, Diagnostics, the persisted placement, the #322 speed identity, the #473 chat share and
   // the §5.3 crash auto-fallback gate (a GPU crash took the #599 restart on the same GPU rung).
-  // The log is the real b11146 capture of a full offload on the hybrid RTX 3080 Ti + UHD 770 box.
+  // The logs are real captures of a full offload: b11146 on the hybrid RTX 3080 Ti + UHD 770 box, and b12110 (#729) on
+  // the GTX 1070 Ti, whose device_info block now lists the processor too (`- CPU : Intel(R) Core(TM) i7-8700 …`).
   it.each([
-    { name: 'no answer (#380)', probe: null },
-    { name: 'an empty answer (#653)', probe: [] as GpuDevice[] }
+    { name: 'no answer (#380)', probe: null, log: 'placement-b11146-full-49of49-swa.txt', card: 'NVIDIA GeForce RTX 3080 Ti' },
+    { name: 'an empty answer (#653)', probe: [] as GpuDevice[], log: 'placement-b11146-full-49of49-swa.txt', card: 'NVIDIA GeForce RTX 3080 Ti' },
+    { name: 'no answer (b12110, #729)', probe: null, log: 'placement-b12110-full-37of37.txt', card: 'NVIDIA GeForce GTX 1070 Ti' },
+    { name: 'an empty answer (b12110, #729)', probe: [] as GpuDevice[], log: 'placement-b12110-full-37of37.txt', card: 'NVIDIA GeForce GTX 1070 Ti' }
   ])(
     'a probe that gave $name yields to the GPU buffers in this start’s load log: gpu, named from device_info',
-    async ({ probe }) => {
-      const h = ladderHarness({ probe, stderr: [fixture('placement-b11146-full-49of49-swa.txt')] })
+    async ({ probe, log, card }) => {
+      const h = ladderHarness({ probe, stderr: [fixture(log)] })
       const runtime = h.factory(opts)
       await runtime.start()
       expect(runtime.backend).toBe('gpu')
-      expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3080 Ti')
+      expect(runtime.gpuName).toBe(card)
     }
   )
 
@@ -129,13 +132,16 @@ describe('the GPU start ladder', () => {
   // (b11146 and b9849 alike; real capture, the GTX 1070 Ti hidden). #380 read that line, so a GPU-less
   // PC whose probe gave no answer was labelled gpu; an override on the line would do the same to
   // every GPU-less PC, whose probe answers `[]`.
+  // #729: the same on b12110, whose device_info lists only the processor there (a CPU row is no card).
   it.each([
-    { name: 'no answer', probe: null },
-    { name: 'an empty answer', probe: [] as GpuDevice[] }
+    { name: 'no answer', probe: null, log: 'placement-b11146-gpuless-37of37-cpu.txt' },
+    { name: 'an empty answer', probe: [] as GpuDevice[], log: 'placement-b11146-gpuless-37of37-cpu.txt' },
+    { name: 'no answer (b12110)', probe: null, log: 'placement-b12110-gpuless-37of37-cpu.txt' },
+    { name: 'an empty answer (b12110)', probe: [] as GpuDevice[], log: 'placement-b12110-gpuless-37of37-cpu.txt' }
   ])(
     'a GPU-less rung 1 whose log says "offloaded 37/37 layers to GPU" reads cpu when the probe gave $name (#653)',
-    async ({ probe }) => {
-      const h = ladderHarness({ probe, stderr: [fixture('placement-b11146-gpuless-37of37-cpu.txt')] })
+    async ({ probe, log }) => {
+      const h = ladderHarness({ probe, stderr: [fixture(log)] })
       const runtime = h.factory(opts)
       await runtime.start()
       expect(runtime.backend).toBe('cpu')
@@ -1137,9 +1143,14 @@ describe('#312 — a model-load failure is not a device verdict', () => {
 // stdio; tests/fixtures/start-failure-b11146-*.txt). The two rungs' last lines carry different
 // per-process timestamps — the #312 comparison has to see past them to the root cause.
 describe('#515 — the #312 verdicts on real llama-server tails', () => {
-  const reason = (name: string): string =>
-    'llama-server exited before becoming healthy (code 1) — last output: ' +
-    readFileSync(join(__dirname, '..', 'fixtures', `start-failure-b11146-${name}.txt`), 'utf8').trim()
+  // `name` is a b11146 tail, or `b12110:<name>` for the b12110 pin's (#729).
+  const reason = (name: string): string => {
+    const [build, tail] = name.includes(':') ? name.split(':') : ['b11146', name]
+    return (
+      'llama-server exited before becoming healthy (code 1) — last output: ' +
+      readFileSync(join(__dirname, '..', 'fixtures', `start-failure-${build}-${tail}.txt`), 'utf8').trim()
+    )
+  }
 
   it.each([
     {
@@ -1159,6 +1170,28 @@ describe('#515 — the #312 verdicts on real llama-server tails', () => {
     {
       name: 'a GPU-side failure with a different cause (an invalid device)',
       tails: ['bad-device', 'broken-gguf-cpu', 'broken-gguf-cpu'],
+      device: 1,
+      model: 0,
+      persisted: 'invalid device: Vulkan7'
+    },
+    // #729: the b12110 pin's tails, and a drive whose cpu/ net (rung 3) still runs b11146.
+    {
+      name: 'the corrupt GGUF on b12110, every rung',
+      tails: ['b12110:broken-gguf-gpu', 'b12110:broken-gguf-cpu', 'b12110:broken-gguf-cpu'],
+      device: 0,
+      model: 1,
+      persisted: null
+    },
+    {
+      name: 'the corrupt GGUF on b12110 rungs 1–2 and a b11146 cpu/ net',
+      tails: ['b12110:broken-gguf-gpu', 'b12110:broken-gguf-cpu', 'broken-gguf-cpu'],
+      device: 0,
+      model: 1,
+      persisted: null
+    },
+    {
+      name: 'an invalid device on b12110',
+      tails: ['b12110:bad-device', 'b12110:broken-gguf-cpu', 'b12110:broken-gguf-cpu'],
       device: 1,
       model: 0,
       persisted: 'invalid device: Vulkan7'

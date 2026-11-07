@@ -482,7 +482,8 @@ export async function assertCommercialDrive(
             build,
             plan: planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, {
               alsoRequired: spec.alsoRequired,
-              declaredExecutables: sources.executables
+              declaredExecutables: sources.executables,
+              neverInstalled: spec.neverInstalled
             })
           })
         } catch (err) {
@@ -576,7 +577,8 @@ export async function assertCommercialDrive(
       try {
         plan = planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, {
           alsoRequired: spec.alsoRequired,
-          declaredExecutables: sources.executables
+          declaredExecutables: sources.executables,
+          neverInstalled: spec.neverInstalled
         })
       } catch {
         continue // checkFamily already reported the tampered path
