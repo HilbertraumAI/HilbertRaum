@@ -1200,8 +1200,8 @@ head's own weights + KV.
   manifest count (this doc no longer restates a hard total — it drifted twice, see DOC-3/F-20): the
   catalog spans 6 role dirs (chat + E5 + bge-reranker + whisper transcriber + translategemma
   translation + qwen2.5-vl vision), and `runtime-sources.yaml` is pinned to the REAL
-  `ggml-org/llama.cpp@b11146` release (= upstream v0.5.0; bumped from b9585 for the Qwen3.5 gate,
-  then from b9849 under #512) with real URLs + SHA-256, plus `whisper_cpp:`/`ocr:`
+  `ggml-org/llama.cpp@b12110` release (= upstream v0.9.0; bumped from b9585 for the Qwen3.5 gate,
+  then from b9849 under #512, then from b11146 under #729) with real URLs + SHA-256, plus `whisper_cpp:`/`ocr:`
   asset blocks — the original "b9196 placeholder / one CPU build per OS" text below is the Phase-12
   as-built snapshot.)** The Phase-12 snapshot: `runtime-sources.yaml` referenced
   `ggml-org/llama.cpp@b9196` as a PLACEHOLDER, one CPU build per OS.
@@ -1941,6 +1941,11 @@ whole renderer-visible surface.
   `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every
   declared file present, hashed and matching — or entirely absent; never folded into
   `runtimeCurrent`/`runtimeHashed`).
+  **#729 addition (no IPC change):** `SidecarFamilySpec` gains `neverInstalled?: readonly string[]` (base
+  names, code-side; the llama family's `['llama-connect']`), and `RuntimeDownloadPlan` gains `excludedPaths:
+  string[]` (absolute, resolved inside the extract dir). A `neverInstalled` name is removed after the flatten,
+  is never part of the required set or the marker's `binaries` map, and wins over a yaml `executables` entry of
+  the same name; the `fetch-runtime` twins carry the same list (`script-drift.test.ts`).
   **#339 P8-2 additions (the consent step; the channel is unchanged, its PAYLOAD is new):**
   `downloadEngine` takes an OPTIONAL `EngineDownloadRequest = { families?: string[] }`. Absent
   (the preload sends NO payload — pinned by `preload-engine.test.ts`) = the default install,

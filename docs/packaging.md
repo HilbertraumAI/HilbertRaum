@@ -609,13 +609,15 @@ npm run package:win                                                            #
 copy ".\apps\desktop\release\HilbertRaum-*-portable.exe" E:\                    # place the launcher on the drive
 ```
 
-> ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b11146** — the
-> build named by upstream's stable **v0.5.0**, bumped from b9849 on 2026-09-27 under #512; real
-> per-OS URLs + SHA-256 checksums from the official GitHub Releases API `digest` metadata, all five
-> also confirmed by local download) — `fetch-runtime` downloads, verifies, extracts (zip and tar.gz)
-> and flattens the binaries for all three OSes from any host. **A real fetch + the manual smokes
-> on the pin are REQUIRED** (they cannot run in offline CI; #512 records what ran on b11146 and
-> what is still open — the MTP start on the 24 GB rig and the macOS/Linux assets).
+> ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b12110** — the
+> build named by upstream's stable **v0.9.0**, bumped from b11146 under #729; real per-OS URLs +
+> SHA-256 checksums from the official GitHub Releases API `digest` metadata, all five also
+> confirmed by local download) — `fetch-runtime` downloads, verifies, extracts (zip and tar.gz)
+> and flattens the binaries for all three OSes from any host, and leaves out `llama-connect`, the
+> peer-to-peer tunnel program every archive carries since v0.8.0 (`neverInstalled`, model-policy.md
+> licence record). **A real fetch + the manual smokes on the pin are REQUIRED** (they cannot run in
+> offline CI; #729 records what ran on b12110 and what is still open — the MTP start on the 24 GB
+> rig, the other five catalog chat models' quality gate on ps-work, and the macOS asset).
 > The win/linux default is the **Vulkan full build** (GPU acceleration with
 > built-in CPU degradation) plus a pure-CPU safety net at `runtime/llama.cpp/<os>/cpu/` — see
 > [`drive-layout.md`](drive-layout.md) and the [`architecture.md`](architecture.md) GPU record.
@@ -1373,10 +1375,11 @@ unless that env var is set, so a green CI run says nothing about them.
 
 **Before any drive ships, run the applicable subset against the real artifacts** (a locally
 provisioned smoke drive with a llama.cpp binary + a small chat GGUF; see BUILD_STATE).
-Treat this as part of the gate, not optional polish. **NOTE (2026-09-27, #512):** the runtime pin
-moved to **b11146** (= upstream v0.5.0), so re-run `fetch-runtime` on the smoke drive (both the
-default build and `--backend cpu`) to refresh the binary before these harnesses prove the
-*current* pin (the drive's previous binary was b9849).
+Treat this as part of the gate, not optional polish. **NOTE (#729):** the runtime pin moved to
+**b12110** (= upstream v0.9.0), so re-run `fetch-runtime` on the smoke drive (both the default
+build and `--backend cpu`; refresh the drive's `model-manifests` first, or `fetch-runtime` follows
+the drive's old yaml) before these harnesses prove the *current* pin (the previous binary was
+b11146, before it b9849).
 
 | Harness | Env var(s) | Proves |
 | --- | --- | --- |

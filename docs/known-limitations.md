@@ -22,7 +22,9 @@ password recovery — are documented in
   engines start without the host's `LLAMA_*` variables and with their config lookup redirected
   (`security-model.md` "The engines do not inherit the host's llama.cpp settings"), but llama.cpp
   also reads the fixed path `/etc/llama.cpp/config.ini`, which no variable moves. Only an
-  administrator can write it. Windows has no such fixed path. On Linux the redirect has one side
+  administrator can write it. Such a file could also switch on `--connect` (v0.8.0+), which then
+  finds a `llama-connect` only if the host put one on its `PATH`: the installers never put it on the
+  drive (#729, `security-model.md`). Windows has no such fixed path. On Linux the redirect has one side
   effect: the Vulkan loader reads user-level layers from `$XDG_CONFIG_HOME/vulkan` too, so layers
   installed under `~/.config/vulkan` (overlays, capture tools) no longer load into the engines.
   Layers and drivers under `~/.local/share` and `/etc` still do.
@@ -2701,8 +2703,9 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The pinned sidecar build leaves `/health` auth-exempt on its own port**, so a local process can
   read liveness (`{"status":"ok"}`) — upstream behaviour, unrelated to the app's own endpoint but
   part of the same threat surface. On b9849 `/v1/models` was exempt too and exposed the loaded
-  model's file path (metadata, never content); on the b11146 pin it answers 401 without the key
-  (#512). A drive still on b9849 keeps the wider exemption until its engine is re-fetched.
+  model's file path (metadata, never content); since b11146 it answers 401 without the key
+  (#512; unchanged on the b12110 pin, #729). A drive still on b9849 keeps the wider exemption until
+  its engine is updated (the AI Model screen offers it, #516).
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 
@@ -2749,6 +2752,14 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   the app checks `System32` for the three files to tell this case from damaged engine files. That
   check is presence-only: an outdated Redistributable with the files present reads as "damaged
   engine files", and the troubleshooting entry covers both causes.
+- **On Windows 10 before version 1903, a drive path with unusual characters may not reach the engine
+  (#729, expected, not measured).** Since the b12110 pin the engine's programs take their command
+  line as UTF-8 through an application manifest, and llama.cpp no longer rebuilds it from Windows'
+  own wide-character copy. Windows reads that manifest from Windows 10 1903 on. On an older build,
+  such as Windows 10 LTSC 2019 (1809), a model path with characters outside the system's code page
+  (Japanese folder names on a German Windows, say) would arrive mangled and the model would not load.
+  German umlauts on a German Windows stay inside its code page. Measured on Windows 11 only: a model
+  and an mmproj under `pfad äöü 日本 [1]` load on b12110.
 - **A refusal is a session verdict.** It is not stored, and a restart or **Check again** re-tests
   it. Check again re-starts only the engines that have a verdict; it does not install anything.
   When the refused program later starts on its own (an intermittent Smart App Control block), its
@@ -3051,10 +3062,12 @@ describe.
   re-prefilled on return for `qwen3.5-4b`/`-9b` and `gemma4-e2b`/`-12b` (b9849: 1,654–1,736), and
   the restored answer byte-identical to a full recompute. `qwen3.6` and `qwen3.8` restore too:
   measured on the RTX 3090 rig on 2026-09-27 (29 of ~1,550 re-prefilled; b9849 1,488–1,492; PR #524),
-  so all four #399 families keep the cache and no manifest sets `disable_prompt_cache`.
-- **A drive still carrying the b9849 engine loses that again.** The app does not compare the
-  installed engine with the pin, so a drive set up before #512 keeps b9849 until `fetch-runtime` /
-  the drive-setup script runs again. On it, the Qwen3.5 / Gemma 4 / Qwen3.6 / Qwen3.8 models now
+  so all four #399 families keep the cache and no manifest sets `disable_prompt_cache`. Re-measured on the
+  b12110 pin (#729, GTX 1070 Ti, 30 conversations each): `qwen3.5-4b` and `gemma4-e2b` restore 30 of 30, and
+  every restored answer equals its recompute (b11146 beside it: 59 of 60).
+- **A drive still carrying the b9849 engine loses that again.** A drive set up before #512 keeps
+  b9849 until its engine is updated: the AI Model screen offers the update since #516 (pause,
+  update, resume), and `fetch-runtime` / the drive-setup script do it too. On it, the Qwen3.5 / Gemma 4 / Qwen3.6 / Qwen3.8 models now
   write a host-RAM cache copy they cannot read (the #399 gate that switched it off is gone), bounded
   by the ceiling below.
 - **On b9849, on 13 of our 17 measured chat models an evicted chat prefix is re-prefilled from

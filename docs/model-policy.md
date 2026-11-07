@@ -50,8 +50,8 @@
 > **reranker** (also XLM-R family) is pinned to **F16 for the same reason**; its live load on b9585
 > is verified by the `HILBERTRAUM_RERANK_SMOKE` manual harness. _(These were verified on b9585; the
 > b9849 pin bump re-opens them — the manual smoke re-confirms the embedder + reranker sidecars load
-> on b9849, or records explicitly if deferred. On the b11146 pin (#512) the rerank and rag-quality
-> smokes passed with both sidecars.)_ License review (recorded in its manifest):
+> on b9849, or records explicitly if deferred. On b11146 (#512) and on the b12110 pin (#729) the rerank
+> and rag-quality smokes passed with both sidecars.)_ License review (recorded in its manifest):
 > base model `BAAI/bge-reranker-v2-m3` = Apache-2.0 (HF API, 2026-06-10); GGUF from
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
@@ -193,7 +193,8 @@ repos ungated), 140+ languages:
   real downloads** — `fetch-models` fetched + SHA-256-verified E2B/E4B/26B-A4B on 2026-07-23.
 - **Runtime**: Gemma 4 needs llama.cpp ~b8680+ (MoE included); **b9849** loaded all
   three smoked sizes (E-series MatFormer + the Gemma MoE were arch firsts for the catalog), and the
-  pinned **b11146** was re-run on E2B and 12B (#512). The
+  **b11146** was re-run on E2B and 12B (#512), and the pinned **b12110** on E2B (#729: the #729 repro, the
+  grounded-QA gate and `gemma-thinking`; the 12B is a ps-work leg). The
   31B (same dense arch string as the 12B) is un-smoked but lowest-risk.
 - **Smoke status (2026-07-23):** E2B + E4B **in-app smoke PASSED** (0.1.48 portable, DIY test
   drive, b9849 win-vulkan). The 26B-A4B loads + answers via CLI but needs a **≥24 GB** machine for
@@ -363,7 +364,8 @@ extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
   at most 8,192 MiB — `shared/prompt-cache-rules.ts`). Like `speculative_decoding`, the manifest
   never supplies arguments. It replaces the #399 family list (`qwen3.5`, `qwen3.6`, `qwen3.8`,
   `gemma4` got `--cache-ram 0` on b9849): on b11146 all four restore, measured (qwen3.6/qwen3.8 on
-  the 24 GB rig, PR #524), so **no committed manifest sets it**
+  the 24 GB rig, PR #524), and on b12110 `qwen3.5` and `gemma4` restore 30 of 30 conversations each
+  (#729; qwen3.6/qwen3.8 are the rig leg), so **no committed manifest sets it**
   (`committed-catalog.test.ts`). To decide it for a new GGUF, run
   `tests/manual/prompt-cache-smoke.test.ts` (`HILBERTRAUM_PROMPT_CACHE_SMOKE=<drive root>`,
   `HILBERTRAUM_SMOKE_MODEL=<gguf>`): it evicts a ~1,700-token conversation with an unrelated one
@@ -663,7 +665,34 @@ GPU driver) — no new licenses enter the product. The file is validated by
 (everything except the downloaded archive + the `cpu/` safety net) so an upgrade can never mix
 two builds or keep a stale binary under a fresh marker (GPU audit round).
 
-**License-review record — llama.cpp b11146 runtime assets (the CURRENT pin; status: approved,
+**License-review record — llama.cpp b12110 runtime assets (the CURRENT pin; status: approved,
+reviewed 2026-11-07, issue #729):** the pin was bumped b11146 → **b12110** (2026-11-04, upstream
+commit `cd959bae`), the build named by upstream's stable release **v0.9.0** (both tags resolve to
+that commit). llama.cpp itself stays **MIT**, and **no licence class changes**: every licence text the
+archives carry is byte-identical to b11146's (llama.cpp's `LICENSE` in the macOS/Linux archives;
+`LICENSE-LLVM-OpenMP` beside `libomp.dll` in both Windows archives, still equal to
+`licenses/LLVM-OpenMP.txt`, and `libomp.dll` is the same file). The one new archive member is
+**`llama-connect`** (`llama-connect.exe` on Windows), in all five archives since v0.8.0: the program
+`llama-server --connect` starts to open a peer-to-peer tunnel to the server. It is a separately built,
+statically linked Rust program (upstream `ggml-org/llama-connect`) whose own dependency licences the
+archives do not carry. **It is never installed:** the in-app installer and both `fetch-runtime` twins
+delete it after extraction (`neverInstalled` in `assets.ts` `SIDECAR_FAMILY_SPECS`, mirrored in the
+scripts and held to it by `script-drift.test.ts`), so a drive never conveys it and no record is needed
+for it. Other archive changes, none licence-relevant: the macOS/Linux libraries carry new version
+suffixes (ggml 0.25.1 → 0.29.0, llama 0.5.0 → 0.9.0; nothing in the repo names them), and the Windows
+executables embed an application manifest (UTF-8 code page, long paths; upstream #31329). All five
+SHA-256 values are the official GitHub Releases API `digest` for tag `b12110` AND were confirmed
+against a local download on 2026-11-07; `fetch-runtime` re-verifies each archive before extraction.
+
+| Asset | SHA-256 | Notes |
+|---|---|---|
+| `llama-b12110-bin-win-vulkan-x64.zip` | `9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f` | MIT; Vulkan full build (default win build); ships LLVM `libomp.dll` + `LICENSE-LLVM-OpenMP`; `llama-connect.exe` left out |
+| `llama-b12110-bin-win-cpu-x64.zip` | `98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2` | MIT; pure-CPU safety net; same `libomp.dll` + licence file; `llama-connect.exe` left out |
+| `llama-b12110-bin-macos-arm64.tar.gz` | `4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662` | MIT; Metal (mac arm64); `llama-connect` left out |
+| `llama-b12110-bin-ubuntu-vulkan-x64.tar.gz` | `a5d741940956ec62e8783aee7e5a4c7c761af867d6f027c3277a51e1a3ac59b0` | MIT; Vulkan full build (default linux build); `llama-connect` left out |
+| `llama-b12110-bin-ubuntu-x64.tar.gz` | `368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55` | MIT; pure-CPU safety net; `llama-connect` left out |
+
+**License-review record — llama.cpp b11146 runtime assets (HISTORICAL — the prior pin; status: approved,
 reviewed 2026-09-27, issue #512):** the pin was bumped b9849 → **b11146** (2026-09-23, upstream
 commit `7fe450e1`), the build named by upstream's stable release **v0.5.0** (both tags resolve to
 that commit). llama.cpp itself stays **MIT**. One component changed licence class in the Windows
@@ -697,7 +726,8 @@ written. The historical tables below name their tag in every asset, so they neve
 current pin. The OCR table is held the same way, through `OCR_PINS` (`ocr-pins.test.ts`).
 
 **What these builds need from the host system** (#530, read with `objdump -T` / `readelf -d`
-and run in stock Ubuntu containers, 2026-10-01; `architecture.md` "Engine load failures"):
+and run in stock Ubuntu containers, 2026-10-01; `architecture.md` "Engine load failures"; re-read on
+b12110 on 2026-11-07 for #729: unchanged, every line below holds for both pins):
 - **Both Linux builds** need glibc ≥ 2.34, libstdc++ with `GLIBCXX_3.4.30` (GCC 12), OpenSSL 3
   (`libssl.so.3` / `libcrypto.so.3`) for `llama-server`, and the system's GCC OpenMP runtime
   `libgomp.so.1`, which is not bundled: desktop images ship `libgomp1`. `libvulkan.so.1` is needed
@@ -741,7 +771,10 @@ later-added assets (Vulkan default + CPU safety net) are explicitly part of this
 The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the original b9585 review
 (unchanged in `runtime-sources.yaml`). **No new licenses enter the product.**
 
-> ✅ **Pinned to a real release: `b11146`** (= upstream stable **v0.5.0**, bumped from b9849 under
+> ✅ **Pinned to a real release: `b12110`** (= upstream stable **v0.9.0**, bumped from b11146 under
+> #729; the paragraph below is the b11146 bump's, kept as written. What #729 verified is in the issue
+> and in `architecture.md` GPU record §3 "PIN BUMPED 2026-11-07"). Previously `b11146` (= **v0.5.0**,
+> bumped from b9849 under
 > #512), with real per-OS URLs and SHA-256 checksums from the official GitHub Releases API
 > `digest` metadata, all five also confirmed by local download — `fetch-runtime` re-verifies before
 > extracting (a wrong/changed hash fails the run). What was verified on the new build is in #512:
@@ -757,7 +790,10 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   (policy since #512, owner ruling 2026-09-27). Since August 2026 upstream's stable releases carry
 >   no assets and name a nightly `bNNNNN` (their notes and `nightly-tag.txt`), and every `bNNNNN` tag
 >   is marked `prerelease: true`, which `fetch-runtime` ignores. Confirm the two tags resolve to one
->   commit; a plain nightly needs an explicit exception recorded in the yaml header. Then update
+>   commit; a plain nightly needs an explicit exception recorded in the yaml header. **Diff the
+>   archive file lists against the current pin's** (#729): a new executable is either one the app
+>   needs (`alsoRequired`) or one it never keeps (`neverInstalled`, like `llama-connect`), never
+>   silently shipped. Then update
 >   `version` + the per-OS asset `url`s (asset names vary per release) from the
 >   [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), download each
 >   asset, promote its real SHA-256 into `sha256`, re-verify the llama.cpp facts the app depends on

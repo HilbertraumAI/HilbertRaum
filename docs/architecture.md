@@ -4134,6 +4134,73 @@ still constant (#318). MTP was verified on the RTX 3090 rig with the Linux Vulka
 at 66/66 with `--spec-type draft-mtp`, draft acceptance 0.754 against b9849's 0.760, decode within
 noise; PR #524, `model-benchmarks.md` §6.6 "Rig legs"). The macOS asset is hash-checked only.
 
+**PIN BUMPED 2026-11-07: the live pin is now b12110** (= upstream stable v0.9.0, `cd959bae`, issue #729;
+owner calls: v0.9.0 rather than v0.8.0 = b11960, merged no earlier than 2026-11-11). Why: b11146 keeps a
+llama-server context checkpoint at position 0 across requests, so a prompt that opens with a user turn
+after `<bos>` (Gemma) skipped its first prompt break and was prefilled in other batch shapes when it
+followed an unrelated request (upstream #30666, first in v0.8.0). Re-verified on the GTX 1070 Ti box
+(i7-8700, 32 GB, Windows 11) against b11146 with the app's exact argv:
+- **#729 itself.** `gemma4-e2b`, the issue's sampling, a request R after an unrelated X: on the card
+  b11146 changes R (token 0 `Wenn` −0.9346 → −0.8797, the text from character 221, R a third time
+  differs too); b12110 gives the same R every time, with the issue's flags and with the app's argv and
+  `cache_prompt: false`. On this processor neither build moves the numbers, but b11146's checkpoint
+  log shows the same leftover checkpoint (`2 of 32` where b12110 starts again at `1 of 32`). A fresh
+  server is deterministic on both.
+- **CLI and defaults.** Every flag the app passes is in b12110's `--help`, `draft-mtp` included. The
+  option lines differ from b11146's only by additions (`--connect`, `--connect-code`,
+  `--moe-cache-mib`, two `--spec-draft-*`, a router margin), the `--port` default (8080 → 9931; the
+  app always passes `--port`) and `--cache-ram`'s help ("0 for decision models" when the flag is not
+  given; the app always gives it). `-ngl auto`, `--fit on`, the fit targets, `kv_unified` under
+  `-np 1`, `n_ctx_checkpoints = 32` and mmproj offload are unchanged. All 155 variables `--help`
+  names match the #730 filter.
+- **`--list-devices`.** Stdout has the same shape (CRLF, `(none)` with no device); b12110 no longer
+  prints `llama_server: initializing ...` on stderr.
+- **Load log.** `device_info` gains a row for the processor (`- CPU : Intel(R) Core(TM) i7-8700 …`),
+  which `placement.ts` already reads as a CPU label and never as a card. GPU starts read the same model,
+  KV and spill figures as on b11146 (full and partial offloads of the 4B, 9B, 14B and TranslateGemma); a
+  start on the processor sums ~100–200 small `CPU_Mapped` lines that no longer map the repacked share, so
+  its CPU-side weights drop to llama.cpp's own breakdown (the 4B 4,045.83 → 2,375.83 MiB; benchmark.md HW2). The last line of a
+  failed start names `server_run_i` instead of `llama_server`, and even the first line is uncoloured;
+  the #515 signature (the first `E` line) is the same as on b11146, so a b12110 main build and a b11146
+  `cpu/` net still blame a broken model together.
+- **Wire.** The chat stream keeps the b11146 shape: content chunks, `timings` on the `finish_reason:
+  "stop"` chunk, `[DONE]` (`chat-sse-timings-b12110.txt`). `return_progress` still sends an event with the
+  headers and after every prompt batch (chat 2048, translation 512 tokens), and the HTTP thread still pings
+  after every 30 s of silence (`chat-sse-progress-b12110.txt`, `translation-sse-progress-b12110.txt`, each with
+  a b11146 run of the same request beside it: the same events). Vision frames are unchanged
+  (`vision/vision-sse-b12110.txt`). The 400 `exceed_context_size_error` and 500 image-not-supported bodies are
+  byte-identical. Auth: the same 18 routes answer the same with and without the key; the endpoints new
+  in v0.8.0 (`POST /tts`, `/v1/realtime` and its websocket upgrade) answer 401 without it.
+- **Embeddings and rerank.** E5 vectors are identical (cosine 1.000000 on 80 texts), so a b12110 query
+  against a workspace embedded on b11146 ranks exactly as before (top-5 order 20/20); bge-reranker
+  scores move by at most 0.0042, same order in 10/10 calls.
+- **Windows paths.** The executables now embed an application manifest selecting the UTF-8 code page
+  and long paths (upstream #31329), and llama.cpp dropped its own wide-argv rebuild (#31417): a model
+  and an mmproj under `…\pfad äöü 日本 [1]\` load and answer on both builds. Windows honours the manifest
+  from Windows 10 1903 on; on an older build (10 LTSC 2019 is 1809) a path with characters outside the
+  system's ANSI code page would no longer reach the engine (expected, not measured; known-limitations.md).
+- **Archives and host.** The only new file in all five archives is `llama-connect[.exe]`, the
+  `--connect` tunnel program; the installers leave it out (`neverInstalled`, security-model.md).
+  Linux needs exactly what b11146 needs (`objdump -T`: GLIBC 2.34, GLIBCXX 3.4.30, OpenSSL 3, libgomp),
+  and both Linux builds start and embed in WSL Ubuntu 24.04; the Windows builds import the same Visual
+  C++ runtime.
+- **Smokes and quality.** On b12110: `gpu-smoke` 6/6 (rung 1 at 37/37 on the card, the unknown-probe
+  label from the load log, `--device none`, rung 3 on the `cpu/` net, the #730 leg), `thinking-smoke` (deep
+  streams separate reasoning deltas, balanced none), `gemma-thinking` 15/16 (b11146 14/16; the one miss is the
+  same deep answer on both), `rerank-smoke`, `rag-quality`, `vision-smoke` (cold start, prefill reuse, idle
+  teardown), `translategemma-smoke` 4/4 on the card and on the processor, the concurrency probe, and the
+  categorizer's `json_schema` enum (0 off-set categories). `bringup-smoke` covers four challengers this box
+  does not hold (ps-work leg). Grounded-QA gate (§2 harness, Vulkan, `gemma4-e2b`, `qwen3-4b`,
+  `qwen3.5-4b`, `qwen3.5-9b`): EM, citation-correct, grounded and unanswerable-abstention are identical on all
+  four, `mean_f1` moves by at most 0.005, 80–96 of 100 answers are byte-identical. Two abstention flips, both on
+  answerable items and neither a loss: qwen3-4b's wrong fee becomes "not stated directly", qwen3.5-4b's correct
+  answer stops tripping the scorer's phrase list. The retrieved sources differ on 3 of 100 items: near-ties the
+  reranker's ≤ 0.004 shift reorders, the gold document still first or second.
+- **Not verified here:** the MTP start (the Qwen3.8 27B needs the 24 GB rig), the other five catalog
+  chat models' gate, and the macOS asset (hash-checked only); they gate the next release tag. The
+  #729 analysis saw two early b11960 servers end mid-generation with no crash record on ps-work. Here about
+  60 b12110 servers ran (repro, probes, gate, smokes, cache, speed, the real app); none ended on its own.
+
 **HOST CONFIGURATION (#730, 2026-10-29).** Since b11146 (absent in b9849) llama.cpp applies config
 files before its ~150 environment variables and the command line: `%PROGRAMDATA%\llama.cpp\config.ini`
 and `%APPDATA%\llama.cpp\config.ini` on Windows, `/etc/llama.cpp/config.ini` and
@@ -6088,7 +6155,10 @@ load-bearing: `runtime-sources.yaml` ships on a user-writable drive, so if the o
 controlled the default selection, deleting one line from it would let the argument-less
 "Install the AI engine" button silently fetch a separately-consented, copyleft binary — the
 code-side `SidecarFamilySpec.optional` is the one that actually decides, and a test asserts the
-two agree for every shipped family. Record: `docs/model-policy.md` "Sidecar binaries —
+two agree for every shipped family. Since #729 a spec can also name executables the archive carries
+but an install never keeps (`neverInstalled`; the llama family's `llama-connect`, the `--connect`
+tunnel): the installers delete them after the flatten, a yaml `executables` entry cannot make one
+required, and both `fetch-runtime` twins carry the same list (`script-drift.test.ts`). Record: `docs/model-policy.md` "Sidecar binaries —
 kiwix-tools" (the license side), `docs/data-contracts.md` (the type-level shape),
 `docs/rag-design.md` §17 D-Z17 (the family contract from the knowledge-packs side, including the
 R-1 closure statement).
