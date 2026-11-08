@@ -1,10 +1,11 @@
-import { describe, it, expect, afterAll, beforeAll } from 'vitest'
+import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { log } from '../../src/main/services/logging'
 import { MockEmbedder, VectorIndex, type Embedder } from '../../src/main/services/embeddings'
 import {
   corpusNeedsReindex,
@@ -850,20 +851,35 @@ describe('T09 — reranker present / absent / throwing, and abort as a refusal (
 
     // ---- (8) counter-check: with a LIVE signal an ordinary arm failure is still swallowed —
     // an unplugged pack drive must never break asking (P4's outcome step reports it instead).
+    // #712: and it is logged as a CLASS — an unplugged drive surfaces as an fs error whose
+    // message names the workspace path, and the log line must not repeat it.
     const tolerated = await seedT09Corpus()
     const live = new AbortController()
-    const degraded = await retrieve(
-      tolerated.db,
-      tolerated.embedder,
-      T09_QUESTION,
-      SETTINGS,
-      null,
-      null,
-      live.signal,
-      async () => {
-        throw new Error('drive unplugged')
-      }
-    )
+    const unplugged = 'D:\\XSENTINEL_712_workspace\\zim-transient'
+    const warn = vi.spyOn(log, 'warn')
+    let degraded: Awaited<ReturnType<typeof retrieve>>
+    try {
+      degraded = await retrieve(
+        tolerated.db,
+        tolerated.embedder,
+        T09_QUESTION,
+        SETTINGS,
+        null,
+        null,
+        live.signal,
+        async () => {
+          throw Object.assign(new Error(`ENOENT: no such file or directory, mkdir '${unplugged}'`), {
+            code: 'ENOENT'
+          })
+        }
+      )
+      expect(warn).toHaveBeenCalledWith('Knowledge-pack retrieval unavailable for this question', {
+        error: 'Error:ENOENT'
+      })
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('XSENTINEL_712')
+    } finally {
+      warn.mockRestore()
+    }
     expect(degraded.chunks.length).toBeGreaterThan(0)
     expect(degraded.chunks.every((c) => c.sourceKind !== 'archive')).toBe(true)
   })

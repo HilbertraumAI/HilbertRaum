@@ -4,7 +4,7 @@ import {
   initBinaryVerification,
 } from '../../src/main/services/binary-verifier'
 import { log } from '../../src/main/services/logging'
-import { KiwixServer } from '../../src/main/services/zim/serve'
+import { KiwixServeStartError, KiwixServer } from '../../src/main/services/zim/serve'
 import { binaryWithMarker, verifierInert } from '../helpers/binary-fixtures'
 import { until } from '../helpers/hang-budget'
 import {
@@ -12,7 +12,9 @@ import {
   ServeFakeChild,
   expectAbortError,
   failEarly,
+  libraryLoadFailure,
   serveGate,
+  spawnErrorLike,
   type EarlyFailure,
   type ServeChildMode
 } from '../helpers/zim-fakes'
@@ -34,11 +36,14 @@ function makeServer(opts: {
   failCount?: number
   /** Default: a fake path. The real verifier answers `skip-dev` while it is not enforced. */
   binPath?: string
+  /** The spawn itself throws this, synchronously (Windows refusing the exe: EPERM). */
+  spawnThrows?: Error
 }): Harness {
   const calls: Array<{ command: string; args: string[] }> = []
   const children: ServeFakeChild[] = []
   const spawn: SpawnFn = (command, args) => {
     calls.push({ command, args })
+    if (opts.spawnThrows) throw opts.spawnThrows
     const child = new ServeFakeChild(9000 + children.length, 'exit-on-sigterm')
     if (opts.failFirst && children.length < (opts.failCount ?? 1)) failEarly(child, opts.failFirst)
     children.push(child)
@@ -97,6 +102,8 @@ describe('KiwixServer', () => {
     await server.stop()
   })
 
+  // #712: `BIND_RACE` is the real kiwix-serve wording now. With llama-server's, which the retry
+  // matched until then, this row passed while the retry never fired against the real binary.
   it('retries ONCE on a fresh port after a bind race', async () => {
     // Only the SECOND port ever becomes healthy — a dead first child must not probe true.
     const { server, calls } = makeServer({ failFirst: BIND_RACE, probeResults: async (p) => p === 8101 })
@@ -113,27 +120,85 @@ describe('KiwixServer', () => {
       ports: [8100, 8101, 8102],
       probeResults: async (p) => p === 8102
     })
-    await expect(twice.server.ensureStarted({ libraryXmlPath: LIBRARY })).rejects.toThrow(
-      /exited before becoming healthy \(code 1\).*address already in use/s
-    )
+    await expect(twice.server.ensureStarted({ libraryXmlPath: LIBRARY })).rejects.toMatchObject({
+      kind: 'exit',
+      exitCode: 1,
+      output: 'port-unavailable'
+    })
     expect(twice.calls).toHaveLength(2)
+
+    // Node may deliver 'exit' before the last stderr chunk (#530): the output is classified only
+    // once the child's pipe has closed, so the retry still sees the bind failure.
+    const late = makeServer({
+      failFirst: { ...BIND_RACE, exitFirst: true } as EarlyFailure,
+      probeResults: async (p) => p === 8101
+    })
+    await expect(late.server.ensureStarted({ libraryXmlPath: LIBRARY })).resolves.toMatchObject({ port: 8101 })
+    expect(late.calls).toHaveLength(2)
+    await late.server.stop()
   })
 
-  it('surfaces the stderr tail when the child exits before healthy', async () => {
+  // #712: the start error is latched by pack revision, rethrown on every later ask and logged by
+  // four callers, so it is built from the failure's class alone: never the child's stderr (the
+  // library file's absolute path, the workspace's) nor a spawn error's message (the binary's).
+  it.each([
+    {
+      name: 'an unloadable library file',
+      failFirst: libraryLoadFailure(LIBRARY),
+      want: { kind: 'exit', exitCode: 1, output: 'library-unreadable' },
+      message: 'kiwix-serve exited before becoming healthy (code 1); output: library-unreadable'
+    },
+    {
+      name: 'output it does not recognise',
+      failFirst: { kind: 'exit', code: 42, stderr: `cannot open ${LIBRARY}: no such device` } as EarlyFailure,
+      want: { kind: 'exit', exitCode: 42, output: 'unrecognised' },
+      message: 'kiwix-serve exited before becoming healthy (code 42); output: unrecognised'
+    },
+    {
+      name: 'a spawn error',
+      failFirst: { kind: 'error', error: spawnErrorLike('/bin/kiwix-serve', ['--library', LIBRARY]) } as EarlyFailure,
+      want: { kind: 'launch', launchCode: 'ENOENT', output: 'none' },
+      message: 'kiwix-serve failed to launch (ENOENT)'
+    },
+    {
+      name: 'a synchronous spawn refusal',
+      spawnThrows: spawnErrorLike('/bin/kiwix-serve', ['--library', LIBRARY], 'EPERM'),
+      want: { kind: 'launch', launchCode: 'EPERM', output: 'none' },
+      message: 'kiwix-serve failed to launch (EPERM)'
+    }
+  ])('a failed start names $name as a class and carries neither its output nor a path (#712)', async (row) => {
     const { server, calls } = makeServer({
-      failFirst: { kind: 'exit', code: 42, stderr: 'The library was NOT loaded' },
+      failFirst: row.failFirst,
+      spawnThrows: row.spawnThrows,
       probeResults: async () => false
     })
-    await expect(server.ensureStarted({ libraryXmlPath: LIBRARY })).rejects.toThrow(/code 42.*library was NOT loaded/s)
+    const err = await server.ensureStarted({ libraryXmlPath: LIBRARY }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(err).toBeInstanceOf(KiwixServeStartError)
+    expect(err).toMatchObject(row.want)
+    expect((err as Error).message).toBe(row.message)
+    const everything = `${String(err)} ${JSON.stringify(err)}`
+    expect(everything).not.toContain('zim-library') // the library path
+    expect(everything).not.toContain('/bin/') // the binary path
+    expect(everything).not.toMatch(/Failed to load|no such device/)
     expect(calls).toHaveLength(1) // not a bind race: no retry
   })
 
-  it('maps a spawn error to a launch failure', async () => {
-    const { server } = makeServer({
-      failFirst: { kind: 'error', error: new Error('spawn ENOENT') },
-      probeResults: async () => false
-    })
-    await expect(server.ensureStarted({ libraryXmlPath: LIBRARY })).rejects.toThrow(/failed to launch.*ENOENT/s)
+  it('a start that never becomes healthy is a timeout, its output classified, never quoted (#712)', async () => {
+    // The real "is empty" line names the library too; a child that prints it and never answers.
+    const { server, children } = makeServer({ probeResults: async () => false })
+    const start = server.ensureStarted({ libraryXmlPath: LIBRARY }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    await until(() => children.length === 1, 'the kiwix-serve spawn')
+    children[0]!.stderr.emit('data', `The XML library file '${LIBRARY}' is empty (or has only remote books).\r\n`)
+    const err = await start
+    expect(err).toMatchObject({ kind: 'timeout', output: 'unrecognised' })
+    expect((err as Error).message).toBe('kiwix-serve did not become healthy within 500ms; output: unrecognised')
+    expect(JSON.stringify(err)).not.toContain('zim-library')
   })
 
   // #554: superseding a live child for a DIFFERENT library.xml awaits stop() between the entry

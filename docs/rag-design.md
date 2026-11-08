@@ -2857,6 +2857,39 @@ the figures they support are quoted in the text.
   changes, but an aborted start never latches. No idle teardown (read-only content
   server, trivial RSS): an unexpected death makes the next ask spawn a NEW generation
   over the SAME library build, not a rebuild.
+  **#712 amendment (2026-11-08): a failed start carries its class, never the child's output.**
+  The start error used to end in ` — last output: <stderr tail>`, and kiwix-serve 3.8.1 prints
+  the library file's absolute path when it cannot load it (`ERROR: Failed to load the XML
+  library file '<path>'.`, libkiwix 14.1.1 `Manager::reload`) and again in its non-fatal "is
+  empty" line. That file is the workspace's `zim-transient/library.<n>.xml`, so four callers
+  logged the drive and workspace path (on a portable exe run outside a Kit, the Windows account:
+  `C:\Users\<name>\AppData\Roaming\…`), once per ask while the failure stayed latched; a spawn
+  error added the binary's path. Reproduced on the real win-x86_64 binary and in the dev app (the
+  issue had read the sources only). The root itself is in the log anyway — `Workspace resolved`
+  at every start, and the Diagnostics screen — so nothing new was revealed: what broke was this
+  rule, raw third-party output in the log, and one copy per ask. Now `KiwixServer` throws `KiwixServeStartError` — `kind` (`integrity` /
+  `launch` / `exit` / `timeout`), the exit code or signal, a spawn's errno code, and `output`, a
+  CLASS of what the child printed (`port-unavailable` / `library-unreadable` / `unrecognised` /
+  `none`) matched on the pinned build's own two phrases; the tail is read only to classify, and
+  only once the child's pipe has closed (#530's bounded 100 ms wait — Node can deliver `'exit'`
+  before the last stderr chunk, and the class decides the retry below). The same rule holds for
+  `KiwixManageError` (it printed `Cannot add ZIM <archive>` / `Cannot write the library <path>`,
+  which no caller ever logged; kiwix-manage now runs with its stderr ignored). Every
+  knowledge-pack log line describes a failure through one `zimErrorClass` (`zim/error-class.ts`,
+  e.g. `serve:exit:code 1:library-unreadable`, `manage:exit`, `Error:EACCES`) — never a foreign
+  error's message, since a Node fs error names its path too; the errno helper is
+  `runtime/sidecar.ts` `errnoCode`. Found on the way and fixed with it: the bind-race retry matched llama-server's
+  wording (`isBindRaceError`), which kiwix-serve never prints — on a held port it says
+  `Unable to instantiate the HTTP daemon. The port N is maybe already occupied …` and exits 1
+  — so the one retry never fired and a lost port latched packs off for the revision; it now keys
+  on `output === 'port-unavailable'` (the test fake carried llama-server's text, which is why the
+  row passed). Also measured, not fixed here: on Windows both tools receive a narrow argv that
+  libkiwix decodes as UTF-8, so a library path with ANY non-ASCII character (`Jürgen`, `山田`)
+  cannot be written by kiwix-manage (`Cannot write the library …`, exit 1) nor loaded by
+  kiwix-serve — packs are unusable under such a root; a relative `--library` with the child's
+  `cwd` set to the transient dir works for both (`getCurrentDirectory` is wide-aware), measured
+  2026-11-08 (`known-limitations.md`). No retrieval or delivery change: logged text, the error's
+  shape, and a retry on a start that used to fail.
 - **D-Z2 — node:http, never fetch.** Node 24's undici crashes (`assert(!this.paused)`) on
   kiwix-serve/libmicrohttpd response framing, keep-alive or not — reproduced on this exact
   combination: Node 24.19.0, Electron 43.4.0 (= Node 24), kiwix-tools 3.8.1 win-x86_64, spike

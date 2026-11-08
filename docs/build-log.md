@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-08 — the closed 2026-10-14 #682/#687 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-08 (preamble budget, making room for the #712 entry). Its records are unchanged:
+architecture.md D25, the OCR install record §4, §47, CONTRIBUTING. It closed with nothing open (#688 was its own PR, merged
+as PR #695). Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#682 / #687 — the two documents test campaigns' leftovers: every listed coverage gap pinned at its owner, the moves and seams done, two defects fixed (`test/682-687-documents-coverage`).** Each new row went red
+under a mutation of the code it guards. Moves: U-2 into the tool-run suite, IA-1 through the production segment reader (its copy had drifted), the whole-doc duplicates, `TurnRow`'s counter test-side, the real-layout corpus
+through `PdfParser` (now `skills-extractor-corpus`). Gone: `DocumentCipher`'s sync members, `downloadImpl`, the optional `OcrEngine` members, ZIM's inert transcriber/OCR deps, the DOMMatrix polyfill's canvas-only members (a Type3
+glyph proves the rest); one `isChatStreaming()` replaces three copies (wiring pinned); `npm test` scrubs 27 shell overrides (a hostile shell turned 45 suites red). Fixes (owner calls): a summary whose reduce belt cut the partials
+(2,048-token override, ≥ 10 windows; and, found in review, a Tier-3 summary of a very large document at the default 4,096, ≥ 7 batches) now says it covers the beginning; a transient unreadable `ocr/` folder after an install no longer asks for a restart. Real app (4B, GTX 1070 Ti, the 2,048-token override, an 11-window text): master stored the cut summary as complete, the fix flags it; a Type3-glyph PDF indexes. Records: architecture.md D25, the OCR
+install record §4, §47; CONTRIBUTING. Open: none (the prepare-phase `failureRowMessage` stays untested: no prepare step throws a typed error; #688 is its own PR)._
+
 ## 2026-11-07 — the closed 2026-10-29 #730 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-07 (preamble budget, making room for the #729 entry). Its record is unchanged:

@@ -102,12 +102,16 @@ import { startKnowledgePackSession } from '../../src/main/services/zim/session'
 import { performShutdown } from '../../src/main/shutdown'
 import { log } from '../../src/main/services/logging'
 import { t } from '../../src/shared/i18n'
+import { tMain } from '../../src/main/services/i18n'
 import {
   ServeFakeChild,
   expectAbortError,
+  failEarly,
   fakeManageSpawn,
+  libraryLoadFailure,
   serveGate,
   zimServiceDeps,
+  type EarlyFailure,
   type ServeChildMode
 } from '../helpers/zim-fakes'
 import { rangeStart, sendRawAnswer, sendRawStall } from '../helpers/zim-http'
@@ -171,6 +175,9 @@ interface SessionHooks {
    * never arrives. Null answers normally. Runs after `beforeRespond`, before `respond`.
    */
   truncate: (url: string) => { partial: string; total: number } | null
+  /** How the NEXT kiwix-serve child dies before it is healthy, given the library it was spawned
+   *  with (#712: the real binary prints that path), or null for a child that stays up. */
+  serveFailure: (libraryXmlPath: string) => EarlyFailure | null
 }
 
 interface SessionHarness {
@@ -276,7 +283,8 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     probe: async () => true,
     beforeRespond: async () => undefined,
     truncate: () => null,
-    respond: () => null
+    respond: () => null,
+    serveFailure: () => null
   }
   const requests: string[] = []
   const server = createServer((req, res) => {
@@ -338,7 +346,10 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
 
   const serveSpawn: SpawnFn = (_command, args) => {
     const child = new ServeFakeChild(servePid++, modes.serve)
-    serveSpawns.push({ libraryXmlPath: args[args.indexOf('--library') + 1] as string, child })
+    const libraryXmlPath = args[args.indexOf('--library') + 1] as string
+    serveSpawns.push({ libraryXmlPath, child })
+    const failure = hooks.serveFailure(libraryXmlPath)
+    if (failure) failEarly(child, failure)
     return child
   }
   // `hooks.manage` and `modes.manage` are read per spawn, so a leg can swap them mid-test.
@@ -1867,6 +1878,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
             if (zimPath === badPath) throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
           }
           dialogState.paths = [goodPath, badPath]
+          const regWarn = vi.spyOn(log, 'warn')
           const mixed = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
           expect(mixed.outcome).toBe('partial')
           expect(mixed.added).toHaveLength(1)
@@ -1888,6 +1900,11 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
             articleCount: 41
           })
           expect(JSON.stringify(dto.auditCalls)).not.toContain('XSENTINEL_T17_DTO_MIXED')
+          // #712: and the log names the failure by its class, never the manager's stderr or the path.
+          const registrationLines = regWarn.mock.calls.filter((c) => c[0] === 'Knowledge pack registration failed')
+          regWarn.mockRestore()
+          expect(registrationLines.map((c) => c[1])).toEqual([{ reason: 'manager', error: 'manage:exit' }])
+          expect(JSON.stringify(registrationLines)).not.toContain('XSENTINEL_T17_DTO_MIXED')
           expect(JSON.stringify(dto.auditCalls)).not.toContain('good-t17-dto')
 
           const allBadA = dto.addPackFile('all-fail-t17-a.zim')
@@ -2037,6 +2054,69 @@ const shape = (outcomes: KnowledgePackOutcome[] | undefined) =>
   (outcomes ?? [])
     .map((o) => ({ packId: o.packId, status: o.status, reason: o.reason }))
     .sort((a, b) => a.packId.localeCompare(b.packId))
+
+// #712: kiwix-serve prints the absolute path of the library file it could not load — the
+// workspace's own `zim-transient/library.<n>.xml` (on a portable exe outside a Kit, under
+// `C:\Users\<name>`). The start error is latched and rethrown, and the session pass and Refresh
+// both log it. Here the fake child dies with the REAL binary's stderr naming the path ITS spawn
+// received; the log must carry the failure's class and nothing of what the child printed.
+describe('#712 — a kiwix-serve start that fails is logged as a class, never with the path it printed', () => {
+  it('#712 the session-start pass and a Refresh (the latched failure rethrown) log the class of a start the real binary refuses: no workspace path, no library name, no stderr', async () => {
+    const h = await sessionHarness()
+    const spies = (['info', 'warn', 'error'] as const).map((level) => vi.spyOn(log, level))
+    const warned = (message: string): unknown[] =>
+      spies[1]!.mock.calls.filter((c) => c[0] === message).map((c) => c[1])
+    try {
+      h.hooks.serveFailure = (libraryXmlPath) => libraryLoadFailure(libraryXmlPath)
+      h.hooks.probe = async () => false // the child's exit decides, never a lucky probe
+      // A pack the session's reconcile registers. Its searchability is unknown, so the pass's end
+      // probe starts the server: the start the binary refuses.
+      h.addPackFile('alpha-712.zim')
+      startKnowledgePackSession(h.ctx)
+      const sessionLine = 'Knowledge-pack session start failed (non-fatal)'
+      expect(await waitUntil(() => warned(sessionLine).length > 0)).toBe(true)
+      expect(h.serveSpawns).toHaveLength(1)
+      // The child really printed the workspace path the log must not repeat.
+      expect(h.serveSpawns[0]!.libraryXmlPath).toContain(basename(h.root))
+
+      // Refresh under the same pack set: the latched failure is rethrown, no second spawn.
+      const refreshLine = 'Knowledge-pack refresh failed'
+      expect((await invoke(handlers, IPC.refreshKnowledgePacks)).result).toEqual({ started: true })
+      expect(await waitUntil(() => warned(refreshLine).length > 0)).toBe(true)
+      expect(h.serveSpawns).toHaveLength(1)
+
+      const expected = [{ error: 'serve:exit:code 1:library-unreadable' }]
+      expect(warned(sessionLine)).toEqual(expected)
+      expect(warned(refreshLine)).toEqual(expected)
+
+      // The viewer and Save as document reach the same latched start; each says "unavailable".
+      const packId = h.packRows()[0]!.id
+      expect((await invoke(handlers, IPC.getPackArticle, packId, 'A/Example')).result).toBeNull()
+      await expect(invoke(handlers, IPC.savePackArticle, packId, 'A/Example')).rejects.toThrow(
+        tMain('main.zim.articleUnavailable')
+      )
+      expect(warned('Pack article read failed')).toEqual([
+        { error: 'serve:exit:code 1:library-unreadable', reason: undefined },
+        { error: 'serve:exit:code 1:library-unreadable', reason: undefined }
+      ])
+      // Enabling the pack again probes its searchability in the background — a NEW revision, so a
+      // fresh start, which the binary refuses the same way.
+      await invoke(handlers, IPC.setKnowledgePackEnabled, packId, false)
+      await invoke(handlers, IPC.setKnowledgePackEnabled, packId, true)
+      const probeLine = 'Knowledge-pack searchability probe failed (non-fatal)'
+      expect(await waitUntil(() => warned(probeLine).length > 0)).toBe(true)
+      expect(warned(probeLine)).toEqual(expected)
+      expect(h.serveSpawns).toHaveLength(2)
+
+      const everything = JSON.stringify(spies.map((s) => s.mock.calls))
+      expect(everything).not.toContain(basename(h.root))
+      expect(everything).not.toMatch(/library\.\d+\.xml|Failed to load|Errors encountered/)
+    } finally {
+      for (const s of spies) s.mockRestore()
+      await h.close()
+    }
+  })
+})
 
 describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', () => {
   it('T16 per-ask outcomes (all failed / zero hits / missing tools / removed or disabled selection / mixed / all fetches failed / two chats / scope changed mid-ask / reload) survive zero-citation answers, associate with the right message, persist with it, and whole-doc / compare never claim packs were queried', async () => {

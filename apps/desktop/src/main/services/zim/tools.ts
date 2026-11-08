@@ -4,6 +4,7 @@ import { log } from '../logging'
 import { verifyBinaryBeforeSpawn } from '../binary-verifier'
 import { KIWIX_MANAGE_BINARY_BASE, KIWIX_SERVE_BINARY_BASE } from '../assets'
 import {
+  errnoCode,
   llamaOsDir,
   registerSidecarChild,
   unregisterSidecarChild,
@@ -80,7 +81,12 @@ export function resolveKiwixManagePath(
 const MANAGE_TIMEOUT_MS = 30_000
 const MANAGE_KILL_GRACE_MS = 1_000
 const MANAGE_FORCE_KILL_WAIT_MS = 2_000
-const STDERR_TAIL_MAX = 2_000
+
+/** A launch failure's message: the errno code only — Node's spawn error names the binary path. */
+const launchFailed = (err: unknown): string => {
+  const code = errnoCode(err)
+  return `kiwix-manage failed to launch${code ? ` (${code})` : ''}`
+}
 
 /** Resolves after `ms`, unref'd so a pending manager wait never keeps the process alive
  *  (matches the sidecar's own timers). */
@@ -100,7 +106,10 @@ export type KiwixManageChildState = 'not-spawned' | 'exited' | 'uncertain'
  *  caller whether it is safe to clean up anything the child might still be writing to:
  *  only `'uncertain'` means "maybe still running". An `'uncertain'` error carries `settled`,
  *  the child's own terminal event: it resolves if the child's exit is observed later, and
- *  from then on what it was writing may be removed (#713). */
+ *  from then on what it was writing may be removed (#713). The message never carries the
+ *  child's output or a path (#712): kiwix-manage prints the archive's path ("Cannot add ZIM
+ *  <path> …") or the library's ("Cannot write the library <path>"), and a spawn error names the
+ *  binary's. */
 export class KiwixManageError extends Error {
   readonly kind: 'verify' | 'spawn' | 'exit' | 'timeout' | 'abort'
   readonly childState: KiwixManageChildState
@@ -198,12 +207,14 @@ export async function kiwixManageAdd(
 
   let child: ChildProcessLike
   try {
+    // stderr is not even piped: what kiwix-manage prints names a path (#712), and every caller
+    // classifies a failure by `kind`, so nothing would read it.
     child = spawnFn(managePath, [native(libraryXmlPath), 'add', native(zimPath)], {
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'ignore', 'ignore'],
       windowsHide: true
     })
   } catch (err) {
-    throw new KiwixManageError(err instanceof Error ? err.message : String(err), 'spawn', 'not-spawned')
+    throw new KiwixManageError(launchFailed(err), 'spawn', 'not-spawned')
   }
 
   // CODE-11/F-32: reachable by the crash-exit reap and the engine-installer's in-use
@@ -213,7 +224,6 @@ export async function kiwixManageAdd(
   registerSidecarChild(child.pid, 'kiwix_tools')
 
   return new Promise<void>((resolve, reject) => {
-    let stderrTail = ''
     let settled = false
     // Set once a timeout/abort begins the kill escalation: from that point the eventual
     // settlement is always a timeout/abort rejection (never the ordinary exit-code path),
@@ -238,10 +248,6 @@ export async function kiwixManageAdd(
       else resolve()
     }
 
-    child.stderr?.on('data', (chunk: unknown) => {
-      stderrTail = (stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX)
-    })
-
     // Terminal handlers ALWAYS unregister the PID and resolve `terminalPromise` — even
     // after the promise has already settled via the cancel path (a late exit/error must
     // still free the reaper registry, and must change nothing else, per M9's contract).
@@ -250,7 +256,7 @@ export async function kiwixManageAdd(
       unregisterSidecarChild(child.pid)
       resolveTerminal()
       if (!cancelling) {
-        settle(new KiwixManageError(err instanceof Error ? err.message : String(err), 'spawn', 'exited'))
+        settle(new KiwixManageError(launchFailed(err), 'spawn', 'exited'))
       }
     })
     child.once('exit', (code: unknown) => {
@@ -259,16 +265,7 @@ export async function kiwixManageAdd(
       resolveTerminal()
       if (!cancelling) {
         if (code === 0) settle()
-        else {
-          const tail = stderrTail.trim()
-          settle(
-            new KiwixManageError(
-              `kiwix-manage exited with code ${String(code)}${tail ? ` — ${tail}` : ''}`,
-              'exit',
-              'exited'
-            )
-          )
-        }
+        else settle(new KiwixManageError(`kiwix-manage exited with code ${String(code)}`, 'exit', 'exited'))
       }
     })
 

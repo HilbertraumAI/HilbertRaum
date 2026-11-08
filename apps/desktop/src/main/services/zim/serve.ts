@@ -2,8 +2,8 @@ import { log } from '../logging'
 import { verifyBinaryBeforeSpawn } from '../binary-verifier'
 import {
   LOOPBACK_HOST,
+  errnoCode,
   findFreePort,
-  isBindRaceError,
   registerSidecarChild,
   unregisterSidecarChild,
   type ChildProcessLike,
@@ -61,6 +61,115 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const abortError = (message: string): DOMException => new DOMException(message, 'AbortError')
 
 /**
+ * What kiwix-serve wrote to stderr before a failed start, as a CLASS (#712). The text itself
+ * never leaves the child's record: kiwix-serve prints the library file's absolute path when it
+ * cannot load it, and again in its non-fatal "is empty" line. That file is the workspace's own
+ * `zim-transient/library.<n>.xml`, so the path names the drive and workspace — and on a
+ * portable exe run outside a Kit, the Windows account (`C:\Users\<name>\AppData\Roaming\…`).
+ *
+ * Matched on the pinned build's own wording (kiwix-tools 3.8.1 / libkiwix 14.1.1:
+ * `manager.cpp` `Manager::reload`, `kiwix-serve.cpp` `reloadLibrary`, `internalServer.cpp`
+ * `InternalServer::start`), captured from the real win-x86_64 binary on 2026-11-08. A pin
+ * bump re-measures these two phrases (runtime-sources.yaml, "To bump").
+ */
+export type KiwixServeOutput = 'none' | 'port-unavailable' | 'library-unreadable' | 'unrecognised'
+
+/** How a start failed: the pre-spawn hash, the spawn itself, an exit before health, the
+ *  health window. */
+export type KiwixServeStartFailureKind = 'integrity' | 'launch' | 'exit' | 'timeout'
+
+/** `Unable to instantiate the HTTP daemon. The port N is maybe already occupied or need more
+ *  permissions to be open. …` — then exit 1. The shared `isBindRaceError` wording is
+ *  llama-server's and Node's; kiwix-serve never prints it, so its one retry never fired (#712). */
+const PORT_UNAVAILABLE_RE = /Unable to instantiate the HTTP daemon/
+/** `ERROR: Failed to load the XML library file '<path>'.` + `Errors encountered while loading
+ *  the library.` — then exit 1. On Windows any non-ASCII character in the path ends here: the
+ *  narrow argv is decoded as UTF-8. */
+const LIBRARY_UNREADABLE_RE = /Failed to load the XML library file|Errors encountered while loading the library/
+
+function classifyServeOutput(tail: string): KiwixServeOutput {
+  if (tail.trim() === '') return 'none'
+  // The two never print together (the library loads before the server binds). The non-fatal "is
+  // empty" line matches neither, so beside a bind failure (measured) it changes nothing.
+  if (PORT_UNAVAILABLE_RE.test(tail)) return 'port-unavailable'
+  if (LIBRARY_UNREADABLE_RE.test(tail)) return 'library-unreadable'
+  return 'unrecognised'
+}
+
+/** How long a start that exited waits for the child's `'close'` (its stderr drained) before the
+ *  tail is classified — the #530 rule of `runtime/sidecar.ts`: Node may emit `'exit'` while
+ *  output is still in the pipe, and the class decides the bind-race retry (#712). A real child
+ *  closes within a millisecond or two; the bound only stops a pipe held open elsewhere. */
+const STDERR_DRAIN_MS = 100
+
+/** `code N` or `signal S` — one spelling for the message and the logged class. */
+function exitDescription(exitCode: number | null, exitSignal: string | null): string {
+  return exitCode != null ? `code ${exitCode}` : `signal ${String(exitSignal)}`
+}
+
+/**
+ * Why a kiwix-serve start failed (#712) — built PATH-FREE and OUTPUT-FREE by construction: the
+ * kind, the exit code or signal, the spawn's errno code and the class of what the child printed.
+ * It is the error the service latches by pack revision and rethrows on every later ask, and four
+ * callers log it, so nothing a later caller does with it can reveal what it never carried.
+ */
+export class KiwixServeStartError extends Error {
+  readonly kind: KiwixServeStartFailureKind
+  readonly output: KiwixServeOutput
+  readonly exitCode: number | null
+  readonly exitSignal: string | null
+  readonly launchCode: string | null
+
+  constructor(
+    kind: KiwixServeStartFailureKind,
+    detail: {
+      output?: KiwixServeOutput
+      exitCode?: number | null
+      exitSignal?: string | null
+      launchCode?: string | null
+      timeoutMs?: number
+    } = {}
+  ) {
+    const output = detail.output ?? 'none'
+    const exitCode = detail.exitCode ?? null
+    const exitSignal = detail.exitSignal ?? null
+    const launchCode = detail.launchCode ?? null
+    const outputSuffix = output === 'none' ? '' : `; output: ${output}`
+    let message: string
+    switch (kind) {
+      case 'integrity':
+        message = 'kiwix-serve failed pre-spawn integrity verification'
+        break
+      case 'launch':
+        message = `kiwix-serve failed to launch${launchCode ? ` (${launchCode})` : ''}`
+        break
+      case 'exit':
+        message = `kiwix-serve exited before becoming healthy (${exitDescription(exitCode, exitSignal)})${outputSuffix}`
+        break
+      case 'timeout':
+        message = `kiwix-serve did not become healthy within ${String(detail.timeoutMs)}ms${outputSuffix}`
+        break
+    }
+    super(message)
+    this.name = 'KiwixServeStartError'
+    this.kind = kind
+    this.output = output
+    this.exitCode = exitCode
+    this.exitSignal = exitSignal
+    this.launchCode = launchCode
+  }
+
+  /** The compact, path-free class the log carries (`zimErrorClass`): `exit:code 1:library-unreadable`. */
+  diagnostic(): string {
+    const parts: string[] = [this.kind]
+    if (this.kind === 'exit') parts.push(exitDescription(this.exitCode, this.exitSignal))
+    if (this.kind === 'launch' && this.launchCode) parts.push(this.launchCode)
+    if (this.output !== 'none') parts.push(this.output)
+    return parts.join(':')
+  }
+}
+
+/**
  * Everything one spawned child owns. The only mutable state of a start; `this.activeRecord`
  * is merely a pointer to the record that is currently PUBLISHED as the server.
  */
@@ -79,7 +188,13 @@ export interface ChildRecord {
   exitSignal: string | null
   /** The child emitted `error` (a spawn failure may never emit `exit`). */
   spawnError: Error | null
+  /** Read only to CLASSIFY a failed start (`classifyServeOutput`); never copied into an error or
+   *  a log line — it carries the library file's absolute path (#712). */
   stderrTail: string
+  /** THIS child's `'close'` (its stderr drained): per record, so a superseded child's late
+   *  `'close'` can never mark a retry's pipe as drained. */
+  stdioClosed: boolean
+  stdioClose: Promise<void>
   /** The health probe succeeded and this record was published as the server. */
   healthy: boolean
   killSent: boolean
@@ -249,8 +364,9 @@ export class KiwixServer {
       return await this.doStart(libraryXmlPath, signal)
     } catch (err) {
       // TOCTOU between findFreePort() and bind: retry ONCE on a fresh port and a fresh
-      // generation. `doStart` has already torn its own record down before rejecting.
-      if (err instanceof Error && !signal.aborted && isBindRaceError(err.message)) {
+      // generation. `doStart` has already torn its own record down before rejecting. Read from
+      // the classified output, never from the message — the message carries no output (#712).
+      if (err instanceof KiwixServeStartError && !signal.aborted && err.output === 'port-unavailable') {
         log.warn('kiwix-serve hit a port-bind race; retrying once on a fresh port')
         return await this.doStart(libraryXmlPath, signal)
       }
@@ -277,7 +393,7 @@ export class KiwixServer {
     // to spawn; dev/legacy installs resolve skip-* and proceed (binary-verifier.ts).
     const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
     if (verdict === 'mismatch') {
-      throw new Error('kiwix-serve failed pre-spawn integrity verification')
+      throw new KiwixServeStartError('integrity')
     }
     // #339 P8-1: an in-app install records a hash for kiwix-serve, so `skip-legacy` now means
     // exactly one thing — a bundle placed by hand with no marker. Say so once per process, the
@@ -304,6 +420,8 @@ export class KiwixServer {
       exitSignal: null,
       spawnError: null,
       stderrTail: '',
+      stdioClosed: false,
+      stdioClose: Promise.resolve(),
       healthy: false,
       killSent: false,
       forceKillSent: false,
@@ -332,7 +450,7 @@ export class KiwixServer {
       // Synchronous spawn throw: no child, no PID, nothing to kill (plan §9.15 item 7).
       record.spawnError = err instanceof Error ? err : new Error(String(err))
       reachTerminal()
-      throw new Error(`kiwix-serve failed to launch: ${record.spawnError.message}`)
+      throw new KiwixServeStartError('launch', { launchCode: errnoCode(record.spawnError) })
     }
     record.child = child
     record.pid = child.pid
@@ -340,6 +458,12 @@ export class KiwixServer {
 
     child.stderr?.on('data', (chunk: unknown) => {
       record.stderrTail = (record.stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX)
+    })
+    record.stdioClose = new Promise<void>((resolve) => {
+      child.once('close', () => {
+        record.stdioClosed = true
+        resolve()
+      })
     })
     child.once('error', (err: unknown) => {
       record.spawnError = err instanceof Error ? err : new Error(String(err))
@@ -392,25 +516,38 @@ export class KiwixServer {
         throw abortError('kiwix-serve start aborted while waiting for health')
       }
       if (record.spawnError) {
-        const message = record.spawnError.message
+        const launchCode = errnoCode(record.spawnError)
         await this.killRecord(record)
-        throw new Error(`kiwix-serve failed to launch: ${message}`)
+        throw new KiwixServeStartError('launch', { launchCode })
       }
       if (record.exited) {
-        const code =
-          record.exitCode != null ? `code ${record.exitCode}` : `signal ${record.exitSignal}`
-        throw new Error(`kiwix-serve exited before becoming healthy (${code})${tailSuffix(record)}`)
+        // The class decides the bind-race retry, so the tail must be complete (#530's rule).
+        await this.awaitStderrDrain(record)
+        throw new KiwixServeStartError('exit', {
+          exitCode: record.exitCode,
+          exitSignal: record.exitSignal,
+          output: classifyServeOutput(record.stderrTail)
+        })
       }
       if (await this.probeFn(record.port)) return
       if (Date.now() >= deadline) {
         await this.killRecord(record)
-        throw new Error(
-          `kiwix-serve did not become healthy within ${timeoutMs}ms${tailSuffix(record)}`
-        )
+        throw new KiwixServeStartError('timeout', {
+          timeoutMs,
+          output: classifyServeOutput(record.stderrTail)
+        })
       }
       await delay(interval)
       interval = Math.min(interval * 2, intervalCap)
     }
+  }
+
+  /** Wait, bounded by `STDERR_DRAIN_MS`, for THIS child's `'close'` after an early `'exit'`. */
+  private async awaitStderrDrain(record: ChildRecord): Promise<void> {
+    if (record.stdioClosed || !record.child?.stderr) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([record.stdioClose, new Promise<void>((resolve) => (timer = setTimeout(resolve, STDERR_DRAIN_MS)))])
+    clearTimeout(timer)
   }
 
   /**
@@ -492,9 +629,4 @@ export class KiwixServer {
     this.activeRecord = null
     if (record) await this.killRecord(record)
   }
-}
-
-function tailSuffix(record: ChildRecord): string {
-  const tail = record.stderrTail.trim()
-  return tail ? ` — last output: ${tail}` : ''
 }

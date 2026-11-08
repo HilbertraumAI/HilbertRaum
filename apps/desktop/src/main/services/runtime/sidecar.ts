@@ -142,6 +142,17 @@ export function isBindRaceError(message: string): boolean {
   return /address already in use|EADDRINUSE|only one usage of each socket address/i.test(message)
 }
 
+/**
+ * A spawn or fs error's errno code (`ENOENT`, `EACCES`, `EPERM`, …) — validated as one, never the
+ * message: Node's spawn error carries the binary path in `message`, `syscall` and `path` and the
+ * whole argv in `spawnargs`, an fs error its path (#712). Unlike `pathFreeSpawnError`, nothing
+ * falls back to the message.
+ */
+export function errnoCode(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null | undefined)?.code
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : null
+}
+
 /** The suffix `stderrSuffix()` builds; the classifier below splits the tail off at it. */
 const LAST_OUTPUT_MARKER = ' — last output: '
 

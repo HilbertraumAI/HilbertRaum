@@ -33,6 +33,7 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
+import { zimErrorClass } from '../services/zim/error-class'
 import { tMain } from '../services/i18n'
 import type { RuntimeManager } from '../services/runtime'
 import type { DownloadGates } from '../services/downloads'
@@ -240,7 +241,8 @@ export function registerEngineIpc(
       ctx.zim.reconcile(ctx.db).catch((err) => {
         // A lock that lands mid-pass aborts it by design — not a failure worth a warning.
         if (err instanceof Error && err.name === 'AbortError') return
-        log.warn('Knowledge-pack reconcile after the tools install failed', String(err))
+        // The class, never `String(err)`: a failed start or an fs error names a path (#712).
+        log.warn('Knowledge-pack reconcile after the tools install failed', { error: zimErrorClass(err) })
       })
     }
   })
