@@ -3292,7 +3292,8 @@ reports and phase plans were working papers; their full text lives in git histor
   skipped; `kiwix-serve` cannot load it either. A Kit at a drive's root (`D:\`) is not
   affected; a portable exe run outside a Kit keeps its data under
   `C:\Users\<name>\AppData\Roaming\`, so a Windows account name such as `Jürgen` hits this, as
-  does a drive folder with such a name. macOS and Linux are not affected.
+  does a drive folder with such a name. macOS and Linux are not affected. (#787: a fix is
+  measured — the library path passed relative to the folder the program starts in.)
 - **A redirect entry (an alias title) opens the article it points to — one hop, same pack.**
   About half of a Wikipedia ZIM's entries are redirects; `kiwix-serve` answers them with a 302
   rather than the target's bytes, and the viewer follows exactly one such hop inside the same

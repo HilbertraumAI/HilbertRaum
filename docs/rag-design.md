@@ -2888,8 +2888,8 @@ the figures they support are quoted in the text.
   cannot be written by kiwix-manage (`Cannot write the library …`, exit 1) nor loaded by
   kiwix-serve — packs are unusable under such a root; a relative `--library` with the child's
   `cwd` set to the transient dir works for both (`getCurrentDirectory` is wide-aware), measured
-  2026-11-08 (`known-limitations.md`). No retrieval or delivery change: logged text, the error's
-  shape, and a retry on a start that used to fail.
+  2026-11-08 (`known-limitations.md`; the fix is #787). No retrieval or delivery change: logged
+  text, the error's shape, and a retry on a start that used to fail.
 - **D-Z2 — node:http, never fetch.** Node 24's undici crashes (`assert(!this.paused)`) on
   kiwix-serve/libmicrohttpd response framing, keep-alive or not — reproduced on this exact
   combination: Node 24.19.0, Electron 43.4.0 (= Node 24), kiwix-tools 3.8.1 win-x86_64, spike
