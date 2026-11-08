@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   defaultThreadCount,
+  guardChildStdio,
   llamaOsDir,
   registerSidecarChild,
   unregisterSidecarChild,
@@ -295,6 +296,9 @@ export class WhisperCliTranscriber implements Transcriber {
         reject(this.spawnFailure(err))
         return
       }
+      // #790: both piped streams can error on their own (a spawn that failed before its pipes were
+      // open); the child's own 'error' below rejects. The transcript is a file, not stdout.
+      guardChildStdio(child, 'whisper-cli')
       onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup
       // CODE-11 (full-audit 2026-07-11): make the child reachable by the crash-exit reap —
       // a hard uncaughtException skips suspend()/stop(), and on Windows the child survives.

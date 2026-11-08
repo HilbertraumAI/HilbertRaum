@@ -200,7 +200,7 @@ describe('rewriteEngineFailureRows (#530)', () => {
 // ---- checkProgramLoads (fake spawn) ------------------------------------------------------
 
 class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 11
+  pid: number | undefined = 11
   killed = false
   stderr = new EventEmitter() as unknown as ChildProcessLike['stderr']
   kill = vi.fn((_signal?: NodeJS.Signals | number) => {
@@ -265,6 +265,18 @@ describe('checkProgramLoads (#530)', () => {
     expect(engineProblems()).toEqual([])
   })
 
+  // #790 (review): stderr is what a non-zero exit is read from. Cut short, the loader's line may never
+  // have arrived (here: none did), so the same exit cannot say "loads", which would clear a verdict.
+  it('an unrecognised exit after the stderr stream failed is unchecked, not loads (#790)', async () => {
+    const { spawn } = fakeSpawn((c) => {
+      ;(c.stderr as unknown as EventEmitter).emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+      c.emit('close', 127, null)
+    })
+    const out = await checkProgramLoads('llama_cpp', '/x/llama-server', ['--version'], { spawn, verify: verified, ...LINUX })
+    expect(out).toBe('unchecked')
+    expect(engineProblems()).toEqual([])
+  })
+
   // #730: llama-server applies the host's llama.cpp variables and config files even for `--version`.
   it('starts llama-server without the host’s llama.cpp variables and config files (#730)', async () => {
     const configVar = process.platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME'
@@ -305,6 +317,26 @@ describe('checkProgramLoads (#530)', () => {
     }
     const out = await checkProgramLoads('llama_cpp', '/x/llama-server', ['--version'], { spawn, verify: verified, ...LINUX })
     expect(out).toBe('unchecked')
+  })
+
+  // #790, the order measured on Windows: a spawn that fails before its pipes are open emits the
+  // child's ENOENT, then ENOTCONN on the piped stderr stream, then 'close'; the child had no PID.
+  // Unhandled, the stream's error is an uncaught exception: a main-process crash.
+  it('absorbs an error on the stderr stream of a failed spawn; the check is unchecked (#790)', async () => {
+    const thrown: unknown[] = []
+    const { spawn } = fakeSpawn((child) => {
+      child.pid = undefined
+      child.emit('error', Object.assign(new Error('spawn C:\\Kit\\llama-server.exe ENOENT'), { code: 'ENOENT' }))
+      try {
+        ;(child.stderr as unknown as EventEmitter).emit('error', Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN' }))
+      } catch (e) {
+        thrown.push(e)
+      }
+      child.emit('close', -4058, null)
+    })
+    const out = await checkProgramLoads('llama_cpp', 'C:\\Kit\\llama-server.exe', ['--version'], { spawn, verify: verified, ...WIN })
+    expect(out).toBe('unchecked')
+    expect(thrown).toEqual([])
   })
 
   it('a child that never exits is killed at the bound and counts as loading', async () => {

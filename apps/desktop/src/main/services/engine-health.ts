@@ -15,7 +15,7 @@ import {
   type LoadFailure,
   type LoadFailureInput
 } from './runtime/engine-load'
-import { resolveLlamaServerPath, type ChildProcessLike, type SpawnFn } from './runtime/sidecar'
+import { guardChildStdio, resolveLlamaServerPath, type ChildProcessLike, type SpawnFn } from './runtime/sidecar'
 import { getSettings, updateSettings } from './settings'
 import { resolveWhisperCliPath } from './transcriber/cli'
 import { workspaceAdmitsWork } from './workspace-vault'
@@ -106,7 +106,8 @@ const LOAD_CHECK_TIMEOUT_MS = 10_000
  * policy / security software. `loads` covers any exit the classifier does not recognise (a usage
  * error is still a program that ran) and a program still running at the bound. `unchecked`: the
  * binary failed its integrity check, or could not be spawned for a reason that says nothing about
- * the loader — the verdict is left as it was. Never throws.
+ * the loader, or (#790) its stderr stream failed before an exit the classifier does not recognise —
+ * the verdict is left as it was. Never throws.
  */
 export async function checkProgramLoads(
   family: EngineProblemFamily,
@@ -149,6 +150,13 @@ export async function checkProgramLoads(
       resolve(failure ? 'refused' : 'unchecked')
       return
     }
+    // #790: the stderr stream of a spawn that failed before its pipes were open errors too; the
+    // child's own 'error' below settles the check. stderr is what a non-zero exit is read from, so a
+    // check whose stderr failed cannot say the loader accepted the program (as the GPU probe's stdout).
+    let stderrFailed = false
+    guardChildStdio(child, `the engine check (${family})`, (stream) => {
+      if (stream === 'stderr') stderrFailed = true
+    })
     child.unref?.()
     let stderr = ''
     let settled = false
@@ -187,7 +195,9 @@ export async function checkProgramLoads(
         systemDllExists: deps.systemDllExists
       })
       if (!failure) {
-        finish('loads')
+        // #790: with its stderr cut short, an unrecognised exit may be a refusal whose text never
+        // arrived: leave the verdict as it was.
+        finish(stderrFailed ? 'unchecked' : 'loads')
         return
       }
       refused(failure, stderr.trim().slice(-1000))
