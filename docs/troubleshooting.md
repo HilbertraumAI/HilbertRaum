@@ -924,13 +924,15 @@ directly; a bundle left one directory too deep is not picked up.
 The version is pinned; a different kiwix-tools release is not supported. Either way, the app
 picks the files up on **Refresh** under *Documents → Knowledge packs* — no restart needed.
 
-### "kiwix-manage cannot read an archive whose … name contains …"
+### "kiwix-manage cannot read this archive because its file name or folder contains …"
 
-On Windows the pinned kiwix-manage cannot open an archive whose folder or file name contains an
-umlaut, an accent or any other non-ASCII character (for example a file under
-`C:\Users\Jörg\Downloads`). Move or copy the file to a path without such characters — the
-drive's own `zim/` folder is the simplest — and add it again. Once registered, the pack works
-normally; only the add step is affected.
+On Windows the pinned kiwix-manage cannot open an archive whose file name contains an umlaut, an
+accent or any other non-ASCII character (for example `Wiki für Kinder.zim`), nor one in such a
+folder outside the app's own (for example `C:\Users\Jörg\Downloads` when the app runs from a Kit
+on `D:\`). Copy the file into the drive's own `zim/` folder under a name without such characters,
+and add it again (or press **Refresh**). The drive's own folders are fine whatever their name (for
+example app data under `C:\Users\Jürgen\AppData\Roaming\HilbertRaum`), and so are other folders of
+that same account. Once registered, the pack works normally; only the add step is affected.
 
 ### A pack shows "File missing" or "Different archive"
 

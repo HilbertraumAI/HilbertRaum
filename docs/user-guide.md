@@ -945,9 +945,9 @@ a subset of the topic you actually want usually beats "all", and remember the fi
 it lies rather than copied into the app, so it has to fit on the drive next to your models. Two
 things are worth checking before you commit to a long download. The archive should carry a
 **full-text index**, or the app can only read it and never search it — the panel marks such a
-pack "No full-text index" and skips it when answering. And on Windows the folder and file name
-must be plain ASCII: an umlaut or an accent anywhere in the path stops the archive being added
-(the drive's own `zim/` folder is always safe).
+pack "No full-text index" and skips it when answering. And on Windows the file name must be plain
+ASCII, and so must any folder it sits in outside the app's own: an umlaut or an accent there stops
+the archive being added (the drive's own `zim/` folder is always safe, whatever its path).
 
 1. **One-time setup:** the kiwix-tools programs (kiwix-serve, kiwix-manage) must be on your
    drive. The first time, the panel offers to install them — a dialog states the size, the

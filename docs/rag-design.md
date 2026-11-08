@@ -2888,8 +2888,52 @@ the figures they support are quoted in the text.
   cannot be written by kiwix-manage (`Cannot write the library …`, exit 1) nor loaded by
   kiwix-serve — packs are unusable under such a root; a relative `--library` with the child's
   `cwd` set to the transient dir works for both (`getCurrentDirectory` is wide-aware), measured
-  2026-11-08 (`known-limitations.md`; the fix is #787). No retrieval or delivery change: logged
-  text, the error's shape, and a retry on a start that used to fail.
+  2026-11-08 (`known-limitations.md`; the fix is #787, the amendment below). No retrieval or
+  delivery change: logged text, the error's shape, and a retry on a start that used to fail.
+  **#787 amendment (2026-11-08): each kiwix child gets an ASCII command line wherever one
+  exists.** Measured on the pinned win-x86_64 binaries (and the linux-x86_64 build in WSL, its
+  pinned SHA-256 verified): libkiwix 14.1.1 decodes the ANSI-code-page narrow argv as UTF-8
+  (`Utf8ToWide` before every file call), so any non-ASCII character on the command line is
+  mis-read (`Jürgen` → `J�rgen`, `山田` → `??`), but it resolves a RELATIVE path against
+  `getCurrentDirectory()` (`_wgetcwd`, exact), and reads the book paths inside a library as UTF-8.
+  The issue's own sketch, a relative library alone, was measured insufficient: under a root such
+  as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum` the archive in the drive's `zim/` folder is
+  non-ASCII too, and kiwix-manage still exits 1 ("Cannot add ZIM"). Design as built, one pure
+  planner (`zim/argv.ts`): **(a)** both tools start in the library's folder and get the library
+  by its bare name (`library.<n>.xml`, `library.xml`), on every platform (owner call: one code
+  path; the POSIX build was measured healthy that way, plain, non-ASCII and symlinked roots);
+  **(b)** on Windows a non-ASCII archive path goes relative to that folder when that spelling is
+  ASCII (`..\..\..\zim\x.zim`, or `..\..\..\..\..\..\Downloads\x.zim` under the same account; never
+  across drives). **The working directory is never the archive's folder.** Starting kiwix-manage
+  there would have reached a non-ASCII folder anywhere (measured: `C:\Users\Jörg\Downloads` beside
+  a Kit on `D:\` registers), and the owner first chose it, but review found its cost: Windows
+  searches a process's working directory for a DLL it finds neither beside the exe nor in the
+  system folders, and the PE import tables of the pinned binaries show `msvcp140.dll`,
+  `vcruntime140.dll` and `vcruntime140_1.dll`, which no drive folder carries (#530: not bundled).
+  On a PC without the Visual C++ runtime, a DLL planted beside a downloaded archive would run inside
+  the integrity-checked tool; the library's folder is the app's own, where whoever can write can
+  already swap the unhashed ICU DLLs beside the exe (owner call 2026-11-08: drop the fallback).
+  **(c)** When no ASCII spelling exists (a non-ASCII FILE NAME, or a non-ASCII folder outside the
+  app's own) the child still runs, since a UTF-8 ANSI code page reads it, and
+  `KiwixManageError.nonAsciiArgv` says why it most likely failed: `path-unsupported` keys on that
+  flag (on `kind: 'exit'` only), not on the archive path's characters, and so does the log class
+  `manage:exit:non-ascii-path` (a launch failure or a timeout is never blamed on the path). The
+  written library is the same: kiwix-manage records each book relative to the library's folder
+  (absolute across drives), byte-identical for an ASCII Kit, and the served names (libkiwix derives
+  them from the file name) do not change; every layout measured, each served build answering
+  `/raw/<name>/meta/Title` with 200. Found beside it and guarded: a child `cwd` over MAX_PATH makes
+  Node's spawn fail late, emitting the child's ENOENT AND an `ENOTCONN` on a piped stdio stream;
+  kiwix-serve pipes stderr, so unhandled it crashed the main process (reproduced in Electron
+  43.8.3), and `KiwixServer` now absorbs the stream's error, the start failing as
+  `launch:ENOENT`. Such a deep folder could not work before either: kiwix opens its files without
+  a `\\?\` prefix, and both layouts fail alike from a 250-character folder. Both spawn sites run the
+  command absolute (`kiwixCommand`): a relative one holding a separator would be looked up from the
+  child's new `cwd` (a dev run's relative drive root, `HILBERTRAUM_KIWIX_BIN`). Test-runtime caveat: Node
+  24.13's `fs.cpSync` and `fs.rmSync` mishandle a non-ASCII Windows path (mojibake; a silent no-op
+  under `force`), Electron 43's Node 24.22 does not, so the app is unaffected but a suite run on
+  such a Node cannot remove such files. A pin bump re-measures the layouts (`runtime-sources.yaml`,
+  "To bump"); `tests/manual/zim-real.test.ts` carries them as a real-tool leg. No retrieval or
+  delivery change: the same library, the same served names, a launch that used to fail.
 - **D-Z2 — node:http, never fetch.** Node 24's undici crashes (`assert(!this.paused)`) on
   kiwix-serve/libmicrohttpd response framing, keep-alive or not — reproduced on this exact
   combination: Node 24.19.0, Electron 43.4.0 (= Node 24), kiwix-tools 3.8.1 win-x86_64, spike
@@ -4284,7 +4328,10 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   `library.xml` (hand-written: healthy, `/raw/klimawandel_arger_unicode/content/index` → 200), so
   the limit is registration-only. In the app `registerPack` throws `KiwixManageError` → the add
   result reports `failureReason: 'manager'` — honest but unhelpful copy for this cause; recorded in
-  `known-limitations.md`, `troubleshooting.md` and the P9 successor issue #340.
+  `known-limitations.md`, `troubleshooting.md` and the P9 successor issue #340. (#787, 2026-11-08:
+  the tool now gets an ASCII spelling of such a path wherever one exists from the app's own
+  folder, so a FILE NAME like this one, and a non-ASCII folder outside the app's own, stay
+  refused — D-Z1 "#787 amendment".)
 - **R-9 window (iii) — same-port bind on Windows:** with kiwix-serve listening on 127.0.0.1:58614
   (one Listen row owned by `kiwix-serve` in `Get-NetTCPConnection`), a Node `listen()` on the port
   → `EADDRINUSE`; a .NET socket bind without `ReuseAddress` → `AddressAlreadyInUse`; WITH

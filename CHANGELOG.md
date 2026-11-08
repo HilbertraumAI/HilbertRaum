@@ -90,6 +90,12 @@ from its first public `1.0.0` release onward.
   start.** That message named the folder of your workspace, once for every question you asked
   while packs were unavailable. The log now records only the kind of failure, as it already did
   for every other knowledge-pack problem (#712).
+- **On Windows, knowledge packs now work when your user name has an umlaut or an accent.** When
+  the app ran from a folder such as `C:\Users\Jürgen\…` (a portable HilbertRaum outside a Kit keeps
+  its data there), no pack could be added or served, and the message blamed an incomplete file.
+  Packs in the app's own `zim` folder, and in other folders of that account such as your
+  Downloads, now work. An archive whose file name has such a character, or that sits in such a
+  folder elsewhere, still cannot be added; the panel now says so and how to fix it (#787).
 
 ### Changed
 

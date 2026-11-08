@@ -3274,26 +3274,21 @@ reports and phase plans were working papers; their full text lives in git histor
   in-app install needs **Settings → Allow internet access for model downloads and updates** on
   and a drive policy that permits downloads (the same gate models and the engine use). Linux and
   macOS builders without the in-app path use the script.
-- **On Windows, an archive can only be added from a path made of ASCII characters.** The
-  pinned `kiwix-manage` 3.8.1 refuses to read a file whose folder or file name contains an
-  umlaut, an accent or any other non-ASCII character ("Cannot add ZIM … to the library.") — a
-  limit of the tool's own path handling, found on real tools at P7 (`rag-design.md` §17 "Real
-  acceptance"). The panel now names the cause and the workaround; the workaround is to put the
-  file in the drive's `zim/` folder or any other path without such characters (a Windows user
-  folder such as `C:\Users\Jörg\Downloads` hits this). Serving is not affected — a pack
-  registered from an ASCII path stays readable and searchable. (#340, decided 2026-09-06: a
-  reason-specific message; the archive's metadata is still read through `kiwix-manage`.)
-- **On Windows, knowledge packs need a drive or app-data path made of ASCII characters.**
-  Both pinned kiwix-tools 3.8.1 programs mis-read a non-ASCII character in the path of the
-  library file the app writes for them under `workspace\zim-transient\` (measured 2026-11-08,
-  `rag-design.md` §17 D-Z1 "#712 amendment"): `kiwix-manage` cannot write it, so adding a pack
-  fails with "The archive could not be read by kiwix-manage. Check that the file is complete
-  and try again." — which points at the wrong cause — and a pack in the drive's `zim/` folder is
-  skipped; `kiwix-serve` cannot load it either. A Kit at a drive's root (`D:\`) is not
-  affected; a portable exe run outside a Kit keeps its data under
-  `C:\Users\<name>\AppData\Roaming\`, so a Windows account name such as `Jürgen` hits this, as
-  does a drive folder with such a name. macOS and Linux are not affected. (#787: a fix is
-  measured — the library path passed relative to the folder the program starts in.)
+- **On Windows, an archive can only be added if its file name, and any folder it sits in outside
+  the app's own folder, is made of ASCII characters.** Both pinned kiwix-tools 3.8.1 programs
+  mis-read an umlaut, an accent or any other non-ASCII character on their command line. Since #787
+  they start in the app's own library folder and get every path in an ASCII spelling from there
+  wherever one exists (`rag-design.md` §17 D-Z1 "#787 amendment"): a drive or app-data folder such
+  as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum` works, the packs in its `zim/` folder included,
+  and so does another folder of that account (`C:\Users\Jürgen\Downloads`). What has no such
+  spelling stays refused: a FILE NAME like `Wiki für Kinder.zim`, or a folder like
+  `C:\Users\Jörg\Downloads` beside a Kit on `D:\`. Starting the tool in the archive's folder would
+  reach those, but Windows also looks for DLLs there, and the pinned build needs the Visual C++
+  runtime the app does not bundle, so a file planted next to a download could run inside the tool
+  (decided 2026-11-08). The panel names that cause and the workaround: copy the file into the
+  drive's `zim/` folder under a name without such characters (the archive's metadata is still read
+  through `kiwix-manage`, #340's ruling of 2026-09-06). Serving is not affected. Not measured: a
+  drive or app data on a network share (`\\server\share`). macOS and Linux are not affected.
 - **A redirect entry (an alias title) opens the article it points to — one hop, same pack.**
   About half of a Wikipedia ZIM's entries are redirects; `kiwix-serve` answers them with a 302
   rather than the target's bytes, and the viewer follows exactly one such hop inside the same
