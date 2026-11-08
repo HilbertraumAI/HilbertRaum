@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-08 — the closed 2026-10-14 #685 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-08 (preamble budget, making room for the #790 entry). Its record is unchanged:
+architecture.md DEP-6 §13. Of its two open items, the PDF gold set stays open in the DEP-7 entry (its corpus is not on this
+machine) and Dependabot alerts #124–#127 were closed by DEP-7. Citations of that entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-10-14 — **#685 — Dependabot #666 (pdf.js 6.4.299, streamdown 2.7.0) reviewed after the merge; the polyfill comments say what pdf.js does (`fix/685-pdfjs-6.4-review`).** pdf.js loads `@napi-rs/canvas` at its first
+import (6.3 too), so the polyfill only picks the DOMMatrix; packaged, pdf.js warns twice on stderr and lacks nothing. CI never ran pdf.js without the addon (dropping the install failed 0 of 140 PDF tests): `pdf-parser-packaged.test.ts`
+does. 52 public PDFs read byte-identically on 6.3 and 6.4 (549 pages; 468 image decodes, JPEG 2000 and JBIG2 among them); a packaged build OCRs a G4 and a JBIG2 office scan word for word; evidence-pack smoke 11/11. streamdown 2.7:
+four streaming fixes; lists on Review/Translate uneven (fixed, `li > p`); an inline `linkSafety` re-rendered closed blocks' code on every flush (fixed: 80 blocks 1,162 → 750 ms). `dependabot.yml`: such bumps wait for this review.
+Record: DEP-6 §13. Open: the PDF gold set (its corpus is not on this machine); Dependabot alerts #124–#127 (sprintf-js, katex, source-map-js): DEP-7, above._
+
 ## 2026-11-08 — the closed 2026-10-14 #682/#687 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-08 (preamble budget, making room for the #712 entry). Its records are unchanged:

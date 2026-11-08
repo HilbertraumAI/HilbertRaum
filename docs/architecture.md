@@ -5066,7 +5066,8 @@ model, memory or the archive instead. Code cites this record as "Engine load fai
   (SIGABRT).
 - **Node's view.** On Linux stderr arrived before `'exit'` in 40 of 40 measured runs, but Node does
   not guarantee that order. The GPU probe already waited for `'close'`; `LlamaServer` read the
-  tail on `'exit'`.
+  tail on `'exit'`. A piped stream can also emit an `'error'` of its own, beside the child's: §12
+  (#790).
 
 ### §2 Decisions (owner, 2026-10-01)
 
@@ -5634,6 +5635,91 @@ manager, its fresh copy refused again, both builds, a gone `cpu/` program, no `c
 the per-build in-use guard), `engine-recheck.test.ts` "#678" (Check again on the `cpu/` net),
 `engine-load.test.ts` "after a reinstall on a Kit of …" (the fresh-copy mark per installed build and
 across installs), `engine-download.test.ts` "#678" (a stopped job reports a `cpu/` net it replaced).
+
+### §12 #790 amendment — a piped stdio stream's own error is absorbed at every spawn site (2026-11-08)
+
+**The gap** (found in #787's review, PR #789). A piped stdio stream of a child can emit an `'error'`
+of its own, beside the child's `'error'`. With no listener it is an uncaught exception, and in the
+main process the `uncaughtException` handler locks the vault and exits: a crash. #789 guarded
+kiwix-serve's stderr only, since only kiwix-serve passes a `cwd` (`rag-design.md` §17 D-Z1 "#787
+amendment"). `LlamaServer` (stderr; chat, embedder, reranker, vision, translation), the GPU probe
+(stdout and stderr), the engine check (stderr) and whisper-cli (stdout and stderr) attached `'data'`
+only.
+
+**The facts (measured 2026-11-08 on Windows 11, in Node 24.13 / libuv 1.51 and in Electron 43.8.3's
+Node 24.22 / libuv 1.52.1, identically).** Each case ran under both stdio shapes the app uses
+(`['ignore','ignore','pipe']` and `['ignore','pipe','pipe']`).
+- **One trigger:** a `cwd` of MAX_PATH or more. The child emits `'error'` ENOENT first, then EVERY
+  piped stream emits `ENOTCONN` (two uncaught exceptions for the two-pipe shape), then `'close'`
+  with -4058; the child never had a PID. A listener on each stream contains it, and the spawn still
+  fails through the child's `'error'` (real llama-server b9849 from D:, both shapes).
+- **The child's own `'error'`, streams at EOF:** a missing binary or `cwd` (ENOENT), a binary path
+  over MAX_PATH (ENOENT, long paths enabled), a folder named `.exe` (ENOENT), a program that requires
+  elevation (EACCES, from a medium-integrity process), no PATH in the parent or the child's env
+  (it spawns).
+- **A synchronous throw, so no stream exists:** a damaged executable (UNKNOWN), a truncated or empty
+  one (EFTYPE), one held open exclusively (EBUSY: an antivirus scan holding the file), a command line
+  over 32,767 characters (ENAMETOOLONG). Every site already handles the throw (#530, #658).
+- **Why** (libuv `win/process.c`, v1.52.1): `uv_spawn` opens the pipes after the `cwd` step (a `cwd`
+  of MAX_PATH or more is shortened with `GetShortPathNameW`, which fails without an 8.3 name) and the
+  PATH lookup, and before the program lookup and `CreateProcessW`. A failure before the pipes leaves
+  them unopened; for its five async codes (EACCES, EAGAIN, EMFILE, ENFILE, ENOENT) Node still wraps
+  them, and the first read returns `ENOTCONN`. On POSIX `uv_spawn` opens the streams even when exec
+  failed (a disabled `#if 0`, for Node's sake), so they read EOF (source reading, not measured).
+- **Nothing measured reaches the four sites:** none passes a `cwd`, and the inherited one cannot be
+  long enough. Windows refuses a process `cwd` over 258 characters (`process.chdir` → ENAMETOOLONG,
+  long paths enabled), and a 258-character one spawns normally.
+
+**Decisions (owner, 2026-11-08, each as recommended).**
+1. **One guard, `guardChildStdio`** (`runtime/sidecar.ts`, beside `registerSidecarChild`), called by
+   every site right after `spawn()` returns: `LlamaServer`, the GPU probe, the engine check,
+   whisper-cli and kiwix-serve (#789's hand-written listener moved onto it). It listens on stdin,
+   stdout and stderr, whichever is piped. The child's own `'error'` / `'exit'` / `'close'` stay the
+   owner of every outcome; the stream's error is absorbed.
+2. **The GPU probe's stdout is its answer.** A probe whose stdout stream failed resolves **`null`**
+   (unknown: never cached, never persisted) even on exit 0, and logs it as no answer ("its output
+   could not be read"). What arrived may be cut short, and the header alone parses as `[]`, which
+   would be persisted as "no graphics card" (GPU record §5.2 "#653 amendment"). The engine check
+   likewise (a review finding, the same rule): its stderr is what a non-zero exit is read from, so
+   an exit the classifier does not recognise after a failed stderr is `unchecked` (the verdict as it
+   was), not `loads`, which would clear it. `LlamaServer` and whisper-cli read their streams for
+   diagnostics (the tail, progress).
+3. **A started child's failed pipe is logged**, once per stream, with the program, the stream and the
+   errno code, never the message. A failed spawn's (no PID) stays silent: each site already logs the
+   child's own error.
+4. **`repo-hygiene` keeps it true for spawns that do not exist yet:** the modules that import
+   `node:child_process` are listed, and a file whose spawn pipes a stream calls the guard once per
+   such spawn (a `stdio` value it cannot read fails closed).
+
+**Real-app verification (2026-11-08, DesktopDiT, GTX 1070 Ti, dev build on a scratch root whose
+`runtime\` and `models\` were junctions to D:'s b9849 and models).** The session's device probe
+found the card; the 4B started on it, answered and stopped; the log, read after a clean quit, held no
+pipe line, no `ENOTCONN` and no uncaught exception. The same day, with the real binary: the probe
+(the card), the engine check (`loads`) and an e5 `LlamaServer` start and stop logged no pipe line.
+whisper-cli was not run on a real binary (none on this machine); its site is the same call.
+
+**Residuals.**
+- On a child that started, a failed stream is not known to happen: a Windows pipe whose writer
+  closes reads EOF, and the app never writes to a child's stdout or stderr socket on POSIX. If it
+  did, `LlamaServer`'s stderr tail (the bind-race retry, load-failure classification, the placement
+  read from the load log) is read as far as it arrived, and whisper-cli's progress stops, so its
+  inactivity watchdog (REL-1) can end a long transcription. Node closes the failed stream, so on
+  POSIX the child's next write to it can end the child (SIGPIPE), which takes the site's ordinary
+  exit path (for a healthy `LlamaServer`, the unexpected-exit report). Each is still better than
+  the main-process crash it replaces. The warn line says which program and stream.
+- The repo-hygiene rule is a text check: it cannot see a spawn with no `stdio` option at all (Node's
+  default pipes all three; every spawn here states its `stdio`, and a new spawning module trips the
+  inventory), nor whether each call guards the right child (the per-site rows prove that).
+- Not measured: a spawn failure on macOS or Linux with a stream error (source reading only), a
+  security product that refuses a program asynchronously, a drive on a network share.
+
+Tests: `sidecar.test.ts` "guardChildStdio (#790)" (a failed spawn: every piped stream absorbed,
+nothing logged, the site told which; a started child: one code-only line; a stream not piped is
+skipped); one failed-spawn row per site: `engine-load-spawn.test.ts` (`LlamaServer`: `failed to
+launch: spawn ENOENT`), `gpu.test.ts` (both streams: `null`; an exit 0 after a stdout failure:
+`null`), `engine-health.test.ts` (`unchecked`; an unrecognised exit after a stderr failure:
+`unchecked`), `transcriber.test.ts` (both streams: the spawn error), `zim-serve.test.ts` (#787's
+row, now through the guard); `repo-hygiene.test.ts` "#790" (the two rules). Mutations: 21/21 red.
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 
