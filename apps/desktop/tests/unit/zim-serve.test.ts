@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { join, resolve } from 'node:path'
 import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import {
   initBinaryVerification,
@@ -24,7 +25,7 @@ const LIBRARY = '/ws/.zim-library.xml'
 
 interface Harness {
   server: KiwixServer
-  calls: Array<{ command: string; args: string[] }>
+  calls: Array<{ command: string; args: string[]; cwd: string | undefined }>
   children: ServeFakeChild[]
 }
 
@@ -39,10 +40,10 @@ function makeServer(opts: {
   /** The spawn itself throws this, synchronously (Windows refusing the exe: EPERM). */
   spawnThrows?: Error
 }): Harness {
-  const calls: Array<{ command: string; args: string[] }> = []
+  const calls: Harness['calls'] = []
   const children: ServeFakeChild[] = []
-  const spawn: SpawnFn = (command, args) => {
-    calls.push({ command, args })
+  const spawn: SpawnFn = (command, args, options) => {
+    calls.push({ command, args, cwd: options.cwd === undefined ? undefined : String(options.cwd) })
     if (opts.spawnThrows) throw opts.spawnThrows
     const child = new ServeFakeChild(9000 + children.length, 'exit-on-sigterm')
     if (opts.failFirst && children.length < (opts.failCount ?? 1)) failEarly(child, opts.failFirst)
@@ -74,18 +75,41 @@ describe('KiwixServer', () => {
     const { server, calls } = makeServer({ probeResults: [false, true] })
     await expect(server.ensureStarted({ libraryXmlPath: LIBRARY })).resolves.toMatchObject({ port: 8100 })
     expect(server.port()).toBe(8100)
-    expect(calls[0]?.args).toEqual([
-      '--address',
-      '127.0.0.1',
-      '--port',
-      '8100',
-      '--nosearchbar',
-      '--blockexternal',
-      '--library',
-      '/ws/.zim-library.xml'
-    ])
+    // #787: the library by its bare name, from its own folder — on every platform, so no
+    // character of that folder ever reaches kiwix-serve's (on Windows, narrow) argv.
+    expect(calls[0]).toEqual({
+      command: '/bin/kiwix-serve',
+      args: ['--address', '127.0.0.1', '--port', '8100', '--nosearchbar', '--blockexternal', '--library', '.zim-library.xml'],
+      cwd: '/ws'
+    })
     await server.stop()
     expect(server.port()).toBeNull()
+  })
+
+  // #787: the child starts in the library's folder, where a relative command holding a separator
+  // would be looked up — a dev run's relative drive root would miss the binary.
+  it('spawns a relative command as an absolute one (#787)', async () => {
+    const { server, calls } = makeServer({ binPath: join('tools', 'kiwix-serve') })
+    await server.ensureStarted({ libraryXmlPath: LIBRARY })
+    expect(calls[0]?.command).toBe(resolve('tools', 'kiwix-serve'))
+    await server.stop()
+  })
+
+  // #787, measured in Electron 43 on Windows: a spawn whose `cwd` is over MAX_PATH emits the
+  // child's ENOENT `'error'` AND an `ENOTCONN` on the piped stderr stream. With no listener on
+  // the stream, that one is an uncaught exception in the main process (the fake's stderr is an
+  // EventEmitter, which throws the same way).
+  it('absorbs an error on the stderr stream of a failed spawn and fails the start as a launch (#787)', async () => {
+    const { server, children } = makeServer({ probeResults: async () => false })
+    const start = server.ensureStarted({ libraryXmlPath: LIBRARY }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    await until(() => children.length === 1, 'the kiwix-serve spawn')
+    const child = children[0]!
+    child.emit('error', spawnErrorLike('/bin/kiwix-serve', ['--library', '.zim-library.xml']))
+    expect(() => child.stderr.emit('error', Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN' }))).not.toThrow()
+    expect(await start).toMatchObject({ kind: 'launch', launchCode: 'ENOENT' })
   })
 
   it('is single-flight: concurrent ensureStarted() shares one spawn', async () => {
@@ -229,7 +253,8 @@ describe('KiwixServer', () => {
       // The same path without an abort still starts.
       await expect(server.ensureStarted({ libraryXmlPath: other })).resolves.toMatchObject({ port: 8101 })
       expect(calls).toHaveLength(2)
-      expect(calls[1]?.args).toContain(other)
+      expect(calls[1]).toMatchObject({ cwd: '/ws' })
+      expect(calls[1]?.args).toContain('.zim-library.2.xml')
     } finally {
       stopSpy.mockRestore()
       await server.stop()

@@ -105,9 +105,9 @@ the full recovery path.
 Files are **used in place** — nothing is copied, nothing is re-encoded, and a pack is never
 written to. Removing a pack's registration forgets it; the file itself is never deleted.
 
-On Windows, add packs from a path made of ASCII characters only: the pinned `kiwix-manage`
-refuses a file whose folder or name contains an umlaut or an accent. The drive's own `zim/`
-folder always works. See [§7](#7-edges-worth-knowing).
+On Windows, give a pack a file name without umlauts or accents, and keep it out of folders with
+such characters unless they are the app's own: the pinned `kiwix-manage` refuses those. The
+drive's own `zim/` folder always works, whatever its path. See [§7](#7-edges-worth-knowing).
 
 ## 5. Asking
 
@@ -159,7 +159,7 @@ at; [`known-limitations.md`](known-limitations.md) carries the full entry for ea
 | Edge | What it means for you |
 |---|---|
 | **Multipart archives (R-2)** | A `.zim` split into `.zimaa`/`.zimab`/… parts is not read. Take the single-file build. |
-| **Windows, non-ASCII paths** | The pinned `kiwix-manage` refuses a path containing an umlaut or accent. Keep packs in the drive's `zim/` folder. Serving is unaffected once registered. |
+| **Windows, non-ASCII paths** | The pinned `kiwix-manage` refuses an archive whose file name, or whose folder outside the app's own, contains an umlaut or accent. Copy it into the drive's `zim/` folder under a plain name. Serving is unaffected once registered. |
 | **Windows, large articles** | The pinned `kiwix-serve` occasionally cuts a read of an article over ~80 KB short. An upstream defect, reported upstream, mitigated in the app. |
 | **No full-text index** | Such a pack is skipped when searching but still readable via *Open article*. The badge appears on its own, shortly after you add or enable the pack. |
 | **Two files with the same name** | Two archives whose file names differ only by folder cannot both be served; the panel marks the later one "Not served" and names the winner. Rename one. |

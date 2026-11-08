@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { isAbsolute, resolve, sep } from 'node:path'
 import { expect } from 'vitest'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 import type { ZimServiceDeps } from '../../src/main/services/zim'
@@ -147,6 +148,23 @@ export function failEarly(child: ServeFakeChild, failure: EarlyFailure): void {
   })
 }
 
+/**
+ * The file a kiwix child's argv path names: a relative one resolves against the child's `cwd`, as
+ * libkiwix does (#787 — both tools are handed the library by its bare name from its folder, and on
+ * Windows an archive possibly relative to it). A suite that injects `platform: 'win32'` on a POSIX
+ * host gets backslash spellings of POSIX temp paths, so they are mapped back to the host separator
+ * first (no real temp path holds a backslash there). A relative path with no `cwd` throws: the
+ * fake would otherwise write the library into the test process's own folder, and the spawn it
+ * stands for has lost its working directory.
+ */
+export function argvPath(arg: string, cwd: string | URL | undefined): string {
+  const host = (p: string): string => (sep === '/' ? p.replace(/\\/g, '/') : p)
+  const path = host(arg)
+  if (isAbsolute(path)) return path
+  if (cwd === undefined) throw new Error(`a kiwix child got the relative path ${JSON.stringify(arg)} and no cwd`)
+  return resolve(host(String(cwd)), path)
+}
+
 export interface FakeManageOptions {
   /** PID of the first child; each spawn takes the next. */
   firstPid: number
@@ -159,24 +177,33 @@ export interface FakeManageOptions {
   before?: (libraryXmlPath: string, zimPath: string) => Promise<void> | void
   /** Called at every spawn, before the child runs (which library file it was pointed at). */
   onSpawn?: (r: { libraryXmlPath: string; zimPath: string; child: ServeFakeChild }) => void
+  /** An error makes the child fail to LAUNCH instead: it emits `'error'` (ENOENT, EPERM — an
+   *  antivirus refusing the exe) and never exits, as Node reports a failed spawn. Read per spawn. */
+  launchError?: (zimPath: string) => Error | null
 }
 
 /**
  * A fake `kiwix-manage LIBRARY add ZIM`: each spawn appends one `<book>` (the archive's own
  * header UUID) and exits 0 — unless it was killed first, so an aborted or timed-out manager
  * writes nothing (the settle-before-cleanup contract). A library file that cannot be written
- * (a temp root removed under a late build) makes it exit 1, never throw.
+ * (a temp root removed under a late build) makes it exit 1, never throw. Both argv paths are
+ * resolved against the spawn's `cwd` (`argvPath`), as the real binary resolves them.
  */
 export function fakeManageSpawn(o: FakeManageOptions): { spawn: SpawnFn; children: ServeFakeChild[] } {
   const children: ServeFakeChild[] = []
   let pid = o.firstPid
-  const spawn: SpawnFn = (_command, args) => {
-    const libraryXmlPath = args[0] as string
-    const zimPath = args[2] as string
+  const spawn: SpawnFn = (_command, args, options) => {
+    const libraryXmlPath = argvPath(args[0] as string, options.cwd)
+    const zimPath = argvPath(args[2] as string, options.cwd)
     const mode = typeof o.mode === 'function' ? o.mode() : (o.mode ?? 'exit-on-sigterm')
     const child = new ServeFakeChild(pid++, mode)
     children.push(child)
     o.onSpawn?.({ libraryXmlPath, zimPath, child })
+    const launchError = o.launchError?.(zimPath) ?? null
+    if (launchError) {
+      queueMicrotask(() => child.emit('error', launchError))
+      return child
+    }
     void (async () => {
       let failure: unknown = null
       try {

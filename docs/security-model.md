@@ -558,7 +558,8 @@ running as you**. Two doors exist:
 
 **What it is.** Knowledge packs (offline ZIM archives) are served to the app by `kiwix-serve`, the
 upstream kiwix-tools binary, spawned as
-`--address 127.0.0.1 --port <n> --nosearchbar --blockexternal --library <generated library.xml>`.
+`--address 127.0.0.1 --port <n> --nosearchbar --blockexternal --library library.<n>.xml` from the
+generated library's own folder, `workspace/zim-transient/` (#787: no path on its command line).
 It is loopback-only and **lazy**: it starts on the first ask (or article read) that has a pack in
 scope, serves only the packs that are enabled and whose archive identity checked out, and is
 stopped again by the workspace lock and by quit through the same bounded teardown every other

@@ -2218,9 +2218,12 @@ number, failureReason: 'not-a-zim' | 'tools-missing' | 'manager' | 'path-unsuppo
 null }` — the invariants of §9.19 (c)1 in one sentence; codes only, never a path or a tool's
 stderr; a lock landing mid-add still REJECTS with the friendly locked copy. `'path-unsupported'`
 (#340, owner ruling 2026-09-06, option M) is set ONLY when the platform is win32 AND the
-archive's path holds a non-ASCII character AND the manager actually ran and exited non-zero (a
-`KiwixManageError` of `kind: 'exit'`) — a spawn/verify/timeout failure, or any other platform,
-still classifies as `'manager'`) · `packs:remove`
+manager's command line still held a non-ASCII character (`KiwixManageError.nonAsciiArgv`, #787:
+the app found no ASCII spelling of the archive's path from its own library folder — a non-ASCII
+file name, or a non-ASCII folder outside the app's own) AND the manager actually ran and exited
+non-zero (`kind: 'exit'`) — a spawn/verify/timeout failure, an archive whose path holds such a
+character but reached the tool in an ASCII spelling, or any other platform, still classifies as
+`'manager'`) · `packs:remove`
 (tombstone, file untouched) · `packs:setEnabled` · `packs:refresh` (#301 P3b, finding L7 —
 schedules a background reconciliation and returns `{ started: boolean }` at once;
 completion arrives via the `packs:changed` event, not the return value) · `packs:status`

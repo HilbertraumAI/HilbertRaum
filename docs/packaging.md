@@ -1399,7 +1399,7 @@ b11146, before it b9849).
 | `script-execution` `-DryRun` pipeline | `HILBERTRAUM_SCRIPT_DRY_RUN` | the whole builder, dry, on both shells, reaching the canonical verdict on an empty target (needs `npm run build`; ~30 s per leg) |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
-| `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |
+| `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline; plus the non-ASCII launch layouts (#787: a pack registered and served under a non-ASCII root and from another folder of that account, and on Windows a non-ASCII file name and a non-ASCII folder outside the app's own refused as `nonAsciiArgv`). **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |
 
 **Installing the pinned kiwix-tools bundle.** The user path is the in-app **consent dialog**
 (#339 P8-2): the Knowledge-packs panel's tools-missing notice, or the mirror row on the AI Model

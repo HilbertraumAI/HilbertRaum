@@ -105,11 +105,13 @@ import { t } from '../../src/shared/i18n'
 import { tMain } from '../../src/main/services/i18n'
 import {
   ServeFakeChild,
+  argvPath,
   expectAbortError,
   failEarly,
   fakeManageSpawn,
   libraryLoadFailure,
   serveGate,
+  spawnErrorLike,
   zimServiceDeps,
   type EarlyFailure,
   type ServeChildMode
@@ -158,6 +160,8 @@ interface ServiceOverrides {
 interface SessionHooks {
   /** Runs inside a fake kiwix-manage child before it appends its `<book>` and exits 0. */
   manage: (libraryXmlPath: string, zimPath: string) => Promise<void>
+  /** A non-null error makes that kiwix-manage child fail to launch instead (`launchError`). */
+  manageLaunch: (zimPath: string) => Error | null
   findPort: () => Promise<number>
   probe: (port: number) => Promise<boolean>
   /** Runs before the loopback server answers; park it to hold an HTTP read open. */
@@ -233,15 +237,19 @@ interface HarnessOptions {
   failReEncrypt?: boolean
   /** Shorten the ZIM settle bound (5 s in production) through the registry seam on ctx. */
   settleBoundMs?: number
-  /** `registerZimIpc`'s platform seam (#340) — defaults to `process.platform` like production;
-   *  pin it to drive the win32-only `'path-unsupported'` classification independently of the
-   *  host running the suite. */
+  /** The `ZimService` platform seam (#340; #787 moved it off `registerZimIpc`: the classification
+   *  now reads the argv the service planned) — defaults to `process.platform` like production; pin
+   *  it to drive the win32-only `'path-unsupported'` classification independently of the host. */
   platform?: NodeJS.Platform
+  /** Nest the drive root in a folder of this name (#787: `Jürgen 山田` stands for the account a
+   *  portable exe run outside a Kit keeps its data under). The temp root itself stays ASCII. */
+  rootLeaf?: string
 }
 
 async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness> {
   const vault = opts.vault ?? 'encrypted'
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zimsession-'))
+  const tempRoot = mkdtempSync(join(tmpdir(), 'hilbertraum-zimsession-'))
+  const root = opts.rootLeaf === undefined ? tempRoot : join(tempRoot, opts.rootLeaf)
   mkdirSync(join(root, 'config'), { recursive: true })
   const workspacePath = join(root, 'workspace')
   mkdirSync(workspacePath, { recursive: true })
@@ -279,6 +287,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
   // ---- the loopback stand-in for kiwix-serve's port ---------------------------------
   const hooks: SessionHooks = {
     manage: async () => undefined,
+    manageLaunch: () => null,
     findPort: async () => httpPort,
     probe: async () => true,
     beforeRespond: async () => undefined,
@@ -344,9 +353,9 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     manage: 'exit-on-sigterm'
   }
 
-  const serveSpawn: SpawnFn = (_command, args) => {
+  const serveSpawn: SpawnFn = (_command, args, options) => {
     const child = new ServeFakeChild(servePid++, modes.serve)
-    const libraryXmlPath = args[args.indexOf('--library') + 1] as string
+    const libraryXmlPath = argvPath(args[args.indexOf('--library') + 1] as string, options.cwd)
     serveSpawns.push({ libraryXmlPath, child })
     const failure = hooks.serveFailure(libraryXmlPath)
     if (failure) failEarly(child, failure)
@@ -357,6 +366,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     firstPid: 7700,
     mode: () => modes.manage,
     before: (libraryXmlPath, zimPath) => hooks.manage(libraryXmlPath, zimPath),
+    launchError: (zimPath) => hooks.manageLaunch(zimPath),
     onSpawn: ({ libraryXmlPath, zimPath }) => {
       if (dirname(libraryXmlPath) === transientDir) buildAdds.push(basename(zimPath))
       else metaAdds.push(basename(zimPath))
@@ -378,6 +388,9 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
     new ZimService({
       rootPath: rootOverride ?? root,
       isDev: true,
+      // #787: the argv rules (and so the `path-unsupported` classification) follow the
+      // service's platform, which defaults to the host's like production.
+      platform: opts.platform,
       admission: {
         admitsWork: () => workspaceAdmitsWork(ctrl),
         epoch: () => ctrl.unlockEpoch()
@@ -451,7 +464,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       auditCalls.push({ type, message, metadata })
   } as unknown as AppContext
 
-  registerZimIpc(ctx, { platform: opts.platform })
+  registerZimIpc(ctx)
   registerWorkspaceIpc(ctx)
 
   const full: SessionHarness = {
@@ -1951,6 +1964,10 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
 // 'path-unsupported' — but ONLY when the platform is win32 AND the tool actually ran and exited
 // non-zero (a real `KiwixManageError` of `kind: 'exit'`, produced here by the fake manageSpawn
 // child exiting 1, exactly like the existing 'manager' DTO legs above).
+// #787: AND its command line still carried such a character. The service hands kiwix-manage an
+// ASCII spelling wherever one exists from its own library folder, so only a path without one — a
+// non-ASCII FILE NAME here — keeps the reason; under a non-ASCII ROOT a pack in its zim/ folder
+// reaches the tool, and its failure has another cause.
 describe('packs:add classifies a non-ASCII-path manager refusal as path-unsupported on win32 only (#340)', () => {
   it('win32 + non-ASCII path + manager exit => path-unsupported; the same fixture on linux stays manager', async () => {
     const win = await sessionHarness({ platform: 'win32' })
@@ -1968,6 +1985,13 @@ describe('packs:add classifies a non-ASCII-path manager refusal as path-unsuppor
       expect(dto.failureReason).toBe('path-unsupported')
       // The reason code is a CODE — never the path itself (JSON keeps the non-ASCII leaf raw).
       expect(JSON.stringify(dto)).not.toContain('Jörg-test')
+
+      // #787: only a refusal of the tool that RAN is the path's: kiwix-manage failing to launch (an
+      // antivirus refusing the exe) over that same non-ASCII file name is a manager problem.
+      win.hooks.manageLaunch = () => spawnErrorLike('/bin/kiwix-manage', [], 'EPERM')
+      dialogState.paths = [badPath]
+      const launch = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+      expect(launch.failureReason).toBe('manager')
     } finally {
       await win.close()
     }
@@ -1985,6 +2009,26 @@ describe('packs:add classifies a non-ASCII-path manager refusal as path-unsuppor
       expect(dto.failureReason).toBe('manager')
     } finally {
       await linux.close()
+    }
+  })
+
+  // #787: under a root such as C:\Users\Jürgen\AppData\Roaming\HilbertRaum every archive in its own
+  // zim/ folder has a non-ASCII path, yet reaches kiwix-manage in an ASCII spelling. A refusal there
+  // has another cause, and the path copy ("copy it into the drive's zim/ folder") would be wrong.
+  it('under a non-ASCII root a refusal of a pack in its zim folder is the manager’s, not the path’s (#787)', async () => {
+    const h = await sessionHarness({ platform: 'win32', rootLeaf: 'Jürgen 山田', vault: 'plaintext_dev' })
+    try {
+      const file = h.addPackFile('pack.zim')
+      h.hooks.manage = async (_libraryXmlPath: string, zimPath: string) => {
+        throw new Error(`Cannot add ZIM ${zimPath} to the library.`)
+      }
+      dialogState.paths = [file]
+      dialogState.canceled = false
+      const dto = (await invoke(handlers, IPC.addKnowledgePacks)).result as KnowledgePackAddResult
+      expect(dto.outcome).toBe('failure')
+      expect(dto.failureReason).toBe('manager')
+    } finally {
+      await h.close()
     }
   })
 })

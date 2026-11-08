@@ -153,8 +153,10 @@ whisper_cpp:
 # archives — pinned in source_bundle: below and enforced by the sell gate (P8-4). To bump: re-download every asset, re-verify its MD5 against the upstream
 # sidecar, recompute each SHA-256, re-read the COPYING/headers of the source trees, re-capture
 # the two kiwix-serve stderr phrases `services/zim/serve.ts` classifies (a held port, an
-# unloadable library — #712; its bind-race retry keys on the first), and
-# promote it here together with a fresh licence review.
+# unloadable library — #712; its bind-race retry keys on the first), re-run the non-ASCII launch
+# layouts on the real tools (tests/manual/zim-real.test.ts "#787" — both programs started from the
+# library's folder, a Windows archive path spelled in ASCII; rag-design.md §17 D-Z1 "#787
+# amendment"), and promote it here together with a fresh licence review.
 kiwix_tools:
   version: '3.8.1'
   optional: true

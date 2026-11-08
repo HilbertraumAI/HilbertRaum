@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { log } from '../../src/main/services/logging'
 import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import {
@@ -15,11 +15,17 @@ import {
 import { ServeFakeChild, spawnErrorLike } from '../helpers/zim-fakes'
 import { until } from '../helpers/hang-budget'
 
-function fakeSpawn(): { spawn: SpawnFn; calls: Array<{ command: string; args: string[] }>; child: ServeFakeChild } {
-  const calls: Array<{ command: string; args: string[] }> = []
+interface SpawnCall {
+  command: string
+  args: string[]
+  cwd: string | undefined
+}
+
+function fakeSpawn(): { spawn: SpawnFn; calls: SpawnCall[]; child: ServeFakeChild } {
+  const calls: SpawnCall[] = []
   const child = new ServeFakeChild(777, 'exit-on-sigterm')
-  const spawn: SpawnFn = (command, args) => {
-    calls.push({ command, args })
+  const spawn: SpawnFn = (command, args, options) => {
+    calls.push({ command, args, cwd: options.cwd === undefined ? undefined : String(options.cwd) })
     return child
   }
   return { spawn, calls, child }
@@ -69,32 +75,126 @@ describe('kiwix binary discovery', () => {
 })
 
 describe('kiwixManageAdd', () => {
-  // #301 P5, finding L9 (plan §9.19 (e)): `platform` is injected, not read from
-  // `process.platform`, so both native-separator branches are pinned independently of the
-  // host running the test — replaces the earlier "assert shape, not separators" hedge.
-  it('normalizes forward-slash argv paths to backslashes when platform is win32', async () => {
+  // The whole spawn — kiwix-manage's CLI is `LIBRARY add ZIM`, in that order — and what a refusal
+  // means. `platform` is injected, not read from `process.platform` (#301 P5, finding L9), so every
+  // branch is pinned independently of the host.
+  //
+  // #787: on Windows the pinned build mis-reads any non-ASCII character of its narrow argv, so the
+  // child starts in the library's folder and gets the library by its bare name; a non-ASCII archive
+  // path goes relative to that folder when that is ASCII. The working directory is never the
+  // archive's folder (Windows searches it for DLLs). Each Windows row is a layout measured on the
+  // real kiwix-tools 3.8.1 (2026-11-08). `nonAsciiArgv` says no ASCII spelling existed — the
+  // residual `path-unsupported` keys on it.
+  const JUERGEN = 'C:\\Users\\Jürgen\\AppData\\Roaming\\HilbertRaum'
+  const JUERGEN_META = `${JUERGEN}\\workspace\\zim-transient\\meta-3`
+  it.each([
+    {
+      name: 'forward slashes on win32 become native backslashes',
+      platform: 'win32' as const,
+      library: '/lib/dir/library.xml',
+      zim: '/zim/sub/a.zim',
+      cwd: '\\lib\\dir',
+      args: ['library.xml', 'add', '\\zim\\sub\\a.zim'],
+      nonAsciiArgv: false
+    },
+    {
+      name: 'linux passes the archive as given, any character, from the library folder',
+      platform: 'linux' as const,
+      library: '/lib/dir/library.xml',
+      zim: '/home/jürgen/zim/a.zim',
+      cwd: '/lib/dir',
+      args: ['library.xml', 'add', '/home/jürgen/zim/a.zim'],
+      nonAsciiArgv: false
+    },
+    {
+      name: 'an ASCII Kit keeps the archive absolute',
+      platform: 'win32' as const,
+      library: 'D:\\workspace\\zim-transient\\library.12.xml',
+      zim: 'D:\\zim\\wiki.zim',
+      cwd: 'D:\\workspace\\zim-transient',
+      args: ['library.12.xml', 'add', 'D:\\zim\\wiki.zim'],
+      nonAsciiArgv: false
+    },
+    {
+      name: "a non-ASCII root reaches the drive's zim folder relative to the library",
+      platform: 'win32' as const,
+      library: `${JUERGEN_META}\\library.xml`,
+      zim: `${JUERGEN}\\zim\\wiki.zim`,
+      cwd: JUERGEN_META,
+      args: ['library.xml', 'add', '..\\..\\..\\zim\\wiki.zim'],
+      nonAsciiArgv: false
+    },
+    {
+      name: 'a root outside cp1252 likewise',
+      platform: 'win32' as const,
+      library: 'C:\\山田\\workspace\\zim-transient\\library.4.xml',
+      zim: 'C:\\山田\\zim\\wiki.zim',
+      cwd: 'C:\\山田\\workspace\\zim-transient',
+      args: ['library.4.xml', 'add', '..\\..\\zim\\wiki.zim'],
+      nonAsciiArgv: false
+    },
+    {
+      name: 'a non-ASCII root keeps an ASCII archive on another drive absolute',
+      platform: 'win32' as const,
+      library: `${JUERGEN_META}\\library.xml`,
+      zim: 'E:\\packs\\wiki.zim',
+      cwd: JUERGEN_META,
+      args: ['library.xml', 'add', 'E:\\packs\\wiki.zim'],
+      nonAsciiArgv: false
+    },
+    {
+      name: 'another folder of the same non-ASCII account relative to the library',
+      platform: 'win32' as const,
+      library: `${JUERGEN_META}\\library.xml`,
+      zim: 'C:\\Users\\Jürgen\\Downloads\\wiki.zim',
+      cwd: JUERGEN_META,
+      args: ['library.xml', 'add', '..\\..\\..\\..\\..\\..\\Downloads\\wiki.zim'],
+      nonAsciiArgv: false
+    },
+    {
+      name: "a non-ASCII folder outside the app's own as it is, never from that folder",
+      platform: 'win32' as const,
+      library: 'D:\\workspace\\zim-transient\\meta-5\\library.xml',
+      zim: 'C:\\Users\\Jörg\\Downloads\\wiki.zim',
+      cwd: 'D:\\workspace\\zim-transient\\meta-5',
+      args: ['library.xml', 'add', 'C:\\Users\\Jörg\\Downloads\\wiki.zim'],
+      nonAsciiArgv: true
+    },
+    {
+      name: 'a non-ASCII file name has no ASCII spelling',
+      platform: 'win32' as const,
+      library: 'D:\\workspace\\zim-transient\\meta-6\\library.xml',
+      zim: 'D:\\zim\\Wiki für Kinder.zim',
+      cwd: 'D:\\workspace\\zim-transient\\meta-6',
+      args: ['library.xml', 'add', 'D:\\zim\\Wiki für Kinder.zim'],
+      nonAsciiArgv: true
+    },
+    {
+      name: 'nor does an archive under an unrelated non-ASCII folder, the root non-ASCII too',
+      platform: 'win32' as const,
+      library: `${JUERGEN_META}\\library.xml`,
+      zim: 'E:\\Bücher\\wiki.zim',
+      cwd: JUERGEN_META,
+      args: ['library.xml', 'add', 'E:\\Bücher\\wiki.zim'],
+      nonAsciiArgv: true
+    }
+  ])('spawns $name (#787)', async (row) => {
     const { spawn, calls, child } = fakeSpawn()
-    const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/dir/library.xml', '/zim/sub/a.zim', spawn, {
-      platform: 'win32'
-    })
-    queueMicrotask(() => child.emit('exit', 0, null))
-    await expect(done).resolves.toBeUndefined()
-    expect(calls[0]?.args[0]).toBe('\\lib\\dir\\library.xml')
-    expect(calls[0]?.args[2]).toBe('\\zim\\sub\\a.zim')
+    const done = kiwixManageAdd('/bin/kiwix-manage', row.library, row.zim, spawn, { platform: row.platform })
+    queueMicrotask(() => child.emit('exit', 1, null))
+    const err = await done.then(() => null, (e: unknown) => e)
+    expect(calls).toEqual([{ command: '/bin/kiwix-manage', args: row.args, cwd: row.cwd }])
+    expect(err).toMatchObject({ kind: 'exit', nonAsciiArgv: row.nonAsciiArgv, message: 'kiwix-manage exited with code 1' })
   })
 
-  it('leaves forward-slash argv paths unchanged when platform is linux', async () => {
+  // #787: the child starts in the library's folder, and a relative command holding a separator is
+  // looked up from the CHILD's working directory — a dev run's relative drive root would miss it.
+  it('spawns a relative command as an absolute one (#787)', async () => {
     const { spawn, calls, child } = fakeSpawn()
-    const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/dir/library.xml', '/zim/sub/a.zim', spawn, {
-      platform: 'linux'
-    })
+    const done = kiwixManageAdd(join('tools', 'kiwix-manage'), '/lib/library.xml', '/zim/a.zim', spawn)
     queueMicrotask(() => child.emit('exit', 0, null))
-    await expect(done).resolves.toBeUndefined()
-    // The whole spawn: kiwix-manage's CLI is `LIBRARY add ZIM`, in that order.
-    expect(calls[0]).toEqual({
-      command: '/bin/kiwix-manage',
-      args: ['/lib/dir/library.xml', 'add', '/zim/sub/a.zim']
-    })
+    await done
+    expect(calls[0]?.command).toBe(resolve('tools', 'kiwix-manage'))
   })
 
   // #712: what kiwix-manage prints names the archive ("Cannot add ZIM <path>") or the library

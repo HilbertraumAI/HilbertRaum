@@ -16,6 +16,7 @@ import {
 import { ZimService, type ServedLibrary, type ZimAdmission } from '../../src/main/services/zim'
 import {
   ServeFakeChild,
+  argvPath,
   expectAbortError,
   fakeManageSpawn,
   serveGate,
@@ -386,6 +387,9 @@ describe('readZimMetadata (via registerPack) — the throwaway meta dir on an un
 
 interface ServeSpawnRecord {
   args: string[]
+  /** The child's working directory: the library's folder (#787). */
+  cwd: string | undefined
+  /** The library file the child serves — its `--library` name resolved against `cwd`. */
   libraryXmlPath: string
   child: ServeFakeChild
   /** Had EVERY earlier child already reached a terminal state at the moment of this spawn? */
@@ -474,12 +478,13 @@ function svcHarness(
         .sort()
   }
 
-  const serveSpawn: SpawnFn = (_command, args) => {
+  const serveSpawn: SpawnFn = (_command, args, options) => {
     const child = new ServeFakeChild(servePid++, harness.nextChildMode)
     const priorChildrenAllExited = serveSpawns.every((s) => s.child.exited)
     serveSpawns.push({
       args: [...args],
-      libraryXmlPath: args[args.indexOf('--library') + 1] as string,
+      cwd: options.cwd === undefined ? undefined : String(options.cwd),
+      libraryXmlPath: argvPath(args[args.indexOf('--library') + 1] as string, options.cwd),
       child,
       priorChildrenAllExited
     })
@@ -563,6 +568,7 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(h.buildAdds.filter((a) => a.libraryXmlPath === buildB)).toHaveLength(2) // alpha + beta
     serveAssertSingleWriter(h.buildAdds)
     expect(h.svc.serverState()).toMatchObject({ revision: 2, port: portAfterOne, alive: true })
+    // #787: the build by its bare name, from its own folder.
     expect(h.serveSpawns[0]!.args).toEqual([
       '--address',
       '127.0.0.1',
@@ -571,8 +577,9 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
       '--nosearchbar',
       '--blockexternal',
       '--library',
-      buildB
+      basename(buildB)
     ])
+    expect(h.serveSpawns[0]!.cwd).toBe(dirname(buildB))
     const childB = h.serveSpawns[0]!.child
 
     // --- (2) PARKED PORT ALLOCATION: the abandoned build never reaches a spawn ------------

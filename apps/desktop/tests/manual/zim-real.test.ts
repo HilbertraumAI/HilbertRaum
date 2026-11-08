@@ -1,11 +1,11 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { ZimService } from '../../src/main/services/zim'
 import { nativeArchivePath, readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
-import { kiwixServeBinaryName, kiwixToolsDir } from '../../src/main/services/zim/tools'
+import { KiwixManageError, kiwixServeBinaryName, kiwixToolsDir } from '../../src/main/services/zim/tools'
 import { zimSmokeEnv } from '../helpers/zim-smoke-env'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
@@ -328,5 +328,75 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
     },
     // A model-backed replay spends several seconds per question on a CPU (one planner call each).
     process.env.HILBERTRAUM_ZIM_MODEL ? 600_000 : 120_000
+  )
+
+  // #787: on Windows the pinned tools mis-read any non-ASCII character of their narrow argv, so a
+  // root such as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum` made packs unusable. Each layout
+  // below goes through the app's own service — the real kiwix-manage registers the pack, the real
+  // kiwix-serve serves the build and answers the route, or (on Windows, no ASCII spelling) the
+  // refusal carries `nonAsciiArgv`. On macOS and Linux the served rows prove the bare-name launch
+  // on the real POSIX tools.
+  it(
+    'registers and serves a pack under a non-ASCII root, and names what stays refused (#787)',
+    async () => {
+      const { toolsDir, zimFile } = gate as { toolsDir: string; zimFile: string; problems: string[] }
+      expect((gate as { problems: string[] }).problems).toEqual([])
+      // An ASCII temp root, so its removal works even on a Node whose rmSync skips such paths.
+      const scratch = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-real-787-'))
+      // Not `cpSync`: Node 24.13's writes a non-ASCII destination on Windows as mojibake
+      // (`Jürgen` → `JÃ¼rgen`), measured 2026-11-08; Electron 43's Node 24.22 does not.
+      const copyTree = (from: string, to: string): void => {
+        mkdirSync(to, { recursive: true })
+        for (const entry of readdirSync(from, { withFileTypes: true })) {
+          if (entry.isDirectory()) copyTree(join(from, entry.name), join(to, entry.name))
+          else copyFileSync(join(from, entry.name), join(to, entry.name))
+        }
+      }
+      const layouts = [
+        // the drive's own zim/ folder, the library beside it: the archive goes relative
+        { name: "the drive's zim folder under a non-ASCII root", root: join(scratch, 'Jürgen 山田', 'HilbertRaum'), archive: (r: string) => join(r, 'zim', 'pack.zim'), served: true },
+        // another folder of the same non-ASCII account: relative too
+        { name: 'a folder of the same non-ASCII account', root: join(scratch, 'Jürgen', 'AppData', 'HilbertRaum'), archive: () => join(scratch, 'Jürgen', 'Downloads', 'pack.zim'), served: true },
+        // no ASCII spelling from the app's folder: a non-ASCII file name, a non-ASCII folder elsewhere
+        { name: 'a non-ASCII file name', root: join(scratch, 'name-root'), archive: (r: string) => join(r, 'zim', 'Wiki für Kinder.zim'), served: false },
+        { name: "a non-ASCII folder outside the app's own", root: join(scratch, 'folder-root'), archive: () => join(scratch, 'Bücher', 'pack.zim'), served: false }
+      ]
+      try {
+        for (const layout of layouts) {
+          if (!layout.served && process.platform !== 'win32') continue // POSIX reads any such path
+          const archive = layout.archive(layout.root)
+          copyTree(toolsDir, kiwixToolsDir(layout.root))
+          mkdirSync(join(layout.root, 'zim'), { recursive: true })
+          mkdirSync(dirname(archive), { recursive: true })
+          copyFileSync(zimFile, archive)
+          const db: Db = openDatabase(join(layout.root, 'test.sqlite'))
+          const service = new ZimService({ rootPath: layout.root, isDev: true, transientDir: join(layout.root, 'workspace', 'zim-transient') })
+          try {
+            if (!layout.served) {
+              const err = await service.registerPack(db, archive).then(() => null, (e: unknown) => e)
+              expect(err, layout.name).toBeInstanceOf(KiwixManageError)
+              expect(err, layout.name).toMatchObject({ kind: 'exit', nonAsciiArgv: true })
+              continue
+            }
+            const pack = await service.registerPack(db, archive)
+            expect(pack.id, layout.name).toBe(readZimHeader(archive).uuid)
+            const library = await service.ensureServer(db)
+            expect(library, layout.name).not.toBeNull()
+            const servedName = library!.names.get(pack.id)
+            const route = await fetch(`http://127.0.0.1:${library!.port}/raw/${servedName}/meta/Title`)
+            expect(route.status, `${layout.name}: /raw/${servedName}/meta/Title`).toBe(200)
+            expect((await route.text()).trim()).toBe(pack.title)
+            // eslint-disable-next-line no-console
+            console.info(`[zim-real] #787 ${layout.name}: registered and served as ${servedName}`)
+          } finally {
+            await service.stop()
+            db.close()
+          }
+        }
+      } finally {
+        rmSync(scratch, { recursive: true, force: true })
+      }
+    },
+    120_000
   )
 })

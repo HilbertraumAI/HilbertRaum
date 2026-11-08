@@ -3215,9 +3215,11 @@ export const en = {
   'packs.addFailed.notAZim': 'The chosen file is not a readable ZIM archive.',
   'packs.addFailed.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See Troubleshooting → “The panel says kiwix-tools are missing” for the install step.',
   'packs.addFailed.manager': 'The archive could not be read by kiwix-manage. Check that the file is complete and try again.',
-  // #340 (owner ruling 2026-09-06, option M): the pinned kiwix-manage 3.8.1 refuses any Windows
-  // path holding a non-ASCII character. Names the cause and the workaround — never the raw path.
-  'packs.addFailed.pathUnsupported': 'On Windows, kiwix-manage cannot read an archive whose folder or file name contains an umlaut, an accent or another non-ASCII character. Move the file to a path without such characters — the drive’s zim/ folder is simplest — and add it again.',
+  // #340 (owner ruling 2026-09-06, option M): the pinned kiwix-manage 3.8.1 mis-reads a non-ASCII
+  // character on its Windows command line. Since #787 the app hands it an ASCII spelling wherever
+  // one exists from its own folder, so what is left is the file name, or a folder outside the
+  // app's own. Names the cause and the workaround — never the raw path.
+  'packs.addFailed.pathUnsupported': 'On Windows, kiwix-manage cannot read this archive because its file name or folder contains an umlaut, an accent or another non-ASCII character. Copy the file into the drive’s zim/ folder under a name without such characters and add it again.',
   'packs.addFailed.other': 'The archive could not be added.',
   'packs.removedToast': 'Knowledge pack removed',
   'packs.articleCount.one': '{count} article',
