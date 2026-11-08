@@ -307,6 +307,10 @@ export function waitUnlessAborted<T>(start: Promise<T>, signal: AbortSignal | un
 /** A readable stream surface — just enough to drain + capture the child's stderr. */
 export interface ReadableLike {
   on(event: 'data', listener: (chunk: unknown) => void): unknown
+  /** A stream error. Node emits one (`ENOTCONN`) on a piped stdio stream when the spawn itself
+   *  failed late — measured for a `cwd` over MAX_PATH on Windows (#787) — and an unhandled one is
+   *  an uncaught exception in the main process. */
+  on(event: 'error', listener: (err: unknown) => void): unknown
 }
 
 /** Minimal child-process surface we depend on (real `ChildProcess` satisfies it). */

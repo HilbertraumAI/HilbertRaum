@@ -2361,8 +2361,10 @@ export interface KnowledgePackOutcome {
  * nor the log (`log.warn` gets this code and a path-free class, `zimErrorClass` — #712; kiwix-manage
  * runs with its stderr ignored). `'path-unsupported'` (#340, owner
  * ruling 2026-09-06, option M) is set ONLY on win32 when the pinned kiwix-manage 3.8.1 ran and
- * refused (a `KiwixManageError` of `kind: 'exit'`) AND the archive's path contains a non-ASCII
- * character — never on other platforms, and never for a spawn/verify/timeout failure.
+ * refused (a `KiwixManageError` of `kind: 'exit'`) AND its command line still carried a non-ASCII
+ * character (`nonAsciiArgv`, #787: no ASCII spelling of the archive existed from the app's own
+ * library folder — a non-ASCII file name, or a non-ASCII folder outside the app's own) — never on
+ * other platforms, and never for a spawn/verify/timeout failure.
  */
 export type KnowledgePackAddFailureReason =
   | 'not-a-zim'

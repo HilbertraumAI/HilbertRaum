@@ -317,7 +317,7 @@ describe('PacksPanel', () => {
     ['not-a-zim', 'The chosen file is not a readable ZIM archive.'],
     ['tools-missing', /kiwix-tools binaries are not installed/],
     ['manager', 'The archive could not be read by kiwix-manage. Check that the file is complete and try again.'],
-    ['path-unsupported', /kiwix-manage cannot read an archive whose folder or file name contains/],
+    ['path-unsupported', /kiwix-manage cannot read this archive because its file name or folder contains/],
     ['other', 'The archive could not be added.']
   ] as const)('add flow: failure (%s) shows the reason’s banner text, never a different one', async (reason, expected) => {
     const addKnowledgePacks = vi.fn(async () => ({
@@ -352,7 +352,7 @@ describe('PacksPanel', () => {
       'manager',
       'Das Archiv konnte nicht von kiwix-manage gelesen werden. Prüfe, ob die Datei vollständig ist, und versuch es noch einmal.'
     ],
-    ['path-unsupported', /kiwix-manage kein Archiv lesen, dessen Ordner- oder Dateiname/],
+    ['path-unsupported', /kiwix-manage dieses Archiv nicht lesen, weil sein Datei- oder Ordnername/],
     ['other', 'Das Archiv konnte nicht hinzugefügt werden.']
   ] as const)('add flow (DE): failure (%s) shows the German reason banner', async (reason, expected) => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')

@@ -17,6 +17,15 @@ describe('zimErrorClass (#712)', () => {
     ['a start that timed out', new KiwixServeStartError('timeout', { timeoutMs: 20_000, output: 'unrecognised' }), 'serve:timeout:unrecognised'],
     ['a tampered binary', new KiwixServeStartError('integrity'), 'serve:integrity'],
     ['a manager failure', new KiwixManageError(`kiwix-manage exited — Cannot add ZIM ${PATH}\\a.zim`, 'exit', 'exited'), 'manage:exit'],
+    // #787: a reconcile skips such a pack at every pass; the log names why, never the path.
+    [
+      'a manager failure over a path with no ASCII spelling',
+      new KiwixManageError(`kiwix-manage exited — Cannot add ZIM ${PATH}\\Jürgen.zim`, 'exit', 'exited', null, true),
+      'manage:exit:non-ascii-path'
+    ],
+    // …but only a tool that ran and refused, as `path-unsupported` reads it: a launch failure
+    // (an antivirus refusing the exe) over the same path is not the path's.
+    ['a manager that could not launch over such a path', new KiwixManageError('kiwix-manage failed to launch (EPERM)', 'spawn', 'exited', null, true), 'manage:spawn'],
     [
       'a Node system error',
       Object.assign(new Error(`EACCES: permission denied, mkdir '${PATH}'`), { code: 'EACCES', path: PATH }),

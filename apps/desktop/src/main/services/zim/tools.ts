@@ -12,6 +12,7 @@ import {
   type ResolveBinOptions,
   type SpawnFn
 } from '../runtime/sidecar'
+import { kiwixCommand, planKiwixManageAdd } from './argv'
 
 // kiwix-tools binary discovery (knowledge packs). Third sidecar family after
 // llama.cpp and whisper.cpp; the resolution rules are the transcriber's
@@ -109,22 +110,27 @@ export type KiwixManageChildState = 'not-spawned' | 'exited' | 'uncertain'
  *  from then on what it was writing may be removed (#713). The message never carries the
  *  child's output or a path (#712): kiwix-manage prints the archive's path ("Cannot add ZIM
  *  <path> …") or the library's ("Cannot write the library <path>"), and a spawn error names the
- *  binary's. */
+ *  binary's. `nonAsciiArgv` (#787): on Windows, the argv the child got still carried a non-ASCII
+ *  character because no ASCII spelling of the archive existed (`planKiwixManageAdd`) — what an
+ *  `exit` most likely means then, since the pinned build mis-reads it; false otherwise. */
 export class KiwixManageError extends Error {
   readonly kind: 'verify' | 'spawn' | 'exit' | 'timeout' | 'abort'
   readonly childState: KiwixManageChildState
   readonly settled: Promise<void> | null
+  readonly nonAsciiArgv: boolean
   constructor(
     message: string,
     kind: KiwixManageError['kind'],
     childState: KiwixManageChildState,
-    settled: Promise<void> | null = null
+    settled: Promise<void> | null = null,
+    nonAsciiArgv = false
   ) {
     super(message)
     this.name = 'KiwixManageError'
     this.kind = kind
     this.childState = childState
     this.settled = settled
+    this.nonAsciiArgv = nonAsciiArgv
   }
 }
 
@@ -141,9 +147,9 @@ export interface KiwixManageOptions {
   /** How long to wait for a terminal state after `SIGKILL` before giving up and settling
    *  `'uncertain'` (default 2s). */
   forceKillWaitMs?: number
-  /** Which native path-separator convention to normalize argv paths to (#301 P5, finding L9).
-   *  Defaults to `process.platform` so production is unchanged; tests pin both branches
-   *  independently of the host by passing this explicitly. */
+  /** Which platform's argv rules apply (#301 P5, finding L9): the native path separator, and on
+   *  win32 the ASCII spelling of a non-ASCII archive path (#787, `planKiwixManageAdd`). Defaults
+   *  to `process.platform`; tests pin both branches independently of the host. */
   platform?: NodeJS.Platform
 }
 
@@ -154,7 +160,9 @@ let warnedManageSkipLegacy = false
 /**
  * Run one `kiwix-manage LIBRARY add ZIM` invocation. kiwix-manage reads only the ZIM
  * header (fast even for a 100 GB archive) and appends a `<book …>` element carrying
- * the archive's metadata to the library XML.
+ * the archive's metadata to the library XML. The child starts in the library's folder and gets
+ * the library by its bare name — and on Windows a non-ASCII archive path in an ASCII spelling,
+ * where one exists (#787, `planKiwixManageAdd`).
  *
  * Order: pre-spawn integrity verification (a packaged-build tamper refuses with NO
  * spawn) → the caller's abort is rechecked → spawn → the PID is registered with the
@@ -198,23 +206,31 @@ export async function kiwixManageAdd(
     throw new KiwixManageError('kiwix-manage add aborted before spawn', 'abort', 'not-spawned')
   }
 
-  // kiwix-manage on Windows REJECTS forward-slash absolute paths ("Cannot add ZIM …" —
-  // spike 2026-08-22). `join()`-built paths are already native, but an env/config-sourced
-  // path may not be; normalizing here removes the whole failure class. `platform` is injected
-  // (#301 P5, finding L9) so the branch is pinned in tests independently of the host.
-  const platform = opts.platform ?? process.platform
-  const native = (p: string): string => (platform === 'win32' ? p.replace(/\//g, '\\') : p)
+  // Native separators (kiwix-manage on Windows rejects forward-slash absolute paths, spike
+  // 2026-08-22), the library by its bare name from its folder, and on Windows an ASCII spelling of
+  // a non-ASCII archive path (#787). `platform` is injected (#301 P5, finding L9) so every branch
+  // is pinned in tests independently of the host.
+  const plan = planKiwixManageAdd(libraryXmlPath, zimPath, opts.platform ?? process.platform)
+  // Every failure from here on reports whether the argv still carried a non-ASCII character.
+  const fail = (
+    message: string,
+    kind: KiwixManageError['kind'],
+    childState: KiwixManageChildState,
+    settled: Promise<void> | null = null
+  ): KiwixManageError => new KiwixManageError(message, kind, childState, settled, plan.nonAsciiArgv)
 
   let child: ChildProcessLike
   try {
     // stderr is not even piped: what kiwix-manage prints names a path (#712), and every caller
-    // classifies a failure by `kind`, so nothing would read it.
-    child = spawnFn(managePath, [native(libraryXmlPath), 'add', native(zimPath)], {
+    // classifies a failure by `kind`, so nothing would read it. Without a pipe there is also no
+    // stream for a failed spawn to error on (`KiwixServer` guards its stderr for that, #787).
+    child = spawnFn(kiwixCommand(managePath), plan.args, {
+      cwd: plan.cwd,
       stdio: ['ignore', 'ignore', 'ignore'],
       windowsHide: true
     })
   } catch (err) {
-    throw new KiwixManageError(launchFailed(err), 'spawn', 'not-spawned')
+    throw fail(launchFailed(err), 'spawn', 'not-spawned')
   }
 
   // CODE-11/F-32: reachable by the crash-exit reap and the engine-installer's in-use
@@ -256,7 +272,7 @@ export async function kiwixManageAdd(
       unregisterSidecarChild(child.pid)
       resolveTerminal()
       if (!cancelling) {
-        settle(new KiwixManageError(launchFailed(err), 'spawn', 'exited'))
+        settle(fail(launchFailed(err), 'spawn', 'exited'))
       }
     })
     child.once('exit', (code: unknown) => {
@@ -265,7 +281,7 @@ export async function kiwixManageAdd(
       resolveTerminal()
       if (!cancelling) {
         if (code === 0) settle()
-        else settle(new KiwixManageError(`kiwix-manage exited with code ${String(code)}`, 'exit', 'exited'))
+        else settle(fail(`kiwix-manage exited with code ${String(code)}`, 'exit', 'exited'))
       }
     })
 
@@ -292,10 +308,10 @@ export async function kiwixManageAdd(
         }
         const label = kind === 'timeout' ? `timed out after ${timeoutMs}ms` : 'aborted'
         if (terminalReached) {
-          settle(new KiwixManageError(`kiwix-manage ${label}`, kind, 'exited'))
+          settle(fail(`kiwix-manage ${label}`, kind, 'exited'))
         } else {
           log.warn(`kiwix-manage child did not reach a terminal state after SIGKILL — PID ${String(child.pid)} left registered for the crash reaper (R-7)`)
-          settle(new KiwixManageError(`kiwix-manage ${label} — cleanup not confirmed`, kind, 'uncertain', terminalPromise))
+          settle(fail(`kiwix-manage ${label} — cleanup not confirmed`, kind, 'uncertain', terminalPromise))
         }
       })()
     }

@@ -10,6 +10,7 @@ import {
   type SpawnFn
 } from '../runtime/sidecar'
 import { spawn as nodeSpawn } from 'node:child_process'
+import { kiwixCommand, kiwixLibraryLaunch, type KiwixLibraryLaunch } from './argv'
 import { kiwixGet } from './client'
 
 /** One `log.warn` per process for a hashless install marker (#339 P8-1, R-1) — never per
@@ -62,10 +63,12 @@ const abortError = (message: string): DOMException => new DOMException(message, 
 
 /**
  * What kiwix-serve wrote to stderr before a failed start, as a CLASS (#712). The text itself
- * never leaves the child's record: kiwix-serve prints the library file's absolute path when it
- * cannot load it, and again in its non-fatal "is empty" line. That file is the workspace's own
- * `zim-transient/library.<n>.xml`, so the path names the drive and workspace — and on a
- * portable exe run outside a Kit, the Windows account (`C:\Users\<name>\AppData\Roaming\…`).
+ * never leaves the child's record: kiwix-serve prints the library file's path, as it was given,
+ * when it cannot load it, and again in its non-fatal "is empty" line. That file is the workspace's
+ * own `zim-transient/library.<n>.xml`; until #787 it was given absolute, so the path named the
+ * drive and workspace — and on a portable exe run outside a Kit, the Windows account
+ * (`C:\Users\<name>\AppData\Roaming\…`). It is the bare name now, but the rule stays: what a
+ * third-party program prints is never logged.
  *
  * Matched on the pinned build's own wording (kiwix-tools 3.8.1 / libkiwix 14.1.1:
  * `manager.cpp` `Manager::reload`, `kiwix-serve.cpp` `reloadLibrary`, `internalServer.cpp`
@@ -83,8 +86,9 @@ export type KiwixServeStartFailureKind = 'integrity' | 'launch' | 'exit' | 'time
  *  llama-server's and Node's; kiwix-serve never prints it, so its one retry never fired (#712). */
 const PORT_UNAVAILABLE_RE = /Unable to instantiate the HTTP daemon/
 /** `ERROR: Failed to load the XML library file '<path>'.` + `Errors encountered while loading
- *  the library.` — then exit 1. On Windows any non-ASCII character in the path ends here: the
- *  narrow argv is decoded as UTF-8. */
+ *  the library.` — then exit 1. Until #787, on Windows any non-ASCII character in the library's
+ *  absolute path ended here (the narrow argv is decoded as UTF-8); it is now handed by its bare
+ *  name from its own folder. */
 const LIBRARY_UNREADABLE_RE = /Failed to load the XML library file|Errors encountered while loading the library/
 
 function classifyServeOutput(tail: string): KiwixServeOutput {
@@ -374,7 +378,9 @@ export class KiwixServer {
     }
   }
 
-  private buildArgs(record: ChildRecord): string[] {
+  /** The library by its bare name: the child starts in the library's folder (`launch.cwd`), so a
+   *  non-ASCII character in that folder never reaches kiwix-serve's narrow argv (#787). */
+  private buildArgs(record: ChildRecord, launch: KiwixLibraryLaunch): string[] {
     return [
       '--address',
       LOOPBACK_HOST,
@@ -383,7 +389,7 @@ export class KiwixServer {
       '--nosearchbar',
       '--blockexternal',
       '--library',
-      record.libraryXmlPath
+      launch.library
     ]
   }
 
@@ -440,9 +446,11 @@ export class KiwixServer {
       settleTerminal()
     }
 
+    const launch = kiwixLibraryLaunch(libraryXmlPath)
     let child: ChildProcessLike
     try {
-      child = this.spawnFn(this.opts.binPath, this.buildArgs(record), {
+      child = this.spawnFn(kiwixCommand(this.opts.binPath), this.buildArgs(record, launch), {
+        cwd: launch.cwd,
         stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true
       })
@@ -459,6 +467,11 @@ export class KiwixServer {
     child.stderr?.on('data', (chunk: unknown) => {
       record.stderrTail = (record.stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX)
     })
+    // The pipe can error on its own: a spawn that fails late (a `cwd` over MAX_PATH on Windows)
+    // emits the child's ENOENT `'error'` below AND an `ENOTCONN` on this stream, which unhandled
+    // would crash the main process — measured in Electron 43 (#787). The child's own `'error'`
+    // already fails the start, so the stream's is only absorbed.
+    child.stderr?.on('error', () => undefined)
     record.stdioClose = new Promise<void>((resolve) => {
       child.once('close', () => {
         record.stdioClosed = true

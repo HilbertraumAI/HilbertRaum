@@ -3190,9 +3190,11 @@ export const de: Record<keyof typeof en, string> = {
   'packs.addFailed.toolsMissing': 'Die kiwix-tools-Programme sind auf diesem Laufwerk nicht installiert; Pakete können daher nicht hinzugefügt oder durchsucht werden. Der Installationsschritt steht in der Fehlerbehebung unter „Das Panel meldet, dass kiwix-tools fehlen“.',
   'packs.addFailed.manager': 'Das Archiv konnte nicht von kiwix-manage gelesen werden. Prüfe, ob die Datei vollständig ist, und versuch es noch einmal.',
   // #340 (Owner-Entscheid 2026-09-06, Option M): das fest eingestellte kiwix-manage 3.8.1
-  // weigert sich bei jedem Windows-Pfad mit einem Nicht-ASCII-Zeichen. Nennt Ursache und
-  // Abhilfe — nie den rohen Pfad.
-  'packs.addFailed.pathUnsupported': 'Unter Windows kann kiwix-manage kein Archiv lesen, dessen Ordner- oder Dateiname einen Umlaut, einen Akzent oder ein anderes Nicht-ASCII-Zeichen enthält. Verschieb die Datei an einen Pfad ohne solche Zeichen – am einfachsten in den „zim“-Ordner des Laufwerks – und füge sie erneut hinzu.',
+  // liest ein Nicht-ASCII-Zeichen auf seiner Windows-Befehlszeile falsch. Seit #787 bekommt es
+  // jeden Pfad in ASCII-Schreibweise, wo es vom Ordner der App aus eine gibt; übrig bleibt der
+  // Dateiname oder ein Ordner außerhalb des Ordners der App. Nennt Ursache und Abhilfe — nie den
+  // rohen Pfad.
+  'packs.addFailed.pathUnsupported': 'Unter Windows kann kiwix-manage dieses Archiv nicht lesen, weil sein Datei- oder Ordnername einen Umlaut, einen Akzent oder ein anderes Nicht-ASCII-Zeichen enthält. Kopier die Datei unter einem Namen ohne solche Zeichen in den „zim“-Ordner des Laufwerks und füge sie erneut hinzu.',
   'packs.addFailed.other': 'Das Archiv konnte nicht hinzugefügt werden.',
   'packs.removedToast': 'Wissenspaket entfernt',
   'packs.articleCount.one': '{count} Artikel',
