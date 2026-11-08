@@ -2357,8 +2357,9 @@ export interface KnowledgePackOutcome {
 
 /**
  * Why one archive of a `packs:add` batch was not registered (#301 P5, finding L1, plan §9.19
- * (c)). NEVER free text — the raw manager stderr/path stays in the protected diagnostic log
- * only (`log.warn`), never on this DTO, never in the audit. `'path-unsupported'` (#340, owner
+ * (c)). NEVER free text — the manager's stderr and the path are on neither this DTO, the audit
+ * nor the log (`log.warn` gets this code and a path-free class, `zimErrorClass` — #712; kiwix-manage
+ * runs with its stderr ignored). `'path-unsupported'` (#340, owner
  * ruling 2026-09-06, option M) is set ONLY on win32 when the pinned kiwix-manage 3.8.1 ran and
  * refused (a `KiwixManageError` of `kind: 'exit'`) AND the archive's path contains a non-ASCII
  * character — never on other platforms, and never for a spawn/verify/timeout failure.

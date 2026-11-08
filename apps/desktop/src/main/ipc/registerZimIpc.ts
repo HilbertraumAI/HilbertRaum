@@ -14,6 +14,7 @@ import { findSavedArticle, saveArticleAsDocument } from '../services/zim/save-ar
 import { documentsDir } from '../services/ingestion'
 import { ArticlePathError } from '../services/zim/client'
 import { KiwixManageError } from '../services/zim/tools'
+import { zimErrorClass } from '../services/zim/error-class'
 import { ZimHeaderError } from '../services/zim/identity'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -94,7 +95,8 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
     zim()
       .reconcile(ctx.db)
       .catch((err) => {
-        log.warn('Knowledge-pack refresh failed', String(err))
+        // The class, never `String(err)`: a failed start or an fs error names a path (#712).
+        log.warn('Knowledge-pack refresh failed', { error: zimErrorClass(err) })
       })
     return { started: true }
   })
@@ -172,7 +174,7 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
           // path (#301 P5, finding L1) — the manager's own stderr can carry an absolute path.
           log.warn('Knowledge pack registration failed', {
             reason,
-            error: err instanceof Error ? err.constructor.name : 'UnknownError'
+            error: zimErrorClass(err)
           })
         }
       }
@@ -214,7 +216,7 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
         // ArticlePathError's reason code) goes to the log — never `String(err)`, whose message
         // could carry a path for some other error class (#301 P5, finding L5).
         log.warn('Pack article read failed', {
-          error: err instanceof Error ? err.constructor.name : 'UnknownError',
+          error: zimErrorClass(err),
           reason: err instanceof ArticlePathError ? err.reason : undefined
         })
         return null
@@ -264,7 +266,7 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
       article = await zim().getArticle(ctx.db, packId, articlePath)
     } catch (err) {
       log.warn('Pack article read failed', {
-        error: err instanceof Error ? err.constructor.name : 'UnknownError',
+        error: zimErrorClass(err),
         reason: err instanceof ArticlePathError ? err.reason : undefined
       })
     }

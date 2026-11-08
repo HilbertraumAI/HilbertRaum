@@ -35,6 +35,7 @@ import {
 import { computeServedSet, type ServingNameCollision } from './identity'
 import { KiwixServer } from './serve'
 import { KiwixManageError, kiwixManageAdd, resolveKiwixManagePath, resolveKiwixServePath } from './tools'
+import { zimErrorClass } from './error-class'
 import type { PlaintextOpKind, PlaintextOpsRegistry } from '../ingestion/plaintext-ops'
 import { cleanupZimTransients, type ZimCleanupReport } from './transients'
 
@@ -721,7 +722,7 @@ export class ZimService {
     } catch (err) {
       if (isAbortError(err)) return
       log.warn('Knowledge-pack searchability probe failed (non-fatal)', {
-        error: err instanceof Error ? err.constructor.name : 'UnknownError'
+        error: zimErrorClass(err)
       })
     } finally {
       op.release()

@@ -12,7 +12,7 @@ import {
   resolveKiwixManagePath,
   resolveKiwixServePath
 } from '../../src/main/services/zim/tools'
-import { ServeFakeChild } from '../helpers/zim-fakes'
+import { ServeFakeChild, spawnErrorLike } from '../helpers/zim-fakes'
 import { until } from '../helpers/hang-budget'
 
 function fakeSpawn(): { spawn: SpawnFn; calls: Array<{ command: string; args: string[] }>; child: ServeFakeChild } {
@@ -97,21 +97,26 @@ describe('kiwixManageAdd', () => {
     })
   })
 
-  it('rejects with the stderr tail on a non-zero exit', async () => {
+  // #712: what kiwix-manage prints names the archive ("Cannot add ZIM <path>") or the library
+  // ("Cannot write the library <path>"), and Node's spawn error names the binary; the rejection
+  // carries the kind, the exit code or the errno code — never any of them.
+  it('a non-zero exit rejects as `exit` with its code, never with what the child printed (#712)', async () => {
     const { spawn, child } = fakeSpawn()
     const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/bad.zim', spawn)
     queueMicrotask(() => {
       child.stderr.emit('data', 'Cannot add ZIM /zim/bad.zim to the library.')
       child.emit('exit', 1, null)
     })
-    await expect(done).rejects.toThrow(/code 1 — Cannot add ZIM/)
+    const err = await done.then(() => null, (e: unknown) => e)
+    expect(err).toMatchObject({ kind: 'exit', childState: 'exited', message: 'kiwix-manage exited with code 1' })
   })
 
-  it('rejects on a spawn error', async () => {
+  it('a spawn error rejects as `spawn` with its errno code, never the binary path (#712)', async () => {
     const { spawn, child } = fakeSpawn()
     const done = kiwixManageAdd('/bin/kiwix-manage', '/lib/library.xml', '/zim/a.zim', spawn)
-    queueMicrotask(() => child.emit('error', new Error('spawn ENOENT')))
-    await expect(done).rejects.toThrow(/ENOENT/)
+    queueMicrotask(() => child.emit('error', spawnErrorLike('/bin/kiwix-manage', ['/lib/library.xml', 'add', '/zim/a.zim'])))
+    const err = await done.then(() => null, (e: unknown) => e)
+    expect(err).toMatchObject({ kind: 'spawn', childState: 'exited', message: 'kiwix-manage failed to launch (ENOENT)' })
   })
 
   // #715: every other row injects millisecond bounds. These are the shipped ones, driven on fake

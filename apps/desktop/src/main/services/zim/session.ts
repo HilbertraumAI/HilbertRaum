@@ -1,6 +1,7 @@
 import { log } from '../logging'
 import { workspaceAdmitsWork } from '../workspace-vault'
 import type { AppContext } from '../context'
+import { zimErrorClass } from './error-class'
 
 // The knowledge-pack SESSION-START seam (#301 P3b, finding L7; owner ruling D3).
 //
@@ -56,6 +57,7 @@ async function runSessionPass(ctx: AppContext): Promise<void> {
     // a Refresh that lands while this runs coalesces into exactly one more pass.
     await zim.reconcile(ctx.db)
   } catch (err) {
-    log.warn('Knowledge-pack session start failed (non-fatal)', String(err))
+    // The class, never `String(err)`: a failed start or an fs error names a path (#712).
+    log.warn('Knowledge-pack session start failed (non-fatal)', { error: zimErrorClass(err) })
   }
 }

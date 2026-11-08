@@ -7,6 +7,7 @@ import { type Db, prepareCached } from '../db'
 import { log } from '../logging'
 import { ftIndexHint, parseLibraryXml, type KiwixBook } from './client'
 import { ZimHeaderError, nativeArchivePath, readZimHeader } from './identity'
+import { zimErrorClass } from './error-class'
 import { KiwixManageError } from './tools'
 
 // Knowledge-pack registry (ZIM wave): CRUD + disk reconciliation over the
@@ -573,7 +574,7 @@ export async function reconcile(
       if (isCancellation(err)) throw err
       // Reason class only — the manager's message can carry the absolute path (the L1 class,
       // P5 scrubs the UI surface; a log line must not leak it either — the sentinel rule).
-      log.warn('Knowledge-pack reconcile skipped one file', { uuid, error: errorClass(err) })
+      log.warn('Knowledge-pack reconcile skipped one file', { uuid, error: zimErrorClass(err) })
     }
   }
 
@@ -814,12 +815,6 @@ function fileSize(path: string): number | null {
   }
 }
 
-/** A path-free classification of a registration/build failure for the log (sentinel rule). */
-function errorClass(err: unknown): string {
-  if (err instanceof KiwixManageError) return `manage:${err.kind}`
-  return err instanceof Error ? err.name : 'unknown'
-}
-
 /** The #159 `AbortError` convention, or a manager child cancelled by the caller's signal. */
 function isCancellation(err: unknown): boolean {
   if (err instanceof DOMException && err.name === 'AbortError') return true
@@ -864,7 +859,7 @@ export async function writeLibraryXml(
         throw err
       }
       // Ids + the error class only: the manager's message can carry the absolute path.
-      log.warn('Knowledge pack skipped from library.xml', { packId: book.id, error: errorClass(err) })
+      log.warn('Knowledge pack skipped from library.xml', { packId: book.id, error: zimErrorClass(err) })
     }
   }
   return count

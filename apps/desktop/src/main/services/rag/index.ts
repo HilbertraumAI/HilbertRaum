@@ -72,6 +72,7 @@ import { documentChunkCount } from '../analysis/coverage'
 // No cycle — `services/zim` reaches back into `rag` with TYPE-only imports (`ExternalRetrievalArm`
 // / `ExternalRetrievalOutput`), which are erased, and `zim/packs.ts` imports nothing from here.
 import { packTitles } from '../zim/packs'
+import { zimErrorClass } from '../zim/error-class'
 import { codePointSlice } from '../text'
 import { SUMMARY_MAP_CALL_CEILING } from '../doctasks/summary'
 import { buildGroundedDataPrompt, EXCERPT_BEGIN, EXCERPT_END, EXCERPT_GUARD_LINE } from './grounded-data'
@@ -442,9 +443,9 @@ export async function retrieve(
       // claims to have consulted the packs. Every OTHER arm failure stays swallowed here (an
       // unplugged pack drive must not break asking).
       if (isAbortError(err, signal)) throw err
-      log.warn('Knowledge-pack retrieval unavailable for this question', {
-        error: err instanceof Error ? err.message : String(err)
-      })
+      // The class, never the message: a failed kiwix-serve start is latched and rethrown on every
+      // ask, and an fs error names the workspace path (#712, D-Z1's sentinel rule).
+      log.warn('Knowledge-pack retrieval unavailable for this question', { error: zimErrorClass(err) })
       // The arm owes one outcome per selected pack and threw before producing any — an
       // UNEXPECTED failure (the service classifies every expected one into an outcome). Rather
       // than let the ask claim nothing was selected, synthesise the honest fallback for every

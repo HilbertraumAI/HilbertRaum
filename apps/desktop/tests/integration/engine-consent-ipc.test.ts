@@ -327,9 +327,17 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     expect(d.reconcile).not.toHaveBeenCalled()
   })
 
+  // #712: the new tools' first reconcile wakes kiwix-serve (the searchability probe), and a start
+  // failure — like an fs error — names the workspace path. The warning carries the class only.
   it.each([
-    ['the lock aborting it (AbortError) is not worth a warning', new DOMException('The knowledge-pack reconcile was cancelled', 'AbortError'), 0],
-    ['any other failure is logged', new Error('kiwix-manage failed'), 1]
+    ['the lock aborting it (AbortError) is not worth a warning', new DOMException('The knowledge-pack reconcile was cancelled', 'AbortError'), []],
+    [
+      'any other failure is logged as a class, never with its message — an fs error by its errno code, not its path (#712)',
+      Object.assign(new Error("EACCES: permission denied, mkdir 'C:\\Users\\XSENTINEL_712\\workspace\\zim-transient'"), {
+        code: 'EACCES'
+      }),
+      [{ error: 'Error:EACCES' }]
+    ]
   ] as const)('a pack reconcile after the kiwix_tools install that rejects: %s', async (_name, error, warnings) => {
     const d = makeDrive()
     d.reconcile.mockImplementationOnce(async () => {
@@ -343,7 +351,8 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
       // Attached after the handler's own catch, so this settles once that one has run.
       await (d.reconcile.mock.results[0]!.value as Promise<void>).catch(() => undefined)
       const logged = warn.mock.calls.filter((c) => c[0] === 'Knowledge-pack reconcile after the tools install failed')
-      expect(logged).toHaveLength(warnings)
+      expect(logged.map((c) => c[1])).toEqual(warnings)
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('XSENTINEL_712')
     } finally {
       warn.mockRestore()
     }

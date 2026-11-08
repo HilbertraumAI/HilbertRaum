@@ -151,7 +151,9 @@ whisper_cpp:
 # GPL-3.0-or-later files", Xapian) and LGPL-2.1-or-later (libmicrohttpd). DRIVE-NOTICES.md
 # carries the grants + the corresponding-source record; a preloaded Kit must carry the source
 # archives — pinned in source_bundle: below and enforced by the sell gate (P8-4). To bump: re-download every asset, re-verify its MD5 against the upstream
-# sidecar, recompute each SHA-256, re-read the COPYING/headers of the source trees, and
+# sidecar, recompute each SHA-256, re-read the COPYING/headers of the source trees, re-capture
+# the two kiwix-serve stderr phrases `services/zim/serve.ts` classifies (a held port, an
+# unloadable library — #712; its bind-race retry keys on the first), and
 # promote it here together with a fresh licence review.
 kiwix_tools:
   version: '3.8.1'

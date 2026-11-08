@@ -78,13 +78,53 @@ export class ServeFakeChild extends EventEmitter implements ChildProcessLike {
   }
 }
 
-/** What a child that dies before it is healthy does: exits (after writing `stderr`), or emits a
- *  spawn `error` (ENOENT and friends) and never exits. */
-export type EarlyFailure = { kind: 'exit'; code: number; stderr?: string } | { kind: 'error'; error: Error }
+/** What a child that dies before it is healthy does: exits (after writing `stderr`, then closes its
+ *  stdio, as Node reports a real child), or emits a spawn `error` (ENOENT and friends) and never
+ *  exits. `exitFirst`: Node delivers `'exit'` BEFORE the last stderr chunk, which then arrives on
+ *  a later turn, followed by `'close'` (#712, #530's ordering). */
+export type EarlyFailure =
+  | { kind: 'exit'; code: number; stderr?: string; exitFirst?: boolean }
+  | { kind: 'error'; error: Error }
 
-/** kiwix-serve losing its port between `findFreePort()` and bind: the stderr the bind-race
- *  retry recognises, then exit 1. */
-export const BIND_RACE: EarlyFailure = { kind: 'exit', code: 1, stderr: 'bind: address already in use' }
+// What the REAL kiwix-serve 3.8.1 (win-x86_64) writes to stderr, captured from the pinned binary
+// on 2026-11-08 (#712): spawned as `KiwixServer` spawns it, against a held port and against a
+// library file it cannot load. Both are followed by exit 1. The library path is the one it was
+// given, so a fake prints the path ITS spawn received — the leak #712 is about.
+
+/** kiwix-serve losing its port between `findFreePort()` and bind (libkiwix `InternalServer::start`).
+ *  Until #712 the fake printed llama-server's "address already in use", which kiwix-serve never
+ *  prints — so the retry passed here and never fired against the real binary. */
+export const BIND_RACE: EarlyFailure = {
+  kind: 'exit',
+  code: 1,
+  stderr:
+    'Unable to instantiate the HTTP daemon. The port 56283 is maybe already occupied or need more ' +
+    'permissions to be open. Please try as root or with a port number higher or equal to 1024.\r\n'
+}
+
+/** kiwix-serve unable to load its library file (libkiwix `Manager::reload` + `reloadLibrary`) —
+ *  the shape a non-ASCII workspace path produces on Windows. */
+export function libraryLoadFailure(libraryXmlPath: string): EarlyFailure {
+  return {
+    kind: 'exit',
+    code: 1,
+    stderr:
+      `ERROR: Failed to load the XML library file '${libraryXmlPath}'.\r\n` +
+      'Errors encountered while loading the library.\r\n'
+  }
+}
+
+/** A spawn failure shaped like Node's own (`ENOENT` for a missing binary): the path rides in
+ *  `message`, `syscall` and `path`, the whole argv in `spawnargs`. */
+export function spawnErrorLike(binPath: string, args: readonly string[], code = 'ENOENT'): Error {
+  return Object.assign(new Error(`spawn ${binPath} ${code}`), {
+    code,
+    errno: -4058,
+    syscall: `spawn ${binPath}`,
+    path: binPath,
+    spawnargs: [...args]
+  })
+}
 
 /** Make `child` die right after spawn, before any health probe can see it alive. */
 export function failEarly(child: ServeFakeChild, failure: EarlyFailure): void {
@@ -93,8 +133,17 @@ export function failEarly(child: ServeFakeChild, failure: EarlyFailure): void {
       child.emit('error', failure.error)
       return
     }
+    if (failure.exitFirst) {
+      child.emit('exit', failure.code, null)
+      setTimeout(() => {
+        if (failure.stderr) child.stderr.emit('data', failure.stderr)
+        child.emit('close', failure.code, null)
+      }, 5)
+      return
+    }
     if (failure.stderr) child.stderr.emit('data', failure.stderr)
     child.emit('exit', failure.code, null)
+    child.emit('close', failure.code, null)
   })
 }
 
