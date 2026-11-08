@@ -3283,6 +3283,16 @@ reports and phase plans were working papers; their full text lives in git histor
   folder such as `C:\Users\Jörg\Downloads` hits this). Serving is not affected — a pack
   registered from an ASCII path stays readable and searchable. (#340, decided 2026-09-06: a
   reason-specific message; the archive's metadata is still read through `kiwix-manage`.)
+- **On Windows, knowledge packs need a drive or app-data path made of ASCII characters.**
+  Both pinned kiwix-tools 3.8.1 programs mis-read a non-ASCII character in the path of the
+  library file the app writes for them under `workspace\zim-transient\` (measured 2026-11-08,
+  `rag-design.md` §17 D-Z1 "#712 amendment"): `kiwix-manage` cannot write it, so adding a pack
+  fails with "The archive could not be read by kiwix-manage. Check that the file is complete
+  and try again." — which points at the wrong cause — and a pack in the drive's `zim/` folder is
+  skipped; `kiwix-serve` cannot load it either. A Kit at a drive's root (`D:\`) is not
+  affected; a portable exe run outside a Kit keeps its data under
+  `C:\Users\<name>\AppData\Roaming\`, so a Windows account name such as `Jürgen` hits this, as
+  does a drive folder with such a name. macOS and Linux are not affected.
 - **A redirect entry (an alias title) opens the article it points to — one hop, same pack.**
   About half of a Wikipedia ZIM's entries are redirects; `kiwix-serve` answers them with a 302
   rather than the target's bytes, and the viewer follows exactly one such hop inside the same

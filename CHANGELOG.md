@@ -81,6 +81,15 @@ from its first public `1.0.0` release onward.
 - **A list built from your documents now says that the knowledge packs you ticked were not
   searched.** So does a skill's answer built from a document's data. Before, such an answer showed
   nothing about the packs, which read as if they had found nothing (#734).
+- **Knowledge packs no longer stay off for the session after a rare clash at start.** The program
+  that serves your packs picks a free connection port as it starts. If another program took that
+  port in the same moment, the app was meant to try once more on another one, but it did not
+  recognise the program's message, so packs stayed unavailable until you added or removed one or
+  restarted the app. It now tries again (#712).
+- **The app's log no longer copies what the knowledge-pack program printed when it fails to
+  start.** That message named the folder of your workspace, once for every question you asked
+  while packs were unavailable. The log now records only the kind of failure, as it already did
+  for every other knowledge-pack problem (#712).
 
 ### Changed
 
