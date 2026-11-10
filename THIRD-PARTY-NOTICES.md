@@ -63,8 +63,8 @@ node scripts/generate-third-party-notices.mjs
 @radix-ui/react-visually-hidden@1.2.5
 @radix-ui/rect@1.1.2
 @streamdown/math@1.0.3
-@tanstack/react-virtual@3.14.22
-@tanstack/virtual-core@3.19.7
+@tanstack/react-virtual@3.14.25
+@tanstack/virtual-core@3.19.10
 @types/debug@4.1.13
 @types/estree@1.0.9
 @types/estree-jsx@1.0.5
@@ -191,7 +191,7 @@ pako@1.0.11
 papaparse@5.7.0
 parse-entities@4.0.2
 parse5@7.3.0
-pdfjs-dist@6.4.299
+pdfjs-dist@6.5.438
 process-nextick-args@2.0.1
 property-information@7.2.0
 react@18.3.1
@@ -1365,7 +1365,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### @tanstack/react-virtual@3.14.22
+### @tanstack/react-virtual@3.14.25
 
 - License: MIT
 - Author: Tanner Linsley
@@ -1397,7 +1397,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### @tanstack/virtual-core@3.19.7
+### @tanstack/virtual-core@3.19.10
 
 - License: MIT
 - Author: Tanner Linsley
@@ -6168,7 +6168,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### pdfjs-dist@6.4.299
+### pdfjs-dist@6.5.438
 
 - License: Apache-2.0
 - Repository: https://github.com/mozilla/pdf.js
@@ -6831,6 +6831,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+#### `wasm/LICENSE_PDFJS_QUICKJS`
+
+```
+MIT License
+
+Copyright (c) 2026 Mozilla Foundation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
 #### `wasm/LICENSE_QCMS`
 
 ```
@@ -6855,6 +6881,33 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+#### `wasm/LICENSE_QUICKJS`
+
+```
+QuickJS Javascript Engine
+
+Copyright (c) 2017-2021 Fabrice Bellard
+Copyright (c) 2017-2021 Charlie Gordon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ### process-nextick-args@2.0.1

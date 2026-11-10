@@ -112,6 +112,10 @@ from its first public `1.0.0` release onward.
   manifest with a source for only one of them never produced a working model, even after a clean
   download of several gigabytes. Such a manifest is now skipped, with a line in the log. The vision
   model that ships with the app is not affected (#752).
+- **The PDF reader is updated to pdf.js 6.5.** It guards against more kinds of damaged or crafted
+  PDF, among them files that could make it hang or skip pages. On the 54 PDFs we compared it read
+  the same text as before, except one page where a few extra spaces between words are gone, and our
+  test scans were still recognised as before (#792).
 
 ## [0.1.64] — 2026-10-28
 
