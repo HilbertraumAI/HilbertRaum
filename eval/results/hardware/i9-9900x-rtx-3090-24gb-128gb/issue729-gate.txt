@@ -1,0 +1,106 @@
+#729 second-machine leg: the §2 grounded-QA gate on the other five chat models, b11146 vs b12110
+=================================================================================================
+Run 2026-11-10, 18:17-18:47 CET, from master 5c1aca87 (carries #785's b12110 pin), branch
+test/729-second-machine-gate. Runbook: PR #785 "Leg 3", run on this machine instead of ps-work.
+
+VERDICT: PASS
+
+Machine
+-------
+OS        Ubuntu 22.04.5 LTS, kernel 6.8.0-138-generic, x86_64
+CPU       Intel Core i9-9900X @ 3.50 GHz (10 cores / 20 threads)
+GPU       NVIDIA GeForce RTX 3090, 24 GB (24,576 MiB; llama-server --list-devices:
+          "Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23819 MiB free)")
+RAM       128 GB (125 GiB as reported by free)
+Driver    NVIDIA proprietary 595.99.02 (Vulkan)
+Backend   vulkan
+Node      v24.22.2
+GPU idle before the run: no compute processes, 438 MiB used. All models fit on the card in full
+(observed 9.3 GB in use, 81 % load, during the gemma4-12b b11146 run).
+
+Engines (official archives, installed by scripts/fetch-runtime.sh into two scratch roots)
+-----------------------------------------------------------------------------------------
+b11146  model-manifests/runtime-sources.yaml from 39f60675^
+        llama-server --version: 0.5.0-dev (build 11146, commit 7fe450e19)
+b12110  model-manifests/runtime-sources.yaml from master
+        llama-server --version: 0.9.0-dev (build 12110, commit cd959bae9)
+        fetch-runtime: "left out: llama-connect"; no llama-connect in either install.
+
+Models
+------
+Already on this machine (the app's own models folder), hard-linked read-only into one scratch
+models folder; each root's `models` was a symlink to it. Nothing downloaded. SHA-256 of all seven
+files checked against their manifests, all exact:
+  gemma4-12b-it-qat-q4               93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b
+  granite-4.1-8b-q4                  ed902ac9eb6adce5a90c6a08c8ea201b50e23fdc5976d1cd0362006afac5309e
+  ministral3-8b-instruct-2512-q4     33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761
+  qwen3-4b-instruct-2507-q4          3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597
+  qwen3-8b-instruct-q4               d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785
+  multilingual-e5-small-q8           3c3569e72acd821a30f1c586f4d39862407da7da3f08fc7068798e5982b5f6db
+  bge-reranker-v2-m3 (f16)           5df93be121c09c43432102ad2b9569d369ccb85c209ca7583e8ccd28f0e41b88
+
+Commands (from apps/desktop, one model and one build per run, sequentially)
+---------------------------------------------------------------------------
+for m in gemma4-12b-it-qat-q4 granite-4.1-8b-q4 ministral3-8b-instruct-2512-q4 \
+         qwen3-4b-instruct-2507-q4 qwen3-8b-instruct-q4; do
+  for b in b11146 b12110; do
+    HILBERTRAUM_MODEL_EVAL=<base>/$b HILBERTRAUM_EVAL_BACKEND=vulkan \
+    HILBERTRAUM_EVAL_MODEL=$m.gguf HILBERTRAUM_EVAL_MACHINE=i9-9900x-729-$b-${m%-q4} \
+      npx vitest run tests/manual/model-eval.test.ts
+  done
+done
+HILBERTRAUM_BRINGUP_SMOKE=<base>/b12110 npx vitest run tests/manual/bringup-smoke.test.ts
+HILBERTRAUM_BRINGUP_SMOKE=<base>/b11146 npx vitest run tests/manual/bringup-smoke.test.ts   (control, see below)
+
+Evidence: eval/results/i9-9900x-729-b{11146,12110}-<model>-vulkan-{quality.csv,items.jsonl} (20 files).
+
+Grounded-QA gate (§2 harness), b11146 -> b12110
+-----------------------------------------------
+Every model started and answered all 100 items on both builds. "=" means identical.
+
+model                            EM        cite-correct  grounded   abstain(unans)   mean_f1           byte-identical
+gemma4-12b-it-qat-q4             0.977 =   0.988 =       0.977 =    0.933 =          0.3402 -> 0.3373  95 / 100
+granite-4.1-8b-q4                0.977 =   0.988 =       0.977 =    0.733 -> 0.800   0.2157 -> 0.2107  80 / 100
+ministral3-8b-instruct-2512-q4   0.965 =   0.988 =       0.965 =    1.000 =          0.2995 -> 0.2999  90 / 100
+qwen3-4b-instruct-2507-q4        0.977 =   0.988 =       0.977 =    0.933 =          0.3366 -> 0.3351  92 / 100
+qwen3-8b-instruct-q4             0.977 =   0.988 =       0.977 =    0.867 =          0.3267 =          97 / 100
+
+over_abstain_rate is identical on all five; hallucination_rate is identical except granite
+(0.267 -> 0.200, the same item as below).
+
+One scored flip in 500 item pairs, and it is not a loss:
+  granite-4.1-8b, de-vhs-lehrbuch (unanswerable: the course programme does not name the textbook).
+  Retrieved sources identical on both builds. Both answers say the title is not given in the
+  excerpts. b11146: "... jedoch wird der Titel oder Herausgeber in den gegebenen Exzerten nicht
+  genauer erwähnt. Daher kann der genaue Lehrbuchtitel nur durch zusätzliche Informationen geklärt
+  werden ..." (not caught by the abstention phrase list, scored as answered). b12110: "... Daher kann
+  die genaue Bezeichnung des Lehrbuchs nicht aus den gegebenen Exzerten bestimmt werden." (caught,
+  scored as abstained). The same substance in other words; the rate change is the scorer's phrase
+  list, in b12110's favour. Same kind as the amendment's qwen3.5-4b en-coffee-redlight flip.
+
+No other item changes EM, citation, grounded, abstained or correct. Every other answer that is not
+byte-identical differs in wording only.
+
+Retrieval noise: the retrieved sources differ between builds on de-hausordnung-sonntag,
+de-security-rest and de-vhs-gebuehr (gemma4-12b and granite: all three; qwen3-8b: two;
+qwen3-4b-2507: one; ministral: none). These are the same three items the #729 amendment saw vary
+on the GTX 1070 Ti box. Across all ten runs each of the three items takes exactly two retrieval
+variants, and BOTH variants occur on BOTH builds (for example de-vhs-gebuehr: variant 1 in four
+b11146 runs and one b12110 run, variant 2 in one b11146 run and four b12110 runs). So the
+variation is the harness's run-to-run near-tie, not the build. None of the three items flips a
+score on any model.
+
+Template leaks / garbling: none. All 20 dumps scanned for ChatML, Gemma, Mistral and Granite turn
+markers and U+FFFD: 0 hits; no empty answers.
+
+Bring-up smoke (tests/manual/bringup-smoke.test.ts), b12110: PASS, 4 / 4 (19 s)
+  Ministral 3 8B 2512, Granite 4.1 8B, Gemma 4 12B QAT, Qwen3 4B Instruct 2507: each loads,
+  answers in German, no template leak, Deep yields a clean answer. Gemma 4 12B streams reasoning
+  in Deep (1,011 chars); the other three none, as recorded in §7.3.
+  Control on b11146: also 4 / 4. Run because Qwen3 4B Instruct 2507's answer is factually weak on
+  b12110 (calls Vienna's river the "Wienfluss" and says the Danube does not flow through the city).
+  b11146 gives the same kind of answer ("Wienfluss", "Wienauer Fluss"), so this is the model, not
+  the engine; the smoke's checks pass on both builds.
+
+Not covered here: #785 legs 1 and 2 (the qwen3.6 / qwen3.8 cache restore and the Qwen3.8 27B MTP
+start). This is the same machine those legs are planned for, but they were not run in this session.
