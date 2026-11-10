@@ -1,0 +1,391 @@
+{
+  "hw_slug": "i9-9900x-rtx-3090-24gb-128gb",
+  "leg": "729",
+  "variant": "nomtp-b11146-b",
+  "rung": "rung 1 (default args, GPU auto-offload)",
+  "model_id": "qwen3.8-27b-ud-q5km",
+  "model_file": "qwen3.8-27b-ud-q5km.gguf",
+  "model_bytes": 19771509664,
+  "runtime": "11146 (7fe450e19)",
+  "argv": "--host 127.0.0.1 --port 37659 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 8192",
+  "mtp": false,
+  "extra_args": [
+    "--cache-ram",
+    "8192"
+  ],
+  "ctx": 8192,
+  "threads": 10,
+  "physical_batch": 2048,
+  "ubatch": 2048,
+  "before": {
+    "list_devices": "Available devices:\n  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23810 MiB free)",
+    "nvidia_smi": {
+      "used": 513,
+      "total": 24576,
+      "free": 23611
+    },
+    "heaps": [],
+    "desktop": "GNOME desktop only; bench study 2 paused, no other GPU process; 275 W cap",
+    "at": "2026-11-10T21:25:03.921Z"
+  },
+  "load_ms": 7328,
+  "load_peak_nvidia_smi": {
+    "t": 1794345906799,
+    "used": 18367,
+    "total": 24576,
+    "free": 5757
+  },
+  "after_load": {
+    "nvidia_smi": {
+      "used": 19594,
+      "total": 24576,
+      "free": 4530
+    },
+    "list_devices": "Available devices:\n  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 4428 MiB free)",
+    "heaps": [],
+    "at": "2026-11-10T21:25:12.938Z"
+  },
+  "prompt_tokens": 2015,
+  "request_ms": 20186,
+  "tokens_predicted": 512,
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 2015,
+    "prompt_ms": 2195.85,
+    "prompt_per_token_ms": 1.0897518610421835,
+    "prompt_per_second": 917.6400938133297,
+    "predicted_n": 512,
+    "predicted_ms": 17953.591,
+    "predicted_per_token_ms": 35.13422896281801,
+    "predicted_per_second": 28.462272533667498
+  },
+  "peak_nvidia_smi": {
+    "t": 1794345913952,
+    "used": 19717,
+    "total": 24576,
+    "free": 4407
+  },
+  "samples": [
+    {
+      "t": 1794345912952,
+      "used": 19593,
+      "total": 24576,
+      "free": 4532
+    },
+    {
+      "t": 1794345913952,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345914952,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345915956,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345916956,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345917956,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345918957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345919957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345920957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345921957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345922957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345923957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345924957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345925957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345926957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345927957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345928957,
+      "used": 19717,
+      "total": 24576,
+      "free": 4407
+    },
+    {
+      "t": 1794345929957,
+      "used": 19714,
+      "total": 24576,
+      "free": 4410
+    },
+    {
+      "t": 1794345930957,
+      "used": 19714,
+      "total": 24576,
+      "free": 4410
+    },
+    {
+      "t": 1794345931957,
+      "used": 19712,
+      "total": 24576,
+      "free": 4412
+    },
+    {
+      "t": 1794345932957,
+      "used": 19712,
+      "total": 24576,
+      "free": 4412
+    },
+    {
+      "t": 1794345933136,
+      "used": 19712,
+      "total": 24576,
+      "free": 4412
+    }
+  ],
+  "after_stop": {
+    "nvidia_smi": {
+      "used": 508,
+      "total": 24576,
+      "free": 23616
+    },
+    "list_devices": "Available devices:\n  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23816 MiB free)",
+    "heaps": [],
+    "exit": {
+      "code": 0,
+      "sig": null
+    }
+  },
+  "heap_samples": [
+    {
+      "t": 1794345903921,
+      "phase": "before",
+      "heaps": []
+    },
+    {
+      "t": 1794345912938,
+      "phase": "after_load",
+      "heaps": []
+    },
+    {
+      "t": 1794345915956,
+      "phase": "request",
+      "heaps": []
+    },
+    {
+      "t": 1794345918956,
+      "phase": "request",
+      "heaps": []
+    },
+    {
+      "t": 1794345921956,
+      "phase": "request",
+      "heaps": []
+    },
+    {
+      "t": 1794345924954,
+      "phase": "request",
+      "heaps": []
+    },
+    {
+      "t": 1794345927956,
+      "phase": "request",
+      "heaps": []
+    },
+    {
+      "t": 1794345930957,
+      "phase": "request",
+      "heaps": []
+    },
+    {
+      "t": 1794345933164,
+      "phase": "after_request",
+      "heaps": []
+    },
+    {
+      "t": 1794345934896,
+      "phase": "after_stop",
+      "heaps": []
+    }
+  ],
+  "prompt_text_in_log": false,
+  "request_errors": [],
+  "fit": {
+    "offloaded": [
+      "0.02.694.499 I load_tensors: offloaded 66/66 layers to GPU"
+    ],
+    "buffers": [
+      "0.02.694.504 I load_tensors:   CPU_Mapped model buffer size =   682.03 MiB",
+      "0.02.694.505 I load_tensors:      Vulkan0 model buffer size = 17828.31 MiB",
+      "0.06.821.676 I llama_context: Vulkan_Host  output buffer size =     0.95 MiB",
+      "0.06.831.095 I llama_kv_cache:    Vulkan0 KV buffer size =   512.00 MiB",
+      "0.06.849.321 I llama_memory_recurrent:    Vulkan0 RS buffer size =   149.62 MiB",
+      "0.06.945.880 I sched_reserve:    Vulkan0 compute buffer size =   560.06 MiB",
+      "0.06.945.884 I sched_reserve: Vulkan_Host compute buffer size =   112.07 MiB"
+    ],
+    "kv": [
+      "0.00.107.897 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)",
+      "0.01.371.716 I print_info: n_ctx_train           = 262144",
+      "0.01.371.744 I print_info: n_swa                 = 0",
+      "0.01.371.744 I print_info: is_swa_any            = 0",
+      "0.01.371.758 I print_info: n_ctx_orig_yarn       = 262144",
+      "0.06.820.634 I llama_context: constructing llama_context",
+      "0.06.820.636 I llama_context: n_seq_max             = 1",
+      "0.06.820.637 I llama_context: n_ctx                 = 8192",
+      "0.06.820.637 I llama_context: n_ctx_seq             = 8192",
+      "0.06.820.637 I llama_context: n_batch               = 2048",
+      "0.06.820.638 I llama_context: n_ubatch              = 2048",
+      "0.06.820.638 I llama_context: causal_attn           = 1",
+      "0.06.820.638 I llama_context: flash_attn            = auto",
+      "0.06.820.639 I llama_context: kv_unified            = false",
+      "0.06.820.641 I llama_context: freq_base             = 10000000.0",
+      "0.06.820.642 I llama_context: freq_scale            = 1",
+      "0.06.820.642 I llama_context: n_rs_seq              = 0",
+      "0.06.820.642 I llama_context: n_outputs_max         = 1",
+      "0.06.820.642 I llama_context: n_outputs_max_per_seq = 1",
+      "0.06.820.643 I llama_context: n_ctx_seq (8192) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+      "0.06.821.676 I llama_context: Vulkan_Host  output buffer size =     0.95 MiB",
+      "0.06.849.321 I llama_memory_recurrent:    Vulkan0 RS buffer size =   149.62 MiB",
+      "0.06.849.346 I llama_memory_recurrent: size =  149.62 MiB (     1 cells,  64 layers,  1 seqs  0 rs_seq), R (f32):    5.62 MiB, S (f32):  144.00 MiB, P (f32):    0.00 MiB",
+      "0.07.066.016 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+      "0.07.066.028 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+      "0.09.053.381 I slot   operator(): id  0 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2015",
+      "0.09.053.383 I slot   operator(): id  0 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)",
+      "0.09.241.674 I slot   operator(): id  0 | task 0 | cached n_tokens = 2011, memory_seq_rm [2011, end)"
+    ],
+    "fit": [
+      "# leg729-nomtp-b11146-b : argv: llama-server --host 127.0.0.1 --port 37659 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 8192",
+      "0.00.109.918 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.109.918 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+      "0.00.109.980 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.00.907.788 I common_params_fit_impl: projected to use 19050 MiB of device memory vs. 23330 MiB of free device memory",
+      "0.00.907.792 I common_params_fit_impl: will leave 4280 >= 1024 MiB of free device memory, no changes needed",
+      "0.00.907.793 I common_fit_params: successfully fit params to free device memory",
+      "0.00.907.796 I common_fit_params: fitting params to free memory took 0.80 seconds",
+      "0.07.066.016 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+      "0.07.066.114 I srv          init: idle slots will be saved to prompt cache upon starting a new task",
+      "0.07.074.755 I srv  update_slots: all slots are idle",
+      "0.29.202.961 I srv  update_slots: all slots are idle"
+    ],
+    "device": [
+      "0.00.103.085 I cmn  common_param: device_info:",
+      "0.00.107.471 I cmn  common_param:   - Vulkan0 : NVIDIA GeForce RTX 3090 (24822 MiB, 23810 MiB free)",
+      "0.00.109.918 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.109.980 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.00.831.461 I common_memory_breakdown_print: |   - Vulkan0 (RTX 3090) | 24822 = 23330 + (19050 = 17828 +     661 +     560) +      -17558 |",
+      "0.00.907.788 I common_params_fit_impl: projected to use 19050 MiB of device memory vs. 23330 MiB of free device memory",
+      "0.00.907.792 I common_params_fit_impl: will leave 4280 >= 1024 MiB of free device memory, no changes needed",
+      "0.00.907.793 I common_fit_params: successfully fit params to free device memory",
+      "0.01.035.313 I llama_prepare_model_devices: using device Vulkan0 (NVIDIA GeForce RTX 3090) (0000:c1:00.0) - 23787 MiB free",
+      "0.02.694.505 I load_tensors:      Vulkan0 model buffer size = 17828.31 MiB",
+      "0.06.831.095 I llama_kv_cache:    Vulkan0 KV buffer size =   512.00 MiB",
+      "0.06.849.321 I llama_memory_recurrent:    Vulkan0 RS buffer size =   149.62 MiB",
+      "0.06.945.880 I sched_reserve:    Vulkan0 compute buffer size =   560.06 MiB",
+      "0.29.238.817 I common_memory_breakdown_print: |   - Vulkan0 (RTX 3090) | 24822 = 4170 + (19050 = 17828 +     661 +     560) +        1601 |"
+    ],
+    "spec": [
+      "# leg729-nomtp-b11146-b : argv: llama-server --host 127.0.0.1 --port 37659 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 8192",
+      "0.01.278.411 I load: special tokens cache size = 33",
+      "0.07.066.012 I srv    load_model: speculative decoding will use checkpoints",
+      "0.07.066.026 I spec common_specu: no implementations specified for speculative decoding"
+    ]
+  },
+  "excerpt": [
+    "# leg729-nomtp-b11146-b : argv: llama-server --host 127.0.0.1 --port 37659 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 8192",
+    "0.00.103.085 I cmn  common_param: device_info:",
+    "0.00.109.918 I cmn  common_init_: fitting params to device memory ...",
+    "0.00.109.918 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+    "0.00.109.980 I common_params_fit_impl: getting device memory data for initial parameters:",
+    "0.00.907.788 I common_params_fit_impl: projected to use 19050 MiB of device memory vs. 23330 MiB of free device memory",
+    "0.00.907.792 I common_params_fit_impl: will leave 4280 >= 1024 MiB of free device memory, no changes needed",
+    "0.00.907.793 I common_fit_params: successfully fit params to free device memory",
+    "0.00.907.796 I common_fit_params: fitting params to free memory took 0.80 seconds",
+    "0.01.035.313 I llama_prepare_model_devices: using device Vulkan0 (NVIDIA GeForce RTX 3090) (0000:c1:00.0) - 23787 MiB free",
+    "0.01.278.411 I load: special tokens cache size = 33",
+    "0.01.371.716 I print_info: n_ctx_train           = 262144",
+    "0.01.371.744 I print_info: n_swa                 = 0",
+    "0.01.371.744 I print_info: is_swa_any            = 0",
+    "0.01.371.758 I print_info: n_ctx_orig_yarn       = 262144",
+    "0.01.380.257 I load_tensors: loading model tensors, this can take a while... (load_mode = mmap)",
+    "0.02.694.495 I load_tensors: offloading output layer to GPU",
+    "0.02.694.498 I load_tensors: offloading 64 repeating layers to GPU",
+    "0.02.694.499 I load_tensors: offloaded 66/66 layers to GPU",
+    "0.02.694.504 I load_tensors:   CPU_Mapped model buffer size =   682.03 MiB",
+    "0.02.694.505 I load_tensors:      Vulkan0 model buffer size = 17828.31 MiB",
+    "0.06.820.637 I llama_context: n_ctx                 = 8192",
+    "0.06.820.637 I llama_context: n_ctx_seq             = 8192",
+    "0.06.820.639 I llama_context: kv_unified            = false",
+    "0.06.820.643 I llama_context: n_ctx_seq (8192) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+    "0.06.821.676 I llama_context: Vulkan_Host  output buffer size =     0.95 MiB",
+    "0.06.831.095 I llama_kv_cache:    Vulkan0 KV buffer size =   512.00 MiB",
+    "0.06.849.321 I llama_memory_recurrent:    Vulkan0 RS buffer size =   149.62 MiB",
+    "0.06.849.346 I llama_memory_recurrent: size =  149.62 MiB (     1 cells,  64 layers,  1 seqs  0 rs_seq), R (f32):    5.62 MiB, S (f32):  144.00 MiB, P (f32):    0.00 MiB",
+    "0.06.945.880 I sched_reserve:    Vulkan0 compute buffer size =   560.06 MiB",
+    "0.06.945.884 I sched_reserve: Vulkan_Host compute buffer size =   112.07 MiB",
+    "0.07.066.012 I srv    load_model: speculative decoding will use checkpoints",
+    "0.07.066.016 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+    "0.07.066.026 I spec common_specu: no implementations specified for speculative decoding",
+    "0.07.066.028 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+    "0.07.066.114 I srv          init: idle slots will be saved to prompt cache upon starting a new task",
+    "0.07.074.755 I srv  update_slots: all slots are idle",
+    "0.09.053.381 I slot   operator(): id  0 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2015",
+    "0.29.202.961 I srv  update_slots: all slots are idle"
+  ],
+  "app_report": null
+}
