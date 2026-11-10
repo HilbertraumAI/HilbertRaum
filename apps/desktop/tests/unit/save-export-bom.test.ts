@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 
-// `save-export.ts` imports { BrowserWindow, dialog } from 'electron' at module top. On CI the
-// electron BINARY download is skipped (ELECTRON_SKIP_BINARY_DOWNLOAD=1 in ci.yml), so importing
-// the REAL package throws "Electron failed to install correctly" before a single test runs —
-// this suite broke master CI from the moment it landed (invoice-hardening merge, bcfa876).
+// `save-export.ts` imports { BrowserWindow, dialog } from 'electron' at module top. On CI there is
+// no electron BINARY (since Electron 42 `npm ci` downloads none, and ci.yml's dead ELECTRON_MIRROR
+// stops the lazy download, #795), so importing the REAL package throws "Electron failed to install
+// correctly" before a single test runs — this suite broke master CI from the moment it landed
+// (invoice-hardening merge, bcfa876).
 // `bomFor` is pure; mock the transport like every other suite that touches this module.
 vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },

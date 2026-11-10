@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,6 +15,12 @@ import type { Translator } from '../../src/main/services/translation'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { CARDS, CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
+
+// #795: `registerRagIpc` reaches `ipcMain` through `guarded-handle`. Unmocked, `electron` is the
+// real npm package, whose first load downloads the Electron binary when none is installed (Electron
+// >= 42): every CI leg fetched ~100 MB from GitHub here, and a 504 failed the file. Nothing in this
+// file registers a handler.
+vi.mock('electron', () => ({ ipcMain: { handle: () => undefined, removeHandler: () => undefined } }))
 
 // Wave 8 ruling (b)(G)/NF-1 (step 4-8, the Wave 8 analysis's finding that a composition test
 // through `compose-services.ts` -> `reranker/factory.ts` alone cannot see an omission at
