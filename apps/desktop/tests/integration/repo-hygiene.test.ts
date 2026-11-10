@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { en } from '../../src/shared/i18n'
+import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
 import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
@@ -507,6 +508,83 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
         'the sidecars the teardown just killed. Only extend the ALLOWLIST above (with a comment ' +
         'saying why) when the site is a pure status/lifecycle READ.'
     ).toEqual(ALLOWLIST)
+  })
+})
+
+// #790: a piped stdio stream of a spawned child can emit an 'error' of its own (measured: a spawn
+// that fails before libuv opens its pipes, on Windows), and with no listener that is an uncaught
+// exception, which in the main process is a crash. Every site's own row proves its guard; this
+// keeps it true for a spawn that does not exist yet, which no behavioural test can reach. A text
+// latch, like AUD-02 above: (a) the modules that may start a process are listed, so a new one is
+// looked at, and (b) a file whose spawn pipes a stream calls the guard at least once per such spawn.
+// What a text check cannot see: a spawn with no `stdio` option at all (Node's default pipes all
+// three; every spawn here states its stdio, and a new module trips (a)), and whether each call
+// guards the right child (the per-site rows prove that for the sites that exist).
+describe('repo hygiene — every piped stdio stream of a spawned child has an error listener (#790)', () => {
+  const MAIN = join(DESKTOP_ROOT, 'src', 'main')
+  const GUARD = guardChildStdio.name // follows a rename of the helper
+  const relOf = (file: string): string => file.slice(DESKTOP_ROOT.length + 1).replace(/\\/g, '/')
+  const codeLines = (file: string): string[] =>
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line) => {
+        const t = line.trim()
+        return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') ? '' : line.replace(/\/\/.*$/, '')
+      })
+  const files = filesUnder(MAIN, /\.(ts|tsx|mts)$/)
+
+  it('the modules that import node:child_process are the known spawn owners', () => {
+    const importers = files
+      .filter((f) => codeLines(f).some((l) => /from\s+['"](?:node:)?child_process['"]/.test(l)))
+      .map(relOf)
+      .sort()
+    expect(files.length).toBeGreaterThan(100) // the walk really walked (not a moved root)
+    expect(
+      importers,
+      'A module under src/main now imports node:child_process (or no longer does). A child it spawns ' +
+        `with a piped stream (Node's default stdio is 'pipe' for all three) must pass through ${GUARD}() ` +
+        'right after spawn() returns (#790): without it a stream error crashes the main process. Then ' +
+        'update this list.'
+    ).toEqual([
+      'src/main/services/engine-health.ts',
+      'src/main/services/runtime-download.ts',
+      'src/main/services/runtime/gpu.ts',
+      'src/main/services/runtime/sidecar.ts',
+      'src/main/services/transcriber/cli.ts',
+      'src/main/services/zim/index.ts',
+      'src/main/services/zim/serve.ts'
+    ])
+  })
+
+  it('every file whose spawn pipes a stream calls the guard once per such spawn', () => {
+    const piped = new Map<string, number>()
+    const unclassified: string[] = []
+    let stdioOptions = 0
+    for (const file of files) {
+      for (const line of codeLines(file)) {
+        // A shorthand `{ stdio }` says nothing this check can read: fail closed.
+        if (/[{,]\s*stdio\s*[,}]/.test(line)) unclassified.push(`${relOf(file)} :: ${line.trim()}`)
+        for (const m of line.matchAll(/\bstdio\s*:\s*(.*)$/g)) {
+          stdioOptions++
+          const value = m[1]!.trim()
+          // Only an inline literal is read; anything else (a variable, a call) fails closed.
+          const literal = /^\[[^\]]*\]/.exec(value)?.[0] ?? /^(['"])[a-z]+\1/.exec(value)?.[0]
+          if (literal === undefined) unclassified.push(`${relOf(file)} :: ${line.trim()}`)
+          else if (/['"](?:pipe|overlapped)['"]/.test(literal)) piped.set(relOf(file), (piped.get(relOf(file)) ?? 0) + 1)
+        }
+      }
+    }
+    expect(stdioOptions).toBeGreaterThanOrEqual(7) // the scan really found the spawn options
+    expect(unclassified, `a stdio option this check cannot read; spell it inline or widen the check`).toEqual([])
+    const calls = new RegExp(`(?<!function\\s+)\\b${GUARD}\\(`, 'g') // a call, not the definition
+    const unguarded = [...piped].filter(
+      ([rel, count]) => (codeLines(join(DESKTOP_ROOT, rel)).join('\n').match(calls)?.length ?? 0) < count
+    )
+    expect(piped.size).toBeGreaterThanOrEqual(5) // llama-server, the probe, the engine check, whisper-cli, kiwix-serve
+    expect(
+      unguarded.map(([rel, count]) => `${rel} (${count} piped)`),
+      `call ${GUARD}(child, …) right after spawn() returns for every spawn that pipes a stream (#790)`
+    ).toEqual([])
   })
 })
 

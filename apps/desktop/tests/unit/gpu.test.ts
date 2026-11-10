@@ -104,9 +104,10 @@ describe('parseListDevices', () => {
 // ---- probeGpuDevices (fake spawn — no real binary, no GPU) -------------------------
 
 class FakeProbeChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
+  pid: number | undefined = 9
   killed = false
   stdout = new EventEmitter()
+  stderr = new EventEmitter() // both piped, as the real probe's are (#530)
   kill(): boolean {
     this.killed = true
     return true
@@ -229,6 +230,49 @@ describe('probeGpuDevices', () => {
     }
   ])('a probe that gave no answer resolves null, not [] — $name (#653)', async ({ spawn, platform }) => {
     expect(await probeGpuDevices('/bin/llama-server', { spawn, platform, verify: async () => 'skip-dev' })).toBeNull()
+  })
+
+  // #790, the order measured on Windows (Node 24.13, Electron 43.8.3): a spawn that fails before its
+  // pipes are open emits the child's ENOENT, then ENOTCONN on stdout and on stderr, then 'close'
+  // with the negative errno; the child never had a PID. Unhandled, each stream error is an uncaught
+  // exception: a main-process crash, at startup (the session's device probe runs then).
+  it('absorbs the errors on both piped streams of a failed spawn and resolves null (#790)', async () => {
+    const thrown: unknown[] = []
+    const { spawn } = probeSpawn((child) => {
+      child.pid = undefined
+      child.emit('error', Object.assign(new Error('spawn C:\\Kit\\llama-server.exe ENOENT'), { code: 'ENOENT' }))
+      for (const stream of [child.stdout, child.stderr]) {
+        try {
+          stream.emit('error', Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN' }))
+        } catch (e) {
+          thrown.push(e)
+        }
+      }
+      child.emit('close', -4058, null)
+    })
+    expect(await probeGpuDevices('/bin/llama-server', { spawn, platform: 'win32', verify: async () => 'skip-dev' })).toBeNull()
+    expect(thrown).toEqual([])
+  })
+
+  // #790 (owner call): stdout IS the answer, and an exit 0 persists it. If that stream failed, what
+  // arrived may be cut short: here the header alone, which would parse as [] ("no graphics card").
+  it('a probe whose stdout stream failed has no answer, even on exit 0 (#790)', async () => {
+    const { spawn } = probeSpawn((child) => {
+      child.stdout.emit('data', 'Available devices:\n')
+      child.stdout.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+      child.emit('exit', 0, null)
+      child.emit('close', 0, null)
+    })
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      expect(await probeGpuDevices('/bin/llama-server', { spawn, verify: async () => 'skip-dev' })).toBeNull()
+      const noAnswer = 'The device probe gave no answer; read as unknown, not "no graphics card"'
+      expect(warn.mock.calls.filter((c) => c[0] === noAnswer)).toEqual([
+        [noAnswer, { detail: 'its output could not be read' }]
+      ])
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('kills a hung probe on timeout and resolves NULL — unknown, NOT "no GPU" (#380; T6 — fake timers, no wall-clock flake)', async () => {
