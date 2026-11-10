@@ -348,7 +348,7 @@ maps every option and still writes the integrity hash, and fails on `asar: false
 `disableAsarIntegrity`.
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
-Decode it with the library, not by hand. Expected for 43.8.3 (as for 43.7.7 and 43.8.0): `001011001`.
+Decode it with the library, not by hand. Expected for 43.8.6 (as for 43.7.7, 43.8.0 and 43.8.3): `001011001`.
 `release.yml`'s build-win decodes the Windows exe it packages against `verify-mac-build.sh`'s
 `EXPECTED_WIRE` on every run (#769); by hand:
 
