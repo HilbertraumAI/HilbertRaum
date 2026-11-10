@@ -44,8 +44,17 @@ permissions:
 # understands the lazy-download model and already exits 0 when the binary is simply not present
 # yet. It stays because it also skips the check on a genuinely half-extracted tree, which CI can
 # neither repair nor usefully diagnose. See packaging.md.
+#
+# ELECTRON_MIRROR points Electron's lazy download at a dead local port, so the suite can never fetch
+# the binary (#795). A test that loads the real `electron` package unmocked used to make every leg
+# download ~100 MB from GitHub mid-run, and a GitHub 504 turned four legs red; now such a test fails
+# at once, on every leg, with "Electron failed to install correctly": mock `electron` in that file.
+# force_no_cache makes @electron/get skip its download cache too, so a runner that happens to hold a
+# cached zip cannot let such a test pass there alone.
 env:
   HILBERTRAUM_SKIP_ELECTRON_CHECK: '1'
+  ELECTRON_MIRROR: 'http://127.0.0.1:9/'
+  force_no_cache: 'true'
 
 jobs:
   build-and-test:
