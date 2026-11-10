@@ -957,7 +957,10 @@ the explicit global install is the reliable mechanism and replaced it.
 **Why it can run with zero weights / zero network / zero binaries:** the unit + integration suite
 is offline by construction — mock runtime, mock embedder, `electron` mocked — and nothing in
 `typecheck`/`build`/`test` launches Electron. So the ~100 MB Electron platform binary is never
-needed in CI.
+needed in CI. One test broke that from 2026-09-17 until #795: `reranker-callbacks-composition`
+reached `ipcMain` unmocked, and loading the real `electron` package made every leg download the
+binary from GitHub mid-run; a GitHub 504 on 2026-11-08 turned four legs red. It mocks `electron`
+now, and `ELECTRON_MIRROR` (table below) makes any such test fail at once instead of downloading.
 
 **How that works changed with Electron 42 (wave DEP-4, 2026-08-18).** Electron **removed the
 `postinstall` binary download** as supply-chain hardening: the package declares no `scripts` at
@@ -978,7 +981,8 @@ of the electron bin. Two consequences worth stating plainly, because both have a
 | Env var (CI only) | Effect |
 | --- | --- |
 | `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` | [`scripts/verify-electron.mjs`](../scripts/verify-electron.mjs) early-exits. Now belt-and-braces rather than load-bearing: the script already exits 0 when the binary is merely not downloaded yet. It stays because it also skips the check on a genuinely half-extracted tree, which CI can neither repair nor usefully diagnose. |
-| `ELECTRON_OVERRIDE_DIST_PATH` | Points at an out-of-tree Electron build; the one env var Electron ≥ 42's `index.js` still reads. |
+| `ELECTRON_OVERRIDE_DIST_PATH` | Points at an out-of-tree Electron build; the one env var Electron ≥ 42's `index.js` still reads. Not set in CI. |
+| `ELECTRON_MIRROR=http://127.0.0.1:9/`, `force_no_cache=true` | #795: Electron's lazy download goes to a dead local port and skips `@electron/get`'s cache, so the suite can never fetch the binary. A test that loads the real `electron` package unmocked fails at once, on every leg, with "Electron failed to install correctly"; mock `electron` in that file. |
 
 **Getting the binary on a dev box:** it arrives by itself the first time anything runs the
 electron bin (`npm run dev`, `npm run package:win`). To materialize it deliberately —
