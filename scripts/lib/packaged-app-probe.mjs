@@ -58,6 +58,8 @@ const check = (name, ok, detail = '') => {
 }
 
 // Fixtures: a text PDF from the repo's own test helpers (the scan is drawn in the app, below).
+// fixtures.ts imports its siblings without an extension (`./archives`, since #769), which Node's
+// own resolver refuses, so the child registers the repo's resolve hook first (#627's class).
 const files = join(resolve(driveRoot), '..', 'probe-files')
 mkdirSync(files, { recursive: true })
 execFileSync(
@@ -67,7 +69,9 @@ execFileSync(
     '--no-warnings',
     '--input-type=module',
     '-e',
-    `const f = await import(${JSON.stringify(pathToFileURL(join(REPO, 'apps/desktop/tests/helpers/fixtures.ts')).href)});
+    `const { registerTsSiblingImports } = await import(${JSON.stringify(pathToFileURL(join(REPO, 'scripts/lib/ts-sibling-imports.mjs')).href)});
+     registerTsSiblingImports();
+     const f = await import(${JSON.stringify(pathToFileURL(join(REPO, 'apps/desktop/tests/helpers/fixtures.ts')).href)});
      const { writeFileSync } = await import('node:fs');
      writeFileSync(${JSON.stringify(join(files, 'probe.pdf'))}, f.makePdf('HilbertRaum packaged probe Kontoauszug 4711'));`
   ],

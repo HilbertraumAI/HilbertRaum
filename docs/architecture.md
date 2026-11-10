@@ -14542,7 +14542,23 @@ window loading a static page; first-contentful-paint in ms after the window is c
   content codings and then drops the connection crashes the main process, whose last-resort handler
   locks the vault and exits. Electron 43.8.4 (published 2026-10-27, Node 24.22.1) bundles undici
   7.30.1, going by the version strings in its Windows binary; it is due once Dependabot's 7-day
-  cooldown ends on 2026-11-03.
+  cooldown ends on 2026-11-03. **Resolved by 43.8.6** (next bullet).
+- **43.8.6 (Dependabot #793, 2026-11-10), measured on DesktopDiT (i7-8700 / GTX 1070 Ti, Windows
+  11).** Read off both stock binaries: Node 24.22.0 → **24.22.1**, undici 7.29.1 → **7.30.1**, so the
+  residual above is closed; Chromium 150.0.7871.250, V8 15.0.245.31 and SQLite 3.53.4 are unchanged.
+  The fuse wire of a `--win dir` package is `001011001`. What the release notes change that reaches
+  the app: 43.8.4's two asar fixes (archives whose size fields do not match the file; asar paths
+  handled differently in the main process and in child processes), Node 24.22.1, and Chromium, ANGLE,
+  PDFium, Skia and V8 backports in 43.8.5 and 43.8.6. The `net.fetch()` and `utilityProcess` changes
+  do not: the scheme handler reads its files itself, and nothing starts a `utilityProcess`.
+  `scripts/lib/packaged-app-probe.mjs` on that package and a scratch root: 10 checks passed and none
+  failed, among them the PDF import and OCR through the worker in `app.asar.unpacked` (dictation, the
+  clipboard, a supplied scan and the PDF export need options and were skipped). The visible-window probe,
+  7 interleaved runs each with a discarded warm-up: 1,238 ms (43.8.3) and 1,245 ms (43.8.6), no change.
+  This desktop reported its windows occluded (`visibilityState` hidden, no paint at all), so both
+  binaries ran with `--disable-features=CalculateNativeWinOcclusion`; the figures compare with each
+  other, not with the i9's above. The probe itself had stopped loading on 2026-11-03 (#769 gave
+  `tests/helpers/fixtures.ts` an extension-less import) and registers `ts-sibling-imports.mjs` now.
 
 ### §4 Re-verification ledger (2026-10-01, the desktop above)
 
@@ -15330,7 +15346,8 @@ the merge as `.github/dependabot.yml` asks, on DesktopDiT (2026-11-10).
     image decodes 5.29 → 5.18 s. All 521 pages rendered at the OCR page's scale on Skia are
     pixel-identical too (the dev posture, with the addon).
 - **The manual gates.**
-  - *Evidence-pack PDF smoke* (real Electron 43.8.3): 11/11.
+  - *Evidence-pack PDF smoke* (real Electron): 11/11 on 43.8.3, and 11/11 again on 43.8.6 once #793 was
+    merged in (the combination master now holds).
   - *Real-data PDF gold set:* **not run**, its corpus is not on this machine (as in §13). The text
     items it reads were byte-identical above, except the one page.
   - *Packaged OCR on a black-and-white office scan:* a `--win dir` package of the branch, the scratch
