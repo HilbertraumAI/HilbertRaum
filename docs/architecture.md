@@ -15281,6 +15281,98 @@ writes, and each old tarball matched the pre-merge lockfile's integrity.
   3.14.21 (virtual-core 3.17.11 → 3.19.6): the viewport is now measured by `clientHeight`, which the
   Documents list's gate already reads; no code change.
 
+### §14 Dependabot's production group #792: pdf.js 6.5 and react-virtual 3.14.25, reviewed before the merge
+
+Dependabot's #792 (opened 2026-11-09) moves `pdfjs-dist` 6.4.299 → 6.5.438, `@tanstack/react-virtual`
+3.14.22 → 3.14.25 (`virtual-core` 3.19.7 → 3.19.10) and the dev-only `@napi-rs/canvas` 1.0.11 → 1.1.0.
+CI failed only on `third-party-notices.test.ts`; the notices are regenerated, and the lockfile is what
+the pinned npm 11.6.2 writes (both tarballs match its integrity). This is §13's review, done before
+the merge as `.github/dependabot.yml` asks, on DesktopDiT (2026-11-10).
+
+- **The pdf.js changelog (one release, v6.5.438, 204 entries) and the code diff.** What reaches the
+  app:
+  - **The decoders the OCR page loads** are now built with wasm2js (#22175):
+    `jbig2_nowasm_fallback.js` 152,009 → 132,439 bytes, `openjpeg_nowasm_fallback.js` 445,781 →
+    338,458. Neither references `WebAssembly`, `fetch`, `import.meta`, `eval` or `new Function`. The
+    file is now `export default function(imports)`, driven by glue inside `pdf.worker.mjs`, so **a
+    fallback works only with the worker of its own version**: measured, a 6.5 worker with 6.4's
+    fallbacks (and the reverse) fails all seven JPX, CCITT and JBIG2 decodes. The OCR page imports
+    both from the same package (`?url`), which keeps them paired. OpenJPEG is updated (JPX with
+    subsampled or mismatched components, #22169), and JPX/JBIG2 is detected by the last filter of a
+    chain. `jbig2.wasm` and the CCITT, JBIG2 and DCT stream modules are unchanged.
+  - **Text:** word spacing (`Tw`) applies only to the single-byte code 32 (#22350), as the PDF
+    specification says and pdf.js's canvas renderer already did; also CMap/ToUnicode CharCodeMaps
+    (#22092), Type3 advances (#22285), a TypeError at a zero font size (#22384).
+  - **Parser hardening on paths an imported PDF reaches:** a CFF charset loop (#22357), bounded
+    charstring work (#22303), format 12 cmap expansion (#22255), Type 4 compilation depth (#22231),
+    a PostScript lexer hang (#22365) and its wasm compiler's traps (#22191, #22174), corrupt XRef
+    state (#22375), offsets above 2 GiB (#22172), a broken `/Kids` no longer dropping the pages
+    after it (#22013), truncated Flate data kept (#22182, the FlateStream rework #22217–#22385),
+    stream and metadata decryption (#22216, #22249), truncated or oversized images (#22402,
+    #22046, #22067).
+  - **Not reaching the app:** the two api-minor changes, a TextLayer that is no longer re-laid-out
+    (#22045; the app has no TextLayer) and drawing in a renderer worker (#21860, the new
+    `pdf.renderer.mjs`, active only when `GlobalWorkerOptions.rendererSrc` or `rendererPorts` is
+    set, which nothing does; neither `pdf.mjs` nor `pdf.worker.mjs` references it). Scripting
+    changes stay in `pdf.sandbox` and QuickJS; `enableScripting` still defaults to off and nothing
+    loads the sandbox. The fake-worker handshake is unchanged.
+- **`getDocument`.** New `disableWorkerRendering` (off here: no renderer source, no OffscreenCanvas in
+  Node), `hasGPU` dropped, `apiVersion`. `useWasm`, `wasmUrl`, `maxImageSize`, `stopAtErrors`,
+  `verbosity` and `useWorkerFetch` parse as before, and the `maxImageSize` check runs before any
+  image data is read, as before. The app's three calls mean what they meant. The public exports,
+  `OPS` and `legacy/build/pdf.d.mts` are unchanged.
+- **The Node block** (`node_utils.js`) is byte-identical to 6.4's: the same unconditional
+  `require("@napi-rs/canvas")` and the same globals filled where missing. `pdf-parser-packaged.test.ts`
+  pins the same two warnings and passes on 6.5. `standard_fonts/`, `cmaps/` and `iccs/` are
+  byte-identical, so §7's exclusion and notice stand. The package grows from 554 to 570 files
+  (16 added, none removed).
+- **Does 6.5 read the same? The differential** (§13's method: `PdfParser`'s calls, both builds copied
+  out of `node_modules` so the addon cannot load, the polyfill first, system Node 24.13) over 54
+  PDFs and 521 pages: 45 public documents installed on this machine (Acrobat templates, samples and
+  stamps, four product manuals, Firefox's and two pdfTeX PDFs; 17 with AcroForms, 9 with document
+  JavaScript, 11 with CID fonts, 3 with JPEG 2000), seven fixtures from the suite's builders, and an
+  A4 300-DPI German office scan, CCITT G4, also wrapped as JBIG2 (an MMR generic region).
+  - Text items, page counts, both operator counts, #575's verdicts and the warnings are
+    byte-identical on 53 of the 54. The 54th, one page of a product manual set in CID fonts, has
+    296 text items instead of 300 and 38 spaces instead of 43, with the same words; patching #22350's
+    one line into a 6.4 copy makes 6.4 produce 6.5's output byte for byte. Totals: 606,198 → 606,193
+    characters.
+  - All 482 image paints decode pixel-identically through the JS decoders (four JPEG 2000 images
+    among them), and both builds decode the G4 page, as CCITT and as JBIG2, to the reference bitmap
+    (135,483 black pixels). Controls: an empty `wasm/` folder, or the other version's fallbacks,
+    fails all seven of those decodes. The image path's warnings are the same 58 per build; eight now
+    carry pdf.js's `Warning:` prefix (OpenJPEG's messages go through `warn()`).
+  - Same speed: the text pass 2.47 → 2.35 s, text plus both operator passes 6.25 → 6.23 s, the
+    image decodes 5.29 → 5.18 s. All 521 pages rendered at the OCR page's scale on Skia are
+    pixel-identical too (the dev posture, with the addon).
+- **The manual gates.**
+  - *Evidence-pack PDF smoke* (real Electron): 11/11 on 43.8.3, and 11/11 again on 43.8.6 once #793 was
+    merged in (the combination master now holds).
+  - *Real-data PDF gold set:* **not run**, its corpus is not on this machine (as in §13). The text
+    items it reads were byte-identical above, except the one page.
+  - *Packaged OCR on a black-and-white office scan:* a `--win dir` package of the branch, the scratch
+    root holding the pinned `deu`/`eng` traineddata, `scripts/lib/packaged-app-probe.mjs` with the G4
+    page (`--scan`): every check passes, the page is detected and recognised, 13 of 14 probe words
+    (umlauts, ß, amounts). The same page as JBIG2 gives the identical text. The 14th word, "Fußweg",
+    reads "FuRweg" on a package of the same tree with pdf.js 6.4.299 too, and that OCR text is
+    byte-identical (654 characters): Tesseract's, not pdf.js's.
+- **What ships.** `app.asar` grows from 4,138 to 4,148 entries: pdf.js's 33.7 MB become 36.4 MB with
+  the `pdf.renderer.*` modules (six files, never loaded), two toolbar icons and QuickJS's two licence
+  files. QuickJS (`quickjs-eval.*`, MIT) already shipped with 6.4, without its licence; the
+  regenerated notices now carry it. Still absent: `@napi-rs/canvas` and `standard_fonts/`.
+- **`@napi-rs/canvas` 1.1.0** is dev and test only (pdf.js's optional range moved to `^1.0.13`).
+- **react-virtual 3.14.25 / virtual-core 3.19.10.** Four fixes: the end of the list counts
+  `scrollMargin`; the range clamps a scroll offset past the end (after the list shrinks) to keep a
+  full viewport of rows; rows mounted during a ResizeObserver delivery are measured at once and
+  observed a frame later; a touch fling on Android. The Documents list uses `scrollMargin`,
+  `measureElement` and `overscan`, so the first three reach it: while scrolling normally the range
+  is the same, past the end it is fuller, and nothing calls the end-detection API. The
+  DocumentsScreen suites pass; not checked in a real window.
+- **On the next bump** (added to §13's list): the two `*_nowasm_fallback.js` files must come from the
+  same pdfjs-dist as the bundled worker, which the OCR page's `?url` imports guarantee; a vendored or
+  cached copy of either fails every CCITT, JBIG2 and JPX decode. The review kit lived in a session scratch
+  folder and is not committed; this section and §13 describe how to rebuild it.
+
 ## Dependabot triage — design record (wave DEP-7)
 
 _Wave DEP-7 (2026-10-14) triages the four alerts Dependabot opened on 2026-10-12, which DEP-6 §13
