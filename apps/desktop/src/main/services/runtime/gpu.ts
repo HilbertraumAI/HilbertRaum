@@ -14,7 +14,7 @@ import {
   reportEngineProblem,
   type LoadFailure
 } from './engine-load'
-import type { ChildProcessLike, SpawnFn } from './sidecar'
+import { guardChildStdio, type ChildProcessLike, type SpawnFn } from './sidecar'
 
 // GPU device probe (architecture.md GPU record §5.1). Spawns the drive's OWN
 // `llama-server --list-devices` — an offline, no-model, sub-second subprocess that
@@ -116,7 +116,9 @@ const PROBE_STDERR_MAX = 4000
  *    EAGAIN, ENOMEM, a POSIX ENOENT or EACCES). Before #653 these resolved `[]`, which was
  *    cached for the session and persisted as "no graphics card": the Performance tile read
  *    "None", the ★ pick and the memory class came from RAM, the #473 card gates switched off,
- *    and a card start was labelled cpu (so a GPU crash took the #599 path, not §5.3).
+ *    and a card start was labelled cpu (so a GPU crash took the #599 path, not §5.3);
+ *  - #790: an exit 0 whose stdout stream errored: what arrived may be cut short (not known to
+ *    happen on a child that started; `guardChildStdio`).
  * Before #380 / #530 the first two were cached and persisted the same way.
  */
 export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promise<GpuDevice[] | null> {
@@ -177,6 +179,13 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
       resolve(null)
       return
     }
+    // #790: both piped streams can error on their own (a spawn that failed before its pipes were
+    // open); the child's 'error' below owns that outcome. stdout IS the answer, so a probe whose
+    // stdout failed has none: what arrived may be cut short, and an exit 0 would persist it.
+    let stdoutFailed = false
+    guardChildStdio(child, 'the device probe', (stream) => {
+      if (stream === 'stdout') stdoutFailed = true
+    })
     // REL-8: detach from the parent event loop so a wedged probe (cold/hung driver) can never
     // delay or block app quit — shutdown() doesn't track this child, and Electron must be able
     // to exit without waiting on it. The probe's own kill-timeout (below) still reaps it.
@@ -230,6 +239,12 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
         // #530: the program ran — a refusal recorded against THIS binary is stale. Even when it
         // exited just as the kill-timeout settled the probe: it still proves the program runs.
         clearEngineProblemFor('llama_cpp', binPath)
+        if (stdoutFailed) {
+          // #790: not an answer: unknown, as #653's other non-answers (logged unless already settled).
+          if (!settled) logNoAnswer('its output could not be read')
+          finish(null)
+          return
+        }
         finish(parseListDevices(stdout))
         return
       }

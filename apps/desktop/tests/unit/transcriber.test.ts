@@ -124,6 +124,9 @@ function fakeCliTranscriber(opts: {
   signal?: NodeJS.Signals | null
   error?: Error
   thrown?: Error
+  /** #790: after `error`, an ENOTCONN on both piped streams, as a spawn that failed before its pipes
+   *  were open emits; whatever such an emit throws (an unhandled stream error) is collected here. */
+  pipeErrorsThrown?: unknown[]
   vadModelPath?: string
   platform?: NodeJS.Platform
 }): { transcriber: ReturnType<typeof createWhisperCliTranscriber>; spawned: string[][]; spawnOptions: SpawnOptions[] } {
@@ -142,7 +145,17 @@ function fakeCliTranscriber(opts: {
       if (opts.thrown) throw opts.thrown
       const child = makeFakeChild()
       setImmediate(() => {
-        if (opts.error) return void child.emit('error', opts.error)
+        if (opts.error) {
+          child.emit('error', opts.error)
+          for (const stream of opts.pipeErrorsThrown ? [child.stdout, child.stderr] : []) {
+            try {
+              stream.emit('error', Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN' }))
+            } catch (e) {
+              opts.pipeErrorsThrown?.push(e)
+            }
+          }
+          return
+        }
         const outBase = args[args.indexOf('-of') + 1]
         if (opts.stderrText) child.stderr.emit('data', Buffer.from(opts.stderrText))
         if (opts.json !== undefined) writeFileSync(`${outBase}.json`, JSON.stringify(opts.json))
@@ -573,6 +586,18 @@ describe('WhisperCliTranscriber — OS loader refusal (#530)', () => {
     expect(isEngineCannotRunError(err)).toBe(true)
     expect((err as EngineCannotRunError).problem).toEqual({ family: 'whisper_cpp', reason: 'blocked', os: 'win', exit: `spawn error ${code}` })
     expect(engineProblemFor('whisper_cpp')?.reason).toBe('blocked')
+  })
+
+  // #790, the order measured on Windows (Node 24.13, Electron 43.8.3): a spawn that fails before its
+  // pipes are open emits the child's ENOENT, then ENOTCONN on stdout and on stderr. Unhandled, each
+  // stream error is an uncaught exception: a main-process crash in an audio import or a dictation.
+  it('absorbs the errors on both piped streams of a failed spawn and rejects with the spawn error (#790)', async () => {
+    const thrown: unknown[] = []
+    const missing = Object.assign(new Error('spawn C:\\Kit\\runtime\\whisper.cpp\\win\\whisper-cli.exe ENOENT'), { code: 'ENOENT' })
+    const { transcriber } = fakeCliTranscriber({ error: missing, pipeErrorsThrown: thrown, platform: 'win32' })
+    const err = await transcriber.transcribe('a.wav', { workDir: workDir() }).catch((e: unknown) => e)
+    expect(err).toBe(missing) // not a refusal: passed on as it came
+    expect(thrown).toEqual([])
   })
 
   // The #530 heal at this spawn site: whisper-cli ran, so a refusal recorded against it is stale.

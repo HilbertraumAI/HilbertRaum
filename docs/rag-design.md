@@ -2925,7 +2925,8 @@ the figures they support are quoted in the text.
   Node's spawn fail late, emitting the child's ENOENT AND an `ENOTCONN` on a piped stdio stream;
   kiwix-serve pipes stderr, so unhandled it crashed the main process (reproduced in Electron
   43.8.3), and `KiwixServer` now absorbs the stream's error, the start failing as
-  `launch:ENOENT`. Such a deep folder could not work before either: kiwix opens its files without
+  `launch:ENOENT`. Since #790 it does so through `guardChildStdio`, the guard every spawn site
+  calls (`architecture.md` "Engine load failures" §12). Such a deep folder could not work before either: kiwix opens its files without
   a `\\?\` prefix, and both layouts fail alike from a 250-character folder. Both spawn sites run the
   command absolute (`kiwixCommand`): a relative one holding a separator would be looked up from the
   child's new `cwd` (a dev run's relative drive root, `HILBERTRAUM_KIWIX_BIN`). Test-runtime caveat: Node
