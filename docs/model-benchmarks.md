@@ -1331,6 +1331,31 @@ Gemma 4 E2B reads a prompt 2.5× faster (upstream #31356, "massive gains on pp f
 slower on this Pascal card on all three, repeatably. TranslateGemma on b12110: 10.0–10.6 tok/s at 39/49 on the card,
 3.3–3.4 on the processor (`translategemma-smoke`).
 
+*Second-machine leg (2026-11-10): PASSED.* The owner's condition for the release tag (call 3 on #785), the runbook's
+"Leg 3", run on the i9-9900X / RTX 3090 24 GB / 128 GB box (Ubuntu 22.04, NVIDIA 595.99.02, Vulkan) instead of
+ps-work: the §2 harness on the other five catalog chat models, each fully on the card, b11146 against b12110 from
+the official archives, models SHA-256-checked against their manifests. Every model started and answered all 100
+items on both builds:
+
+| model | EM | citation-correct | grounded | abstain (unans.) | `mean_f1` b11146 → b12110 | byte-identical answers |
+|---|---|---|---|---|---|---|
+| `gemma4-12b-it-qat-q4` | 0.977 = | 0.988 = | 0.977 = | 0.933 = | 0.340 → 0.337 | 95 / 100 |
+| `granite-4.1-8b-q4` | 0.977 = | 0.988 = | 0.977 = | 0.733 → 0.800 | 0.216 → 0.211 | 80 / 100 |
+| `ministral3-8b-instruct-2512-q4` | 0.965 = | 0.988 = | 0.965 = | 1.000 = | 0.2995 → 0.2999 | 90 / 100 |
+| `qwen3-4b-instruct-2507-q4` | 0.977 = | 0.988 = | 0.977 = | 0.933 = | 0.337 → 0.335 | 92 / 100 |
+| `qwen3-8b-instruct-q4` | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.327 = | 97 / 100 |
+
+One item flips a score, and it is not a loss: `granite-4.1-8b` on the unanswerable `de-vhs-lehrbuch` says on both
+builds, from the same retrieved sources, that the excerpts do not name the textbook; only b12110's wording ("kann …
+nicht aus den gegebenen Exzerten bestimmt werden") trips the scorer's abstention phrase list. The retrieved sources
+differ between builds on the same three near-tie items as on the GTX 1070 Ti box (`de-hausordnung-sonntag`,
+`de-security-rest`, `de-vhs-gebuehr`), and across the ten runs each item's two retrieval variants both occur on both
+builds, so this is the harness's run-to-run variation again; none of the three flips a score. No template leak, no
+garbled or empty answer in the 20 dumps. The bring-up smoke passes 4 / 4 on b12110 (and 4 / 4 on b11146 as a
+control: `qwen3-4b-instruct-2507` calls Vienna's river the "Wienfluss" on both builds, the model's weakness, not the
+engine's). Raw results: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue729-gate.txt`, evidence
+`eval/results/i9-9900x-729-b{11146,12110}-<model>-vulkan-*`.
+
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
 spreads layers over every listed device — did not hold on the pinned b9849 build on either hybrid
