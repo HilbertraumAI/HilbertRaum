@@ -308,8 +308,9 @@ export function waitUnlessAborted<T>(start: Promise<T>, signal: AbortSignal | un
 export interface ReadableLike {
   on(event: 'data', listener: (chunk: unknown) => void): unknown
   /** A stream error. Node emits one (`ENOTCONN`) on a piped stdio stream when the spawn itself
-   *  failed late — measured for a `cwd` over MAX_PATH on Windows (#787) — and an unhandled one is
-   *  an uncaught exception in the main process. */
+   *  failed before the pipes were opened — measured for a `cwd` of MAX_PATH or more on Windows
+   *  (#787) — and an unhandled one is an uncaught exception in the main process. Every spawn site
+   *  attaches its listener through `guardChildStdio` (#790). */
   on(event: 'error', listener: (err: unknown) => void): unknown
 }
 
@@ -366,6 +367,57 @@ export function registerSidecarChild(pid: number | undefined, family: SidecarFam
 /** Forget a sidecar child that exited/errored — on its own or via stop() (CODE-11). */
 export function unregisterSidecarChild(pid: number | undefined): void {
   if (typeof pid === 'number') liveSidecarPids.delete(pid)
+}
+
+/** One end of a child's stdio, as far as `guardChildStdio` needs it (#790). */
+export interface StdioErrorSource {
+  on(event: 'error', listener: (err: unknown) => void): unknown
+}
+
+export type StdioStreamName = 'stdin' | 'stdout' | 'stderr'
+
+/**
+ * #790: give every piped stdio stream of a just-spawned child an `'error'` listener. Each spawn
+ * site calls it right after `spawn()` returns, before any await; a stream that is not piped is
+ * absent (null) and skipped.
+ *
+ * A piped stream can emit an `'error'` of its own, beside the child's. libuv opens the pipes partway
+ * through `uv_spawn` on Windows (after the cwd and PATH steps, before the program lookup and
+ * CreateProcessW); a spawn that fails before that leaves them unopened, and Node's first read on
+ * one emits `ENOTCONN`, after the child's own ENOENT. Measured in Node 24.13 and Electron 43.8.3:
+ * a `cwd` of MAX_PATH or more is the one trigger (#787; only kiwix-serve passes a cwd). A missing
+ * binary or cwd, an over-long binary path, an elevation refusal and no PATH fail after the pipes
+ * are open (EOF, no stream error); a damaged, empty, locked or over-long-command-line spawn throws
+ * synchronously. With no listener, the stream's error is an uncaught exception: in the main process,
+ * a crash.
+ *
+ * The child's own `'error'` / `'exit'` / `'close'` stay the owner of every outcome; the stream's
+ * error is absorbed. On a child that did start (it has a PID) one is not known to happen; it is
+ * logged with its code only (`errnoCode`, never the message), and `onStreamError` lets a site
+ * whose answer IS that stream's content stop trusting it (the GPU probe's stdout).
+ */
+export function guardChildStdio(
+  child: {
+    readonly pid?: number
+    readonly stdin?: StdioErrorSource | null
+    readonly stdout?: StdioErrorSource | null
+    readonly stderr?: StdioErrorSource | null
+  },
+  program: string,
+  onStreamError?: (stream: StdioStreamName) => void
+): void {
+  for (const stream of ['stdin', 'stdout', 'stderr'] as const) {
+    child[stream]?.on('error', (err: unknown) => {
+      if (typeof child.pid === 'number') {
+        log.warn('A pipe of a child process failed after it started; what it carries is no longer read', {
+          program,
+          stream,
+          code: errnoCode(err)
+        })
+      }
+      onStreamError?.(stream)
+    })
+  }
 }
 
 /** Read-only view of the currently registered sidecar PIDs — all families, or one (tests /
@@ -739,6 +791,9 @@ export class LlamaServer {
       this.port = null
       this.throwLaunchFailure(err)
     }
+    // #790: a spawn that fails before its pipes are open also errors the stderr stream; the child's
+    // own 'error' below fails the start, the stream's must not crash the main process.
+    guardChildStdio(child, 'llama-server')
     this.child = child
     const closeState = { closed: false, promise: Promise.resolve() }
     closeState.promise = new Promise<void>((resolve) => {

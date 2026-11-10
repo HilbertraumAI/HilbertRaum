@@ -163,6 +163,24 @@ describe('LlamaServer — a program the OS loader refused (#530)', () => {
     expect((err as Error).message).toBe('llama-server failed to launch: spawn ENOENT')
   })
 
+  // #790, as measured on Windows (Node 24.13, Electron 43.8.3): a spawn that fails before its pipes
+  // are open emits the child's ENOENT, then an ENOTCONN on the piped stderr stream, and the child has
+  // no PID. Unhandled, the stream's error is an uncaught exception: a main-process crash.
+  it('absorbs an error on the stderr stream of a failed spawn and fails the start as a launch (#790)', async () => {
+    let spawned!: (child: FakeChild) => void
+    const child = new Promise<FakeChild>((resolve) => (spawned = resolve))
+    const spawn: SpawnFn = () => {
+      const c = Object.assign(new FakeChild(), { pid: undefined, stdout: null }) // stdout is ignored
+      spawned(c)
+      return c
+    }
+    const start = server(spawn, { platform: 'win32' }).start().catch((e: unknown) => e)
+    const c = await child
+    c.emit('error', Object.assign(new Error('spawn C:\\Kit\\llama-server.exe ENOENT'), { code: 'ENOENT' }))
+    expect(() => c.stderr!.emit('error', Object.assign(new Error('read ENOTCONN'), { code: 'ENOTCONN' }))).not.toThrow()
+    expect(((await start) as Error).message).toBe('llama-server failed to launch: spawn ENOENT')
+  })
+
   it('a healthy start of the refused program clears its verdict (an intermittent block that went away)', async () => {
     const binPath = '/media/someone/HR/runtime/llama.cpp/linux/llama-server'
     reportEngineProblem(

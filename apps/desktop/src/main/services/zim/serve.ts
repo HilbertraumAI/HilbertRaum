@@ -4,6 +4,7 @@ import {
   LOOPBACK_HOST,
   errnoCode,
   findFreePort,
+  guardChildStdio,
   registerSidecarChild,
   unregisterSidecarChild,
   type ChildProcessLike,
@@ -467,11 +468,11 @@ export class KiwixServer {
     child.stderr?.on('data', (chunk: unknown) => {
       record.stderrTail = (record.stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX)
     })
-    // The pipe can error on its own: a spawn that fails late (a `cwd` over MAX_PATH on Windows)
-    // emits the child's ENOENT `'error'` below AND an `ENOTCONN` on this stream, which unhandled
-    // would crash the main process — measured in Electron 43 (#787). The child's own `'error'`
-    // already fails the start, so the stream's is only absorbed.
-    child.stderr?.on('error', () => undefined)
+    // The pipe can error on its own: a spawn that fails before its pipes are open (a `cwd` of
+    // MAX_PATH or more on Windows) emits the child's ENOENT `'error'` below AND an `ENOTCONN` on
+    // this stream, which unhandled would crash the main process — measured in Electron 43 (#787).
+    // The child's own `'error'` already fails the start, so the stream's is only absorbed (#790).
+    guardChildStdio(child, 'kiwix-serve')
     record.stdioClose = new Promise<void>((resolve) => {
       child.once('close', () => {
         record.stdioClosed = true

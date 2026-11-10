@@ -15,6 +15,7 @@ import {
   defaultThreadCount,
   failureSignature,
   findFreePort,
+  guardChildStdio,
   killRegisteredSidecarChildren,
   LlamaServer,
   LOOPBACK_HOST,
@@ -27,6 +28,7 @@ import {
   type UnexpectedExitInfo
 } from '../../src/main/services/runtime/sidecar'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import { log } from '../../src/main/services/logging'
 
 // A switchable core count for the defaultThreadCount rows; everything else in this file reads the
 // real cpus() (the switch is null) — the benchmark.test.ts RAM-pin idiom.
@@ -1170,5 +1172,49 @@ describe('sidecar child-PID registry (full-audit 2026-07-11 CODE-11)', () => {
     expect(killed.sort()).toEqual([11, 33])
     expect(signals).toEqual(new Set(['SIGKILL'])) // no polite-then-escalate: the parent is dying NOW
     expect(registeredSidecarPids()).toEqual([]) // cleared either way — the process is exiting
+  })
+})
+
+// #790: the guard every spawn site calls on its child. Each site's own row (engine-load-spawn, gpu,
+// engine-health, transcriber, zim-serve) proves it is called there; these pin what it does. The
+// streams are EventEmitters, which throw on an unhandled 'error' exactly as Node's streams do.
+describe('guardChildStdio (#790)', () => {
+  const streamError = (code: string): Error =>
+    // The message of a real one names no path, but nothing may rely on that: only the code is logged.
+    Object.assign(new Error(`read ${code} C:\\Users\\someone\\Kit\\runtime`), { code })
+
+  it('absorbs the error of every piped stream of a spawn that failed (no PID), logs nothing and tells the site which stream', () => {
+    // Measured (Node 24.13, Electron 43.8.3): a spawn that fails before its pipes are open emits the
+    // child's ENOENT, then ENOTCONN on each piped stream, and the child never got a PID.
+    const child = { pid: undefined, stdin: new EventEmitter(), stdout: new EventEmitter(), stderr: new EventEmitter() }
+    const heard: string[] = []
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      guardChildStdio(child, 'the device probe', (stream) => heard.push(stream))
+      for (const stream of [child.stdin, child.stdout, child.stderr]) {
+        expect(() => stream.emit('error', streamError('ENOTCONN'))).not.toThrow()
+      }
+      expect(heard).toEqual(['stdin', 'stdout', 'stderr'])
+      expect(warn).not.toHaveBeenCalled() // the child's own 'error' is what each site logs
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('logs a started child’s failed pipe with its code, never the message; a stream that is not piped is skipped', () => {
+    const child = { pid: 4242, stdin: null, stderr: new EventEmitter() } // stdout absent, stdin ignored
+    const warn = vi.spyOn(log, 'warn')
+    try {
+      guardChildStdio(child, 'whisper-cli')
+      expect(() => child.stderr.emit('error', streamError('ECONNRESET'))).not.toThrow()
+      expect(warn.mock.calls).toEqual([
+        [
+          'A pipe of a child process failed after it started; what it carries is no longer read',
+          { program: 'whisper-cli', stream: 'stderr', code: 'ECONNRESET' }
+        ]
+      ])
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
