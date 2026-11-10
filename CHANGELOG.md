@@ -112,6 +112,11 @@ from its first public `1.0.0` release onward.
   manifest with a source for only one of them never produced a working model, even after a clean
   download of several gigabytes. Such a manifest is now skipped, with a line in the log. The vision
   model that ships with the app is not affected (#752).
+- **Electron 43.8.3 → 43.8.6**, the browser engine the app runs on, with the Chromium security
+  fixes released since 43.8.3 and Node.js 24.22.1. A download server that sends a malformed reply
+  can no longer make the app quit in the middle of a model, AI engine or text recognition download
+  (GHSA-xjj6-f33q-929c). Workspaces open exactly as before, and the minimum operating systems are
+  unchanged (#793).
 
 ## [0.1.64] — 2026-10-28
 
