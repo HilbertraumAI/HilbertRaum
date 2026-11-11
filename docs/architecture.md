@@ -6017,6 +6017,20 @@ tree-shakes them).
   picker filter names) localizes **in the main process at emission** via `tMain()`.
   Transient messages interpolate values and cannot be exact-matched — that is why
   display-mapping was rejected for this class.
+- **Rule 3 — code that recognises localized emissions iterates every registered language
+  (2026-11-11, UI languages wave).** A Rule-2 emission is in whatever language main had cached
+  when it was thrown, and that can differ from the language in force when the text is inspected
+  (the setting can change in between, and main and the renderer resolve separately). So code that
+  identifies an emission by its text compares against the catalog value in **every** language of
+  the registry (`UI_LANGUAGES`, D-L9), never a hard-coded pair and never only the current language;
+  otherwise a newly registered language fails silently (a Russian guard message would be replaced
+  by the generic failure). Better still, don't recognise emissions by text: a typed error
+  (`err.name`, a `reason` code) or a canonical-English wire constant (Rule 1, e.g.
+  `DOC_TASK_BUSY_MESSAGE`) needs no loop. Site at this record: `isFriendlyTaskError`
+  (`doctasks/manager.ts`, the doc-task friendly pass-through, exact match over
+  `FRIENDLY_TASK_ERROR_KEYS` × the registry; proof `i18n-boundary.test.ts`, a registry loop). A
+  2026-11-11 audit of `src/` found no other main-process site; every other text comparison runs on
+  Rule-1 English, an un-catalogued engine or library literal, or a code.
 - The product name "HilbertRaum" is never translated; language names in the
   picker stay untranslated (`System`/`English`/`Deutsch`); technical values (model ids,
   paths, hardware-profile codes) stay as-is. Audit-log `message` strings stay English in

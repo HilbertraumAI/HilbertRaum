@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { t, type MessageKey } from '../../../shared/i18n'
+import { t, UI_LANGUAGES, type MessageKey } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import {
   isTranslationLangCode,
@@ -792,10 +792,11 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
 
 /**
  * True when a thrown message is our own friendly guard copy (exact match). The guards
- * throw via tMain(), so the message may be in EITHER language — and the cached language
- * can even change between a guard throwing and the failure being recorded — so both
- * catalogs are checked, not just the current one.
+ * throw via tMain(), so the message may be in ANY registered UI language — and the cached
+ * language can even change between a guard throwing and the failure being recorded — so
+ * every catalog in the registry is checked, not just the current one (i18n record §3.3
+ * rule 3). A language left out would have its guard copy replaced by the generic failure.
  */
 export function isFriendlyTaskError(raw: string): boolean {
-  return FRIENDLY_TASK_ERROR_KEYS.some((key) => raw === t('en', key) || raw === t('de', key))
+  return FRIENDLY_TASK_ERROR_KEYS.some((key) => UI_LANGUAGES.some(({ code }) => raw === t(code, key)))
 }
