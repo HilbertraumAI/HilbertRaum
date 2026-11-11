@@ -3155,6 +3155,13 @@ are decided scope, not oversights; the record's §7 carries the reasoning.
   act on. The answer to "is it actually on?" is the log and `perfMark('runtime_speculative')`.
 - **RAM/VRAM lines in the manifests are pre-MTP figures** and stay that way until re-measured with
   the flag on. Manifest numbers are measured, never estimated.
+- **On the b12110 pin the draft head is accepted less often (#800, accepted for v0.1.65).** The
+  Qwen3.8 27B with MTP accepts 0.697 of its drafts against 0.754 on b11146, so it decodes about 4 %
+  slower (43.3 against 45.3 tok/s on the RTX 3090 at temperature 0); MTP still gives 1.48× over no
+  draft head, and answers are unchanged because the target verifies every draft. Without MTP both
+  builds decode at the same speed. The cause is not established (upstream #30141 is the suspect),
+  and the cost at the app's own temperatures is not measured. Re-measured at the next pin bump
+  (`model-benchmarks.md` §6.6 "#729 amendment", "Rig legs").
 - **Watch item, not observed:** `measureTokensPerSecond` counts stream CHUNKS. If a future
   llama-server batched an accepted draft run into one SSE delta, the probe would under-read on an
   MTP model and could feed the very-low-tps downgrade. Recorded so the next person who sees a

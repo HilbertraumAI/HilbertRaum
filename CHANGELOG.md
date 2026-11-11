@@ -27,7 +27,7 @@ from its first public `1.0.0` release onward.
 
 Nothing yet — the next release's entries accumulate here.
 
-## [0.1.65] — 2026-11-10
+## [0.1.65] — 2026-11-11
 
 ### Fixed
 
@@ -145,8 +145,10 @@ Nothing yet — the next release's entries accumulate here.
   accurately as before, and documents you already added keep their search index: it does not need
   to be rebuilt. Since v0.8.0 llama.cpp also ships a program that can open the engine to other
   computers over the internet; HilbertRaum never installs it. On a graphics card the Gemma 4 E2B
-  model reads a long question or document about 2.5 times faster in our tests. A drive set up
-  with the previous engine offers **Update the AI engine** on the AI Model screen.
+  model reads a long question or document about 2.5 times faster in our tests. On a 24 GB graphics
+  card the Qwen3.8 27B models, which draft ahead to answer faster, now write about 4 % slower than
+  with the previous engine (their answers are the same; #800). A drive set up with the previous
+  engine offers **Update the AI engine** on the AI Model screen.
 - **Hand-written vision model manifests must give a download source for both files or neither.** A
   manifest with a source for only one of them never produced a working model, even after a clean
   download of several gigabytes. Such a manifest is now skipped, with a line in the log. The vision
