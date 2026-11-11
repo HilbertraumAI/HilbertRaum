@@ -1410,8 +1410,9 @@ export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree'
  * round-trip evidence exists for the original 10 (the TG-6 smoke); the widened rest ship
  * on the model's own WMT24++ evaluation as the quality evidence. A free-text language
  * field invites silent quality failures — this stays a CLOSED list, validated
- * server-side. Alphabetical by code (the pickers render in array order); the de/en
- * DEFAULTS are chosen in the screens, not by array position.
+ * server-side. Alphabetical by code (the pickers render in array order); the DEFAULT
+ * pair is chosen by `initialTranslateChoice` (`renderer/lib/translateSession.ts`), not by
+ * array position.
  * This array is the SINGLE source of truth for the codes: the sidecar prompt builder
  * (`main/services/translation/prompt.ts`) and its name maps key off this type.
  */

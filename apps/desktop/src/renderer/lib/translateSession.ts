@@ -79,15 +79,16 @@ let lastChoice: TranslateChoice | null = null
 
 /**
  * The pair a translate surface opens on — the Translate screen and the Documents translate modal
- * alike (DOC-7): the session's last choice, else the UI-language default. A German UI translates
- * INTO German (en → de), an English one out of it (de → en). TranslateGemma needs an explicit
- * source, so there is no auto-detect to fall back to.
+ * alike (DOC-7): the session's last choice, else the UI-language default. The default translates
+ * INTO the UI language, from English; the English UI, which can't translate from itself, translates
+ * from German (en UI → de → en, de UI → en → de, any other UI language L → en → L). TranslateGemma
+ * needs an explicit source, so there is no auto-detect to fall back to.
+ *
+ * `targetLang: lang` is the registry check: it compiles only while every UI language is also a
+ * translation language (`TRANSLATION_LANGUAGE_CODES`), so registering one that isn't fails here.
  */
 export function initialTranslateChoice(lang: UiLanguage): TranslateChoice {
-  return (
-    lastChoice ??
-    (lang === 'de' ? { sourceLang: 'en', targetLang: 'de' } : { sourceLang: 'de', targetLang: 'en' })
-  )
+  return lastChoice ?? { sourceLang: lang === 'en' ? 'de' : 'en', targetLang: lang }
 }
 export function setLastTranslateChoice(sourceLang: TranslationSourceLang, targetLang: TranslationTargetLang): void {
   lastChoice = { sourceLang, targetLang }
