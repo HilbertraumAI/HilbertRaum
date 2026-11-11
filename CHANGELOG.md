@@ -7,7 +7,7 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 from its first public `1.0.0` release onward.
 
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
-> since that day: **v0.1.50** was the first, **v0.1.64** is current. Versions stay in the
+> since that day: **v0.1.50** was the first, **v0.1.65** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
 > not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
 > page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
@@ -24,6 +24,10 @@ from its first public `1.0.0` release onward.
 > not for a contributor.
 
 ## [Unreleased]
+
+Nothing yet — the next release's entries accumulate here.
+
+## [0.1.65] — 2026-11-11
 
 ### Fixed
 
@@ -96,6 +100,41 @@ from its first public `1.0.0` release onward.
   Packs in the app's own `zim` folder, and in other folders of that account such as your
   Downloads, now work. An archive whose file name has such a character, or that sits in such a
   folder elsewhere, still cannot be added; the panel now says so and how to fix it (#787).
+- **The memory meter's colour matches the number it shows.** At 74.6 % it showed "75%" in the calm
+  colour without the "will summarize" line, and at 89.6 % "90%" in amber. The colour and the line
+  now follow the number on the meter (#742).
+- **A file dragged onto a busy chat is refused instead of lost.** While an answer is being written,
+  or a file is still being added, the pointer now shows that the chat cannot take a drop. Before,
+  the file was dropped and thrown away without a word (#742).
+- **"Send again" waits until the app knows the answer has stopped.** Back on an unanswered chat
+  whose check kept failing, the button appeared beside an answer that might still be arriving. The
+  message box unlocks as before, but the button now appears only once a check succeeds. A message
+  that fails to send just as you press Stop now shows only its error, without a "Stopped" note as
+  well (#742).
+- **A summary of every section says when it could read only some of them.** Asked to summarise
+  each section of a document while another document, a knowledge pack or a document being
+  re-indexed was also in the chat, the app answered from a selection of passages without its usual
+  note that some sections were left out. The note is back (#736).
+- **No document-skill offer when there is no document to work on.** With documents switched off,
+  or only documents that never finished indexing, the chat no longer offers a document skill (such
+  as Meeting Minutes) under its fixed "nothing to search" reply (#733).
+- **Keyword search in a very old workspace survives an interrupted first start.** A workspace from
+  before keyword search existed builds its keyword index the first time a newer version opens it.
+  If the app was closed during that build, keyword search could stay empty for good. The build is
+  now one step, so an interrupted one is done again at the next start (#737).
+- **The Performance screen clears the steps of a finished check.** After **Check again**, the steps
+  of the check that had just ended, such as "Generation speed (no model running, skipped): in
+  progress", stayed on the card (#746).
+- **On a Mac with Apple Silicon, switching the graphics processor off shows as off.** With the GPU
+  switched off, or turned off after a crash, the Performance screen and Diagnostics now say the next
+  model start runs on the processor, instead of showing an earlier graphics measurement as current.
+  Checked in our tests; not yet on a real Mac (#746).
+- **The drive preparation scripts are more careful.** On Windows, `fetch-models` no longer lets a
+  model past the licence check when one of its files is missing, and the scripts now work when the
+  drive's path contains a `[`. `--only` with an id that names nothing stops with a message instead
+  of doing nothing quietly. The Linux and macOS Kit builder now finishes on a drive that carries the
+  text recognition files; it used to stop at its last step (#765, #767; drive builders only;
+  nothing changes for an app already in use).
 
 ### Changed
 
@@ -106,8 +145,10 @@ from its first public `1.0.0` release onward.
   accurately as before, and documents you already added keep their search index: it does not need
   to be rebuilt. Since v0.8.0 llama.cpp also ships a program that can open the engine to other
   computers over the internet; HilbertRaum never installs it. On a graphics card the Gemma 4 E2B
-  model reads a long question or document about 2.5 times faster in our tests. A drive set up
-  with the previous engine offers **Update the AI engine** on the AI Model screen.
+  model reads a long question or document about 2.5 times faster in our tests. On a 24 GB graphics
+  card the Qwen3.8 27B models, which draft ahead to answer faster, now write about 4 % slower than
+  with the previous engine (their answers are the same; #800). A drive set up with the previous
+  engine offers **Update the AI engine** on the AI Model screen.
 - **Hand-written vision model manifests must give a download source for both files or neither.** A
   manifest with a source for only one of them never produced a working model, even after a clean
   download of several gigabytes. Such a manifest is now skipped, with a line in the log. The vision
@@ -121,6 +162,13 @@ from its first public `1.0.0` release onward.
   PDF, among them files that could make it hang or skip pages. On the 54 PDFs we compared it read
   the same text as before, except one page where a few extra spaces between words are gone, and our
   test scans were still recognised as before (#792).
+- **A HilbertRaum AI Kit ships a starter set of models; the rest downloads in the app.** A Kit now
+  comes with Qwen3 4B, the multilingual search model and Whisper small (3.2 GB) ready to use. Every
+  other model of the catalog is listed on the AI Model screen and downloads when you choose it. The
+  check that clears a Kit for sale now looks at the models it ships (#766).
+- **The Windows drive scripts download with `curl.exe` only.** It ships with every Windows from
+  Windows 10 version 1803 on. The scripts no longer fall back to a PowerShell download, a line a
+  security product had quarantined (#769; drive builders only).
 
 ## [0.1.64] — 2026-10-28
 
@@ -1643,7 +1691,8 @@ For what the product *is*, see the [README](README.md) and
 [`docs/known-limitations.md`](docs/known-limitations.md). Every release since has its own
 section in [`CHANGELOG.md`](CHANGELOG.md).
 
-[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.64...HEAD
+[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.65...HEAD
+[0.1.65]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.64...v0.1.65
 [0.1.64]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.63...v0.1.64
 [0.1.63]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.62...v0.1.63
 [0.1.62]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.61...v0.1.62

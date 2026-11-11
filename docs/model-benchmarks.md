@@ -1396,7 +1396,10 @@ a/b spread. A control with MTP off (the same four starts, rung 1) separates the 
 Without MTP b12110 decodes as fast as b11146 and reads the prompt about 5 % faster, so the whole loss is the lower
 acceptance: MTP's decode gain falls from 1.56× to 1.48×. Answers are unaffected (the target model verifies every
 draft). This is the symptom the runbook watched for after v0.9.0 changed how MTP's hidden state is saved and restored
-in checkpoints (upstream #30141); the cause is not established. Whether the release ships with it is the owner's call.
+in checkpoints (upstream #30141); the cause is not established. **Owner call 2026-11-11: ship v0.1.65 on b12110
+with this cost recorded** (CHANGELOG, known-limitations.md "Speculative decoding"), re-measure at the next pin bump
+(#800), and report it upstream. The upstream check due on that date found v0.9.0 still the latest stable release,
+no report of this drop, and no reported b12110 regression on a path the app uses.
 Raw results: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue729-rig-legs.txt`,
 `issue729-rig-cache-smoke.txt` and `leg729-{mtp,nomtp}-*` in the same folder.
 
