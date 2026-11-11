@@ -1356,6 +1356,50 @@ control: `qwen3-4b-instruct-2507` calls Vienna's river the "Wienfluss" on both b
 engine's). Raw results: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue729-gate.txt`, evidence
 `eval/results/i9-9900x-729-b{11146,12110}-<model>-vulkan-*`.
 
+*Rig legs (2026-11-10): Leg 1 PASSED, Leg 2 FAILED on draft acceptance.* The runbook's "Leg 1" and "Leg 2" on the
+same i9-9900X / RTX 3090 box (275 W limit, memory clock at P0 on every run, no other GPU process), b11146 against
+b12110 from the official archives, both models SHA-256-checked against their manifests.
+
+Leg 1, the prompt-cache smoke on b12110 with 20 conversations per run:
+
+| run | restored | restored answer == recompute | re-prefilled |
+|---|---|---|---|
+| `qwen3.6-27b-q4` | 20 of 20 | 20 of 20 | 0 |
+| `qwen3.8-27b-ud-q5km` | 20 of 20 | 20 of 20 | 0 |
+| `qwen3.8-27b-ud-q5km` with rung 1a's MTP flags | 20 of 20 | 20 of 20 | 0 |
+
+Each return re-processes 31–32 of about 1,900 tokens, as on b11146 in #512. Every run advises leaving
+`disable_prompt_cache` unset, so no manifest changes.
+
+Leg 2, `run-start.mjs` with `qwen3.8-27b-ud-q5km` at ctx 8192, `-np 1`, `--spec-type draft-mtp --spec-draft-n-max 2
+--cache-ram 8192`, a 2,015-token prompt and 512 generated tokens, builds alternating:
+
+| variant | build | offload | draft acceptance | pp tok/s | decode tok/s | load |
+|---|---|---|---|---|---|---|
+| b12110-a | 12110 | 66/66 | 297 / 426 = **0.697** | 775.0 | **43.40** | 7.46 s |
+| b11146-a | 11146 | 66/66 | 307 / 407 = 0.754 | 795.8 | 45.32 | 8.03 s |
+| b12110-b | 12110 | 66/66 | 297 / 426 = **0.697** | 783.6 | **43.11** | 7.42 s |
+| b11146-b | 11146 | 66/66 | 307 / 407 = 0.754 | 784.3 | 45.20 | 8.03 s |
+
+The start passes: 66/66 with the MTP flags on both b12110 runs. The acceptance does not: b11146 reproduces #512's 0.754
+exactly, while b12110 drafts more and accepts fewer, identically on both runs. 512 tokens then take about 215 target
+steps instead of 205, and decode with MTP is 4.4 % lower (43.25 against 45.26 tok/s), far outside b11146's 0.12 tok/s
+a/b spread. A control with MTP off (the same four starts, rung 1) separates the engine from the draft:
+
+| variant | build | pp tok/s | decode tok/s | load |
+|---|---|---|---|---|
+| b12110-a | 12110 | 977.1 | 29.51 | 7.05 s |
+| b11146-a | 11146 | 921.0 | 29.39 | 7.39 s |
+| b12110-b | 12110 | 960.4 | 28.80 | 7.00 s |
+| b11146-b | 11146 | 917.6 | 28.46 | 7.33 s |
+
+Without MTP b12110 decodes as fast as b11146 and reads the prompt about 5 % faster, so the whole loss is the lower
+acceptance: MTP's decode gain falls from 1.56× to 1.48×. Answers are unaffected (the target model verifies every
+draft). This is the symptom the runbook watched for after v0.9.0 changed how MTP's hidden state is saved and restored
+in checkpoints (upstream #30141); the cause is not established. Whether the release ships with it is the owner's call.
+Raw results: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue729-rig-legs.txt`,
+`issue729-rig-cache-smoke.txt` and `leg729-{mtp,nomtp}-*` in the same folder.
+
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
 spreads layers over every listed device — did not hold on the pinned b9849 build on either hybrid

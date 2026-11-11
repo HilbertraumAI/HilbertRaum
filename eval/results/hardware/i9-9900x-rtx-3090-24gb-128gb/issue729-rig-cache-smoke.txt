@@ -1,0 +1,131 @@
+# #729 rig leg 1: prompt-cache smoke on the i9-9900X / RTX 3090 24 GB / 128 GB rig, 2026-11-10, b12110
+# tests/manual/prompt-cache-smoke.test.ts at master f1ffaf0e, HILBERTRAUM_PROMPT_CACHE_SMOKE_PROMPTS=20; [prompt-cache] lines only
+
+## cache-b12110-qwen3.6-27b-q4
+[prompt-cache] model qwen3.6-27b-q4.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 32 of 1903 (cache_n 1871) → RESTORED (1.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (50 chars)
+[prompt-cache] answer: "The item in room 142 is grey and belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.09.167.344 I srv  get_availabl: prompt cache update took 362.48 ms
+  0.09.193.197 I slot   operator(): id  0 | task 24 | restored context checkpoint (pos_min = 20, pos_max = 20, n_tokens = 21, n_past = 21, size = 149.626 MiB)
+  0.10.694.255 I srv  get_availabl: updating prompt cache
+  0.11.065.883 I srv        update:  - cache state: 1 prompts, 455.381 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.11.065.888 I srv  get_availabl: prompt cache update took 371.63 ms
+  0.11.935.166 I srv  get_availabl: updating prompt cache
+  0.12.640.436 I srv        update:  - cache state: 1 prompts, 1017.676 MiB (limits: 8192.000 MiB, 8192 tokens, 15439 est)
+  0.12.640.441 I srv  get_availabl: prompt cache update took 705.27 ms
+  0.12.656.431 I slot   operator(): id  0 | task 85 | restored context checkpoint (pos_min = 60, pos_max = 60, n_tokens = 61, n_past = 61, size = 149.626 MiB)
+  0.13.998.146 I srv  get_availabl: updating prompt cache
+  0.14.363.604 I srv        update:  - cache state: 1 prompts, 455.381 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.14.363.610 I srv  get_availabl: prompt cache update took 365.46 ms
+[prompt-cache] #1: prompt_n 32 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #2: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #3: prompt_n 32 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #4: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #5: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #6: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #7: prompt_n 32 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #8: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #9: prompt_n 32 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #10: prompt_n 32 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #11: prompt_n 32 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #12: prompt_n 32 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #13: prompt_n 32 of 1905 → RESTORED, restored == recompute
+[prompt-cache] #14: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #15: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #16: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #17: prompt_n 32 of 1898 → RESTORED, restored == recompute
+[prompt-cache] #18: prompt_n 32 of 1900 → RESTORED, restored == recompute
+[prompt-cache] #19: prompt_n 32 of 1900 → RESTORED, restored == recompute
+[prompt-cache] SUMMARY over 20 conversations: restored 20 of 20; restored answer == recompute 20 of 20
+
+## cache-b12110-qwen3.8-27b-ud-q5km
+[prompt-cache] model qwen3.8-27b-ud-q5km.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 32 of 1903 (cache_n 1871) → RESTORED (1.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.09.933.239 I srv  get_availabl: prompt cache update took 361.61 ms
+  0.09.959.309 I slot   operator(): id  0 | task 24 | restored context checkpoint (pos_min = 20, pos_max = 20, n_tokens = 21, n_past = 21, size = 149.626 MiB)
+  0.11.610.847 I srv  get_availabl: updating prompt cache
+  0.11.968.627 I srv        update:  - cache state: 1 prompts, 455.194 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.11.968.634 I srv  get_availabl: prompt cache update took 357.79 ms
+  0.13.009.600 I srv  get_availabl: updating prompt cache
+  0.13.726.303 I srv        update:  - cache state: 1 prompts, 1017.801 MiB (limits: 8192.000 MiB, 8192 tokens, 15453 est)
+  0.13.726.308 I srv  get_availabl: prompt cache update took 716.71 ms
+  0.13.742.437 I slot   operator(): id  0 | task 84 | restored context checkpoint (pos_min = 60, pos_max = 60, n_tokens = 61, n_past = 61, size = 149.626 MiB)
+  0.15.223.909 I srv  get_availabl: updating prompt cache
+  0.15.596.796 I srv        update:  - cache state: 1 prompts, 455.194 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.15.596.801 I srv  get_availabl: prompt cache update took 372.89 ms
+[prompt-cache] #1: prompt_n 32 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #2: prompt_n 32 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #3: prompt_n 32 of 1905 → RESTORED, restored == recompute
+[prompt-cache] #4: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #5: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #6: prompt_n 32 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #7: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #8: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #9: prompt_n 32 of 1888 → RESTORED, restored == recompute
+[prompt-cache] #10: prompt_n 32 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #11: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #12: prompt_n 32 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #13: prompt_n 32 of 1892 → RESTORED, restored == recompute
+[prompt-cache] #14: prompt_n 32 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #15: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #16: prompt_n 32 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #17: prompt_n 32 of 1887 → RESTORED, restored == recompute
+[prompt-cache] #18: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #19: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] SUMMARY over 20 conversations: restored 20 of 20; restored answer == recompute 20 of 20
+
+## cache-b12110-qwen3.8-mtp
+[prompt-cache] model qwen3.8-27b-ud-q5km.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192, --spec-type draft-mtp --spec-draft-n-max 2
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 31 of 1903 (cache_n 1872) → RESTORED (1.6 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.11.388.155 I srv  get_availabl: prompt cache update took 370.12 ms
+  0.11.424.314 I slot   operator(): id  0 | task 11 | restored context checkpoint (pos_min = 20, pos_max = 20, n_tokens = 21, n_past = 21, size = 149.646 MiB)
+  0.12.693.255 I srv  get_availabl: updating prompt cache
+  0.13.079.711 I srv        update:  - cache state: 1 prompts, 455.630 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.13.079.716 I srv  get_availabl: prompt cache update took 386.46 ms
+  0.14.017.763 I srv  get_availabl: updating prompt cache
+  0.14.765.356 I srv        update:  - cache state: 1 prompts, 1025.509 MiB (limits: 8192.000 MiB, 8192 tokens, 15345 est)
+  0.14.765.362 I srv  get_availabl: prompt cache update took 747.60 ms
+  0.14.802.213 I slot   operator(): id  0 | task 39 | restored context checkpoint (pos_min = 60, pos_max = 60, n_tokens = 61, n_past = 61, size = 149.646 MiB)
+  0.16.250.190 I srv  get_availabl: updating prompt cache
+  0.16.640.851 I srv        update:  - cache state: 1 prompts, 455.630 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.16.640.856 I srv  get_availabl: prompt cache update took 390.67 ms
+[prompt-cache] #1: prompt_n 32 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #2: prompt_n 31 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #3: prompt_n 31 of 1905 → RESTORED, restored == recompute
+[prompt-cache] #4: prompt_n 32 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #5: prompt_n 31 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #6: prompt_n 31 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #7: prompt_n 32 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #8: prompt_n 31 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #9: prompt_n 31 of 1888 → RESTORED, restored == recompute
+[prompt-cache] #10: prompt_n 31 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #11: prompt_n 31 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #12: prompt_n 31 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #13: prompt_n 31 of 1892 → RESTORED, restored == recompute
+[prompt-cache] #14: prompt_n 31 of 1904 → RESTORED, restored == recompute
+[prompt-cache] #15: prompt_n 31 of 1903 → RESTORED, restored == recompute
+[prompt-cache] #16: prompt_n 31 of 1902 → RESTORED, restored == recompute
+[prompt-cache] #17: prompt_n 32 of 1887 → RESTORED, restored == recompute
+[prompt-cache] #18: prompt_n 31 of 1901 → RESTORED, restored == recompute
+[prompt-cache] #19: prompt_n 31 of 1901 → RESTORED, restored == recompute
+[prompt-cache] SUMMARY over 20 conversations: restored 20 of 20; restored answer == recompute 20 of 20

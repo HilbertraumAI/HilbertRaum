@@ -1,0 +1,109 @@
+#729 rig legs: Leg 1 (qwen3.6 / qwen3.8 cache restore) and Leg 2 (Qwen3.8 27B start with MTP)
+==============================================================================================
+Run 2026-11-10, 21:37-21:52 CET (both legs) and 22:24-22:26 CET (Leg 2 MTP-off control), from
+master f1ffaf0e (carries #785's b12110 pin and #798), branch test/729-rig-legs. Runbook: PR #785
+"Leg 1" and "Leg 2".
+
+VERDICT
+  Leg 1: PASS. 3 runs x 20 conversations, restored 20 of 20, restored answer == recompute 20 of 20.
+         No manifest needs disable_prompt_cache.
+  Leg 2: FAIL (draft acceptance and decode with MTP). b12110 starts with the MTP flags and offloads
+         66/66, but its draft acceptance is 0.697 against b11146's 0.754 in this session (identical
+         counts on both runs of each build), and decode with MTP is 4.4 % lower (43.25 against
+         45.26 tok/s mean), far outside b11146's a/b spread (0.12 tok/s). An MTP-off control shows
+         the base engine is not slower (29.16 against 28.92 tok/s), so the whole loss is the
+         acceptance drop. Nothing was changed to fix it; the owner decides.
+
+Machine
+-------
+OS        Ubuntu 22.04.5 LTS, kernel 6.8.0-138-generic, x86_64
+CPU       Intel Core i9-9900X @ 3.50 GHz (10 cores / 20 threads)
+GPU       NVIDIA GeForce RTX 3090, 24 GB (llama-server --list-devices:
+          "Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23822 MiB free)")
+RAM       128 GB
+Driver    NVIDIA proprietary 595.99.02 (Vulkan)
+Power     275 W limit; memory clock at P0 (9751 MHz) on every measured run (leg729-clock-state.csv;
+          the one 405 MHz reading is the idle card sampled before the first MTP-off start)
+Node      v24.22.2
+Other GPU users: none. The bench study that had the card was paused for the session; only the
+desktop held about 500 MiB.
+
+Engines (official archives, installed by scripts/fetch-runtime.sh into two scratch roots)
+-----------------------------------------------------------------------------------------
+b11146  model-manifests/runtime-sources.yaml from 39f60675^
+        llama-server --version: 0.5.0-dev (build 11146, commit 7fe450e19)
+b12110  model-manifests/runtime-sources.yaml from master
+        llama-server --version: 0.9.0-dev (build 12110, commit cd959bae9); "left out: llama-connect"
+
+Models
+------
+Already on this machine (the app's own models folder), hard-linked into one scratch models folder;
+each root's `models` was a symlink to it. Nothing downloaded. SHA-256 checked against the manifests:
+  qwen3.6-27b-q4        5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0  exact
+  qwen3.8-27b-ud-q5km   2de73110cb254cbf09b54b717578dadff12ef1194e7271527e68202f39ba4bfd  exact
+
+Leg 1: prompt-cache restore, b12110, 20 conversations per run
+-------------------------------------------------------------
+From apps/desktop:
+  for m in qwen3.6-27b-q4 qwen3.8-27b-ud-q5km; do
+    HILBERTRAUM_PROMPT_CACHE_SMOKE=<root-b12110> HILBERTRAUM_SMOKE_MODEL=$m.gguf \
+    HILBERTRAUM_PROMPT_CACHE_SMOKE_PROMPTS=20 npx vitest run tests/manual/prompt-cache-smoke.test.ts
+  done
+  HILBERTRAUM_PROMPT_CACHE_SMOKE=<root-b12110> HILBERTRAUM_SMOKE_MODEL=qwen3.8-27b-ud-q5km.gguf \
+  HILBERTRAUM_PROMPT_CACHE_SMOKE_MTP=1 HILBERTRAUM_PROMPT_CACHE_SMOKE_PROMPTS=20 \
+    npx vitest run tests/manual/prompt-cache-smoke.test.ts
+
+| run                          | restored | restored == recompute | re-prefilled | tokens re-processed on return |
+|------------------------------|----------|-----------------------|--------------|-------------------------------|
+| qwen3.6-27b-q4               | 20 of 20 | 20 of 20              | 0            | 32 of 1,898-1,905             |
+| qwen3.8-27b-ud-q5km          | 20 of 20 | 20 of 20              | 0            | 32 of 1,887-1,905             |
+| qwen3.8-27b-ud-q5km + MTP    | 20 of 20 | 20 of 20              | 0            | 31-32 of 1,887-1,905          |
+
+Every run: "ADVICE: leave disable_prompt_cache unset". Same re-processed share as #512 on b11146
+(31-32 of 1,903). No re-prefill, so the b11146 control was not needed.
+Evidence: issue729-rig-cache-smoke.txt ([prompt-cache] lines of all three runs).
+
+Leg 2: Qwen3.8 27B start with MTP, ABAB against b11146
+------------------------------------------------------
+From the repo root, variants in this order: b12110-a, b11146-a, b12110-b, b11146-b:
+  node eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/run-start.mjs --leg 729 --variant mtp-<variant> \
+    --model <root>/models/chat/qwen3.8-27b-ud-q5km.gguf --id qwen3.8-27b-ud-q5km --ctx 8192 \
+    --mtp on --extra "--cache-ram 8192" --bin <root>/runtime/llama.cpp/linux/llama-server \
+    --out <scratch> --slug i9-9900x-rtx-3090-24gb-128gb --desktop "<note>"
+argv: --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format
+deepseek -lv 4 -np 1 --spec-type draft-mtp --spec-draft-n-max 2 --cache-ram 8192; a 2,015-token
+prompt, 512 generated tokens.
+
+| variant  | build | offload | draft acceptance     | pp tok/s | decode tok/s | load   |
+|----------|-------|---------|----------------------|----------|--------------|--------|
+| b12110-a | 12110 | 66/66   | 297 / 426 = 0.697    | 775.0    | 43.40        | 7.46 s |
+| b11146-a | 11146 | 66/66   | 307 / 407 = 0.754    | 795.8    | 45.32        | 8.03 s |
+| b12110-b | 12110 | 66/66   | 297 / 426 = 0.697    | 783.6    | 43.11        | 7.42 s |
+| b11146-b | 11146 | 66/66   | 307 / 407 = 0.754    | 784.3    | 45.20        | 8.03 s |
+
+b11146 reproduces #512's 0.754 exactly. b12110 drafts more (426 against 407) and accepts fewer
+(297 against 307), so 512 tokens take about 215 target steps instead of about 205 (+4.9 %), which
+accounts for the whole 4.4 % decode loss. Prompt processing is within noise; b12110 loads about
+0.6 s faster.
+
+Control (not in the runbook, owner's go 2026-11-10): the same four starts with --mtp off (rung 1),
+variants nomtp-<variant>, same order:
+
+| variant  | build | offload | pp tok/s | decode tok/s | load   |
+|----------|-------|---------|----------|--------------|--------|
+| b12110-a | 12110 | 66/66   | 977.1    | 29.51        | 7.05 s |
+| b11146-a | 11146 | 66/66   | 921.0    | 29.39        | 7.39 s |
+| b12110-b | 12110 | 66/66   | 960.4    | 28.80        | 7.00 s |
+| b11146-b | 11146 | 66/66   | 917.6    | 28.46        | 7.33 s |
+
+Without MTP b12110 decodes as fast as b11146 (+0.8 %) and reads the prompt about 5 % faster. Both
+builds drift down about 1 tok/s across the four starts (card warming), evenly, since builds
+alternate. MTP's decode gain: 1.56x on b11146, 1.48x on b12110.
+
+Consistent with upstream #30141 (v0.9.0 changed how MTP's hidden state is saved and restored in
+checkpoints), which is what the runbook told this leg to look for; the cause is not established.
+
+Evidence: leg729-mtp-<variant>.{json,stderr.log,heaps.csv,run.log} and
+leg729-nomtp-<variant>.{json,stderr.log,heaps.csv,run.log}; leg729-clock-state.csv. In the
+run.log files the scratch paths are replaced with <drive> and <out>. heaps.csv is empty: vulkaninfo
+is not installed on this machine.
