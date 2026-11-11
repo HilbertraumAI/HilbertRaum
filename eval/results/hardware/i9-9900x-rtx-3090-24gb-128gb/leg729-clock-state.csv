@@ -1,0 +1,9 @@
+variant,power.limit,clocks.mem,temperature.gpu,memory.used
+mtp-b12110-a,275.00 W, 9751 MHz, 65, 501 MiB
+mtp-b11146-a,275.00 W, 9751 MHz, 65, 497 MiB
+mtp-b12110-b,275.00 W, 9751 MHz, 65, 497 MiB
+mtp-b11146-b,275.00 W, 9751 MHz, 66, 508 MiB
+nomtp-b12110-a,275.00 W, 405 MHz, 43, 513 MiB
+nomtp-b11146-a,275.00 W, 9751 MHz, 53, 513 MiB
+nomtp-b12110-b,275.00 W, 9751 MHz, 56, 513 MiB
+nomtp-b11146-b,275.00 W, 9751 MHz, 59, 513 MiB

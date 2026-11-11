@@ -1,0 +1,16 @@
+[pre] nvidia-smi {"used":513,"total":24576,"free":23611}
+[pre] heaps []
+[pre] list-devices
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23810 MiB free)
+[argv] --host 127.0.0.1 --port 39555 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 8192
+[loaded] 7392 ms; nvidia-smi {"used":19594,"total":24576,"free":4530}
+[loaded] heaps []
+[loaded] list-devices while loaded
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 4428 MiB free)
+[prompt] 107 tok/paragraph × 19 → 2015 tokens
+[timings] {"cache_n":0,"prompt_n":2015,"prompt_ms":2187.955,"prompt_per_token_ms":1.085833746898263,"prompt_per_second":920.9512992726084,"predicted_n":512,"predicted_ms":17389.488,"predicted_per_token_ms":34.03030919765167,"predicted_per_second":29.38556902882937}
+[peak] used 19717 MiB; tokens_predicted=512 prompt_n=2015
+[after] nvidia-smi {"used":513,"total":24576,"free":23611} exit {"code":0,"sig":null}
+[done] <out>/leg729-nomtp-b11146-a.json

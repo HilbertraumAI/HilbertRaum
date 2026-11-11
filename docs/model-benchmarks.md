@@ -1331,6 +1331,75 @@ Gemma 4 E2B reads a prompt 2.5× faster (upstream #31356, "massive gains on pp f
 slower on this Pascal card on all three, repeatably. TranslateGemma on b12110: 10.0–10.6 tok/s at 39/49 on the card,
 3.3–3.4 on the processor (`translategemma-smoke`).
 
+*Second-machine leg (2026-11-10): PASSED.* The owner's condition for the release tag (call 3 on #785), the runbook's
+"Leg 3", run on the i9-9900X / RTX 3090 24 GB / 128 GB box (Ubuntu 22.04, NVIDIA 595.99.02, Vulkan) instead of
+ps-work: the §2 harness on the other five catalog chat models, each fully on the card, b11146 against b12110 from
+the official archives, models SHA-256-checked against their manifests. Every model started and answered all 100
+items on both builds:
+
+| model | EM | citation-correct | grounded | abstain (unans.) | `mean_f1` b11146 → b12110 | byte-identical answers |
+|---|---|---|---|---|---|---|
+| `gemma4-12b-it-qat-q4` | 0.977 = | 0.988 = | 0.977 = | 0.933 = | 0.340 → 0.337 | 95 / 100 |
+| `granite-4.1-8b-q4` | 0.977 = | 0.988 = | 0.977 = | 0.733 → 0.800 | 0.216 → 0.211 | 80 / 100 |
+| `ministral3-8b-instruct-2512-q4` | 0.965 = | 0.988 = | 0.965 = | 1.000 = | 0.2995 → 0.2999 | 90 / 100 |
+| `qwen3-4b-instruct-2507-q4` | 0.977 = | 0.988 = | 0.977 = | 0.933 = | 0.337 → 0.335 | 92 / 100 |
+| `qwen3-8b-instruct-q4` | 0.977 = | 0.988 = | 0.977 = | 0.867 = | 0.327 = | 97 / 100 |
+
+One item flips a score, and it is not a loss: `granite-4.1-8b` on the unanswerable `de-vhs-lehrbuch` says on both
+builds, from the same retrieved sources, that the excerpts do not name the textbook; only b12110's wording ("kann …
+nicht aus den gegebenen Exzerten bestimmt werden") trips the scorer's abstention phrase list. The retrieved sources
+differ between builds on the same three near-tie items as on the GTX 1070 Ti box (`de-hausordnung-sonntag`,
+`de-security-rest`, `de-vhs-gebuehr`), and across the ten runs each item's two retrieval variants both occur on both
+builds, so this is the harness's run-to-run variation again; none of the three flips a score. No template leak, no
+garbled or empty answer in the 20 dumps. The bring-up smoke passes 4 / 4 on b12110 (and 4 / 4 on b11146 as a
+control: `qwen3-4b-instruct-2507` calls Vienna's river the "Wienfluss" on both builds, the model's weakness, not the
+engine's). Raw results: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue729-gate.txt`, evidence
+`eval/results/i9-9900x-729-b{11146,12110}-<model>-vulkan-*`.
+
+*Rig legs (2026-11-10): Leg 1 PASSED, Leg 2 FAILED on draft acceptance.* The runbook's "Leg 1" and "Leg 2" on the
+same i9-9900X / RTX 3090 box (275 W limit, memory clock at P0 on every run, no other GPU process), b11146 against
+b12110 from the official archives, both models SHA-256-checked against their manifests.
+
+Leg 1, the prompt-cache smoke on b12110 with 20 conversations per run:
+
+| run | restored | restored answer == recompute | re-prefilled |
+|---|---|---|---|
+| `qwen3.6-27b-q4` | 20 of 20 | 20 of 20 | 0 |
+| `qwen3.8-27b-ud-q5km` | 20 of 20 | 20 of 20 | 0 |
+| `qwen3.8-27b-ud-q5km` with rung 1a's MTP flags | 20 of 20 | 20 of 20 | 0 |
+
+Each return re-processes 31–32 of about 1,900 tokens, as on b11146 in #512. Every run advises leaving
+`disable_prompt_cache` unset, so no manifest changes.
+
+Leg 2, `run-start.mjs` with `qwen3.8-27b-ud-q5km` at ctx 8192, `-np 1`, `--spec-type draft-mtp --spec-draft-n-max 2
+--cache-ram 8192`, a 2,015-token prompt and 512 generated tokens, builds alternating:
+
+| variant | build | offload | draft acceptance | pp tok/s | decode tok/s | load |
+|---|---|---|---|---|---|---|
+| b12110-a | 12110 | 66/66 | 297 / 426 = **0.697** | 775.0 | **43.40** | 7.46 s |
+| b11146-a | 11146 | 66/66 | 307 / 407 = 0.754 | 795.8 | 45.32 | 8.03 s |
+| b12110-b | 12110 | 66/66 | 297 / 426 = **0.697** | 783.6 | **43.11** | 7.42 s |
+| b11146-b | 11146 | 66/66 | 307 / 407 = 0.754 | 784.3 | 45.20 | 8.03 s |
+
+The start passes: 66/66 with the MTP flags on both b12110 runs. The acceptance does not: b11146 reproduces #512's 0.754
+exactly, while b12110 drafts more and accepts fewer, identically on both runs. 512 tokens then take about 215 target
+steps instead of 205, and decode with MTP is 4.4 % lower (43.25 against 45.26 tok/s), far outside b11146's 0.12 tok/s
+a/b spread. A control with MTP off (the same four starts, rung 1) separates the engine from the draft:
+
+| variant | build | pp tok/s | decode tok/s | load |
+|---|---|---|---|---|
+| b12110-a | 12110 | 977.1 | 29.51 | 7.05 s |
+| b11146-a | 11146 | 921.0 | 29.39 | 7.39 s |
+| b12110-b | 12110 | 960.4 | 28.80 | 7.00 s |
+| b11146-b | 11146 | 917.6 | 28.46 | 7.33 s |
+
+Without MTP b12110 decodes as fast as b11146 and reads the prompt about 5 % faster, so the whole loss is the lower
+acceptance: MTP's decode gain falls from 1.56× to 1.48×. Answers are unaffected (the target model verifies every
+draft). This is the symptom the runbook watched for after v0.9.0 changed how MTP's hidden state is saved and restored
+in checkpoints (upstream #30141); the cause is not established. Whether the release ships with it is the owner's call.
+Raw results: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue729-rig-legs.txt`,
+`issue729-rig-cache-smoke.txt` and `leg729-{mtp,nomtp}-*` in the same folder.
+
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
 spreads layers over every listed device — did not hold on the pinned b9849 build on either hybrid

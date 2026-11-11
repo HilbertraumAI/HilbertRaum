@@ -1,0 +1,2 @@
+model,n,em_rate,mean_f1,citation_correct_rate,grounded_rate,over_abstain_rate,abstain_rate_unans,hallucination_rate,em_rate_de,em_rate_en,f1_de,f1_en
+ministral3-8b-instruct-2512-q4,100,0.9647,0.2999,0.9882,0.9647,0.0000,1.0000,0.0000,0.9608,0.9706,0.3141,0.2787
