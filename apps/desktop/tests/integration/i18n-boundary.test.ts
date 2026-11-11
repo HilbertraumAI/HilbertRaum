@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { t, UI_LANGUAGES } from '../../src/shared/i18n'
+import { en, t, UI_LANGUAGES, type MessageKey } from '../../src/shared/i18n'
 import type { StartDocTaskRequest } from '../../src/shared/types'
 import type { Translator } from '../../src/main/services/translation'
 import { applyUiLanguageSetting, initMainI18n } from '../../src/main/services/i18n'
@@ -14,6 +14,7 @@ import { isFriendlyTaskError } from '../../src/main/services/doctasks'
 import { buildWarnings } from '../../src/main/services/benchmark'
 import { docTaskManager, importWords, scriptedTranslator, waitTerminal } from '../helpers/doctask-fixtures'
 import { importScan } from '../helpers/ocr-fixtures'
+import { catalogOf } from '../helpers/i18n-catalogs'
 
 // Phase 41 — the §3.3 two-rule boundary under a GERMAN-cached main-process language:
 // emissions (IPC throws, job errors) localize via tMain, while everything persisted
@@ -108,6 +109,26 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
       }
     }
   )
+
+  // The pass-through is an exact match against each guard's copy rendered with no params, so a
+  // guard key with a {param} could never match what its guard throws: that failure would show
+  // the generic copy instead. Every key the filter accepts stays param-less in every catalog.
+  it('every guard key the pass-through accepts has no {param} in any registered catalog', () => {
+    // A key's English render (a placeholder left literal) passes exactly when the filter lists
+    // that key, or one with the same English text: this finds the list without reading it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let accepted: MessageKey[]
+    try {
+      accepted = (Object.keys(en) as MessageKey[]).filter((key) => isFriendlyTaskError(t('en', key)))
+    } finally {
+      warn.mockRestore()
+    }
+    expect(accepted).toEqual(expect.arrayContaining(['main.noModelRunning', 'main.translation.noModel']))
+    const withParam = accepted.flatMap((key) =>
+      UI_LANGUAGES.filter(({ code }) => /\{\w+\}/.test(catalogOf(code)[key])).map(({ code }) => `${code}: ${key}`)
+    )
+    expect(withParam, 'guard copy with a {param} can never pass the exact-match filter').toEqual([])
+  })
 
   it('benchmark warnings stay canonical English under a German cache (persisted in lastBenchmark)', () => {
     applyUiLanguageSetting('de')

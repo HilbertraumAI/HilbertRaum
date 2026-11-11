@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { t, type MessageKey } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 
 // Task A (design-guidelines §12.1 #1): the compact app rail must never hyphenate a label
 // mid-word ("Docu-ments" / "Doku-mente" / "Einstel-lungen"). The fix is two-part: (1) the
@@ -15,14 +15,30 @@ const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.tr
 const STYLES = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8')
 
 describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
-  it('carry no soft hyphen (U+00AD) or other invisible break in EITHER locale', () => {
-    for (const lang of ['en', 'de'] as const) {
+  it('carry no soft hyphen (U+00AD) or other invisible break in ANY registered locale', () => {
+    for (const lang of UI_LANGUAGE_CODES) {
       for (const key of NAV_KEYS) {
         const label = t(lang, key)
         expect(label, `${lang}/${key} has a soft hyphen`).not.toMatch(/­/)
         expect(label, `${lang}/${key} has a zero-width break`).not.toMatch(/[​­]/)
       }
     }
+  })
+
+  it('a single-word rail label is no longer than "Einstellungen" in ANY registered locale', () => {
+    // The rail column is sized to German "Einstellungen" at the active label's weight (E-1/#149).
+    // A label with a space or hyphen may wrap cleanly to two lines; a single word cannot, so
+    // it must fit. The character count is the unit-test proxy for the width; the real-app
+    // scan measures it. A word that does not fit gets a shorter synonym, never an
+    // abbreviation (D-10). nav.home is the brand mark's tooltip, not a rail label.
+    const tooLong: string[] = []
+    for (const lang of UI_LANGUAGE_CODES) {
+      for (const key of NAV_KEYS.filter((k) => k !== 'nav.home')) {
+        const label = t(lang, key)
+        if (!/[ -]/.test(label) && label.length > 'Einstellungen'.length) tooLong.push(`${lang}/${key}: ${label}`)
+      }
+    }
+    expect(tooLong, 'single-word rail labels wider than the rail is sized for').toEqual([])
   })
 
   it('the longest single-word label is German "Einstellungen" (what the rail width is sized to)', () => {

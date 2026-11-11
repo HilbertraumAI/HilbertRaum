@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import * as ts from 'typescript'
 import { en } from '../../src/shared/i18n'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
+import { catalogFiles } from '../helpers/i18n-catalogs'
 import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
@@ -712,6 +714,45 @@ describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through 
   })
 })
 
+/** The CLDR plural categories in their canonical order. */
+const CLDR_PLURAL_ORDER: readonly string[] = ['zero', 'one', 'two', 'few', 'many', 'other']
+
+/**
+ * How the plural forms of `base` sit in a catalog's source text: `.one` and `.other` present, each
+ * form once and in CLDR order, and each form starting on the line after the previous one ends (a
+ * value wrapped onto its own line is fine; another key, a comment or a blank line is not).
+ */
+function pluralFormLayoutProblems(fileName: string, text: string, base: string): string[] {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const lineOf = (pos: number): number => source.getLineAndCharacterOfPosition(pos).line
+  const forms: Array<{ form: string; start: number; end: number }> = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && ts.isStringLiteral(node.name) && node.name.text.startsWith(`${base}.`)) {
+      const form = node.name.text.slice(base.length + 1)
+      if (CLDR_PLURAL_ORDER.includes(form)) {
+        forms.push({ form, start: lineOf(node.getStart(source)), end: lineOf(node.getEnd()) })
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+
+  const problems: string[] = []
+  for (const form of ['one', 'other']) {
+    if (!forms.some((f) => f.form === form)) problems.push(`${base}.${form}: missing`)
+  }
+  const order = forms.map((f) => f.form)
+  const cldr = [...order].sort((a, b) => CLDR_PLURAL_ORDER.indexOf(a) - CLDR_PLURAL_ORDER.indexOf(b))
+  if (new Set(order).size !== order.length) problems.push(`${base}: a form appears twice (${order.join(', ')})`)
+  else if (order.join() !== cldr.join()) problems.push(`${base}: forms out of CLDR order (${order.join(', ')})`)
+  for (let i = 1; i < forms.length; i++) {
+    if (forms[i].start !== forms[i - 1].end + 1) {
+      problems.push(`${base}.${forms[i].form}: not on the line after ${base}.${forms[i - 1].form}`)
+    }
+  }
+  return problems
+}
+
 // ZIM knowledge packs (PR #294 → #301), plan §0.3 item 5: the wave's acceptance matrix is a checked-in
 // INVENTORY (`tests/fixtures/zim/required-checks.json`), not a memory. A row is one named automated test
 // or one piece of required manual evidence; its status says whether the case exists yet. What this net
@@ -835,14 +876,42 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
     expect(lines.filter((l) => /^\/?zim\/?$/.test(l.trim()))).toEqual(['/zim/'])
   })
 
-  it('EN/DE chat.scope.projectCount.one/.other are adjacent lines again (PR #294 review INFO, split plural pair)', () => {
-    for (const lang of ['en', 'de']) {
-      const lines = readFileSync(join(DESKTOP_ROOT, 'src', 'shared', 'i18n', `${lang}.ts`), 'utf8').split(/\r?\n/)
-      const one = lines.findIndex((l) => l.includes("'chat.scope.projectCount.one'"))
-      const other = lines.findIndex((l) => l.includes("'chat.scope.projectCount.other'"))
-      expect(one, `${lang}: .one present`).toBeGreaterThan(-1)
-      expect(other, `${lang}: .other directly follows .one`).toBe(one + 1)
+  // PR #294 review INFO: the chat.scope.projectCount pair had been split apart in a catalog. Every
+  // catalog keeps all its forms of the pair on consecutive lines, in CLDR order; a language with
+  // more forms than .one/.other (Russian .few/.many, French .many) puts them in between.
+  it.each(catalogFiles().map((file) => [basename(file), file]))(
+    '%s: all forms of chat.scope.projectCount are consecutive lines in CLDR order (PR #294 review INFO, split plural pair)',
+    (_name, file) => {
+      expect(pluralFormLayoutProblems(file, readFileSync(file, 'utf8'), 'chat.scope.projectCount')).toEqual([])
     }
+  )
+
+  it.each([
+    ['the .one/.other pair on consecutive lines', ["  'n.count.one': '{count} x',", "  'n.count.other': '{count} xs',"], []],
+    [
+      'four forms in CLDR order, one value wrapped',
+      ["  'n.count.one': '{count} x',", "  'n.count.few':", "    '{count} xa',", "  'n.count.many': '{count} xb',", "  'n.count.other': '{count} xc',"],
+      []
+    ],
+    [
+      '.other above .few',
+      ["  'n.count.one': '{count} x',", "  'n.count.other': '{count} xc',", "  'n.count.few': '{count} xa',"],
+      ['n.count: forms out of CLDR order (one, other, few)']
+    ],
+    [
+      'another key between the forms',
+      ["  'n.count.one': '{count} x',", "  'n.label': 'X',", "  'n.count.other': '{count} xs',"],
+      ['n.count.other: not on the line after n.count.one']
+    ],
+    [
+      'a comment between the forms',
+      ["  'n.count.one': '{count} x',", '  // note', "  'n.count.other': '{count} xs',"],
+      ['n.count.other: not on the line after n.count.one']
+    ],
+    ['no .other', ["  'n.count.one': '{count} x',"], ['n.count.other: missing']]
+  ])('the layout check on a fixture catalog: %s', (_title, lines, problems) => {
+    const text = `export const xx = {\n${lines.join('\n')}\n}\n`
+    expect(pluralFormLayoutProblems('xx.ts', text, 'n.count')).toEqual(problems)
   })
 
   it('T17 security-model.md carries the kiwix-serve exception to the per-spawn-key claim and the R-9 wording is present in security-model.md, PRIVACY.md and known-limitations.md', () => {

@@ -7,9 +7,13 @@ import {
   resolveUiLanguage,
   t,
   tCount,
-  type MessageKey
+  UI_LANGUAGES,
+  type MessageKey,
+  type UiLanguage,
+  type UiLanguageInfo
 } from '../../src/shared/i18n'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { catalogOf } from '../helpers/i18n-catalogs'
 
 // Phase 39 — the shared i18n module (i18n record §3.1, D-L1/D-L2/D-L8): synchronous
 // lookup, {name} interpolation, .one/.other plurals, English fallback, and the
@@ -160,39 +164,82 @@ describe('resolveUiLanguage (D-L2)', () => {
   })
 })
 
-describe('German typography — quotation marks (design-guidelines §7 "Typography")', () => {
+/** One machine-checkable typography rule of a language (its style guide; design-guidelines §7). */
+interface TypographyRule {
+  title: string
+  /** The catalog entries that break the rule; empty when it holds. */
+  offenders: (catalog: Readonly<Record<string, string>>) => string[]
+  /** The failure message, naming the fix. */
+  message: string
+}
+
+const occurrences = (value: string, mark: string): number => value.split(mark).length - 1
+
+/** Every `open` quote is closed by `close`, never by an ASCII quote. Offenders read `key: value`. */
+function balancedQuotes(open: string, close: string, title: string, message: string): TypographyRule {
+  return {
+    title,
+    message,
+    offenders: (catalog) =>
+      Object.entries(catalog)
+        .filter(([, value]) => occurrences(value, open) !== occurrences(value, close))
+        .map(([key, value]) => `${key}: ${value}`)
+  }
+}
+
+/** `close` never comes before its `open` (walking each value's pairs). Offenders are keys. */
+function opensBeforeCloses(open: string, close: string, title: string, message: string): TypographyRule {
+  return {
+    title,
+    message,
+    offenders: (catalog) =>
+      Object.entries(catalog)
+        .filter(([, value]) => {
+          let depth = 0
+          for (const ch of value) {
+            if (ch === open) depth++
+            else if (ch === close && --depth < 0) return true
+          }
+          return false
+        })
+        .map(([key]) => key)
+  }
+}
+
+// The rules run over the CATALOG VALUES only: a catalog file's own comments are not shipped
+// copy, and technical field names inside notes ("{field}", "language") legitimately keep
+// straight ASCII pairs. Typecheck makes every registered language list its rules here.
+const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] } = {
+  en: [],
   // German quotes are „…“ — an opening „ closed with an ASCII " is a visible typo in shipped
-  // copy (it rendered as `Durchsuchbar machen (OCR)"` on the Images empty state). The guard is
-  // over the CATALOG VALUES only: the file's own comments are not shipped copy, and technical
-  // field names inside notes ("{field}", "language") legitimately keep straight ASCII pairs.
-  const opens = (s: string): number => (s.match(/„/g) ?? []).length
-  const closes = (s: string): number => (s.match(/“/g) ?? []).length
-
-  it('closes every opening „ with “, never with an ASCII quote', () => {
-    const offenders = (Object.entries(de) as [MessageKey, string][])
-      .filter(([, value]) => opens(value) !== closes(value))
-      .map(([key, value]) => `${key}: ${value}`)
-    expect(
-      offenders,
+  // copy (it rendered as `Durchsuchbar machen (OCR)"` on the Images empty state).
+  de: [
+    balancedQuotes(
+      '„',
+      '“',
+      'closes every opening „ with “, never with an ASCII quote',
       'German values with an unbalanced „…“ pair — close them with “ (U+201C), not "'
-    ).toEqual([])
-  })
+    ),
+    opensBeforeCloses(
+      '„',
+      '“',
+      'never uses “ as an OPENING quote (the pair is „…“, not “…”)',
+      '“ used before its „ — German opens low, closes high'
+    )
+  ]
+}
 
-  it('never uses “ as an OPENING quote (the pair is „…“, not “…”)', () => {
-    // Walk the pairs per value: a closer may never appear before its opener.
-    const offenders = (Object.entries(de) as [MessageKey, string][])
-      .filter(([, value]) => {
-        let depth = 0
-        for (const ch of value) {
-          if (ch === '„') depth++
-          else if (ch === '“' && --depth < 0) return true
-        }
-        return false
-      })
-      .map(([key]) => key)
-    expect(offenders, '“ used before its „ — German opens low, closes high').toEqual([])
-  })
+describe('typography per registered language (design-guidelines §7 "Typography")', () => {
+  const rows = UI_LANGUAGES.flatMap(({ code }) =>
+    TYPOGRAPHY_RULES[code].map((rule) => [code, rule.title, rule] as const)
+  )
 
+  it.each(rows)('%s: %s', (code, _title, { offenders, message }) => {
+    expect(offenders(catalogOf(code)), message).toEqual([])
+  })
+})
+
+describe('German typography — quotation marks (design-guidelines §7 "Typography")', () => {
   it('the strings the sweep corrected read with German closers', () => {
     expect(de['images.avail.ocrPointer']).toContain('„Durchsuchbar machen (OCR)“')
     expect(de['docs.task.extractBusyTitle']).toContain('„Liste alle…“')
@@ -212,16 +259,13 @@ describe('German typography — quotation marks (design-guidelines §7 "Typograp
 describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () => {
   // EN sentence-level breaks use the em dash "—", DE uses the en dash "–"; a bare ASCII
   // hyphen standing in for either (space-hyphen-space) is a typo, not a house-style choice.
+  // The same holds in every other registered language (its dash is in its style guide).
   const PREFIXES = ['packs.', 'chat.scope.', 'chat.packs.', 'chat.article.']
 
-  it('no value under packs./chat.scope./chat.packs./chat.article. contains " - " in EN or DE', () => {
+  it('no value under packs./chat.scope./chat.packs./chat.article. contains " - " in any registered language', () => {
     const offenders: string[] = []
-    for (const catalog of [
-      ['en', en] as const,
-      ['de', de] as const
-    ]) {
-      const [lang, table] = catalog
-      for (const [key, value] of Object.entries(table)) {
+    for (const { code: lang } of UI_LANGUAGES) {
+      for (const [key, value] of Object.entries(catalogOf(lang))) {
         if (!PREFIXES.some((p) => key.startsWith(p))) continue
         if (value.includes(' - ')) offenders.push(`${lang}:${key}: ${value}`)
       }
@@ -230,21 +274,175 @@ describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () 
   })
 })
 
-describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
-  it('both catalogs carry the same keys with no empty values', () => {
-    expect(Object.keys(de).sort()).toEqual(Object.keys(en).sort())
-    for (const [key, value] of Object.entries({ ...en, ...de })) {
-      expect(value.trim().length, `empty value for ${key}`).toBeGreaterThan(0)
-    }
-  })
+type Catalog = Readonly<Record<string, string>>
+type CatalogShape = Pick<UiLanguageInfo, 'evidencePack' | 'pluralCategories'>
 
-  it('placeholder sets match per key (a {name} in English exists in German too)', () => {
-    for (const key of Object.keys(en) as MessageKey[]) {
-      const placeholders = (s: string): string[] => (s.match(/\{\w+\}/g) ?? []).sort()
-      expect(placeholders(de[key]), `placeholder mismatch in ${key}`).toEqual(
-        placeholders(en[key])
-      )
+/** The plural bases: `X` with both `X.one` and `X.other` (`packs.addFailed.other` alone is no plural). */
+function pluralBases(keys: ReadonlySet<string>): string[] {
+  return [...keys]
+    .filter((key) => key.endsWith('.one') && keys.has(`${key.slice(0, -'.one'.length)}.other`))
+    .map((key) => key.slice(0, -'.one'.length))
+}
+
+/**
+ * The runtime twin of `CatalogKeyFor` (shared/i18n/languages.ts): the exact key set a catalog of
+ * a language must have. Every English key, plus one key per plural base for each form the
+ * language has beyond `.one`/`.other` (Russian `.few` and `.many`); without any `packExport.*`
+ * key when the language writes no evidence packs (they render only inside a pack, D-L9).
+ */
+function requiredCatalogKeys(info: CatalogShape, english: Catalog): Set<string> {
+  const englishKeys = new Set(Object.keys(english))
+  const extraForms = info.pluralCategories.filter((form) => form !== 'one' && form !== 'other')
+  const keys = [
+    ...englishKeys,
+    ...pluralBases(englishKeys).flatMap((base) => extraForms.map((form) => `${base}.${form}`))
+  ]
+  return new Set(keys.filter((key) => info.evidencePack || !key.startsWith('packExport.')))
+}
+
+const placeholders = (s: string): string[] => (s.match(/\{\w+\}/g) ?? []).sort()
+
+/**
+ * Everything wrong with `catalog` as the catalog of a language shaped `info`: a missing or an
+ * unexpected key, an empty value, or placeholders that differ from English. A form English
+ * does not have (`.few`) is compared with its base's `.other`.
+ */
+function catalogParityProblems(info: CatalogShape, catalog: Catalog, english: Catalog): string[] {
+  const required = requiredCatalogKeys(info, english)
+  const problems: string[] = []
+  for (const key of [...required].sort()) {
+    if (!Object.hasOwn(catalog, key)) problems.push(`missing key ${key}`)
+  }
+  for (const key of Object.keys(catalog).sort()) {
+    if (!required.has(key)) {
+      problems.push(`unexpected key ${key}`)
+      continue
     }
+    const value = catalog[key]
+    if (value.trim().length === 0) problems.push(`empty value for ${key}`)
+    const reference = english[key] ?? english[`${key.slice(0, key.lastIndexOf('.'))}.other`]
+    const [have, want] = [placeholders(value), placeholders(reference)]
+    if (have.join() !== want.join()) {
+      problems.push(`placeholder mismatch in ${key}: [${have.join(', ')}], English [${want.join(', ')}]`)
+    }
+  }
+  return problems
+}
+
+describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
+  // D-L10: every registered catalog is complete. Typecheck holds the key set (`UiCatalog`);
+  // this row is its runtime belt and adds what a type cannot say (no empty value, the
+  // English placeholders).
+  it.each(UI_LANGUAGES.map((info) => [info.code, info] as const))(
+    '%s: carries exactly its required keys, no empty value, and the English placeholders',
+    (code, info) => {
+      expect(catalogParityProblems(info, catalogOf(code), en)).toEqual([])
+    }
+  )
+
+  describe('the parity rule on fixture catalogs (only en and de are registered so far)', () => {
+    const english = {
+      'nav.home': 'Home',
+      'docs.opened': 'Opened {name}',
+      'docs.count.one': '{count} document',
+      'docs.count.other': '{count} documents',
+      'packs.addFailed.other': 'The archive could not be added.',
+      'packExport.title': 'Evidence pack',
+      'packExport.items.one': '{count} item',
+      'packExport.items.other': '{count} items'
+    }
+    const russianShape: CatalogShape = {
+      evidencePack: false,
+      pluralCategories: ['one', 'few', 'many', 'other']
+    }
+    const frenchShape: CatalogShape = { evidencePack: false, pluralCategories: ['one', 'many', 'other'] }
+    const russian: Catalog = {
+      'nav.home': 'Главная',
+      'docs.opened': 'Открыт {name}',
+      'docs.count.one': '{count} документ',
+      'docs.count.few': '{count} документа',
+      'docs.count.many': '{count} документов',
+      'docs.count.other': '{count} документа',
+      'packs.addFailed.other': 'Не удалось добавить архив.'
+    }
+    // The same catalog with the forms French has (one, many, other).
+    const { 'docs.count.few': _few, ...frenchForms } = russian
+    void _few
+    const without = (catalog: Catalog, key: string): Catalog =>
+      Object.fromEntries(Object.entries(catalog).filter(([k]) => k !== key))
+
+    it('a complete catalog passes: its extra forms, no packExport.*, no form of a non-plural', () => {
+      // `packs.addFailed` has no `.one`, so it has no `.few`; `packExport.items` is a plural, but a
+      // language without evidence packs carries none of its forms.
+      expect(catalogParityProblems(russianShape, russian, english)).toEqual([])
+      expect(catalogParityProblems(frenchShape, frenchForms, english)).toEqual([])
+    })
+
+    it.each<[string, CatalogShape, Catalog, string[]]>([
+      ['a plain key removed', russianShape, without(russian, 'nav.home'), ['missing key nav.home']],
+      [
+        'a plural form the language has removed',
+        russianShape,
+        without(russian, 'docs.count.few'),
+        ['missing key docs.count.few']
+      ],
+      [
+        'a form the language does not have',
+        frenchShape,
+        { ...frenchForms, 'docs.count.few': '{count} documents' },
+        ['unexpected key docs.count.few']
+      ],
+      [
+        'a form of a key that is not a plural',
+        russianShape,
+        { ...russian, 'nav.home.few': 'x', 'packs.addFailed.few': 'x' },
+        ['unexpected key nav.home.few', 'unexpected key packs.addFailed.few']
+      ],
+      [
+        'a packExport key in a language without evidence packs',
+        russianShape,
+        { ...russian, 'packExport.title': 'Пакет' },
+        ['unexpected key packExport.title']
+      ],
+      [
+        'a form of a packExport plural in a language without evidence packs',
+        russianShape,
+        { ...russian, 'packExport.items.few': '{count} элемента' },
+        ['unexpected key packExport.items.few']
+      ],
+      [
+        'no packExport keys in a language that writes evidence packs',
+        { ...russianShape, evidencePack: true },
+        russian,
+        [
+          'missing key packExport.items.few',
+          'missing key packExport.items.many',
+          'missing key packExport.items.one',
+          'missing key packExport.items.other',
+          'missing key packExport.title'
+        ]
+      ],
+      [
+        'an empty value',
+        russianShape,
+        { ...russian, 'nav.home': ' ' },
+        ['empty value for nav.home']
+      ],
+      [
+        'a placeholder dropped from a plain key',
+        russianShape,
+        { ...russian, 'docs.opened': 'Открыт' },
+        ['placeholder mismatch in docs.opened: [], English [{name}]']
+      ],
+      [
+        "a placeholder dropped from a form English lacks (compared with the base's .other)",
+        russianShape,
+        { ...russian, 'docs.count.many': 'много документов' },
+        ['placeholder mismatch in docs.count.many: [], English [{count}]']
+      ]
+    ])('%s is a problem', (_title, shape, catalog, problems) => {
+      expect(catalogParityProblems(shape, catalog, english)).toEqual(problems)
+    })
   })
 
   it('CODE-8 net: every {count}/{done}/{hidden} key consumed via plain t() is on the reviewed non-grammatical list', () => {
@@ -322,7 +520,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
   })
 
   it('every .one plural key has its .other partner and vice versa (tCount contract)', () => {
-    // Key parity is asserted above, so checking the English key set covers both catalogs.
+    // Key parity is asserted above, so checking the English key set covers every catalog.
     // A trailing ".other" alone is not proof of a plural (a key could just as well be a plain
     // label that happens to end in "...other") — a plural variant is one that interpolates
     // {count}.

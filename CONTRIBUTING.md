@@ -405,6 +405,14 @@ is to keep `node_modules` on a native filesystem (ext4/Btrfs/APFS); the portable
   "Swappable interfaces (spec §9.2)") so it stays swappable.
 - Match the surrounding code's style and comment density.
 
+## UI text
+Interface copy lives in the catalogs under `apps/desktop/src/shared/i18n/`: `en.ts` is the source
+of truth, and `languages.ts` lists the languages. A pull request that adds or changes UI text
+writes it in every registered catalog. `npm run typecheck` fails on a missing or misspelt key, and
+`tests/unit/i18n.test.ts` fails on an empty value or a placeholder that differs from English.
+Typecheck checks presence, not freshness: when you change an English value, update its
+translations too, because nothing marks them as stale.
+
 ## Scripts mirror canonical TypeScript modules
 The self-contained shell scripts (`scripts/*.{ps1,sh}`) re-implement logic whose canonical,
 unit-tested source lives in `apps/desktop/src/main/services/` (`drive.ts`, `assets.ts`,

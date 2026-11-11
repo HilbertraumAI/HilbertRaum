@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import * as ts from 'typescript'
-import { en, type MessageKey } from '../../src/shared/i18n'
+import { en, UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
+import { isCatalogPath, registeredCatalogCode } from '../helpers/i18n-catalogs'
 
 // PR #302 fix wave, P5 (CG8): an unused-i18n-key guard. The full-card model picker's removal
 // left five orphaned keys (F7) with no compile-time signal — TypeScript only checks that EN/DE
@@ -29,9 +30,10 @@ import { en, type MessageKey } from '../../src/shared/i18n'
 // case hands a real failed job to the real `ModelsScreen`), so a key exercised only
 // through a preview override is still real production code reading it. Including it can only
 // ADD "used" evidence — it never manufactures a false negative — so there is no safety cost to
-// keeping it in scope. The two i18n catalog files themselves are excluded: they declare every
+// keeping it in scope. The i18n catalog files themselves are excluded: they declare every
 // key as an object-literal string, which would trivially mark every key "used" and defeat the
-// guard entirely.
+// guard entirely. A row below holds the excluded files to the registered languages' catalogs,
+// so a new catalog (ru.ts) can only be excluded, never scanned (L-11).
 
 // ---------------------------------------------------------------------------------------------
 // Scanning primitives — plain functions so the classifier can be unit-tested on small fixtures
@@ -203,11 +205,62 @@ function findStaleExceptions(
   return stale
 }
 
+/** The two languages a closed set of interface languages used to name (L-01). */
+const LEGACY_PAIR: ReadonlySet<string> = new Set(['en', 'de'])
+
+const EQUALITY_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken
+])
+
+/**
+ * The places a file hardcodes the English/German pair instead of reading the language registry
+ * (`shared/i18n/languages.ts`): a union type naming both `'en'` and `'de'`, and an equality
+ * comparison (or `case`) against `'en'` or `'de'`. String and type literals only, through the
+ * compiler's AST, so a comment or a string that merely spells `=== 'de'` never matches.
+ */
+function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line: number; text: string }> {
+  const source = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  )
+  const isPairLiteral = (node: ts.Node): boolean => ts.isStringLiteralLike(node) && LEGACY_PAIR.has(node.text)
+  const sites: Array<{ line: number; text: string }> = []
+  const record = (node: ts.Node, text: string): void => {
+    sites.push({ line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1, text })
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isUnionTypeNode(node)) {
+      const named = node.types.flatMap((member) =>
+        ts.isLiteralTypeNode(member) && ts.isStringLiteral(member.literal) ? [member.literal.text] : []
+      )
+      if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
+    } else if (
+      ts.isBinaryExpression(node) &&
+      EQUALITY_OPERATORS.has(node.operatorToken.kind) &&
+      (isPairLiteral(node.left) || isPairLiteral(node.right))
+    ) {
+      record(node, node.getText(source))
+    } else if (ts.isCaseClause(node) && isPairLiteral(node.expression)) {
+      record(node, `case ${node.expression.getText(source)}`)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return sites.map(({ line, text }) => ({ line, text: text.replace(/\s+/g, ' ') }))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Production source walk (mirrors i18n.test.ts's existing `t('key'` scan's file-listing shape).
 // ---------------------------------------------------------------------------------------------
 
-function listProductionFiles(): string[] {
+/** Every production source file under src/ (catalogs included). */
+function listSourceFiles(): string[] {
   const srcRoot = join(process.cwd(), 'src')
   const files: string[] = []
   const walk = (dir: string): void => {
@@ -223,15 +276,22 @@ function listProductionFiles(): string[] {
     }
   }
   walk(srcRoot)
-  return files.filter((f) => {
-    const normalized = f.split('\\').join('/')
-    // Exclude the catalogs themselves (see the file-header note) — everything else under src/,
-    // preview/ included, counts as production source for this guard.
-    return !normalized.endsWith('/shared/i18n/en.ts') && !normalized.endsWith('/shared/i18n/de.ts')
-  })
+  return files
 }
 
+function listProductionFiles(): string[] {
+  // Exclude the catalogs themselves (see the file-header note): every file that could be one,
+  // so a new catalog never counts as a use of every key; the catalog-exclusion rows below
+  // fail on any of them that is not a registered language's. Everything else under src/,
+  // preview/ included, counts as production source for this guard.
+  return listSourceFiles().filter((f) => !isCatalogPath(f))
+}
+
+// One parse of the tree serves every row below (the result is read, never changed).
+let productionScan: ScanResult | undefined
+
 function scanProduction(): ScanResult {
+  if (productionScan !== undefined) return productionScan
   const literals = new Set<string>()
   const dynamics: DynamicPattern[] = []
   for (const file of listProductionFiles()) {
@@ -240,7 +300,8 @@ function scanProduction(): ScanResult {
     for (const literal of found.literals) literals.add(literal)
     dynamics.push(...found.dynamics)
   }
-  return { literals, dynamics }
+  productionScan = { literals, dynamics }
+  return productionScan
 }
 
 /**
@@ -278,6 +339,64 @@ const EXACT_KEY_EXCEPTIONS: readonly ExactKeyException[] = []
 // deleted outright in #315 rather than kept baselined — none had a real call site. Empty today.
 // ---------------------------------------------------------------------------------------------
 const LEGACY_UNREFERENCED: readonly MessageKey[] = []
+
+// ---------------------------------------------------------------------------------------------
+// Two-language literals (L-01, UI languages wave): the interface languages come from the
+// registry (`UI_LANGUAGES`), so a hardcoded en/de pair in src/ is a language left out the day
+// a third one registers. The exceptions name the en/de pair for a reason other than the
+// interface language. Each entry is one site, matched by file and source text: a new site, a
+// second copy or a stale entry fails the row.
+// ---------------------------------------------------------------------------------------------
+
+/** src/ paths whose files may name languages freely: the registry, the catalogs and `t()` itself. */
+const PAIR_LITERAL_SCOPE = 'shared/i18n/'
+
+interface PairLiteralException {
+  /** Path under src/, forward slashes. */
+  file: string
+  /** The flagged source text, whitespace collapsed. */
+  text: string
+  reason: string
+}
+
+const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
+  {
+    file: 'main/services/skills/vocabulary.ts',
+    text: "'en' | 'de'",
+    reason: 'VocabLang: the languages questions are understood in (content language; interface-only wave, L-29)'
+  },
+  {
+    file: 'main/services/zim/question-language.ts',
+    text: "'de' | 'en' | null",
+    reason: 'the detected language of a question (content language, L-29)'
+  },
+  {
+    file: 'main/services/zim/expand.ts',
+    text: "'de' | 'en' | null",
+    reason: "the question's detected language in the expansion result (content language, L-29)"
+  },
+  {
+    file: 'main/services/ingestion/index.ts',
+    text: "v.targetLang === 'de'",
+    reason: 'legacy translation-provenance rows, persisted before the type field, translated only to de/en'
+  },
+  {
+    file: 'main/services/ingestion/index.ts',
+    text: "v.targetLang === 'en'",
+    reason: 'the same legacy translation-provenance check'
+  },
+  {
+    file: 'renderer/lib/translateSession.ts',
+    text: "lang === 'en'",
+    reason: 'the English UI translates from German: the one UI language that cannot be its own source (translateSession.ts)'
+  },
+  {
+    file: 'shared/types.ts',
+    text: "'en' | 'de'",
+    reason:
+      'EvidencePackLanguage: packs are written in en/de only (D-5 b, i18n record D-L11); a type row in evidence-pack-model.test.ts holds it to the registry'
+  }
+]
 
 // =================================================================================================
 // Classifier unit tests (CG8 acceptance b/c/d): small fixtures, independent of the real catalog.
@@ -447,5 +566,92 @@ describe('i18n unused-key guard — production scan', () => {
     const matches = boundedDynamicMatches(dynamics, catalogKeys)
     expect(matches.has('review.source.kind.direct_excerpt')).toBe(true)
     expect(matches.has('review.relation.contradicts')).toBe(true)
+  })
+})
+
+// =================================================================================================
+// Which files the scan skips as catalogs (L-11): every catalog, and nothing but registered ones.
+// =================================================================================================
+
+describe('i18n unused-key guard — the catalog exclusion (L-11)', () => {
+  it.each([
+    ['/repo/apps/desktop/src/shared/i18n/en.ts', true],
+    ['C:\\repo\\apps\\desktop\\src\\shared\\i18n\\de.ts', true],
+    // A catalog of a language the registry does not list yet is skipped from the start (and
+    // refused by the row below until the language is registered).
+    ['/repo/apps/desktop/src/shared/i18n/ru.ts', true],
+    // Nested: skipped too, and then refused below, because no registered catalog is nested.
+    ['/repo/apps/desktop/src/shared/i18n/drafts/ru.ts', true],
+    ['/repo/apps/desktop/src/shared/i18n/index.ts', false],
+    ['/repo/apps/desktop/src/shared/i18n/languages.ts', false],
+    ['/repo/apps/desktop/src/renderer/i18n.tsx', false],
+    ['/repo/apps/desktop/src/main/services/i18n.ts', false]
+  ])('isCatalogPath(%s) → %s', (path, skipped) => {
+    expect(isCatalogPath(path)).toBe(skipped)
+  })
+
+  it.each<[string, readonly string[], string | null]>([
+    ['/repo/apps/desktop/src/shared/i18n/de.ts', UI_LANGUAGE_CODES, 'de'],
+    ['C:\\repo\\apps\\desktop\\src\\shared\\i18n\\en.ts', UI_LANGUAGE_CODES, 'en'],
+    ['/repo/apps/desktop/src/shared/i18n/ru.ts', UI_LANGUAGE_CODES, null],
+    ['/repo/apps/desktop/src/shared/i18n/ru.ts', ['en', 'de', 'ru'], 'ru'],
+    ['/repo/apps/desktop/src/shared/i18n/drafts/ru.ts', ['en', 'de', 'ru'], null]
+  ])('registeredCatalogCode(%s, %j) → %s', (path, codes, code) => {
+    expect(registeredCatalogCode(path, codes)).toBe(code)
+  })
+
+  it('skips exactly the registered languages’ catalogs (an unregistered one fails here, never silently disables the guard)', () => {
+    const srcRoot = join(process.cwd(), 'src')
+    const name = (file: string): string => relative(srcRoot, file).split('\\').join('/')
+    const catalogLike = listSourceFiles().filter(isCatalogPath)
+    const scanned = new Set(listProductionFiles())
+    expect(catalogLike.filter((f) => scanned.has(f)).map(name), 'catalog files the scan still reads').toEqual([])
+    expect(
+      catalogLike.filter((f) => registeredCatalogCode(f, UI_LANGUAGE_CODES) === null).map(name),
+      'files under shared/i18n/ that are no registered language’s catalog: register the language ' +
+        '(languages.ts, index.ts), or list a code module in NON_CATALOG_MODULES (tests/helpers/i18n-catalogs.ts)'
+    ).toEqual([])
+    expect(catalogLike.map((f) => registeredCatalogCode(f, UI_LANGUAGE_CODES)).sort()).toEqual(
+      [...UI_LANGUAGE_CODES].sort()
+    )
+  })
+})
+
+// =================================================================================================
+// Two-language literals outside the registry (L-01).
+// =================================================================================================
+
+describe('two-language literals — the interface languages come from the registry (L-01)', () => {
+  it.each([
+    ['a comparison with de', 'fixture.ts', "const german = lang === 'de'", ["lang === 'de'"]],
+    ['a negated comparison with en', 'fixture.ts', "if ('en' !== lang) render()", ["'en' !== lang"]],
+    ['a loose comparison', 'fixture.ts', 'const english = lang == "en"', ['lang == "en"']],
+    ['the closed union', 'fixture.ts', "type Lang = 'en' | 'de'", ["'en' | 'de'"]],
+    ['a wider union naming both', 'fixture.ts', "type Lang = 'de' | 'en' | null", ["'de' | 'en' | null"]],
+    ['a switch case', 'fixture.ts', "switch (lang) { case 'de': break }", ["case 'de'"]],
+    ['a comparison in JSX', 'fixture.tsx', "export const A = () => <p>{lang === 'de' ? 'Hallo' : 'Hi'}</p>", ["lang === 'de'"]],
+    ['a comment only', 'fixture.ts', "// lang === 'de' used to pick German\nconst x = 1", []],
+    ['a string that spells it', 'fixture.ts', "const hint = \"use lang === 'de' nowhere\"", []],
+    ['another language', 'fixture.ts', "type Lang = 'en' | 'fr'\nconst french = lang === 'fr'", []],
+    ['object keys (a table per pack language)', 'fixture.ts', "const line = { en: 'a', de: 'b' }", []],
+    ['a union naming only one of the pair', 'fixture.ts', "type T = 'de' | 'system'", []]
+  ])('%s', (_title, fileName, code, texts) => {
+    expect(twoLanguageLiterals(fileName, code).map((site) => site.text)).toEqual(texts)
+  })
+
+  it('src/ names the en/de pair only at the reviewed sites; everything else derives from UI_LANGUAGES', () => {
+    const srcRoot = join(process.cwd(), 'src')
+    const sites = listSourceFiles().flatMap((file) => {
+      const path = relative(srcRoot, file).split('\\').join('/')
+      if (path.startsWith(PAIR_LITERAL_SCOPE)) return []
+      return twoLanguageLiterals(file, readFileSync(file, 'utf8')).map((site) => ({ file: path, ...site }))
+    })
+    const key = ({ file, text }: { file: string; text: string }): string => `${file}: ${text}`
+    expect(
+      sites.map(key).sort(),
+      'a hardcoded en/de pair: derive the languages from UI_LANGUAGES (shared/i18n/languages.ts), or, for a ' +
+        'content language rather than the interface one, add a PAIR_LITERAL_EXCEPTIONS entry with its reason. ' +
+        `Sites: ${sites.map((s) => `${s.file}:${s.line} ${s.text}`).join('; ')}`
+    ).toEqual(PAIR_LITERAL_EXCEPTIONS.map(key).sort())
   })
 })

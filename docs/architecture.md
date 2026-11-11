@@ -6074,6 +6074,21 @@ of `de.ts`.
   at display in `DictationButton` — the renderer-internal analogue of the display map.
 - Tests assert via `t('en', key)` / the `en` catalog, never re-typed literals; German
   render smokes live in `tests/renderer/GermanSmoke.test.tsx`.
+- **The catalog guards iterate the registry** (UI languages wave, 2026-11-11), so a language is
+  covered the day it is registered. `tests/unit/i18n.test.ts`: every registered catalog's key set,
+  empty values and placeholders (D-L10), the per-language typography rules (`TYPOGRAPHY_RULES`,
+  keyed by language, so typecheck asks for a list for each new one) and the house dashes.
+  `tests/unit/rail-labels.test.ts`: every language's rail labels (no invisible breaks; the
+  single-word width proxy). `tests/integration/repo-hygiene.test.ts`: each catalog file keeps the
+  forms of `chat.scope.projectCount` on consecutive lines in CLDR order.
+  `tests/unit/i18n-unused-keys.test.ts`: the unused-key scan skips every catalog file and each one
+  it skips is a registered language's (an unregistered `xx.ts` fails instead of silently disabling
+  the guard); it also bans the hard-coded en/de pair in `src/` (a union naming both, or a
+  comparison or `case` against `'en'`/`'de'`, found through the TypeScript AST) outside
+  `shared/i18n/` and a reviewed list of content-language sites. `tests/integration/i18n-boundary.test.ts`:
+  no guard key the doc-task pass-through accepts has a `{param}` (the filter is an exact match,
+  §3.3 Rule 3). Shared convention (`tests/helpers/i18n-catalogs.ts`): a catalog is
+  `shared/i18n/<code>.ts` exporting `const <code>`.
 
 ### Phase-42 QA (as built)
 
