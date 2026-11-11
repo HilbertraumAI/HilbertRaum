@@ -1539,6 +1539,7 @@ export const de: Record<keyof typeof en, string> = {
     'folgt immer dem System.',
   'settings.language.title': 'Sprache',
   'settings.language.aria': 'Sprache',
+  'settings.language.system': 'System',
   'settings.language.hint':
     '„System“ folgt der Sprache deines Betriebssystems: Deutsche Systeme verwenden Deutsch, ' +
     'alle anderen Englisch. Änderungen gelten sofort.',

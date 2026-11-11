@@ -1526,6 +1526,7 @@ export const en = {
     'always follows the system theme.',
   'settings.language.title': 'Language',
   'settings.language.aria': 'Language',
+  'settings.language.system': 'System',
   'settings.language.hint':
     '“System” follows your operating system’s language: German systems use Deutsch, ' +
     'everything else uses English. Changes apply right away.',

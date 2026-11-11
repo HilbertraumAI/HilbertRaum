@@ -6037,7 +6037,10 @@ tree-shakes them).
   language). A 2026-11-11 audit of `src/` found no other site; every other text comparison runs on
   Rule-1 English, an un-catalogued engine or library literal, or a code.
 - The product name "HilbertRaum" is never translated; language names in the
-  picker stay untranslated (`System`/`English`/`Deutsch`); technical values (model ids,
+  picker stay in their own language (each registry entry's `nativeName`: `English`, `Deutsch`),
+  so someone on a UI they can't read can still find their way back, while the picker's *System*
+  label is translated (`settings.language.system`, owner call D-13, 2026-11-11; the picker is a
+  native `<select>` built from the registry since then); technical values (model ids,
   paths, hardware-profile codes) stay as-is. Audit-log `message` strings stay English in
   the DB and export (the Phase-19 privacy rule; only the Activity panel's type labels
   translate).

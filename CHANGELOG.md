@@ -25,7 +25,12 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Changed
+
+- **You now choose the interface language from a drop-down list.** Settings → Language used to
+  show System, English and Deutsch as three buttons side by side; it is now a list, with room for
+  more languages. The choices and how they work are unchanged, and a change still applies right
+  away.
 
 ## [0.1.65] — 2026-11-11
 
