@@ -1,6 +1,6 @@
-import { t, tCount, type MessageKey, type UiLanguage } from '../../../shared/i18n'
+import { t, tCount, type MessageKey } from '../../../shared/i18n'
 import { CITE_CODE_SPLIT_RE, CITE_MARKER_RE } from '../../../shared/citation-markers'
-import type { ReviewDecision } from '../../../shared/types'
+import type { EvidencePackLanguage, ReviewDecision } from '../../../shared/types'
 import type { EvidencePackModel, EvidencePackSource } from './pack-model'
 import { EVIDENCE_PACK_CSP } from '../../window-security'
 
@@ -30,6 +30,8 @@ import { EVIDENCE_PACK_CSP } from '../../window-security'
 // snapshot and is never re-localized later (plan §8.2). Inline `[S{n}]` machine markers in
 // the frozen answer/item text localize exactly like the chat display (shared regexes from
 // `shared/citation-markers.ts`; DE renders `[Q{n}]`, code spans/fences stay literal).
+// Every language in this file is an `EvidencePackLanguage`, never a `UiLanguage`: a UI
+// language that writes no packs has no `packExport.*` keys (i18n record D-L9, D-L11).
 //
 // Injection stance (spec §29.4): EVERY string that can carry stored content — answer,
 // question, titles, snippets, notes, labels, skill/model names — passes through
@@ -80,7 +82,7 @@ export function formatPackTimestamp(iso: string): string {
 /** Rewrite inline `[S{n}]` PROSE markers to the pack language's display marker (DE `[Q{n}]`),
  *  skipping code spans/fences — the displayMap `localizeCitationMarkers` semantics via the
  *  same shared regexes. Runs on RAW text (before escaping). */
-function localizeMarkers(lang: UiLanguage, raw: string): string {
+function localizeMarkers(lang: EvidencePackLanguage, raw: string): string {
   if (!raw.includes('[S')) return raw
   const parts = raw.split(CITE_CODE_SPLIT_RE)
   for (let i = 0; i < parts.length; i += 2) {
@@ -90,7 +92,7 @@ function localizeMarkers(lang: UiLanguage, raw: string): string {
 }
 
 /** Localize a stored `S{n}` machine label for display (`formatCitationLabel` semantics). */
-function localizeLabel(lang: UiLanguage, label: string): string {
+function localizeLabel(lang: EvidencePackLanguage, label: string): string {
   const m = /^S(\d+)$/.exec(label)
   return m ? t(lang, 'chat.sources.marker', { n: m[1]! }) : label
 }

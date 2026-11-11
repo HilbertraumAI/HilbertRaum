@@ -3717,6 +3717,8 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.title': 'Nachweispaket exportieren',
   'review.export.encryptionWarning':
     'Diese exportierte Datei liegt außerhalb des verschlüsselten HilbertRaum-Arbeitsbereichs und ist nicht durch dein Arbeitsbereich-Passwort geschützt.',
+  'review.export.packLanguage.en': 'Dieses Paket wird auf Englisch erstellt.',
+  'review.export.packLanguage.de': 'Dieses Paket wird auf Deutsch erstellt.',
   'review.export.options': 'In das Paket aufnehmen',
   'review.export.optNotes': 'Prüfnotizen',
   'review.export.optExcerpts': 'Quellenauszüge',

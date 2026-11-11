@@ -1,4 +1,11 @@
-import type { Conversation, CoverageInfo, EvidencePackOptions, Message } from './types'
+import type {
+  Conversation,
+  CoverageInfo,
+  EvidencePackLanguage,
+  EvidencePackOptions,
+  Message
+} from './types'
+import type { MessageKey, UiLanguageInfo } from './i18n'
 
 // Evidence Pack / Review Mode — the entry-point eligibility rule (spec §9.1), as ONE pure
 // shared predicate so the renderer action row, the sources-disclosure footer (Phase 2) and
@@ -75,4 +82,45 @@ export const EVIDENCE_PACK_OPTION_DEFAULTS: Omit<EvidencePackOptions, 'language'
   includeDocumentHashes: true,
   includeUnreviewedItems: true,
   includeTechnicalDetails: false
+}
+
+/**
+ * The export dialog's line per pack language (i18n record D-L11): one full sentence per
+ * language, never a sentence with the language name interpolated, because a language name
+ * inside a sentence needs case and lower-casing in Russian, French, Spanish and Italian.
+ * Its keys are also the set of pack languages: adding one is a compile error here until
+ * its sentence exists.
+ */
+const PACK_LANGUAGE_LINE = {
+  en: 'review.export.packLanguage.en',
+  de: 'review.export.packLanguage.de'
+} as const satisfies Record<EvidencePackLanguage, MessageKey>
+
+/** Whether `value` is a language evidence packs can be written in (the export boundary's
+ *  guard: anything else exports in English). */
+export function isPackLanguage(value: unknown): value is EvidencePackLanguage {
+  return typeof value === 'string' && Object.hasOwn(PACK_LANGUAGE_LINE, value)
+}
+
+/**
+ * The language a pack exported from this UI language is written in (owner call D-5 (b),
+ * 2026-11-11): the UI language itself when its registry entry writes evidence packs
+ * (`evidencePack`), English otherwise. Production passes the real registry entry
+ * (`uiLanguageInfo(lang)`).
+ */
+export function packLanguageFor(
+  info: Pick<UiLanguageInfo, 'code' | 'evidencePack'>
+): EvidencePackLanguage {
+  return info.evidencePack && isPackLanguage(info.code) ? info.code : 'en'
+}
+
+/**
+ * The key of the export dialog's pack-language line for this UI language, or null when
+ * the pack is written in the UI language itself (there is nothing to point out).
+ */
+export function packLanguageLineKey(
+  info: Pick<UiLanguageInfo, 'code' | 'evidencePack'>
+): MessageKey | null {
+  const pack = packLanguageFor(info)
+  return pack === info.code ? null : PACK_LANGUAGE_LINE[pack]
 }

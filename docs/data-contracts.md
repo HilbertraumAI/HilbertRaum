@@ -1604,7 +1604,11 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
 **Phase 3 — evidence-pack export, self-contained HTML (as built):**
 
 ✅ **Types (`shared/types.ts`):** `EvidencePackLanguage` ('en'|'de' — the pack's content
-  language, chosen at export and FROZEN into the file; never re-localized later) and
+  language, chosen at export and FROZEN into the file; never re-localized later. The renderer
+  maps its UI language through `packLanguageFor(uiLanguageInfo(lang))` (`shared/evidence-review.ts`,
+  owner call D-5 (b), 2026-11-11; architecture.md i18n record D-L11): the UI language when its
+  registry entry has `evidencePack: true`, else `'en'`, so it is always one of these two values,
+  whatever the UI language) and
   `EvidencePackOptions { language, includeReviewerNotes, includeSourceExcerpts,
   includeDocumentHashes, includeUnreviewedItems, includeTechnicalDetails }` (spec §16.2).
   Defaults live in `EVIDENCE_PACK_OPTION_DEFAULTS` (`shared/evidence-review.ts`): everything
@@ -1617,7 +1621,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   whole-doc/WEAK).
 ✅ **Pack model (`main/services/evidence-pack/pack-model.ts`, pure):**
   `resolveEvidencePackOptions(raw)` (untrusted-boundary resolver — literal booleans only,
-  unknown keys dropped, language 'de' only on the literal) and
+  unknown keys dropped, language kept only when `isPackLanguage` ('en'/'de'), else 'en') and
   `buildEvidencePackModel(detail, options, {packId, generatedAt}) → EvidencePackModel` —
   the nine §16.1 sections normalized from the STORED review read-model only: cover, Q&A
   (frozen snapshots), review summary (fixed-order decision counts, `lastExportedAt` =

@@ -5,7 +5,12 @@ import type {
   EvidenceReviewFreshness,
   ReviewDecision
 } from '@shared/types'
-import { EVIDENCE_PACK_OPTION_DEFAULTS } from '@shared/evidence-review'
+import {
+  EVIDENCE_PACK_OPTION_DEFAULTS,
+  packLanguageFor,
+  packLanguageLineKey
+} from '@shared/evidence-review'
+import { uiLanguageInfo } from '@shared/i18n'
 import { CoverageMeter, Button, useToast } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
 import { exportReviewPack } from '../lib/reviewSession'
@@ -319,9 +324,11 @@ export function ReviewSummaryView({
  * format (HTML default, PDF via the hidden-window print), the §16.2 option checkboxes
  * (shared defaults — privacy-sensitive extras OFF; file paths have no flag because no
  * pack can contain one) and the §24.3 encryption-boundary warning, always visible before
- * the native save dialog opens. The pack's language is FROZEN to the current UI language
- * at generation. The save dialog offers both formats too (requested one preselected) —
- * the chosen file extension has the final word main-side.
+ * the native save dialog opens. The pack's language is FROZEN at generation: the current
+ * UI language when packs can be written in it, English otherwise (`packLanguageFor`, D-5
+ * (b)), and a one-sentence line says so when the two differ. The save dialog offers both
+ * formats too (requested one preselected) — the chosen file extension has the final word
+ * main-side.
  */
 function ExportPackPanel({
   onClose,
@@ -337,6 +344,9 @@ function ExportPackPanel({
   const [format, setFormat] = useState<EvidenceExportFormat>('html')
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const languageInfo = uiLanguageInfo(lang)
+  const packLanguage = packLanguageFor(languageInfo)
+  const packLanguageLine = packLanguageLineKey(languageInfo)
   const OPTION_LABELS = [
     ['includeReviewerNotes', 'review.export.optNotes'],
     ['includeSourceExcerpts', 'review.export.optExcerpts'],
@@ -352,7 +362,7 @@ function ExportPackPanel({
     setExporting(true)
     setError(null)
     try {
-      const result = await exportReviewPack({ ...flags, language: lang, format })
+      const result = await exportReviewPack({ ...flags, language: packLanguage, format })
       if (result.outcome === 'exported') {
         showToast(t('review.export.done'))
         onClose()
@@ -373,6 +383,7 @@ function ExportPackPanel({
       <p className="hint review-export-warning">
         <span aria-hidden="true">⚠</span> {t('review.export.encryptionWarning')}
       </p>
+      {packLanguageLine !== null && <p className="hint hint-lede">{t(packLanguageLine)}</p>}
       {/* P6 (plan §11): the format choice — a native radio group; HTML stays the default,
           PDF prints the same pack through the hidden window (A4, footer, bookmarks). */}
       <fieldset className="review-export-options review-export-format">
