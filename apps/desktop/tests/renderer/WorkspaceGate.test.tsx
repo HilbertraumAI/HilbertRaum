@@ -11,6 +11,7 @@ import type {
   ModelVerifyProgress
 } from '../../src/shared/types'
 import { modelInfo } from '../helpers/model-fixtures'
+import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the pre-app gate. Phase 27 turned the CREATE path
@@ -389,5 +390,63 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
 
     expect(await screen.findByText(/didn.t unlock your workspace/i)).toBeInTheDocument()
     expect(onUnlocked).not.toHaveBeenCalled()
+  })
+})
+
+// D-17 (a), UI languages wave: before unlock the gate renders in the localStorage mirror's
+// language, while main emits its failure `message` in its own cached language (the OS locale
+// until settings are readable). Every row renders the gate in German and lets main answer in
+// English, so a gate that showed `message` for a mapped reason turns its row red.
+describe('WorkspaceGate — unlock/create failures render in the gate’s language (D-17 a)', () => {
+  type Failure = Extract<WorkspaceActionResult, { ok: false }>
+
+  afterEach(() => window.localStorage.clear())
+
+  /** Render the gate in German, submit once, and have main answer with `failure`. */
+  async function failIn(call: 'unlock' | 'create', failure: Failure): Promise<void> {
+    const user = userEvent.setup()
+    const answer = vi.fn(async (): Promise<WorkspaceActionResult> => failure)
+    stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
+    renderInLanguage(
+      <WorkspaceGate state={call === 'unlock' ? LOCKED : UNINITIALIZED} onUnlocked={vi.fn()} />,
+      'de'
+    )
+    if (call === 'unlock') {
+      await user.type(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder')), 'nope')
+      await user.click(screen.getByRole('button', { name: t('de', 'gate.unlock.submit') }))
+    } else {
+      // A valid encrypted password, as the gate always sends: main's too-short refusal can't
+      // be the answer, so a `refused` here is the vault's own sentence.
+      await user.click(screen.getByRole('button', { name: t('de', 'gate.welcome.start') }))
+      const password = await screen.findByPlaceholderText(t('de', 'gate.passwordPlaceholder'))
+      await user.type(password, 'longenough')
+      await user.type(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder')), 'longenough')
+      await user.click(screen.getByRole('button', { name: t('de', 'gate.create.submit') }))
+      expect(answer).toHaveBeenCalledWith('longenough', 'encrypted')
+    }
+  }
+
+  it.each([
+    ['unlock', 'wrong_password', 'main.workspace.wrongPassword'],
+    ['unlock', 'vault_damaged', 'main.workspace.vaultDamaged'],
+    ['unlock', 'vault_recovery_blocked', 'main.workspace.recoveryBlocked'],
+    ['unlock', 'workspace_newer', 'main.workspace.newer'],
+    ['unlock', 'error', 'main.workspace.openFailed'],
+    ['create', 'workspace_newer', 'main.workspace.newer'],
+    ['create', 'error', 'main.workspace.createFailed']
+  ] as const)('%s %s shows %s in German although main said it in English', async (call, reason, key) => {
+    await failIn(call, { ok: false, reason, message: t('en', key) })
+    expect(await screen.findByText(t('de', key))).toBeInTheDocument()
+  })
+
+  it.each([
+    // The vault's own refusal sentence: no catalog key, raw English in every UI language today.
+    ['create', 'refused', 'An encrypted workspace already exists here — refusing to overwrite it.'],
+    // A reason neither table has. The tables are typecheck-complete, so only a cast gets here;
+    // the gate still says what main said instead of showing an empty banner.
+    ['unlock', 'not_in_the_tables' as string as Failure['reason'], 'Something new went wrong.']
+  ] as const)('%s %s shows main’s own message', async (call, reason, message) => {
+    await failIn(call, { ok: false, reason, message })
+    expect(await screen.findByText(message)).toBeInTheDocument()
   })
 })

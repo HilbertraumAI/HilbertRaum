@@ -32,6 +32,15 @@ from its first public `1.0.0` release onward.
   more languages. The choices and how they work are unchanged, and a change still applies right
   away.
 
+### Fixed
+
+- **Unlock and setup errors now appear in the language the lock screen shows.** If the language
+  you chose in Settings differs from your operating system's, the lock screen was already in your
+  language, but a wrong password or a problem opening or creating the workspace was reported in
+  the operating system's language. These messages now match the rest of the screen. Two rare
+  refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
+  unencrypted one) are still shown in English.
+
 ## [0.1.65] — 2026-11-11
 
 ### Fixed

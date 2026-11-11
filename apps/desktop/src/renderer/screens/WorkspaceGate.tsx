@@ -12,7 +12,13 @@ import {
   passwordStrength
 } from '../components'
 import { useT } from '../i18n'
-import type { ModelVerifyProgress, WorkspaceStateInfo } from '@shared/types'
+import type { MessageKey } from '@shared/i18n'
+import {
+  MIN_PASSWORD_LENGTH,
+  type ModelVerifyProgress,
+  type WorkspaceActionResult,
+  type WorkspaceStateInfo
+} from '@shared/types'
 
 // The password field + strength meter live in `components/PasswordField`
 // (the Settings "Change password" card reuses them); re-exported here so existing
@@ -48,6 +54,47 @@ interface Props {
 type LandOn = 'chat' | 'models' | 'documents'
 
 type CreatePhase = 'welcome' | 'password' | 'finishing' | 'starter'
+
+type Failure = Extract<WorkspaceActionResult, { ok: false }>
+
+// A failed unlock or create renders in the GATE's language (UI languages wave, owner call
+// D-17 (a), 2026-11-11). Before unlock the gate follows the localStorage mirror while main
+// emits in its own cached language (the OS locale until settings are readable), so showing
+// main's `message` put one screen in two languages whenever the chosen language wasn't the
+// OS's. The gate renders the failure from its `reason` instead, through its own `t()`, with
+// the `main.workspace.*` value main would have emitted (same text when the languages agree).
+// One table per call: `error` means "couldn't open" to unlock and "couldn't create" to create.
+// `null` (and a reason missing at runtime) shows main's `message`. Create's `refused` is then
+// the vault's own sentence (plaintext not permitted, a workspace already exists), which has
+// no catalog key. Main's other create refusal, a password under MIN_PASSWORD_LENGTH, can't
+// answer this gate: `canSubmit` holds the same floor before sending. That is decided by what
+// the gate knows, never by matching the text (i18n record §3.3 Rule 3).
+const UNLOCK_FAILURE_KEYS = {
+  wrong_password: 'main.workspace.wrongPassword',
+  vault_damaged: 'main.workspace.vaultDamaged',
+  vault_recovery_blocked: 'main.workspace.recoveryBlocked',
+  workspace_newer: 'main.workspace.newer',
+  refused: null,
+  error: 'main.workspace.openFailed'
+} satisfies Record<Failure['reason'], MessageKey | null>
+
+const CREATE_FAILURE_KEYS = {
+  wrong_password: null,
+  vault_damaged: null,
+  vault_recovery_blocked: null,
+  workspace_newer: 'main.workspace.newer',
+  refused: null,
+  error: 'main.workspace.createFailed'
+} satisfies Record<Failure['reason'], MessageKey | null>
+
+function failureText(
+  keys: Record<Failure['reason'], MessageKey | null>,
+  failure: Failure,
+  t: (key: MessageKey) => string
+): string {
+  const key = keys[failure.reason]
+  return key ? t(key) : failure.message
+}
 
 export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const creating = state.state === 'uninitialized'
@@ -95,7 +142,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const canSubmit = creating
     ? mode === 'plaintext_dev'
       ? true
-      : password.length >= 8 && password === confirm
+      : password.length >= MIN_PASSWORD_LENGTH && password === confirm
     : password.length > 0
 
   function finish(next: WorkspaceStateInfo, landOn: LandOn): void {
@@ -155,7 +202,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         if (result.ok) {
           await completeCreate(result.state)
         } else {
-          setError(result.message)
+          setError(failureText(CREATE_FAILURE_KEYS, result, t))
           setPassword('')
           setConfirm('')
           passwordInputRef.current?.focus() // SH-12: focus back to the field for the retry
@@ -165,7 +212,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         if (result.ok) {
           onUnlocked(result.state)
         } else {
-          setError(result.message)
+          setError(failureText(UNLOCK_FAILURE_KEYS, result, t))
           setPassword('')
           // SH-12 (#145): without this, focus stays on the now-disabled submit button —
           // combined with a missed announcement the failure was entirely non-obvious to AT.
