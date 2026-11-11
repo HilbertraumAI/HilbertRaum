@@ -25,20 +25,25 @@ describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
     }
   })
 
-  it('a single-word rail label is no longer than "Einstellungen" in ANY registered locale', () => {
+  it('no word of a rail label is longer than "Einstellungen" in ANY registered locale', () => {
     // The rail column is sized to German "Einstellungen" at the active label's weight (E-1/#149).
-    // A label with a space or hyphen may wrap cleanly to two lines; a single word cannot, so
-    // it must fit. The character count is the unit-test proxy for the width; the real-app
-    // scan measures it. A word that does not fit gets a shorter synonym, never an
-    // abbreviation (D-10). nav.home is the brand mark's tooltip, not a rail label.
+    // A label may wrap at a space or a hyphen, never inside a word, so each word must fit on
+    // its own line. Only a plain space and a hyphen-minus split words here; any other space or
+    // dash (a no-break one, U+2010) counts as part of the word, the stricter reading. The
+    // character count is the unit-test proxy for the width; the real-app scan measures it. A
+    // word that does not fit gets a shorter synonym, never an abbreviation (D-10). nav.home is
+    // the brand mark's tooltip, not a rail label.
+    // The proxy under-counts wider glyphs (Cyrillic): for Russian the real-app scan decides.
     const tooLong: string[] = []
     for (const lang of UI_LANGUAGE_CODES) {
       for (const key of NAV_KEYS.filter((k) => k !== 'nav.home')) {
         const label = t(lang, key)
-        if (!/[ -]/.test(label) && label.length > 'Einstellungen'.length) tooLong.push(`${lang}/${key}: ${label}`)
+        for (const word of label.split(/[ -]/)) {
+          if (word.length > 'Einstellungen'.length) tooLong.push(`${lang}/${key}: "${word}" in "${label}"`)
+        }
       }
     }
-    expect(tooLong, 'single-word rail labels wider than the rail is sized for').toEqual([])
+    expect(tooLong, 'rail-label words wider than the rail is sized for').toEqual([])
   })
 
   it('the longest single-word label is German "Einstellungen" (what the rail width is sized to)', () => {

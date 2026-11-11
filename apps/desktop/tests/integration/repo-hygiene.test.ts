@@ -3,9 +3,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import * as ts from 'typescript'
-import { en } from '../../src/shared/i18n'
+import { en, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
-import { catalogFiles } from '../helpers/i18n-catalogs'
+import { I18N_DIR } from '../helpers/i18n-catalogs'
 import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
@@ -878,8 +878,10 @@ describe('repo hygiene â€” the ZIM required-check inventory is honest (PR #294 â
 
   // PR #294 review INFO: the chat.scope.projectCount pair had been split apart in a catalog. Every
   // catalog keeps all its forms of the pair on consecutive lines, in CLDR order; a language with
-  // more forms than .one/.other (Russian .few/.many, French .many) puts them in between.
-  it.each(catalogFiles().map((file) => [basename(file), file]))(
+  // more forms than .one/.other (Russian .few/.many, French .many) puts them in between. One row
+  // per registered language, so the rows cannot come out empty; i18n-unused-keys.test.ts refuses
+  // a catalog file of a language that is not registered.
+  it.each(UI_LANGUAGE_CODES.map((code) => [`${code}.ts`, join(I18N_DIR, `${code}.ts`)]))(
     '%s: all forms of chat.scope.projectCount are consecutive lines in CLDR order (PR #294 review INFO, split plural pair)',
     (_name, file) => {
       expect(pluralFormLayoutProblems(file, readFileSync(file, 'utf8'), 'chat.scope.projectCount')).toEqual([])

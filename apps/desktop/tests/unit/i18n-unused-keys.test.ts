@@ -217,9 +217,10 @@ const EQUALITY_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
 
 /**
  * The places a file hardcodes the English/German pair instead of reading the language registry
- * (`shared/i18n/languages.ts`): a union type naming both `'en'` and `'de'`, and an equality
- * comparison (or `case`) against `'en'` or `'de'`. String and type literals only, through the
- * compiler's AST, so a comment or a string that merely spells `=== 'de'` never matches.
+ * (`shared/i18n/languages.ts`): a union type or an array literal (`as const` or not) naming both
+ * `'en'` and `'de'`, and an equality comparison (or `case`) against `'en'` or `'de'`. String and
+ * type literals only, through the compiler's AST, so a comment or a string that merely spells
+ * `=== 'de'` never matches.
  */
 function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line: number; text: string }> {
   const source = ts.createSourceFile(
@@ -239,6 +240,9 @@ function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line
       const named = node.types.flatMap((member) =>
         ts.isLiteralTypeNode(member) && ts.isStringLiteral(member.literal) ? [member.literal.text] : []
       )
+      if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
+    } else if (ts.isArrayLiteralExpression(node)) {
+      const named = node.elements.flatMap((element) => (ts.isStringLiteralLike(element) ? [element.text] : []))
       if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
     } else if (
       ts.isBinaryExpression(node) &&
@@ -389,6 +393,14 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
     file: 'renderer/lib/translateSession.ts',
     text: "lang === 'en'",
     reason: 'the English UI translates from German: the one UI language that cannot be its own source (translateSession.ts)'
+  },
+  {
+    file: 'shared/types.ts',
+    text:
+      "[ 'ar', 'bg', 'bn', 'ca', 'cs', 'da', 'de', 'el', 'en', 'es', 'et', 'fa', 'fi', 'fil', 'fr', 'gu', 'he', " +
+      "'hi', 'hr', 'hu', 'id', 'is', 'it', 'ja', 'kn', 'ko', 'lt', 'lv', 'ml', 'mr', 'nl', 'no', 'pa', 'pl', 'pt', " +
+      "'ro', 'ru', 'sk', 'sl', 'sr', 'sv', 'sw', 'ta', 'te', 'th', 'tr', 'uk', 'ur', 'vi', 'zh', 'zu' ]",
+    reason: 'TRANSLATION_LANGUAGE_CODES: the 51 languages documents translate between (content language, issue #31)'
   },
   {
     file: 'shared/types.ts',
@@ -629,6 +641,10 @@ describe('two-language literals — the interface languages come from the regist
     ['the closed union', 'fixture.ts', "type Lang = 'en' | 'de'", ["'en' | 'de'"]],
     ['a wider union naming both', 'fixture.ts', "type Lang = 'de' | 'en' | null", ["'de' | 'en' | null"]],
     ['a switch case', 'fixture.ts', "switch (lang) { case 'de': break }", ["case 'de'"]],
+    ['an array naming both', 'fixture.ts', "const LANGS = ['en', 'de']", ["['en', 'de']"]],
+    ['an as-const array naming both', 'fixture.ts', "const LANGS = ['de', 'en'] as const", ["['de', 'en']"]],
+    ['a wider array naming both, over lines', 'fixture.ts', "new Set([\n  'en',\n  'de',\n  'fr'\n])", ["[ 'en', 'de', 'fr' ]"]],
+    ['an array naming one code', 'fixture.ts', "const LANGS = ['en'] as const", []],
     ['a comparison in JSX', 'fixture.tsx', "export const A = () => <p>{lang === 'de' ? 'Hallo' : 'Hi'}</p>", ["lang === 'de'"]],
     ['a comment only', 'fixture.ts', "// lang === 'de' used to pick German\nconst x = 1", []],
     ['a string that spells it', 'fixture.ts', "const hint = \"use lang === 'de' nowhere\"", []],

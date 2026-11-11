@@ -7,6 +7,7 @@ import {
   resolveUiLanguage,
   t,
   tCount,
+  UI_LANGUAGE_CODES,
   UI_LANGUAGES,
   type MessageKey,
   type UiLanguage,
@@ -340,6 +341,20 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     }
   )
 
+  // Every guard here reads the catalog FILES (`catalogOf`); `t` reads `CATALOGS` (index.ts).
+  // Languages with the same plural forms share a catalog type, so a map entry pointing at
+  // another language's catalog (`de: en`, `fr: es`) typechecks; this row is what notices it.
+  it.each(UI_LANGUAGE_CODES)('%s: t() renders the text of its own catalog file (the CATALOGS entry)', (code) => {
+    const catalog = catalogOf(code)
+    const plain = Object.keys(catalog).filter((key) => !/\{\w+\}/.test(catalog[key]))
+    const elsewhere = plain.filter((key) => t(code, key as MessageKey) !== catalog[key])
+    expect(plain.length).toBeGreaterThan(0)
+    expect(
+      elsewhere.slice(0, 5),
+      `${elsewhere.length} of ${plain.length} param-less keys render text that is not in ${code}.ts`
+    ).toEqual([])
+  })
+
   describe('the parity rule on fixture catalogs (only en and de are registered so far)', () => {
     const english = {
       'nav.home': 'Home',
@@ -433,6 +448,12 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
         russianShape,
         { ...russian, 'docs.opened': 'Открыт' },
         ['placeholder mismatch in docs.opened: [], English [{name}]']
+      ],
+      [
+        'a placeholder English does not have',
+        russianShape,
+        { ...russian, 'nav.home': 'Главная {x}' },
+        ['placeholder mismatch in nav.home: [{x}], English []']
       ],
       [
         "a placeholder dropped from a form English lacks (compared with the base's .other)",

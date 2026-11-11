@@ -5,7 +5,7 @@
 // means a language registered later is covered by every suite here without touching them.
 import { join } from 'node:path'
 import type { UiLanguage } from '../../src/shared/i18n'
-import { DESKTOP_ROOT, filesUnder } from './repo-files'
+import { DESKTOP_ROOT } from './repo-files'
 
 export const I18N_DIR: string = join(DESKTOP_ROOT, 'src', 'shared', 'i18n')
 
@@ -29,11 +29,6 @@ export function isCatalogPath(path: string): boolean {
 export function registeredCatalogCode(path: string, codes: readonly string[]): string | null {
   const match = /\/shared\/i18n\/([^/]+)\.ts$/.exec(path.split('\\').join('/'))
   return match !== null && codes.includes(match[1]) ? match[1] : null
-}
-
-/** Every catalog file on disk (registered or not), as absolute paths. */
-export function catalogFiles(): string[] {
-  return filesUnder(I18N_DIR, /\.tsx?$/).filter(isCatalogPath)
 }
 
 // The direct children only: a nested file is never a registered catalog (see above).
