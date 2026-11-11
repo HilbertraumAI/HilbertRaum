@@ -9,7 +9,7 @@ import type { PreloadApi } from '../../src/preload'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import { appShellStubs } from '../helpers/app-shell'
 import { modelsScreenStubs } from '../helpers/model-fixtures'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { LAZY_SCREEN_WAIT } from '../helpers/hang-budget'
 import { stubApi } from '../helpers/renderer'
 import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
@@ -17,10 +17,6 @@ import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '.
 // (Chat · Documents · Translate · Images ‖ AI Model · Performance ‖ Settings), Home behind
 // the brand mark, Privacy/Skills/Diagnostics folded into Settings tabs, and the navigate()
 // virtual targets, including every legacy alias older entry points still use.
-
-// A lazy screen arrives through a dynamic import (App.tsx `lazyScreen`): ~350 ms alone, but past
-// testing-library's 1 s findBy* default under full-suite load. A hang bound, not a timing proof.
-const LAZY_SCREEN_WAIT = { timeout: hangBudgetMs(5000) }
 
 afterEach(cleanup)
 
