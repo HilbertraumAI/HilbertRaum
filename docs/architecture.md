@@ -5937,25 +5937,35 @@ code comments cite them as "i18n record §N"** (the German style rules of §3.5 
 
 | ID | Decision |
 |---|---|
-| D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. `de.ts` is typed `Record<keyof typeof en, string>`, so typecheck enforces catalog parity — removing a key is a compile error. i18next/react-intl were rejected: async resource loading + ICU machinery en/de don't need, and a provider-suspense would have churned hundreds of green synchronous tests. |
-| D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). |
+| D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. `de.ts` is typed `Record<keyof typeof en, string>`, so typecheck enforces catalog parity — removing a key is a compile error. i18next/react-intl were rejected: async resource loading + ICU machinery en/de don't need, and a provider-suspense would have churned hundreds of green synchronous tests. **Amended 2026-11-11 (UI languages wave, D-L9):** plurals are chosen per language. Each registry entry carries a plural rule and the plural forms its catalog must provide. English and German keep the exact `n === 1` rule (`.one` for exactly 1, else `.other`), so their output is unchanged; a language with more forms uses the built-in `Intl.PluralRules` and carries the extra forms as `<base>.few` / `<base>.many`. If a catalog lacks the selected form, `.other` is used. Still no dependency. Every registered catalog is typed against its own required key set, so parity stays typecheck-enforced for every language. |
+| D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). **Amended 2026-11-11:** the setting accepts any registered language (D-L9). `'system'` follows the OS locale's **primary subtag** (lower-cased, split on `-` or `_`) when that language is registered, and is English otherwise; a tag that merely begins with a registered code (`deu`, `frr-DE`) does not match. A stored value this build does not know (for example a language added by a newer build on a shared drive) resolves like `'system'`. |
 | D-L3 | Pre-unlock language: renderer = the `hilbertraum.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. |
 | D-L4 | **Persist canonical English, translate at display**: an exact-match display map over the finite static persisted set (`renderer/lib/displayMap.ts`). Keeps the `scanDetected` contract and pre-i18n rows valid; persisted copy is retroactively language-switchable. |
 | D-L5 | **Ephemeral main→user strings localize at emission** via `tMain()` + the cached language; the IPC error transport (`friendlyIpcError`) is unchanged. |
 | D-L6 | LLM prompts stay English and unchanged (Phase-29 benchmark comparability; models follow the question's language). Task-output language = a future feature; documented in `known-limitations.md` ("Internationalization"). |
 | D-L7 | German address form = informal **„du"** (lowercase mid-sentence), a deliberate brand choice (user decision 2026-06-13); glossary pinned in `de.ts`. Human review of the German copy gates the wave (the user is the reviewer). |
 | D-L8 | Default-English + synchronous `t()` keeps the ~323 pre-existing English copy assertions green; migrated assertions reference the `en` catalog instead of re-typed literals. English values for shipped strings stay **byte-identical** to the pre-i18n literals. |
+| D-L9 | **Language registry (2026-11-11, UI languages wave).** `shared/i18n/languages.ts` holds `UI_LANGUAGES`, one entry per interface language, English first: `code`, `nativeName`, `nativeReviewed`, `evidencePack`, `plural`, `pluralCategories`. `UiLanguage`, `UiLanguageSetting`, `isUiLanguage`, `isUiLanguageSetting`, the catalog types and locale resolution are derived from it; nothing else lists the languages. `pluralCategories` is pinned in the registry rather than read from ICU at runtime, so an ICU update cannot change which keys a catalog needs without a code change; a test compares the pin with the running ICU. There is no completeness tier: every registered language is complete and typecheck-enforced (owner call 2026-11-11). A language whose `evidencePack` is false does not carry the `packExport.*` keys, which render only inside an evidence pack. |
 
 ### §3.1 The i18n module
 
 `apps/desktop/src/shared/i18n/` (importable from both processes): `en.ts` is the
 source-of-truth catalog (~600 keys at the Phase-39 record; ~1,700 by 2026-08 — #151 AR-2;
 `MessageKey = keyof typeof en`), `de.ts` the typed
-German catalog with the §3.5 glossary pinned on top, `index.ts` exports `t(lang, key,
-params?)` (synchronous lookup + `{name}` interpolation; unknown key/missing param falls
-back to English — never a crash), `tCount(lang, keyBase, n)` (`.one` for exactly 1, else
-`.other` — English and German share the n===1 rule), and `resolveUiLanguage(setting,
-osLocale)`.
+German catalog with the §3.5 glossary pinned on top. `languages.ts` is the registry (D-L9)
+with the plural rules, the catalog types (`CatalogFor`, `UiCatalog<code>`) and two pure
+cores that take the registry data as arguments, `pluralKeyFor` and `resolveUiLanguageIn`.
+`index.ts` holds the explicit `CATALOGS` map (leaving a registered language out is a
+compile error) and exports `t(lang, key, params?)` (synchronous lookup + `{name}`
+interpolation; unknown key/missing param falls back to English — never a crash),
+`tCount(lang, keyBase, n, params?)` (the form the language's plural rule selects for `n`;
+English and German: `.one` for exactly 1, else `.other`; a missing form falls back to
+`.other`, and the English fallback uses the English form for the same count), and
+`resolveUiLanguage(setting, osLocale)`. A new language's catalog is declared
+`UiCatalog<'xx'>`: a missing key, a misspelt key or a plural form the language does not
+have fails `npm run typecheck`. All catalogs are static imports, bundled into the main,
+renderer and preview builds (about 270 KB of source per language; the tools build
+tree-shakes them).
 
 ### §3.2 The setting and its resolution
 

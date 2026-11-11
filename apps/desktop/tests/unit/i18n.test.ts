@@ -143,7 +143,7 @@ describe('resolveUiLanguage (D-L2)', () => {
     expect(resolveUiLanguage('system', 'DE-DE')).toBe('de')
     expect(resolveUiLanguage('system', 'en-US')).toBe('en')
     expect(resolveUiLanguage('system', 'fr-FR')).toBe('en')
-    // A locale merely STARTING with the letters 'de' is not German.
+    // Another language whose tag merely shares a first letter with 'de' is not German.
     expect(resolveUiLanguage('system', 'dv')).toBe('en')
   })
 
