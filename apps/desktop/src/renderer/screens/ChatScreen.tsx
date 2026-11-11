@@ -52,7 +52,7 @@ import { useT, type I18n } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, Progress, SegmentedControl, Spinner, useToast } from '../components'
 import { ArticleModal, Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillInfoCard, SkillPicker, SkillRunBar, Transcript, type ArticleTarget, type SkillRunTarget } from '../chat'
 import { requestSkillDetail } from '../lib/skillDetailRequest'
-import type { MessageKey } from '@shared/i18n'
+import { t as tCatalog, UI_LANGUAGES, type MessageKey } from '@shared/i18n'
 import { isModelStarting } from '@shared/runtime-status'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -175,6 +175,17 @@ const ROUTED_RUN_QUESTION: Partial<Record<string, MessageKey>> = {
   categorize_transactions: 'chat.skill.categorize.breakdownQuestion',
   summarize_cashflow: 'chat.skill.summarize.question'
 }
+
+/**
+ * #599: the refusals about the model's state that go once the model is back. Main throws them
+ * through `tMain`, in MAIN's language, which need not be the one this screen renders (a language
+ * switch between the refusal and the model's return; main still on the OS locale before settings
+ * load). So every registered language's copy counts, not just the current one (i18n record §3.3
+ * rule 3): a language left out would keep its stale banner until dismissed.
+ */
+const STALE_MODEL_REFUSALS: ReadonlySet<string> = new Set(
+  UI_LANGUAGES.flatMap(({ code }) => [tCatalog(code, 'main.noModelRunning'), tCatalog(code, 'main.modelStarting')])
+)
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -616,12 +627,12 @@ export function ChatScreen({
   // model is back — it used to sit over the restored composer. Every other error stays until it is
   // dismissed, a crash's own message included: that one explains why the question has no answer.
   // Keyed on every status read, not on a down-to-up flip: a quick restart is often over by the
-  // re-read that follows the refusal, so the screen never saw the model down.
+  // re-read that follows the refusal, so the screen never saw the model down. The refusal can be
+  // in any registered language (`STALE_MODEL_REFUSALS`), so the screen's own language is no input.
   useEffect(() => {
     if (runtimeInfo?.running !== true) return
-    const stale = new Set([t('main.noModelRunning'), t('main.modelStarting')])
-    setErrorState((current) => (current != null && stale.has(current.message) ? null : current))
-  }, [runtimeInfo, t])
+    setErrorState((current) => (current != null && STALE_MODEL_REFUSALS.has(current.message) ? null : current))
+  }, [runtimeInfo])
 
   // #36: keep the header hint honest across the mid-generation GPU crash fallback — the
   // same `runtime:notice` broadcast that shows the ephemeral compatibility-mode banner
