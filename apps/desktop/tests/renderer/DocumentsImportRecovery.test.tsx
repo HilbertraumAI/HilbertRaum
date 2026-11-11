@@ -59,9 +59,11 @@ describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () 
 
     // Mount recovery: the live job re-disables BOTH import buttons (pre-fix they re-enabled
     // mid-import, leaving main-side exclusivity as the only guard). The primary button reads
-    // its busy label while `busy === 'import'`.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Importing…' })).toBeDisabled()
+    // its busy label while `busy === 'import'`. A hang bound like the two waits below: the
+    // screen's first render under full-suite load can pass testing-library's 1 s default.
+    await waitFor(
+      () => expect(screen.getByRole('button', { name: 'Importing…' })).toBeDisabled(),
+      { timeout: hangBudgetMs(5000) }
     )
     expect(screen.getByRole('button', { name: 'Import folder' })).toBeDisabled()
 
