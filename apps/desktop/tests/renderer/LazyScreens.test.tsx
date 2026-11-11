@@ -7,6 +7,7 @@ import type { Conversation, Message } from '../../src/shared/types'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { appShellStubs } from '../helpers/app-shell'
 import { modelsScreenStubs } from '../helpers/model-fixtures'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import { stubApi } from '../helpers/renderer'
 import { appStatus, runtimeStatus } from '../helpers/status'
 import { makeDetail } from '../helpers/evidenceReview'
@@ -17,6 +18,10 @@ import { makeDetail } from '../helpers/evidenceReview'
 // the quiet localized loading fallback, then the real screen replaces it. The other
 // full-<App/> suites (AppLock, I18n, InformationArchitecture) keep covering that every
 // destination still RENDERS; this one covers the fallback → content sequence itself.
+
+// A lazy screen arrives through a dynamic import (App.tsx `lazyScreen`): ~350 ms alone, but past
+// testing-library's 1 s findBy* default under full-suite load. A hang bound, not a timing proof.
+const LAZY_SCREEN_WAIT = { timeout: hangBudgetMs(5000) }
 
 afterEach(() => {
   cleanup()
@@ -50,7 +55,7 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
 
     // …then the chunk resolves and the real screen replaces the fallback.
     expect(
-      await screen.findByRole('heading', { name: t('en', 'models.title') })
+      await screen.findByRole('heading', { name: t('en', 'models.title') }, LAZY_SCREEN_WAIT)
     ).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'app.loadingScreen'))).not.toBeInTheDocument()
   })
@@ -110,7 +115,7 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
 
     // …then the review workspace replaces it, created via the idempotent evidence create.
     expect(
-      await screen.findByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') })
+      await screen.findByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') }, LAZY_SCREEN_WAIT)
     ).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'app.loadingScreen'))).not.toBeInTheDocument()
 
