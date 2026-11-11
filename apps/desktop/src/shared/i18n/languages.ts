@@ -113,14 +113,20 @@ type ExtraPluralCategory<I extends UiLanguageInfo> = Exclude<
   'one' | 'other'
 >
 
-/**
- * The exact key set a catalog of language `I` must have: every English key (without
- * `packExport.*` when the language writes no evidence packs), plus one key per plural
- * base for each extra plural form of the language (Russian: `.few` and `.many`).
- */
-export type CatalogKeyFor<I extends UiLanguageInfo> =
-  | (I['evidencePack'] extends false ? Exclude<MessageKey, `packExport.${string}`> : MessageKey)
+/** Every English key plus one key per plural base for each extra plural form of `I`. */
+type AllKeysFor<I extends UiLanguageInfo> =
+  | MessageKey
   | `${CountMessageKey}.${ExtraPluralCategory<I>}`
+
+/**
+ * The exact key set a catalog of language `I` must have: every English key, plus one key
+ * per plural base for each extra plural form of the language (Russian: `.few` and
+ * `.many`). A language that writes no evidence packs has no `packExport.*` key at all,
+ * the extra plural forms of a `packExport.*` base included: they render only inside a pack.
+ */
+export type CatalogKeyFor<I extends UiLanguageInfo> = I['evidencePack'] extends false
+  ? Exclude<AllKeysFor<I>, `packExport.${string}`>
+  : AllKeysFor<I>
 
 /**
  * The type a catalog of language `I` is declared with. A missing key is a compile error,

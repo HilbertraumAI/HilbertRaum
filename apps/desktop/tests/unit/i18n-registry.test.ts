@@ -209,6 +209,8 @@ type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 type Assert<T extends true> = T
 type PackKey = Extract<MessageKey, `packExport.${string}`>
+/** A `packExport.*` plural base (`CountMessageKey` holds bases, which are not message keys). */
+type PackBase = `packExport.${string}`
 
 type RuKey = CatalogKeyFor<typeof RU>
 type FrKey = CatalogKeyFor<typeof FR>
@@ -217,15 +219,19 @@ type CatalogTypeRows = [
   // English and German: exactly the English key set, as before the registry.
   Assert<Equal<UiCatalog<'en'>, Record<MessageKey, string>>>,
   Assert<Equal<UiCatalog<'de'>, Record<MessageKey, string>>>,
-  // Russian: one .few and one .many key per plural base on top of the English keys.
-  Assert<Equal<Exclude<RuKey, MessageKey>, `${CountMessageKey}.${'few' | 'many'}`>>,
-  // French: one .many key per plural base, and no .few.
-  Assert<Equal<Exclude<FrKey, MessageKey>, `${CountMessageKey}.many`>>,
+  // Russian: one .few and one .many key per plural base on top of the English keys, except
+  // the packExport.* bases: a language without evidence packs has none of their forms.
+  Assert<Equal<Exclude<RuKey, MessageKey>, `${Exclude<CountMessageKey, PackBase>}.${'few' | 'many'}`>>,
+  // French: one .many key per plural base (packExport.* bases excluded), and no .few.
+  Assert<Equal<Exclude<FrKey, MessageKey>, `${Exclude<CountMessageKey, PackBase>}.many`>>,
   // A language that writes no evidence packs: every English key except packExport.*.
   Assert<Equal<Exclude<MessageKey, RuKey>, PackKey>>,
   Assert<Equal<Exclude<MessageKey, FrKey>, PackKey>>,
-  // A language that does write them needs those keys too.
-  Assert<Equal<Exclude<MessageKey, CatalogKeyFor<typeof RU_WITH_PACKS>>, never>>
+  // A language that does write them needs those keys too, every plural form included.
+  Assert<Equal<Exclude<MessageKey, CatalogKeyFor<typeof RU_WITH_PACKS>>, never>>,
+  Assert<
+    Equal<Exclude<CatalogKeyFor<typeof RU_WITH_PACKS>, MessageKey>, `${CountMessageKey}.${'few' | 'many'}`>
+  >
 ]
 
 // Never called: only its types matter.
@@ -262,11 +268,16 @@ function catalogLiteralRows(complete: CatalogFor<typeof RU>, french: CatalogFor<
     // @ts-expect-error — packExport.* is not part of a catalog without evidence packs
     'packExport.integrity.options': 'x'
   }
+  const unshownPackForm: CatalogFor<typeof RU> = {
+    ...complete,
+    // @ts-expect-error — nor is the extra plural form of a packExport.* plural base
+    'packExport.items.unreviewedExcluded.few': 'x'
+  }
   const validForms: CatalogFor<typeof RU> = {
     ...complete,
     'home.docsReady.few': 'x',
     'home.docsReady.many': 'x'
   }
   void [missingKey, missingForm, englishShape, misspelt, formOfPlainKey]
-  void [formTheLanguageLacks, unshownPackKey, validForms]
+  void [formTheLanguageLacks, unshownPackKey, unshownPackForm, validForms]
 }
