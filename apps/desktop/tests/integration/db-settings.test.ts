@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, listTables } from '../../src/main/services/db'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
+import { applyUiLanguageSetting, initMainI18n, mainUiLanguage } from '../../src/main/services/i18n'
 
 function freshDb() {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-db-'))
@@ -97,7 +98,29 @@ describe('settings persistence', () => {
     expect(updateSettings(db, { uiLanguage: 'de' }).uiLanguage).toBe('de')
     expect(updateSettings(db, { uiLanguage: 'en' }).uiLanguage).toBe('en')
     // Junk from a buggy/hostile renderer is never persisted (same guard as theme/gpuMode).
-    expect(updateSettings(db, { uiLanguage: 'fr' as never }).uiLanguage).toBe('en')
+    expect(updateSettings(db, { uiLanguage: 'xx' as never }).uiLanguage).toBe('en')
     expect(updateSettings(db, { uiLanguage: 'system' }).uiLanguage).toBe('system')
+  })
+
+  it('a uiLanguage only a newer build knows resolves like system and its row is kept (L-25 downgrade)', () => {
+    const db = freshDb()
+    seedSettings(db)
+    // A newer build on the same drive saved a language this build doesn't register. The write
+    // gate refuses that value here, so the row is written the way that build wrote it.
+    const row = db.prepare("SELECT value_json FROM settings WHERE key = 'uiLanguage'")
+    db.prepare("UPDATE settings SET value_json = ? WHERE key = 'uiLanguage'").run(JSON.stringify('xx'))
+    try {
+      // Once settings are readable, main re-resolves from the stored value (plaintext start,
+      // unlock): on a German OS that is German, not English.
+      initMainI18n('de-AT')
+      applyUiLanguageSetting(getSettings(db).uiLanguage)
+      expect(mainUiLanguage()).toBe('de')
+    } finally {
+      initMainI18n('en-US') // module-global cache: never leak German into this worker
+    }
+    // Neither the read nor another setting's write drops the row: the newer build still finds
+    // the choice.
+    updateSettings(db, { theme: 'dark' })
+    expect((row.get() as { value_json: string }).value_json).toBe('"xx"')
   })
 })

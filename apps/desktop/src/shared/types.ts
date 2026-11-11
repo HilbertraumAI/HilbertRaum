@@ -485,8 +485,10 @@ export interface AppSettings {
   theme: ThemeSetting
   // ---- Language (i18n record §3.2, D-L2/D-L3) ----
   /**
-   * UI language preference. 'system' (default) follows the OS locale: a `de*`
-   * locale resolves to German, everything else to English. The pre-unlock gate
+   * UI language preference. 'system' (default) follows the OS locale's primary
+   * subtag when that language is registered (`shared/i18n/languages.ts`), English
+   * otherwise; a stored value this build does not know resolves like 'system'
+   * (the write gate accepts only registered languages). The pre-unlock gate
    * cannot read settings (encrypted DB) — it resolves from the renderer's
    * localStorage mirror of the last RESOLVED language, falling back to
    * `navigator.language`.

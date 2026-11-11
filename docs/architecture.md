@@ -5979,6 +5979,11 @@ tree-shakes them).
 - Main: `services/i18n.ts` holds the cached resolved language — initialized from
   `app.getLocale()` after `whenReady`, updated when settings become readable and inside
   `updateSettings()`. Every main-side emission calls `tMain(key, params)`. No new IPC.
+- The setting's write gate (`updateSettings`) and the mirror read accept exactly the registered
+  languages, through the registry guards `isUiLanguageSetting` / `isUiLanguage` (D-L9). The
+  settings read path stays tolerant on purpose: a stored value this build does not know (a newer
+  build's language on a shared drive) is kept as it is and resolves like `'system'` in main and in
+  the renderer, so going back to the newer build still finds the choice.
 - **R-L1 locale finding (measured on de-AT Windows 11, Electron 37):**
   `app.getLocale()` returns the **bare language tag `'de'`** (Chromium UI language — not
   always a full `de-DE` tag; `app.getSystemLocale()` gives `'de-AT'`), and the renderer's
