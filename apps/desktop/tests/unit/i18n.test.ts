@@ -238,6 +238,22 @@ function opensBeforeCloses(open: string, close: string, title: string, message: 
   }
 }
 
+/**
+ * No value matches `pattern`. Offenders read `key: value`. The pattern must not carry the `g`
+ * or `y` flag: `RegExp#test` would then resume from the previous match and skip values.
+ */
+function forbids(pattern: RegExp, title: string, message: string): TypographyRule {
+  if (pattern.global || pattern.sticky) throw new Error(`forbids(${pattern}): drop the g/y flag`)
+  return {
+    title,
+    message,
+    offenders: (catalog) =>
+      Object.entries(catalog)
+        .filter(([, value]) => pattern.test(value))
+        .map(([key, value]) => `${key}: ${value}`)
+  }
+}
+
 // The rules run over the CATALOG VALUES only: a catalog file's own comments are not shipped
 // copy, and technical field names inside notes ("{field}", "language") legitimately keep
 // straight ASCII pairs. Typecheck makes every registered language list its rules here.
@@ -289,9 +305,10 @@ describe('German typography — quotation marks (design-guidelines §7 "Typograp
 })
 
 describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () => {
-  // EN sentence-level breaks use the em dash "—", DE uses the en dash "–"; a bare ASCII
-  // hyphen standing in for either (space-hyphen-space) is a typo, not a house-style choice.
-  // The same holds in every other registered language (its dash is in its style guide).
+  // A sentence-level break uses a real dash: English the em dash "—", German the em dash or
+  // the en dash "–"; a bare ASCII hyphen standing in for one (space-hyphen-space) is a typo,
+  // not a house-style choice. The same holds in every other registered language (its dash is
+  // in its style guide, and its own typography rules go further).
   const PREFIXES = ['packs.', 'chat.scope.', 'chat.packs.', 'chat.article.']
 
   it('no value under packs./chat.scope./chat.packs./chat.article. contains " - " in any registered language', () => {
