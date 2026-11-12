@@ -5939,7 +5939,7 @@ code comments cite them as "i18n record §N"** (the German style rules of §3.5 
 |---|---|
 | D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. `de.ts` is typed `Record<keyof typeof en, string>`, so typecheck enforces catalog parity — removing a key is a compile error. i18next/react-intl were rejected: async resource loading + ICU machinery en/de don't need, and a provider-suspense would have churned hundreds of green synchronous tests. **Amended 2026-11-11 (UI languages wave, D-L9):** plurals are chosen per language. Each registry entry carries a plural rule and the plural forms its catalog must provide. English and German keep the exact `n === 1` rule (`.one` for exactly 1, else `.other`), so their output is unchanged; a language with more forms uses the built-in `Intl.PluralRules` and carries the extra forms as `<base>.few` / `<base>.many`. If a catalog lacks the selected form, `.other` is used. Still no dependency. Every registered catalog is typed against its own required key set, so parity stays typecheck-enforced for every language. |
 | D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). **Amended 2026-11-11:** the setting accepts any registered language (D-L9). `'system'` follows the OS locale's **primary subtag** (lower-cased, split on `-` or `_`) when that language is registered, and is English otherwise; a tag that merely begins with a registered code (`deu`, `frr-DE`) does not match. A stored value this build does not know (for example a language added by a newer build on a shared drive) resolves like `'system'`. |
-| D-L3 | Pre-unlock language: renderer = the `hilbertraum.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. **Amended 2026-11-11 (UI languages wave, UI-languages owner call D-17 (a)):** before unlock the two can differ (the mirror holds the chosen language, `app.getLocale()` the OS's), so the gate (`WorkspaceGate.tsx`) no longer shows main's `message` for a failed unlock or create. It renders the failure from its `reason` code through its own `t()`, with the same `main.workspace.*` key main emits, one table per call; typecheck makes each table cover every reason. Main's `message` shows only for a reason a table maps to `null` (main never sends it for that call; the one that does occur is create's free-text `refused`, the vault's own sentence, which has no catalog key) and for a reason the tables lack. Main's too-short refusal never reaches the gate, which applies the same floor (`MIN_PASSWORD_LENGTH`, `shared/types.ts`) before it sends. **Amended 2026-11-12 (code review of the wave):** the two tables live in `shared/workspace-failure-keys.ts` (the gate imports it; main doesn't read it), and `tests/integration/workspace-ipc.test.ts` drives main's real unlock and create handlers into every branch the gate can receive (all but create's too-short refusal, which the gate's own floor keeps from being sent), in every registered language, checking main's `message` against the gate's key (a `null` entry must be free text: the same in every language and no catalog value), so a key changed on one side alone turns red. |
+| D-L3 | Pre-unlock language: renderer = the `hilbertraum.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. **Amended 2026-11-11 (UI languages wave, UI-languages owner call D-17 (a)):** before unlock the two can differ (the mirror holds the chosen language, `app.getLocale()` the OS's), so the gate (`WorkspaceGate.tsx`) no longer shows main's `message` for a failed unlock or create. It renders the failure from its `reason` code through its own `t()`, with the same `main.workspace.*` key main emits, one table per call; typecheck makes each table cover every reason. Main's `message` shows only for a reason a table maps to `null` (main never sends it for that call; the one that does occur is create's free-text `refused`, the vault's own sentence, which has no catalog key) and for a reason the tables lack. Main's too-short refusal never reaches the gate, which applies the same floor (`MIN_PASSWORD_LENGTH`, `shared/types.ts`) before it sends. **Amended 2026-11-12 (review of PR #801):** the two tables live in `shared/workspace-failure-keys.ts` (the gate imports it; main doesn't read it), and `tests/integration/workspace-ipc.test.ts` drives main's real unlock and create handlers into every branch the gate can receive (all but create's too-short refusal, which the gate's own floor keeps from being sent), in every registered language, checking main's `message` against the gate's key (a `null` entry must be free text: the same in every language and no catalog value), so a key changed on one side alone turns red. |
 | D-L4 | **Persist canonical English, translate at display**: an exact-match display map over the finite static persisted set (`renderer/lib/displayMap.ts`). Keeps the `scanDetected` contract and pre-i18n rows valid; persisted copy is retroactively language-switchable. |
 | D-L5 | **Ephemeral main→user strings localize at emission** via `tMain()` + the cached language; the IPC error transport (`friendlyIpcError`) is unchanged. |
 | D-L6 | LLM prompts stay English and unchanged (Phase-29 benchmark comparability; models follow the question's language). Task-output language = a future feature; documented in `known-limitations.md` ("Internationalization"). |
@@ -5950,17 +5950,21 @@ code comments cite them as "i18n record §N"** (the German style rules of §3.5 
 | D-L11 | **Evidence-pack language (2026-11-11, UI languages wave).** Packs are written in English or German only (UI-languages owner call D-5 (b), 2026-11-11). `packLanguageFor(info)` (`shared/evidence-review.ts`) maps a UI language's registry entry to the pack language: the language itself when its `evidencePack` flag is set, English otherwise. The export panel (`ReviewSummaryView.tsx`) sends that language, and main's boundary (`resolveEvidencePackOptions`) keeps only a pack language (`isPackLanguage`, else English). The pack languages are `EvidencePackLanguage` (`'en' \| 'de'`); a type row in `evidence-pack-model.test.ts` holds it equal to the registered codes whose `evidencePack` is true, and the pack renderer (`render-html.ts`) takes only that type, so a language without the `packExport.*` keys (D-L9) never reaches it. When the pack language differs from the UI language, the export panel says so in one full sentence per pack language (`review.export.packLanguage.en` / `.de`, chosen by `packLanguageLineKey`): no `{language}` placeholder and no `nativeName`, because a language name inside a sentence needs grammatical case and lower-casing in Russian, French, Spanish and Italian ("на английском", "en anglais"). With only English and German registered, the line never shows. |
 | D-L12 | **Native-review status (2026-11-11, UI languages wave).** Each registry entry carries `nativeReviewed`: true when a native speaker has reviewed the catalog (English; German by the owner, D-L7), false for a machine-drafted one. UI-languages owner call D-4 (c), 2026-11-11: a machine-drafted catalog ships with **no notice in the app**; the flag records the status for a later native review and for `known-limitations.md`. Nothing renders from it today. |
 
-**UI-languages owner calls (2026-11-11/12).** The rows above cite the UI languages wave's
-decision gates as "UI-languages owner call D-N"; these are not the D-numbers used elsewhere in
-this file. D-2 (a): every registered catalog is complete and typecheck-enforced · D-4 (c): a
+**UI-languages owner calls (2026-11-11/12).** This record and code comments cite the UI languages
+wave's decision gates as "UI-languages owner call D-N"; these are not the D-numbers used elsewhere
+in this file. D-2 (a): every registered catalog is complete and typecheck-enforced · D-4 (c): a
 machine-drafted catalog ships with no in-app note · D-5 (b): evidence packs stay English or
-German · D-6 (a): the language picker is a native `<select>` · D-7 (a): *System* follows the OS
+German · D-6 (a): the language picker is a native `<select>`, *System* first and then the
+registered languages in registry order (English, Deutsch; then Español, Français, Italiano,
+Русский) · D-7 (a): *System* follows the OS
 into any registered language · D-8 (a): English and German keep the exact `n === 1` plural rule ·
 D-11 (a): "(1 core)" on a single-core machine · D-13 (a): the picker's *System* label is
 translated · D-14 (a): no `packExport.*` keys in a catalog whose language writes no packs ·
 D-17 (a): the lock screen renders unlock/create errors in its own language. 2026-11-12: a plural
-form may add `{count}` where the language's `one` isn't exactly 1; English singular slips in
-answer sentences ("1 transactions") are a follow-up.
+form may add `{count}` where the language's `one` isn't exactly 1, and must when its plural form
+shows the number; English and German plain number keys that read wrong at exactly 1 ("1 sections
+scanned", "I read 1 transactions"; the `NON_GRAMMATICAL` groups in `tests/unit/i18n.test.ts` that
+say so) are a follow-up.
 
 ### §3.1 The i18n module
 
@@ -6048,7 +6052,7 @@ tree-shakes them).
   (`STALE_MODEL_REFUSALS` in `ChatScreen.tsx`: a "No AI model is running" / "…is starting" banner
   goes once a status read finds the model running, whatever registered language main threw it in;
   proof `ChatSendFailure.test.tsx`, a registry loop that renders the screen in another registered
-  language). A 2026-11-11 audit of `src/` found no other site; every other text comparison runs on
+  language). A 2026-11-11 search of `src/` found no other site; every other text comparison runs on
   Rule-1 English, an un-catalogued engine or library literal, or a code.
 - The product name "HilbertRaum" is never translated; language names in the
   picker stay in their own language (each registry entry's `nativeName`: `English`, `Deutsch`),
@@ -6103,9 +6107,11 @@ of `de.ts`.
   both, a comparison or `case` against `'en'`/`'de'`, or a catalog lookup — `t`/`tCount` under
   whatever name the file imports it from `shared/i18n` — handed a registered language other than
   English as a literal, such as `t('de', key)`; `t('en', …)` stays allowed for persisted text; all
-  found through the TypeScript AST) outside
+  found through the TypeScript AST, through parentheses, `as`, `satisfies` and `!`) outside
   `shared/i18n/` and a reviewed list of sites (content languages, the pack languages, the Translate
-  default pair, the translation-language list, the legacy translation-provenance check). `tests/integration/i18n-boundary.test.ts`:
+  default pair, the translation-language list, the legacy translation-provenance check). Its limits:
+  a code held in a constant, `.includes` / `Set` / `startsWith` / regex tests, an `{ en, de }` key
+  table and a lookup re-bound to another name are not seen. `tests/integration/i18n-boundary.test.ts`:
   no guard key the doc-task pass-through accepts has a `{param}` (the filter is an exact match,
   §3.3 Rule 3). Shared convention (`tests/helpers/i18n-catalogs.ts`): a catalog is
   `shared/i18n/<code>.ts` exporting `const <code>`.
@@ -6113,17 +6119,23 @@ of `de.ts`.
   a number is either a `.one`/`.other` pair rendered through `tCount`, or a plain key on the
   reviewed `NON_GRAMMATICAL` list in `tests/unit/i18n.test.ts`, grouped by the reason it stays
   right in every registered language: nothing agrees with the figure (a count in parentheses, an
-  ordinal, a unit symbol, an identifier, a money amount, a constant), or the ru/fr/es/it
-  translations must be written so nothing does (label first, no participle after a bare count).
-  English and German keep their wording; their slips at exactly 1 are a recorded follow-up. The
+  ordinal, a unit symbol, an identifier, a money amount, a constant), the ru/fr/es/it
+  translations must be written so nothing does (label first, no participle after a bare count), or
+  the key renders only inside an English or German evidence pack (D-L11). English and German keep
+  their wording; where it reads wrong at exactly 1 ("1 sections scanned") that is a follow-up
+  (owner call 2026-11-12, legend above). The
   net finds such keys two ways: in the source, a TypeScript-AST scan of every call or
   `{ key, params }` table that fills a placeholder with a number or with text formatted from one
   (two variable hops back); in the catalog, placeholder names that always carry a number
   (`{count}`, `{total}`, `{pct}`, …). A new key it finds fails with a message saying what to do.
   Its limit: a number passed through a plain property or parameter under a placeholder name that
-  isn't on the number-name list is not seen.
-  A pair's caller passes the raw number as the count and the grouped string as the param the text
-  shows (`count`, or `context` in `perf.model.line` and `perf.model.measuredOther`). A
+  isn't on the number-name list is not seen. The same scan fails any plural form `src/` names
+  itself (`n === 1 ? t('x.one') : t('x.other')`, a key built on a written-out base in a template
+  literal or by `+` included), so `tCount` picks every form by the language's own rule.
+  A pair whose text shows a locale-grouped figure gets the raw number as the count and the grouped
+  string as the param the text shows (`count` in the two `models.*` context-size pairs, `context` in
+  `perf.model.line` and `perf.model.measuredOther`); every other pair passes only the count, which
+  `tCount` supplies as `{count}`. A
   `tMain`-emitted pair would need a `tCountMain`, which doesn't exist yet: no `main.*` key is a
   pair (the pack renderer, main-side, calls `tCount` with the pack language for the
   `packExport.*` pairs).
@@ -6131,11 +6143,12 @@ of `de.ts`.
   the displayed digits (`new Intl.PluralRules(code, { minimumFractionDigits })`): CLDR selects by
   the digits the reader sees, so Russian and Italian "1,0" is `other` although `select(1)` is
   `one`. Put such a figure before a unit symbol, or write the key label first.
-- **A plural form may add `{count}` in a language whose `one` is not exactly 1** (owner call
-  2026-11-12). Russian `.one` also serves 21, 31, …, and French `.one` serves 0 and 1.5, so a
-  form English writes without a number ("Knowledge pack added") may show `{count}` there; `tCount`
-  always supplies it. The parity rule decides by probing the language's rule, so Spanish and
-  Italian (`one` = 1 alone) get no licence. No other placeholder may be added or dropped.
+- **A plural form may add `{count}` in a language whose `one` is not exactly 1, and must when its
+  plural form shows the number** (owner calls 2026-11-12). Russian `.one` also serves 21, 31, …,
+  and French `.one` serves 0 and 1.5, so a form English writes without a number ("Knowledge pack
+  added") shows `{count}` there, or 21 packs would read as one; `tCount` always supplies it. The
+  parity rule decides by probing the language's rule, so Spanish and Italian (`one` = 1 alone) get
+  neither the licence nor the duty. No other placeholder may be added or dropped.
 
 ### Phase-42 QA (as built)
 

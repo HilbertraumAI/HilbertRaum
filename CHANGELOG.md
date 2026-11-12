@@ -43,9 +43,6 @@ from its first public `1.0.0` release onward.
 - **A computer with one processor core now reads "(1 core)".** The hardware details in Settings →
   Diagnostics and on the Performance screen, and the reports their Copy buttons make, said
   "(1 cores)" next to the processor on such a machine (German: "(1 Kerne)").
-- **"No AI model is running" now goes away in Chat once the model is back, whatever the
-  language.** If the app's own language and the language you chose differed for a moment (for
-  example right after switching), the notice could stay over the chat until you closed it.
 
 ## [0.1.65] — 2026-11-11
 
