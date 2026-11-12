@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate, passwordStrength } from '../../src/renderer/screens/WorkspaceGate'
-import { t } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import {
   MIN_PASSWORD_LENGTH,
   type WorkspaceStateInfo,
@@ -72,6 +72,15 @@ describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', (
   it('calls a password too short exactly below the shared floor (MIN_PASSWORD_LENGTH)', () => {
     expect(label('a'.repeat(MIN_PASSWORD_LENGTH - 1))).toBe('Too short')
     expect(label('a'.repeat(MIN_PASSWORD_LENGTH))).not.toBe('Too short')
+  })
+
+  // The hint under a too-short password writes the floor as a figure ("Use at least 8
+  // characters."), in every catalog: a moved floor, or a translation that drops the figure, would
+  // otherwise leave the hint naming a length main doesn't enforce.
+  it.each(UI_LANGUAGE_CODES)('%s: the too-short hint names the shared floor (MIN_PASSWORD_LENGTH)', (code) => {
+    const hintKey = passwordStrength('a'.repeat(MIN_PASSWORD_LENGTH - 1)).hintKey
+    expect(hintKey).not.toBeNull()
+    expect(t(code, hintKey!)).toMatch(new RegExp(`(^|\\D)${MIN_PASSWORD_LENGTH}(\\D|$)`))
   })
 })
 
