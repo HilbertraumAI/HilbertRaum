@@ -1,13 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   UI_LANGUAGES,
+  UI_LANGUAGE_CODES,
   cldrPlural,
+  en,
   isUiLanguage,
   isUiLanguageSetting,
   pluralKeyFor,
   resolveUiLanguage,
   resolveUiLanguageIn,
-  t,
   tCount,
   type CatalogFor,
   type CatalogKeyFor,
@@ -17,7 +18,7 @@ import {
   type UiLanguageInfo,
   type UiLanguageSetting
 } from '../../src/shared/i18n'
-import { exactOne } from '../../src/shared/i18n/languages'
+import { catalogOf } from '../helpers/i18n-catalogs'
 
 // The UI-language registry and the cores derived from it (i18n record D-L9, D-L1, D-L2):
 // registry invariants, the plural engine, OS-locale resolution, and the catalog types.
@@ -55,17 +56,23 @@ const EXACT_ONE_CODES: readonly string[] = ['en', 'de']
 /** Counts at which the rules of English, German, Russian, French, Spanish and Italian part ways. */
 const PLURAL_PROBES = [0, 0.5, 1, 1.5, 2, 5, 21, 22, 1_000_000]
 
+/** The same, plus the counts where CLDR English and the exactly-1 rule part ways (negatives). */
+const EXACT_ONE_PROBES = [-2, -1, -0.5, ...PLURAL_PROBES, 1.0000001, Number.NaN, Number.POSITIVE_INFINITY]
+
 /**
- * Everything wrong with an entry's plural rule. English and German must name `exactOne` itself,
- * not a rule that only agrees with it on positive counts (CLDR English also gives `one` to −1).
- * Every other language must select as its own CLDR rule does (`Intl.PluralRules(code)`), so a
- * copied entry that kept another language's rule fails. The branch is decided by `code`, not by
- * the forms: a language with only one/other forms that is not English or German takes its CLDR
- * rule too.
+ * Everything wrong with an entry's plural rule. English and German must give `one` to exactly 1
+ * and to nothing else, negative counts and fractions included: a rule that only agrees on
+ * positive counts fails (CLDR English also gives `one` to −1). Every other language must select
+ * as its own CLDR rule does (`Intl.PluralRules(code)`), so a copied entry that kept another
+ * language's rule fails. The branch is decided by `code`, not by the forms: a language with only
+ * one/other forms that is not English or German takes its CLDR rule too.
  */
 function pluralRuleProblems(info: Pick<UiLanguageInfo, 'code' | 'plural'>): string[] {
   if (EXACT_ONE_CODES.includes(info.code)) {
-    return info.plural === exactOne ? [] : [`${info.code}: the rule is not exactOne`]
+    const exact = (n: number): string => (n === 1 ? 'one' : 'other')
+    return EXACT_ONE_PROBES.filter((n) => info.plural(n) !== exact(n)).map(
+      (n) => `${info.code}: ${n} → ${info.plural(n)}, exactly-1 rule ${exact(n)}`
+    )
   }
   const cldr = new Intl.PluralRules(info.code)
   return PLURAL_PROBES.filter((n) => info.plural(n) !== cldr.select(n)).map(
@@ -115,7 +122,18 @@ describe('UI language registry — invariants', () => {
       { ...FR, code: 'it' },
       ['it: 0 → one, CLDR other', 'it: 0.5 → one, CLDR other', 'it: 1.5 → one, CLDR other']
     ],
-    ['English with the CLDR English rule', { code: 'en', plural: cldrPlural('en') }, ['en: the rule is not exactOne']]
+    // CLDR rounds to three fraction digits before it selects, so 1.0000001 reads as "1".
+    ['English with the CLDR English rule', { code: 'en', plural: cldrPlural('en') }, [
+      'en: -1 → one, exactly-1 rule other',
+      'en: 1.0000001 → one, exactly-1 rule other'
+    ]],
+    ['German with "1 or less"', { code: 'de', plural: (n) => (n <= 1 ? 'one' : 'other') }, [
+      'de: -2 → one, exactly-1 rule other',
+      'de: -1 → one, exactly-1 rule other',
+      'de: -0.5 → one, exactly-1 rule other',
+      'de: 0 → one, exactly-1 rule other',
+      'de: 0.5 → one, exactly-1 rule other'
+    ]]
   ])('%s is a problem', (_title, info, problems) => {
     expect(pluralRuleProblems(info)).toEqual(problems)
   })
@@ -136,10 +154,16 @@ describe('UI language registry — invariants', () => {
   })
 })
 
-describe('tCount — English and German keep the exact n === 1 rule (D-L1)', () => {
-  // The oracle is local on purpose: comparing against the module's own rule would stay
-  // green if that rule changed.
-  const oracle = (n: number): 'one' | 'other' => (n === 1 ? 'one' : 'other')
+describe('tCount — each registered language renders the form its own rule picks (D-L1)', () => {
+  // The oracle is local on purpose: comparing against the module's own rule would stay green if
+  // that rule changed. English and German keep the exact n === 1 rule; every other language
+  // selects as CLDR does. The expected text comes from the language's own catalog FILE, so a
+  // language registered later gets these rows the day it is registered, and `tCount` reading
+  // another language's rule or catalog turns them red.
+  const exactlyOne = (n: number): 'one' | 'other' => (n === 1 ? 'one' : 'other')
+  const oracle = (code: string, n: number): string =>
+    EXACT_ONE_CODES.includes(code) ? exactlyOne(n) : new Intl.PluralRules(code).select(n)
+  const fill = (template: string, n: number): string => template.split('{count}').join(String(n))
   const counts = [
     ...Array.from({ length: 10_006 }, (_, i) => i - 5), // −5 … 10,000
     0.5,
@@ -150,13 +174,29 @@ describe('tCount — English and German keep the exact n === 1 rule (D-L1)', () 
     Number.POSITIVE_INFINITY
   ]
 
-  it.each(['en', 'de'] as const)('%s: singular for exactly 1, plural for every other count', (lang) => {
+  it.each(UI_LANGUAGE_CODES)('%s: the form its own rule picks, from its own catalog, for every count', (code) => {
+    const catalog = catalogOf(code)
     const wrong = counts.filter(
-      (n) =>
-        tCount(lang, 'home.docsReady', n) !==
-        t(lang, `home.docsReady.${oracle(n)}`, { count: n })
+      (n) => tCount(code, 'home.docsReady', n) !== fill(catalog[`home.docsReady.${oracle(code, n)}`], n)
     )
     expect(wrong).toEqual([])
+  })
+
+  // A form whose param is missing renders English: the English form for the SAME count, by the
+  // English rule, with the missing placeholder left visible. Never another English form (English
+  // has no `.few` to borrow) and never the raw key.
+  it.each(UI_LANGUAGE_CODES)('%s: a missing param falls back to the English form for the same count', (code) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const wrong = PLURAL_PROBES.filter(
+        (n) =>
+          tCount(code, 'chat.skill.run.running', n) !==
+          fill(en[`chat.skill.run.running.${exactlyOne(n)}`], n)
+      )
+      expect(wrong).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 

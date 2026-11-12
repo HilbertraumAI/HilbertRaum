@@ -44,7 +44,7 @@ export interface UiLanguageInfo {
  * The English and German rule, kept exactly as it shipped: singular for exactly 1,
  * plural for everything else (0, negatives, fractions, NaN).
  */
-export function exactOne(n: number): PluralCategory {
+function exactOne(n: number): PluralCategory {
   return n === 1 ? 'one' : 'other'
 }
 

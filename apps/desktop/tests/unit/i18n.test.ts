@@ -362,12 +362,13 @@ function oneMeansExactlyOne(plural: (n: number) => PluralCategory): boolean {
 /**
  * Everything wrong with `catalog` as the catalog of a language shaped `info`: a missing or an
  * unexpected key, an empty value, or placeholders that differ from English. A form English
- * does not have (`.few`) is compared with its base's `.other`. One licence (owner call,
- * 2026-11-12): in a language whose `one` is not exactly 1, a plural form may add `{count}` where
- * English's form lacks it ("Knowledge pack added" is a Russian `.one` that also serves 21 packs).
- * `tCount` always supplies `count`, so the render cannot miss it. A plain key, even one named
- * under a plural base, gets no licence: `t` renders it with no `count`. Nothing else may be added
- * or dropped.
+ * does not have (`.few`) is compared with its base's `.other`. One licence and one duty (owner
+ * calls, 2026-11-12): in a language whose `one` is not exactly 1, a plural form may add `{count}`
+ * where English's form lacks it, and must when its base's English `.other` shows it ("Knowledge
+ * pack added" is a Russian `.one` that also serves 21 packs, so a copy of the English shape would
+ * call 21 packs one). `tCount` always supplies `count`, so the render cannot miss it. A plain key,
+ * even one named under a plural base, gets neither: `t` renders it with no `count`. Nothing else
+ * may be added or dropped.
  */
 function catalogParityProblems(info: CatalogShape, catalog: Catalog, english: Catalog): string[] {
   const required = requiredCatalogKeys(info, english)
@@ -391,6 +392,13 @@ function catalogParityProblems(info: CatalogShape, catalog: Catalog, english: Ca
       countLicence && pluralForm && !want.includes('{count}') && have.join() === [...want, '{count}'].sort().join()
     if (have.join() !== want.join() && !addsCount) {
       problems.push(`placeholder mismatch in ${key}: [${have.join(', ')}], English [${want.join(', ')}]`)
+    } else if (
+      countLicence &&
+      pluralForm &&
+      !have.includes('{count}') &&
+      placeholders(english[`${key.slice(0, key.lastIndexOf('.'))}.other`]).includes('{count}')
+    ) {
+      problems.push(`no {count} in ${key}: this form also renders counts other than 1, so it must show the number`)
     }
   }
   return problems
@@ -537,7 +545,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     })
   })
 
-  describe('a plural form may add {count} only where the language’s one is not exactly 1 (owner call 2026-11-12)', () => {
+  describe('a plural form may add {count} only where the language’s one is not exactly 1, and there must show it when the plural does (owner calls 2026-11-12)', () => {
     // English `.one` of `packs.added` names no number; English `gap.pages` shows a range, never
     // the count (like `packs.addedToast` and `translate.file.gapPages`).
     const english = {
@@ -606,6 +614,33 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
       ['French (0 is one)', frShape, french]
     ])('%s: a form that adds {count} passes, extra forms included', (_title, shape, catalog) => {
       expect(catalogParityProblems(shape, catalog, english)).toEqual([])
+    })
+
+    // Where `one` is exactly 1, the singular serves 1 alone, so the English shape is right.
+    it.each<[string, CatalogShape, Catalog]>([
+      ['German (the real registry entry)', uiLanguageInfo('de'), german],
+      ['Spanish (a CLDR rule whose one is exactly 1)', esShape, spanish]
+    ])('%s: a singular with no number passes', (_title, shape, catalog) => {
+      expect(catalogParityProblems(shape, catalog, english)).toEqual([])
+    })
+
+    // A copy of the English shape ("Pack added") would call 21 Russian packs, or 0 French ones,
+    // a single pack. `gap.pages` stays free: its English plural shows no count either.
+    it.each<[string, CatalogShape, Catalog, string[]]>([
+      [
+        'Russian, a singular with no number (it also serves 21)',
+        ruShape,
+        { ...russian, 'packs.added.one': 'Пакет добавлен' },
+        ['no {count} in packs.added.one: this form also renders counts other than 1, so it must show the number']
+      ],
+      [
+        'French, a singular with no number (it also serves 0)',
+        frShape,
+        { ...french, 'packs.added.one': 'Pack ajouté' },
+        ['no {count} in packs.added.one: this form also renders counts other than 1, so it must show the number']
+      ]
+    ])('%s is a problem', (_title, shape, catalog, problems) => {
+      expect(catalogParityProblems(shape, catalog, english)).toEqual(problems)
     })
 
     it.each<[string, CatalogShape, Catalog, string[]]>([
@@ -703,7 +738,9 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
 // A plural form is exempt from the net: the same scan proves that src names no plural form
 // (`x.one`, `x.other`, …) at all, so each form is picked by `tCount`, which takes the base and
 // asks the language's own rule. A form picked by hand (`n === 1 ? t('x.one') : t('x.other')`) is
-// wrong in Russian for 2 or 21. A key built in a template literal (`${base}.one`) is not seen.
+// wrong in Russian for 2 or 21. A key built on a plural base written out in a template literal or
+// by `+` (`` `x.${form}` ``, `'x.' + form`) counts as one too; a key built from a base held in a
+// variable is not seen.
 // =================================================================================================
 
 /** Placeholder names that carry a number in every key that uses them (reviewed 2026-11-12). */
@@ -746,7 +783,8 @@ interface NumberBinding {
 interface KeyUse {
   /** Every placeholder of a `catalog` key that the file fills with a number. */
   numbers: NumberBinding[]
-  /** Every plural form of a `catalog` base that the file names in a string literal, as `file:line key`. */
+  /** Every plural form of a `catalog` base that the file names in a string literal (or builds on a
+   *  written-out base, `file:line base.…`), as `file:line key`. */
   pluralForms: string[]
 }
 
@@ -874,6 +912,18 @@ function keyUse(fileName: string, sourceText: string, catalog: Catalog): KeyUse 
     // `tCount` did not pick.
     if (ts.isStringLiteralLike(node) && isPluralFormOf(bases, node.text)) {
       pluralForms.push(`${siteOf(node)} ${node.text}`)
+    }
+    // A key built on a plural base written out (`` `${base}.${n === 1 ? 'one' : 'other'}` ``,
+    // `'base.' + form`) is a form picked by hand too: it typechecks without a cast. Only the
+    // static head is known, so any key built under a plural base counts (src builds none).
+    const left = ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken ? unwrap(node.left) : undefined
+    const head = ts.isTemplateExpression(node)
+      ? node.head.text
+      : left !== undefined && ts.isStringLiteralLike(left)
+        ? left.text
+        : undefined
+    if (head !== undefined && head.endsWith('.') && bases.has(head.slice(0, -1))) {
+      pluralForms.push(`${siteOf(node)} ${head}…`)
     }
     if (ts.isCallExpression(node)) {
       // The key is the first argument (`t(key, …)`) or the second (`t(lang, key, …)`), and the
@@ -1275,6 +1325,13 @@ describe('CODE-8 net: a key that shows a number is a plural pair or on the revie
     ['a form in a variable', "const key = 'b.files.other'\nctx.tr(key, { count: n })", ['fixture.ts:1 b.files.other']],
     ['a form in a key table', "const KEYS = { many: 'b.files.other', none: 'b.files.none' }", ['fixture.ts:1 b.files.other']],
     ['a form in a key/params row', "const row = {\n  key: 'b.files.one',\n  params: { count: 1 }\n}", ['fixture.ts:2 b.files.one']],
+    [
+      'a form picked in a template literal',
+      "t(`b.files.${n === 1 ? 'one' : 'other'}`, { count: n })",
+      ['fixture.ts:1 b.files.…']
+    ],
+    ['a form built by concatenation', "t('b.files.' + form, { count: n })", ['fixture.ts:1 b.files.…']],
+    ['no form in a template that only shares a base’s prefix', 't(`b.filesize.${unit}`)', []],
     ['no form in tCount, which takes the base', "tCount(lang, 'b.files', n)", []],
     ["no form in the renderer's bound tCount", "const { tCount } = useT()\ntCount('b.files', n)", []],
     ['no form in a plain key named under a base', "t('b.files.none')", []],
