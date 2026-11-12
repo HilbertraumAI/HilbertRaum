@@ -9,6 +9,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Vertragsübersicht
     description: Verwenden, wenn eine verständliche Übersicht eines Vertrags entstehen soll – Parteien, Fristen, Pflichten, wichtige Klauseln und offene Fragen. Keine Rechtsberatung.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Resumen de contrato
+    description: "Sirve para obtener un resumen en lenguaje sencillo de un contrato o acuerdo: partes, fechas, obligaciones, cláusulas clave y preguntas que conviene hacer. No es asesoramiento legal."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

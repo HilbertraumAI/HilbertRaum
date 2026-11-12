@@ -9,6 +9,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Rechnungsanalyse
     description: Verwenden, wenn die Positionen und Beträge einer Rechnung extrahiert, geprüft oder exportiert werden sollen.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Análisis de facturas
+    description: Sirve para extraer, comprobar o exportar las líneas y los totales de una factura.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

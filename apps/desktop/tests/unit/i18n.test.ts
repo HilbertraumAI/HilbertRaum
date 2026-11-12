@@ -274,6 +274,75 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'never uses “ as an OPENING quote (the pair is „…“, not “…”)',
       '“ used before its „ — German opens low, closes high'
     )
+  ],
+  // Spanish: the typography of design-guidelines §7 "Spanish microcopy".
+  es: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Spanish values with an unbalanced «…» pair — close them with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » as an OPENING quote (the pair is «…», not »…«)',
+      '» used before its « — Spanish opens with « and closes with »'
+    ),
+    forbids(
+      /["“”„‟‘]/,
+      'uses no ASCII, English or German quotation mark',
+      'Spanish values with a foreign quotation mark — quote with «…» (U+00AB, U+00BB)'
+    ),
+    balancedQuotes(
+      '¿',
+      '?',
+      'opens every question with ¿',
+      'Spanish values where ¿ and ? do not pair — every question opens with ¿ (U+00BF) and sits inside one value'
+    ),
+    opensBeforeCloses(
+      '¿',
+      '?',
+      'never closes a question before opening it',
+      '? used before its ¿ — put ¿ where the question starts'
+    ),
+    balancedQuotes(
+      '¡',
+      '!',
+      'opens every exclamation with ¡',
+      'Spanish values where ¡ and ! do not pair — every exclamation opens with ¡ (U+00A1)'
+    ),
+    opensBeforeCloses(
+      '¡',
+      '!',
+      'never closes an exclamation before opening it',
+      '! used before its ¡ — put ¡ where the exclamation starts'
+    ),
+    forbids(
+      /['’]/,
+      'uses no apostrophe',
+      'Spanish values with an apostrophe — Spanish has none; quote with «…» and reword contractions'
+    ),
+    forbids(
+      /\.\.\.| …/,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Spanish values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      / [—–-] /,
+      'uses no spaced dash',
+      'Spanish values with a spaced dash — Spanish breaks a sentence with a colon, a full stop, a comma or parentheses'
+    ),
+    forbids(
+      /[¿¡«] | [?!»;,:]/,
+      'puts no space inside «…», ¿…? or ¡…!, and none before : ; ,',
+      'Spanish values with a space after ¿ ¡ « or before ? ! » : ; , — remove it'
+    ),
+    forbids(
+      /[^\u00A0]%/,
+      'separates a figure from % with a no-break space',
+      'Spanish values with % not preceded by U+00A0 — write {pct}\\u00A0%'
+    )
   ]
 }
 
