@@ -8,9 +8,12 @@ import {
 import { sourceKindForMode } from '../../src/main/services/evidence-pack/snapshot'
 import {
   EVIDENCE_PACK_OPTION_DEFAULTS,
-  evidencePaneMode
+  evidencePaneMode,
+  packLanguageFor,
+  packLanguageLineKey
 } from '../../src/shared/evidence-review'
-import type { CoverageInfo, EvidencePackOptions } from '../../src/shared/types'
+import { UI_LANGUAGES, uiLanguageInfo, type UiLanguageInfo } from '../../src/shared/i18n'
+import type { CoverageInfo, EvidencePackLanguage, EvidencePackOptions } from '../../src/shared/types'
 import { makeDetail, makeItem } from '../helpers/evidenceReview'
 
 // EP-1 plan §8.1 — the pure pack model: §16.2 option resolution at the untrusted boundary
@@ -62,6 +65,43 @@ describe('resolveEvidencePackOptions (spec §16.2 boundary)', () => {
     expect(resolveEvidencePackOptions([]).language).toBe('en')
   })
 })
+
+describe('pack language for a UI language (UI-languages owner call D-5 (b), i18n D-L11)', () => {
+  it('an English or German UI writes its pack in its own language, with no line about it', () => {
+    for (const code of ['en', 'de'] as const) {
+      expect(packLanguageFor(uiLanguageInfo(code))).toBe(code)
+      expect(packLanguageLineKey(uiLanguageInfo(code))).toBeNull()
+    }
+  })
+
+  // Fixture entries: the registry has no language without evidence packs yet (ru/fr/es/it
+  // will join with `evidencePack: false`). The 'de' row proves the flag decides, not
+  // whether the code happens to be a pack language.
+  it.each<Pick<UiLanguageInfo, 'code' | 'evidencePack'>>([
+    { code: 'fr', evidencePack: false },
+    { code: 'de', evidencePack: false }
+  ])('a UI language without evidence packs ($code) exports English and says so', (info) => {
+    expect(packLanguageFor(info)).toBe('en')
+    expect(packLanguageLineKey(info)).toBe('review.export.packLanguage.en')
+  })
+
+  it('a prototype member is not a pack language at the export boundary', () => {
+    expect(resolveEvidencePackOptions({ language: 'constructor' }).language).toBe('en')
+  })
+})
+
+// Checked by `npm run typecheck` (tests/ is in the web project). The pack languages are
+// exactly the registered languages whose `evidencePack` flag is set: a language that writes
+// packs but is missing from `EvidencePackLanguage` would export English, and one listed
+// there without the flag would reach the pack renderer without its `packExport.*` keys.
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
+type Assert<T extends true> = T
+type PackLanguageRows = [
+  Assert<
+    Equal<Extract<(typeof UI_LANGUAGES)[number], { evidencePack: true }>['code'], EvidencePackLanguage>
+  >
+]
 
 describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
   it('carries the nine-section facts from the stored detail only', () => {

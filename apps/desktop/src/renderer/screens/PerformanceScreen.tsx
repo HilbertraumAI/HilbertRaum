@@ -246,6 +246,7 @@ function buildReport(
   currentMachine: boolean,
   live: LiveRecommendation | null,
   t: I18n['t'],
+  tCount: I18n['tCount'],
   lang: UiLanguage
 ): string {
   const graphicsLine =
@@ -278,7 +279,7 @@ function buildReport(
         : t('perf.tile.speed.none')
     }`,
     `${t('perf.tile.memory')}: ${bench.ramGb > 0 ? `${fmt1Safe(bench.ramGb, lang)} ${t('perf.tile.memory.unit')}` : t('diag.app.unknown')}`,
-    `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
+    `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : '')}`,
     `${t('perf.tile.graphics')}: ${graphicsLine}`,
     `${t('perf.tile.drive')}: ${
       bench.effectiveRead ? `${fmtNumSafe(bench.effectiveRead.mbps, lang)} ${t('perf.tile.drive.unit')}` : t('perf.tile.drive.none')
@@ -299,7 +300,7 @@ function buildReport(
     lines.push(
       `${t(currentMachine ? 'perf.recommendation.next' : 'perf.recommendation.nextOnThisComputer')}: ${live.modelId ? `${modelName(live.modelId, models, t)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
     )
-    if (contextTokens != null) lines.push(`${t('models.context.title')}: ${t('models.tech.contextValue', { count: contextTokens.toLocaleString(lang) })}`)
+    if (contextTokens != null) lines.push(`${t('models.context.title')}: ${tCount('models.tech.contextValue', contextTokens, { count: contextTokens.toLocaleString(lang) })}`)
   }
   lines.push(`${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`)
   lines.push(`${t('diag.bench.lastRun')}: ${fmtDateTime(bench.ranAt, lang)}`)
@@ -350,7 +351,7 @@ export interface PerformanceScreenProps {
 }
 
 export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.Element {
-  const { t, lang } = useT()
+  const { t, tCount, lang } = useT()
   const toast = useToast()
   const [snap, setSnap] = useState<PerformanceSnapshot | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
@@ -684,7 +685,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
 
   function memoryTile(): JSX.Element {
     const cpu = bench
-      ? (bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')
+      ? (bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : '')
       : ''
     return (
       <Tile
@@ -845,7 +846,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         <div className="perf-model-title">{t('perf.model.title')}</div>
         <div className="perf-model-line">
           {p.model
-            ? t('perf.model.line', {
+            ? tCount('perf.model.line', p.model.contextTokens, {
                 model: modelName(p.model.id, models, t),
                 size: fmt1(p.model.sizeOnDiskGb, lang),
                 context: p.model.contextTokens.toLocaleString(lang)
@@ -859,7 +860,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             the two never read as one contradicting claim. */}
         {p.model && p.observedMismatch && (
           <div className="perf-model-note hint">
-            {t('perf.model.measuredOther', {
+            {tCount('perf.model.measuredOther', p.observedMismatch.contextTokens, {
               context: p.observedMismatch.contextTokens.toLocaleString(lang),
               when: fmtDate(p.observedMismatch.at, lang)
             })}
@@ -1117,7 +1118,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 <Button
                   variant="ghost"
                   title={t('diag.copyTitle')}
-                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, snap?.currentMachine ?? true, live, t, lang))}
+                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, snap?.currentMachine ?? true, live, t, tCount, lang))}
                 >
                   {t('perf.copy')}
                 </Button>

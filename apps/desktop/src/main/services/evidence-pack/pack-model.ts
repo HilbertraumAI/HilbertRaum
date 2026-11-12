@@ -16,6 +16,7 @@ import type {
 import {
   EVIDENCE_PACK_OPTION_DEFAULTS,
   evidencePaneMode,
+  isPackLanguage,
   type EvidencePaneMode
 } from '../../../shared/evidence-review'
 
@@ -56,17 +57,19 @@ type PackRelation = (typeof RELATION_ORDER)[number]
 
 /**
  * Untrusted-boundary resolver for the renderer's export-panel payload: known boolean flags
- * are kept only when literally boolean, `language` only when literally 'de' (else 'en'),
- * everything else falls back to `EVIDENCE_PACK_OPTION_DEFAULTS`. Unknown keys are DROPPED
- * (the sanitize-patch idiom) — the resolved set is what gets persisted to
- * `evidence_exports.options_json`, so garbage can never masquerade as a recorded choice.
+ * are kept only when literally boolean, `language` only when it is a pack language
+ * (`isPackLanguage`, else 'en'; the renderer already maps its UI language through
+ * `packLanguageFor`), everything else falls back to `EVIDENCE_PACK_OPTION_DEFAULTS`.
+ * Unknown keys are DROPPED (the sanitize-patch idiom) — the resolved set is what gets
+ * persisted to `evidence_exports.options_json`, so garbage can never masquerade as a
+ * recorded choice.
  */
 export function resolveEvidencePackOptions(raw: unknown): EvidencePackOptions {
   const v = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
   const flag = (name: keyof Omit<EvidencePackOptions, 'language'>): boolean =>
     typeof v[name] === 'boolean' ? (v[name] as boolean) : EVIDENCE_PACK_OPTION_DEFAULTS[name]
   return {
-    language: v.language === 'de' ? 'de' : 'en',
+    language: isPackLanguage(v.language) ? v.language : 'en',
     includeReviewerNotes: flag('includeReviewerNotes'),
     includeSourceExcerpts: flag('includeSourceExcerpts'),
     includeDocumentHashes: flag('includeDocumentHashes'),

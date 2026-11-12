@@ -1454,7 +1454,9 @@ export const de: Record<keyof typeof en, string> = {
   'models.tech.recRam': 'Empfohlener RAM',
   'models.tech.context': 'Kontextfenster',
   // RD-3: deutscher Plural ist „Token“ (wie `models.context.autoResolved` unten), nicht „Tokens“.
-  'models.tech.contextValue': '{count} Token',
+  // Ein Pluralpaar (UI-Sprachen-Welle): „Token“ ist im Deutschen in Singular und Plural gleich.
+  'models.tech.contextValue.one': '{count} Token',
+  'models.tech.contextValue.other': '{count} Token',
   'models.tech.file': 'Datei',
   // ---- Kontextgrößen-Auswahl (Nutzerbericht 2026-07-04 — der Abschneide-Hinweis verweist hierher) ----
   'models.context.title': 'Kontextgröße',
@@ -1463,7 +1465,8 @@ export const de: Record<keyof typeof en, string> = {
   // Issue #43: „Automatisch“ nennt die aufgelöste Zahl für das aktive Modell — sie ist oft
   // die größte Wahl in der Liste, und ein unbeschriftetes „Automatisch“ wirkte wie ein
   // kleiner Standardwert.
-  'models.context.autoResolved': 'Automatisch — empfohlene Größe des Modells ({count} Token)',
+  'models.context.autoResolved.one': 'Automatisch — empfohlene Größe des Modells ({count} Token)',
+  'models.context.autoResolved.other': 'Automatisch — empfohlene Größe des Modells ({count} Token)',
   'models.context.bigWarning':
     'Sehr große Kontextfenster brauchen viel zusätzlichen Arbeitsspeicher, während das Modell ' +
     'läuft. Auf kleineren Geräten startet das Modell dann möglicherweise nicht oder antwortet ' +
@@ -1539,6 +1542,7 @@ export const de: Record<keyof typeof en, string> = {
     'folgt immer dem System.',
   'settings.language.title': 'Sprache',
   'settings.language.aria': 'Sprache',
+  'settings.language.system': 'System',
   'settings.language.hint':
     '„System“ folgt der Sprache deines Betriebssystems: Deutsche Systeme verwenden Deutsch, ' +
     'alle anderen Englisch. Änderungen gelten sofort.',
@@ -2101,7 +2105,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.tile.memory.unified': 'Gemeinsamer Speicher',
   'perf.tile.memory.unifiedSub': 'Von Prozessor und Grafikkernen gemeinsam genutzt',
   'perf.model.title': 'Dein Modell',
-  'perf.model.line': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
+  'perf.model.line.one': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
+  'perf.model.line.other': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
   'perf.model.none': 'Noch kein Modell ausgewählt. Wähle eines auf dem KI-Modell-Bildschirm.',
   'perf.model.need': 'Belegt {need} GB mit diesem Kontext.',
   'perf.model.needEstimate':
@@ -2132,7 +2137,9 @@ export const de: Record<keyof typeof en, string> = {
   // Ein Datensatz pro Modell liegt auf dem LAUFWERK, nicht auf dem Computer.
   'perf.model.perDrive':
     'Das Laufwerk behält einen Datensatz pro Modell, ein Start auf einem anderen Computer ersetzt also den hier gemessenen.',
-  'perf.model.measuredOther':
+  'perf.model.measuredOther.one':
+    'Früher mit einem Kontext von {context} Token am {when} gemessen; die Schätzung oben gilt für die aktuellen Einstellungen.',
+  'perf.model.measuredOther.other':
     'Früher mit einem Kontext von {context} Token am {when} gemessen; die Schätzung oben gilt für die aktuellen Einstellungen.',
   'perf.model.runningOnCard': 'Läuft gerade auf der Grafikkarte.',
   'perf.model.choose': 'Kleineres Modell wählen',
@@ -2274,7 +2281,9 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.noMatch': 'Kein passendes Modell',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',
-  'diag.bench.cores': ' ({count} Kerne)',
+  // Ein Pluralpaar, damit ein Ein-Kern-Rechner „(1 Kern)“ liest (UI-languages owner call D-11 (a)).
+  'diag.bench.cores.one': ' ({count} Kern)',
+  'diag.bench.cores.other': ' ({count} Kerne)',
   'diag.bench.osArch': 'OS / Architektur',
   'diag.bench.gpu': 'GPU',
   'diag.bench.notDetected': 'nicht erkannt',
@@ -3717,6 +3726,8 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.title': 'Nachweispaket exportieren',
   'review.export.encryptionWarning':
     'Diese exportierte Datei liegt außerhalb des verschlüsselten HilbertRaum-Arbeitsbereichs und ist nicht durch dein Arbeitsbereich-Passwort geschützt.',
+  'review.export.packLanguage.en': 'Dieses Paket wird auf Englisch erstellt.',
+  'review.export.packLanguage.de': 'Dieses Paket wird auf Deutsch erstellt.',
   'review.export.options': 'In das Paket aufnehmen',
   'review.export.optNotes': 'Prüfnotizen',
   'review.export.optExcerpts': 'Quellenauszüge',

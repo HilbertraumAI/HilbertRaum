@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
@@ -11,7 +11,15 @@ import {
   useT
 } from '../../src/renderer/i18n'
 import { DEFAULT_SETTINGS, type AppSettings, type WorkspaceStateInfo } from '../../src/shared/types'
+import {
+  UI_LANGUAGES,
+  UI_LANGUAGE_CODES,
+  t,
+  type UiLanguage,
+  type UiLanguageSetting
+} from '../../src/shared/i18n'
 import { appShellStubs } from '../helpers/app-shell'
+import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 
 // Phase 39 — renderer language resolution (i18n record §3.2, D-L2/D-L3): the pre-unlock
@@ -71,6 +79,32 @@ describe('pre-unlock gate language (App + WorkspaceGate)', () => {
   })
 })
 
+describe('a language only a newer build registers (two builds on one drive)', () => {
+  // A German OS, so "follows the OS" and "falls back to English" give different answers.
+  beforeEach(() => {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('de-DE')
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('the pre-unlock gate ignores an unregistered mirror value and follows the OS locale', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'xx')
+    expect(resolvePreUnlockLanguage()).toBe('de')
+  })
+
+  it('an unregistered stored setting resolves like System once settings load, and the mirror gets the result', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en') // the gate rendered English
+    const newerBuildSettings = { ...DEFAULT_SETTINGS, uiLanguage: 'xx' as UiLanguageSetting }
+    stubApi(appShellStubs({ getSettings: vi.fn(async () => newerBuildSettings) }))
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    expect(await within(nav).findByRole('button', { name: t('de', 'nav.settings') })).toBeInTheDocument()
+    expect(document.documentElement.lang).toBe('de')
+    expect(window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('de')
+  })
+})
+
 describe('I18nProvider — stable applyLanguageSetting identity (FE-5)', () => {
   it('keeps applyLanguageSetting referentially stable across a language switch', async () => {
     const user = userEvent.setup()
@@ -112,17 +146,22 @@ describe('Settings → General language picker', () => {
     return { updateSettings }
   }
 
-  it('offers System / English / Deutsch and patches uiLanguage like theme', async () => {
+  /** The picker, found by its accessible name in the language the screen renders in. */
+  function findPicker(lang: UiLanguage = 'en'): Promise<HTMLElement> {
+    return screen.findByRole('combobox', { name: t(lang, 'settings.language.aria') })
+  }
+
+  it('is a drop-down list; choosing a language patches uiLanguage like theme and applies at once', async () => {
     const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
     render(
       <I18nProvider>
         <SettingsScreen />
       </I18nProvider>
     )
-    const deutsch = await screen.findByRole('radio', { name: 'Deutsch' })
-    expect(screen.getByRole('radio', { name: 'English' })).toBeInTheDocument()
+    const picker = await findPicker()
+    expect(within(picker).getByRole('option', { name: 'English' })).toBeInTheDocument()
 
-    await userEvent.click(deutsch)
+    await userEvent.selectOptions(picker, 'Deutsch')
     expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'de' })
     // The switch is live (no restart): the chrome re-renders in German…
     expect(await screen.findByRole('heading', { name: 'Einstellungen' })).toBeInTheDocument()
@@ -131,26 +170,72 @@ describe('Settings → General language picker', () => {
     expect(document.documentElement.lang).toBe('de')
 
     // Back to English via the picker (its label stays untranslated in German).
-    await userEvent.click(screen.getByRole('radio', { name: 'English' }))
+    await userEvent.selectOptions(await findPicker('de'), 'English')
     expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'en' })
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()
     expect(window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('en')
   })
 
-  it('marks the saved choice as selected', async () => {
-    stubSettings({ ...DEFAULT_SETTINGS, uiLanguage: 'de' })
+  it.each([
+    ['the saved language', 'de' as UiLanguageSetting, 'de', 'Deutsch'],
+    // A newer build's language on a shared drive resolves like System, so it shows System.
+    ['System for a language only a newer build registers', 'xx' as UiLanguageSetting, 'system', t('en', 'settings.language.system')]
+  ])('shows %s as the selected choice', async (_case, saved, value, label) => {
+    stubSettings({ ...DEFAULT_SETTINGS, uiLanguage: saved })
     render(
       <I18nProvider>
         <SettingsScreen />
       </I18nProvider>
     )
-    expect(await screen.findByRole('radio', { name: 'Deutsch' })).toHaveAttribute(
-      'aria-checked',
-      'true'
+    const picker = await findPicker()
+    expect(picker).toHaveValue(value)
+    expect(picker).toHaveDisplayValue(label)
+  })
+
+  // UI-languages owner calls D-6 (a) and D-13 (a): System first, then the registry in order.
+  // Language names stay in their own language whatever the UI language (so a user can always
+  // find their way back); only the System label is translated. `lang` lets a screen reader say
+  // each name in its language.
+  it.each(UI_LANGUAGE_CODES)(
+    'in %s, offers the translated System label, then every registered language by its own name',
+    async (lang) => {
+      stubSettings({ ...DEFAULT_SETTINGS })
+      renderInLanguage(<SettingsScreen />, lang)
+      const options = within(await findPicker(lang)).getAllByRole('option') as HTMLOptionElement[]
+      expect(options.map((o) => [o.value, o.textContent, o.lang])).toEqual([
+        ['system', t(lang, 'settings.language.system'), ''],
+        ...UI_LANGUAGES.map((info) => [info.code, info.nativeName, info.code])
+      ])
+    }
+  )
+
+  it('is reached with the Tab key', async () => {
+    stubSettings({ ...DEFAULT_SETTINGS })
+    render(
+      <I18nProvider>
+        <SettingsScreen />
+      </I18nProvider>
     )
-    expect(screen.getByRole('radio', { name: 'English' })).toHaveAttribute(
-      'aria-checked',
-      'false'
+    const picker = await findPicker()
+    const user = userEvent.setup()
+    // Bounded walk through the screen's tab order (no assumption about which control precedes it).
+    for (let i = 0; i < 50 && document.activeElement !== picker; i++) await user.tab()
+    expect(picker).toHaveFocus()
+  })
+
+  it('saves only a registered setting: a <select> hands back a plain string', async () => {
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
+    render(
+      <I18nProvider>
+        <SettingsScreen />
+      </I18nProvider>
     )
+    const picker = (await findPicker()) as HTMLSelectElement
+    // An option the registry doesn't know, added outside React. Main's write gate would drop
+    // the value too, but only after the round trip and a "Saved" toast for nothing saved.
+    picker.append(new Option('Klingon', 'xx'))
+    await userEvent.selectOptions(picker, 'xx')
+    expect(updateSettings).not.toHaveBeenCalled()
+    expect(picker).toHaveValue('system') // still shows the saved choice
   })
 })

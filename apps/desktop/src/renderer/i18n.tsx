@@ -8,6 +8,7 @@ import {
   type ReactNode
 } from 'react'
 import {
+  isUiLanguage,
   resolveUiLanguage,
   t,
   tCount,
@@ -25,13 +26,15 @@ import {
 // back to `navigator.language`. Once settings load (and on every Settings patch),
 // `applyLanguageSetting` re-resolves, updates `<html lang>`, and rewrites the mirror.
 
-/** localStorage key mirroring the last RESOLVED language ('en' | 'de'). */
+/** localStorage key mirroring the last RESOLVED language (a registered `UiLanguage` code). */
 export const UI_LANGUAGE_STORAGE_KEY = 'hilbertraum.uiLanguage'
 
+/** The mirrored language, or null when there is none or this build doesn't register it (a
+ *  newer build's language, junk): the gate then follows the OS locale. */
 function readMirror(): UiLanguage | null {
   try {
     const value = window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)
-    return value === 'en' || value === 'de' ? value : null
+    return isUiLanguage(value) ? value : null
   } catch {
     return null
   }

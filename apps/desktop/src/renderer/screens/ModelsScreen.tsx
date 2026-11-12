@@ -263,6 +263,10 @@ export interface ModelsScreenProps {
 
 export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {}): JSX.Element {
   const { t, tCount, lang } = useT()
+  // A context size in words: the raw token count picks the plural form, and the text shows the
+  // figure grouped for the locale ("8,192" / "8.192").
+  const contextSizeText = (key: 'models.tech.contextValue' | 'models.context.autoResolved', tokens: number): string =>
+    tCount(key, tokens, { count: tokens.toLocaleString(lang) })
   const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [libraryView, setLibraryView] = useState<'installed' | 'browse' | null>(
     focus !== null ? 'browse' : null
@@ -1236,7 +1240,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
               <dt>{t('models.tech.context')}</dt>
               {/* RD-3: locale-formatted like every other figure in this block (fmtGbNum / the
                   context-size picker below) — a German UI reads "32.768", not raw "32768". */}
-              <dd>{t('models.tech.contextValue', { count: m.recommendedContextTokens.toLocaleString(lang) })}</dd>
+              <dd>{contextSizeText('models.tech.contextValue', m.recommendedContextTokens)}</dd>
               <dt>{t('models.tech.file')}</dt>
               <dd>
                 <code>{m.localPath}</code>
@@ -1674,14 +1678,15 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
                   "small default", sending users into a fixed pick that capped the window. */}
               <option value="auto">
                 {activeChat
-                  ? t('models.context.autoResolved', {
-                      count: (activeChat.recommendedContextTokens || settings.contextTokens).toLocaleString(lang)
-                    })
+                  ? contextSizeText(
+                      'models.context.autoResolved',
+                      activeChat.recommendedContextTokens || settings.contextTokens
+                    )
                   : t('models.context.auto')}
               </option>
               {CONTEXT_SIZE_PRESETS.map((n) => (
                 <option key={n} value={String(n)}>
-                  {t('models.tech.contextValue', { count: n.toLocaleString(lang) })}
+                  {contextSizeText('models.tech.contextValue', n)}
                 </option>
               ))}
               {/* RD-4: an override outside the preset rungs (an older release's preset, a hand-
@@ -1690,9 +1695,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
               {settings.contextTokensOverride != null &&
                 !(CONTEXT_SIZE_PRESETS as readonly number[]).includes(settings.contextTokensOverride) && (
                   <option value={String(settings.contextTokensOverride)}>
-                    {t('models.tech.contextValue', {
-                      count: settings.contextTokensOverride.toLocaleString(lang)
-                    })}
+                    {contextSizeText('models.tech.contextValue', settings.contextTokensOverride)}
                   </option>
                 )}
             </select>

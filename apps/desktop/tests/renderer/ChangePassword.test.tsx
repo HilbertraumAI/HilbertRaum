@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import {
   DEFAULT_SETTINGS,
+  MIN_PASSWORD_LENGTH,
   type AppSettings,
   type WorkspaceActionResult
 } from '../../src/shared/types'
@@ -105,6 +106,22 @@ describe('Settings → Change password (Phase 32)', () => {
     )
     expect((screen.getByLabelText('New password') as HTMLInputElement).value).toBe('')
     expect((screen.getByLabelText('Confirm new password') as HTMLInputElement).value).toBe('')
+  })
+
+  // The floor is main's (`registerWorkspaceIpc` refuses a new password under it); a copy of the
+  // literal 8 here would drift from main the day it moves (found in the UI languages wave's code review).
+  it('enables submission exactly at the shared floor main enforces (MIN_PASSWORD_LENGTH)', async () => {
+    stubSettings({})
+    const user = userEvent.setup()
+    render(<SettingsScreen tab="general" />)
+    const button = await screen.findByRole('button', { name: /change password/i })
+    const belowFloor = 'a'.repeat(MIN_PASSWORD_LENGTH - 1)
+    await fillCard(user, 'old-password', belowFloor, belowFloor)
+    expect(button).toBeDisabled()
+
+    await user.type(screen.getByLabelText('New password'), 'a')
+    await user.type(screen.getByLabelText('Confirm new password'), 'a')
+    expect(button).toBeEnabled()
   })
 
   it('shows the strength meter on the new password (advisory only)', async () => {

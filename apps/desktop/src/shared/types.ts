@@ -347,6 +347,14 @@ export type WorkspaceActionResult =
       message: string
     }
 
+/** Minimum password length for a new encrypted vault (create and change password): the
+ *  at-rest key is only as strong as the password (the salt + KDF params live in the
+ *  unencrypted descriptor). Main refuses a shorter one (`registerWorkspaceIpc.ts`); the
+ *  first-run gate and the Settings change-password card hold the same floor before they send
+ *  (so the gate never gets that refusal back), and the strength meter calls anything under it
+ *  too short. */
+export const MIN_PASSWORD_LENGTH = 8
+
 export interface DriveStatus {
   /** Root directory that holds models + workspace (drive root or app-data fallback). */
   rootPath: string
@@ -485,8 +493,10 @@ export interface AppSettings {
   theme: ThemeSetting
   // ---- Language (i18n record §3.2, D-L2/D-L3) ----
   /**
-   * UI language preference. 'system' (default) follows the OS locale: a `de*`
-   * locale resolves to German, everything else to English. The pre-unlock gate
+   * UI language preference. 'system' (default) follows the OS locale's primary
+   * subtag when that language is registered (`shared/i18n/languages.ts`), English
+   * otherwise; a stored value this build does not know resolves like 'system'
+   * (the write gate accepts only registered languages). The pre-unlock gate
    * cannot read settings (encrypted DB) — it resolves from the renderer's
    * localStorage mirror of the last RESOLVED language, falling back to
    * `navigator.language`.
@@ -1408,8 +1418,9 @@ export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree'
  * round-trip evidence exists for the original 10 (the TG-6 smoke); the widened rest ship
  * on the model's own WMT24++ evaluation as the quality evidence. A free-text language
  * field invites silent quality failures — this stays a CLOSED list, validated
- * server-side. Alphabetical by code (the pickers render in array order); the de/en
- * DEFAULTS are chosen in the screens, not by array position.
+ * server-side. Alphabetical by code (the pickers render in array order); the DEFAULT
+ * pair is chosen by `initialTranslateChoice` (`renderer/lib/translateSession.ts`), not by
+ * array position.
  * This array is the SINGLE source of truth for the codes: the sidecar prompt builder
  * (`main/services/translation/prompt.ts`) and its name maps key off this type.
  */

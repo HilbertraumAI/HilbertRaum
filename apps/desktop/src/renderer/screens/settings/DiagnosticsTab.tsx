@@ -305,11 +305,16 @@ function lastRunValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): s
  * Keeping rows in the report that the card no longer shows would also break this file's standing
  * invariant — card row and Copy text render from the same helpers "so the two can never disagree".
  */
-function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+function buildBenchmarkReport(
+  bench: BenchmarkResult,
+  t: I18n['t'],
+  tCount: I18n['tCount'],
+  lang: UiLanguage
+): string {
   const lines = [
     t('diag.bench.title'),
     `${t('diag.bench.ram')}: ${bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} GB` : t('diag.app.unknown')}`,
-    `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('diag.app.unknown')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
+    `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('diag.app.unknown')) + (bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : '')}`,
     `${t('diag.bench.osArch')}: ${bench.os || t('diag.app.unknown')} (${bench.arch || t('diag.app.unknown')})`,
     `${t('diag.bench.gpu')}: ${bench.gpu ?? t('diag.bench.notDetected')}`,
     `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, t, lang)}`,
@@ -323,7 +328,7 @@ function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
 }
 
 export function DiagnosticsTab(): JSX.Element {
-  const { t, lang } = useT()
+  const { t, tCount, lang } = useT()
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [bench, setBench] = useState<BenchmarkResult | null>(null)
   const [app, setApp] = useState<AppStatus | null>(null)
@@ -606,7 +611,7 @@ export function DiagnosticsTab(): JSX.Element {
               <Button
                 size="sm"
                 title={t('diag.copyTitle')}
-                onClick={() => copyReport(buildBenchmarkReport(bench, t, lang))}
+                onClick={() => copyReport(buildBenchmarkReport(bench, t, tCount, lang))}
               >
                 {t('diag.copy')}
               </Button>
@@ -619,7 +624,7 @@ export function DiagnosticsTab(): JSX.Element {
               <dt>{t('diag.bench.cpu')}</dt>
               <dd>
                 {bench.cpuModel || t('diag.app.unknown')}
-                {bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : ''}
+                {bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : ''}
               </dd>
               <dt>{t('diag.bench.osArch')}</dt>
               <dd>

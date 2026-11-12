@@ -55,6 +55,8 @@ describe('DV-1 — every screen that owns a <select> opts into the treatment', (
   // are covered — styling only two of them would leave the same control looking different on
   // two routes to the same task. A new <select> added to any of them without the class would
   // silently reintroduce the UA skin, so the guard is over the FILE, not over a fixed count.
+  // The interface-language picker (Settings → General) joined as a native <select> when the
+  // language list outgrew a segmented control.
   //
   // `.review-relation select` (review/EvidencePane.tsx) is deliberately NOT here: it already
   // carries its own older, lighter treatment, and moving it onto `.select` is a real restyle of
@@ -63,7 +65,8 @@ describe('DV-1 — every screen that owns a <select> opts into the treatment', (
     'screens/ModelsScreen.tsx',
     'screens/TranslateScreen.tsx',
     'screens/DocumentsScreen.tsx',
-    'screens/settings/DiagnosticsTab.tsx'
+    'screens/settings/DiagnosticsTab.tsx',
+    'screens/SettingsScreen.tsx'
   ]) {
     it(`every <select> in ${file} carries className="select"`, () => {
       // Strip comments first: the prose in these files talks ABOUT `<select>` elements.

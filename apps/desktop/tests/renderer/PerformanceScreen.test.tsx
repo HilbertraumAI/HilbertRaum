@@ -13,7 +13,7 @@ import {
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { t } from '../../src/shared/i18n'
+import { t, tCount } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/shared/format'
 import { effectiveReadSample } from '../helpers/benchmark-records'
 import { deferred } from '../helpers/deferred'
@@ -843,6 +843,17 @@ describe('PerformanceScreen: actions', () => {
     expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
   })
 
+  // UI-languages owner call D-11 (a): the core count picks its plural form on this screen too, on
+  // the memory tile and in the copied report; until the UI languages wave one core read "(1 cores)".
+  it('names a single core in the singular, on the memory tile and in the copied report', async () => {
+    install(snapshot({ current: result({ cpuCores: 1 }) }))
+    renderPerformanceScreen()
+    const cpu = `Intel Core i7-1260P${t('en', 'diag.bench.cores.one', { count: 1 })}`
+    await screen.findByText(cpu)
+    expect(within(tile('Memory')).getByText(cpu)).toBeInTheDocument()
+    expect(await copiedReport()).toContain(`${t('en', 'diag.bench.cpu')}: ${cpu}`)
+  })
+
   it.each<[string, (text: string) => Promise<boolean>, string]>([
     ['the clipboard took it', async () => true, 'Copied to clipboard'],
     ['the clipboard refused it', async () => false, 'Could not copy to the clipboard'],
@@ -1369,7 +1380,7 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
       })
     )
     renderPerformanceScreen({ lang: 'de' })
-    const expected = t('de', 'perf.model.measuredOther', {
+    const expected = tCount('de', 'perf.model.measuredOther', 32_768, {
       context: (32_768).toLocaleString('de'),
       when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('de')
     })
@@ -1742,7 +1753,7 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
     const contextAt = lines.findIndex((l) => l.startsWith(`${t('de', 'models.context.title')}:`))
     const savedAt = lines.findIndex((l) => l.startsWith(`${t('de', 'perf.recommendation.atCheckTime')}:`))
     expect(lines[contextAt]).toBe(
-      `${t('de', 'models.context.title')}: ${t('de', 'models.tech.contextValue', { count: (4096).toLocaleString('de') })}`
+      `${t('de', 'models.context.title')}: ${tCount('de', 'models.tech.contextValue', 4096, { count: (4096).toLocaleString('de') })}`
     )
     expect(contextAt).toBe(liveAt + 1)
     expect(contextAt).toBeLessThan(savedAt)

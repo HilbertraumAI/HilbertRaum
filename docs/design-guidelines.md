@@ -1066,8 +1066,9 @@ change; nothing here touches the model recommender. Code comments cite this sect
    bare-element `select { … }` rule: the class keeps the blast radius on surfaces that were
    actually eyeballed. The cost of that choice is that a select without the class still bypasses
    the system, so `tests/unit/select-token-treatment.test.ts` guards it per FILE — the rule's
-   token set, plus "every `<select>` in these four screens carries the class". **All four
-   picker-style selects moved together on purpose:** the Documents translate modal renders the
+   token set, plus "every `<select>` in these screens carries the class" (four screen files at
+   this record; `SettingsScreen.tsx`, for the interface-language picker in Settings → General,
+   joined as the fifth in the 2026-11 UI languages wave). **The four original picker-style selects moved together on purpose:** the Documents translate modal renders the
    *identical* from/to language pair as the Translate screen, so styling only one of them would
    make the same control look different on two routes to the same task. `.review-relation select`
    (evidence review) keeps its own older, lighter treatment — folding it in is a real restyle of

@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { t } from '../../src/shared/i18n'
+import { en, t, UI_LANGUAGES, type MessageKey } from '../../src/shared/i18n'
+import type { StartDocTaskRequest } from '../../src/shared/types'
+import type { Translator } from '../../src/main/services/translation'
 import { applyUiLanguageSetting, initMainI18n } from '../../src/main/services/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { documentsDir, getDocument } from '../../src/main/services/ingestion'
@@ -10,8 +12,9 @@ import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/par
 import { assertDownloadAllowed } from '../../src/main/services/downloads'
 import { isFriendlyTaskError } from '../../src/main/services/doctasks'
 import { buildWarnings } from '../../src/main/services/benchmark'
-import { docTaskManager } from '../helpers/doctask-fixtures'
+import { docTaskManager, importWords, scriptedTranslator, waitTerminal } from '../helpers/doctask-fixtures'
 import { importScan } from '../helpers/ocr-fixtures'
+import { catalogOf } from '../helpers/i18n-catalogs'
 
 // Phase 41 — the §3.3 two-rule boundary under a GERMAN-cached main-process language:
 // emissions (IPC throws, job errors) localize via tMain, while everything persisted
@@ -69,6 +72,62 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
     expect(isFriendlyTaskError(t('en', 'main.noModelRunning'))).toBe(true)
     expect(isFriendlyTaskError(t('de', 'main.noModelRunning'))).toBe(true)
     expect(isFriendlyTaskError('ECONNREFUSED 127.0.0.1:8080')).toBe(false)
+  })
+
+  // i18n record §3.3 rule 3: the pass-through recognizes guard copy in EVERY registered language.
+  // Looping the registry covers a language the day it is registered; one left out of the filter
+  // would see its own guard copy replaced by the generic failure.
+  it.each(UI_LANGUAGES.map(({ code }) => code))(
+    'a task that fails on a guard keeps the guard copy when main speaks %s',
+    async (code) => {
+      applyUiLanguageSetting(code)
+      const world = { root: tmp, db, storeDir }
+      const a = await importWords(world, 60, { name: 'a.txt' })
+      const b = await importWords(world, 60, { name: 'b.txt' })
+      // B queues behind A; the translator goes away while B waits, so B's dequeue guard throws
+      // in main's language and the failure handler decides whether that text may pass.
+      let available: Translator | null = scriptedTranslator()
+      const manager = docTaskManager(world, { getTranslator: () => available })
+      const request = (id: string): StartDocTaskRequest => ({
+        kind: 'translation',
+        documentIds: [id],
+        params: { sourceLang: 'en', targetLang: 'de' }
+      })
+      const first = manager.startDocTask(request(a))
+      const second = manager.startDocTask(request(b))
+      available = null
+      expect((await waitTerminal(manager, first.jobId)).state).toBe('done')
+      const failed = await waitTerminal(manager, second.jobId)
+      expect(failed.state).toBe('failed')
+      expect(failed.error).toBe(t(code, 'main.translation.noModel'))
+
+      // The language can change between the throw and the record: the same text still
+      // passes whichever registered language main has switched to since.
+      for (const { code: now } of UI_LANGUAGES) {
+        applyUiLanguageSetting(now)
+        expect(isFriendlyTaskError(t(code, 'main.translation.noModel'))).toBe(true)
+      }
+    }
+  )
+
+  // The pass-through is an exact match against each guard's copy rendered with no params, so a
+  // guard key with a {param} could never match what its guard throws: that failure would show
+  // the generic copy instead. Every key the filter accepts stays param-less in every catalog.
+  it('every guard key the pass-through accepts has no {param} in any registered catalog', () => {
+    // A key's English render (a placeholder left literal) passes exactly when the filter lists
+    // that key, or one with the same English text: this finds the list without reading it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let accepted: MessageKey[]
+    try {
+      accepted = (Object.keys(en) as MessageKey[]).filter((key) => isFriendlyTaskError(t('en', key)))
+    } finally {
+      warn.mockRestore()
+    }
+    expect(accepted).toEqual(expect.arrayContaining(['main.noModelRunning', 'main.translation.noModel']))
+    const withParam = accepted.flatMap((key) =>
+      UI_LANGUAGES.filter(({ code }) => /\{\w+\}/.test(catalogOf(code)[key])).map(({ code }) => `${code}: ${key}`)
+    )
+    expect(withParam, 'guard copy with a {param} can never pass the exact-match filter').toEqual([])
   })
 
   it('benchmark warnings stay canonical English under a German cache (persisted in lastBenchmark)', () => {

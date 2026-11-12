@@ -7,6 +7,7 @@ import {
   normalizeModelPlacements
 } from '../../shared/benchmark-schema'
 import { MAX_LOCAL_API_PORT, MIN_LOCAL_API_PORT } from '../../shared/local-api'
+import { isUiLanguageSetting } from '../../shared/i18n'
 
 /** Upper bound on any persisted string[] setting so a buggy/hostile renderer can't bloat the
  *  encrypted settings blob (`skillInfoSeen` is the shipping case; the element-wise validation
@@ -211,7 +212,10 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue
-    if (key === 'uiLanguage' && value !== 'system' && value !== 'en' && value !== 'de') continue
+    // uiLanguage: 'system' or a language this build registers. The READ path stays tolerant on
+    // purpose: a value a newer build wrote (a shared drive) resolves like 'system' and its row
+    // is kept, so going back to that build still finds the choice (i18n record §3.2).
+    if (key === 'uiLanguage' && !isUiLanguageSetting(value)) continue
     upsert.run(key, JSON.stringify(toStore), now)
   }
   return getSettings(db)

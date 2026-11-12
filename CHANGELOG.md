@@ -25,7 +25,24 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Changed
+
+- **You now choose the interface language from a drop-down list.** Settings → General → Language used to
+  show System, English and Deutsch as three buttons side by side; it is now a list, with room for
+  more languages. The choices and how they work are unchanged, and a change still applies right
+  away.
+
+### Fixed
+
+- **Unlock and setup errors now appear in the language the lock screen shows.** If the language
+  you chose in Settings differs from your operating system's, the lock screen was already in your
+  language, but a wrong password or a problem opening or creating the workspace was reported in
+  the operating system's language. These messages now match the rest of the screen. Two rare
+  refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
+  unencrypted one) are still shown in English.
+- **A computer with one processor core now reads "(1 core)".** The hardware details in Settings →
+  Diagnostics and on the Performance screen, and the reports their Copy buttons make, said
+  "(1 cores)" next to the processor on such a machine (German: "(1 Kerne)").
 
 ## [0.1.65] — 2026-11-11
 

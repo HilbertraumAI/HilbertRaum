@@ -39,7 +39,7 @@ import { appendMessage, createConversation, generateAssistantMessage, listMessag
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { PrivacyPolicy, WorkspaceActionResult } from '../../src/shared/types'
+import { MIN_PASSWORD_LENGTH, type PrivacyPolicy, type WorkspaceActionResult } from '../../src/shared/types'
 import {
   WorkspaceController,
   vaultPathsFrom,
@@ -47,8 +47,19 @@ import {
   unlockEncryptedVault,
   lockEncryptedVault,
   encryptFile,
+  VaultRecoveryBlockedError,
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
+import { SCHEMA_VERSION } from '../../src/main/services/db'
+import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
+import { UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
+import {
+  CREATE_FAILURE_KEYS,
+  UNLOCK_FAILURE_KEYS,
+  type WorkspaceFailureReason
+} from '../../src/shared/workspace-failure-keys'
+import { catalogOf } from '../helpers/i18n-catalogs'
+import { openRawDb } from '../helpers/db-fixtures'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -69,6 +80,19 @@ function freshVault(): VaultPaths {
   mkdirSync(join(root, 'config'), { recursive: true })
   mkdirSync(join(root, 'workspace'), { recursive: true })
   return vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'hilbertraum.sqlite') })
+}
+
+/** #208's on-disk state: the password verifies and `.enc` authenticates, but it holds our own
+ *  encryption of pure noise under the real key, not a database. */
+function damagedVault(password: string): VaultPaths {
+  const vp = freshVault()
+  createEncryptedVaultOnDisk(vp, password, FAST_KDF)
+  const { db, key } = unlockEncryptedVault(vp, password)
+  lockEncryptedVault(vp, db, key)
+  const noise = `${vp.dbPath}.noise-src`
+  writeFileSync(noise, randomBytes(64 * 1024))
+  encryptFile(noise, vp.encPath, key)
+  return vp
 }
 
 function ctxWith(
@@ -115,6 +139,57 @@ describe('registerWorkspaceIpc', () => {
     ctrl.lock()
   })
 
+  // Main's own floors, at the boundary. The gate and the Settings card hold the same
+  // MIN_PASSWORD_LENGTH (WorkspaceGate.test.tsx, ChangePassword.test.tsx), so they never send
+  // main a password one short of it; only these rows reach main's checks there.
+  it('create refuses an encrypted password one short of MIN_PASSWORD_LENGTH and creates one at it', async () => {
+    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    registerWorkspaceIpc(ctxWith(ctrl))
+    const short = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH - 1), 'encrypted')
+    expect(short.result).toEqual({
+      ok: false,
+      reason: 'refused',
+      message: tMain('main.workspace.passwordTooShort', { min: MIN_PASSWORD_LENGTH })
+    })
+    expect(ctrl.isUnlocked()).toBe(false)
+    const atFloor = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH), 'encrypted')
+    expect(atFloor.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
+    ctrl.lock()
+  })
+
+  it('change password refuses a new password one short of MIN_PASSWORD_LENGTH and takes one at it', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    registerWorkspaceIpc(ctxWith(ctrl))
+    try {
+      const short = await invoke(
+        handlers,
+        IPC.changeWorkspacePassword,
+        'right-password',
+        'a'.repeat(MIN_PASSWORD_LENGTH - 1)
+      )
+      expect(short.result).toEqual({
+        ok: false,
+        reason: 'refused',
+        message: tMain('main.workspace.newPasswordTooShort', { min: MIN_PASSWORD_LENGTH })
+      })
+      // The refusal left the vault alone: the current password still verifies for the change at the floor.
+      const atFloor = await invoke(
+        handlers,
+        IPC.changeWorkspacePassword,
+        'right-password',
+        'a'.repeat(MIN_PASSWORD_LENGTH)
+      )
+      expect(atFloor.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
+    } finally {
+      ctrl.lock()
+    }
+  })
+
   it('maps a wrong password to { ok:false, reason:"wrong_password" } instead of throwing', async () => {
     const vp = freshVault()
     createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF) // descriptor uses FAST params
@@ -133,15 +208,7 @@ describe('registerWorkspaceIpc', () => {
   // looked like a forgotten password across three releases, and the troubleshooting step
   // that suggests ("create a new workspace") erases the recovery evidence.
   it('maps a damaged vault to { ok:false, reason:"vault_damaged" }, distinct from wrong_password', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const { db, key } = unlockEncryptedVault(vp, 'right-password')
-    lockEncryptedVault(vp, db, key)
-    // The incident's on-disk state: our own encryption of pure noise, under the real key.
-    const noise = `${vp.dbPath}.noise-src`
-    writeFileSync(noise, randomBytes(64 * 1024))
-    encryptFile(noise, vp.encPath, key)
-
+    const vp = damagedVault('right-password')
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctrl.init()
     registerWorkspaceIpc(ctxWith(ctrl))
@@ -596,4 +663,164 @@ describe('registerWorkspaceIpc', () => {
       ctrl.lock()
     }
   })
+})
+
+// UI-languages owner call D-17 (a), and the wave's code review: the first-run gate shows a
+// failed unlock or create in ITS language, from `reason`, with the key its tables
+// (`shared/workspace-failure-keys.ts`) hold: a copy of the choice each branch of the handlers
+// makes. The gate's own rows stub main's answer, so main moving a reason to another key would turn
+// nothing red there while the gate kept showing the old copy. These rows drive the REAL handlers
+// into every branch that answers each reason and hold main's `message` against the gate's table,
+// once for every language main can speak (equal text in all of them stands in for the same key).
+// Where a table holds `null` the gate shows main's `message` as it came, which keeps the screen in
+// one language only while that message is free text: the same in every language, and no catalog
+// value.
+describe('main’s unlock/create failure copy is the copy the gate’s tables pick (UI-languages owner call D-17 (a))', () => {
+  type Call = 'unlock' | 'create'
+  /** One way into a branch of a handler: the workspace it sees and the arguments it gets. */
+  interface Provocation {
+    how: string
+    arrange: () => { workspace: WorkspaceController; args: readonly unknown[] }
+  }
+  /** The call never answers this reason: nothing to drive (the gate's table holds `null`). */
+  const NEVER_SENT = 'never sent'
+  /** Typecheck makes every reason either driven (at least once) or declared never sent. */
+  type Provocations = Record<WorkspaceFailureReason, readonly [Provocation, ...Provocation[]] | typeof NEVER_SENT>
+
+  const PW = 'right-password'
+  const startedOn = (vp: VaultPaths, policy = ENCRYPTION_REQUIRED, devMode = false): WorkspaceController => {
+    const ctrl = new WorkspaceController(vp, policy, devMode)
+    ctrl.init()
+    return ctrl
+  }
+  const lockedVault = (): VaultPaths => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, PW, FAST_KDF)
+    return vp
+  }
+  /** Databases a newer build stamped (#247, as in workspace-newer.test.ts). */
+  const newerVault = (): VaultPaths => {
+    const vp = lockedVault()
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1};`)
+    lockEncryptedVault(vp, db, key)
+    return vp
+  }
+  const newerPlaintext = (): VaultPaths => {
+    const vp = freshVault()
+    const raw = openRawDb(vp.dbPath)
+    raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1};`)
+    raw.close()
+    return vp
+  }
+
+  const UNLOCK: Provocations = {
+    wrong_password: [
+      { how: 'a wrong password', arrange: () => ({ workspace: startedOn(lockedVault()), args: ['wrong-password'] }) },
+      {
+        how: 'a password that is not a string',
+        arrange: () => ({ workspace: startedOn(lockedVault()), args: [{ evil: true }] })
+      }
+    ],
+    vault_damaged: [
+      { how: 'a vault that decrypts to noise', arrange: () => ({ workspace: startedOn(damagedVault(PW)), args: [PW] }) }
+    ],
+    // A real hold takes an `fs` mock (vault-recovery-guards.test.ts drives one into this handler);
+    // the handler only sees the controller's typed refusal, so a workspace whose unlock throws it
+    // reaches the same branch.
+    vault_recovery_blocked: [
+      {
+        how: 'a recovery file another program holds',
+        arrange: () => ({
+          workspace: {
+            unlock: () => {
+              throw new VaultRecoveryBlockedError()
+            }
+          } as unknown as WorkspaceController,
+          args: [PW]
+        })
+      }
+    ],
+    workspace_newer: [
+      { how: 'a database a newer build stamped', arrange: () => ({ workspace: startedOn(newerVault()), args: [PW] }) }
+    ],
+    refused: NEVER_SENT,
+    error: [{ how: 'no vault to unlock', arrange: () => ({ workspace: startedOn(freshVault()), args: [PW] }) }]
+  }
+
+  const CREATE: Provocations = {
+    wrong_password: NEVER_SENT,
+    vault_damaged: NEVER_SENT,
+    vault_recovery_blocked: NEVER_SENT,
+    workspace_newer: [
+      {
+        how: 'a plaintext database a newer build stamped',
+        arrange: () => ({ workspace: startedOn(newerPlaintext(), DEFAULT_POLICY, true), args: ['', 'plaintext_dev'] })
+      }
+    ],
+    // Not a row: main's too-short refusal (a password under MIN_PASSWORD_LENGTH, or not a string),
+    // which does carry a catalog sentence. The gate never sends one (WorkspaceGate.test.tsx,
+    // "enables Create exactly at the shared floor main enforces").
+    refused: [
+      {
+        how: 'a plaintext workspace the policy forbids',
+        arrange: () => ({
+          workspace: startedOn(freshVault(), ENCRYPTION_REQUIRED, true),
+          args: ['whatever8', 'plaintext_dev']
+        })
+      },
+      {
+        how: 'a vault already on the drive',
+        arrange: () => ({ workspace: startedOn(lockedVault()), args: ['longenough', 'encrypted'] })
+      }
+    ],
+    error: [
+      { how: 'an unknown mode', arrange: () => ({ workspace: startedOn(freshVault()), args: ['longenough', 'bogus'] }) },
+      {
+        how: 'a workspace already open',
+        arrange: () => ({ workspace: startedOn(freshVault(), DEFAULT_POLICY, true), args: ['', 'plaintext_dev'] })
+      }
+    ]
+  }
+
+  type Row = [Call, WorkspaceFailureReason, string, Provocation]
+  const rows = (call: Call, provocations: Provocations): Row[] =>
+    Object.entries(provocations).flatMap(([reason, list]) =>
+      list === NEVER_SENT ? [] : list.map((p): Row => [call, reason as WorkspaceFailureReason, p.how, p])
+    )
+  const TABLES: Record<Call, Record<WorkspaceFailureReason, MessageKey | null>> = {
+    unlock: UNLOCK_FAILURE_KEYS,
+    create: CREATE_FAILURE_KEYS
+  }
+  const CHANNELS: Record<Call, string> = { unlock: IPC.unlockWorkspace, create: IPC.createWorkspace }
+  const catalogValues = new Set(UI_LANGUAGE_CODES.flatMap((code) => Object.values(catalogOf(code))))
+
+  it.each([...rows('unlock', UNLOCK), ...rows('create', CREATE)])(
+    '%s %s (%s): main says what the gate shows, in every language main speaks',
+    async (call, reason, _how, provocation) => {
+      const { workspace, args } = provocation.arrange()
+      registerWorkspaceIpc(ctxWith(workspace))
+      const key = TABLES[call][reason]
+      const before = mainUiLanguage()
+      const messages: string[] = []
+      try {
+        for (const code of UI_LANGUAGE_CODES) {
+          applyUiLanguageSetting(code)
+          const { result } = await invoke(handlers, CHANNELS[call], ...args)
+          expect(result).toMatchObject({ ok: false, reason })
+          const { message } = result as Extract<WorkspaceActionResult, { ok: false }>
+          if (key !== null) expect(message, code).toBe(tMain(key))
+          messages.push(message)
+        }
+      } finally {
+        applyUiLanguageSetting(before)
+        if (workspace instanceof WorkspaceController) workspace.shutdown()
+      }
+      if (key === null) {
+        // Free text: one sentence whatever language main speaks, and none the catalogs hold.
+        expect(new Set(messages).size).toBe(1)
+        expect(catalogValues.has(messages[0])).toBe(false)
+      }
+    }
+  )
 })

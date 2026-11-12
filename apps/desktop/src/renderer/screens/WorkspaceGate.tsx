@@ -12,7 +12,18 @@ import {
   passwordStrength
 } from '../components'
 import { useT } from '../i18n'
-import type { ModelVerifyProgress, WorkspaceStateInfo } from '@shared/types'
+import type { MessageKey } from '@shared/i18n'
+import {
+  MIN_PASSWORD_LENGTH,
+  type ModelVerifyProgress,
+  type WorkspaceActionResult,
+  type WorkspaceStateInfo
+} from '@shared/types'
+import {
+  CREATE_FAILURE_KEYS,
+  UNLOCK_FAILURE_KEYS,
+  type WorkspaceFailureReason
+} from '@shared/workspace-failure-keys'
 
 // The password field + strength meter live in `components/PasswordField`
 // (the Settings "Change password" card reuses them); re-exported here so existing
@@ -48,6 +59,22 @@ interface Props {
 type LandOn = 'chat' | 'models' | 'documents'
 
 type CreatePhase = 'welcome' | 'password' | 'finishing' | 'starter'
+
+type Failure = Extract<WorkspaceActionResult, { ok: false }>
+
+// A failed unlock or create renders in the GATE's language (UI-languages owner call D-17 (a)):
+// the copy for each `reason` comes from the tables in `shared/workspace-failure-keys.ts`, which
+// say why and which test ties them to main's handlers.
+function failureText(
+  keys: Record<WorkspaceFailureReason, MessageKey | null>,
+  failure: Failure,
+  t: (key: MessageKey) => string
+): string {
+  // An own-property read: `reason` comes over IPC, and one naming an inherited member
+  // (`toString`, `constructor`) would otherwise resolve to a function and garble the banner.
+  const key = Object.hasOwn(keys, failure.reason) ? keys[failure.reason] : null
+  return key === null ? failure.message : t(key)
+}
 
 export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const creating = state.state === 'uninitialized'
@@ -95,7 +122,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const canSubmit = creating
     ? mode === 'plaintext_dev'
       ? true
-      : password.length >= 8 && password === confirm
+      : password.length >= MIN_PASSWORD_LENGTH && password === confirm
     : password.length > 0
 
   function finish(next: WorkspaceStateInfo, landOn: LandOn): void {
@@ -155,7 +182,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         if (result.ok) {
           await completeCreate(result.state)
         } else {
-          setError(result.message)
+          setError(failureText(CREATE_FAILURE_KEYS, result, t))
           setPassword('')
           setConfirm('')
           passwordInputRef.current?.focus() // SH-12: focus back to the field for the retry
@@ -165,7 +192,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         if (result.ok) {
           onUnlocked(result.state)
         } else {
-          setError(result.message)
+          setError(failureText(UNLOCK_FAILURE_KEYS, result, t))
           setPassword('')
           // SH-12 (#145): without this, focus stays on the now-disabled submit button —
           // combined with a missed announcement the failure was entirely non-obvious to AT.

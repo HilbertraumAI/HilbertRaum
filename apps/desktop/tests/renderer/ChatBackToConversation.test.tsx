@@ -6,6 +6,7 @@ import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { en, t } from '../../src/shared/i18n'
 import type { Message } from '../../src/shared/types'
 import { UNLOCKED_DEV_WORKSPACE } from '../helpers/app-shell'
+import { LAZY_SCREEN_WAIT } from '../helpers/hang-budget'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { appStatus, makePolicyStatus, preflightResult } from '../helpers/status'
 import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
@@ -138,7 +139,7 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
     fireEvent.click(await screen.findByRole('button', { name: /^Contract chat/ }))
     await screen.findByText(/90 days notice/)
     fireEvent.click(screen.getByRole('button', { name: t('en', 'review.action.start') }))
-    await screen.findByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') })
+    await screen.findByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') }, LAZY_SCREEN_WAIT)
 
     // Back → the slot fires ONCE: c1 comes back as the active conversation.
     fireEvent.click(screen.getByRole('button', { name: `‹ ${t('en', 'review.back')}` }))
@@ -149,7 +150,7 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
     fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.documents') }))
     const checkbox = await screen.findByRole('checkbox', {
       name: t('en', 'docs.selectAria', { title: 'contract.pdf' })
-    })
+    }, LAZY_SCREEN_WAIT)
     fireEvent.click(checkbox)
     listMessages.mockClear()
     fireEvent.click(screen.getByRole('button', { name: t('en', 'docs.askSelected', { count: 1 }) }))
@@ -213,7 +214,7 @@ describe('App — "Back to chat" after a failed attachment sent the user to Docu
     await waitFor(() => expect(conversationRow('Scan chat')).toHaveAttribute('aria-current', 'true'))
     bridge.drop(chatMain(), 'scan.pdf', '/tmp/scan.pdf')
     fireEvent.click(await screen.findByRole('button', { name: t('en', 'chat.attach.goToDocuments') }))
-    await screen.findByRole('heading', { name: t('en', 'docs.title') })
+    await screen.findByRole('heading', { name: t('en', 'docs.title') }, LAZY_SCREEN_WAIT)
   }
 
   it('the pointer → Documents → Back to chat reopens the conversation the file was attached in', async () => {
@@ -232,7 +233,7 @@ describe('App — "Back to chat" after a failed attachment sent the user to Docu
     const nav = await screen.findByRole('navigation')
 
     fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.documents') }))
-    await screen.findByRole('heading', { name: t('en', 'docs.title') })
+    await screen.findByRole('heading', { name: t('en', 'docs.title') }, LAZY_SCREEN_WAIT)
     expect(screen.queryByRole('button', { name: backLabel })).not.toBeInTheDocument()
 
     // Armed by the pointer, then the rail's Chat: the plain chat-home landing, unchanged…

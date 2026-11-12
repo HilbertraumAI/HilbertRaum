@@ -7,6 +7,7 @@ import type { Conversation, Message } from '../../src/shared/types'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { appShellStubs } from '../helpers/app-shell'
 import { modelsScreenStubs } from '../helpers/model-fixtures'
+import { LAZY_SCREEN_WAIT } from '../helpers/hang-budget'
 import { stubApi } from '../helpers/renderer'
 import { appStatus, runtimeStatus } from '../helpers/status'
 import { makeDetail } from '../helpers/evidenceReview'
@@ -50,7 +51,7 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
 
     // …then the chunk resolves and the real screen replaces the fallback.
     expect(
-      await screen.findByRole('heading', { name: t('en', 'models.title') })
+      await screen.findByRole('heading', { name: t('en', 'models.title') }, LAZY_SCREEN_WAIT)
     ).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'app.loadingScreen'))).not.toBeInTheDocument()
   })
@@ -110,7 +111,7 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
 
     // …then the review workspace replaces it, created via the idempotent evidence create.
     expect(
-      await screen.findByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') })
+      await screen.findByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') }, LAZY_SCREEN_WAIT)
     ).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'app.loadingScreen'))).not.toBeInTheDocument()
 

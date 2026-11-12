@@ -4,9 +4,10 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
-import { t } from '../../src/shared/i18n'
+import { t, type UiLanguage } from '../../src/shared/i18n'
 import type { EvidenceExportRecord } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { renderInLanguage } from '../helpers/render-language'
 import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 
 // EP-1 Phase 3 (plan §8.4) — the summary's export surface: the "Create evidence pack"
@@ -24,6 +25,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  window.localStorage.clear()
   assertNoUnexpectedApiCalls()
 })
 
@@ -43,16 +45,16 @@ function makeExportRecord(over: Partial<EvidenceExportRecord> = {}): EvidenceExp
   }
 }
 
-async function openSummary(): Promise<HTMLElement> {
+async function openSummary(lang: UiLanguage = 'en'): Promise<HTMLElement> {
   // findByRole waits for the open-session load to resolve (the footer renders only once
   // the detail is in the store).
-  fireEvent.click(await screen.findByRole('button', { name: t('en', 'review.footer.summary') }))
+  fireEvent.click(await screen.findByRole('button', { name: t(lang, 'review.footer.summary') }))
   return await screen.findByRole('dialog')
 }
 
-async function openExportPanel(dialog: HTMLElement): Promise<void> {
-  fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.export.action') }))
-  await within(dialog).findByText(t('en', 'review.export.encryptionWarning'))
+async function openExportPanel(dialog: HTMLElement, lang: UiLanguage = 'en'): Promise<void> {
+  fireEvent.click(within(dialog).getByRole('button', { name: t(lang, 'review.export.action') }))
+  await within(dialog).findByText(t(lang, 'review.export.encryptionWarning'))
 }
 
 describe('summary export panel (plan §8.4)', () => {
@@ -137,6 +139,30 @@ describe('summary export panel (plan §8.4)', () => {
     expect(
       within(dialog).queryByText(t('en', 'review.export.encryptionWarning'))
     ).not.toBeInTheDocument()
+  })
+
+  // UI-languages owner call D-5 (b): the panel sends the pack language `packLanguageFor` maps
+  // the UI language to, and names it only when it differs. The English row above covers 'en';
+  // a UI language without evidence packs joins when the first one is registered, and the line
+  // is rendered for real then.
+  it('a German UI exports a German pack and shows no pack-language line', async () => {
+    const exportEvidencePack = vi.fn(async () => makeExportRecord())
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
+    renderInLanguage(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />, 'de')
+    const dialog = await openSummary('de')
+    await openExportPanel(dialog, 'de')
+
+    for (const key of ['review.export.packLanguage.en', 'review.export.packLanguage.de'] as const) {
+      expect(within(dialog).queryByText(t('de', key))).not.toBeInTheDocument()
+    }
+    fireEvent.click(within(dialog).getByRole('button', { name: t('de', 'review.export.confirm') }))
+    await waitFor(() =>
+      expect(exportEvidencePack).toHaveBeenCalledWith('r1', {
+        ...EVIDENCE_PACK_OPTION_DEFAULTS,
+        language: 'de',
+        format: 'html'
+      })
+    )
   })
 
   it('cancel (null result) keeps the panel open with NO history row and NO error', async () => {

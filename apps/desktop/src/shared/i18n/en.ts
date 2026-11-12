@@ -1442,7 +1442,11 @@ export const en = {
   'models.tech.minRam': 'Minimum RAM',
   'models.tech.recRam': 'Recommended RAM',
   'models.tech.context': 'Context window',
-  'models.tech.contextValue': '{count} tokens',
+  // Context-size figures are plural pairs (UI languages wave): the raw token count picks the
+  // form and the locale-grouped figure is passed as `{count}`. English and German use one text
+  // for both; Russian inflects the noun ("8 192 токена", "4 096 токенов").
+  'models.tech.contextValue.one': '{count} tokens',
+  'models.tech.contextValue.other': '{count} tokens',
   'models.tech.file': 'File',
   // ---- Context-size picker (2026-07-04 user report — the truncation hint points here) ----
   'models.context.title': 'Context size',
@@ -1450,7 +1454,8 @@ export const en = {
   'models.context.auto': 'Automatic — the model’s recommended size',
   // Issue #43: "Auto" names its resolved number for the active model — it is often the
   // largest choice in the list, and an unlabeled "Auto" read as a small default.
-  'models.context.autoResolved': 'Automatic — the model’s recommended size ({count} tokens)',
+  'models.context.autoResolved.one': 'Automatic — the model’s recommended size ({count} tokens)',
+  'models.context.autoResolved.other': 'Automatic — the model’s recommended size ({count} tokens)',
   'models.context.bigWarning':
     'Very large windows need a lot of extra memory while the model runs. On smaller ' +
     'machines the model may fail to start or answer much slower — if that happens, pick ' +
@@ -1526,6 +1531,7 @@ export const en = {
     'always follows the system theme.',
   'settings.language.title': 'Language',
   'settings.language.aria': 'Language',
+  'settings.language.system': 'System',
   'settings.language.hint':
     '“System” follows your operating system’s language: German systems use Deutsch, ' +
     'everything else uses English. Changes apply right away.',
@@ -2096,7 +2102,10 @@ export const en = {
   'perf.tile.memory.unified': 'Unified memory',
   'perf.tile.memory.unifiedSub': 'Shared by the processor and the graphics cores',
   'perf.model.title': 'Your model',
-  'perf.model.line': '{model} · {size} GB on disk · {context}-token context',
+  // A plural pair on the raw context size, like `models.tech.contextValue`; the grouped figure
+  // stays `{context}` (the forms read the same in English).
+  'perf.model.line.one': '{model} · {size} GB on disk · {context}-token context',
+  'perf.model.line.other': '{model} · {size} GB on disk · {context}-token context',
   'perf.model.none': 'No model selected yet. Pick one on the AI Model screen.',
   'perf.model.need': 'Takes {need} GB with this context.',
   'perf.model.needEstimate':
@@ -2139,7 +2148,10 @@ export const en = {
   // The stored measurement describes a start with a DIFFERENT context size, or a GPU start on a
   // configuration that now forces the processor: the verdict above it is the estimate for the
   // current settings, and this dates the measurement rather than letting the two contradict.
-  'perf.model.measuredOther':
+  // A plural pair on the raw context size, like `perf.model.line`.
+  'perf.model.measuredOther.one':
+    'Measured earlier with a {context}-token context on {when}; the estimate above is for the current settings.',
+  'perf.model.measuredOther.other':
     'Measured earlier with a {context}-token context on {when}; the estimate above is for the current settings.',
   // The active model is on the card RIGHT NOW (the runtime reports the GPU rung and the placement
   // evidence says the card): tells "still running there" from "measured earlier" once the GPU
@@ -2311,7 +2323,9 @@ export const en = {
   'diag.bench.noMatch': 'No matching model',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',
-  'diag.bench.cores': ' ({count} cores)',
+  // A plural pair so a single-core machine reads "(1 core)" (UI-languages owner call D-11 (a)).
+  'diag.bench.cores.one': ' ({count} core)',
+  'diag.bench.cores.other': ' ({count} cores)',
   'diag.bench.osArch': 'OS / arch',
   'diag.bench.gpu': 'GPU',
   'diag.bench.notDetected': 'not detected',
@@ -3794,6 +3808,11 @@ export const en = {
   // the macOS save sheet via the dialog `message`).
   'review.export.encryptionWarning':
     'This exported file is stored outside the encrypted HilbertRaum workspace and is not protected by your workspace password.',
+  // Shown only when the pack's language differs from the UI language (`packLanguageLineKey`,
+  // i18n record D-L11). One full sentence per pack language, never a `{language}` slot:
+  // a language name inside a sentence needs case and lower-casing in ru/fr/es/it.
+  'review.export.packLanguage.en': 'This pack will be written in English.',
+  'review.export.packLanguage.de': 'This pack will be written in German.',
   'review.export.options': 'Include in the pack',
   'review.export.optNotes': 'Reviewer notes',
   'review.export.optExcerpts': 'Source excerpts',

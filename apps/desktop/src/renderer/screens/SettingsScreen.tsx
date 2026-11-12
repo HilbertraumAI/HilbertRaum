@@ -17,8 +17,8 @@ import { PrivacyTab } from './settings/PrivacyTab'
 import { DiagnosticsTab } from './settings/DiagnosticsTab'
 import { SkillsTab } from './settings/SkillsTab'
 import type { SettingsTab } from '../navigation'
-import type { MessageKey, UiLanguageSetting } from '@shared/i18n'
-import type { AppSettings, ThemeSetting } from '@shared/types'
+import { UI_LANGUAGES, isUiLanguageSetting, type MessageKey } from '@shared/i18n'
+import { MIN_PASSWORD_LENGTH, type AppSettings, type ThemeSetting } from '@shared/types'
 import { CPU_HI_MIN_THREADS } from '@shared/rerank-rules'
 
 // Settings (guidelines §2): one utility destination with four tabs.
@@ -43,15 +43,6 @@ const THEME_CHOICES: Array<{ value: ThemeSetting; labelKey: MessageKey }> = [
   { value: 'system', labelKey: 'settings.appearance.system' },
   { value: 'light', labelKey: 'settings.appearance.light' },
   { value: 'dark', labelKey: 'settings.appearance.dark' }
-]
-
-// Language names stay UNTRANSLATED (i18n record §3.3, standard practice): a German
-// speaker stuck on an English UI must still recognize „Deutsch“ — and "System" is
-// the same word in both languages.
-const LANGUAGE_CHOICES: Array<{ value: UiLanguageSetting; label: string }> = [
-  { value: 'system', label: 'System' },
-  { value: 'en', label: 'English' },
-  { value: 'de', label: 'Deutsch' }
 ]
 
 export interface SettingsScreenProps {
@@ -166,12 +157,29 @@ function GeneralTab(): JSX.Element {
 
       <div className="card">
         <h2>{t('settings.language.title')}</h2>
-        <SegmentedControl
-          options={LANGUAGE_CHOICES}
+        {/* A native <select> (guidelines §6, the shared `.select` class): the choices are
+            *System*, then every registered language in registry order, so registering a
+            language is all it takes to offer it. Language names stay in their own language
+            (i18n record §3.3, standard practice): someone stuck on a UI they can't read must
+            still find their way back, the way a German speaker on an English UI recognizes
+            „Deutsch“. Only the *System* label is translated, because it names no language. */}
+        <select
+          className="select"
+          aria-label={t('settings.language.aria')}
           value={settings.uiLanguage}
-          onChange={(uiLanguage) => void patch({ uiLanguage })}
-          ariaLabel={t('settings.language.aria')}
-        />
+          onChange={(e) => {
+            // A <select>'s value is a plain string: save only a registered setting.
+            const uiLanguage = e.target.value
+            if (isUiLanguageSetting(uiLanguage)) void patch({ uiLanguage })
+          }}
+        >
+          <option value="system">{t('settings.language.system')}</option>
+          {UI_LANGUAGES.map((info) => (
+            <option key={info.code} value={info.code} lang={info.code}>
+              {info.nativeName}
+            </option>
+          ))}
+        </select>
         <p className="hint">{t('settings.language.hint')}</p>
       </div>
 
@@ -279,9 +287,11 @@ function ChangePasswordCard(): JSX.Element {
   const { t } = useT()
 
   const strength = passwordStrength(next)
-  // The strength meter is advisory; only the 8-character floor + the confirm match
-  // (and the main process's own checks) gate submission — the WorkspaceGate rules.
-  const canSubmit = current.length > 0 && next.length >= 8 && next === confirm && !busy
+  // The strength meter is advisory; only the MIN_PASSWORD_LENGTH floor (the one main refuses
+  // under) + the confirm match (and the main process's own checks) gate submission — the
+  // WorkspaceGate rules.
+  const canSubmit =
+    current.length > 0 && next.length >= MIN_PASSWORD_LENGTH && next === confirm && !busy
 
   async function submit(e: React.FormEvent): Promise<void> {
     e.preventDefault()

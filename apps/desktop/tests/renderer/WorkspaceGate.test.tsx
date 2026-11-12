@@ -3,14 +3,16 @@ import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate, passwordStrength } from '../../src/renderer/screens/WorkspaceGate'
-import { t } from '../../src/shared/i18n'
-import type {
-  WorkspaceStateInfo,
-  WorkspaceActionResult,
-  ModelInfo,
-  ModelVerifyProgress
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
+import {
+  MIN_PASSWORD_LENGTH,
+  type WorkspaceStateInfo,
+  type WorkspaceActionResult,
+  type ModelInfo,
+  type ModelVerifyProgress
 } from '../../src/shared/types'
 import { modelInfo } from '../helpers/model-fixtures'
+import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the pre-app gate. Phase 27 turned the CREATE path
@@ -64,6 +66,22 @@ describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', (
     expect(label('sixteen long pwd')).toBe('Strong')
     expect(label('C0rrect-horse-battery!')).toBe('Very strong')
   })
+
+  // "Too short" must mean "under the floor main refuses", or the meter and the submit button
+  // disagree the day the floor moves (a copy of the literal 8 did, until the UI languages wave's code review).
+  it('calls a password too short exactly below the shared floor (MIN_PASSWORD_LENGTH)', () => {
+    expect(label('a'.repeat(MIN_PASSWORD_LENGTH - 1))).toBe('Too short')
+    expect(label('a'.repeat(MIN_PASSWORD_LENGTH))).not.toBe('Too short')
+  })
+
+  // The hint under a too-short password writes the floor as a figure ("Use at least 8
+  // characters."), in every catalog: a moved floor, or a translation that drops the figure, would
+  // otherwise leave the hint naming a length main doesn't enforce.
+  it.each(UI_LANGUAGE_CODES)('%s: the too-short hint names the shared floor (MIN_PASSWORD_LENGTH)', (code) => {
+    const hintKey = passwordStrength('a'.repeat(MIN_PASSWORD_LENGTH - 1)).hintKey
+    expect(hintKey).not.toBeNull()
+    expect(t(code, hintKey!)).toMatch(new RegExp(`(^|\\D)${MIN_PASSWORD_LENGTH}(\\D|$)`))
+  })
 })
 
 describe('WorkspaceGate — create (3-step first run)', () => {
@@ -109,6 +127,25 @@ describe('WorkspaceGate — create (3-step first run)', () => {
 
     await user.clear(screen.getByPlaceholderText('Confirm password'))
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+    expect(create).toBeEnabled()
+  })
+
+  // The floor is main's (`registerWorkspaceIpc` refuses under it), so main's too-short refusal
+  // can never answer this gate; `workspace-ipc.test.ts`'s gate cross-check relies on that.
+  it('enables Create exactly at the shared floor main enforces (MIN_PASSWORD_LENGTH)', async () => {
+    const user = userEvent.setup()
+    stubApi({})
+    render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
+    await toPasswordStep(user)
+
+    const create = screen.getByRole('button', { name: /create workspace/i })
+    const belowFloor = 'a'.repeat(MIN_PASSWORD_LENGTH - 1)
+    await user.type(screen.getByPlaceholderText('Password'), belowFloor)
+    await user.type(screen.getByPlaceholderText('Confirm password'), belowFloor)
+    expect(create).toBeDisabled()
+
+    await user.type(screen.getByPlaceholderText('Password'), 'a')
+    await user.type(screen.getByPlaceholderText('Confirm password'), 'a')
     expect(create).toBeEnabled()
   })
 
@@ -389,5 +426,66 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
 
     expect(await screen.findByText(/didn.t unlock your workspace/i)).toBeInTheDocument()
     expect(onUnlocked).not.toHaveBeenCalled()
+  })
+})
+
+// UI-languages owner call D-17 (a): before unlock the gate renders in the localStorage mirror's
+// language, while main emits its failure `message` in its own cached language (the OS locale
+// until settings are readable). Every row renders the gate in German and lets main answer in
+// English, so a gate that showed `message` for a mapped reason turns its row red.
+describe('WorkspaceGate — unlock/create failures render in the gate’s language (UI-languages owner call D-17 (a))', () => {
+  type Failure = Extract<WorkspaceActionResult, { ok: false }>
+
+  afterEach(() => window.localStorage.clear())
+
+  /** Render the gate in German, submit once, and have main answer with `failure`. */
+  async function failIn(call: 'unlock' | 'create', failure: Failure): Promise<void> {
+    const user = userEvent.setup()
+    const answer = vi.fn(async (): Promise<WorkspaceActionResult> => failure)
+    stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
+    renderInLanguage(
+      <WorkspaceGate state={call === 'unlock' ? LOCKED : UNINITIALIZED} onUnlocked={vi.fn()} />,
+      'de'
+    )
+    if (call === 'unlock') {
+      await user.type(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder')), 'nope')
+      await user.click(screen.getByRole('button', { name: t('de', 'gate.unlock.submit') }))
+    } else {
+      // A valid encrypted password, as the gate always sends: main's too-short refusal can't
+      // be the answer, so a `refused` here is the vault's own sentence.
+      await user.click(screen.getByRole('button', { name: t('de', 'gate.welcome.start') }))
+      const password = await screen.findByPlaceholderText(t('de', 'gate.passwordPlaceholder'))
+      await user.type(password, 'longenough')
+      await user.type(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder')), 'longenough')
+      await user.click(screen.getByRole('button', { name: t('de', 'gate.create.submit') }))
+      expect(answer).toHaveBeenCalledWith('longenough', 'encrypted')
+    }
+  }
+
+  it.each([
+    ['unlock', 'wrong_password', 'main.workspace.wrongPassword'],
+    ['unlock', 'vault_damaged', 'main.workspace.vaultDamaged'],
+    ['unlock', 'vault_recovery_blocked', 'main.workspace.recoveryBlocked'],
+    ['unlock', 'workspace_newer', 'main.workspace.newer'],
+    ['unlock', 'error', 'main.workspace.openFailed'],
+    ['create', 'workspace_newer', 'main.workspace.newer'],
+    ['create', 'error', 'main.workspace.createFailed']
+  ] as const)('%s %s shows %s in German although main said it in English', async (call, reason, key) => {
+    await failIn(call, { ok: false, reason, message: t('en', key) })
+    expect(await screen.findByText(t('de', key))).toBeInTheDocument()
+  })
+
+  it.each([
+    // The vault's own refusal sentence: no catalog key, raw English in every UI language today.
+    ['create', 'refused', 'An encrypted workspace already exists here — refusing to overwrite it.'],
+    // A reason neither table has. The tables are typecheck-complete, so only a cast gets here;
+    // the gate still says what main said instead of showing an empty banner.
+    ['unlock', 'not_in_the_tables' as string as Failure['reason'], 'Something new went wrong.'],
+    // A reason naming an inherited member: a plain `keys[reason]` read finds a function there
+    // (found in the UI languages wave's code review).
+    ['unlock', 'toString' as string as Failure['reason'], 'Something else went wrong.']
+  ] as const)('%s %s shows main’s own message', async (call, reason, message) => {
+    await failIn(call, { ok: false, reason, message })
+    expect(await screen.findByText(message)).toBeInTheDocument()
   })
 })

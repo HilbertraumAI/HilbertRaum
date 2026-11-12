@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { Button } from './Button'
 import { englishTranslator, type Translator } from './translator'
 import type { MessageKey } from '@shared/i18n'
+import { MIN_PASSWORD_LENGTH } from '@shared/types'
 
 // Password input + advisory strength meter, shared by the first-run flow
 // (WorkspaceGate) and the Settings "Change password" card so the behavior stays
@@ -21,11 +22,12 @@ export interface PasswordStrength {
 /**
  * Hand-rolled, honest password-strength hint (no external library — fully offline).
  * Length carries most of the weight; character variety adds one step. It is a HINT:
- * only the 8-character floor and the confirm match gate submission.
+ * only the MIN_PASSWORD_LENGTH floor (main's) and the confirm match gate submission, and
+ * "too short" means exactly "under that floor".
  */
 export function passwordStrength(pw: string): PasswordStrength {
   if (pw.length === 0) return { score: 0, labelKey: null, hintKey: null }
-  if (pw.length < 8) {
+  if (pw.length < MIN_PASSWORD_LENGTH) {
     return { score: 1, labelKey: 'password.strength.tooShort', hintKey: 'password.strength.minHint' }
   }
   let score = 1

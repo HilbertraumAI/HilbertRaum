@@ -2,13 +2,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message } from '../../src/shared/types'
+import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message, type RuntimeStatus } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
+import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { chatScreenStubs, conversationRow, deferred, flushFakeTimers, renderChatScreen } from '../helpers/chat-screen'
 import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
+import { renderInLanguage } from '../helpers/render-language'
 import { runtimeStatus } from '../helpers/status'
-import { t } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey, type UiLanguage } from '../../src/shared/i18n'
 import { RUNTIME_POLL_MS } from '../../src/renderer/lib/polling'
 import { clearDocTaskSession, startTask } from '../../src/renderer/lib/doctasks'
 
@@ -374,6 +376,57 @@ describe('ChatScreen — a "model is starting" refusal clears once the model is 
       const alerts = screen.queryAllByRole('alert').map((el) => el.textContent ?? '').join(' ')
       if (stays) expect(alerts).toContain(refusal)
       else expect(alerts).not.toContain(refusal)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // i18n record §3.3 rule 3: main throws the refusal in ITS language (`tMain`), which need not be the one the
+  // screen renders — a language switch between the refusal and the model's return, or main still on the OS
+  // locale. One row per registered language × refusal, the screen rendered in ANOTHER registered language, so
+  // a check against the screen's own language only (the code before the UI languages wave) keeps every row's
+  // banner. The re-read after the refusal is held until the banner is seen: the clear is the status read's
+  // doing, and the foreign text demonstrably reached the banner first.
+  const otherLanguage = (code: UiLanguage): UiLanguage => {
+    const other = UI_LANGUAGE_CODES.find((candidate) => candidate !== code)
+    if (other === undefined) throw new Error('the cross-language rows need two registered languages')
+    return other
+  }
+  it.each(
+    UI_LANGUAGE_CODES.flatMap((code) =>
+      (['main.noModelRunning', 'main.modelStarting'] as const).map(
+        (key): [UiLanguage, MessageKey, UiLanguage] => [code, key, otherLanguage(code)]
+      )
+    )
+  )('main speaks %s: the %s refusal clears on a %s screen once the model is back', async (mainLang, key, screenLang) => {
+    vi.useFakeTimers()
+    try {
+      const refusal = t(mainLang, key)
+      const reread = deferred<RuntimeStatus>()
+      let refused = false
+      const getRuntimeStatus = vi.fn(async () => (refused ? reread.promise : runtimeStatus()))
+      const sendChatMessage = vi.fn(async (): Promise<Message> => {
+        refused = true
+        throw new Error(refusal)
+      })
+      baseStub({ listMessages: vi.fn(async () => []), sendChatMessage, getRuntimeStatus })
+
+      renderInLanguage(<ChatScreen onNavigate={() => {}} />, screenLang)
+      await flushFakeTimers()
+      fireEvent.click(conversationRow('Chat 1'))
+      await flushFakeTimers()
+      fireEvent.change(screen.getByPlaceholderText(t(screenLang, 'chat.placeholder.chat')), {
+        target: { value: 'hello' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: t(screenLang, 'chat.send.send') }))
+      await flushFakeTimers()
+
+      const alerts = (): string => screen.queryAllByRole('alert').map((el) => el.textContent ?? '').join(' ')
+      expect(alerts()).toContain(refusal) // shown verbatim, in main's language, while the re-read is out
+      reread.resolve(runtimeStatus()) // the model is back
+      await flushFakeTimers()
+      expect(screen.getByPlaceholderText(t(screenLang, 'chat.placeholder.chat'))).toBeInTheDocument()
+      expect(alerts()).not.toContain(refusal)
     } finally {
       vi.useRealTimers()
     }

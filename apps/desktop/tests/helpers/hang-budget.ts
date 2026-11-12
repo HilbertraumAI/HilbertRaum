@@ -119,3 +119,18 @@ export async function until(cond: () => boolean, what: string, localMs = 5_000):
     await new Promise<void>((r) => realSetTimeout(r, 1))
   }
 }
+
+/**
+ * The wait options for a testing-library `findBy*` / `waitFor` that has to outlast a LAZY SCREEN's
+ * dynamic import — `await screen.findByRole('heading', { name }, LAZY_SCREEN_WAIT)`. App.tsx's
+ * `lazyScreen` (React `lazy` + `import()`) loads a screen's module on its first mount, and the wait
+ * for anything that screen renders starts before the import has settled. Alone that takes a few
+ * hundred ms, but under full-suite load on a Windows desktop it landed past testing-library's 1 s
+ * default (1.1-1.6 s), failing tests whose only problem was a slow import. A hang bound like the
+ * rest of this module, never a timing proof.
+ *
+ * Use it on the first wait for a lazy screen in each test, since a test run alone (`-t`) pays the
+ * import itself. It isn't needed where the screen's module is already loaded: the test file imports
+ * it statically, or the same test mounted it earlier and React renders it from its lazy cache.
+ */
+export const LAZY_SCREEN_WAIT: Readonly<{ timeout: number }> = { timeout: hangBudgetMs(5_000) }

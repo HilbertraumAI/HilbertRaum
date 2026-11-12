@@ -1312,9 +1312,11 @@ the change applies immediately and is remembered on the drive.
 One small exception: the lock screen always follows the system theme. Your settings live
 inside the encrypted workspace, so before you unlock it the app can't know your choice yet.
 
-The interface language works the same way: **Settings → Language** offers **System**,
-**English**, and **Deutsch** — *System* follows your operating system's language (German
-systems get Deutsch, everything else English), and a change applies right away, no restart.
+The interface language works the same way: choose it from the drop-down list under
+**Settings → General → Language** — **System**, **English**, or **Deutsch**. Each language is listed by
+its own name, so you can find yours even when the app shows a language you don't read.
+*System* follows your operating system's language (German systems get Deutsch, everything
+else English), and a change applies right away, no restart.
 Before you unlock, the lock screen uses the language you last used on this computer. The first
 time, it uses your operating system's language, and it does so once more after the update that
 moved the app's screens to their own address (#560), until you unlock.

@@ -21,19 +21,16 @@ import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
-import type {
-  WorkspaceActionResult,
-  WorkspaceMode,
-  WorkspaceStateInfo
+import {
+  MIN_PASSWORD_LENGTH,
+  type WorkspaceActionResult,
+  type WorkspaceMode,
+  type WorkspaceStateInfo
 } from '../../shared/types'
 
 // IPC for the encrypted-workspace lock/unlock lifecycle (spec §7.9).
 // A wrong password or a policy refusal is a NORMAL result (`{ ok: false, reason }`),
 // not a thrown error, so the unlock gate can re-prompt cleanly.
-
-/** Minimum password length for a new encrypted vault — the at-rest key is only as strong
- * as the password (the salt + KDF params live in the unencrypted descriptor). */
-const MIN_PASSWORD_LENGTH = 8
 
 /** Settings just became readable (unlock/create) → re-resolve the main-side UI
  *  language from the real `uiLanguage` setting. Best-effort: a settings read must

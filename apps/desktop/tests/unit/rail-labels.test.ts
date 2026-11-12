@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { t, type MessageKey } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 
 // Task A (design-guidelines §12.1 #1): the compact app rail must never hyphenate a label
 // mid-word ("Docu-ments" / "Doku-mente" / "Einstel-lungen"). The fix is two-part: (1) the
@@ -15,14 +15,37 @@ const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.tr
 const STYLES = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8')
 
 describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
-  it('carry no soft hyphen (U+00AD) or other invisible break in EITHER locale', () => {
-    for (const lang of ['en', 'de'] as const) {
+  it('carry no soft hyphen (U+00AD) or other invisible break in ANY registered locale', () => {
+    for (const lang of UI_LANGUAGE_CODES) {
       for (const key of NAV_KEYS) {
         const label = t(lang, key)
         expect(label, `${lang}/${key} has a soft hyphen`).not.toMatch(/­/)
         expect(label, `${lang}/${key} has a zero-width break`).not.toMatch(/[​­]/)
       }
     }
+  })
+
+  it('no word of a rail label is longer than "Einstellungen" in ANY registered locale', () => {
+    // The rail column is sized to German "Einstellungen" at the active label's weight (E-1/#149).
+    // A label may wrap at a space or a hyphen, never inside a word, so each word must fit on
+    // its own line. Only a plain space and a hyphen-minus split words here; any other space or
+    // dash (a no-break one, U+2010) counts as part of the word, the stricter reading. The
+    // character count is only a proxy for the width: no test measures the width itself, so a new
+    // language's rail has to be checked by eye in the running app, active label included. A
+    // word that does not fit gets a shorter synonym, never an abbreviation (owner call,
+    // 2026-11-11). nav.home is the brand mark's tooltip, not a rail label.
+    // The proxy under-counts wider glyphs (Cyrillic): a Russian label that passes here can still
+    // clip, so only that check in the running app clears it.
+    const tooLong: string[] = []
+    for (const lang of UI_LANGUAGE_CODES) {
+      for (const key of NAV_KEYS.filter((k) => k !== 'nav.home')) {
+        const label = t(lang, key)
+        for (const word of label.split(/[ -]/)) {
+          if (word.length > 'Einstellungen'.length) tooLong.push(`${lang}/${key}: "${word}" in "${label}"`)
+        }
+      }
+    }
+    expect(tooLong, 'rail-label words wider than the rail is sized for').toEqual([])
   })
 
   it('the longest single-word label is German "Einstellungen" (what the rail width is sized to)', () => {
