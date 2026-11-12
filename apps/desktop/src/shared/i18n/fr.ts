@@ -58,7 +58,7 @@ export const fr: UiCatalog<'fr'> = {
   'nav.models': 'Modèle d’IA',
   'nav.performance': 'Performance',
   'nav.settings': 'Paramètres',
-  'app.lockNow': 'Verrouiller maintenant',
+  'app.lockNow': 'Verrouiller',
   'app.lockNowTitle': 'Chiffrer à nouveau et verrouiller l’espace de travail',
   'app.noticeDetails': 'Détails',
   'app.noticeGoToModels': 'Ouvrir l’écran Modèle d’IA',
@@ -226,7 +226,7 @@ export const fr: UiCatalog<'fr'> = {
   'chat.list.docMeta': 'Documents',
   'chat.list.otherGroup': 'Autres / Bibliothèque',
   'chat.list.rowOptionsAria': 'Options de la conversation «\u00A0{title}\u00A0»',
-  'chat.search.placeholder': 'Rechercher dans les conversations…',
+  'chat.search.placeholder': 'Rechercher une conversation…',
   'chat.search.aria': 'Rechercher dans les conversations',
   'chat.search.resultsAria': 'Résultats de la recherche',
   'chat.search.resultsFor': 'Résultats pour «\u00A0{query}\u00A0»',
@@ -245,7 +245,7 @@ export const fr: UiCatalog<'fr'> = {
     'La conversation «\u00A0{title}\u00A0» et ses messages seront définitivement supprimés de ce ' +
     'disque.',
   // ---- Chat: answer depth (DepthMenu.tsx; ids stay fast|balanced|deep) ----
-  'chat.depth.trigger': 'Niveau de détail\u00A0: {label}',
+  'chat.depth.trigger': 'Détail\u00A0: {label}',
   'chat.depth.fast': 'Rapide',
   'chat.depth.balanced': 'Équilibré',
   'chat.depth.deep': 'Approfondi',
@@ -670,6 +670,9 @@ export const fr: UiCatalog<'fr'> = {
   'docs.meta.sectionsCount.many': '{count} sections',
   'docs.meta.sectionsCount.other': '{count} sections',
   'docs.meta.summary': 'Résumé',
+  'docs.meta.type.text': 'Texte',
+  'docs.meta.type.audio': 'Audio',
+  'docs.meta.type.image': 'Image',
   'docs.scan.ocrOffer':
     'Utilisez «\u00A0Rendre interrogeable (OCR)\u00A0» sur cette ligne pour lire les pages sur ' +
     'ce disque.',
@@ -1584,7 +1587,7 @@ export const fr: UiCatalog<'fr'> = {
   'settings.workspace.contextAuto':
     'Automatique (valeur par défaut du modèle)\u00A0: modifiable sur l’écran Modèle d’IA',
   'settings.workspace.encryptedHint':
-    'Cet espace de travail est chiffré au repos. Utilisez «\u00A0Verrouiller maintenant\u00A0» ' +
+    'Cet espace de travail est chiffré au repos. Utilisez «\u00A0Verrouiller\u00A0» ' +
     'dans la barre latérale pour le chiffrer à nouveau et le verrouiller\u00A0; il se verrouille ' +
     'aussi automatiquement quand vous quittez l’application.',
   'settings.workspace.plaintextHint':
@@ -2507,7 +2510,7 @@ export const fr: UiCatalog<'fr'> = {
   'indicator.onlineDetail':
     'Téléchargements autorisés\u00A0: les conversations et les documents restent en local.',
   'indicator.short.offline': 'Hors ligne',
-  'indicator.short.online': 'Réseau autorisé',
+  'indicator.short.online': 'Réseau activé',
   'indicator.withLocalApi': '{state} · API activée',
   'indicator.localApiDetail':
     'D’autres applications de cet ordinateur peuvent utiliser votre modèle. Rien ne quitte cet ' +

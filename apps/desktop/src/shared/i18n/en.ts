@@ -632,6 +632,11 @@ export const en = {
   'docs.meta.sectionsCount.one': '{count} section',
   'docs.meta.sectionsCount.other': '{count} sections',
   'docs.meta.summary': 'Summary',
+  // The file kind that leads a document row's meta line (documents/format.tsx `friendlyMimeLabel`):
+  // plain text, and the fallback for an audio / image / text type that has no format name.
+  'docs.meta.type.text': 'Text',
+  'docs.meta.type.audio': 'Audio',
+  'docs.meta.type.image': 'Image',
   'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" on this row to read the pages on this drive.',
   // #410: the in-app download first (the install control sits under the row's banner); the
   // drive-setup script stays the DIY alternative. `…Offline` is the copy when this drive has no

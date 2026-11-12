@@ -99,7 +99,7 @@ export const ru: UiCatalog<'ru'> = {
     'пока нет.',
   'home.checking': 'Проверка…',
   'home.workspace.label': 'Рабочее пространство',
-  'home.workspace.encrypted': 'Зашифровано — после закрытия приложения заблокировано вашим паролем',
+  'home.workspace.encrypted': 'Зашифровано — при закрытии приложения блокируется паролем',
   'home.workspace.plaintext': 'Без шифрования (режим разработчика)',
   'home.workspace.badgeProtected': 'Защищено',
   'home.workspace.badgeDeveloper': 'Разработчик',
@@ -664,6 +664,9 @@ export const ru: UiCatalog<'ru'> = {
   'docs.meta.sectionsCount.many': '{count} разделов',
   'docs.meta.sectionsCount.other': '{count} раздела',
   'docs.meta.summary': 'Краткое содержание',
+  'docs.meta.type.text': 'Текст',
+  'docs.meta.type.audio': 'Аудио',
+  'docs.meta.type.image': 'Изображение',
   'docs.scan.ocrOffer':
     'Используйте «Сделать доступным для поиска (OCR)» в этой строке, чтобы распознать текст ' +
     'страниц на этом диске.',
@@ -2433,7 +2436,7 @@ export const ru: UiCatalog<'ru'> = {
     'подтверждение. Ваши документы и чаты в любом случае никогда не используют интернет.',
   'gate.starter.skip': 'Пока пропустить',
   'gate.starter.addDocuments': 'Добавить документы',
-  'gate.starter.chooseModel': 'Выбрать ИИ-модель',
+  'gate.starter.chooseModel': 'Выбрать модель',
   'gate.create.title': 'Создание пароля',
   'gate.create.hint':
     'Этот пароль защищает все в вашем рабочем пространстве на этом диске — документы, чаты и ' +

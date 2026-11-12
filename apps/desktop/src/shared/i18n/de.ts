@@ -645,6 +645,11 @@ export const de: Record<keyof typeof en, string> = {
   'docs.meta.sectionsCount.one': '{count} Abschnitt',
   'docs.meta.sectionsCount.other': '{count} Abschnitte',
   'docs.meta.summary': 'Zusammenfassung',
+  // Die Dateiart vorn in der Metazeile einer Dokumentzeile (documents/format.tsx `friendlyMimeLabel`):
+  // reiner Text und der Rückfall für Audio-, Bild- und Texttypen ohne Formatnamen.
+  'docs.meta.type.text': 'Text',
+  'docs.meta.type.audio': 'Audio',
+  'docs.meta.type.image': 'Bild',
   'docs.scan.ocrOffer':
     'Nutze „Durchsuchbar machen (OCR)“ in dieser Zeile, um die Seiten auf diesem Laufwerk zu lesen.',
   // #410: zuerst der In-App-Download (die Schaltfläche steht unter dem Hinweis der Zeile).

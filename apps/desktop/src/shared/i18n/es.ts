@@ -50,7 +50,7 @@ export const es: UiCatalog<'es'> = {
   'nav.models': 'Modelo de IA',
   'nav.performance': 'Rendimiento',
   'nav.settings': 'Ajustes',
-  'app.lockNow': 'Bloquear ahora',
+  'app.lockNow': 'Bloquear',
   'app.lockNowTitle': 'Volver a cifrar y bloquear el espacio de trabajo',
   'app.noticeDetails': 'Detalles',
   'app.noticeGoToModels': 'Ir a Modelo de IA',
@@ -178,7 +178,7 @@ export const es: UiCatalog<'es'> = {
   'chat.runtime.gpu': '{model} · GPU ({name})',
   'chat.runtime.cpu': '{model} · procesador',
   'chat.runtime.cpuCompat': '{model} · procesador (modo de compatibilidad)',
-  'chat.runtime.demo': '{model} · modo de demostración',
+  'chat.runtime.demo': '{model} · demostración',
   'chat.runtime.title':
     'El modelo de IA que responde en este chat y si se ejecuta en la tarjeta gráfica (GPU) o en ' +
     'el procesador (CPU). Detalles: Ajustes → Diagnóstico.',
@@ -230,7 +230,7 @@ export const es: UiCatalog<'es'> = {
   'chat.delete.confirm': 'Eliminar',
   'chat.delete.body': '«{title}» y sus mensajes se eliminarán de esta unidad de forma permanente.',
   // ---- Chat: answer depth (DepthMenu.tsx; ids stay fast|balanced|deep) ----
-  'chat.depth.trigger': 'Detalle de la respuesta: {label}',
+  'chat.depth.trigger': 'Detalle: {label}',
   'chat.depth.fast': 'Rápido',
   'chat.depth.balanced': 'Equilibrado',
   'chat.depth.deep': 'Minucioso',
@@ -637,6 +637,9 @@ export const es: UiCatalog<'es'> = {
   'docs.meta.sectionsCount.many': '{count} de secciones',
   'docs.meta.sectionsCount.other': '{count} secciones',
   'docs.meta.summary': 'Resumen',
+  'docs.meta.type.text': 'Texto',
+  'docs.meta.type.audio': 'Audio',
+  'docs.meta.type.image': 'Imagen',
   'docs.scan.ocrOffer':
     'Usa «Habilitar búsqueda (OCR)» en esta fila para leer las páginas en esta unidad.',
   'docs.scan.ocrMissing':
@@ -1494,7 +1497,7 @@ export const es: UiCatalog<'es'> = {
   'settings.workspace.contextAuto':
     'Automático (el predeterminado del modelo): puedes cambiarlo en la pantalla Modelo de IA',
   'settings.workspace.encryptedHint':
-    'Este espacio de trabajo se guarda cifrado. Usa «Bloquear ahora» en la barra lateral para ' +
+    'Este espacio de trabajo se guarda cifrado. Usa «Bloquear» en la barra lateral para ' +
     'volver a cifrarlo y bloquearlo; también se bloquea automáticamente al cerrar la aplicación.',
   'settings.workspace.plaintextHint':
     'Espacio de trabajo de desarrollo sin cifrar: los datos se guardan sin cifrar. El modo ' +
@@ -2364,7 +2367,7 @@ export const es: UiCatalog<'es'> = {
   'indicator.onlineDetail':
     'Descargas permitidas: los chats y los documentos no salen de tu equipo.',
   'indicator.short.offline': 'Sin conexión',
-  'indicator.short.online': 'Descargas activadas',
+  'indicator.short.online': 'Red permitida',
   'indicator.withLocalApi': '{state} · API activada',
   'indicator.localApiDetail':
     'Otras aplicaciones de este equipo pueden usar tu modelo. Nada sale de este equipo.',
@@ -3148,7 +3151,7 @@ export const es: UiCatalog<'es'> = {
   'packs.copyLibrary': 'Copiar la dirección de la biblioteca',
   'packs.copiedToast': 'Dirección copiada: library.kiwix.org',
   'packs.copyFailed': 'No se pudo copiar. La dirección es library.kiwix.org',
-  'packs.setup.title': 'Configuración única: las herramientas de los paquetes de conocimiento',
+  'packs.setup.title': 'Configuración inicial: las herramientas de los paquetes de conocimiento',
   'packs.toolsMissing':
     'Los programas de kiwix-tools no están instalados en esta unidad, así que no se pueden ' +
     'agregar paquetes ni buscar en ellos. Lee el paso de instalación en la guía de solución de ' +

@@ -656,6 +656,9 @@ export const it: UiCatalog<'it'> = {
   'docs.meta.sectionsCount.many': '{count} di sezioni',
   'docs.meta.sectionsCount.other': '{count} sezioni',
   'docs.meta.summary': 'Riassunto',
+  'docs.meta.type.text': 'Testo',
+  'docs.meta.type.audio': 'Audio',
+  'docs.meta.type.image': 'Immagine',
   'docs.scan.ocrOffer':
     'Usa «Rendi ricercabile (OCR)» su questa riga per leggere le pagine su questa unità.',
   'docs.scan.ocrMissing':
@@ -1470,7 +1473,7 @@ export const it: UiCatalog<'it'> = {
   'settings.network.allow':
     'Consenti l’accesso a Internet per download e aggiornamenti dei modelli',
   'settings.network.hint':
-    'Attiva per impostazione predefinita, così una nuova installazione può scaricare subito un ' +
+    'Attivata per impostazione predefinita, così una nuova installazione può scaricare subito un ' +
     'modello. Quando è disattivata, l’app non si connette mai a Internet. Quando è attiva, ' +
     'permette di scaricare modelli, il motore IA, gli strumenti opzionali per i pacchetti di ' +
     'conoscenze e i file opzionali per il riconoscimento del testo (OCR): ogni download chiede ' +
@@ -1505,14 +1508,14 @@ export const it: UiCatalog<'it'> = {
   'settings.performance.autoStart':
     'Carica automaticamente il modello selezionato all’avvio dell’app',
   'settings.performance.autoStartHint':
-    'Attiva per impostazione predefinita. Il modello selezionato nella schermata Modello IA ' +
+    'Attivata per impostazione predefinita. Il modello selezionato nella schermata Modello IA ' +
     'viene caricato in background all’avvio (nelle aree di lavoro crittografate, dopo lo ' +
     'sblocco), così la schermata Chat è pronta senza altri clic.',
   // ---- Settings: Chat / conversation compaction (context-compaction plan §5.4) ----
   'settings.chat.title': 'Chat',
   'settings.chatCompaction.label': 'Riassumi i messaggi meno recenti per liberare contesto',
   'settings.chatCompaction.help':
-    'Attiva per impostazione predefinita. Quando una conversazione lunga si avvicina al limite ' +
+    'Attivata per impostazione predefinita. Quando una conversazione lunga si avvicina al limite ' +
     'di contesto del modello, i messaggi meno recenti vengono riassunti una sola volta in una ' +
     'nota compatta, salvata su questa unità, invece di essere scartati senza avviso. Disattiva ' +
     'l’opzione per tenere solo i messaggi più recenti che rientrano nel contesto.',
@@ -1850,7 +1853,7 @@ export const it: UiCatalog<'it'> = {
   'privacy.network.effective': 'Stato effettivo',
   'privacy.network.effectiveOffline': 'Offline (nessuna connessione a Internet)',
   'privacy.network.effectiveAllowed': 'Rete consentita',
-  'privacy.network.byPolicy': 'Rete consentita dai criteri',
+  'privacy.network.byPolicy': 'Consentita dai criteri',
   'privacy.network.policyYes': 'Sì',
   'privacy.network.policyNo': 'No (disattivata dai criteri)',
   'privacy.network.yourSetting': 'La tua impostazione',
@@ -2409,7 +2412,7 @@ export const it: UiCatalog<'it'> = {
     'Tutto resta su questa unità. Non viene usata nessuna connessione a Internet.',
   'indicator.onlineDetail': 'Download consentiti: chat e documenti restano in locale.',
   'indicator.short.offline': 'Offline',
-  'indicator.short.online': 'Download attivi',
+  'indicator.short.online': 'Rete attiva',
   'indicator.withLocalApi': '{state} · API attiva',
   'indicator.localApiDetail':
     'Altre app su questo computer possono usare il tuo modello. Nulla esce da questo computer.',
