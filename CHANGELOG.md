@@ -25,6 +25,16 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Added
+
+- **The interface is now available in Spanish, French, Italian and Russian.** Choose Español,
+  Français, Italiano or Русский under Settings → General → Language. The translations were made
+  by machine translation and checked by a second AI model; native speakers haven't reviewed them
+  yet. *System* now also follows an operating system set to one of these languages: if your
+  computer is set to French and you never picked a language, HilbertRaum shows French as soon as
+  your workspace is open after the update, and the lock screen follows from then on. Evidence
+  packs exported from these languages are written in English, and the export panel says so.
+
 ### Changed
 
 - **You now choose the interface language from a drop-down list.** Settings → General → Language used to

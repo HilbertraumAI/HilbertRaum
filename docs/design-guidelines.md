@@ -422,7 +422,234 @@ Qualität bleibt top.").
 - **Text expansion is a layout problem:** German runs ~30 % longer — fix overflows with
   wrapping/min-widths/flex (the Phase-42 audit pattern: chat-header `flex-wrap`,
   empty-state chips wrap, `overflow-wrap: anywhere` on `.kv dd`), never by abbreviating
-  copy.
+  copy. **Exception — fixed-width surfaces** (owner decision 2026-11-11, UI languages wave):
+  the 106 px nav rail and its foot, and segmented options, cannot wrap their way out, so a
+  label that does not fit there takes a shorter synonym that still follows the glossary —
+  never an abbreviation. Widening the control is the last resort, and then every language is
+  re-checked.
+
+### Russian microcopy (UI languages wave, 2026-11-12 — `architecture.md` i18n record)
+
+Everything above applies to the Russian copy too — **adapted, never translated literally**. The
+copy is machine-drafted and checked by a second model; no native speaker has reviewed it yet
+(owner decision 2026-11-11), so these rules prefer wordings that are hard to get wrong and that a
+test can check. The spec-§11.4 rule binds every warning and error ("Pick a smaller model — quality
+stays great" → «Выберите модель поменьше — качество останется отличным.»).
+
+- **Form of address: formal «вы»** (owner decision 2026-11-11), lower case mid-sentence («вы»,
+  «ваш»); never «ты». Buttons, menu items and tabs take the infinitive or a noun («Сохранить»,
+  «Отмена»), instructions the вы-imperative («выберите»), busy states a verbal noun («Загрузка…»).
+  The app never speaks in the first-person past tense (a Russian past verb shows gender): "I read…"
+  becomes impersonal («Прочитано транзакций: {count}»). A placeholder never carries grammar: a
+  generic noun in front takes the case and the agreement («модель {model} работает…»).
+- **Glossary** (pinned as the comment block on top of `ru.ts`): workspace → рабочее пространство ·
+  drive → диск (never накопитель, флешка, носитель) · vault/encrypted workspace → зашифрованное
+  рабочее пространство · model → модель (AI model → ИИ-модель) · document → документ · re-index →
+  переиндексировать · offline → офлайн · "Ask my documents" → «Спросить по моим документам» ·
+  lock/unlock → заблокировать/разблокировать · password → пароль · settings → настройки ·
+  plaintext (developer) mode → без шифрования (режим разработчика) · chat and conversation → чат ·
+  download → скачать («загрузка» is loading) · performance check → проверка скорости.
+- **Review glossary** (the legal-adjacent register; the `ru.ts` header mirrors it): evidence →
+  **подтверждение** — the noun «доказательство» is banned; «не доказывает» appears only in the
+  disclaimers · supported → подтверждено («Проверено — подтверждено») · review → проверка
+  (evidence review → проверка подтверждений) · review item → пункт проверки · evidence pack →
+  пакет подтверждений · citation → ссылка на источник (never «цитата») · whole-document provenance
+  → происхождение из анализа документа целиком (its negation is always «без ссылок на отдельные
+  предложения») · direct excerpt → прямая выдержка · source → источник / исходный документ ·
+  reviewer → проверяющий, never a gendered verb («Проверено: {name}») · mark ready / reopen →
+  завершить проверку / вернуть проверку в работу · outdated → устарела · a review is «создана»,
+  an answer «сформирован» (never mixed).
+- **Nav labels and screen names:** Главная · Чат · Документы · Перевод · Картинки · ИИ-модель ·
+  Скорость · Настройки. «Картинки» and «Скорость» are the fixed-width synonyms for «Изображения»
+  and «Производительность», which do not fit the rail; the rail-foot lock button is «Блокировка».
+  A screen reference quotes the rail word in guillemets and never declines it; where the sentence
+  would need a case ending, a generic noun in front takes it («на экране «Документы»», but
+  «Открыть «Документы»»). A string that names a button quotes its exact Russian label
+  («нажмите «Повторить»»).
+- **Typography:** quotes «…», inner „…“ only inside «…»; the em dash with a space on each side;
+  `…` as one character; no letter «ё» (е throughout); a Latin and a Cyrillic letter never touch;
+  numbers and dates from `Intl`. The machine-checkable part is enforced by `TYPOGRAPHY_RULES.ru`
+  (`tests/unit/i18n.test.ts`), with look-arounds, because JavaScript's `\b` does not see Cyrillic.
+- **Units** stay the Latin symbols the formatters print (GB, MB, KB, B, s, ms, tok/s), never «ГБ»
+  or «сек».
+- **Plurals:** one / few / many / other, on consecutive lines in that order. `one` also serves 21,
+  31, 101…, so no form points back at the counted things with a singular pronoun. Every form shows
+  `{count}` — also a `one` whose English form has none (`packs.addedToast`) — except
+  `perf.model.line` and `perf.model.measuredOther`, which show the figure as `{context}`;
+  `translate.file.gapPages` is number-neutral in all four forms (it shows a page range). `other`
+  is reached only by fractions. A plain key with a number goes label-first («Токенов: {tokens}»);
+  "and N more" in a plain key is «… и еще {count}», with no noun after the figure (the plural
+  pairs name what they count).
+- **Citation marker:** `И{n}` (источник).
+- **Untranslated by design:** HilbertRaum (never declined: «в приложении HilbertRaum»), "HilbertRaum
+  Lite", "HilbertRaum AI Kit", model ids, paths, technical values, the picker's language names.
+  *System* in the language picker is «Как в системе» (the theme control's is «Системная»).
+- **Fixed-width surfaces** (the 106 px rail and its foot, segmented options): Cyrillic runs wider
+  than Latin, so no word of a rail label is longer than about 10 letters; a shorter glossary
+  synonym, never an abbreviation («настр.», «вкл.», «кол-во» are banned).
+
+### French microcopy (UI languages wave, 2026-11-12 — `architecture.md` i18n record)
+
+Everything above applies to the French copy too — **adapted, never translated literally**;
+machine-drafted and checked by a second model, not yet reviewed by a native speaker (owner decision
+2026-11-11). The spec-§11.4 rule binds every warning and error ("Pick a smaller model — quality
+stays great" → « Choisissez un modèle plus petit : la qualité reste excellente. »).
+
+- **Form of address: formal « vous »** (owner decision 2026-11-11), lowercase mid-sentence; never
+  « tu ». Buttons and menu items use the infinitive (« Réessayer »), tabs and screen names a
+  noun (« Général »), instructions the vous imperative (« Choisissez… »), progress labels a
+  noun (« Chargement… »). Nothing agrees with the
+  reader's gender (« Espace de travail déverrouillé », not « Vous êtes connecté »). A name
+  placeholder is never elided onto: guillemets, a colon or a class noun in front (« le modèle
+  {model} »).
+- **Glossary** (mirrored in the `fr.ts` header): workspace → espace de travail · drive → disque
+  (never lecteur, clé, support) · vault → espace de travail chiffré (chiffrer, never crypter) ·
+  model → modèle (AI model → modèle d’IA) · document → document · re-index → réindexer · offline
+  → hors ligne · "Ask my documents" → « Interroger mes documents » · lock/unlock →
+  verrouiller/déverrouiller · password → mot de passe · settings → Paramètres · plaintext
+  (developer) mode → non chiffré (développeur) · skill → compétence · token → token · knowledge
+  pack → pack de connaissances. "Nothing leaves this drive" is always « rien ne quitte ce
+  disque ».
+- **Review glossary:** evidence → **justificatif(s)** — the noun « preuve » is banned; « prouver »
+  appears only negated in the disclaimers · supported → étayé (« Vérifié – étayé ») · review →
+  vérification · review item → point de vérification · evidence pack → pack de justificatifs ·
+  citation → référence (never « citation ») · whole-document provenance → provenance : analyse du
+  document entier (its negation is always « pas des références phrase par phrase ») · direct
+  excerpt → extrait direct · source → source / document source · reviewer → « Vérifié par »
+  (label) / la personne qui vérifie (prose) · mark ready / reopen → Clôturer / Rouvrir la
+  vérification · outdated → obsolète · a vérification is « créée », an answer « générée ».
+- **Nav labels and screen names:** Accueil · Chat · Documents · Traduction · Images · Modèle d’IA ·
+  Performance · Paramètres. A screen reference equals the label (« l’écran Documents », « dans
+  les Paramètres »); a string that names a button quotes its exact label in « ».
+- **Typography:** « … » with a no-break space (U+00A0) inside; U+00A0 before `: ; ? ! %` (one
+  character everywhere, written `\u00A0` in the source); U+202F only between the digits of a
+  typed figure; ’ for apostrophes; `…`; the spaced en dash « – » — or better a colon — never the
+  em dash; œ; accented capitals (« État »); numbers and dates from `Intl`. The machine-checkable
+  part is enforced by `TYPOGRAPHY_RULES.fr`.
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s), joined to the
+  figure by U+00A0; never Go/Mo/Ko.
+- **Plurals:** one / many / other, on consecutive lines in that order. `one` serves 0 and 1, so a
+  `.one` sentence must be true for 0 and never points back at the counted things with a singular
+  pronoun; every form shows `{count}`, also a `one` whose English form has none
+  (`packs.addedToast`) — except `perf.model.line` / `perf.model.measuredOther` (`{context}`) and
+  `translate.file.gapPages` (`{pages}`). `many` (exact millions) is written like `other`: after
+  digits French takes no « de ». A plain key with a number goes label-first (« Tokens : {n} »);
+  "and N more" in a plain key is « et {count} de plus ».
+- **Citation marker:** `S{n}` (source) — the same letter as the English evidence pack a French UI
+  exports.
+- **Untranslated by design:** the product name (no article: « dans HilbertRaum »), "HilbertRaum
+  Lite", "HilbertRaum AI Kit", model ids, paths, technical values, the picker's language names.
+  *System* is « Système ».
+- **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation (no « max. »,
+  « infos »).
+
+### Spanish microcopy (UI languages wave, 2026-11-12 — `architecture.md` i18n record)
+
+Everything above applies to the Spanish copy too — **adapted, never translated literally**;
+machine-drafted and checked by a second model, not yet reviewed by a native speaker (owner decision
+2026-11-11). **One neutral international Spanish** for every `es-*` locale: the word with no
+regional mark, else the word Windows shows in both its Spanish builds. The spec-§11.4 rule binds
+every warning and error ("Pick a smaller model — quality stays great" → "Elige un modelo más
+pequeño: la calidad sigue siendo excelente.").
+
+- **Form of address: informal «tú»** (owner decision 2026-11-11), lower case, everywhere — errors,
+  the lock screen and the Review screen; never «usted», «vosotros» or voseo. Buttons and menu items
+  are infinitives («Guardar»), instructions tú imperatives («Elige»), busy states gerunds
+  («Cargando…»). Finished events take the simple past («No se pudo abrir el archivo»). Nothing
+  agrees with the user's gender («Te damos la bienvenida», «Todo listo»).
+- **Glossary** (mirrored in the `es.ts` header): workspace → espacio de trabajo · drive → unidad
+  (never disco, memoria, pendrive) · computer → equipo · device → dispositivo · vault → espacio de
+  trabajo cifrado (cifrar, never encriptar) · model → modelo (AI model → modelo de IA) · document
+  → documento (file → archivo) · re-index → reindexar · offline → sin conexión · "Ask my
+  documents" → «Preguntar a mis documentos» · lock/unlock → bloquear/desbloquear · password →
+  contraseña · settings → Ajustes · plaintext (developer) mode → sin cifrar (desarrollo) · add →
+  agregar · skill → habilidad · knowledge pack → paquete de conocimiento · check / verify /
+  review → comprobar / verificar / revisar (never swapped).
+- **Review glossary:** evidence → **evidencia** — never «prueba»; «demostrar» appears only negated
+  in the disclaimers («por sí sola no demuestra») · supported → respaldado («Revisado: respaldado»)
+  · review → revisión (evidence review → revisión de evidencia) · review item → punto de revisión
+  · evidence pack → paquete de evidencia · citation → referencia a la fuente (never «cita») ·
+  whole-document provenance → procedencia de un análisis del documento completo (its negation is
+  always «no son referencias a frases concretas») · direct excerpt → extracto directo · source →
+  fuente / documento fuente · reviewer → «Revisado por» (label) / la persona que revisa (prose) ·
+  mark ready / reopen → marcar la revisión como lista / reabrir la revisión · outdated →
+  desactualizada · a review is «creada», an answer «generada».
+- **Nav labels and screen names:** Inicio · Chat · Documentos · Traducir · Imágenes · Modelo de IA ·
+  Rendimiento · Ajustes («Configuración» is wider than the rail allows). A screen reference
+  equals the label, capitalised, without quotes («en Ajustes», «Ir a Modelo de IA»); a string
+  that names a button quotes its exact label in «».
+- **Typography:** quotes «…» without inner spaces; every question and exclamation opens with ¿ / ¡
+  inside one value; no apostrophe at all; `…`; **no spaced dash** — an English dash becomes a
+  colon, a full stop, a comma or parentheses; a no-break space before `%` (`{pct}\u00A0%`);
+  numbers and dates from `Intl`. The machine-checkable part is enforced by
+  `TYPOGRAPHY_RULES.es`.
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s), with «de» before
+  what they measure («{min} GB de RAM»). `Intl` prints the Spain pattern («98.304», «4,3») for
+  every Spanish locale (a known limitation).
+- **Plurals:** one / many / other, on consecutive lines in that order. `one` is exactly 1, so a
+  form uses the placeholders of the English form of its category (`packs.addedToast.one` has no
+  `{count}`); `many` (exact millions) is the `other` text with «de» before the noun («{count} de
+  documentos»). A plain key with a number goes label-first («secciones analizadas: {scanned}»);
+  "and N more" in a plain key is «y {count} más».
+- **Citation marker:** `F{n}` (fuente).
+- **Untranslated by design:** the product name (no article), "HilbertRaum Lite", "HilbertRaum AI
+  Kit", model ids, paths, technical values, the picker's language names. *System* is «Sistema».
+- **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation and never a dropped
+  accent (no «config.», «pág.»).
+
+### Italian microcopy (UI languages wave, 2026-11-12 — `architecture.md` i18n record)
+
+Everything above applies to the Italian copy too — **adapted, never translated literally**;
+machine-drafted and checked by a second model, not yet reviewed by a native speaker (owner decision
+2026-11-11). The spec-§11.4 rule binds every warning and error ("Pick a smaller model — quality
+stays great" → «Scegli un modello più piccolo: la qualità resta ottima.»).
+
+- **Form of address: informal «tu»** (owner decision 2026-11-11), lower case, everywhere — including
+  the lock screen and the Review screen; never «Lei» or «voi». Buttons and instructions take the
+  imperative («Riprova», «Scegli»), negatives «non» + infinitive («Non scollegare l’unità»). Nothing
+  agrees with the user's gender («Vuoi davvero eliminare…?», not «Sei sicuro?»). The skill answers'
+  "I" keeps verbs with «avere» («Ho letto»).
+- **Glossary** (mirrored in the `it.ts` header): workspace → area di lavoro · drive → unità (also
+  "disk"; always «questa unità», never «quest’unità»; never chiavetta, disco) · vault → area di
+  lavoro crittografata (never «cifrata») · model → modello (AI model → modello IA) · document →
+  documento · re-index → reindicizzare · offline → offline · "Ask my documents" → «Chiedi ai miei
+  documenti» · lock/unlock → bloccare/sbloccare · password → password · settings → Impostazioni ·
+  plaintext (developer) mode → non crittografata (sviluppatori) · delete / cancel → eliminare /
+  annullare (never «cancellare» for either) · skill → skill · token → token. "Everything stays on
+  this drive" is always «Tutto resta su questa unità».
+- **Review glossary:** evidence → **riscontro / riscontri** — never «prova» or «evidenza»;
+  «dimostrare» appears only negated in the disclaimers · supported → «Verificato – con riscontro»
+  / «… con riscontro parziale» / «… senza riscontro» · review → verifica (evidence review →
+  verifica dei riscontri) · review item → punto di verifica · evidence pack → pacchetto di
+  riscontri (never «fascicolo») · citation → riferimento alla fonte (never «citazione») ·
+  whole-document provenance → provenienza da un’analisi dell’intero documento (its negation is
+  always «nessun riferimento alle fonti per singola frase») · direct excerpt → estratto diretto ·
+  source → fonte / documento di origine (never «sorgente») · reviewer → «Persona che verifica»
+  (label) / chi verifica (prose; never «revisore», a regulated title) · mark ready / reopen →
+  Concludi / Riapri la verifica · outdated → non aggiornata · the review is «avviata», the answer
+  «generata». Outside the Review screen "check" and "verify" are «controllare».
+- **Nav labels and screen names:** Home · Chat · Documenti · Traduzione · Immagini · Modello IA ·
+  Prestazioni · Impostazioni. A screen reference equals the label, capitalised, without quotes
+  («nella schermata Modello IA», «nelle Impostazioni»); a string that names a button quotes its
+  exact label in «».
+- **Typography:** quotes «…» without inner spaces and without nesting (also around technical field
+  names); ’ for the apostrophe and never an elision before a placeholder; accents, never an
+  apostrophe for one (È, perché, più); `…`; no em dash — a colon or a new sentence, and the
+  spaced en dash « – » only between a label and its gloss; no space before `; : ! ?`; numbers and
+  dates from `Intl`. The machine-checkable part is enforced by `TYPOGRAPHY_RULES.it`.
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, %); «unità» never
+  names a unit of measurement.
+- **Plurals:** one / many / other, on consecutive lines in that order. `one` is exactly 1, so a
+  form uses the placeholders of the English form of its category (`packs.addedToast.one` has no
+  `{count}`); `many` (exact millions) adds «di» where the figure stands right before the noun
+  («{count} di sezioni»), otherwise it is the `other` text. A plain key with a number goes
+  label-first («Sezioni analizzate: {scanned}»); "and N more" in a plain key is «e {count} in
+  più».
+- **Citation marker:** `F{n}` (fonte).
+- **Untranslated by design:** the product name, "HilbertRaum Lite", "HilbertRaum AI Kit", model
+  ids, paths, technical values, the picker's language names. *System* is «Sistema».
+- **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation (no «Impost.»,
+  «ecc.»).
 
 ---
 
@@ -1068,9 +1295,13 @@ change; nothing here touches the model recommender. Code comments cite this sect
    the system, so `tests/unit/select-token-treatment.test.ts` guards it per FILE — the rule's
    token set, plus "every `<select>` in these screens carries the class" (four screen files at
    this record; `SettingsScreen.tsx`, for the interface-language picker in Settings → General,
-   joined as the fifth in the 2026-11 UI languages wave). **The four original picker-style selects moved together on purpose:** the Documents translate modal renders the
-   *identical* from/to language pair as the Translate screen, so styling only one of them would
-   make the same control look different on two routes to the same task. `.review-relation select`
+   joined as the fifth in the 2026-11 UI languages wave; on 2026-11-12 the five files hold nine
+   `.select` controls: three on the AI Model screen, two on the Translate screen, two in the
+   Documents translate modal, the Diagnostics activity filter and the language picker). **The
+   selects of the four original files moved together on purpose:** the Documents translate modal
+   renders the *identical* from/to language pair as the Translate screen, so styling only one of
+   them would make the same control look different on two routes to the same task.
+   `.review-relation select`
    (evidence review) keeps its own older, lighter treatment — folding it in is a real restyle of
    a review-screen control and wants its own visual pass.
 2. **DV-2 — "can this computer run it" outranks alphabetical.** The chat picker fell back to

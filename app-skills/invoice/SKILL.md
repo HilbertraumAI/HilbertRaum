@@ -9,6 +9,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Rechnungsanalyse
     description: Verwenden, wenn die Positionen und Beträge einer Rechnung extrahiert, geprüft oder exportiert werden sollen.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Análisis de facturas
+    description: Sirve para extraer, comprobar o exportar las líneas y los totales de una factura.
+  fr:                          #   Shown when the app runs in French.
+    title: Analyse de facture
+    description: À utiliser pour extraire, vérifier ou exporter les lignes et les totaux d’une facture.
+  it:                          #   Shown when the app runs in Italian.
+    title: Analisi della fattura
+    description: Serve a estrarre, controllare o esportare le voci e i totali di una fattura.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Анализ счета на оплату
+    description: Подходит, когда нужно извлечь, проверить или экспортировать позиции и итоговые суммы счета на оплату.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

@@ -1,6 +1,6 @@
 import type { Db } from '../../db'
 import type { Citation } from '../../../../shared/types'
-import type { MessageKey, MessageParams } from '../../../../shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams } from '../../../../shared/i18n'
 import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
@@ -98,17 +98,34 @@ const CATEGORY_KEYWORDS: readonly string[] = [
   'kategor', 'nach kategorie', 'aufschlüssel', 'gruppier', 'summier'
 ]
 
+// The app's OWN routed questions (Phase 33 routed feedback): when a "Summarize cashflow" / "Categorize"
+// run finishes, the Chat screen sends the catalog question of the UI language (`ROUTED_RUN_QUESTION` in
+// `ChatScreen.tsx`) and this handler answers it from the persisted rows. The stems above are English and
+// German only, so each routed question is also recognised by EXACT match, in every registered UI language
+// (i18n record §3.3 rule 3, like `isFriendlyTaskError`): a language left out would get a model answer
+// instead of the completeness-gated template. Read from the catalogs, never copied; trimmed and
+// lower-cased on both sides. They feed the SAME predicates the English questions reach: the summary
+// question is analysis- and summary-shaped (never category-shaped), the breakdown question category-shaped.
+const routedQuestions = (key: MessageKey): ReadonlySet<string> =>
+  new Set(UI_LANGUAGE_CODES.map((code) => t(code, key).trim().toLowerCase()))
+const ROUTED_SUMMARY_QUESTIONS = routedQuestions('chat.skill.summarize.question')
+const ROUTED_BREAKDOWN_QUESTIONS = routedQuestions('chat.skill.categorize.breakdownQuestion')
+
+function isRoutedSummaryQuestion(question: string): boolean {
+  return ROUTED_SUMMARY_QUESTIONS.has(question.trim().toLowerCase())
+}
+
 function isAnalysisShaped(question: string): boolean {
   // A CATEGORY request ("Kategorisiere …", "nach Kategorie", "break down …") is DEFINITIONALLY an
   // analysis request, so it routes to this 0-model handler too — otherwise a category question that
   // happens to miss every analysis term falls through to generic RAG and overflows the context window on a
   // long statement. Category-shaped ⟹ analysis-shaped.
-  return routeMatch('bank-statement', question) || isCategoryShaped(question)
+  return routeMatch('bank-statement', question) || isCategoryShaped(question) || isRoutedSummaryQuestion(question)
 }
 
 function isCategoryShaped(question: string): boolean {
   const q = question.toLowerCase()
-  return CATEGORY_KEYWORDS.some((k) => q.includes(k))
+  return CATEGORY_KEYWORDS.some((k) => q.includes(k)) || ROUTED_BREAKDOWN_QUESTIONS.has(q.trim())
 }
 
 // Format-transformation intent (W4, audit §3.3 — the bank half of invoice-format-2026-07-01). When
@@ -193,6 +210,7 @@ function isSummaryShaped(question: string): boolean {
     SUMMARY_KEYWORDS.some((k) => q.includes(k)) ||
     RECONCILE_STIMMT_RE.test(q) ||
     SEPARABLE_SUMMARY_RES.some((re) => re.test(q)) ||
+    isRoutedSummaryQuestion(q) ||
     isCategoryShaped(q)
   )
 }

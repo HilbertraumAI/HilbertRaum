@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { openDatabase, listTables } from '../../src/main/services/db'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import { applyUiLanguageSetting, initMainI18n, mainUiLanguage } from '../../src/main/services/i18n'
+import { UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 
 function freshDb() {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-db-'))
@@ -100,6 +101,17 @@ describe('settings persistence', () => {
     // Junk from a buggy/hostile renderer is never persisted (same guard as theme/gpuMode).
     expect(updateSettings(db, { uiLanguage: 'xx' as never }).uiLanguage).toBe('en')
     expect(updateSettings(db, { uiLanguage: 'system' }).uiLanguage).toBe('system')
+  })
+
+  it('saves every registered uiLanguage and reads it back', () => {
+    const db = freshDb()
+    seedSettings(db)
+    // The write gate follows the registry: a language registered after German is a valid choice.
+    const kept = UI_LANGUAGE_CODES.filter((code) => {
+      updateSettings(db, { uiLanguage: 'system' })
+      return updateSettings(db, { uiLanguage: code }).uiLanguage === code && getSettings(db).uiLanguage === code
+    })
+    expect(kept).toEqual([...UI_LANGUAGE_CODES])
   })
 
   it('a uiLanguage only a newer build knows resolves like system and its row is kept (downgrade on a shared drive)', () => {

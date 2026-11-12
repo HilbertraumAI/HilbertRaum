@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { StrictMode } from 'react'
-import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within, getDefaultNormalizer } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { ToastProvider } from '../../src/renderer/components'
@@ -16,6 +16,7 @@ import {
 import { t, tCount } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/shared/format'
 import { effectiveReadSample } from '../helpers/benchmark-records'
+import { catalogOf } from '../helpers/i18n-catalogs'
 import { deferred } from '../helpers/deferred'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import {
@@ -1385,6 +1386,73 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
       when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('de')
     })
     expect(await screen.findByText(expected)).toBeInTheDocument()
+  })
+})
+
+// A pair whose text shows a locale-grouped figure gets the raw number as the count and the grouped
+// string as the param (i18n record §5). English and German say "tokens"/"Token" in both forms, so
+// only a language with more forms can tell whether the count really is the figure shown. Each row
+// shows two figures in two Russian forms: 32,768 is `many` («токенов») and 8,192 is `few`
+// («токена»), so no single constant selector passes both. The field each row could mix its figure
+// up with holds the other one, so a selector reading the wrong field fails too. The figure itself
+// is compared with `Intl` output, never a typed literal: Russian groups with a no-break space.
+describe('PerformanceScreen: in Russian, each context figure picks its own plural form', () => {
+  const FIGURES = [
+    { shown: 32_768, form: 'many', other: 8192 },
+    { shown: 8192, form: 'few', other: 32_768 }
+  ] as const
+  const ru = (key: string, params: Record<string, string>): string =>
+    Object.entries(params).reduce((text, [name, value]) => text.split(`{${name}}`).join(value), catalogOf('ru')[key])
+  const grouped = (n: number): string => new Intl.NumberFormat('ru').format(n)
+  // The default collapses every whitespace run to a plain space, the no-break space included.
+  const exact = { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) }
+
+  it.each(FIGURES)('the Your-model line, by the model’s context size: $shown ($form)', async ({ shown, form, other }) => {
+    install(
+      snapshot({
+        placement: placement({
+          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, contextTokens: shown },
+          recommendedContextTokens: other
+        })
+      })
+    )
+    renderPerformanceScreen({ lang: 'ru' })
+    const line = ru(`perf.model.line.${form}`, { model: MODELS[0].displayName, size: fmt1(5.8, 'ru'), context: grouped(shown) })
+    expect(await screen.findByText(line, exact)).toBeInTheDocument()
+  })
+
+  it.each(FIGURES)('the measured-earlier note, by the measured context size: $shown ($form)', async ({ shown, form, other }) => {
+    install(
+      snapshot({
+        placement: placement({
+          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, contextTokens: other },
+          observed: null,
+          observedMismatch: { contextTokens: shown, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
+        })
+      })
+    )
+    renderPerformanceScreen({ lang: 'ru' })
+    const note = ru(`perf.model.measuredOther.${form}`, {
+      context: grouped(shown),
+      when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('ru')
+    })
+    expect(await screen.findByText(note, exact)).toBeInTheDocument()
+  })
+
+  it.each(FIGURES)('the copied report, by the recommended context size: $shown ($form)', async ({ shown, form, other }) => {
+    install(
+      snapshot({
+        placement: placement({
+          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, contextTokens: other },
+          recommendedContextTokens: shown
+        })
+      })
+    )
+    renderPerformanceScreen({ lang: 'ru' })
+    const text = await copiedReport(t('ru', 'perf.copy'))
+    expect(text.split('\n')).toContain(
+      `${t('ru', 'models.context.title')}: ${ru(`models.tech.contextValue.${form}`, { count: grouped(shown) })}`
+    )
   })
 })
 

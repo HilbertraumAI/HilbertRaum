@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import * as ts from 'typescript'
 import { en, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { guardChildStdio } from '../../src/main/services/runtime/sidecar'
-import { I18N_DIR } from '../helpers/i18n-catalogs'
+import { I18N_DIR, catalogOf } from '../helpers/i18n-catalogs'
 import { DESKTOP_ROOT, REPO_ROOT, filesUnder, repoText } from '../helpers/repo-files'
 
 // Issue #49: different npm versions compute the lockfile `peer` flags differently (a
@@ -717,26 +717,56 @@ describe('repo hygiene — every ipcMain.handle under src/main/ipc goes through 
 /** The CLDR plural categories in their canonical order. */
 const CLDR_PLURAL_ORDER: readonly string[] = ['zero', 'one', 'two', 'few', 'many', 'other']
 
+/** One plural form in a catalog's source text: its CLDR category and its first and last line. */
+interface PluralFormLines {
+  form: string
+  start: number
+  end: number
+}
+
+/** Every `<base>.<CLDR form>` property of a catalog's source text, by base, in source order (one parse). */
+function pluralFormsByBase(fileName: string, text: string): Map<string, PluralFormLines[]> {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const lineOf = (pos: number): number => source.getLineAndCharacterOfPosition(pos).line
+  const byBase = new Map<string, PluralFormLines[]>()
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && ts.isStringLiteral(node.name)) {
+      const key = node.name.text
+      const dot = key.lastIndexOf('.')
+      const form = key.slice(dot + 1)
+      if (dot > 0 && CLDR_PLURAL_ORDER.includes(form)) {
+        const base = key.slice(0, dot)
+        byBase.set(base, [...(byBase.get(base) ?? []), { form, start: lineOf(node.getStart(source)), end: lineOf(node.getEnd()) }])
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return byBase
+}
+
 /**
  * How the plural forms of `base` sit in a catalog's source text: `.one` and `.other` present, each
  * form once and in CLDR order, and each form starting on the line after the previous one ends (a
  * value wrapped onto its own line is fine; another key, a comment or a blank line is not).
  */
 function pluralFormLayoutProblems(fileName: string, text: string, base: string): string[] {
-  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-  const lineOf = (pos: number): number => source.getLineAndCharacterOfPosition(pos).line
-  const forms: Array<{ form: string; start: number; end: number }> = []
-  const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAssignment(node) && ts.isStringLiteral(node.name) && node.name.text.startsWith(`${base}.`)) {
-      const form = node.name.text.slice(base.length + 1)
-      if (CLDR_PLURAL_ORDER.includes(form)) {
-        forms.push({ form, start: lineOf(node.getStart(source)), end: lineOf(node.getEnd()) })
-      }
-    }
-    ts.forEachChild(node, visit)
-  }
-  visit(source)
+  return formLayoutProblems(base, pluralFormsByBase(fileName, text).get(base) ?? [])
+}
 
+/**
+ * The same for every plural base of a catalog file, from one parse. A base is a key with a `.one`
+ * form (`packs.addFailed.other` alone is a plain key that happens to end in a form's name).
+ */
+function everyPluralBaseLayout(fileName: string, text: string): { bases: string[]; problems: string[] } {
+  const bases = [...pluralFormsByBase(fileName, text)].filter(([, forms]) => forms.some((f) => f.form === 'one'))
+  return {
+    bases: bases.map(([base]) => base).sort(),
+    problems: bases.flatMap(([base, forms]) => formLayoutProblems(base, forms))
+  }
+}
+
+function formLayoutProblems(base: string, forms: readonly PluralFormLines[]): string[] {
   const problems: string[] = []
   for (const form of ['one', 'other']) {
     if (!forms.some((f) => f.form === form)) problems.push(`${base}.${form}: missing`)
@@ -877,14 +907,21 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
   })
 
   // PR #294 review INFO: the chat.scope.projectCount pair had been split apart in a catalog. Every
-  // catalog keeps all its forms of the pair on consecutive lines, in CLDR order; a language with
-  // more forms than .one/.other (Russian .few/.many, French .many) puts them in between. One row
-  // per registered language, so the rows cannot come out empty; i18n-unused-keys.test.ts refuses
-  // a catalog file of a language that is not registered.
-  it.each(UI_LANGUAGE_CODES.map((code) => [`${code}.ts`, join(I18N_DIR, `${code}.ts`)]))(
-    '%s: all forms of chat.scope.projectCount are consecutive lines in CLDR order (PR #294 review INFO, split plural pair)',
-    (_name, file) => {
-      expect(pluralFormLayoutProblems(file, readFileSync(file, 'utf8'), 'chat.scope.projectCount')).toEqual([])
+  // catalog keeps all the forms of each plural base on consecutive lines, in CLDR order; a language
+  // with more forms than .one/.other (Russian .few/.many, French .many) puts them in between. One
+  // row per registered language, so the rows cannot come out empty, and the parse must find every
+  // plural base the loaded catalog has; i18n-unused-keys.test.ts refuses a catalog file of a
+  // language that is not registered.
+  it.each(UI_LANGUAGE_CODES.map((code) => [`${code}.ts`, code, join(I18N_DIR, `${code}.ts`)] as const))(
+    '%s: all forms of every plural base are consecutive lines in CLDR order (PR #294 review INFO, split plural pair)',
+    (_name, code, file) => {
+      const { bases, problems } = everyPluralBaseLayout(file, readFileSync(file, 'utf8'))
+      const loaded = Object.keys(catalogOf(code))
+        .filter((key) => key.endsWith('.one'))
+        .map((key) => key.slice(0, -'.one'.length))
+        .sort()
+      expect(bases).toEqual(loaded)
+      expect(problems).toEqual([])
     }
   )
 

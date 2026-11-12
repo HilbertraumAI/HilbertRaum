@@ -13,7 +13,7 @@ import {
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
 import { validateInvoiceTotals, type InvoiceInput } from '../../src/main/services/skills/tools/invoice'
-import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 
 // A-1 (audit 2026-06-26) — SKILL.md ⇔ deterministic-answer PARITY.
 //
@@ -128,6 +128,46 @@ describe('SKILL.md ⇔ docs/skills-overview.md parity (skills overview keep-in-s
   it('the overview lists no skill id that no longer ships', () => {
     const listed = [...OVERVIEW.matchAll(/`([a-z0-9-]+)` · v/g)].map((m) => m[1]).sort()
     expect(listed).toEqual(shippedIds)
+  })
+})
+
+// Every bundled skill shows its own title and description in every interface language: the
+// picker falls back to English for a language without a `localized.<code>` block, and the parser
+// drops an override that breaks its limits with only a note (skill-manifest.ts). Read from the
+// registry, so a language registered later needs its block in every SKILL.md.
+describe('SKILL.md localized display text for every registered interface language', () => {
+  // One parse per skill, shared by its rows.
+  const parsed = new Map<string, ReturnType<typeof parseSkillManifestFromDir>>()
+  const parse = (id: string): ReturnType<typeof parseSkillManifestFromDir> => {
+    const known = parsed.get(id)
+    if (known !== undefined) return known
+    const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
+    parsed.set(id, res)
+    return res
+  }
+
+  // A dropped override is reported only as a note, which names no language.
+  it.each(shippedIds)('%s: parses with no note about its localized block', (id) => {
+    const res = parse(id)
+    expect(res.ok, `parse ${id}: ${res.errors.join('; ')}`).toBe(true)
+    expect((res.noteCodes ?? []).map((note) => note.code).filter((note) => note.startsWith('localized'))).toEqual([])
+  })
+
+  const rows = shippedIds.flatMap((id) =>
+    UI_LANGUAGE_CODES.filter((code) => code !== 'en').map((code) => [id, code] as const)
+  )
+
+  // A block that repeats the English text parses cleanly, and the picker then shows English in
+  // that language with nothing to say it is untranslated.
+  it.each(rows)('%s: localized.%s has a title and a description the parser keeps, neither one the English text', (id, code) => {
+    const manifest = parse(id).manifest
+    const localized = manifest?.localized?.[code]
+    expect(localized?.title, `${id}: no localized.${code}.title`).toBeTruthy()
+    expect(localized?.description, `${id}: no localized.${code}.description`).toBeTruthy()
+    expect(localized?.title, `${id}: localized.${code}.title is the English title`).not.toBe(manifest?.title)
+    expect(localized?.description, `${id}: localized.${code}.description is the English description`).not.toBe(
+      manifest?.description
+    )
   })
 })
 

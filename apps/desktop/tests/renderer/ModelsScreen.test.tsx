@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach, type Mock } from 'vitest'
-import { act, render, screen, cleanup, within, waitFor } from '@testing-library/react'
+import { act, render, screen, cleanup, within, waitFor, getDefaultNormalizer } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   ModelsScreen,
@@ -22,6 +22,8 @@ import {
 import { t, tCount } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { ENGINE_MISSING, engineJob, modelInfo, stubModelsApi } from '../helpers/model-fixtures'
+import { catalogOf } from '../helpers/i18n-catalogs'
+import { renderInLanguage } from '../helpers/render-language'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { STOPPED_RUNTIME, appStatus, makePolicyStatus } from '../helpers/status'
 import { groupModelVariants, variantGroupFace } from '../../src/renderer/lib/modelLibrary'
@@ -1279,6 +1281,29 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
       expect(
         screen.getByText(tCount('de', 'models.tech.contextValue', 98_304, { count: (98_304).toLocaleString('de') }))
       ).toBeInTheDocument()
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
+  })
+
+  // English and German say "tokens"/"Token" in both forms, so only a language with more forms shows
+  // whether the count is the figure the row shows (i18n record §5: raw count, grouped param).
+  // Two figures no picker option shows, in two Russian forms: 40,960 is `many` («токенов») and
+  // 98,304 is `few` («токена»), so no single constant selector passes both. The figure is compared
+  // with `Intl` output, never a typed literal: Russian groups with a no-break space.
+  it.each([
+    { tokens: 40_960, form: 'many' },
+    { tokens: 98_304, form: 'few' }
+  ] as const)('in Russian, the tech-details context row picks its form by the figure it shows: $tokens ($form)', async ({ tokens, form }) => {
+    const shown = catalogOf('ru')[`models.tech.contextValue.${form}`].split('{count}').join(new Intl.NumberFormat('ru').format(tokens))
+    try {
+      stubWithSettings({ activeModelId: 'qwen3-4b-instruct-q4' }, [
+        model({ state: 'installed', recommendedContextTokens: tokens })
+      ])
+      renderInLanguage(<ModelsScreen />, 'ru')
+      await screen.findByText('Qwen3 4B Instruct')
+      // The default normalizer would turn the no-break space into a plain one.
+      expect(screen.getByText(shown, { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) })).toBeInTheDocument()
     } finally {
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
     }

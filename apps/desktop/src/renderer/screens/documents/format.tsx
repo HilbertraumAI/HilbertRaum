@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import type { BadgeTone } from '../../components'
 import type { DocTaskKind, DocumentInfo, IngestionStatus } from '@shared/types'
 import { provenanceView } from '@shared/types'
-import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
+import { en, t as tCatalog, type MessageKey, type UiLanguage } from '@shared/i18n'
 import { fmtDiskSize } from '@shared/format'
 import type { I18n } from '../../i18n'
 import { unsupportedTypeExt } from '../../lib/displayMap'
@@ -152,7 +152,7 @@ export function rowChips(d: DocumentInfo, t: I18n['t']): string[] {
 /** Compact muted meta line: "PDF · 2.0 KB · 7 sections" (§5/§6 — technical, visually secondary).
  *  Module-scope (PERF-5) so {@link DocRow} can call it with `lang`/`tCount`. */
 export function metaLine(d: DocumentInfo, lang: UiLanguage, tCount: I18n['tCount']): string {
-  const parts: string[] = [friendlyMimeLabel(d.mimeType)]
+  const parts: string[] = [friendlyMimeLabel(d.mimeType, lang)]
   if (d.sizeBytes != null) parts.push(formatSize(d.sizeBytes, lang))
   if (d.chunkCount > 0) parts.push(tCount('docs.meta.sectionsCount', d.chunkCount))
   return parts.join(' · ')
@@ -182,11 +182,13 @@ export const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
  * Map a stored MIME type to a short, friendly label (§7 — hide the machinery; show "PDF",
  * not "application/pdf"). Display-only: the stored MIME string is never changed, so the
  * copy-tone guard and the ingestion contracts are untouched. Pure ⇒ unit-tested directly.
+ * The map holds format names, which read the same in every language; the generic kinds
+ * (text, audio, image) are words, so they come from the catalog (`docs.meta.type.*`), and
+ * plain text reaches the text one through the `text/` fallback.
  */
 const MIME_LABELS: Record<string, string> = {
   'application/pdf': 'PDF',
   'text/markdown': 'Markdown',
-  'text/plain': 'Text',
   'text/csv': 'CSV',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word',
   'application/msword': 'Word',
@@ -199,13 +201,13 @@ const MIME_LABELS: Record<string, string> = {
   'image/jpeg': 'JPEG'
 }
 
-export function friendlyMimeLabel(mime: string | null | undefined): string {
+export function friendlyMimeLabel(mime: string | null | undefined, lang: UiLanguage): string {
   if (!mime) return '—'
   const direct = MIME_LABELS[mime]
   if (direct) return direct
-  if (mime.startsWith('audio/')) return 'Audio'
-  if (mime.startsWith('image/')) return 'Image'
-  if (mime.startsWith('text/')) return 'Text'
+  if (mime.startsWith('audio/')) return tCatalog(lang, 'docs.meta.type.audio')
+  if (mime.startsWith('image/')) return tCatalog(lang, 'docs.meta.type.image')
+  if (mime.startsWith('text/')) return tCatalog(lang, 'docs.meta.type.text')
   // Last resort: the subtype, upper-cased (e.g. application/zip → ZIP).
   const sub = mime.split('/')[1] ?? mime
   return sub.toUpperCase()

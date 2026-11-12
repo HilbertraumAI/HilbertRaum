@@ -9,6 +9,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Kontoauszug-Analyse
     description: Verwenden, wenn Transaktionen aus einem Kontoauszug extrahiert, kategorisiert, abgeglichen oder zusammengefasst werden sollen.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Análisis de extractos bancarios
+    description: Sirve para extraer, clasificar, conciliar o resumir los movimientos de un extracto bancario.
+  fr:                          #   Shown when the app runs in French.
+    title: Analyse de relevé bancaire
+    description: À utiliser pour extraire, catégoriser, rapprocher ou résumer les transactions d’un relevé bancaire.
+  it:                          #   Shown when the app runs in Italian.
+    title: Analisi dell’estratto conto
+    description: Serve a estrarre, classificare, riconciliare o riassumere le transazioni di un estratto conto.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Анализ банковской выписки
+    description: Подходит, когда нужно извлечь, распределить по категориям, сверить или кратко изложить транзакции из банковской выписки.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

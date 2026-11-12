@@ -77,6 +77,38 @@ export const UI_LANGUAGES = [
     evidencePack: true,
     plural: exactOne,
     pluralCategories: ['one', 'other']
+  },
+  {
+    code: 'es',
+    nativeName: 'Español',
+    nativeReviewed: false,
+    evidencePack: false,
+    plural: cldrPlural('es'),
+    pluralCategories: ['one', 'many', 'other']
+  },
+  {
+    code: 'fr',
+    nativeName: 'Français',
+    nativeReviewed: false,
+    evidencePack: false,
+    plural: cldrPlural('fr'),
+    pluralCategories: ['one', 'many', 'other']
+  },
+  {
+    code: 'it',
+    nativeName: 'Italiano',
+    nativeReviewed: false,
+    evidencePack: false,
+    plural: cldrPlural('it'),
+    pluralCategories: ['one', 'many', 'other']
+  },
+  {
+    code: 'ru',
+    nativeName: 'Русский',
+    nativeReviewed: false,
+    evidencePack: false,
+    plural: cldrPlural('ru'),
+    pluralCategories: ['one', 'few', 'many', 'other']
   }
 ] as const satisfies readonly UiLanguageInfo[]
 

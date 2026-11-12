@@ -2646,9 +2646,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   determinism risk for the golden-tested template. The pack states the answer is reproduced
   verbatim as frozen at review creation; formatting characters (`#`, `*`, backticks) show
   as typed.
-- **Pack language is frozen at generation.** An exported pack is a snapshot in the UI
-  language chosen at export (EN or DE) — switching the app language later does not (and
-  must not) re-localize an existing file. The stored SHA-256 pins the exact bytes.
+- **Pack language is frozen at generation.** An exported pack is a snapshot in the pack
+  language chosen at export (English or German; English from any other interface language) —
+  switching the app language later does not (and must not) re-localize an existing file. The
+  stored SHA-256 pins the exact bytes.
 - **No file paths, by construction.** The review snapshot never captures paths, so no
   export option can include one — the spec's "paths default off" is satisfied by absence.
 - **PDF accessibility is best-effort — not a PDF/UA claim.** The PDF export (P6) asks
@@ -2710,6 +2711,52 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 
+- **The interface comes in six languages, but the app understands questions best in English and
+  German.** English, German, Spanish, French, Italian and Russian are offered under Settings →
+  General → Language. You can ask questions in any of them, but the rules that decide how a
+  question is answered — whether it asks for a complete list, which notes lead the answer, when a
+  skill is suggested or started, and how a knowledge pack is searched — recognise English and
+  German wording only. Three cases you can run into: the document chat's example question "Find
+  every mention of …", asked over several documents or one too large to read whole, gets the
+  best-matching passages in every language, but only in English and German does the answer say
+  when it could not read every section; in a chat about one document, a
+  thank-you such as "Gracias", "Grazie" or "Спасибо!" is taken for a question about it and can
+  start a read of the whole document; and the knowledge-pack search counts the Spanish word "es"
+  and the French "des" as German words, so it can take a Spanish or French question for German.
+- **Only the English and German interface has been reviewed by native speakers.** The Spanish,
+  French, Italian and Russian text was machine-translated and checked by a second AI model; no
+  native speaker has reviewed it yet. The app shows no notice about this.
+- **Text recognition (OCR) reads German and English; speech was not tested in the new
+  languages.** The OCR files the app installs cover German and English only, so a scan or photo
+  in another language may be read with errors. Dictation and audio import detect the spoken
+  language on their own; how well that works in Spanish, French, Italian or Russian has not been
+  measured.
+- **Evidence packs are written in English or German.** From a Spanish, French, Italian or Russian
+  interface the pack is written in English, and the export panel says so. The answer inside the
+  pack is quoted as it was written, and so are the notes the app puts in front of a document
+  answer (for example "I answered from … only" or the heads-up that a total is the model's own
+  arithmetic), which are written in the interface language of the moment: an English pack
+  exported from a French interface can quote French lines.
+- **Spanish figures use the Spain number format** for every Spanish-speaking user: a full stop
+  between thousands and a decimal comma (98.304, 4,3 GB), which readers used to the Mexican or US
+  format can misread.
+- **Two app versions on one computer can show the lock screen in another language.** The
+  language you choose is stored in the workspace, but the lock screen's language is remembered by
+  the computer. When an older HilbertRaum version opens a workspace set to a language it doesn't
+  offer (for example Русский), it treats the setting as *System*: it uses the language its
+  *System* choice gives and remembers that language for the lock screen. The newer version's next
+  lock screen is then in that language until you unlock. In Settings, version 0.1.65 and earlier
+  show no language as selected; pick the one you want. A later version that meets a language it
+  doesn't know shows *System* in its list, and choosing *System* there changes nothing at first:
+  choose another language, then *System*.
+- **Copy reports for support follow the interface language.** The reports the **Copy** buttons
+  make (Settings → Diagnostics, the Performance screen) are written in the language the app is
+  shown in, so a report from a Russian interface is in Russian.
+- **Two rare refusals when creating a workspace are always in English:** a workspace already
+  exists there ("An encrypted workspace already exists here …", "A workspace already exists on
+  this drive …"), or the drive's policy doesn't allow an unencrypted one ("Plaintext workspace is
+  not permitted by policy."). These three messages have no translation and show in English in
+  every interface language.
 - **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as
   documented).** LLM prompts are pinned English (benchmark comparability; models
   follow the language of the user's question naturally), so a one-click summary of a German
@@ -2721,13 +2768,14 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   labels in the Diagnostics Activity panel are translated. Per the audit-log privacy rule the
   messages carry ids/filenames/counts, never content — a stable English diagnostic record was
   chosen over translated DB rows.
-- **Interpolated and library-origin error strings render as-is under German.** The D-L4
-  display map is exact-match over the finite persist-canonical set by design, so
-  `documents.error_message` values like `Unsupported file type: .xyz` and raw parser-library
-  errors (e.g. a pdfjs exception message) show English in a German UI. Rare failure-path
-  remnants, accepted.
-- **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now.**
-  Translating them is content work, tracked separately from UI i18n.
+- **Library-origin and other unmapped error strings render as-is in every interface language but
+  English.** The D-L4 display map covers the finite persist-canonical set (exact match, plus five
+  interpolated messages matched by their template), so anything else in
+  `documents.error_message`, such as a raw parser-library error (a pdfjs exception message),
+  shows English in a German, Spanish, French, Italian or Russian UI. Rare failure-path remnants,
+  accepted.
+- **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now**, whatever
+  the interface language. Translating them is content work, tracked separately from UI i18n.
 - **A conversation transcript can legitimately mix languages.** Old answers, model output,
   and the fixed RAG answers translate (or don't) independently of the current UI language —
   accepted.

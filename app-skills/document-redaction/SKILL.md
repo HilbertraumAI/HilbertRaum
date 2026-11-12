@@ -9,6 +9,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Dokument schwärzen
     description: Verwenden, wenn personenbezogene Daten in einem Dokument geschwärzt, anonymisiert oder entfernt werden sollen.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Ocultar datos personales
+    description: Sirve para ocultar, anonimizar o quitar los datos personales de un documento.
+  fr:                          #   Shown when the app runs in French.
+    title: Caviarder un document
+    description: À utiliser pour caviarder, anonymiser ou supprimer les données personnelles d’un document.
+  it:                          #   Shown when the app runs in Italian.
+    title: Oscuramento dei dati personali
+    description: Serve a oscurare, anonimizzare o rimuovere i dati personali da un documento.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Скрытие персональных данных
+    description: Подходит, когда в документе нужно скрыть, обезличить или удалить персональные данные.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

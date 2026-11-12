@@ -9,6 +9,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Besprechungsprotokoll
     description: Verwenden, wenn aus einem Besprechungstranskript, Notizen oder einer Tagesordnung ein sauberes, strukturiertes Protokoll entstehen soll – Beschlüsse, Aufgaben und offene Fragen.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Acta de reunión
+    description: "Sirve para convertir la transcripción de una reunión, unas notas sueltas o un orden del día en un acta clara y estructurada: decisiones, tareas pendientes y preguntas sin resolver."
+  fr:                          #   Shown when the app runs in French.
+    title: Compte rendu de réunion
+    description: "À utiliser pour transformer une transcription de réunion, des notes brutes ou un ordre du jour en un compte rendu clair et structuré\u00A0: décisions, actions à mener et questions en suspens."
+  it:                          #   Shown when the app runs in Italian.
+    title: Verbale di riunione
+    description: "Serve a trasformare la trascrizione di una riunione, appunti sommari o un ordine del giorno in un verbale chiaro e strutturato: decisioni, attività da svolgere e questioni aperte."
+  ru:                          #   Shown when the app runs in Russian.
+    title: Протокол встречи
+    description: Подходит, когда из расшифровки встречи, черновых заметок или повестки нужно составить аккуратный структурированный протокол — решения, задачи и открытые вопросы.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model answers over the WHOLE transcript (not top-k passages).
                                #   With this skill active over a single fully-chunked doc the whole-doc engine

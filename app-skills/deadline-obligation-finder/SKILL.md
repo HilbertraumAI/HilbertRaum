@@ -9,6 +9,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Fristen & Pflichten
     description: Verwenden, wenn Fristen, Kündigungsfristen, Verlängerungs- und Zahlungstermine sowie Pflichten in einem Dokument gefunden werden sollen – was bis wann zu tun ist und was bei Versäumnis passiert.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Plazos y obligaciones
+    description: "Sirve para encontrar en un documento los plazos, los periodos de preaviso, las fechas de renovación y de pago, y las obligaciones: qué hacer, para cuándo y qué pasa si no se cumple."
+  fr:                          #   Shown when the app runs in French.
+    title: Échéances et obligations
+    description: "À utiliser pour repérer dans un document les échéances, les délais de préavis, les dates de renouvellement et de paiement, ainsi que les obligations\u00A0: ce qu’il faut faire, dans quel délai et ce qui se passe en cas de non-respect."
+  it:                          #   Shown when the app runs in Italian.
+    title: Scadenze e obblighi
+    description: "Serve a trovare in un documento scadenze, termini di preavviso, date di rinnovo e di pagamento, oltre agli obblighi: cosa fare, entro quando e cosa succede in caso di mancato rispetto."
+  ru:                          #   Shown when the app runs in Russian.
+    title: Сроки и обязательства
+    description: Подходит, когда в документе нужно найти крайние сроки, сроки уведомления, даты продления и оплаты, а также обязательства — что сделать, к какому сроку и что будет при пропуске срока.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the

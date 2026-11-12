@@ -9,6 +9,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Dokument bearbeiten
     description: Verwenden, wenn gezielte Suchen-und-Ersetzen-Änderungen an einem Dokument vorgenommen werden sollen, ohne es neu zu schreiben.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Editar documento
+    description: Sirve para hacer cambios puntuales de buscar y reemplazar en un documento sin reescribirlo.
+  fr:                          #   Shown when the app runs in French.
+    title: Modifier un document
+    description: À utiliser pour apporter à un document des modifications ciblées (rechercher et remplacer), sans le réécrire.
+  it:                          #   Shown when the app runs in Italian.
+    title: Modifica del documento
+    description: Serve ad applicare a un documento modifiche mirate con trova e sostituisci, senza riscriverlo.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Редактирование документа
+    description: Подходит, когда в документе нужно точечно найти и заменить текст, не переписывая документ целиком.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40

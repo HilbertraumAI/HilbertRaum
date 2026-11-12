@@ -205,9 +205,6 @@ function findStaleExceptions(
   return stale
 }
 
-/** The two interface languages code named as a closed set (`'en' | 'de'`) before the language registry. */
-const LEGACY_PAIR: ReadonlySet<string> = new Set(['en', 'de'])
-
 const EQUALITY_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.EqualsEqualsEqualsToken,
   ts.SyntaxKind.ExclamationEqualsEqualsToken,
@@ -217,9 +214,6 @@ const EQUALITY_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
 
 /** The catalog lookups that take the language as their first argument, by their exported names. */
 const CATALOG_LOOKUPS: ReadonlySet<string> = new Set(['t', 'tCount'])
-
-/** The registered languages a lookup may not be handed literally: English is the persist language. */
-const NON_ENGLISH_CODES: ReadonlySet<string> = new Set(UI_LANGUAGE_CODES.filter((code) => code !== 'en'))
 
 /** Whether `fileName`'s import `specifier` is the shared i18n module (`src/shared/i18n`, its index). */
 function isSharedI18nImport(fileName: string, specifier: string): boolean {
@@ -260,19 +254,28 @@ function catalogLookupBindings(
 }
 
 /**
- * The places a file hardcodes the English/German pair instead of reading the language registry
- * (`shared/i18n/languages.ts`): a union type or an array literal (`as const` or not) naming both
- * `'en'` and `'de'`, an equality comparison (or `case`) against `'en'` or `'de'`, and a catalog
- * lookup (`t`, `tCount`, under whatever local name the file imports it) handed a registered
- * language other than English as a literal, the `t('en', key) || t('de', key)` shape that knows
- * copy in two languages only. `t('en', …)` stays allowed: persisted text is canonical English.
- * String and type literals only, through the compiler's AST, so a comment or a string that
- * merely spells `=== 'de'` never matches. Parentheses (in values and in types), `as`, `satisfies`
- * and `!` around a code are seen through. Not seen (reviewed limits): a code held in a constant, `.includes` / `Set` /
- * `startsWith` / regex tests, an `{ en, de }` key table, and a lookup re-bound to another name
- * after its import.
+ * The places a file hardcodes interface languages instead of reading the language registry
+ * (`shared/i18n/languages.ts`), for the registered language codes `codes`: a union type or an
+ * array literal (`as const` or not) naming two or more of them (the closed `'en' | 'de'` the
+ * registry replaced, or any other hand-kept set), an equality comparison (or `case`) against one
+ * of them (`lang === 'de'`, `lang === 'fr'`), and a catalog lookup (`t`, `tCount`, under whatever
+ * local name the file imports it) handed one of them other than English as a literal, the
+ * `t('en', key) || t('de', key)` shape that knows copy in a fixed set of languages only.
+ * `t('en', …)` stays allowed: persisted text is canonical English. A code outside `codes` is
+ * never flagged. String and type literals only, through the compiler's
+ * AST, so a comment or a string that merely spells `=== 'de'` never matches. Parentheses (in
+ * values and in types), `as`, `satisfies` and `!` around a code are seen through. Not seen
+ * (reviewed limits): a code held in a constant, `.includes` / `Set` / `startsWith` / regex tests,
+ * an `{ en, de }` key table, and a lookup re-bound to another name after its import.
  */
-function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line: number; text: string }> {
+function twoLanguageLiterals(
+  fileName: string,
+  sourceText: string,
+  codes: readonly string[] = UI_LANGUAGE_CODES
+): Array<{ line: number; text: string }> {
+  const registered: ReadonlySet<string> = new Set(codes)
+  // English is the persist language: `t('en', key)` is the one literal a lookup may take.
+  const nonEnglish: ReadonlySet<string> = new Set(codes.filter((code) => code !== 'en'))
   const source = ts.createSourceFile(
     fileName,
     sourceText,
@@ -298,7 +301,9 @@ function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line
     const e = unwrap(node)
     return ts.isStringLiteralLike(e) ? e.text : null
   }
-  const isPairLiteral = (node: ts.Node): boolean => LEGACY_PAIR.has(literalText(node) ?? '')
+  const isLanguageLiteral = (node: ts.Node): boolean => registered.has(literalText(node) ?? '')
+  /** Two or more distinct registered codes among `named`: a hand-kept set of languages. */
+  const namesASet = (named: readonly string[]): boolean => new Set(named.filter((code) => registered.has(code))).size >= 2
   const lookups = catalogLookupBindings(fileName, source)
   const isCatalogLookup = (callee: ts.Expression): boolean =>
     ts.isIdentifier(callee)
@@ -318,23 +323,23 @@ function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line
         while (ts.isParenthesizedTypeNode(type)) type = type.type
         return ts.isLiteralTypeNode(type) && ts.isStringLiteral(type.literal) ? [type.literal.text] : []
       })
-      if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
+      if (namesASet(named)) record(node, node.getText(source))
     } else if (ts.isArrayLiteralExpression(node)) {
       const named = node.elements.flatMap((element) => literalText(element) ?? [])
-      if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
+      if (namesASet(named)) record(node, node.getText(source))
     } else if (
       ts.isBinaryExpression(node) &&
       EQUALITY_OPERATORS.has(node.operatorToken.kind) &&
-      (isPairLiteral(node.left) || isPairLiteral(node.right))
+      (isLanguageLiteral(node.left) || isLanguageLiteral(node.right))
     ) {
       record(node, node.getText(source))
-    } else if (ts.isCaseClause(node) && isPairLiteral(node.expression)) {
+    } else if (ts.isCaseClause(node) && isLanguageLiteral(node.expression)) {
       record(node, `case ${node.expression.getText(source)}`)
     } else if (
       ts.isCallExpression(node) &&
       isCatalogLookup(node.expression) &&
       node.arguments.length > 0 &&
-      NON_ENGLISH_CODES.has(literalText(node.arguments[0]) ?? '')
+      nonEnglish.has(literalText(node.arguments[0]) ?? '')
     ) {
       record(node, node.getText(source))
     }
@@ -431,9 +436,10 @@ const LEGACY_UNREFERENCED: readonly MessageKey[] = []
 
 // ---------------------------------------------------------------------------------------------
 // Two-language literals (UI languages wave): the interface languages come from the
-// registry (`UI_LANGUAGES`), so a hardcoded en/de pair in src/ is a language left out the day
-// a third one registers, and so is a catalog lookup in a fixed language other than English
-// (`t('de', key)`). The exceptions name the en/de pair for a reason other than the
+// registry (`UI_LANGUAGES`), so a hardcoded set of registered codes in src/ (the old en/de pair)
+// is a language left out the day another one registers, a comparison with one registered code
+// special-cases that language, and so does a catalog lookup in a fixed language other than English
+// (`t('de', key)`). The exceptions name registered codes for a reason other than the
 // interface language. Each entry is one site, matched by file and source text: a new site, a
 // second copy or a stale entry fails the row.
 // ---------------------------------------------------------------------------------------------
@@ -480,6 +486,11 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
     file: 'renderer/lib/translateSession.ts',
     text: "lang === 'en'",
     reason: 'the English UI translates from German: the one UI language that cannot be its own source (translateSession.ts)'
+  },
+  {
+    file: 'main/services/zim/head-noun.ts',
+    text: "['en', 'es', 's', 'n']",
+    reason: 'SUFFIXES: German noun inflection endings that happen to spell two language codes (not languages at all)'
   },
   {
     file: 'shared/types.ts',
@@ -741,7 +752,7 @@ describe('two-language literals — the interface languages come from the regist
     ['an array of cast codes', 'fixture.ts', "const LANGS = ['en' as UiLanguage, 'de' as UiLanguage]", ["['en' as UiLanguage, 'de' as UiLanguage]"]],
     ['a comment only', 'fixture.ts', "// lang === 'de' used to pick German\nconst x = 1", []],
     ['a string that spells it', 'fixture.ts', "const hint = \"use lang === 'de' nowhere\"", []],
-    ['another language', 'fixture.ts', "type Lang = 'en' | 'fr'\nconst french = lang === 'fr'", []],
+    ['a language no registered code names', 'fixture.ts', "type Lang = 'en' | 'pt'\nconst portuguese = lang === 'pt'", []],
     ['object keys (a table per pack language)', 'fixture.ts', "const line = { en: 'a', de: 'b' }", []],
     ['a union naming only one of the pair', 'fixture.ts', "type T = 'de' | 'system'", []],
     // A catalog lookup handed a fixed language other than English. The lookups are found
@@ -798,7 +809,22 @@ describe('two-language literals — the interface languages come from the regist
     expect(twoLanguageLiterals(fileName, code).map((site) => site.text)).toEqual(texts)
   })
 
-  it('src/ names the en/de pair only at the reviewed sites; everything else derives from UI_LANGUAGES', () => {
+  // The arms follow the codes they are given, not a fixed pair: with a set of codes that differs
+  // from today's registry, its third language is caught the way German is, and a code the set
+  // leaves out (French here) is free.
+  it.each([
+    ['a comparison with the third language', "const portuguese = lang === 'pt'", ["lang === 'pt'"]],
+    ['a switch case on it', "switch (lang) { case 'pt': break }", ["case 'pt'"]],
+    ['a union of English and it', "type Lang = 'en' | 'pt'", ["'en' | 'pt'"]],
+    ['an array of German and it', "const LANGS = ['de', 'pt'] as const", ["['de', 'pt']"]],
+    ['a lookup in it', "import { t } from '@shared/i18n'\nconst text = t('pt', key)", ["t('pt', key)"]],
+    ['a code the set leaves out', "type Lang = 'en' | 'fr'\nconst french = lang === 'fr'", []]
+  ])('with en, de and pt as the languages: %s', (_title, code, texts) => {
+    const sites = twoLanguageLiterals('/repo/apps/desktop/src/renderer/fixture.ts', code, ['en', 'de', 'pt'])
+    expect(sites.map((site) => site.text)).toEqual(texts)
+  })
+
+  it('src/ names registered language codes only at the reviewed sites; everything else derives from UI_LANGUAGES', () => {
     const srcRoot = join(process.cwd(), 'src')
     const sites = listSourceFiles().flatMap((file) => {
       const path = relative(srcRoot, file).split('\\').join('/')
@@ -808,7 +834,8 @@ describe('two-language literals — the interface languages come from the regist
     const key = ({ file, text }: { file: string; text: string }): string => `${file}: ${text}`
     expect(
       sites.map(key).sort(),
-      'a hardcoded en/de pair or a lookup in a fixed non-English language: derive the languages from ' +
+      'a hardcoded set of language codes, a comparison with one, or a lookup in a fixed non-English ' +
+        'language: derive the languages from ' +
         'UI_LANGUAGES (shared/i18n/languages.ts), or, for a ' +
         'content language rather than the interface one, add a PAIR_LITERAL_EXCEPTIONS entry with its reason. ' +
         `Sites: ${sites.map((s) => `${s.file}:${s.line} ${s.text}`).join('; ')}`

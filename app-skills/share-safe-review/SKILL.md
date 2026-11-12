@@ -9,6 +9,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Sicher teilen prüfen
     description: Verwenden, wenn ein Dokument vor dem Teilen geprüft werden soll – sichtbare sensible Informationen und praktische Risiken. Nur beratend; keine Anonymisierung.
+  es:                          #   Shown when the app runs in Spanish.
+    title: Comprobar antes de compartir
+    description: "Sirve para comprobar un documento antes de compartirlo: información sensible visible y riesgos prácticos al compartirlo. Es solo orientativo y no anonimiza el documento."
+  fr:                          #   Shown when the app runs in French.
+    title: Vérifier avant de partager
+    description: "À utiliser pour vérifier un document avant de le partager\u00A0: informations sensibles visibles et risques concrets liés au partage. Donne seulement un avis indicatif et n’anonymise pas le document."
+  it:                          #   Shown when the app runs in Italian.
+    title: Controllo prima della condivisione
+    description: "Serve a controllare un documento prima di condividerlo: informazioni sensibili visibili e rischi pratici della condivisione. Ha solo valore indicativo e non anonimizza il documento."
+  ru:                          #   Shown when the app runs in Russian.
+    title: Проверка перед отправкой
+    description: Подходит, когда документ нужно проверить перед отправкой — видимые конфиденциальные сведения и практические риски при отправке. Только рекомендации, а не обезличивание.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the review reads the WHOLE document (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

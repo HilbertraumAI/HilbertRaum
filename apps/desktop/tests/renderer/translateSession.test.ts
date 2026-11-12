@@ -11,7 +11,6 @@ import {
 import { clearFileTranslate, getFileTranslate, translateDroppedFiles } from '../../src/renderer/lib/fileTranslateSession'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { TranslateJob } from '../../src/shared/types'
-import type { UiLanguage } from '../../src/shared/i18n'
 import type { PreloadApi } from '../../src/preload'
 import { stubApi } from '../helpers/renderer'
 
@@ -611,9 +610,8 @@ describe('translateSession — the pair a translate surface opens on (DOC-7, #68
   it.each([
     { lang: 'en', pair: { sourceLang: 'de', targetLang: 'en' } },
     { lang: 'de', pair: { sourceLang: 'en', targetLang: 'de' } },
-    // Any UI language but English opens on English → itself. `ru` is not registered yet, so the
-    // test casts it in; no production code changes for it (the rule reads no registry).
-    { lang: 'ru' as string as UiLanguage, pair: { sourceLang: 'en', targetLang: 'ru' } }
+    // Any UI language but English opens on English → itself (the rule reads no registry).
+    { lang: 'ru', pair: { sourceLang: 'en', targetLang: 'ru' } }
   ] as const)('before any translation this session, a $lang UI opens on its default pair', async ({ lang, pair }) => {
     const { session } = await freshStores()
     expect(session.initialTranslateChoice(lang)).toEqual(pair)

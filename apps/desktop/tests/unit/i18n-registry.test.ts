@@ -10,6 +10,7 @@ import {
   resolveUiLanguage,
   resolveUiLanguageIn,
   tCount,
+  uiLanguageInfo,
   type CatalogFor,
   type CatalogKeyFor,
   type CountMessageKey,
@@ -23,10 +24,10 @@ import { catalogOf } from '../helpers/i18n-catalogs'
 // The UI-language registry and the cores derived from it (i18n record D-L9, D-L1, D-L2):
 // registry invariants, the plural engine, OS-locale resolution, and the catalog types.
 //
-// The registry holds English and German only until more languages are registered, so the
-// rows for other languages run the pure cores (`pluralKeyFor`, `resolveUiLanguageIn`,
-// `CatalogFor`) against fixture entries. Production calls the same cores with the real
-// registry.
+// Most rows run the pure cores (`pluralKeyFor`, `resolveUiLanguageIn`, `CatalogFor`) against
+// fixture entries, so a rule is proved on a language shape whether or not a language of that
+// shape is registered; the rows over `UI_LANGUAGES` check the real registry and catalogs.
+// Production calls the same cores with the real registry.
 
 /** Fixture entries with the plural forms CLDR gives these languages. */
 const RU = {
@@ -62,9 +63,13 @@ const PLURAL_PROBES = [0, 0.5, 1, 1.5, 2, 5, 21, 22, 1_000_000]
  */
 const exactlyOne = (n: number): 'one' | 'other' => (n === 1 ? 'one' : 'other')
 
-/** −5 … 10,000, fractions (1.0000001 reads as "1" to CLDR), NaN and ∞. */
+/**
+ * −5 … 10,000, fractions (1.0000001 reads as "1" to CLDR), NaN and ∞, and an exact million (the
+ * count Spanish, Italian and French keep a `.many` form for).
+ */
 const SWEEP = [
   ...Array.from({ length: 10_006 }, (_, i) => i - 5),
+  1_000_000,
   -0.5,
   0.5,
   1.0,
@@ -203,6 +208,27 @@ describe('tCount — each registered language renders the form its own rule pick
       warn.mockRestore()
     }
   })
+
+  // The sweep row above is only as good as the counts it tries: they must reach every form a
+  // language pins (Russian 2 → few and 5 → many, French 0 → one, 1,000,000 → many), or a form
+  // goes unchecked. French writes every `.many` exactly like its `.other` (owner call: no «de»
+  // after a figure), so for French a `tCount` that never picks `.many` cannot be told apart.
+  it.each(UI_LANGUAGE_CODES)('%s: the sweep reaches every plural form the registry pins', (code) => {
+    const cldr = new Intl.PluralRules(code)
+    const rule = (n: number): string => (EXACT_ONE_CODES.includes(code) ? exactlyOne(n) : cldr.select(n))
+    const reached = new Set(SWEEP.map(rule))
+    expect(uiLanguageInfo(code).pluralCategories.filter((form) => !reached.has(form))).toEqual([])
+  })
+
+  // The missing-pages warning picks its form by the page count while it shows the pages as a
+  // range (TranslateScreen). Russian `.one` also serves 21, 31 … pages, so it may not read as one
+  // page: with the same range text it reads exactly as the form for 25 pages does.
+  it('ru: the missing-pages warning for 21 pages reads as it does for 25', () => {
+    const pages = '3–23'
+    expect(tCount('ru', 'translate.file.gapPages', 21, { pages })).toBe(
+      tCount('ru', 'translate.file.gapPages', 25, { pages })
+    )
+  })
 })
 
 describe('pluralKeyFor — the form a language renders for a count', () => {
@@ -285,10 +311,11 @@ describe('resolveUiLanguageIn — setting + OS locale against a set of languages
 
 // ---- Catalog types (checked by `npm run typecheck`, which includes tests/) ----------------
 //
-// A language's catalog type is derived from its registry entry. No language beyond
-// English and German is registered yet, so these rows prove the derivation on the
-// fixture entries above: an unused `@ts-expect-error` or a `false` handed to `Assert`
-// fails typecheck.
+// A language's catalog type is derived from its registry entry. These rows prove the
+// derivation on the fixture entries above (including shapes no registered language has,
+// such as a language that writes packs and has extra plural forms); the real catalogs are
+// checked by the `CATALOGS` map in `index.ts`. An unused `@ts-expect-error` or a `false`
+// handed to `Assert` fails typecheck.
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false

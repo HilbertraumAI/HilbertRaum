@@ -5,7 +5,7 @@ import {
   BANK_STATEMENT_INSTALL_ID,
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
-import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams, type UiLanguage } from '../../src/shared/i18n'
 import type { RetrievalScope } from '../../src/shared/types'
 import { BANK_FIXTURES } from '../fixtures/real-layouts/corpus'
 import { openFreshDb } from '../helpers/db-fixtures'
@@ -857,6 +857,43 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     // Both the deterministic in/out/net echo AND the R5 caveat ride the postscript (R5 honesty preserved).
     expect(res.postscript).toContain('2454.10')
     expect(res.postscript).toContain(tr('skills.bankAnalysis.dateOrderCaveat'))
+  })
+})
+
+// UI languages wave (i18n record §3.3 rule 3): when a "Summarize cashflow" / "Categorize" run
+// finishes, the Chat screen sends the app's OWN catalog question in the UI language
+// (`ROUTED_RUN_QUESTION`, ChatScreen.tsx) and main answers it in that language. The stems recognise
+// English and German only, so without the exact-match a registered language's routed question would
+// get a model answer (grounded-data) instead of the completeness-gated template. One row per
+// registered language: a language registered later arms itself.
+describe('bank-statement analysis handler — routed skill-run questions in every UI language', () => {
+  const routedTurn = async (code: UiLanguage, key: MessageKey) => {
+    const db = freshDb()
+    const scope = { documentIds: [seedDoc(db, COMPLETE)] }
+    const question = t(code, key)
+    const trIn = (k: MessageKey, p?: MessageParams): string => t(code, k, p)
+    const ctx = makeAnalysisCtx(db, scope, question, { skillInstallId: BANK_STATEMENT_INSTALL_ID, locale: code })
+    const applies = bankStatementAnalysisHandler.applies({ db, scope, question })
+    const res = await bankStatementAnalysisHandler.run!(ctx)
+    return { applies, res, trIn, tools: ctx.events.map((e) => e.meta?.toolName) }
+  }
+
+  it.each(UI_LANGUAGE_CODES)('%s: the routed summary question gets the totals template, no category breakdown', async (code) => {
+    const { applies, res, trIn, tools } = await routedTurn(code, 'chat.skill.summarize.question')
+    expect(applies).toBe(true)
+    expect(res.mode).toBeUndefined() // the deterministic template, not grounded-data
+    expect(res.answer).toContain(trIn('skills.bankAnalysis.caveat')) // the D56-verified total was presented
+    expect(tools).not.toContain('categorize_transactions')
+    expect(res.answer).not.toContain(trIn('skills.bankAnalysis.categoryHeading'))
+  })
+
+  it.each(UI_LANGUAGE_CODES)('%s: the routed breakdown question gets the per-category breakdown template', async (code) => {
+    const { applies, res, trIn, tools } = await routedTurn(code, 'chat.skill.categorize.breakdownQuestion')
+    expect(applies).toBe(true)
+    expect(res.mode).toBeUndefined()
+    expect(res.answer).toContain(trIn('skills.bankAnalysis.caveat'))
+    expect(tools).toContain('categorize_transactions')
+    expect(res.answer).toContain(trIn('skills.bankAnalysis.categoryHeading'))
   })
 })
 

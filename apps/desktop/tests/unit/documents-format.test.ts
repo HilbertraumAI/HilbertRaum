@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { formatSize, friendlyMimeLabel, isRetryableFailure } from '../../src/renderer/screens/documents/format'
-import { t as translate } from '../../src/shared/i18n'
+import { formatSize, friendlyMimeLabel, isRetryableFailure, metaLine } from '../../src/renderer/screens/documents/format'
+import { t as translate, tCount } from '../../src/shared/i18n'
+import { makeDocumentInfo } from '../helpers/chat-fixtures'
 
 // The Documents screen's pure formatters (screens/documents/format.tsx, DX-3 split). Moved here from the
 // renderer suites (DocumentsScreen / DocumentsScreenPolish) so the screens test what the user sees.
@@ -24,15 +25,41 @@ describe('isRetryableFailure', () => {
 
 describe('friendlyMimeLabel', () => {
   it('friendlyMimeLabel maps known MIME types to friendly labels', () => {
-    expect(friendlyMimeLabel('application/pdf')).toBe('PDF')
-    expect(friendlyMimeLabel('text/markdown')).toBe('Markdown')
-    expect(friendlyMimeLabel('text/csv')).toBe('CSV')
-    expect(friendlyMimeLabel('application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe('Word')
-    expect(friendlyMimeLabel('audio/mpeg')).toBe('MP3')
-    expect(friendlyMimeLabel('image/png')).toBe('PNG')
-    expect(friendlyMimeLabel('audio/aac')).toBe('Audio')
-    expect(friendlyMimeLabel('application/zip')).toBe('ZIP')
-    expect(friendlyMimeLabel(null)).toBe('—')
+    expect(friendlyMimeLabel('application/pdf', 'en')).toBe('PDF')
+    expect(friendlyMimeLabel('text/markdown', 'en')).toBe('Markdown')
+    expect(friendlyMimeLabel('text/csv', 'en')).toBe('CSV')
+    expect(friendlyMimeLabel('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'en')).toBe('Word')
+    expect(friendlyMimeLabel('audio/mpeg', 'en')).toBe('MP3')
+    expect(friendlyMimeLabel('image/png', 'en')).toBe('PNG')
+    expect(friendlyMimeLabel('audio/aac', 'en')).toBe('Audio')
+    expect(friendlyMimeLabel('application/zip', 'en')).toBe('ZIP')
+    expect(friendlyMimeLabel(null, 'en')).toBe('—')
+  })
+
+  // A .txt row once read "Text · 158 B · 1 раздел" in every new language. The generic kinds
+  // are words, so they follow the UI language; format names (PDF, MP3, the upper-cased subtype)
+  // and the dash do not. One row per registered language: plain text, then the audio / image /
+  // text fallbacks for a type that has no format name.
+  it.each([
+    ['en', 'Text', 'Audio', 'Image'],
+    ['de', 'Text', 'Audio', 'Bild'],
+    ['es', 'Texto', 'Audio', 'Imagen'],
+    ['fr', 'Texte', 'Audio', 'Image'],
+    ['it', 'Testo', 'Audio', 'Immagine'],
+    ['ru', 'Текст', 'Аудио', 'Изображение']
+  ] as const)('%s names the generic file kinds in its own language', (lang, text, audio, image) => {
+    expect(friendlyMimeLabel('text/plain', lang)).toBe(text)
+    expect(friendlyMimeLabel('text/html', lang)).toBe(text)
+    expect(friendlyMimeLabel('audio/aac', lang)).toBe(audio)
+    expect(friendlyMimeLabel('image/webp', lang)).toBe(image)
+    expect(friendlyMimeLabel('application/pdf', lang)).toBe('PDF')
+    expect(friendlyMimeLabel('application/zip', lang)).toBe('ZIP')
+    expect(friendlyMimeLabel(null, lang)).toBe('—')
+  })
+
+  it('metaLine leads with the file kind in the row language', () => {
+    const doc = makeDocumentInfo({ mimeType: 'text/plain', sizeBytes: 158, chunkCount: 1 })
+    expect(metaLine(doc, 'es', (key, count) => tCount('es', key, count))).toBe('Texto · 158 B · 1 sección')
   })
 })
 

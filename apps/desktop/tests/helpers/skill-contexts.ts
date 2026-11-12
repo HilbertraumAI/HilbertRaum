@@ -1,16 +1,16 @@
 // Skill-analysis / skill-tool context factories with a capturing audit (pure: no electron import).
 import type { Db } from '../../src/main/services/db'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
-import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
+import { t, type MessageKey, type MessageParams, type UiLanguage } from '../../src/shared/i18n'
 import type { DocumentChunkRead, RetrievalScope, SkillToolContext } from '../../src/shared/types'
 import { capturingAudit, type CapturedAuditEvent } from './audit-capture'
 
-/** A skill-analysis handler context over `db`, with a capturing audit and the EN (default) or DE `tr`. */
+/** A skill-analysis handler context over `db`, with a capturing audit and the `tr` of `locale` (English by default). */
 export function makeAnalysisCtx(
   db: Db,
   scope: RetrievalScope,
   question: string,
-  o: { skillInstallId: string; conversationId?: string | null; locale?: 'en' | 'de' }
+  o: { skillInstallId: string; conversationId?: string | null; locale?: UiLanguage }
 ): SkillAnalysisContext & { events: CapturedAuditEvent[] } {
   const { audit, events } = capturingAudit()
   const locale = o.locale ?? 'en'

@@ -171,14 +171,18 @@ describe('resolveUiLanguage (D-L2)', () => {
     expect(resolveUiLanguage('de', 'en-US')).toBe('de')
   })
 
-  it("'system' resolves de-prefixed locales to German, everything else to English", () => {
+  it("'system' resolves a registered language's locale to that language, everything else to English", () => {
     expect(resolveUiLanguage('system', 'de')).toBe('de')
     expect(resolveUiLanguage('system', 'de-DE')).toBe('de')
     expect(resolveUiLanguage('system', 'de-AT')).toBe('de')
     expect(resolveUiLanguage('system', 'de_CH')).toBe('de')
     expect(resolveUiLanguage('system', 'DE-DE')).toBe('de')
     expect(resolveUiLanguage('system', 'en-US')).toBe('en')
-    expect(resolveUiLanguage('system', 'fr-FR')).toBe('en')
+    expect(resolveUiLanguage('system', 'es-MX')).toBe('es')
+    expect(resolveUiLanguage('system', 'fr-FR')).toBe('fr')
+    expect(resolveUiLanguage('system', 'it-IT')).toBe('it')
+    expect(resolveUiLanguage('system', 'ru-RU')).toBe('ru')
+    expect(resolveUiLanguage('system', 'pt-BR')).toBe('en')
     // Another language whose tag merely shares a first letter with 'de' is not German.
     expect(resolveUiLanguage('system', 'dv')).toBe('en')
   })
@@ -238,6 +242,22 @@ function opensBeforeCloses(open: string, close: string, title: string, message: 
   }
 }
 
+/**
+ * No value matches `pattern`. Offenders read `key: value`. The pattern must not carry the `g`
+ * or `y` flag: `RegExp#test` would then resume from the previous match and skip values.
+ */
+function forbids(pattern: RegExp, title: string, message: string): TypographyRule {
+  if (pattern.global || pattern.sticky) throw new Error(`forbids(${pattern}): drop the g/y flag`)
+  return {
+    title,
+    message,
+    offenders: (catalog) =>
+      Object.entries(catalog)
+        .filter(([, value]) => pattern.test(value))
+        .map(([key, value]) => `${key}: ${value}`)
+  }
+}
+
 // The rules run over the CATALOG VALUES only: a catalog file's own comments are not shipped
 // copy, and technical field names inside notes ("{field}", "language") legitimately keep
 // straight ASCII pairs. Typecheck makes every registered language list its rules here.
@@ -258,6 +278,304 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'never uses “ as an OPENING quote (the pair is „…“, not “…”)',
       '“ used before its „ — German opens low, closes high'
     )
+  ],
+  // Spanish: the typography of design-guidelines §7 "Spanish microcopy".
+  es: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Spanish values with an unbalanced «…» pair — close them with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » as an OPENING quote (the pair is «…», not »…«)',
+      '» used before its « — Spanish opens with « and closes with »'
+    ),
+    forbids(
+      /["“”„‟‘]/,
+      'uses no ASCII, English or German quotation mark',
+      'Spanish values with a foreign quotation mark — quote with «…» (U+00AB, U+00BB)'
+    ),
+    balancedQuotes(
+      '¿',
+      '?',
+      'opens every question with ¿',
+      'Spanish values where ¿ and ? do not pair — every question opens with ¿ (U+00BF) and sits inside one value'
+    ),
+    opensBeforeCloses(
+      '¿',
+      '?',
+      'never closes a question before opening it',
+      '? used before its ¿ — put ¿ where the question starts'
+    ),
+    balancedQuotes(
+      '¡',
+      '!',
+      'opens every exclamation with ¡',
+      'Spanish values where ¡ and ! do not pair — every exclamation opens with ¡ (U+00A1)'
+    ),
+    opensBeforeCloses(
+      '¡',
+      '!',
+      'never closes an exclamation before opening it',
+      '! used before its ¡ — put ¡ where the exclamation starts'
+    ),
+    forbids(
+      /['’]/,
+      'uses no apostrophe',
+      'Spanish values with an apostrophe — Spanish has none; quote with «…» and reword contractions'
+    ),
+    forbids(
+      /\.\.\.| …/,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Spanish values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      / [—–-] /,
+      'uses no spaced dash',
+      'Spanish values with a spaced dash — Spanish breaks a sentence with a colon, a full stop, a comma or parentheses'
+    ),
+    forbids(
+      /[¿¡«] | [?!»;,:]/,
+      'puts no space inside «…», ¿…? or ¡…!, and none before : ; ,',
+      'Spanish values with a space after ¿ ¡ « or before ? ! » : ; , — remove it'
+    ),
+    forbids(
+      /[^\u00A0]%/,
+      'separates a figure from % with a no-break space',
+      'Spanish values with % not preceded by U+00A0 — write {pct}\\u00A0%'
+    )
+  ],
+  // French: the typography of design-guidelines §7 "French microcopy".
+  fr: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'French values with an unbalanced «…» pair'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » before its «',
+      '» used before its « — French opens with «'
+    ),
+    forbids(
+      /["“”„‟]/,
+      'uses no quotation mark other than « »',
+      'French values quoting with " “ ” or „ — use «\u00A0…\u00A0»'
+    ),
+    forbids(
+      /«(?!\u00A0)|(?<!\u00A0)»/,
+      'puts a no-break space inside « and »',
+      'French guillemets without U+00A0 inside — write «\\u00A0…\\u00A0»'
+    ),
+    // The one colon a French value may write without a space is the host:port one: a figure,
+    // the colon, then the {port} placeholder (`diag.app.onPort`, 127.0.0.1:{port}). Any other
+    // colon, Erreur:{detail} or Étape 2:{title} alike, needs the no-break space before it.
+    forbids(
+      /(?<!\u00A0)[;?!]|(?<![\u00A0\d]):|(?<=\d):(?!\{port\})/,
+      'puts a no-break space before : ; ? !',
+      'French : ; ? ! with a plain space or no space before it — write \\u00A0 (only the host:port colon of 127.0.0.1:{port} is exempt)'
+    ),
+    forbids(
+      /(?<!\u00A0)%/,
+      'puts a no-break space before %',
+      'French % without U+00A0 before it'
+    ),
+    forbids(
+      / \u00A0|\u00A0 |\u00A0\u00A0/,
+      'never doubles a no-break space with another space',
+      'French values with a space next to U+00A0'
+    ),
+    forbids(
+      /(?<!\d)\u202F|\u202F(?!\d)/,
+      'uses U+202F only between two digits',
+      'French values with a narrow no-break space outside a typed figure — the house space is U+00A0'
+    ),
+    forbids(
+      /['‘]/,
+      'uses ’ for every apostrophe',
+      "French values with an ASCII ' or a ‘ — use ’ (U+2019)"
+    ),
+    forbids(
+      /\.\.\./,
+      'uses … for an ellipsis',
+      'French values with three dots — use … (U+2026)'
+    ),
+    forbids(
+      /—| - /,
+      'uses the spaced en dash as the house dash',
+      'French values with an em dash or a bare " - " — use " – " (U+2013), or better a colon'
+    ),
+    forbids(
+      /oe[ui]/i,
+      'writes the œ ligature',
+      'French values with "oeu"/"oei" — write œ (cœur, œuvre, œil, nœud)'
+    ),
+    forbids(
+      /[}\d] (?:GB|MB|KB|B|MB\/s|tok\/s|ms|s)(?![\p{L}’])/u,
+      'joins a figure and its unit symbol with a no-break space',
+      'French values with a plain space between a figure and its unit — write \\u00A0'
+    ),
+    forbids(
+      /[}\d][\u00A0 ](?:Go|Mo|Ko|octets?)(?!\p{L})/u,
+      'keeps the Latin size symbols the formatters print',
+      'French values with Go/Mo/Ko — the app prints GB/MB/KB, so the copy must too'
+    ),
+    // A tu form counts as a whole word, with no letter or digit on either side (Veux-tu,
+    // Assieds-toi and ton… all count). «ton» is also the noun "tone": straight after an article
+    // or a determiner it cannot be the possessive (le ton, d’un ton, son ton), so it passes there.
+    // After «de» or «est-ce», or with a word in between (un bon ton), the two read alike: reword.
+    forbids(
+      /(?<![\p{L}\p{N}])(?:tu|toi|te|ta|tes|(?<!(?:^|[^\p{L}-])(?:le|un|du|au|ce|quel|mon|son|notre|votre|leur)\s)ton)(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])t’/iu,
+      'addresses the reader as vous',
+      'French values with tu/toi/te/ton/ta/tes or t’ — the form of address is vous (the noun ton passes right after le, un, du, au, ce, quel or a possessive; otherwise reword)'
+    ),
+    forbids(
+      /[\p{Ll},] Vous(?!\p{L})/u,
+      'writes vous in lowercase mid-sentence',
+      'French values with a capital Vous mid-sentence'
+    )
+  ],
+  // Italian: the typography of design-guidelines §7 "Italian microcopy".
+  it: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Italian values with an unbalanced «…» pair — close each « with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » as an OPENING quote (the pair is «…», not »…«)',
+      '» used before its « — Italian opens with « and closes with »'
+    ),
+    forbids(
+      /["“”„‟]/u,
+      'uses no ASCII, English or German double quote',
+      'Italian values with " “ ” or „ — quote with «…» (also around technical field names)'
+    ),
+    forbids(
+      /['‘`´]/u,
+      'writes the apostrophe as ’, never as an ASCII quote, a backtick or an accent mark',
+      "Italian values with ' ‘ ` or ´ — the apostrophe is ’ (U+2019)"
+    ),
+    forbids(
+      /(?<![\p{L}\p{N}])(?:l|un|gl|dell|all|dall|nell|sull|coll|quell|quest|bell|sant|buon|grand|mezz|nessun|alcun|ciascun|qualcun|tutt|anch|senz|dov|com|cos|quand|quant|tant|nient|c|d|m|t|s|v|n)’(?=\s|$)/iu,
+      'leaves no space after an elided form (l’unità, not l’ unità)',
+      'Italian values with a space, or nothing, after an elision — join the two words'
+    ),
+    forbids(
+      /\p{L}’\{/u,
+      'never elides before a placeholder',
+      'Italian values that elide before a {placeholder} — the inserted text may start with a consonant; put a noun in front (del documento «{title}»)'
+    ),
+    forbids(
+      /\.\.\./u,
+      'writes the ellipsis as …, never as three full stops',
+      'Italian values with ... — use … (U+2026)'
+    ),
+    forbids(
+      /—| - /u,
+      'uses no em dash and no bare hyphen as a dash',
+      'Italian values with — or " - " — use a colon, a new sentence, or the en dash " – " (U+2013)'
+    ),
+    forbids(
+      /«\s|\s»/u,
+      'puts no space inside «…»',
+      'Italian values with a space inside the guillemets — «testo», not « testo » (that is French)'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:perchè|poichè|affinchè|finchè|benchè|giacchè|sicchè|nonchè|purchè|nè|sè|ventitrè|trentatrè|é|cioé|caffé|piú|giú|cosí|puó|giá|pò|qual’è)(?![\p{L}])/iu,
+      'puts the right accent on perché, né, sé, è, cioè, più (and writes po’, qual è)',
+      'Italian values with a wrong accent — acute on perché/poiché/né/sé, grave on è/cioè/più/già/così/può; un po’; qual è'
+    ),
+    forbids(
+      /(?<![\p{L}])e’(?=\s)|\p{L}{2}[aeiou]’(?![\p{L}])/iu,
+      'never writes an accent as an apostrophe (È, perché, qualità)',
+      'Italian values with an apostrophe standing in for an accent (E’, perche’, qualita’) — use the accented letter'
+    ),
+    forbids(
+      /[^\S\n][;:!?](?=\s|$)/u,
+      'puts no space before ; : ! ?',
+      'Italian values with a space before ; : ! or ? — that is the French convention'
+    )
+  ],
+  // Russian: the typography of design-guidelines §7 "Russian microcopy".
+  ru: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Russian values with an unbalanced «…» pair'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » before its «',
+      '» used before its « — Russian opens with « and closes with »'
+    ),
+    balancedQuotes(
+      '„',
+      '“',
+      'closes every inner „ with “',
+      'Russian values with an unbalanced inner „…“ pair — close them with “ (U+201C)'
+    ),
+    opensBeforeCloses(
+      '„',
+      '“',
+      'never uses “ as an OPENING quote (the inner pair is „…“)',
+      '“ used before its „ — the inner pair opens low, closes high'
+    ),
+    forbids(
+      /(?:^|»)[^«]*„/,
+      'uses „…“ only inside «…»',
+      'inner quotes „…“ outside a «…» pair — the outer quotes are «…»'
+    ),
+    forbids(
+      /["”‟]/,
+      'uses no ASCII or English double quote',
+      'Russian values with " or ” — quote with «…» (inner: „…“)'
+    ),
+    forbids(
+      /\.\.\./,
+      'writes the ellipsis as one character',
+      'three dots where … (U+2026) belongs'
+    ),
+    forbids(
+      / [-–] /,
+      'breaks a sentence with the em dash only',
+      'a spaced hyphen or en dash where the Russian house dash — belongs'
+    ),
+    forbids(
+      /[ёЁ]/,
+      'does not use the letter ё',
+      'Russian values with ё — the catalog writes е throughout'
+    ),
+    forbids(
+      /[A-Za-z][А-Яа-яЁё]|[А-Яа-яЁё][A-Za-z]/,
+      'never joins a Latin and a Cyrillic letter',
+      'a Latin letter next to a Cyrillic one — a look-alike typo, or a missing hyphen or space'
+    ),
+    forbids(
+      /(?<=[а-яa-z0-9,;»)] )В(?:ы|ас|ам|ами|аш[а-я]{0,3})(?![а-я])/,
+      'keeps вы / ваш lower case inside a sentence',
+      'capital Вы / Ваш mid-sentence — the address form is lower-case вы'
+    ),
+    forbids(
+      /(?<![А-Яа-я])(?:ты|тебя|тебе|тобой|тво(?:й|я|е|и|его|ей|ему|им|ими|их|ю))(?![А-Яа-я])/i,
+      'never addresses the reader as ты',
+      'an informal ты form — the address form is вы'
+    ),
+    forbids(
+      /(?<![А-Яа-я])(?:[ГМКТ][Бб]|кБ|сек|мс)(?![А-Яа-я])/,
+      'keeps the unit symbols the formatters print (GB, MB, KB, s, ms)',
+      'a Cyrillic unit symbol next to the Latin ones the app prints'
+    )
   ]
 }
 
@@ -268,6 +586,46 @@ describe('typography per registered language (design-guidelines §7 "Typography"
 
   it.each(rows)('%s: %s', (code, _title, { offenders, message }) => {
     expect(offenders(catalogOf(code)), message).toEqual([])
+  })
+})
+
+// The two French rules that carve out exceptions, tried on samples. The rules are read from
+// TYPOGRAPHY_RULES by their titles, so these rows see whatever the catalog rows above enforce.
+describe('French typography — the colon and address rules on samples', () => {
+  const TITLES = { colon: 'puts a no-break space before : ; ? !', address: 'addresses the reader as vous' } as const
+  const flags = (rule: keyof typeof TITLES, sample: string): boolean => {
+    const found = TYPOGRAPHY_RULES.fr.find((r) => r.title === TITLES[rule])
+    if (found === undefined) throw new Error(`no French typography rule titled ${TITLES[rule]}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['colon', 'the host:port colon', ' sur 127.0.0.1:{port}'],
+    ['colon', 'a no-break space before the colon', 'Erreur\u00A0: {detail}'],
+    ['address', 'the noun after le', 'Changez le ton du texte'],
+    ['address', 'the noun after un', 'un ton neutre'],
+    ['address', 'the noun after d’un', 'd’un ton neutre'],
+    ['address', 'vous', 'Vous pouvez le modifier'],
+    ['address', 'ton inside a word', 'Appuyez sur le bouton']
+  ])('the %s rule accepts %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(false)
+  })
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['colon', 'a bare colon before a placeholder', 'Erreur:{detail}'],
+    ['colon', 'a figure, a colon and another placeholder', 'Étape 2:{title}'],
+    ['colon', 'a colon between two figures', 'Page 3:4'],
+    ['colon', 'a plain space before the colon', 'Erreur : x'],
+    ['colon', 'a host name before the colon', 'localhost:{port}'],
+    ['address', 'the possessive', 'Ouvre ton document'],
+    ['address', 'the possessive after de', 'Le nom de ton fichier'],
+    ['address', 'tu after a hyphen', 'Veux-tu continuer'],
+    ['address', 'toi after a hyphen', 'Assieds-toi'],
+    ['address', 'the elided t’', 'Pour t’aider'],
+    ['address', 'the possessive after est-ce', 'Est-ce ton fichier'],
+    ['address', 'ton before an ellipsis', 'C’est ton…']
+  ])('the %s rule rejects %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(true)
   })
 })
 
@@ -289,9 +647,10 @@ describe('German typography — quotation marks (design-guidelines §7 "Typograp
 })
 
 describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () => {
-  // EN sentence-level breaks use the em dash "—", DE uses the en dash "–"; a bare ASCII
-  // hyphen standing in for either (space-hyphen-space) is a typo, not a house-style choice.
-  // The same holds in every other registered language (its dash is in its style guide).
+  // A sentence-level break uses a real dash: English the em dash "—", German the em dash or
+  // the en dash "–"; a bare ASCII hyphen standing in for one (space-hyphen-space) is a typo,
+  // not a house-style choice. The same holds in every other registered language (its dash is
+  // in its style guide, and its own typography rules go further).
   const PREFIXES = ['packs.', 'chat.scope.', 'chat.packs.', 'chat.article.']
 
   it('no value under packs./chat.scope./chat.packs./chat.article. contains " - " in any registered language', () => {
@@ -429,7 +788,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     ).toEqual([])
   })
 
-  describe('the parity rule on fixture catalogs (only en and de are registered so far)', () => {
+  describe('the parity rule on fixture catalogs (the failing shapes no real catalog has)', () => {
     const english = {
       'nav.home': 'Home',
       'docs.opened': 'Opened {name}',
