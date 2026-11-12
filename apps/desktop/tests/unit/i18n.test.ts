@@ -902,6 +902,32 @@ function keyUse(fileName: string, sourceText: string, catalog: Catalog): KeyUse 
       }
     }
   }
+  const isPlus = (n: ts.Node | undefined): n is ts.BinaryExpression =>
+    n !== undefined && ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken
+  // The text a template literal, or the outermost `+` of a chain, starts with before its first
+  // value that isn't a string literal (parentheses and casts seen through).
+  const staticHead = (n: ts.Node): string | undefined => {
+    if (ts.isTemplateExpression(n)) return n.head.text
+    if (!isPlus(n)) return undefined
+    let parent = n.parent
+    while (parent !== undefined && ts.isParenthesizedExpression(parent)) parent = parent.parent
+    if (isPlus(parent)) return undefined
+    const operands: ts.Expression[] = []
+    const flatten = (e: ts.Expression): void => {
+      const u = unwrap(e)
+      if (isPlus(u)) {
+        flatten(u.left)
+        flatten(u.right)
+      } else operands.push(u)
+    }
+    flatten(n)
+    let head = ''
+    for (const operand of operands) {
+      if (!ts.isStringLiteralLike(operand)) break
+      head += operand.text
+    }
+    return head
+  }
   const propertyOf = (object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined =>
     object.properties.find(
       (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name
@@ -914,15 +940,11 @@ function keyUse(fileName: string, sourceText: string, catalog: Catalog): KeyUse 
       pluralForms.push(`${siteOf(node)} ${node.text}`)
     }
     // A key built on a plural base written out (`` `${base}.${n === 1 ? 'one' : 'other'}` ``,
-    // `'base.' + form`) is a form picked by hand too: it typechecks without a cast. Only the
-    // static head is known, so any key built under a plural base counts (src builds none).
-    const left = ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken ? unwrap(node.left) : undefined
-    const head = ts.isTemplateExpression(node)
-      ? node.head.text
-      : left !== undefined && ts.isStringLiteralLike(left)
-        ? left.text
-        : undefined
-    if (head !== undefined && head.endsWith('.') && bases.has(head.slice(0, -1))) {
+    // `'base.' + form`, `'base' + '.' + form`) is a form picked by hand too: it typechecks
+    // without a cast. Only the static head is known, so any key built under a plural base counts
+    // (src builds none).
+    const head = staticHead(node)
+    if (head !== undefined && [...bases].some((base) => head.startsWith(`${base}.`))) {
       pluralForms.push(`${siteOf(node)} ${head}…`)
     }
     if (ts.isCallExpression(node)) {
@@ -1331,6 +1353,8 @@ describe('CODE-8 net: a key that shows a number is a plural pair or on the revie
       ['fixture.ts:1 b.files.…']
     ],
     ['a form built by concatenation', "t('b.files.' + form, { count: n })", ['fixture.ts:1 b.files.…']],
+    ['a form built from the base and a dot', "t('b.files' + '.' + (n === 1 ? 'one' : 'other'), { count: n })", ['fixture.ts:1 b.files.…']],
+    ['a form spelled out in two literals', "t(('b.files' + '.one') as MessageKey, { count: 1 })", ['fixture.ts:1 b.files.one…']],
     ['no form in a template that only shares a base’s prefix', 't(`b.filesize.${unit}`)', []],
     ['no form in tCount, which takes the base', "tCount(lang, 'b.files', n)", []],
     ["no form in the renderer's bound tCount", "const { tCount } = useT()\ntCount('b.files', n)", []],

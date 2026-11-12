@@ -267,8 +267,8 @@ function catalogLookupBindings(
  * language other than English as a literal, the `t('en', key) || t('de', key)` shape that knows
  * copy in two languages only. `t('en', …)` stays allowed: persisted text is canonical English.
  * String and type literals only, through the compiler's AST, so a comment or a string that
- * merely spells `=== 'de'` never matches. Parentheses, `as`, `satisfies` and `!` around a code are
- * seen through. Not seen (reviewed limits): a code held in a constant, `.includes` / `Set` /
+ * merely spells `=== 'de'` never matches. Parentheses (in values and in types), `as`, `satisfies`
+ * and `!` around a code are seen through. Not seen (reviewed limits): a code held in a constant, `.includes` / `Set` /
  * `startsWith` / regex tests, an `{ en, de }` key table, and a lookup re-bound to another name
  * after its import.
  */
@@ -313,9 +313,11 @@ function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line
   }
   const visit = (node: ts.Node): void => {
     if (ts.isUnionTypeNode(node)) {
-      const named = node.types.flatMap((member) =>
-        ts.isLiteralTypeNode(member) && ts.isStringLiteral(member.literal) ? [member.literal.text] : []
-      )
+      const named = node.types.flatMap((member) => {
+        let type: ts.TypeNode = member
+        while (ts.isParenthesizedTypeNode(type)) type = type.type
+        return ts.isLiteralTypeNode(type) && ts.isStringLiteral(type.literal) ? [type.literal.text] : []
+      })
       if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
     } else if (ts.isArrayLiteralExpression(node)) {
       const named = node.elements.flatMap((element) => literalText(element) ?? [])
@@ -732,6 +734,7 @@ describe('two-language literals — the interface languages come from the regist
     ['a wider array naming both, over lines', 'fixture.ts', "new Set([\n  'en',\n  'de',\n  'fr'\n])", ["[ 'en', 'de', 'fr' ]"]],
     ['an array naming one code', 'fixture.ts', "const LANGS = ['en'] as const", []],
     ['a comparison in JSX', 'fixture.tsx', "export const A = () => <p>{lang === 'de' ? 'Hallo' : 'Hi'}</p>", ["lang === 'de'"]],
+    ['a union with a parenthesized member', 'fixture.ts', "type Lang = ('en') | 'de'", ["('en') | 'de'"]],
     ['a comparison with a cast code', 'fixture.ts', "const german = lang === ('de' as UiLanguage)", ["lang === ('de' as UiLanguage)"]],
     ['a comparison in parentheses', 'fixture.ts', "const german = ('de') === lang", ["('de') === lang"]],
     ['a switch case with a cast code', 'fixture.ts', "switch (lang) { case 'en' satisfies UiLanguage: break }", ["case 'en' satisfies UiLanguage"]],

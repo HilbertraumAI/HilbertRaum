@@ -30,12 +30,12 @@ describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
     // A label may wrap at a space or a hyphen, never inside a word, so each word must fit on
     // its own line. Only a plain space and a hyphen-minus split words here; any other space or
     // dash (a no-break one, U+2010) counts as part of the word, the stricter reading. The
-    // character count is the unit-test proxy for the width; the width itself is measured in the
-    // running app, not by this test. A
+    // character count is only a proxy for the width: no test measures the width itself, so a new
+    // language's rail has to be checked by eye in the running app, active label included. A
     // word that does not fit gets a shorter synonym, never an abbreviation (owner call,
     // 2026-11-11). nav.home is the brand mark's tooltip, not a rail label.
-    // The proxy under-counts wider glyphs (Cyrillic): for Russian a measurement in the running
-    // app decides.
+    // The proxy under-counts wider glyphs (Cyrillic): a Russian label that passes here can still
+    // clip, so only that check in the running app clears it.
     const tooLong: string[] = []
     for (const lang of UI_LANGUAGE_CODES) {
       for (const key of NAV_KEYS.filter((k) => k !== 'nav.home')) {
