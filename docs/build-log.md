@@ -27,6 +27,16 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-13 — the 2026-11-11 UI-languages wave entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-13, when the wave closed (PR #801 merged as `5fde36cf`, PR #802 as
+`3ac00b8d`); a short outcome entry with the follow-up issues #803–#815 replaces it there. Its record is
+unchanged: architecture.md "Internationalization — design record" and its "UI-languages wave QA" section,
+CONTRIBUTING "Translating the interface". Citations of that entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-11-11 — **UI languages wave (Russian, French, Spanish, Italian; interface only): PR-A foundation merged 2026-11-12 (PR #801); PR-B (`feat/ui-languages-ru-fr-es-it`, not pushed yet) registers Spanish, French, Italian and Russian.** A language registry (`shared/i18n/languages.ts`) replaces the closed `'en' | 'de'` type: per-language plural rule and catalog type, OS locale matched by primary subtag; every consumer goes through it, and the catalog guards iterate it. PR-A kept `[en, de]` with text unchanged except the lock screen's unlock/create errors (now in the lock screen's language), the picker (a `<select>`) and "(1 core)". Owner calls: every catalog complete and typecheck-enforced, packs stay en/de, *System* follows the OS, no review note. PR-B so far: four complete catalogs (machine-drafted, checked chunk by chunk by a second model, no native review) following the style guides in design-guidelines §7 "Russian/French/Spanish/Italian microcopy" (owner-approved 2026-11-12); the nine app skills localized; the *System* hint names no languages; the bank skill's summarize and categorize runs get their checked template answer in every language, not a model answer; automated checks prove each new language wired end to end (`LanguageSmoke`, real-key plurals, main-side emissions, the pack-language line), and the hard-coded-language ban follows every registered code; a real-app walk in all six languages (both window extremes, both themes, a second model judging every screenshot) left no rail-label overflow, shortened a few labels, and translated the document-row file kind ("Text"). Record: architecture.md i18n record D-L1–D-L3, D-L7, D-L9–D-L12, §3.1–§3.3, §5, "UI-languages wave QA"; CONTRIBUTING "Translating the interface"; known-limitations "Internationalization". Open: PR-B — push, CI and merge (reviewed: two cross-model reviews and a code review, findings fixed); follow-ups: English/German plain number keys that read wrong at exactly 1 ("1 sections scanned"); layout that is wrong in English too at 880×600 (rail foot below the window, document-mode chat past the edge, document rows); code-built separators that ignore French typography._
+
 ## 2026-11-08 — the closed 2026-10-14 #685 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-08 (preamble budget, making room for the #790 entry). Its record is unchanged:
