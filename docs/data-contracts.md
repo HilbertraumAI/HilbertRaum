@@ -281,6 +281,16 @@ units, not verified UTF-8 bytes) applied to the normalized value.
 **The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
 `checksumCache`** (`Record<path, {size, mtimeMs, sha256}>`, default `{}` — the persisted L2 of
 the weight-file hash cache).
+**The i18n phases (39–42) added `uiLanguage`** (`UiLanguageSetting`, default `'system'`;
+architecture.md i18n record D-L2, D-L9, §3.2): `'system'` or a code of the language registry
+(`UI_LANGUAGES` in `shared/i18n/languages.ts`; since the 2026-11 UI languages wave `en`, `de`,
+`es`, `fr`, `it`, `ru`). `UiLanguageSetting` is derived from the registry, so registering a
+language widens the union. The write gate (`updateSettings`) stores only an `isUiLanguageSetting`
+value and drops anything else. The READ path does not validate the row: a value this build does
+not register (a newer build's language on a shared drive) comes back as stored, resolves like
+`'system'` (`resolveUiLanguage`, in main and in the renderer), and is never rewritten by the read,
+so the newer build still finds the choice. Before unlock the renderer cannot read it and uses its
+per-computer localStorage mirror `hilbertraum.uiLanguage` instead (D-L3).
 ⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
 unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
 `workspaceMode` is set to the active mode by the `WorkspaceController` on open.
@@ -1613,7 +1623,8 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   maps its UI language through `packLanguageFor(uiLanguageInfo(lang))` (`shared/evidence-review.ts`,
   UI-languages owner call D-5 (b), 2026-11-11; architecture.md i18n record D-L11): the UI language when its
   registry entry has `evidencePack: true`, else `'en'`, so it is always one of these two values,
-  whatever the UI language) and
+  whatever the UI language — English and German write their own; Spanish, French, Italian and
+  Russian (registered 2026-11-12, `evidencePack: false`) map to `'en'`) and
   `EvidencePackOptions { language, includeReviewerNotes, includeSourceExcerpts,
   includeDocumentHashes, includeUnreviewedItems, includeTechnicalDetails }` (spec §16.2).
   Defaults live in `EVIDENCE_PACK_OPTION_DEFAULTS` (`shared/evidence-review.ts`): everything

@@ -1,7 +1,9 @@
 // The ENGLISH catalog — the source of truth for every message key (i18n record §3.1,
 // D-L1). Flat keys, `{name}` interpolation placeholders, `.one`/`.other` plural pairs.
-// `de.ts` is typed `Record<MessageKey, string>` against this object, so `npm run
-// typecheck` fails when the catalogs drift apart.
+// `de.ts` is typed `Record<MessageKey, string>` against this object, and every other
+// catalog (`es.ts`, `fr.ts`, `it.ts`, `ru.ts`) `UiCatalog<'<code>'>` (D-L10: these keys,
+// plus the extra plural forms of its language, minus `packExport.*` when the language
+// writes no evidence packs), so `npm run typecheck` fails when the catalogs drift apart.
 //
 // English values for strings that already shipped MUST stay byte-identical to the
 // pre-i18n literals: ~323 existing test assertions query this copy, and the default
@@ -2592,16 +2594,18 @@ export const en = {
     'Text generation measured about {tps} tokens per second with the loaded model ({model}), ' +
     'so the recommended model was moved down one size tier to keep answers quick on this ' +
     'computer.',
+
+  // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()
+  // — IPC throws, runtime notices, preflight problems, task-status errors, dialog
+  // titles. These never reach the DB.
+  // The benchmark's lock refusals (registerBenchmarkIpc.ts, thrown via tMain) — never persisted
+  // and never display-mapped, unlike the `main.benchmark.warn*` set just above.
   'main.benchmark.locked': 'Workspace is locked. Unlock it to run the benchmark.',
   // PR #303 audit A-D2: the late-write guard's refusal — the legs finished, but the workspace
   // was locked (or locked and re-opened) meanwhile, so nothing was written. One message for both.
   'main.benchmark.lockedDuringRun':
     'The workspace was locked while the benchmark ran, so the result was not saved. Run the ' +
     'benchmark again.',
-
-  // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()
-  // — IPC throws, runtime notices, preflight problems, task-status errors, dialog
-  // titles. These never reach the DB.
   // #236: the native confirmation before an http(s) link from an answer or a model manifest
   // opens in the OS browser — the site on its own line, the URL (cut past 200 characters,
   // marked), Cancel as the default.

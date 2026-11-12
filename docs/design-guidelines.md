@@ -519,7 +519,7 @@ stays great" → « Choisissez un modèle plus petit : la qualité reste excel
   Performance · Paramètres. A screen reference equals the label (« l’écran Documents », « dans
   les Paramètres »); a string that names a button quotes its exact label in « ».
 - **Typography:** « … » with a no-break space (U+00A0) inside; U+00A0 before `: ; ? ! %` (one
-  character everywhere, written ` ` in the source); U+202F only between the digits of a
+  character everywhere, written `\u00A0` in the source); U+202F only between the digits of a
   typed figure; ’ for apostrophes; `…`; the spaced en dash « – » — or better a colon — never the
   em dash; œ; accented capitals (« État »); numbers and dates from `Intl`. Enforced by
   `TYPOGRAPHY_RULES.fr`.
@@ -1290,9 +1290,13 @@ change; nothing here touches the model recommender. Code comments cite this sect
    the system, so `tests/unit/select-token-treatment.test.ts` guards it per FILE — the rule's
    token set, plus "every `<select>` in these screens carries the class" (four screen files at
    this record; `SettingsScreen.tsx`, for the interface-language picker in Settings → General,
-   joined as the fifth in the 2026-11 UI languages wave). **The four original picker-style selects moved together on purpose:** the Documents translate modal renders the
-   *identical* from/to language pair as the Translate screen, so styling only one of them would
-   make the same control look different on two routes to the same task. `.review-relation select`
+   joined as the fifth in the 2026-11 UI languages wave; on 2026-11-12 the five files hold nine
+   `.select` controls: three on the AI Model screen, two on the Translate screen, two in the
+   Documents translate modal, the Diagnostics activity filter and the language picker). **The
+   selects of the four original files moved together on purpose:** the Documents translate modal
+   renders the *identical* from/to language pair as the Translate screen, so styling only one of
+   them would make the same control look different on two routes to the same task.
+   `.review-relation select`
    (evidence review) keeps its own older, lighter treatment — folding it in is a real restyle of
    a review-screen control and wants its own visual pass.
 2. **DV-2 — "can this computer run it" outranks alphabetical.** The chat picker fell back to

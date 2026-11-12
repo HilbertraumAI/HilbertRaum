@@ -2,7 +2,10 @@ import type { en } from './en'
 
 // The GERMAN catalog. Typed against the English source-of-truth catalog, so a missing,
 // stale, or extra key is a `npm run typecheck` failure — no partial catalogs, ever
-// (i18n record §3.1, D-L1).
+// (i18n record §3.1, D-L1). The other catalogs (`es.ts`, `fr.ts`, `it.ts`, `ru.ts`) are
+// typed `UiCatalog<'<code>'>` instead (D-L10), which adds their language's extra plural
+// forms and leaves out `packExport.*`; for German that type is this same
+// `Record<MessageKey, string>`.
 //
 // Style (i18n record §3.5, D-L7): informal „du", lowercase „du/dein" mid-sentence,
 // consistently — including errors and the gate. The copy ADAPTS the friendly spec-§11.4
@@ -2550,12 +2553,12 @@ export const de: Record<keyof typeof en, string> = {
     'Die Textgenerierung lag mit dem geladenen Modell ({model}) bei etwa {tps} Tokens pro ' +
     'Sekunde, daher wurde die Modell-Empfehlung eine Größenstufe herabgesetzt, damit ' +
     'Antworten auf diesem Computer schnell bleiben.',
+
+  // Emission set (D-L5): localized at the emission site via tMain().
   'main.benchmark.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um den Benchmark auszuführen.',
   'main.benchmark.lockedDuringRun':
     'Der Arbeitsbereich wurde während des Benchmarks gesperrt, daher wurde das Ergebnis nicht ' +
     'gespeichert. Führe den Benchmark noch einmal aus.',
-
-  // Emission set (D-L5): localized at the emission site via tMain().
   // #236: die native Rückfrage, bevor ein http(s)-Link aus einer Antwort oder einem
   // Modell-Manifest im Browser geöffnet wird.
   'main.dialog.openLink.title': 'Diesen Link im Browser öffnen?',
