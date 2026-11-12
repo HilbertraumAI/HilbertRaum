@@ -109,7 +109,7 @@ describe('Settings → Change password (Phase 32)', () => {
   })
 
   // The floor is main's (`registerWorkspaceIpc` refuses a new password under it); a copy of the
-  // literal 8 here would drift from main the day it moves (/code-review high on PR-A, #4).
+  // literal 8 here would drift from main the day it moves (found in the UI languages wave's code review).
   it('enables submission exactly at the shared floor main enforces (MIN_PASSWORD_LENGTH)', async () => {
     stubSettings({})
     const user = userEvent.setup()

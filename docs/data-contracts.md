@@ -1101,7 +1101,12 @@ head's own weights + KV.
   `wrong_password`; `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage — retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
-  written by a NEWER build — nothing written, update the app);
+  written by a NEWER build — nothing written, update the app). Since the 2026-11 UI languages
+  wave the lock screen renders a failed unlock or create from `reason` in its own language
+  (`shared/workspace-failure-keys.ts`, one table per call; architecture.md i18n record D-L3);
+  `message` is shown only for a reason a table maps to `null` (create's free-text `refused`) or
+  doesn't know. `MIN_PASSWORD_LENGTH` (`shared/types.ts`) is the one password floor for main, the
+  gate, the change-password card and the strength meter;
   **Schema stamp (#247):** the workspace database carries `PRAGMA user_version` =
   `SCHEMA_VERSION` (`services/db.ts`; `1` since PR #289). `openDatabase` reads it before any
   PRAGMA that writes: `0` (every database written before the stamp) and any lower value run the

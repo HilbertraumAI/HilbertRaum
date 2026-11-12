@@ -69,6 +69,16 @@ function catalogOf(lang: UiLanguage): Record<string, string> {
   return CATALOGS[lang]
 }
 
+/**
+ * `lang`'s own entry for `key`, or `undefined`. Own properties only: a plain read would find
+ * an inherited member (`toString`, `__proto__`) for a cast key and hand `interpolate` a
+ * function or an object instead of taking the unknown-key path.
+ */
+function entryOf(lang: UiLanguage, key: string): string | undefined {
+  const catalog = catalogOf(lang)
+  return Object.hasOwn(catalog, key) ? catalog[key] : undefined
+}
+
 /** Dev-only diagnostics for fallbacks; never throws, silent in production builds. */
 function warnDev(message: string): void {
   try {
@@ -116,7 +126,7 @@ function render(
   englishKey: string,
   params?: MessageParams
 ): string {
-  const localized = catalogOf(lang)[key]
+  const localized = entryOf(lang, key)
   if (localized === undefined) {
     // Unreachable for real keys (typecheck enforces catalog parity) — runtime guard
     // for casts/persisted junk.
@@ -133,7 +143,7 @@ function render(
       `missing param for '${key}' (${lang})${lang === 'en' ? '' : ' — falling back to English'}`
     )
   }
-  const english = catalogOf('en')[englishKey]
+  const english = entryOf('en', englishKey)
   if (english === undefined) return key
   return interpolate(english, params).text
 }

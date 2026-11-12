@@ -68,7 +68,7 @@ describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', (
   })
 
   // "Too short" must mean "under the floor main refuses", or the meter and the submit button
-  // disagree the day the floor moves (/code-review high on PR-A, #4: a copy of the literal 8).
+  // disagree the day the floor moves (a copy of the literal 8 did, until the UI languages wave's code review).
   it('calls a password too short exactly below the shared floor (MIN_PASSWORD_LENGTH)', () => {
     expect(label('a'.repeat(MIN_PASSWORD_LENGTH - 1))).toBe('Too short')
     expect(label('a'.repeat(MIN_PASSWORD_LENGTH))).not.toBe('Too short')
@@ -473,7 +473,7 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     // the gate still says what main said instead of showing an empty banner.
     ['unlock', 'not_in_the_tables' as string as Failure['reason'], 'Something new went wrong.'],
     // A reason naming an inherited member: a plain `keys[reason]` read finds a function there
-    // (/code-review high on PR-A, #8).
+    // (found in the UI languages wave's code review).
     ['unlock', 'toString' as string as Failure['reason'], 'Something else went wrong.']
   ] as const)('%s %s shows main’s own message', async (call, reason, message) => {
     await failIn(call, { ok: false, reason, message })

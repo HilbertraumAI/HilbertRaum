@@ -39,7 +39,7 @@ import { appendMessage, createConversation, generateAssistantMessage, listMessag
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { PrivacyPolicy, WorkspaceActionResult } from '../../src/shared/types'
+import { MIN_PASSWORD_LENGTH, type PrivacyPolicy, type WorkspaceActionResult } from '../../src/shared/types'
 import {
   WorkspaceController,
   vaultPathsFrom,
@@ -137,6 +137,57 @@ describe('registerWorkspaceIpc', () => {
     expect(r.ok && r.state.state).toBe('unlocked')
     expect(r.ok && r.state.mode).toBe('encrypted')
     ctrl.lock()
+  })
+
+  // Main's own floors, at the boundary. The gate and the Settings card hold the same
+  // MIN_PASSWORD_LENGTH (WorkspaceGate.test.tsx, ChangePassword.test.tsx), so they never send
+  // main a password one short of it; only these rows reach main's checks there.
+  it('create refuses an encrypted password one short of MIN_PASSWORD_LENGTH and creates one at it', async () => {
+    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    registerWorkspaceIpc(ctxWith(ctrl))
+    const short = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH - 1), 'encrypted')
+    expect(short.result).toEqual({
+      ok: false,
+      reason: 'refused',
+      message: tMain('main.workspace.passwordTooShort', { min: MIN_PASSWORD_LENGTH })
+    })
+    expect(ctrl.isUnlocked()).toBe(false)
+    const atFloor = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH), 'encrypted')
+    expect(atFloor.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
+    ctrl.lock()
+  })
+
+  it('change password refuses a new password one short of MIN_PASSWORD_LENGTH and takes one at it', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    registerWorkspaceIpc(ctxWith(ctrl))
+    try {
+      const short = await invoke(
+        handlers,
+        IPC.changeWorkspacePassword,
+        'right-password',
+        'a'.repeat(MIN_PASSWORD_LENGTH - 1)
+      )
+      expect(short.result).toEqual({
+        ok: false,
+        reason: 'refused',
+        message: tMain('main.workspace.newPasswordTooShort', { min: MIN_PASSWORD_LENGTH })
+      })
+      // The refusal left the vault alone: the current password still verifies for the change at the floor.
+      const atFloor = await invoke(
+        handlers,
+        IPC.changeWorkspacePassword,
+        'right-password',
+        'a'.repeat(MIN_PASSWORD_LENGTH)
+      )
+      expect(atFloor.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
+    } finally {
+      ctrl.lock()
+    }
   })
 
   it('maps a wrong password to { ok:false, reason:"wrong_password" } instead of throwing', async () => {
@@ -614,7 +665,7 @@ describe('registerWorkspaceIpc', () => {
   })
 })
 
-// UI-languages owner call D-17 (a), and /code-review high on PR-A (#3): the first-run gate shows a
+// UI-languages owner call D-17 (a), and the wave's code review: the first-run gate shows a
 // failed unlock or create in ITS language, from `reason`, with the key its tables
 // (`shared/workspace-failure-keys.ts`) hold: a copy of the choice each branch of the handlers
 // makes. The gate's own rows stub main's answer, so main moving a reason to another key would turn

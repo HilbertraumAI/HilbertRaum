@@ -208,6 +208,17 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     expect(lastCopied).not.toContain('approximate')
   })
 
+  // UI-languages owner call D-11 (a): the core count picks its plural form here, not in the
+  // catalog alone; until the UI languages wave one core read "(1 cores)".
+  it('names a single core in the singular, in the card and the copy', async () => {
+    const user = userEvent.setup()
+    stubDiagnostics({}, { ...benchmark, cpuCores: 1 })
+    renderDiagnostics()
+    expect(await screen.findByText('Test CPU (1 core)')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
+    expect(lastCopied).toContain('CPU: Test CPU (1 core)')
+  })
+
   it('marks a chunk-count fallback reading approximate in the card and the copy (#291)', async () => {
     const user = userEvent.setup()
     stubDiagnostics({}, { ...benchmark, speedBasis: { basis: 'chunks', tokens: 41 } })

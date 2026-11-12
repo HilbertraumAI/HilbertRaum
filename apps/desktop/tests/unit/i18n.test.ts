@@ -48,6 +48,23 @@ describe('t — lookup and interpolation', () => {
     expect(t('de', 'no.such.key' as MessageKey)).toBe('no.such.key')
   })
 
+  it.each(['toString', '__proto__'])(
+    'takes the same unknown-key path for a key naming an inherited member (%s), never a crash',
+    (key) => {
+      // A plain `catalog[key]` read finds Object.prototype's member there and hands it to the
+      // interpolation as if it were a template ("template.replace is not a function").
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        for (const lang of UI_LANGUAGE_CODES) {
+          expect(t(lang, key as MessageKey)).toBe(key)
+          expect(warn).toHaveBeenLastCalledWith(`[i18n] unknown message key '${key}'`)
+        }
+      } finally {
+        warn.mockRestore()
+      }
+    }
+  )
+
   it('falls back to the English string when a param is missing in a non-English render', () => {
     // The unresolved placeholder stays literal — visible in dev, never a crash.
     expect(t('de', 'home.docsReady.other')).toBe('{count} documents ready to ask about')
