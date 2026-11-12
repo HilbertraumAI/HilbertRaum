@@ -493,6 +493,78 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'puts no space before ; : ! ?',
       'Italian values with a space before ; : ! or ? — that is the French convention'
     )
+  ],
+  // Russian: the typography of design-guidelines §7 "Russian microcopy".
+  ru: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Russian values with an unbalanced «…» pair'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » before its «',
+      '» used before its « — Russian opens with « and closes with »'
+    ),
+    balancedQuotes(
+      '„',
+      '“',
+      'closes every inner „ with “',
+      'Russian values with an unbalanced inner „…“ pair — close them with “ (U+201C)'
+    ),
+    opensBeforeCloses(
+      '„',
+      '“',
+      'never uses “ as an OPENING quote (the inner pair is „…“)',
+      '“ used before its „ — the inner pair opens low, closes high'
+    ),
+    forbids(
+      /(?:^|»)[^«]*„/,
+      'uses „…“ only inside «…»',
+      'inner quotes „…“ outside a «…» pair — the outer quotes are «…»'
+    ),
+    forbids(
+      /["”‟]/,
+      'uses no ASCII or English double quote',
+      'Russian values with " or ” — quote with «…» (inner: „…“)'
+    ),
+    forbids(
+      /\.\.\./,
+      'writes the ellipsis as one character',
+      'three dots where … (U+2026) belongs'
+    ),
+    forbids(
+      / [-–] /,
+      'breaks a sentence with the em dash only',
+      'a spaced hyphen or en dash where the Russian house dash — belongs'
+    ),
+    forbids(
+      /[ёЁ]/,
+      'does not use the letter ё',
+      'Russian values with ё — the catalog writes е throughout'
+    ),
+    forbids(
+      /[A-Za-z][А-Яа-яЁё]|[А-Яа-яЁё][A-Za-z]/,
+      'never joins a Latin and a Cyrillic letter',
+      'a Latin letter next to a Cyrillic one — a look-alike typo, or a missing hyphen or space'
+    ),
+    forbids(
+      /(?<=[а-яa-z0-9,;»)] )В(?:ы|ас|ам|ами|аш[а-я]{0,3})(?![а-я])/,
+      'keeps вы / ваш lower case inside a sentence',
+      'capital Вы / Ваш mid-sentence — the address form is lower-case вы'
+    ),
+    forbids(
+      /(?<![А-Яа-я])(?:ты|тебя|тебе|тобой|тво(?:й|я|е|и|его|ей|ему|им|ими|их|ю))(?![А-Яа-я])/i,
+      'never addresses the reader as ты',
+      'an informal ты form — the address form is вы'
+    ),
+    forbids(
+      /(?<![А-Яа-я])(?:[ГМКТ][Бб]|кБ|сек|мс)(?![А-Яа-я])/,
+      'keeps the unit symbols the formatters print (GB, MB, KB, s, ms)',
+      'a Cyrillic unit symbol next to the Latin ones the app prints'
+    )
   ]
 }
 

@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Verbale di riunione
     description: "Serve a trasformare la trascrizione di una riunione, appunti sommari o un ordine del giorno in un verbale chiaro e strutturato: decisioni, attività da svolgere e questioni aperte."
+  ru:                          #   Shown when the app runs in Russian.
+    title: Протокол встречи
+    description: Подходит, когда из расшифровки встречи, черновых заметок или повестки нужно составить аккуратный структурированный протокол — решения, задачи и открытые вопросы.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model answers over the WHOLE transcript (not top-k passages).
                                #   With this skill active over a single fully-chunked doc the whole-doc engine

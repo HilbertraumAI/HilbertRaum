@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Oscuramento dei dati personali
     description: Serve a oscurare, anonimizzare o rimuovere i dati personali da un documento.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Скрытие персональных данных
+    description: Подходит, когда в документе нужно скрыть, обезличить или удалить персональные данные.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

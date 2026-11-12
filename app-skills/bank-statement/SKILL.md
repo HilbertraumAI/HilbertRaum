@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Analisi dell’estratto conto
     description: Serve a estrarre, classificare, riconciliare o riassumere le transazioni di un estratto conto.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Анализ банковской выписки
+    description: Подходит, когда нужно извлечь, распределить по категориям, сверить или кратко изложить транзакции из банковской выписки.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

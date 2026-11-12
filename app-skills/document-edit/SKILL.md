@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Modifica del documento
     description: Serve ad applicare a un documento modifiche mirate con trova e sostituisci, senza riscriverlo.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Редактирование документа
+    description: Подходит, когда в документе нужно точечно найти и заменить текст, не переписывая документ целиком.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40

@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Scadenze e obblighi
     description: "Serve a trovare in un documento scadenze, termini di preavviso, date di rinnovo e di pagamento, oltre agli obblighi: cosa fare, entro quando e cosa succede in caso di mancato rispetto."
+  ru:                          #   Shown when the app runs in Russian.
+    title: Сроки и обязательства
+    description: Подходит, когда в документе нужно найти крайние сроки, сроки уведомления, даты продления и оплаты, а также обязательства — что сделать, к какому сроку и что будет при пропуске срока.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the

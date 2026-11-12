@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Controllo prima della condivisione
     description: "Serve a controllare un documento prima di condividerlo: informazioni sensibili visibili e rischi pratici della condivisione. Ha solo valore indicativo e non anonimizza il documento."
+  ru:                          #   Shown when the app runs in Russian.
+    title: Проверка перед отправкой
+    description: Подходит, когда документ нужно проверить перед отправкой — видимые конфиденциальные сведения и практические риски при отправке. Только рекомендации, а не обезличивание.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the review reads the WHOLE document (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

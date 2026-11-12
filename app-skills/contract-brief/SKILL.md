@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Sintesi del contratto
     description: "Serve a ottenere una sintesi in linguaggio semplice di un contratto o di un accordo: parti, date, obblighi, clausole principali e domande da porre. Non è una consulenza legale."
+  ru:                          #   Shown when the app runs in Russian.
+    title: Обзор договора
+    description: Подходит, когда нужен понятный обзор договора или соглашения — стороны, даты, обязательства, ключевые условия и вопросы, которые стоит задать. Не является юридической консультацией.
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

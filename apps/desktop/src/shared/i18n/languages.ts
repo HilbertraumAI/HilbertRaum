@@ -101,6 +101,14 @@ export const UI_LANGUAGES = [
     evidencePack: false,
     plural: cldrPlural('it'),
     pluralCategories: ['one', 'many', 'other']
+  },
+  {
+    code: 'ru',
+    nativeName: 'Русский',
+    nativeReviewed: false,
+    evidencePack: false,
+    plural: cldrPlural('ru'),
+    pluralCategories: ['one', 'few', 'many', 'other']
   }
 ] as const satisfies readonly UiLanguageInfo[]
 

@@ -18,6 +18,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   it:                          #   Shown when the app runs in Italian.
     title: Analisi della fattura
     description: Serve a estrarre, controllare o esportare le voci e i totali di una fattura.
+  ru:                          #   Shown when the app runs in Russian.
+    title: Анализ счета на оплату
+    description: Подходит, когда нужно извлечь, проверить или экспортировать позиции и итоговые суммы счета на оплату.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29
