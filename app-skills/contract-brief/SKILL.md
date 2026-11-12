@@ -15,6 +15,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   fr:                          #   Shown when the app runs in French.
     title: Synthèse de contrat
     description: "À utiliser pour obtenir une synthèse en langage clair d’un contrat ou d’un accord\u00A0: parties, dates, obligations, clauses essentielles et questions à poser. Ne constitue pas un conseil juridique."
+  it:                          #   Shown when the app runs in Italian.
+    title: Sintesi del contratto
+    description: "Serve a ottenere una sintesi in linguaggio semplice di un contratto o di un accordo: parti, date, obblighi, clausole principali e domande da porre. Non è una consulenza legale."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

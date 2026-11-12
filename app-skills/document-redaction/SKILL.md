@@ -15,6 +15,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   fr:                          #   Shown when the app runs in French.
     title: Caviarder un document
     description: À utiliser pour caviarder, anonymiser ou supprimer les données personnelles d’un document.
+  it:                          #   Shown when the app runs in Italian.
+    title: Oscuramento dei dati personali
+    description: Serve a oscurare, anonimizzare o rimuovere i dati personali da un documento.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

@@ -15,6 +15,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   fr:                          #   Shown when the app runs in French.
     title: Analyse de facture
     description: À utiliser pour extraire, vérifier ou exporter les lignes et les totaux d’une facture.
+  it:                          #   Shown when the app runs in Italian.
+    title: Analisi della fattura
+    description: Serve a estrarre, controllare o esportare le voci e i totali di una fattura.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

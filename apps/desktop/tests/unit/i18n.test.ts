@@ -428,6 +428,71 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'writes vous in lowercase mid-sentence',
       'French values with a capital Vous mid-sentence'
     )
+  ],
+  // Italian: the typography of design-guidelines §7 "Italian microcopy".
+  it: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Italian values with an unbalanced «…» pair — close each « with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » as an OPENING quote (the pair is «…», not »…«)',
+      '» used before its « — Italian opens with « and closes with »'
+    ),
+    forbids(
+      /["“”„‟]/u,
+      'uses no ASCII, English or German double quote',
+      'Italian values with " “ ” or „ — quote with «…» (also around technical field names)'
+    ),
+    forbids(
+      /['‘`´]/u,
+      'writes the apostrophe as ’, never as an ASCII quote, a backtick or an accent mark',
+      "Italian values with ' ‘ ` or ´ — the apostrophe is ’ (U+2019)"
+    ),
+    forbids(
+      /(?<![\p{L}\p{N}])(?:l|un|gl|dell|all|dall|nell|sull|coll|quell|quest|bell|sant|buon|grand|mezz|nessun|alcun|ciascun|qualcun|tutt|anch|senz|dov|com|cos|quand|quant|tant|nient|c|d|m|t|s|v|n)’(?=\s|$)/iu,
+      'leaves no space after an elided form (l’unità, not l’ unità)',
+      'Italian values with a space, or nothing, after an elision — join the two words'
+    ),
+    forbids(
+      /\p{L}’\{/u,
+      'never elides before a placeholder',
+      'Italian values that elide before a {placeholder} — the inserted text may start with a consonant; put a noun in front (del documento «{title}»)'
+    ),
+    forbids(
+      /\.\.\./u,
+      'writes the ellipsis as …, never as three full stops',
+      'Italian values with ... — use … (U+2026)'
+    ),
+    forbids(
+      /—| - /u,
+      'uses no em dash and no bare hyphen as a dash',
+      'Italian values with — or " - " — use a colon, a new sentence, or the en dash " – " (U+2013)'
+    ),
+    forbids(
+      /«\s|\s»/u,
+      'puts no space inside «…»',
+      'Italian values with a space inside the guillemets — «testo», not « testo » (that is French)'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:perchè|poichè|affinchè|finchè|benchè|giacchè|sicchè|nonchè|purchè|nè|sè|ventitrè|trentatrè|é|cioé|caffé|piú|giú|cosí|puó|giá|pò|qual’è)(?![\p{L}])/iu,
+      'puts the right accent on perché, né, sé, è, cioè, più (and writes po’, qual è)',
+      'Italian values with a wrong accent — acute on perché/poiché/né/sé, grave on è/cioè/più/già/così/può; un po’; qual è'
+    ),
+    forbids(
+      /(?<![\p{L}])e’(?=\s)|\p{L}{2}[aeiou]’(?![\p{L}])/iu,
+      'never writes an accent as an apostrophe (È, perché, qualità)',
+      'Italian values with an apostrophe standing in for an accent (E’, perche’, qualita’) — use the accented letter'
+    ),
+    forbids(
+      /[^\S\n][;:!?](?=\s|$)/u,
+      'puts no space before ; : ! ?',
+      'Italian values with a space before ; : ! or ? — that is the French convention'
+    )
   ]
 }
 

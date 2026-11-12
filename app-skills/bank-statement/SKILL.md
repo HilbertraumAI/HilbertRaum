@@ -15,6 +15,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   fr:                          #   Shown when the app runs in French.
     title: Analyse de relevé bancaire
     description: À utiliser pour extraire, catégoriser, rapprocher ou résumer les transactions d’un relevé bancaire.
+  it:                          #   Shown when the app runs in Italian.
+    title: Analisi dell’estratto conto
+    description: Serve a estrarre, classificare, riconciliare o riassumere le transazioni di un estratto conto.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29
