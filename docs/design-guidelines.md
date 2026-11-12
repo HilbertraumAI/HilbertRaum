@@ -462,13 +462,14 @@ stays great" → «Выберите модель поменьше — качес
 - **Nav labels and screen names:** Главная · Чат · Документы · Перевод · Картинки · ИИ-модель ·
   Скорость · Настройки. «Картинки» and «Скорость» are the fixed-width synonyms for «Изображения»
   and «Производительность», which do not fit the rail; the rail-foot lock button is «Блокировка».
-  A screen reference puts the rail word in guillemets after a generic noun and never declines it
-  («на экране «Документы»»). A string that names a button quotes its exact Russian label
+  A screen reference quotes the rail word in guillemets and never declines it; where the sentence
+  would need a case ending, a generic noun in front takes it («на экране «Документы»», but
+  «Открыть «Документы»»). A string that names a button quotes its exact Russian label
   («нажмите «Повторить»»).
 - **Typography:** quotes «…», inner „…“ only inside «…»; the em dash with a space on each side;
   `…` as one character; no letter «ё» (е throughout); a Latin and a Cyrillic letter never touch;
-  numbers and dates from `Intl`. Enforced by `TYPOGRAPHY_RULES.ru` (`tests/unit/i18n.test.ts`),
-  with look-arounds, because JavaScript's `\b` does not see Cyrillic.
+  numbers and dates from `Intl`. The machine-checkable part is enforced by `TYPOGRAPHY_RULES.ru`
+  (`tests/unit/i18n.test.ts`), with look-arounds, because JavaScript's `\b` does not see Cyrillic.
 - **Units** stay the Latin symbols the formatters print (GB, MB, KB, B, s, ms, tok/s), never «ГБ»
   or «сек».
 - **Plurals:** one / few / many / other, on consecutive lines in that order. `one` also serves 21,
@@ -477,7 +478,8 @@ stays great" → «Выберите модель поменьше — качес
   `perf.model.line` and `perf.model.measuredOther`, which show the figure as `{context}`;
   `translate.file.gapPages` is number-neutral in all four forms (it shows a page range). `other`
   is reached only by fractions. A plain key with a number goes label-first («Токенов: {tokens}»);
-  "and N more" is «… и еще {count}», with no noun after the figure.
+  "and N more" in a plain key is «… и еще {count}», with no noun after the figure (the plural
+  pairs name what they count).
 - **Citation marker:** `И{n}` (источник).
 - **Untranslated by design:** HilbertRaum (never declined: «в приложении HilbertRaum»), "HilbertRaum
   Lite", "HilbertRaum AI Kit", model ids, paths, technical values, the picker's language names.
@@ -494,8 +496,9 @@ machine-drafted and checked by a second model, not yet reviewed by a native spea
 stays great" → « Choisissez un modèle plus petit : la qualité reste excellente. »).
 
 - **Form of address: formal « vous »** (owner decision 2026-11-11), lowercase mid-sentence; never
-  « tu ». Buttons, menu items and tabs use the infinitive (« Réessayer »), instructions the vous
-  imperative (« Choisissez… »), progress labels a noun (« Chargement… »). Nothing agrees with the
+  « tu ». Buttons and menu items use the infinitive (« Réessayer »), tabs and screen names a
+  noun (« Général »), instructions the vous imperative (« Choisissez… »), progress labels a
+  noun (« Chargement… »). Nothing agrees with the
   reader's gender (« Espace de travail déverrouillé », not « Vous êtes connecté »). A name
   placeholder is never elided onto: guillemets, a colon or a class noun in front (« le modèle
   {model} »).
@@ -521,8 +524,8 @@ stays great" → « Choisissez un modèle plus petit : la qualité reste excel
 - **Typography:** « … » with a no-break space (U+00A0) inside; U+00A0 before `: ; ? ! %` (one
   character everywhere, written `\u00A0` in the source); U+202F only between the digits of a
   typed figure; ’ for apostrophes; `…`; the spaced en dash « – » — or better a colon — never the
-  em dash; œ; accented capitals (« État »); numbers and dates from `Intl`. Enforced by
-  `TYPOGRAPHY_RULES.fr`.
+  em dash; œ; accented capitals (« État »); numbers and dates from `Intl`. The machine-checkable
+  part is enforced by `TYPOGRAPHY_RULES.fr`.
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s), joined to the
   figure by U+00A0; never Go/Mo/Ko.
 - **Plurals:** one / many / other, on consecutive lines in that order. `one` serves 0 and 1, so a
@@ -531,7 +534,7 @@ stays great" → « Choisissez un modèle plus petit : la qualité reste excel
   (`packs.addedToast`) — except `perf.model.line` / `perf.model.measuredOther` (`{context}`) and
   `translate.file.gapPages` (`{pages}`). `many` (exact millions) is written like `other`: after
   digits French takes no « de ». A plain key with a number goes label-first (« Tokens : {n} »);
-  "and N more" is « et {count} de plus ».
+  "and N more" in a plain key is « et {count} de plus ».
 - **Citation marker:** `S{n}` (source) — the same letter as the English evidence pack a French UI
   exports.
 - **Untranslated by design:** the product name (no article: « dans HilbertRaum »), "HilbertRaum
@@ -578,7 +581,8 @@ pequeño: la calidad sigue siendo excelente.").
 - **Typography:** quotes «…» without inner spaces; every question and exclamation opens with ¿ / ¡
   inside one value; no apostrophe at all; `…`; **no spaced dash** — an English dash becomes a
   colon, a full stop, a comma or parentheses; a no-break space before `%` (`{pct}\u00A0%`);
-  numbers and dates from `Intl`. Enforced by `TYPOGRAPHY_RULES.es`.
+  numbers and dates from `Intl`. The machine-checkable part is enforced by
+  `TYPOGRAPHY_RULES.es`.
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s), with «de» before
   what they measure («{min} GB de RAM»). `Intl` prints the Spain pattern («98.304», «4,3») for
   every Spanish locale (a known limitation).
@@ -586,7 +590,7 @@ pequeño: la calidad sigue siendo excelente.").
   form uses the placeholders of the English form of its category (`packs.addedToast.one` has no
   `{count}`); `many` (exact millions) is the `other` text with «de» before the noun («{count} de
   documentos»). A plain key with a number goes label-first («secciones analizadas: {scanned}»);
-  "and N more" is «y {count} más».
+  "and N more" in a plain key is «y {count} más».
 - **Citation marker:** `F{n}` (fuente).
 - **Untranslated by design:** the product name (no article), "HilbertRaum Lite", "HilbertRaum AI
   Kit", model ids, paths, technical values, the picker's language names. *System* is «Sistema».
@@ -632,14 +636,15 @@ stays great" → «Scegli un modello più piccolo: la qualità resta ottima.»).
   names); ’ for the apostrophe and never an elision before a placeholder; accents, never an
   apostrophe for one (È, perché, più); `…`; no em dash — a colon or a new sentence, and the
   spaced en dash « – » only between a label and its gloss; no space before `; : ! ?`; numbers and
-  dates from `Intl`. Enforced by `TYPOGRAPHY_RULES.it`.
+  dates from `Intl`. The machine-checkable part is enforced by `TYPOGRAPHY_RULES.it`.
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, %); «unità» never
   names a unit of measurement.
 - **Plurals:** one / many / other, on consecutive lines in that order. `one` is exactly 1, so a
   form uses the placeholders of the English form of its category (`packs.addedToast.one` has no
   `{count}`); `many` (exact millions) adds «di» where the figure stands right before the noun
   («{count} di sezioni»), otherwise it is the `other` text. A plain key with a number goes
-  label-first («Sezioni analizzate: {scanned}»); "and N more" is «e {count} in più».
+  label-first («Sezioni analizzate: {scanned}»); "and N more" in a plain key is «e {count} in
+  più».
 - **Citation marker:** `F{n}` (fonte).
 - **Untranslated by design:** the product name, "HilbertRaum Lite", "HilbertRaum AI Kit", model
   ids, paths, technical values, the picker's language names. *System* is «Sistema».

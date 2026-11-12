@@ -6240,7 +6240,9 @@ Spanish and French skill trigger on two lines in document mode at maximized; the
 badge «Краткое содержание» (the glossary term), which at 880×600 pushes the row's Preview button out
 of the row as German «Zusammenfassung» already does; designed ellipses. Recorded for follow-up, not
 changed in this wave: code-built joins that ignore a language's typography (a plain ": " before a
-value where French puts a no-break space, `{pct}%` in the context meter, a spaced em dash in the
+value where French puts a no-break space, and in the review summary a second colon after a
+Spanish label that already contains one, «Revisado: respaldado: 0»; `{pct}%` in the context
+meter, a spaced em dash in the
 model-download and knowledge-pack-tools licence line, a plain space between figure and unit from
 `shared/format.ts`, though no figure–unit pair broke across lines at either size); the closed
 language select switching, saving and toasting on every arrow key, with the toast in the language

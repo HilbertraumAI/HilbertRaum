@@ -157,10 +157,17 @@ describe('SKILL.md localized display text for every registered interface languag
     UI_LANGUAGE_CODES.filter((code) => code !== 'en').map((code) => [id, code] as const)
   )
 
-  it.each(rows)('%s: localized.%s has a title and a description the parser keeps', (id, code) => {
-    const localized = parse(id).manifest?.localized?.[code]
+  // A block that repeats the English text parses cleanly, and the picker then shows English in
+  // that language with nothing to say it is untranslated.
+  it.each(rows)('%s: localized.%s has a title and a description the parser keeps, neither one the English text', (id, code) => {
+    const manifest = parse(id).manifest
+    const localized = manifest?.localized?.[code]
     expect(localized?.title, `${id}: no localized.${code}.title`).toBeTruthy()
     expect(localized?.description, `${id}: no localized.${code}.description`).toBeTruthy()
+    expect(localized?.title, `${id}: localized.${code}.title is the English title`).not.toBe(manifest?.title)
+    expect(localized?.description, `${id}: localized.${code}.description is the English description`).not.toBe(
+      manifest?.description
+    )
   })
 })
 

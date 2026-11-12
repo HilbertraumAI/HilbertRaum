@@ -2717,8 +2717,9 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   question is answered — whether it asks for a complete list, which notes lead the answer, when a
   skill is suggested or started, and how a knowledge pack is searched — recognise English and
   German wording only. Three cases you can run into: the document chat's example question "Find
-  every mention of …" gets the best-matching passages in every language, but only in English and
-  German does the answer say when it could not read every section; in a chat about one document, a
+  every mention of …", asked over several documents or one too large to read whole, gets the
+  best-matching passages in every language, but only in English and German does the answer say
+  when it could not read every section; in a chat about one document, a
   thank-you such as "Gracias", "Grazie" or "Спасибо!" is taken for a question about it and can
   start a read of the whole document; and the knowledge-pack search counts the Spanish word "es"
   and the French "des" as German words, so it can take a Spanish or French question for German.

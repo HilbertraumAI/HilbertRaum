@@ -481,6 +481,11 @@ judgement. A catalog nobody has reviewed natively keeps `nativeReviewed: false` 
 6. Add a "<Language> microcopy" section to `docs/design-guidelines.md` §7.
 7. Check the layout in the running app: a word that doesn't fit a fixed-width surface such as the
    navigation rail takes a shorter synonym from the glossary, never an abbreviation.
+8. Update the docs that list the languages: the language paragraph in
+   [`docs/user-guide.md`](docs/user-guide.md) (Settings → General → Language), the
+   "Internationalization" section of [`docs/known-limitations.md`](docs/known-limitations.md)
+   (native-review status), the `uiLanguage` codes in
+   [`docs/data-contracts.md`](docs/data-contracts.md), and a `CHANGELOG.md` entry.
 
 ## Scripts mirror canonical TypeScript modules
 The self-contained shell scripts (`scripts/*.{ps1,sh}`) re-implement logic whose canonical,
