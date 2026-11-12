@@ -741,7 +741,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     ).toEqual([])
   })
 
-  describe('the parity rule on fixture catalogs (only en and de are registered so far)', () => {
+  describe('the parity rule on fixture catalogs (the failing shapes no real catalog has)', () => {
     const english = {
       'nav.home': 'Home',
       'docs.opened': 'Opened {name}',
