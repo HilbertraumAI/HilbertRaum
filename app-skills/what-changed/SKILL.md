@@ -12,6 +12,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   es:                          #   Shown when the app runs in Spanish.
     title: ¿Qué cambió?
     description: Sirve para comparar dos versiones de un documento, contrato, política u oferta y ver los cambios importantes, no solo una comparación en bruto.
+  fr:                          #   Shown when the app runs in French.
+    title: "Qu’est-ce qui a changé\u00A0?"
+    description: À utiliser pour comparer deux versions d’un document, d’un contrat, d’un règlement ou d’une offre et en dégager les changements importants, pas seulement les différences brutes.
 kind: instruction
 analysis: compare              # A3/§8.2: the model compares BOTH whole versions (not top-k passages). With this
                                #   skill active over EXACTLY TWO fully-chunked docs the compare engine is the

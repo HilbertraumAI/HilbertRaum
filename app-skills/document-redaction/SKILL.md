@@ -12,6 +12,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   es:                          #   Shown when the app runs in Spanish.
     title: Ocultar datos personales
     description: Sirve para ocultar, anonimizar o quitar los datos personales de un documento.
+  fr:                          #   Shown when the app runs in French.
+    title: Caviarder un document
+    description: À utiliser pour caviarder, anonymiser ou supprimer les données personnelles d’un document.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

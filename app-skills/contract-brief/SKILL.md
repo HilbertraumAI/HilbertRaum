@@ -12,6 +12,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   es:                          #   Shown when the app runs in Spanish.
     title: Resumen de contrato
     description: "Sirve para obtener un resumen en lenguaje sencillo de un contrato o acuerdo: partes, fechas, obligaciones, cláusulas clave y preguntas que conviene hacer. No es asesoramiento legal."
+  fr:                          #   Shown when the app runs in French.
+    title: Synthèse de contrat
+    description: "À utiliser pour obtenir une synthèse en langage clair d’un contrat ou d’un accord\u00A0: parties, dates, obligations, clauses essentielles et questions à poser. Ne constitue pas un conseil juridique."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

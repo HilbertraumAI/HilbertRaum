@@ -343,6 +343,91 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'separates a figure from % with a no-break space',
       'Spanish values with % not preceded by U+00A0 — write {pct}\\u00A0%'
     )
+  ],
+  // French: the typography of design-guidelines §7 "French microcopy".
+  fr: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'French values with an unbalanced «…» pair'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » before its «',
+      '» used before its « — French opens with «'
+    ),
+    forbids(
+      /["“”„‟]/,
+      'uses no quotation mark other than « »',
+      'French values quoting with " “ ” or „ — use «\u00A0…\u00A0»'
+    ),
+    forbids(
+      /«(?!\u00A0)|(?<!\u00A0)»/,
+      'puts a no-break space inside « and »',
+      'French guillemets without U+00A0 inside — write «\\u00A0…\\u00A0»'
+    ),
+    forbids(
+      /(?<!\u00A0)[;?!]|(?<!\u00A0):(?![A-Za-z0-9{/\\])/,
+      'puts a no-break space before : ; ? !',
+      'French : ; ? ! with a plain space or no space before it — write \\u00A0 (a colon inside a technical token such as host:{port} is exempt)'
+    ),
+    forbids(
+      /(?<!\u00A0)%/,
+      'puts a no-break space before %',
+      'French % without U+00A0 before it'
+    ),
+    forbids(
+      / \u00A0|\u00A0 |\u00A0\u00A0/,
+      'never doubles a no-break space with another space',
+      'French values with a space next to U+00A0'
+    ),
+    forbids(
+      /(?<!\d)\u202F|\u202F(?!\d)/,
+      'uses U+202F only between two digits',
+      'French values with a narrow no-break space outside a typed figure — the house space is U+00A0'
+    ),
+    forbids(
+      /['‘]/,
+      'uses ’ for every apostrophe',
+      "French values with an ASCII ' or a ‘ — use ’ (U+2019)"
+    ),
+    forbids(
+      /\.\.\./,
+      'uses … for an ellipsis',
+      'French values with three dots — use … (U+2026)'
+    ),
+    forbids(
+      /—| - /,
+      'uses the spaced en dash as the house dash',
+      'French values with an em dash or a bare " - " — use " – " (U+2013), or better a colon'
+    ),
+    forbids(
+      /oe[ui]/i,
+      'writes the œ ligature',
+      'French values with "oeu"/"oei" — write œ (cœur, œuvre, œil, nœud)'
+    ),
+    forbids(
+      /[}\d] (?:GB|MB|KB|B|MB\/s|tok\/s|ms|s)(?![\p{L}’])/u,
+      'joins a figure and its unit symbol with a no-break space',
+      'French values with a plain space between a figure and its unit — write \\u00A0'
+    ),
+    forbids(
+      /[}\d][\u00A0 ](?:Go|Mo|Ko|octets?)(?!\p{L})/u,
+      'keeps the Latin size symbols the formatters print',
+      'French values with Go/Mo/Ko — the app prints GB/MB/KB, so the copy must too'
+    ),
+    forbids(
+      /(?:^|[\s(\u00A0])(?:tu|toi|te|ton|ta|tes)(?=[\s,.)\u00A0]|$)|(?:^|[\s(\u00A0])t’/i,
+      'addresses the reader as vous',
+      'French values with tu/ton/ta/tes — the form of address is vous'
+    ),
+    forbids(
+      /[\p{Ll},] Vous(?!\p{L})/u,
+      'writes vous in lowercase mid-sentence',
+      'French values with a capital Vous mid-sentence'
+    )
   ]
 }
 

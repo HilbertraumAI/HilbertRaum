@@ -12,6 +12,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   es:                          #   Shown when the app runs in Spanish.
     title: Plazos y obligaciones
     description: "Sirve para encontrar en un documento los plazos, los periodos de preaviso, las fechas de renovación y de pago, y las obligaciones: qué hacer, para cuándo y qué pasa si no se cumple."
+  fr:                          #   Shown when the app runs in French.
+    title: Échéances et obligations
+    description: "À utiliser pour repérer dans un document les échéances, les délais de préavis, les dates de renouvellement et de paiement, ainsi que les obligations\u00A0: ce qu’il faut faire, dans quel délai et ce qui se passe en cas de non-respect."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the

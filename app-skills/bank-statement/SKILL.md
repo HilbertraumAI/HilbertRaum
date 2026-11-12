@@ -12,6 +12,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   es:                          #   Shown when the app runs in Spanish.
     title: Análisis de extractos bancarios
     description: Sirve para extraer, clasificar, conciliar o resumir los movimientos de un extracto bancario.
+  fr:                          #   Shown when the app runs in French.
+    title: Analyse de relevé bancaire
+    description: À utiliser pour extraire, catégoriser, rapprocher ou résumer les transactions d’un relevé bancaire.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

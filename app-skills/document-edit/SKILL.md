@@ -12,6 +12,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   es:                          #   Shown when the app runs in Spanish.
     title: Editar documento
     description: Sirve para hacer cambios puntuales de buscar y reemplazar en un documento sin reescribirlo.
+  fr:                          #   Shown when the app runs in French.
+    title: Modifier un document
+    description: À utiliser pour apporter à un document des modifications ciblées (rechercher et remplacer), sans le réécrire.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40
