@@ -4,11 +4,12 @@ import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate, passwordStrength } from '../../src/renderer/screens/WorkspaceGate'
 import { t } from '../../src/shared/i18n'
-import type {
-  WorkspaceStateInfo,
-  WorkspaceActionResult,
-  ModelInfo,
-  ModelVerifyProgress
+import {
+  MIN_PASSWORD_LENGTH,
+  type WorkspaceStateInfo,
+  type WorkspaceActionResult,
+  type ModelInfo,
+  type ModelVerifyProgress
 } from '../../src/shared/types'
 import { modelInfo } from '../helpers/model-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
@@ -65,6 +66,13 @@ describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', (
     expect(label('sixteen long pwd')).toBe('Strong')
     expect(label('C0rrect-horse-battery!')).toBe('Very strong')
   })
+
+  // "Too short" must mean "under the floor main refuses", or the meter and the submit button
+  // disagree the day the floor moves (/code-review high on PR-A, #4: a copy of the literal 8).
+  it('calls a password too short exactly below the shared floor (MIN_PASSWORD_LENGTH)', () => {
+    expect(label('a'.repeat(MIN_PASSWORD_LENGTH - 1))).toBe('Too short')
+    expect(label('a'.repeat(MIN_PASSWORD_LENGTH))).not.toBe('Too short')
+  })
 })
 
 describe('WorkspaceGate — create (3-step first run)', () => {
@@ -110,6 +118,25 @@ describe('WorkspaceGate — create (3-step first run)', () => {
 
     await user.clear(screen.getByPlaceholderText('Confirm password'))
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+    expect(create).toBeEnabled()
+  })
+
+  // The floor is main's (`registerWorkspaceIpc` refuses under it), so main's too-short refusal
+  // can never answer this gate; `workspace-ipc.test.ts`'s gate cross-check relies on that.
+  it('enables Create exactly at the shared floor main enforces (MIN_PASSWORD_LENGTH)', async () => {
+    const user = userEvent.setup()
+    stubApi({})
+    render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
+    await toPasswordStep(user)
+
+    const create = screen.getByRole('button', { name: /create workspace/i })
+    const belowFloor = 'a'.repeat(MIN_PASSWORD_LENGTH - 1)
+    await user.type(screen.getByPlaceholderText('Password'), belowFloor)
+    await user.type(screen.getByPlaceholderText('Confirm password'), belowFloor)
+    expect(create).toBeDisabled()
+
+    await user.type(screen.getByPlaceholderText('Password'), 'a')
+    await user.type(screen.getByPlaceholderText('Confirm password'), 'a')
     expect(create).toBeEnabled()
   })
 
@@ -444,7 +471,10 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     ['create', 'refused', 'An encrypted workspace already exists here — refusing to overwrite it.'],
     // A reason neither table has. The tables are typecheck-complete, so only a cast gets here;
     // the gate still says what main said instead of showing an empty banner.
-    ['unlock', 'not_in_the_tables' as string as Failure['reason'], 'Something new went wrong.']
+    ['unlock', 'not_in_the_tables' as string as Failure['reason'], 'Something new went wrong.'],
+    // A reason naming an inherited member: a plain `keys[reason]` read finds a function there
+    // (/code-review high on PR-A, #8).
+    ['unlock', 'toString' as string as Failure['reason'], 'Something else went wrong.']
   ] as const)('%s %s shows main’s own message', async (call, reason, message) => {
     await failIn(call, { ok: false, reason, message })
     expect(await screen.findByText(message)).toBeInTheDocument()

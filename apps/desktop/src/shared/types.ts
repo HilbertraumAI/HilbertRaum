@@ -350,7 +350,9 @@ export type WorkspaceActionResult =
 /** Minimum password length for a new encrypted vault (create and change password): the
  *  at-rest key is only as strong as the password (the salt + KDF params live in the
  *  unencrypted descriptor). Main refuses a shorter one (`registerWorkspaceIpc.ts`); the
- *  first-run gate holds the same floor before it sends, so it never gets that refusal back. */
+ *  first-run gate and the Settings change-password card hold the same floor before they send
+ *  (so the gate never gets that refusal back), and the strength meter calls anything under it
+ *  too short. */
 export const MIN_PASSWORD_LENGTH = 8
 
 export interface DriveStatus {

@@ -18,7 +18,7 @@ import { DiagnosticsTab } from './settings/DiagnosticsTab'
 import { SkillsTab } from './settings/SkillsTab'
 import type { SettingsTab } from '../navigation'
 import { UI_LANGUAGES, isUiLanguageSetting, type MessageKey } from '@shared/i18n'
-import type { AppSettings, ThemeSetting } from '@shared/types'
+import { MIN_PASSWORD_LENGTH, type AppSettings, type ThemeSetting } from '@shared/types'
 import { CPU_HI_MIN_THREADS } from '@shared/rerank-rules'
 
 // Settings (guidelines §2): one utility destination with four tabs.
@@ -287,9 +287,11 @@ function ChangePasswordCard(): JSX.Element {
   const { t } = useT()
 
   const strength = passwordStrength(next)
-  // The strength meter is advisory; only the 8-character floor + the confirm match
-  // (and the main process's own checks) gate submission — the WorkspaceGate rules.
-  const canSubmit = current.length > 0 && next.length >= 8 && next === confirm && !busy
+  // The strength meter is advisory; only the MIN_PASSWORD_LENGTH floor (the one main refuses
+  // under) + the confirm match (and the main process's own checks) gate submission — the
+  // WorkspaceGate rules.
+  const canSubmit =
+    current.length > 0 && next.length >= MIN_PASSWORD_LENGTH && next === confirm && !busy
 
   async function submit(e: React.FormEvent): Promise<void> {
     e.preventDefault()

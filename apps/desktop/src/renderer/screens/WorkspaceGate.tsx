@@ -19,6 +19,11 @@ import {
   type WorkspaceActionResult,
   type WorkspaceStateInfo
 } from '@shared/types'
+import {
+  CREATE_FAILURE_KEYS,
+  UNLOCK_FAILURE_KEYS,
+  type WorkspaceFailureReason
+} from '@shared/workspace-failure-keys'
 
 // The password field + strength meter live in `components/PasswordField`
 // (the Settings "Change password" card reuses them); re-exported here so existing
@@ -57,48 +62,18 @@ type CreatePhase = 'welcome' | 'password' | 'finishing' | 'starter'
 
 type Failure = Extract<WorkspaceActionResult, { ok: false }>
 
-// A failed unlock or create renders in the GATE's language (UI languages wave,
-// UI-languages owner call D-17 (a), 2026-11-11). Before unlock the gate follows the
-// localStorage mirror while main emits in its own cached language (the OS locale until
-// settings are readable), so showing main's `message` put one screen in two languages
-// whenever the chosen language wasn't the OS's. The gate renders the failure from its
-// `reason` instead, through its own `t()`, with the `main.workspace.*` value main would have
-// emitted (same text when the languages agree).
-// One table per call: `error` means "couldn't open" to unlock and "couldn't create" to create.
-// `null` (and a reason missing at runtime) shows main's `message`. Create's `refused` is then
-// the vault's own sentence (plaintext not permitted, a workspace already exists), which has
-// no catalog key. Main's other create refusal, a password under MIN_PASSWORD_LENGTH, can't
-// answer this gate: `canSubmit` holds the same floor before sending. That is decided by what
-// the gate knows, never by matching the text (i18n record §3.3 Rule 3).
-const UNLOCK_FAILURE_KEYS = {
-  wrong_password: 'main.workspace.wrongPassword',
-  vault_damaged: 'main.workspace.vaultDamaged',
-  vault_recovery_blocked: 'main.workspace.recoveryBlocked',
-  workspace_newer: 'main.workspace.newer',
-  // `null`: main never sends this reason for this call. If it ever does, give the entry a key:
-  // a `null` shows main's `message`, in main's language, and the screen is in two languages again.
-  refused: null,
-  error: 'main.workspace.openFailed'
-} satisfies Record<Failure['reason'], MessageKey | null>
-
-const CREATE_FAILURE_KEYS = {
-  // `null`: main never sends these three for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
-  wrong_password: null,
-  vault_damaged: null,
-  vault_recovery_blocked: null,
-  workspace_newer: 'main.workspace.newer',
-  // The one `null` main does send: the vault's own sentence, which has no catalog key.
-  refused: null,
-  error: 'main.workspace.createFailed'
-} satisfies Record<Failure['reason'], MessageKey | null>
-
+// A failed unlock or create renders in the GATE's language (UI-languages owner call D-17 (a)):
+// the copy for each `reason` comes from the tables in `shared/workspace-failure-keys.ts`, which
+// say why and which test ties them to main's handlers.
 function failureText(
-  keys: Record<Failure['reason'], MessageKey | null>,
+  keys: Record<WorkspaceFailureReason, MessageKey | null>,
   failure: Failure,
   t: (key: MessageKey) => string
 ): string {
-  const key = keys[failure.reason]
-  return key ? t(key) : failure.message
+  // An own-property read: `reason` comes over IPC, and one naming an inherited member
+  // (`toString`, `constructor`) would otherwise resolve to a function and garble the banner.
+  const key = Object.hasOwn(keys, failure.reason) ? keys[failure.reason] : null
+  return key === null ? failure.message : t(key)
 }
 
 export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
