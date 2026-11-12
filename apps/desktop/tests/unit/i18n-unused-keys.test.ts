@@ -267,7 +267,10 @@ function catalogLookupBindings(
  * language other than English as a literal, the `t('en', key) || t('de', key)` shape that knows
  * copy in two languages only. `t('en', …)` stays allowed: persisted text is canonical English.
  * String and type literals only, through the compiler's AST, so a comment or a string that
- * merely spells `=== 'de'` never matches.
+ * merely spells `=== 'de'` never matches. Parentheses, `as`, `satisfies` and `!` around a code are
+ * seen through. Not seen (reviewed limits): a code held in a constant, `.includes` / `Set` /
+ * `startsWith` / regex tests, an `{ en, de }` key table, and a lookup re-bound to another name
+ * after its import.
  */
 function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line: number; text: string }> {
   const source = ts.createSourceFile(
@@ -277,7 +280,25 @@ function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line
     true,
     fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   )
-  const isPairLiteral = (node: ts.Node): boolean => ts.isStringLiteralLike(node) && LEGACY_PAIR.has(node.text)
+  // Parentheses and type assertions leave the value as it is: `('de' as UiLanguage)` is still 'de'.
+  const unwrap = (node: ts.Node): ts.Node => {
+    let e = node
+    while (
+      ts.isParenthesizedExpression(e) ||
+      ts.isAsExpression(e) ||
+      ts.isSatisfiesExpression(e) ||
+      ts.isNonNullExpression(e) ||
+      ts.isTypeAssertionExpression(e)
+    ) {
+      e = e.expression
+    }
+    return e
+  }
+  const literalText = (node: ts.Node): string | null => {
+    const e = unwrap(node)
+    return ts.isStringLiteralLike(e) ? e.text : null
+  }
+  const isPairLiteral = (node: ts.Node): boolean => LEGACY_PAIR.has(literalText(node) ?? '')
   const lookups = catalogLookupBindings(fileName, source)
   const isCatalogLookup = (callee: ts.Expression): boolean =>
     ts.isIdentifier(callee)
@@ -297,7 +318,7 @@ function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line
       )
       if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
     } else if (ts.isArrayLiteralExpression(node)) {
-      const named = node.elements.flatMap((element) => (ts.isStringLiteralLike(element) ? [element.text] : []))
+      const named = node.elements.flatMap((element) => literalText(element) ?? [])
       if (named.includes('en') && named.includes('de')) record(node, node.getText(source))
     } else if (
       ts.isBinaryExpression(node) &&
@@ -311,8 +332,7 @@ function twoLanguageLiterals(fileName: string, sourceText: string): Array<{ line
       ts.isCallExpression(node) &&
       isCatalogLookup(node.expression) &&
       node.arguments.length > 0 &&
-      ts.isStringLiteralLike(node.arguments[0]) &&
-      NON_ENGLISH_CODES.has(node.arguments[0].text)
+      NON_ENGLISH_CODES.has(literalText(node.arguments[0]) ?? '')
     ) {
       record(node, node.getText(source))
     }
@@ -712,6 +732,10 @@ describe('two-language literals — the interface languages come from the regist
     ['a wider array naming both, over lines', 'fixture.ts', "new Set([\n  'en',\n  'de',\n  'fr'\n])", ["[ 'en', 'de', 'fr' ]"]],
     ['an array naming one code', 'fixture.ts', "const LANGS = ['en'] as const", []],
     ['a comparison in JSX', 'fixture.tsx', "export const A = () => <p>{lang === 'de' ? 'Hallo' : 'Hi'}</p>", ["lang === 'de'"]],
+    ['a comparison with a cast code', 'fixture.ts', "const german = lang === ('de' as UiLanguage)", ["lang === ('de' as UiLanguage)"]],
+    ['a comparison in parentheses', 'fixture.ts', "const german = ('de') === lang", ["('de') === lang"]],
+    ['a switch case with a cast code', 'fixture.ts', "switch (lang) { case 'en' satisfies UiLanguage: break }", ["case 'en' satisfies UiLanguage"]],
+    ['an array of cast codes', 'fixture.ts', "const LANGS = ['en' as UiLanguage, 'de' as UiLanguage]", ["['en' as UiLanguage, 'de' as UiLanguage]"]],
     ['a comment only', 'fixture.ts', "// lang === 'de' used to pick German\nconst x = 1", []],
     ['a string that spells it', 'fixture.ts', "const hint = \"use lang === 'de' nowhere\"", []],
     ['another language', 'fixture.ts', "type Lang = 'en' | 'fr'\nconst french = lang === 'fr'", []],
@@ -730,6 +754,12 @@ describe('two-language literals — the interface languages come from the regist
       '/repo/apps/desktop/src/renderer/lib/fixture.ts',
       "import { t as tCatalog, type MessageKey } from '@shared/i18n'\nconst text = tCatalog('de', key)",
       ["tCatalog('de', key)"]
+    ],
+    [
+      't handed a cast code',
+      '/repo/apps/desktop/src/renderer/lib/fixture.ts',
+      "import { t, type UiLanguage } from '@shared/i18n'\nconst text = t('de' as UiLanguage, key)",
+      ["t('de' as UiLanguage, key)"]
     ],
     [
       'tCount in de',
