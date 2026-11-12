@@ -6093,6 +6093,29 @@ of `de.ts`.
   no guard key the doc-task pass-through accepts has a `{param}` (the filter is an exact match,
   §3.3 Rule 3). Shared convention (`tests/helpers/i18n-catalogs.ts`): a catalog is
   `shared/i18n/<code>.ts` exporting `const <code>`.
+- **A number in copy (CODE-8, for every language; UI languages wave P4).** A key whose text shows
+  a number is either a `.one`/`.other` pair rendered through `tCount`, or a plain key on the
+  reviewed `NON_GRAMMATICAL` list in `tests/unit/i18n.test.ts`, grouped by the reason it stays
+  right in every registered language: nothing agrees with the figure (a count in parentheses, an
+  ordinal, a unit symbol, an identifier, a money amount, a constant), or the ru/fr/es/it
+  translations are written so nothing does (label first, no participle after a bare count).
+  English and German keep their wording; their slips at exactly 1 are a recorded follow-up. The
+  net finds such keys two ways: in the source, a TypeScript-AST scan of every call or
+  `{ key, params }` table that fills a placeholder with a number or with text formatted from one
+  (two variable hops back); in the catalog, placeholder names that always carry a number
+  (`{count}`, `{total}`, `{pct}`, …). A new key it finds fails with a message saying what to do.
+  A pair's caller passes the raw number as the count and the grouped string as the param the text
+  shows (`count`, or `context` in `perf.model.line`). A main-side pair would need a `tCountMain`,
+  which doesn't exist yet: no main-side key is a pair.
+- **Never pair a key whose figure is shown with fraction digits** unless `tCount` first learns
+  the displayed digits (`new Intl.PluralRules(code, { minimumFractionDigits })`): CLDR selects by
+  the digits the reader sees, so Russian and Italian "1,0" is `other` although `select(1)` is
+  `one`. Put such a figure before a unit symbol, or write the key label first.
+- **A plural form may add `{count}` in a language whose `one` is not exactly 1** (owner call
+  2026-11-12). Russian `.one` also serves 21, 31, …, and French `.one` serves 0 and 1.5, so a
+  form English writes without a number ("Knowledge pack added") may show `{count}` there; `tCount`
+  always supplies it. The parity rule decides by probing the language's rule, so Spanish and
+  Italian (`one` = 1 alone) get no licence. No other placeholder may be added or dropped.
 
 ### Phase-42 QA (as built)
 
@@ -10400,7 +10423,7 @@ review-round findings are folded into their rows):
 | **CODE-5** | MED | E `7f5d291` | **fixed** — `retrieveCompareDiff` budgets `changesText + redlineText` JOINTLY (top-level check + `fitChangesToBudget`'s fit test); over budget the redline drops FIRST, the load-bearing change list only shrinks after (the doctask mode-d precedent) — closes the ~2×-budget #41 context-exceeded class on the primary version-compare route. rag-design §14 mode-d note. |
 | **CODE-6** | MED | F1 `b7bbaac` | **fixed** — doctasks store ports the skillruns SKA-40 tolerance: `MAX_POLL_FAILURES = 3` consecutive-failure counter (any success resets), below the max the task/snapshot stays untouched, at the max polling stops and the task is KEPT flagged `stateUnknown` instead of `setActive(null)` (one transient poll rejection used to vanish the busy/Cancel UI mid-run and un-gate every task button). F2 rider (`9b4df23`): DocRow renders the labelled `docs.task.stateUnknown` row + Dismiss (the SkillRunBar treatment) via screen-owned `onDismissTask` → `acknowledgeDocTask()`. |
 | **CODE-7** | MED | F1 | **fixed** — `SettingsScreen.patch` try/catch + `settings.saveFailed` toast (EN+DE) + mountedRef; on failure the controls keep showing the server's last-confirmed values. Registered nit: the blanket mounted-guard also skips the GLOBAL theme/language apply when the IPC reply lands post-unmount (persisted server-side, applied on next settings read; millisecond window) — candidate narrowing to the local `setSettings` only. |
-| **CODE-8** | MED | G `43b6f7e` | **fixed (premise corrected)** — `.one/.other` pairs + `tCount` for the five non-pluralized `{count}`/`{done}` strings EN+DE (DE adjective endings; `docs.reindexAllDone`'s `{done}` → `{count}`), all five call sites converted. The report's "common single-failure case" is UI-unreachable for the confirm titles today (the toolbar buttons are `length > 1`-gated) — pairs landed anyway (defense-in-depth; the toast's singular IS reachable via mount-adoption of a total=1 job, pinned RTL). Plus the **catalog-hygiene net**: a static scan failing any new plain-`t('` consumption of a counting key without `.one/.other` siblings (reviewed non-grammatical allowlist; NUL-tolerant read; dynamic-expression keys out of static reach by design — acceptable for a regression net). The net flagged `diag.bench.cores` "(1 cores)" — same class, not in the finding list: allowlisted + registered, one-pair fix on the next i18n pass. |
+| **CODE-8** | MED | G `43b6f7e` | **fixed (premise corrected)** — `.one/.other` pairs + `tCount` for the five non-pluralized `{count}`/`{done}` strings EN+DE (DE adjective endings; `docs.reindexAllDone`'s `{done}` → `{count}`), all five call sites converted. The report's "common single-failure case" is UI-unreachable for the confirm titles today (the toolbar buttons are `length > 1`-gated) — pairs landed anyway (defense-in-depth; the toast's singular IS reachable via mount-adoption of a total=1 job, pinned RTL). Plus the **catalog-hygiene net**: a static scan failing any new plain-`t('` consumption of a counting key without `.one/.other` siblings (reviewed non-grammatical allowlist; NUL-tolerant read; dynamic-expression keys out of static reach by design — acceptable for a regression net). The net flagged `diag.bench.cores` "(1 cores)" — same class, not in the finding list: allowlisted + registered, one-pair fix on the next i18n pass (fixed 2026-11-12, UI languages wave P4: "(1 core)"). |
 | **CODE-9/TQ-6** | MED | I `815b3c0` | **registered (release checklist)** — the real llama-server wire contract + composite quality/perf behaviors live ONLY in env-gated manual smokes (the mock never emits `reasoning_content`, always finishes `stop`); the concrete (a)–(g) inventory — real SSE wire contract / real-model+RAG answer quality / `ragMinSimilarity` vs the real E5 distribution / server concurrency / per-model bring-up + template leak / all perf numbers / real GPU behavior — is pasted into BUILD_STATE §5's TS-3 bullet so CI-green is never mistaken for evidence there; both SSE fixture files carry b9849 provenance comments ("re-verify on pin bump"). The mechanical smoke-record gate remains the §46 TS-3 owner design item. |
 | **CODE-10** | LOW-MED | B | **fixed** — `encryptFile`/`encryptFileAsync` fsync the frame BEFORE the atomic rename (the `writeVaultDescriptor` idiom) — covers lock, create, rekey staging and sidecar writes in one place; fs-wiring pins with teeth via `vi.mock('node:fs')` in a dedicated file (test-infra lesson below). |
 | **CODE-11** | LOW-MED | C | **fixed** — module-level sidecar child-PID registry (registered/deregistered at both spawn funnels: `LlamaServer` + `WhisperCliTranscriber`); the `uncaughtException` handler best-effort SIGKILLs every registered child after the vault lock (throw-safe per PID) — a crash exit no longer strands up to five llama-servers on Windows. Accepted residual (GPU record §5.6): a crash that bypasses `uncaughtException` itself still orphans. |
@@ -10468,8 +10491,8 @@ here; everything is Low, none flip-blocking):
 - **Fix-when-touched polish candidates:** ~~CODE-13 mock-backend first-install exemption~~
   (done 2026-10-05 by #532: "Engine load failures" §8) ·
   CODE-7 mounted-guard narrowing · the CODE-18 canned-answer persist site ·
-  CODE-35 `key={preview.id}` · CODE-37 `setAutoFire` failure key · `diag.bench.cores` plural pair
-  (CODE-8 net allowlist) · the seven-plus older DE ASCII-quote closers (CODE-25) · ~~a direct GAP-5
+  CODE-35 `key={preview.id}` · CODE-37 `setAutoFire` failure key · ~~`diag.bench.cores` plural
+  pair~~ (done 2026-11-12, UI languages P4) · the seven-plus older DE ASCII-quote closers (CODE-25) · ~~a direct GAP-5
   batch-skip test~~ · ~~exporting `TOKENS_PER_WORD`~~ (the compare-budget tests hard-coded `1.3`, the
   pre-existing SK-2 idiom — a constant change would silently desync the tests' budget currency)
   (both done 2026-10-14 by #682: docs-ipc's "re-index all skips a document held by …" rows; the RAG

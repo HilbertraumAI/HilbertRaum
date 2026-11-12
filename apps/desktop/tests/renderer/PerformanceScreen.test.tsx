@@ -13,7 +13,7 @@ import {
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { t } from '../../src/shared/i18n'
+import { t, tCount } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/shared/format'
 import { effectiveReadSample } from '../helpers/benchmark-records'
 import { deferred } from '../helpers/deferred'
@@ -1369,7 +1369,7 @@ describe('PerformanceScreen: malformed records and the resolved context', () => 
       })
     )
     renderPerformanceScreen({ lang: 'de' })
-    const expected = t('de', 'perf.model.measuredOther', {
+    const expected = tCount('de', 'perf.model.measuredOther', 32_768, {
       context: (32_768).toLocaleString('de'),
       when: new Date('2026-09-01T00:00:00Z').toLocaleDateString('de')
     })
@@ -1742,7 +1742,7 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
     const contextAt = lines.findIndex((l) => l.startsWith(`${t('de', 'models.context.title')}:`))
     const savedAt = lines.findIndex((l) => l.startsWith(`${t('de', 'perf.recommendation.atCheckTime')}:`))
     expect(lines[contextAt]).toBe(
-      `${t('de', 'models.context.title')}: ${t('de', 'models.tech.contextValue', { count: (4096).toLocaleString('de') })}`
+      `${t('de', 'models.context.title')}: ${tCount('de', 'models.tech.contextValue', 4096, { count: (4096).toLocaleString('de') })}`
     )
     expect(contextAt).toBe(liveAt + 1)
     expect(contextAt).toBeLessThan(savedAt)

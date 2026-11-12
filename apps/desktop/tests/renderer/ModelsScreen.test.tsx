@@ -19,7 +19,7 @@ import {
   type PolicyStatus,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { t } from '../../src/shared/i18n'
+import { t, tCount } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { ENGINE_MISSING, engineJob, modelInfo, stubModelsApi } from '../helpers/model-fixtures'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
@@ -1261,7 +1261,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
     render(<ModelsScreen />)
     await screen.findByText('Qwen3 4B Instruct')
     expect(
-      screen.getByText(t('en', 'models.tech.contextValue', { count: (98_304).toLocaleString('en') }))
+      screen.getByText(tCount('en', 'models.tech.contextValue', 98_304, { count: (98_304).toLocaleString('en') }))
     ).toBeInTheDocument()
     cleanup()
 
@@ -1277,7 +1277,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
       )
       await screen.findByText('Qwen3 4B Instruct')
       expect(
-        screen.getByText(t('de', 'models.tech.contextValue', { count: (98_304).toLocaleString('de') }))
+        screen.getByText(tCount('de', 'models.tech.contextValue', 98_304, { count: (98_304).toLocaleString('de') }))
       ).toBeInTheDocument()
     } finally {
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
@@ -1292,7 +1292,7 @@ describe('ModelsScreen — context-size picker beyond 32k (issue #43)', () => {
     render(<ModelsScreen />)
     const select = (await screen.findByRole('combobox', { name: /Context window for answers/ })) as HTMLSelectElement
     const option = within(select).getByRole('option', {
-      name: t('en', 'models.tech.contextValue', { count: (24_576).toLocaleString('en') })
+      name: tCount('en', 'models.tech.contextValue', 24_576, { count: (24_576).toLocaleString('en') })
     }) as HTMLOptionElement
     expect(option.selected).toBe(true)
     expect(select.value).toBe('24576')

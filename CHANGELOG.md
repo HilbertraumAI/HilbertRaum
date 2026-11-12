@@ -40,6 +40,9 @@ from its first public `1.0.0` release onward.
   the operating system's language. These messages now match the rest of the screen. Two rare
   refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
   unencrypted one) are still shown in English.
+- **A computer with one processor core now reads "(1 core)".** The hardware details in Settings →
+  Diagnostics and on the Performance screen, and the reports their Copy buttons make, said
+  "(1 cores)" next to the processor on such a machine (German: "(1 Kerne)").
 
 ## [0.1.65] — 2026-11-11
 

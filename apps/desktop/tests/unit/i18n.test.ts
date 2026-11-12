@@ -1,20 +1,24 @@
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
+import * as ts from 'typescript'
 import {
+  cldrPlural,
   de,
   en,
   resolveUiLanguage,
   t,
   tCount,
+  uiLanguageInfo,
   UI_LANGUAGE_CODES,
   UI_LANGUAGES,
   type MessageKey,
+  type PluralCategory,
   type UiLanguage,
   type UiLanguageInfo
 } from '../../src/shared/i18n'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
-import { catalogOf } from '../helpers/i18n-catalogs'
+import { catalogOf, isCatalogPath } from '../helpers/i18n-catalogs'
 
 // Phase 39 — the shared i18n module (i18n record §3.1, D-L1/D-L2/D-L8): synchronous
 // lookup, {name} interpolation, .one/.other plurals, English fallback, and the
@@ -104,6 +108,16 @@ describe('tCount — .one/.other plural pairs (n === 1 rule)', () => {
     // DE: „weiterER Abschnitt" (starke Flexion im Singular) vs „weiterE Abschnitte".
     expect(tCount('de', 'chat.sources.more', 1)).toBe('und 1 weiterer Abschnitt')
     expect(tCount('de', 'chat.sources.more', 2)).toBe('und 2 weitere Abschnitte')
+  })
+
+  it('D-11: a single-core machine reads "(1 core)" in the benchmark CPU row (EN + DE)', () => {
+    // UI languages wave P4: `diag.bench.cores` was a plain key on the CODE-8 list, so one core
+    // read "(1 cores)" / "(1 Kerne)" on the Diagnostics card, the Performance memory tile and
+    // both Copy reports.
+    expect(tCount('en', 'diag.bench.cores', 1)).toBe(' (1 core)')
+    expect(tCount('en', 'diag.bench.cores', 8)).toBe(' (8 cores)')
+    expect(tCount('de', 'diag.bench.cores', 1)).toBe(' (1 Kern)')
+    expect(tCount('de', 'diag.bench.cores', 8)).toBe(' (8 Kerne)')
   })
 })
 
@@ -276,7 +290,7 @@ describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () 
 })
 
 type Catalog = Readonly<Record<string, string>>
-type CatalogShape = Pick<UiLanguageInfo, 'evidencePack' | 'pluralCategories'>
+type CatalogShape = Pick<UiLanguageInfo, 'evidencePack' | 'pluralCategories' | 'plural'>
 
 /** The plural bases: `X` with both `X.one` and `X.other` (`packs.addFailed.other` alone is no plural). */
 function pluralBases(keys: ReadonlySet<string>): string[] {
@@ -304,12 +318,29 @@ function requiredCatalogKeys(info: CatalogShape, english: Catalog): Set<string> 
 const placeholders = (s: string): string[] => (s.match(/\{\w+\}/g) ?? []).sort()
 
 /**
+ * Whether a plural rule gives `one` to the number 1 and to nothing else, probed over the counts
+ * a screen shows (`tCount` selects on the raw number). True for English and German (`exactOne`)
+ * and also for Spanish and Italian; false for Russian (21, 31, …) and French (0, 1.5), whose
+ * `.one` form also renders other numbers. Decided by probing the rule, not by comparing it with
+ * `exactOne`: a CLDR rule can still give `one` to 1 alone.
+ */
+function oneMeansExactlyOne(plural: (n: number) => PluralCategory): boolean {
+  const probes = [0, 0.5, 1.5, 1_000_001, ...Array.from({ length: 1_000 }, (_, i) => i + 1)]
+  return probes.every((n) => (plural(n) === 'one') === (n === 1))
+}
+
+/**
  * Everything wrong with `catalog` as the catalog of a language shaped `info`: a missing or an
  * unexpected key, an empty value, or placeholders that differ from English. A form English
- * does not have (`.few`) is compared with its base's `.other`.
+ * does not have (`.few`) is compared with its base's `.other`. One licence (S-3-2): in a
+ * language whose `one` is not exactly 1, a plural form may add `{count}` where English's form
+ * lacks it ("Knowledge pack added" is a Russian `.one` that also serves 21 packs). `tCount`
+ * always supplies `count`, so the render cannot miss it. Nothing else may be added or dropped.
  */
 function catalogParityProblems(info: CatalogShape, catalog: Catalog, english: Catalog): string[] {
   const required = requiredCatalogKeys(info, english)
+  const bases = new Set(pluralBases(new Set(Object.keys(english))))
+  const countLicence = !oneMeansExactlyOne(info.plural)
   const problems: string[] = []
   for (const key of [...required].sort()) {
     if (!Object.hasOwn(catalog, key)) problems.push(`missing key ${key}`)
@@ -323,7 +354,10 @@ function catalogParityProblems(info: CatalogShape, catalog: Catalog, english: Ca
     if (value.trim().length === 0) problems.push(`empty value for ${key}`)
     const reference = english[key] ?? english[`${key.slice(0, key.lastIndexOf('.'))}.other`]
     const [have, want] = [placeholders(value), placeholders(reference)]
-    if (have.join() !== want.join()) {
+    const pluralForm = bases.has(key.slice(0, key.lastIndexOf('.')))
+    const addsCount =
+      countLicence && pluralForm && !want.includes('{count}') && have.join() === [...want, '{count}'].sort().join()
+    if (have.join() !== want.join() && !addsCount) {
       problems.push(`placeholder mismatch in ${key}: [${have.join(', ')}], English [${want.join(', ')}]`)
     }
   }
@@ -368,9 +402,14 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     }
     const russianShape: CatalogShape = {
       evidencePack: false,
-      pluralCategories: ['one', 'few', 'many', 'other']
+      pluralCategories: ['one', 'few', 'many', 'other'],
+      plural: cldrPlural('ru')
     }
-    const frenchShape: CatalogShape = { evidencePack: false, pluralCategories: ['one', 'many', 'other'] }
+    const frenchShape: CatalogShape = {
+      evidencePack: false,
+      pluralCategories: ['one', 'many', 'other'],
+      plural: cldrPlural('fr')
+    }
     const russian: Catalog = {
       'nav.home': 'Главная',
       'docs.opened': 'Открыт {name}',
@@ -466,78 +505,117 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     })
   })
 
-  it('CODE-8 net: every {count}/{done}/{hidden} key consumed via plain t() is on the reviewed non-grammatical list', () => {
-    // full-audit 2026-07-11 CODE-8 (task 2): the plural class must not regress. A key whose
-    // value interpolates {count} (or the {done} progress twin) and is consumed via plain
-    // t() can render broken grammar the moment a call site passes 1 ("Retry 1 failed
-    // documents?"). Every such key must either be a .one/.other pair consumed via tCount,
-    // or sit on this reviewed list of counts that never inflect (parenthetical counts,
-    // "{done} of {total}" progress forms, pre-formatted figures). Adding a NEW plain-t()
-    // consumer of a counting key fails here — pluralize it or justify it below.
-    const NON_GRAMMATICAL: ReadonlySet<string> = new Set([
-      'chat.sources.toggle', // "Sources ({count})" — parenthetical
-      'docs.askSelected', // "Ask these documents ({count})" — parenthetical
-      'docs.reindexAll', // "Re-index all ({count})" — parenthetical
-      'docs.retryAllFailed', // "Retry all ({count})" — parenthetical
-      'docs.reindexAllProgress', // "Re-indexing {done} of {total}…" — no noun inflects
-      'docs.reindexAllCancelled', // "… {done} of {total} done."
-      'docs.reindexAllPartial', // "{done} of {total} — {failed} failed."
-      'translate.file.progress', // "Translating… ({done}/{total})"
-      'models.tech.contextValue', // "{count} tokens" — pre-formatted figure, window ≥ 512
-      'models.context.autoResolved', // the same pre-formatted figure in the Auto label
-      // " ({count} cores)" — a single-core machine would read "(1 cores)"; registered as a
-      // residual in the remediation plan's discoveries, deliberately not fixed in Phase G.
-      'diag.bench.cores',
-      // #236: "characters not shown: {hidden}" — a figure after a colon, no noun inflects.
-      'main.dialog.openLink.truncated',
-      // #576/#538: "on {count} of {total} pages" — the noun follows {total}, which these call sites
-      // only render when it is at least 2 (ocrNotes.ts); "all {count}" likewise only for ≥ 2 pages
-      // (a single page has its own sentence).
-      'docs.previewModal.ocrInfoPartial',
-      'docs.ocr.unsure.some',
-      'docs.ocr.unsure.all',
-      // #575: "Scanned pages without readable text yet: {count} of {total}." — figures after a colon.
-      'docs.ocr.scannedPages'
-    ])
-    // Scan the shipped source for plain `t('key'` consumptions (bound renderer t and the
-    // shared t(lang, …) form differ in shape — the latter never matches `t('`). The read is
-    // NUL-tolerant by construction (utf8 readFileSync): analysis/extract.ts carries a
-    // literal NUL byte until CODE-24 lands in Phase H.
-    const srcRoot = join(process.cwd(), 'src')
-    const files: string[] = []
-    const walk = (dir: string): void => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const p = join(dir, entry.name)
-        if (entry.isDirectory()) walk(p)
-        else if (/\.(ts|tsx)$/.test(entry.name)) files.push(p)
-      }
+  describe('S-3-2: a plural form may add {count} only where the language’s one is not exactly 1', () => {
+    // English `.one` of `packs.added` names no number; English `gap.pages` shows a range, never
+    // the count (like `packs.addedToast` and `translate.file.gapPages`).
+    const english = {
+      'nav.home': 'Home',
+      'packs.added.one': 'Pack added',
+      'packs.added.other': '{count} packs added',
+      'gap.pages.one': 'Page {pages} is missing',
+      'gap.pages.other': 'Pages {pages} are missing'
     }
-    walk(srcRoot)
-    expect(files.length).toBeGreaterThan(100) // sanity: the walk really saw the tree
+    const ruShape: CatalogShape = {
+      evidencePack: false,
+      pluralCategories: ['one', 'few', 'many', 'other'],
+      plural: cldrPlural('ru')
+    }
+    const frShape: CatalogShape = {
+      evidencePack: false,
+      pluralCategories: ['one', 'many', 'other'],
+      plural: cldrPlural('fr')
+    }
+    const esShape: CatalogShape = {
+      evidencePack: false,
+      pluralCategories: ['one', 'many', 'other'],
+      plural: cldrPlural('es')
+    }
+    // Russian `.one` also serves 21, 31, …, so it shows the number; `.few` may too.
+    const russian: Catalog = {
+      'nav.home': 'Главная',
+      'packs.added.one': 'Добавлен {count} пакет',
+      'packs.added.few': 'Добавлено {count} пакета',
+      'packs.added.many': 'Добавлено {count} пакетов',
+      'packs.added.other': 'Добавлено {count} пакета',
+      'gap.pages.one': 'Не переведены страницы: {pages}',
+      'gap.pages.few': 'Не переведены страницы ({count}): {pages}',
+      'gap.pages.many': 'Не переведены страницы: {pages}',
+      'gap.pages.other': 'Не переведены страницы: {pages}'
+    }
+    // French `.one` also serves 0 and 1.5.
+    const french: Catalog = {
+      'nav.home': 'Accueil',
+      'packs.added.one': '{count} pack ajouté',
+      'packs.added.many': '{count} de packs ajoutés',
+      'packs.added.other': '{count} packs ajoutés',
+      'gap.pages.one': 'Page {pages} manquante',
+      'gap.pages.many': 'Pages {pages} manquantes',
+      'gap.pages.other': 'Pages {pages} manquantes'
+    }
+    const spanish: Catalog = {
+      'nav.home': 'Inicio',
+      'packs.added.one': 'Paquete añadido',
+      'packs.added.many': '{count} de paquetes añadidos',
+      'packs.added.other': '{count} paquetes añadidos',
+      'gap.pages.one': 'Falta la página {pages}',
+      'gap.pages.many': 'Faltan las páginas {pages}',
+      'gap.pages.other': 'Faltan las páginas {pages}'
+    }
+    const german: Catalog = {
+      'nav.home': 'Start',
+      'packs.added.one': 'Paket hinzugefügt',
+      'packs.added.other': '{count} Pakete hinzugefügt',
+      'gap.pages.one': 'Seite {pages} fehlt',
+      'gap.pages.other': 'Seiten {pages} fehlen'
+    }
 
-    const catalog = en as Record<string, string>
-    const offenders = new Set<string>()
-    for (const file of files) {
-      const text = readFileSync(file, 'utf8')
-      for (const m of text.matchAll(/\bt\(\s*'([^']+)'/g)) {
-        const key = m[1]
-        const value = catalog[key]
-        if (value === undefined) continue // dynamic/derived keys are out of static reach
-        if (!/\{count\}|\{done\}|\{hidden\}/.test(value)) continue
-        if (!NON_GRAMMATICAL.has(key)) offenders.add(key)
-      }
-    }
-    expect(
-      [...offenders].sort(),
-      'plain-t()-consumed {count}/{done} keys — switch them to tCount with .one/.other variants (CODE-8) or justify them on the list above'
-    ).toEqual([])
+    it.each<[string, CatalogShape, Catalog]>([
+      ['Russian (21 is one)', ruShape, russian],
+      ['French (0 is one)', frShape, french]
+    ])('%s: a form that adds {count} passes, extra forms included', (_title, shape, catalog) => {
+      expect(catalogParityProblems(shape, catalog, english)).toEqual([])
+    })
 
-    // Teeth for the allowlist itself: every entry still exists and still counts — a renamed
-    // or de-counted key must be pruned here, not silently ignored.
-    for (const key of NON_GRAMMATICAL) {
-      expect(catalog[key], `stale allowlist entry ${key}`).toBeDefined()
-      expect(/\{count\}|\{done\}|\{hidden\}/.test(catalog[key]), `allowlisted key no longer counts: ${key}`).toBe(true)
-    }
+    it.each<[string, CatalogShape, Catalog, string[]]>([
+      [
+        'German (its one is exactly 1, the real registry entry)',
+        uiLanguageInfo('de'),
+        { ...german, 'packs.added.one': '{count} Paket hinzugefügt' },
+        ['placeholder mismatch in packs.added.one: [{count}], English []']
+      ],
+      [
+        'Spanish (a CLDR rule whose one is exactly 1)',
+        esShape,
+        { ...spanish, 'packs.added.one': '{count} paquete añadido' },
+        ['placeholder mismatch in packs.added.one: [{count}], English []']
+      ],
+      [
+        'Russian, another placeholder in its place',
+        ruShape,
+        { ...russian, 'packs.added.one': 'Добавлен {name}' },
+        ['placeholder mismatch in packs.added.one: [{name}], English []']
+      ],
+      [
+        'Russian, another placeholder beside {count}',
+        ruShape,
+        { ...russian, 'packs.added.one': 'Добавлен {count} пакет {name}' },
+        ['placeholder mismatch in packs.added.one: [{count}, {name}], English []']
+      ],
+      [
+        'Russian, {count} in a key that is not a plural',
+        ruShape,
+        { ...russian, 'nav.home': 'Главная ({count})' },
+        ['placeholder mismatch in nav.home: [{count}], English []']
+      ],
+      [
+        'Russian, {count} dropped where English has it',
+        ruShape,
+        { ...russian, 'packs.added.other': 'Добавлены пакеты' },
+        ['placeholder mismatch in packs.added.other: [], English [{count}]']
+      ]
+    ])('%s is a problem', (_title, shape, catalog, problems) => {
+      expect(catalogParityProblems(shape, catalog, english)).toEqual(problems)
+    })
   })
 
   it('every .one plural key has its .other partner and vice versa (tCount contract)', () => {
@@ -553,5 +631,581 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
         expect(keys.has(`${key.slice(0, -6)}.one` as MessageKey), `missing .one for ${key}`).toBe(true)
       }
     }
+  })
+})
+
+// =================================================================================================
+// CODE-8 net: a number shown by a plain (unpaired) key (full-audit 2026-07-11 CODE-8; widened in
+// the UI languages wave, P4 / L-07). Such a key renders the same words for every count, so it
+// reads wrong wherever a word agrees with the number ("Retry 1 failed documents?"). It must
+// either become a .one/.other pair rendered through `tCount`, or sit on NON_GRAMMATICAL below
+// with a reason that holds in every registered language and in each one the wave adds (ru, fr,
+// es, it): either nothing agrees with the number, or the translations are written so that
+// nothing does (the R1–R7 rules of the per-language style guides).
+//
+// The net finds these keys two ways:
+//   - in the source: every call that names a catalog key (`t`, `tMain`, `t(lang, …)`, `tr`, `s`,
+//     …) or a `{ key, params }` table, where a params property that fills one of the key's
+//     placeholders is a number or text formatted from one (`.length`, arithmetic, `Math.*`,
+//     `toLocaleString`, `String(n)`, a number formatter such as `fmt1`), read through the
+//     TypeScript AST, up to two variable hops back;
+//   - in the catalog: every key with a placeholder whose name means a number wherever it is used
+//     here (`{count}`, `{total}`, `{pct}`, …). This sees what the syntax cannot (`{ total: job.total }`).
+// =================================================================================================
+
+/** Placeholder names that carry a number in every key that uses them (reviewed 2026-11-12). */
+const NUMBER_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  'count', 'n', 'm', 'k', 'total', 'done', 'failed', 'shown', 'covered', 'dropped', 'scanned',
+  'unparsed', 'decided', 'required', 'served', 'rejected', 'hidden', 'chunks', 'tokens', 'layers',
+  'gpuLayers', 'page', 'min', 'max', 'pct', 'tps', 'ttft', 'seconds', 'mbps', 'gb', 'ram', 'vram',
+  'budget', 'need', 'needed', 'spill', 'margin', 'working', 'sum', 'size', 'received', 'amount', 'port'
+])
+
+/** Functions in src/ that turn a number into display text (`fmtDate`/`fmtDateTime` excluded). */
+const NUMBER_FORMATTERS =
+  /^(fmt(?!Date|Time)\w*|gb|gbOf|vramGb|marginGb|secondsOf|formatSize|amountText|shown|Number|parseInt|parseFloat)$/
+
+/** Methods that format a number. A Date's `toLocaleString` would count too: use `fmtDateTime`. */
+const NUMBER_METHODS: ReadonlySet<string> = new Set(['toLocaleString', 'toFixed', 'toPrecision'])
+
+const ARITHMETIC: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.MinusToken,
+  ts.SyntaxKind.AsteriskToken,
+  ts.SyntaxKind.SlashToken,
+  ts.SyntaxKind.PercentToken,
+  ts.SyntaxKind.AsteriskAsteriskToken
+])
+const EITHER_SIDE: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.PlusToken,
+  ts.SyntaxKind.QuestionQuestionToken,
+  ts.SyntaxKind.BarBarToken
+])
+
+/** A placeholder that a call site fills with a number. */
+interface NumberBinding {
+  key: string
+  placeholder: string
+  /** `file:line` of the call or table. */
+  site: string
+}
+
+/** Every placeholder of a `catalog` key that `sourceText` fills with a number. */
+function numberBindings(fileName: string, sourceText: string, catalog: Catalog): NumberBinding[] {
+  const source = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  )
+  const unwrap = (expression: ts.Expression): ts.Expression => {
+    let e = expression
+    while (
+      ts.isParenthesizedExpression(e) ||
+      ts.isAsExpression(e) ||
+      ts.isNonNullExpression(e) ||
+      ts.isSatisfiesExpression(e)
+    ) {
+      e = e.expression
+    }
+    return e
+  }
+  // The initializer of the variable `id` names: the nearest enclosing block that declares it; a
+  // parameter of that name ends the search (its value is unknown here).
+  const initializerOf = (id: ts.Identifier): ts.Expression | undefined => {
+    for (let node: ts.Node | undefined = id.parent; node; node = node.parent) {
+      if (ts.isFunctionLike(node) && node.parameters.some((p) => ts.isIdentifier(p.name) && p.name.text === id.text)) {
+        return undefined
+      }
+      const statements =
+        ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node) || ts.isCaseOrDefaultClause(node)
+          ? node.statements
+          : []
+      for (const statement of statements) {
+        if (!ts.isVariableStatement(statement)) continue
+        for (const declaration of statement.declarationList.declarations) {
+          if (ts.isIdentifier(declaration.name) && declaration.name.text === id.text) return declaration.initializer
+        }
+      }
+    }
+    return undefined
+  }
+  const isNumber = (expression: ts.Expression, hops = 0): boolean => {
+    const e = unwrap(expression)
+    if (ts.isNumericLiteral(e)) return true
+    if (ts.isPrefixUnaryExpression(e)) return e.operator !== ts.SyntaxKind.ExclamationToken
+    if (ts.isBinaryExpression(e)) {
+      const operator = e.operatorToken.kind
+      if (ARITHMETIC.has(operator)) return true
+      if (EITHER_SIDE.has(operator)) return isNumber(e.left, hops) || isNumber(e.right, hops)
+      return operator === ts.SyntaxKind.AmpersandAmpersandToken && isNumber(e.right, hops)
+    }
+    if (ts.isConditionalExpression(e)) return isNumber(e.whenTrue, hops) || isNumber(e.whenFalse, hops)
+    if (ts.isPropertyAccessExpression(e)) return e.name.text === 'length' || e.name.text === 'size'
+    if (ts.isCallExpression(e)) {
+      const callee = unwrap(e.expression)
+      if (ts.isIdentifier(callee)) {
+        // `String(n)` is a number; `String(err)` is an error message.
+        if (callee.text === 'String') return e.arguments.length > 0 && isNumber(e.arguments[0], hops)
+        return NUMBER_FORMATTERS.test(callee.text)
+      }
+      if (!ts.isPropertyAccessExpression(callee)) return false
+      const math = ts.isIdentifier(callee.expression) && callee.expression.text === 'Math'
+      return math || NUMBER_METHODS.has(callee.name.text)
+    }
+    if (ts.isIdentifier(e) && hops < 2) {
+      const initializer = initializerOf(e)
+      return initializer !== undefined && isNumber(initializer, hops + 1)
+    }
+    return false
+  }
+  const keysOf = (expression: ts.Expression): string[] => {
+    const e = unwrap(expression)
+    if (ts.isStringLiteralLike(e)) return Object.hasOwn(catalog, e.text) ? [e.text] : []
+    if (ts.isConditionalExpression(e)) return [...keysOf(e.whenTrue), ...keysOf(e.whenFalse)]
+    return []
+  }
+  const objectOf = (expression: ts.Expression, hops = 0): ts.ObjectLiteralExpression | undefined => {
+    const e = unwrap(expression)
+    if (ts.isObjectLiteralExpression(e)) return e
+    if (!ts.isIdentifier(e) || hops >= 2) return undefined
+    const initializer = initializerOf(e)
+    return initializer === undefined ? undefined : objectOf(initializer, hops + 1)
+  }
+  const entriesOf = (object: ts.ObjectLiteralExpression, hops = 0): Array<[string, ts.Expression]> =>
+    object.properties.flatMap((property): Array<[string, ts.Expression]> => {
+      if (ts.isPropertyAssignment(property) && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) {
+        return [[property.name.text, property.initializer]]
+      }
+      if (ts.isShorthandPropertyAssignment(property)) return [[property.name.text, property.name]]
+      if (ts.isSpreadAssignment(property) && hops < 2) {
+        const spread = objectOf(property.expression)
+        return spread === undefined ? [] : entriesOf(spread, hops + 1)
+      }
+      return []
+    })
+  const bindings: NumberBinding[] = []
+  const record = (keys: readonly string[], params: ts.ObjectLiteralExpression, at: ts.Node): void => {
+    const site = `${fileName}:${source.getLineAndCharacterOfPosition(at.getStart(source)).line + 1}`
+    for (const key of keys) {
+      const names = new Set(placeholders(catalog[key]).map((p) => p.slice(1, -1)))
+      for (const [name, value] of entriesOf(params)) {
+        if (names.has(name) && isNumber(value)) bindings.push({ key, placeholder: name, site })
+      }
+    }
+  }
+  const propertyOf = (object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined =>
+    object.properties.find(
+      (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name
+    )?.initializer
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      // The key is the first argument (`t(key, …)`) or the second (`t(lang, key, …)`), and the
+      // params object comes after it.
+      node.arguments.slice(0, 2).forEach((argument, index) => {
+        const keys = keysOf(argument)
+        if (keys.length === 0) return
+        for (const later of node.arguments.slice(index + 1)) {
+          const params = objectOf(later)
+          if (params !== undefined) record(keys, params, node)
+        }
+      })
+    } else if (ts.isObjectLiteralExpression(node)) {
+      // `{ key: 'coverage.tree.partial', params: { covered, total } }` tables (CoverageMeter.tsx).
+      const key = propertyOf(node, 'key')
+      const params = propertyOf(node, 'params')
+      const object = params === undefined ? undefined : objectOf(params)
+      if (key !== undefined && object !== undefined) record(keysOf(key), object, node)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return bindings
+}
+
+// One parse of src/ serves every row below (the result is read, never changed).
+let srcNumberBindings: NumberBinding[] | undefined
+
+function srcNumbers(): NumberBinding[] {
+  if (srcNumberBindings !== undefined) return srcNumberBindings
+  const srcRoot = join(process.cwd(), 'src')
+  const files: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else if (/\.(ts|tsx)$/.test(entry.name) && !isCatalogPath(path)) files.push(path)
+    }
+  }
+  walk(srcRoot)
+  expect(files.length).toBeGreaterThan(100) // the walk really saw the tree
+  srcNumberBindings = files.flatMap((file) =>
+    numberBindings(relative(srcRoot, file).split('\\').join('/'), readFileSync(file, 'utf8'), en)
+  )
+  return srcNumberBindings
+}
+
+/** Every English key that shows a number, with what says so (call sites or a placeholder name). */
+function keysShowingANumber(): Map<string, string[]> {
+  const evidence = new Map<string, string[]>()
+  const add = (key: string, why: string): void => {
+    evidence.set(key, [...(evidence.get(key) ?? []), why])
+  }
+  for (const { key, placeholder, site } of srcNumbers()) add(key, `${site} {${placeholder}}`)
+  for (const [key, value] of Object.entries(en)) {
+    for (const name of placeholders(value).map((p) => p.slice(1, -1))) {
+      if (NUMBER_PLACEHOLDERS.has(name)) add(key, `{${name}}`)
+    }
+  }
+  return evidence
+}
+
+const PLURAL_BASES: ReadonlySet<string> = new Set(pluralBases(new Set(Object.keys(en))))
+const isPluralForm = (key: string): boolean => PLURAL_BASES.has(key.slice(0, key.lastIndexOf('.')))
+
+/**
+ * Plain keys that show a number, grouped by what keeps them right in every language. The rule
+ * numbers R1–R7 are those of the per-language style guides (UI languages wave, P6). "F-12" is the
+ * follow-up for the English and German singular slips of the D-11 class ("1 sections scanned").
+ */
+const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly MessageKey[] }>> = {
+  parenthetical: {
+    reason:
+      'A bare count in parentheses, after a colon or after "×", or "… and {count} more" with no noun: ' +
+      'nothing agrees with it in any language, and the translations keep that shape.',
+    keys: [
+      'chat.sources.toggle',
+      'docs.askSelected',
+      'docs.reindexAll',
+      'docs.retryAllFailed',
+      'docs.ocr.scannedPages', // #575: "…: {count} of {total}."
+      'analysis.listing.item',
+      'skills.bankAnalysis.transactionsMore',
+      'skills.invoiceAnalysis.positionsMore',
+      'skills.redactionRouting.scan',
+      'models.library.showVariants',
+      'models.library.hideVariants',
+      'main.dialog.openLink.truncated' // #236: "characters not shown: {hidden}."
+    ]
+  },
+  ratio: {
+    reason:
+      '"{done} of {total}" with no noun and no participle: nothing agrees with either figure (Russian ' +
+      'uses a verbal noun, "Переиндексация: {done} из {total}").',
+    keys: ['docs.reindexAllProgress', 'docs.previewModal.segmentProgress', 'translate.file.progress']
+  },
+  ordinal: {
+    reason:
+      'The number is a label (page, item, part or model n of m): the noun before it stays singular in ' +
+      'every language (R4). A page range has its own key, so its plural is fixed.',
+    keys: [
+      'chat.sources.page',
+      'docs.previewModal.page',
+      'analysis.listing.refPage',
+      'analysis.listing.refSection',
+      'models.checkingProgress',
+      'gate.finishing.progress',
+      'main.translation.failedWindowNotice',
+      'main.translation.missingPageNotice',
+      'main.translation.missingPageRangeNotice',
+      'review.evidence.linkingItem',
+      'review.item.aria',
+      'review.selection.surfaceAria'
+    ]
+  },
+  identifier: {
+    reason: 'An identifier (a port, a citation index), not a quantity: nothing agrees with it.',
+    keys: [
+      'chat.sources.marker',
+      'settings.localApi.status.port',
+      'settings.localApi.error.portInUse',
+      'diag.app.onPort'
+    ]
+  },
+  unitSymbol: {
+    reason:
+      'The figure stands before a unit symbol (GB, MB/s, s, %, tok/s) or is a formatted size that ' +
+      'carries one: a symbol never inflects, whatever the decimals (R3). The translations write a unit ' +
+      'expression such as "tokens / s" as a symbol too.',
+    keys: [
+      'chat.noModel.startingProgress',
+      // "tokens" follows a "k" figure of at least 2k (the window): plural in every language.
+      'chat.context.usageTooltip',
+      'models.library.memory',
+      'models.usesSpace',
+      'models.download.progress',
+      'models.download.progressNoTotal',
+      'models.download.titled',
+      'models.engine.progress',
+      'ocr.install.progress',
+      'models.ram.needs',
+      'models.ram.machine',
+      'models.badge.ramNeeded',
+      'perf.report.otherComputer',
+      'perf.model.need',
+      'perf.model.needEstimate',
+      'perf.model.gpuEstimate',
+      'perf.model.partialEstimate',
+      'perf.model.cpu',
+      'perf.model.cpuEstimate',
+      'perf.model.unified',
+      'perf.model.unifiedEstimate',
+      'perf.model.tooLarge',
+      'perf.models.row',
+      'perf.models.card',
+      'perf.models.cardReranker',
+      'perf.models.ram',
+      'perf.models.memory',
+      'perf.tile.graphics.small',
+      'perf.others.subGpu',
+      'perf.observed.answer',
+      'perf.observed.load',
+      'perf.observed.check',
+      'perf.others.row',
+      'perf.others.sub',
+      'perf.others.load',
+      'perf.others.check',
+      'main.benchmark.warnSlowRead',
+      'packs.summary.size',
+      'packs.tools.progress',
+      'images.history.total',
+      'images.history.clear.body'
+    ]
+  },
+  amount: {
+    reason: 'A money amount followed by its currency code, or a list of such amounts: nothing agrees with it.',
+    keys: [
+      'skills.bankAnalysis.unreconciledItem',
+      'skills.bankAnalysis.totals',
+      'skills.bankAnalysis.categoryItem',
+      'skills.bankAnalysis.transactionItem',
+      'skills.bankAnalysis.figureEcho',
+      'skills.bankAnalysis.figureEchoIn',
+      'skills.bankAnalysis.figureEchoOut',
+      'skills.bankAnalysis.figureEchoNet',
+      'skills.invoiceAnalysis.net',
+      'skills.invoiceAnalysis.tax',
+      'skills.invoiceAnalysis.taxWithRate',
+      'skills.invoiceAnalysis.gross',
+      'skills.invoiceAnalysis.positionItem',
+      'skills.invoiceAnalysis.figureEchoNet',
+      'skills.invoiceAnalysis.figureEchoTax',
+      'skills.invoiceAnalysis.figureEchoGross'
+    ]
+  },
+  constant: {
+    reason:
+      'The value is a compile-time constant (the password floor 8; the skill-import caps 64 and 16): ' +
+      'every translation writes the form that fits that value (R7).',
+    keys: [
+      'main.workspace.passwordTooShort',
+      'main.workspace.newPasswordTooShort',
+      'skills.import.note.listTruncated',
+      'skills.import.note.localizedTooMany'
+    ]
+  },
+  evidencePack: {
+    reason:
+      'Renders only inside an evidence pack, which is written in English or German (D-5 b); no other ' +
+      'language carries packExport.* keys (D-14 a). Their en/de reading at 1 is the F-12 class.',
+    keys: [
+      'packExport.meta.formatValue',
+      'packExport.meta.formatValuePdf',
+      'packExport.summary.progress',
+      'packExport.summary.followUps',
+      'packExport.item.number',
+      'packExport.evidence.page',
+      'packExport.coverage.inputStatement'
+    ]
+  },
+  labelFirstNoun: {
+    reason:
+      'A noun after the figure ("tokens", "sections", "layers") agrees with it in every language. The ' +
+      'ru/fr/es/it translations put the noun first as a label ("Tokens: {tokens}", R1), or write a unit ' +
+      'symbol where the figure has decimals ("{tps} tok/s", R3). English and German read wrong only ' +
+      'where the figure can be exactly 1 (F-12).',
+    keys: [
+      'chat.speed.line',
+      // The count is at least 2 here (a single page has its own sentence, ocrNotes.ts), so en/de/fr/es/it
+      // read right; Russian "на всех 21 странице" is singular, so ru writes it label-first.
+      'docs.ocr.unsure.all',
+      'coverage.extract.whole',
+      'coverage.extract.wholeUnparsed',
+      'coverage.extract.sections',
+      'coverage.extract.sectionsUnparsed',
+      'perf.verdict.speed',
+      'perf.tile.speed.chunks',
+      'perf.model.gpu',
+      'perf.observed.answerSub',
+      'diag.bench.tokensOver',
+      // Cannot be a pair: stored in English and re-rendered from the captured figure (displayMap.ts).
+      'main.benchmark.warnRecommendationLowered'
+    ]
+  },
+  labelFirstOf: {
+    reason:
+      '"{a} of {b} <noun>": the noun follows {b}. With b of at least 2 it is plural in en/de/fr/es/it, ' +
+      'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere ' +
+      '(F-12 for en/de). The ru/fr/es/it translations put the noun first ("Sections: {covered} of ' +
+      '{total}", R1).',
+    keys: [
+      // #576/#538: these two render only when the total is at least 2 (ocrNotes.ts).
+      'docs.previewModal.ocrInfoPartial',
+      'docs.ocr.unsure.some',
+      'coverage.relevance.counted',
+      'coverage.tree.partial',
+      'perf.model.partial',
+      'perf.model.partialFree',
+      'perf.model.partialMargin',
+      'perf.model.partialMarginNoWorking',
+      'perf.models.split',
+      'translate.device.gpu',
+      'translate.device.gpuPartial',
+      'translate.device.gpuNone'
+    ]
+  },
+  labelFirstSentence: {
+    reason:
+      'The count governs a noun, and often a verb, inside a sentence, which agrees with it in every ' +
+      'language. The ru/fr/es/it translations state the count label-first ("Transactions read: ' +
+      '**{count}**", R1); where the English and German sentence can meet 1 ("I read 1 transactions"), ' +
+      'that is F-12.',
+    keys: [
+      'skills.bankAnalysis.count',
+      'skills.bankAnalysis.countPartial',
+      'skills.bankAnalysis.countContradicted',
+      'skills.bankAnalysis.unverifiedCaveat',
+      'skills.invoiceAnalysis.count',
+      'skills.invoiceAnalysis.countPartial',
+      'skills.analysis.scopeNarrowed',
+      'skills.analysis.selectOne',
+      'skills.analysis.selectTwo',
+      'packs.addPartial',
+      'review.evidence.shownCount',
+      'analysis.listing.coverageWhole',
+      'analysis.listing.coverageSections',
+      'analysis.listing.empty'
+    ]
+  },
+  noParticiple: {
+    reason:
+      'A bare figure before a participle or a verb ("{n} failed", "{gb} GB read", "{free} is free"). ' +
+      'English and German do not inflect these ("1 failed", "1 fehlgeschlagen"); ru/fr/es/it do, so the ' +
+      'translations use a label or an impersonal form ("failed: {n}", "lecture de {gb} GB", R2).',
+    keys: [
+      'docs.reindexAllCancelled',
+      'docs.reindexAllPartial',
+      'analysis.listing.unparsedSuffix',
+      'diag.localApi.running',
+      'perf.tile.drive.load',
+      'perf.tile.drive.hash',
+      'perf.observed.loadSub',
+      'perf.observed.checkSub',
+      'diag.bench.effectiveReadLoad',
+      'diag.bench.effectiveReadHash',
+      'chat.packs.outcome.summary',
+      'review.progress',
+      'review.summary.gateHint',
+      'main.download.notEnoughSpace'
+    ]
+  }
+}
+
+/** Listed keys the net cannot see, and how their number reaches them (reviewed by hand, T4.1). */
+const SEEN_BY_HAND: Readonly<Partial<Record<MessageKey, string>>> = {
+  'skills.bankAnalysis.figureEcho': '{figures} joins the figureEcho* fragments, whose amounts the net sees',
+  'skills.redactionRouting.scan': 'six counts read from a `counts` record (redaction.ts)',
+  'settings.localApi.error.portInUse': '{suggestion} is String(suggestPort(port)), a port number',
+  'main.translation.missingPageRangeNotice': '{from} and {to} are page numbers (gap.from, gap.to)',
+  'packExport.meta.formatValue': '{version} is the pack schema version number',
+  'packExport.meta.formatValuePdf': '{version} is the pack schema version number'
+}
+
+describe('CODE-8 net: a key that shows a number is a plural pair or on the reviewed list', () => {
+  const catalog: Catalog = {
+    'a.count': 'Files: {n}',
+    'a.value': 'Value {value}',
+    'a.size': 'Uses {size}',
+    'a.when': 'Saved {when}',
+    'a.reason': 'Failed ({reason})'
+  }
+
+  it.each<[string, string, string[]]>([
+    ['a .length', "t('a.count', { n: files.length })", ['a.count {n}']],
+    ['the main-process translator', "tMain('a.value', { value: (bytes / 1e9).toFixed(1) })", ['a.value {value}']],
+    ['the key in second place', "t(lang, 'a.value', { value: n.toLocaleString(lang) })", ['a.value {value}']],
+    ['a number formatter', "s('a.size', { size: fmtDiskSize(bytes, lang) })", ['a.size {size}']],
+    ['String of a number', "deps.t('a.value', { value: String(rows.length) })", ['a.value {value}']],
+    ['Math', "t('a.value', { value: Math.round(x) })", ['a.value {value}']],
+    ['a variable, one hop back', "const total = rows.length\nt('a.count', { n: total })", ['a.count {n}']],
+    ['a shorthand property', "const n = rows.length\nt('a.count', { n })", ['a.count {n}']],
+    ['a spread object', "const p = { n: rows.length }\nt('a.count', { ...p })", ['a.count {n}']],
+    ['a params variable', "const params = { n: rows.length }\nctx.tr('a.count', params)", ['a.count {n}']],
+    ['a key/params table', "const row = { key: 'a.count', params: { n: rows.length } }", ['a.count {n}']],
+    [
+      'either key of a conditional',
+      "t(ok ? 'a.count' : 'a.value', { n: 1, value: 2 })",
+      ['a.count {n}', 'a.value {value}']
+    ],
+    ['a call in JSX', "export const A = () => <p>{t('a.count', { n: list.length })}</p>", ['a.count {n}']],
+    ['no number in a date formatter', "t('a.when', { when: fmtDate(at, lang) })", []],
+    ['no number in String of an error', "t('a.reason', { reason: String(err) })", []],
+    [
+      'no number in a same-named variable of another function',
+      "function f() { const raw = rows.length }\nfunction g(err) { const raw = String(err); t('a.reason', { reason: raw }) }",
+      []
+    ],
+    ['no number in a parameter', "function g(n) { t('a.count', { n }) }", []],
+    ['no number in a property the text does not show', "t('a.when', { when: at, n: 3 })", []],
+    ['no key that is not in the catalog', "t('no.such.key', { n: 3 })", []],
+    ['nothing in a comment', "// t('a.count', { n: files.length })\nconst x = 1", []]
+  ])('the source scan sees %s', (_title, code, found) => {
+    const fileName = code.includes('<p>') ? 'fixture.tsx' : 'fixture.ts'
+    expect(numberBindings(fileName, code, catalog).map((b) => `${b.key} {${b.placeholder}}`)).toEqual(found)
+  })
+
+  it('every key that shows a number is a .one/.other pair or on NON_GRAMMATICAL', () => {
+    const listed = new Set<string>(Object.values(NON_GRAMMATICAL).flatMap((group) => group.keys))
+    const offenders = [...keysShowingANumber()]
+      .filter(([key]) => !isPluralForm(key) && !listed.has(key))
+      .map(([key, why]) => `${key} (${why.join(', ')})`)
+      .sort()
+    expect(
+      offenders,
+      'a plain key shows a number, so its words cannot follow the count. Make it a .one/.other pair ' +
+        'rendered through tCount (the main process has only tMain today: add a tCountMain to ' +
+        'src/main/services/i18n.ts), or, if no word agrees with the number in any registered language, ' +
+        'add it to NON_GRAMMATICAL (tests/unit/i18n.test.ts) in the group whose reason holds for it. ' +
+        'Never pair a figure shown with fraction digits: plural rules select by the digits shown ' +
+        '(docs/architecture.md, i18n record §5).'
+    ).toEqual([])
+  })
+
+  it('NON_GRAMMATICAL lists each key once, and only plain keys that exist and have a placeholder', () => {
+    const all = Object.values(NON_GRAMMATICAL).flatMap((group) => group.keys)
+    expect(
+      all.filter((key, index) => all.indexOf(key) !== index),
+      'listed in two groups'
+    ).toEqual([])
+    const values = en as Record<string, string>
+    for (const key of all) {
+      expect(values[key], `stale NON_GRAMMATICAL entry ${key}`).toBeDefined()
+      expect(isPluralForm(key), `${key} is a plural form: take it off NON_GRAMMATICAL`).toBe(false)
+      expect(placeholders(values[key]).length, `${key} shows no figure any more`).toBeGreaterThan(0)
+    }
+  })
+
+  it('the net finds every listed key except the reviewed hand-found ones', () => {
+    // A listed key whose number went away (or one the net has learnt to see) fails here, so
+    // the list cannot keep entries nobody needs.
+    const seen = keysShowingANumber()
+    const unseen = Object.values(NON_GRAMMATICAL)
+      .flatMap((group) => group.keys)
+      .filter((key) => !seen.has(key))
+      .sort()
+    expect(
+      unseen,
+      'listed keys the net does not see: drop the entry, or record in SEEN_BY_HAND how its number arrives'
+    ).toEqual(Object.keys(SEEN_BY_HAND).sort())
   })
 })
