@@ -384,9 +384,9 @@ describe('ChatScreen — a "model is starting" refusal clears once the model is 
   // i18n record §3.3 rule 3: main throws the refusal in ITS language (`tMain`), which need not be the one the
   // screen renders — a language switch between the refusal and the model's return, or main still on the OS
   // locale. One row per registered language × refusal, the screen rendered in ANOTHER registered language, so
-  // a check against the screen's own language only (the code before T2.2b) keeps every row's banner. The
-  // re-read after the refusal is held until the banner is seen: the clear is the status read's doing, and the
-  // foreign text demonstrably reached the banner first.
+  // a check against the screen's own language only (the code before the UI languages wave) keeps every row's
+  // banner. The re-read after the refusal is held until the banner is seen: the clear is the status read's
+  // doing, and the foreign text demonstrably reached the banner first.
   const otherLanguage = (code: UiLanguage): UiLanguage => {
     const other = UI_LANGUAGE_CODES.find((candidate) => candidate !== code)
     if (other === undefined) throw new Error('the cross-language rows need two registered languages')

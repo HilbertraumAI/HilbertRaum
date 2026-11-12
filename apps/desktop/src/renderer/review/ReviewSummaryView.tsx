@@ -325,10 +325,10 @@ export function ReviewSummaryView({
  * (shared defaults — privacy-sensitive extras OFF; file paths have no flag because no
  * pack can contain one) and the §24.3 encryption-boundary warning, always visible before
  * the native save dialog opens. The pack's language is FROZEN at generation: the current
- * UI language when packs can be written in it, English otherwise (`packLanguageFor`, D-5
- * (b)), and a one-sentence line says so when the two differ. The save dialog offers both
- * formats too (requested one preselected) — the chosen file extension has the final word
- * main-side.
+ * UI language when packs can be written in it, English otherwise (`packLanguageFor`,
+ * UI-languages owner call D-5 (b)), and a one-sentence line says so when the two differ. The
+ * save dialog offers both formats too (requested one preselected) — the chosen file
+ * extension has the final word main-side.
  */
 function ExportPackPanel({
   onClose,

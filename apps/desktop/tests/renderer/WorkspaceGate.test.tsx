@@ -393,11 +393,11 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
   })
 })
 
-// D-17 (a), UI languages wave: before unlock the gate renders in the localStorage mirror's
+// UI-languages owner call D-17 (a): before unlock the gate renders in the localStorage mirror's
 // language, while main emits its failure `message` in its own cached language (the OS locale
 // until settings are readable). Every row renders the gate in German and lets main answer in
 // English, so a gate that showed `message` for a mapped reason turns its row red.
-describe('WorkspaceGate — unlock/create failures render in the gate’s language (D-17 a)', () => {
+describe('WorkspaceGate — unlock/create failures render in the gate’s language (UI-languages owner call D-17 (a))', () => {
   type Failure = Extract<WorkspaceActionResult, { ok: false }>
 
   afterEach(() => window.localStorage.clear())

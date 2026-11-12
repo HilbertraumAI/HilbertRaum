@@ -17,6 +17,7 @@ import {
   type UiLanguageInfo,
   type UiLanguageSetting
 } from '../../src/shared/i18n'
+import { exactOne } from '../../src/shared/i18n/languages'
 
 // The UI-language registry and the cores derived from it (i18n record D-L9, D-L1, D-L2):
 // registry invariants, the plural engine, OS-locale resolution, and the catalog types.
@@ -47,6 +48,30 @@ const FR = {
 
 /** Russian plural forms, but a language that does write evidence packs. */
 const RU_WITH_PACKS = { ...RU, evidencePack: true } as const satisfies UiLanguageInfo
+
+/** The languages that keep the exact n === 1 rule (UI-languages owner call D-8 (a)). */
+const EXACT_ONE_CODES: readonly string[] = ['en', 'de']
+
+/** Counts at which the rules of English, German, Russian, French, Spanish and Italian part ways. */
+const PLURAL_PROBES = [0, 0.5, 1, 1.5, 2, 5, 21, 22, 1_000_000]
+
+/**
+ * Everything wrong with an entry's plural rule. English and German must name `exactOne` itself,
+ * not a rule that only agrees with it on positive counts (CLDR English also gives `one` to −1).
+ * Every other language must select as its own CLDR rule does (`Intl.PluralRules(code)`), so a
+ * copied entry that kept another language's rule fails. The branch is decided by `code`, not by
+ * the forms: a language with only one/other forms that is not English or German takes its CLDR
+ * rule too.
+ */
+function pluralRuleProblems(info: Pick<UiLanguageInfo, 'code' | 'plural'>): string[] {
+  if (EXACT_ONE_CODES.includes(info.code)) {
+    return info.plural === exactOne ? [] : [`${info.code}: the rule is not exactOne`]
+  }
+  const cldr = new Intl.PluralRules(info.code)
+  return PLURAL_PROBES.filter((n) => info.plural(n) !== cldr.select(n)).map(
+    (n) => `${info.code}: ${n} → ${info.plural(n)}, CLDR ${cldr.select(n)}`
+  )
+}
 
 describe('UI language registry — invariants', () => {
   it('lists English first (the fallback language)', () => {
@@ -79,6 +104,21 @@ describe('UI language registry — invariants', () => {
       expect(counts.filter((n) => !pinned.includes(info.plural(n)))).toEqual([])
     }
   )
+
+  it.each([...UI_LANGUAGES, RU, FR])('$code: the plural rule is the language’s own', (info) => {
+    expect(pluralRuleProblems(info)).toEqual([])
+  })
+
+  it.each<[string, Pick<UiLanguageInfo, 'code' | 'plural'>, string[]]>([
+    [
+      'an Italian entry that kept the French rule',
+      { ...FR, code: 'it' },
+      ['it: 0 → one, CLDR other', 'it: 0.5 → one, CLDR other', 'it: 1.5 → one, CLDR other']
+    ],
+    ['English with the CLDR English rule', { code: 'en', plural: cldrPlural('en') }, ['en: the rule is not exactOne']]
+  ])('%s is a problem', (_title, info, problems) => {
+    expect(pluralRuleProblems(info)).toEqual(problems)
+  })
 
   it('isUiLanguage accepts exactly the registered codes', () => {
     for (const { code } of UI_LANGUAGES) expect(isUiLanguage(code)).toBe(true)

@@ -1606,7 +1606,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
 ✅ **Types (`shared/types.ts`):** `EvidencePackLanguage` ('en'|'de' — the pack's content
   language, chosen at export and FROZEN into the file; never re-localized later. The renderer
   maps its UI language through `packLanguageFor(uiLanguageInfo(lang))` (`shared/evidence-review.ts`,
-  owner call D-5 (b), 2026-11-11; architecture.md i18n record D-L11): the UI language when its
+  UI-languages owner call D-5 (b), 2026-11-11; architecture.md i18n record D-L11): the UI language when its
   registry entry has `evidencePack: true`, else `'en'`, so it is always one of these two values,
   whatever the UI language) and
   `EvidencePackOptions { language, includeReviewerNotes, includeSourceExcerpts,

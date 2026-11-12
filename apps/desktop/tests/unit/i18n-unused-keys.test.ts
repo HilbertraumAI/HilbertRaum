@@ -33,7 +33,7 @@ import { isCatalogPath, registeredCatalogCode } from '../helpers/i18n-catalogs'
 // keeping it in scope. The i18n catalog files themselves are excluded: they declare every
 // key as an object-literal string, which would trivially mark every key "used" and defeat the
 // guard entirely. A row below holds the excluded files to the registered languages' catalogs,
-// so a new catalog (ru.ts) can only be excluded, never scanned (L-11).
+// so a new catalog (ru.ts) can only be excluded, never scanned.
 
 // ---------------------------------------------------------------------------------------------
 // Scanning primitives — plain functions so the classifier can be unit-tested on small fixtures
@@ -205,7 +205,7 @@ function findStaleExceptions(
   return stale
 }
 
-/** The two languages a closed set of interface languages used to name (L-01). */
+/** The two interface languages code named as a closed set (`'en' | 'de'`) before the language registry. */
 const LEGACY_PAIR: ReadonlySet<string> = new Set(['en', 'de'])
 
 const EQUALITY_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
@@ -345,7 +345,7 @@ const EXACT_KEY_EXCEPTIONS: readonly ExactKeyException[] = []
 const LEGACY_UNREFERENCED: readonly MessageKey[] = []
 
 // ---------------------------------------------------------------------------------------------
-// Two-language literals (L-01, UI languages wave): the interface languages come from the
+// Two-language literals (UI languages wave): the interface languages come from the
 // registry (`UI_LANGUAGES`), so a hardcoded en/de pair in src/ is a language left out the day
 // a third one registers. The exceptions name the en/de pair for a reason other than the
 // interface language. Each entry is one site, matched by file and source text: a new site, a
@@ -367,17 +367,18 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
   {
     file: 'main/services/skills/vocabulary.ts',
     text: "'en' | 'de'",
-    reason: 'VocabLang: the languages questions are understood in (content language; interface-only wave, L-29)'
+    reason:
+      'VocabLang: the languages questions are understood in (content language; the UI languages wave is interface-only, owner call 2026-11-11)'
   },
   {
     file: 'main/services/zim/question-language.ts',
     text: "'de' | 'en' | null",
-    reason: 'the detected language of a question (content language, L-29)'
+    reason: 'the detected language of a question (content language, not the interface language)'
   },
   {
     file: 'main/services/zim/expand.ts',
     text: "'de' | 'en' | null",
-    reason: "the question's detected language in the expansion result (content language, L-29)"
+    reason: "the question's detected language in the expansion result (content language, not the interface language)"
   },
   {
     file: 'main/services/ingestion/index.ts',
@@ -406,7 +407,7 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
     file: 'shared/types.ts',
     text: "'en' | 'de'",
     reason:
-      'EvidencePackLanguage: packs are written in en/de only (D-5 b, i18n record D-L11); a type row in evidence-pack-model.test.ts holds it to the registry'
+      'EvidencePackLanguage: packs are written in en/de only (UI-languages owner call D-5 (b), i18n record D-L11); a type row in evidence-pack-model.test.ts holds it to the registry'
   }
 ]
 
@@ -582,10 +583,10 @@ describe('i18n unused-key guard — production scan', () => {
 })
 
 // =================================================================================================
-// Which files the scan skips as catalogs (L-11): every catalog, and nothing but registered ones.
+// Which files the scan skips as catalogs: every catalog, and nothing but registered ones.
 // =================================================================================================
 
-describe('i18n unused-key guard — the catalog exclusion (L-11)', () => {
+describe('i18n unused-key guard — the catalog exclusion', () => {
   it.each([
     ['/repo/apps/desktop/src/shared/i18n/en.ts', true],
     ['C:\\repo\\apps\\desktop\\src\\shared\\i18n\\de.ts', true],
@@ -630,10 +631,10 @@ describe('i18n unused-key guard — the catalog exclusion (L-11)', () => {
 })
 
 // =================================================================================================
-// Two-language literals outside the registry (L-01).
+// Two-language literals outside the registry.
 // =================================================================================================
 
-describe('two-language literals — the interface languages come from the registry (L-01)', () => {
+describe('two-language literals — the interface languages come from the registry', () => {
   it.each([
     ['a comparison with de', 'fixture.ts', "const german = lang === 'de'", ["lang === 'de'"]],
     ['a negated comparison with en', 'fixture.ts', "if ('en' !== lang) render()", ["'en' !== lang"]],

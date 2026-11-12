@@ -1454,7 +1454,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.tech.recRam': 'Empfohlener RAM',
   'models.tech.context': 'Kontextfenster',
   // RD-3: deutscher Plural ist „Token“ (wie `models.context.autoResolved` unten), nicht „Tokens“.
-  // Ein Pluralpaar (UI-Sprachen-Welle, P4): „Token“ ist im Deutschen in Singular und Plural gleich.
+  // Ein Pluralpaar (UI-Sprachen-Welle): „Token“ ist im Deutschen in Singular und Plural gleich.
   'models.tech.contextValue.one': '{count} Token',
   'models.tech.contextValue.other': '{count} Token',
   'models.tech.file': 'Datei',
@@ -2281,7 +2281,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.bench.noMatch': 'Kein passendes Modell',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',
-  // Ein Pluralpaar, damit ein Ein-Kern-Rechner „(1 Kern)“ liest (UI-Sprachen-Welle, D-11).
+  // Ein Pluralpaar, damit ein Ein-Kern-Rechner „(1 Kern)“ liest (UI-languages owner call D-11 (a)).
   'diag.bench.cores.one': ' ({count} Kern)',
   'diag.bench.cores.other': ' ({count} Kerne)',
   'diag.bench.osArch': 'OS / Architektur',

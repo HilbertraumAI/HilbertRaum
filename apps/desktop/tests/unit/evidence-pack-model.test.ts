@@ -66,7 +66,7 @@ describe('resolveEvidencePackOptions (spec §16.2 boundary)', () => {
   })
 })
 
-describe('pack language for a UI language (D-5 (b), i18n D-L11)', () => {
+describe('pack language for a UI language (UI-languages owner call D-5 (b), i18n D-L11)', () => {
   it('an English or German UI writes its pack in its own language, with no line about it', () => {
     for (const code of ['en', 'de'] as const) {
       expect(packLanguageFor(uiLanguageInfo(code))).toBe(code)
@@ -75,7 +75,7 @@ describe('pack language for a UI language (D-5 (b), i18n D-L11)', () => {
   })
 
   // Fixture entries: the registry has no language without evidence packs yet (ru/fr/es/it
-  // join in PR-B with `evidencePack: false`). The 'de' row proves the flag decides, not
+  // will join with `evidencePack: false`). The 'de' row proves the flag decides, not
   // whether the code happens to be a pack language.
   it.each<Pick<UiLanguageInfo, 'code' | 'evidencePack'>>([
     { code: 'fr', evidencePack: false },

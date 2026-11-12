@@ -79,7 +79,7 @@ describe('pre-unlock gate language (App + WorkspaceGate)', () => {
   })
 })
 
-describe('a language only a newer build registers (L-25: two builds on one drive)', () => {
+describe('a language only a newer build registers (two builds on one drive)', () => {
   // A German OS, so "follows the OS" and "falls back to English" give different answers.
   beforeEach(() => {
     vi.spyOn(navigator, 'language', 'get').mockReturnValue('de-DE')
@@ -178,7 +178,7 @@ describe('Settings → General language picker', () => {
 
   it.each([
     ['the saved language', 'de' as UiLanguageSetting, 'de', 'Deutsch'],
-    // L-25: a newer build's language on a shared drive resolves like System, so it shows System.
+    // A newer build's language on a shared drive resolves like System, so it shows System.
     ['System for a language only a newer build registers', 'xx' as UiLanguageSetting, 'system', t('en', 'settings.language.system')]
   ])('shows %s as the selected choice', async (_case, saved, value, label) => {
     stubSettings({ ...DEFAULT_SETTINGS, uiLanguage: saved })
@@ -192,9 +192,10 @@ describe('Settings → General language picker', () => {
     expect(picker).toHaveDisplayValue(label)
   })
 
-  // D-6 / D-13: System first, then the registry in order. Language names stay in their own
-  // language whatever the UI language (so a user can always find their way back); only the
-  // System label is translated. `lang` lets a screen reader say each name in its language.
+  // UI-languages owner calls D-6 (a) and D-13 (a): System first, then the registry in order.
+  // Language names stay in their own language whatever the UI language (so a user can always
+  // find their way back); only the System label is translated. `lang` lets a screen reader say
+  // each name in its language.
   it.each(UI_LANGUAGE_CODES)(
     'in %s, offers the translated System label, then every registered language by its own name',
     async (lang) => {

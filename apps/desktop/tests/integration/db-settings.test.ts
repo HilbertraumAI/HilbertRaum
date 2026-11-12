@@ -102,7 +102,7 @@ describe('settings persistence', () => {
     expect(updateSettings(db, { uiLanguage: 'system' }).uiLanguage).toBe('system')
   })
 
-  it('a uiLanguage only a newer build knows resolves like system and its row is kept (L-25 downgrade)', () => {
+  it('a uiLanguage only a newer build knows resolves like system and its row is kept (downgrade on a shared drive)', () => {
     const db = freshDb()
     seedSettings(db)
     // A newer build on the same drive saved a language this build doesn't register. The write

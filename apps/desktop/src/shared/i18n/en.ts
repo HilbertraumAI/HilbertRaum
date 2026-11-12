@@ -1442,7 +1442,7 @@ export const en = {
   'models.tech.minRam': 'Minimum RAM',
   'models.tech.recRam': 'Recommended RAM',
   'models.tech.context': 'Context window',
-  // Context-size figures are plural pairs (UI languages wave, P4): the raw token count picks the
+  // Context-size figures are plural pairs (UI languages wave): the raw token count picks the
   // form and the locale-grouped figure is passed as `{count}`. English and German use one text
   // for both; Russian inflects the noun ("8 192 токена", "4 096 токенов").
   'models.tech.contextValue.one': '{count} tokens',
@@ -2323,7 +2323,7 @@ export const en = {
   'diag.bench.noMatch': 'No matching model',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',
-  // A plural pair so a single-core machine reads "(1 core)" (UI languages wave, D-11).
+  // A plural pair so a single-core machine reads "(1 core)" (UI-languages owner call D-11 (a)).
   'diag.bench.cores.one': ' ({count} core)',
   'diag.bench.cores.other': ' ({count} cores)',
   'diag.bench.osArch': 'OS / arch',

@@ -141,9 +141,10 @@ describe('summary export panel (plan §8.4)', () => {
     ).not.toBeInTheDocument()
   })
 
-  // D-5 (b): the panel sends the pack language `packLanguageFor` maps the UI language to,
-  // and names it only when it differs. The English row above covers 'en'; a UI language
-  // without evidence packs joins in PR-B, where the line is rendered for real.
+  // UI-languages owner call D-5 (b): the panel sends the pack language `packLanguageFor` maps
+  // the UI language to, and names it only when it differs. The English row above covers 'en';
+  // a UI language without evidence packs joins when the first one is registered, and the line
+  // is rendered for real then.
   it('a German UI exports a German pack and shows no pack-language line', async () => {
     const exportEvidencePack = vi.fn(async () => makeExportRecord())
     stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })

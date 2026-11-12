@@ -110,10 +110,10 @@ describe('tCount — .one/.other plural pairs (n === 1 rule)', () => {
     expect(tCount('de', 'chat.sources.more', 2)).toBe('und 2 weitere Abschnitte')
   })
 
-  it('D-11: a single-core machine reads "(1 core)" in the benchmark CPU row (EN + DE)', () => {
-    // UI languages wave P4: `diag.bench.cores` was a plain key on the CODE-8 list, so one core
-    // read "(1 cores)" / "(1 Kerne)" on the Diagnostics card, the Performance memory tile and
-    // both Copy reports.
+  it('a single-core machine reads "(1 core)" in the benchmark CPU row (EN + DE)', () => {
+    // UI-languages owner call D-11 (a): until the UI languages wave `diag.bench.cores` was a plain
+    // key on the CODE-8 list, so one core read "(1 cores)" / "(1 Kerne)" on the Diagnostics card,
+    // the Performance memory tile and both Copy reports.
     expect(tCount('en', 'diag.bench.cores', 1)).toBe(' (1 core)')
     expect(tCount('en', 'diag.bench.cores', 8)).toBe(' (8 cores)')
     expect(tCount('de', 'diag.bench.cores', 1)).toBe(' (1 Kern)')
@@ -299,6 +299,19 @@ function pluralBases(keys: ReadonlySet<string>): string[] {
     .map((key) => key.slice(0, -'.one'.length))
 }
 
+const PLURAL_CATEGORIES: readonly string[] = ['zero', 'one', 'two', 'few', 'many', 'other'] satisfies PluralCategory[]
+
+/**
+ * Whether `key` is a form of one of `bases`: a plural base plus a plural category. A plain key
+ * named under a base is not one (`chat.skill.run.done.reconciled` sits beside the
+ * `chat.skill.run.done` pair, `review.deleteWithConversation.unknown` beside its own pair).
+ * So never name a plain key `<base>.zero|one|two|few|many|other`: it would read as a plural form.
+ */
+function isPluralFormOf(bases: ReadonlySet<string>, key: string): boolean {
+  const dot = key.lastIndexOf('.')
+  return PLURAL_CATEGORIES.includes(key.slice(dot + 1)) && bases.has(key.slice(0, dot))
+}
+
 /**
  * The runtime twin of `CatalogKeyFor` (shared/i18n/languages.ts): the exact key set a catalog of
  * a language must have. Every English key, plus one key per plural base for each form the
@@ -332,10 +345,12 @@ function oneMeansExactlyOne(plural: (n: number) => PluralCategory): boolean {
 /**
  * Everything wrong with `catalog` as the catalog of a language shaped `info`: a missing or an
  * unexpected key, an empty value, or placeholders that differ from English. A form English
- * does not have (`.few`) is compared with its base's `.other`. One licence (S-3-2): in a
- * language whose `one` is not exactly 1, a plural form may add `{count}` where English's form
- * lacks it ("Knowledge pack added" is a Russian `.one` that also serves 21 packs). `tCount`
- * always supplies `count`, so the render cannot miss it. Nothing else may be added or dropped.
+ * does not have (`.few`) is compared with its base's `.other`. One licence (owner call,
+ * 2026-11-12): in a language whose `one` is not exactly 1, a plural form may add `{count}` where
+ * English's form lacks it ("Knowledge pack added" is a Russian `.one` that also serves 21 packs).
+ * `tCount` always supplies `count`, so the render cannot miss it. A plain key, even one named
+ * under a plural base, gets no licence: `t` renders it with no `count`. Nothing else may be added
+ * or dropped.
  */
 function catalogParityProblems(info: CatalogShape, catalog: Catalog, english: Catalog): string[] {
   const required = requiredCatalogKeys(info, english)
@@ -354,7 +369,7 @@ function catalogParityProblems(info: CatalogShape, catalog: Catalog, english: Ca
     if (value.trim().length === 0) problems.push(`empty value for ${key}`)
     const reference = english[key] ?? english[`${key.slice(0, key.lastIndexOf('.'))}.other`]
     const [have, want] = [placeholders(value), placeholders(reference)]
-    const pluralForm = bases.has(key.slice(0, key.lastIndexOf('.')))
+    const pluralForm = isPluralFormOf(bases, key)
     const addsCount =
       countLicence && pluralForm && !want.includes('{count}') && have.join() === [...want, '{count}'].sort().join()
     if (have.join() !== want.join() && !addsCount) {
@@ -505,7 +520,7 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     })
   })
 
-  describe('S-3-2: a plural form may add {count} only where the language’s one is not exactly 1', () => {
+  describe('a plural form may add {count} only where the language’s one is not exactly 1 (owner call 2026-11-12)', () => {
     // English `.one` of `packs.added` names no number; English `gap.pages` shows a range, never
     // the count (like `packs.addedToast` and `translate.file.gapPages`).
     const english = {
@@ -616,6 +631,17 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
     ])('%s is a problem', (_title, shape, catalog, problems) => {
       expect(catalogParityProblems(shape, catalog, english)).toEqual(problems)
     })
+
+    it('Russian, {count} added to a plain key named under a plural base is a problem', () => {
+      // `packs.added.none` is no plural form, so `t` renders it with no `count`: an added {count}
+      // would make `t` fall back to the English text. The real catalog has such keys
+      // (`chat.skill.run.done.reconciled`).
+      const withPlain = { ...english, 'packs.added.none': 'Nothing was added' }
+      const catalog = { ...russian, 'packs.added.none': 'Ничего не добавлено ({count})' }
+      expect(catalogParityProblems(ruShape, catalog, withPlain)).toEqual([
+        'placeholder mismatch in packs.added.none: [{count}], English []'
+      ])
+    })
   })
 
   it('every .one plural key has its .other partner and vice versa (tCount contract)', () => {
@@ -636,12 +662,13 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
 
 // =================================================================================================
 // CODE-8 net: a number shown by a plain (unpaired) key (full-audit 2026-07-11 CODE-8; widened in
-// the UI languages wave, P4 / L-07). Such a key renders the same words for every count, so it
-// reads wrong wherever a word agrees with the number ("Retry 1 failed documents?"). It must
-// either become a .one/.other pair rendered through `tCount`, or sit on NON_GRAMMATICAL below
-// with a reason that holds in every registered language and in each one the wave adds (ru, fr,
-// es, it): either nothing agrees with the number, or the translations are written so that
-// nothing does (the R1–R7 rules of the per-language style guides).
+// the UI languages wave to every key the scan below finds showing a number). Such a key renders
+// the same words for every count, so it reads wrong wherever a word agrees with the number
+// ("Retry 1 failed documents?"). It must either become a .one/.other pair rendered through
+// `tCount`, or sit on NON_GRAMMATICAL below with a reason that holds in every registered language
+// and in each one the wave adds (ru, fr, es, it): either nothing agrees with the number, or the
+// translations must be written so that nothing does (the group's reason says how, e.g. label
+// first: "Tokens: {tokens}").
 //
 // The net finds these keys two ways:
 //   - in the source: every call that names a catalog key (`t`, `tMain`, `t(lang, …)`, `tr`, `s`,
@@ -651,6 +678,15 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
 //     TypeScript AST, up to two variable hops back;
 //   - in the catalog: every key with a placeholder whose name means a number wherever it is used
 //     here (`{count}`, `{total}`, `{pct}`, …). This sees what the syntax cannot (`{ total: job.total }`).
+// Its limit: a number that arrives through a plain property or a function parameter
+// (`{ files: job.files }`, `function f(files) { t(key, { files }) }`) under a placeholder name that
+// is not on NUMBER_PLACEHOLDERS is seen by neither. SEEN_BY_HAND records the listed keys a review
+// found that way; an unlisted one stays unseen.
+//
+// A plural form is exempt from the net: the same scan proves that src names no plural form
+// (`x.one`, `x.other`, …) at all, so each form is picked by `tCount`, which takes the base and
+// asks the language's own rule. A form picked by hand (`n === 1 ? t('x.one') : t('x.other')`) is
+// wrong in Russian for 2 or 21. A key built in a template literal (`${base}.one`) is not seen.
 // =================================================================================================
 
 /** Placeholder names that carry a number in every key that uses them (reviewed 2026-11-12). */
@@ -689,8 +725,21 @@ interface NumberBinding {
   site: string
 }
 
+/** What the source scan finds in one file. */
+interface KeyUse {
+  /** Every placeholder of a `catalog` key that the file fills with a number. */
+  numbers: NumberBinding[]
+  /** Every plural form of a `catalog` base that the file names in a string literal, as `file:line key`. */
+  pluralForms: string[]
+}
+
 /** Every placeholder of a `catalog` key that `sourceText` fills with a number. */
 function numberBindings(fileName: string, sourceText: string, catalog: Catalog): NumberBinding[] {
+  return keyUse(fileName, sourceText, catalog).numbers
+}
+
+/** One parse of `sourceText` against the keys of `catalog` (its plural bases included). */
+function keyUse(fileName: string, sourceText: string, catalog: Catalog): KeyUse {
   const source = ts.createSourceFile(
     fileName,
     sourceText,
@@ -784,9 +833,13 @@ function numberBindings(fileName: string, sourceText: string, catalog: Catalog):
       }
       return []
     })
+  const siteOf = (at: ts.Node): string =>
+    `${fileName}:${source.getLineAndCharacterOfPosition(at.getStart(source)).line + 1}`
+  const bases: ReadonlySet<string> = new Set(pluralBases(new Set(Object.keys(catalog))))
+  const pluralForms: string[] = []
   const bindings: NumberBinding[] = []
   const record = (keys: readonly string[], params: ts.ObjectLiteralExpression, at: ts.Node): void => {
-    const site = `${fileName}:${source.getLineAndCharacterOfPosition(at.getStart(source)).line + 1}`
+    const site = siteOf(at)
     for (const key of keys) {
       const names = new Set(placeholders(catalog[key]).map((p) => p.slice(1, -1)))
       for (const [name, value] of entriesOf(params)) {
@@ -799,6 +852,12 @@ function numberBindings(fileName: string, sourceText: string, catalog: Catalog):
       (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name
     )?.initializer
   const visit = (node: ts.Node): void => {
+    // Any string literal, wherever it stands (a call, a conditional, a variable, a key table), and
+    // any form, the ones English lacks (`.few`) included: a plural form named in src is one that
+    // `tCount` did not pick.
+    if (ts.isStringLiteralLike(node) && isPluralFormOf(bases, node.text)) {
+      pluralForms.push(`${siteOf(node)} ${node.text}`)
+    }
     if (ts.isCallExpression(node)) {
       // The key is the first argument (`t(key, …)`) or the second (`t(lang, key, …)`), and the
       // params object comes after it.
@@ -820,14 +879,14 @@ function numberBindings(fileName: string, sourceText: string, catalog: Catalog):
     ts.forEachChild(node, visit)
   }
   visit(source)
-  return bindings
+  return { numbers: bindings, pluralForms }
 }
 
 // One parse of src/ serves every row below (the result is read, never changed).
-let srcNumberBindings: NumberBinding[] | undefined
+let srcScan: KeyUse | undefined
 
-function srcNumbers(): NumberBinding[] {
-  if (srcNumberBindings !== undefined) return srcNumberBindings
+function srcKeyUse(): KeyUse {
+  if (srcScan !== undefined) return srcScan
   const srcRoot = join(process.cwd(), 'src')
   const files: string[] = []
   const walk = (dir: string): void => {
@@ -839,13 +898,16 @@ function srcNumbers(): NumberBinding[] {
   }
   walk(srcRoot)
   expect(files.length).toBeGreaterThan(100) // the walk really saw the tree
-  srcNumberBindings = files.flatMap((file) =>
-    numberBindings(relative(srcRoot, file).split('\\').join('/'), readFileSync(file, 'utf8'), en)
+  const uses = files.map((file) =>
+    keyUse(relative(srcRoot, file).split('\\').join('/'), readFileSync(file, 'utf8'), en)
   )
-  return srcNumberBindings
+  srcScan = { numbers: uses.flatMap((use) => use.numbers), pluralForms: uses.flatMap((use) => use.pluralForms) }
+  return srcScan
 }
 
-/** Every English key that shows a number, with what says so (call sites or a placeholder name). */
+const srcNumbers = (): NumberBinding[] => srcKeyUse().numbers
+
+/** Every English key the net finds showing a number, with what says so (call sites or a placeholder name). */
 function keysShowingANumber(): Map<string, string[]> {
   const evidence = new Map<string, string[]>()
   const add = (key: string, why: string): void => {
@@ -861,18 +923,21 @@ function keysShowingANumber(): Map<string, string[]> {
 }
 
 const PLURAL_BASES: ReadonlySet<string> = new Set(pluralBases(new Set(Object.keys(en))))
-const isPluralForm = (key: string): boolean => PLURAL_BASES.has(key.slice(0, key.lastIndexOf('.')))
+const isPluralForm = (key: string): boolean => isPluralFormOf(PLURAL_BASES, key)
 
 /**
- * Plain keys that show a number, grouped by what keeps them right in every language. The rule
- * numbers R1–R7 are those of the per-language style guides (UI languages wave, P6). "F-12" is the
- * follow-up for the English and German singular slips of the D-11 class ("1 sections scanned").
+ * Plain keys that show a number, grouped by what keeps them right in every language. Where a
+ * reason says what the ru/fr/es/it translations must do, it is a requirement on catalogs that are
+ * not written yet. "The English singular slip" is an English or German sentence that reads wrong
+ * at exactly 1 ("1 sections scanned", the kind the "(1 core)" fix corrected): left to a follow-up
+ * (owner call, 2026-11-12).
  */
 const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly MessageKey[] }>> = {
   parenthetical: {
     reason:
       'A bare count in parentheses, after a colon or after "×", or "… and {count} more" with no noun: ' +
-      'nothing agrees with it in any language, and the translations keep that shape.',
+      'nothing agrees with it in English or German. The translations must keep a shape in which ' +
+      'nothing does ("… and {count} more" without a word for "other" that agrees: "и ещё {count}").',
     keys: [
       'chat.sources.toggle',
       'docs.askSelected',
@@ -890,14 +955,16 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   },
   ratio: {
     reason:
-      '"{done} of {total}" with no noun and no participle: nothing agrees with either figure (Russian ' +
-      'uses a verbal noun, "Переиндексация: {done} из {total}").',
+      '"{done} of {total}" with no noun and no participle: nothing agrees with either figure. The ' +
+      'translations must keep it that way (a Russian one with a verbal noun: "Переиндексация: {done} ' +
+      'из {total}").',
     keys: ['docs.reindexAllProgress', 'docs.previewModal.segmentProgress', 'translate.file.progress']
   },
   ordinal: {
     reason:
       'The number is a label (page, item, part or model n of m): the noun before it stays singular in ' +
-      'every language (R4). A page range has its own key, so its plural is fixed.',
+      'every language, and the translations must keep the noun before the number ("Page {page}"). A ' +
+      'page range has its own key, so its plural is fixed.',
     keys: [
       'chat.sources.page',
       'docs.previewModal.page',
@@ -925,8 +992,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   unitSymbol: {
     reason:
       'The figure stands before a unit symbol (GB, MB/s, s, %, tok/s) or is a formatted size that ' +
-      'carries one: a symbol never inflects, whatever the decimals (R3). The translations write a unit ' +
-      'expression such as "tokens / s" as a symbol too.',
+      'carries one: a symbol never inflects, whatever the decimals. The translations must write a ' +
+      'unit expression such as "tokens / s" as a symbol too.',
     keys: [
       'chat.noModel.startingProgress',
       // "tokens" follows a "k" figure of at least 2k (the window): plural in every language.
@@ -996,7 +1063,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   constant: {
     reason:
       'The value is a compile-time constant (the password floor 8; the skill-import caps 64 and 16): ' +
-      'every translation writes the form that fits that value (R7).',
+      'every translation must write the form that fits that value.',
     keys: [
       'main.workspace.passwordTooShort',
       'main.workspace.newPasswordTooShort',
@@ -1006,8 +1073,9 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   },
   evidencePack: {
     reason:
-      'Renders only inside an evidence pack, which is written in English or German (D-5 b); no other ' +
-      'language carries packExport.* keys (D-14 a). Their en/de reading at 1 is the F-12 class.',
+      'Renders only inside an evidence pack, which is written in English or German (UI-languages owner ' +
+      'call D-5 (b)); no other language carries packExport.* keys (UI-languages owner call D-14 (a)). ' +
+      'An English or German pack line that reads wrong at exactly 1 is the singular slip left to a follow-up.',
     keys: [
       'packExport.meta.formatValue',
       'packExport.meta.formatValuePdf',
@@ -1021,13 +1089,13 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstNoun: {
     reason:
       'A noun after the figure ("tokens", "sections", "layers") agrees with it in every language. The ' +
-      'ru/fr/es/it translations put the noun first as a label ("Tokens: {tokens}", R1), or write a unit ' +
-      'symbol where the figure has decimals ("{tps} tok/s", R3). English and German read wrong only ' +
-      'where the figure can be exactly 1 (F-12).',
+      'ru/fr/es/it translations must put the noun first as a label ("Tokens: {tokens}"), or write a ' +
+      'unit symbol where the figure has decimals ("{tps} tok/s"). English and German read wrong only ' +
+      'where the figure can be exactly 1 (the English singular slip left to a follow-up).',
     keys: [
       'chat.speed.line',
       // The count is at least 2 here (a single page has its own sentence, ocrNotes.ts), so en/de/fr/es/it
-      // read right; Russian "на всех 21 странице" is singular, so ru writes it label-first.
+      // read right; Russian "на всех 21 странице" is singular, so the ru translation must be label-first.
       'docs.ocr.unsure.all',
       'coverage.extract.whole',
       'coverage.extract.wholeUnparsed',
@@ -1046,8 +1114,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       '"{a} of {b} <noun>": the noun follows {b}. With b of at least 2 it is plural in en/de/fr/es/it, ' +
       'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere ' +
-      '(F-12 for en/de). The ru/fr/es/it translations put the noun first ("Sections: {covered} of ' +
-      '{total}", R1).',
+      '(in English and German, the singular slip left to a follow-up). The ru/fr/es/it translations ' +
+      'must put the noun first ("Sections: {covered} of {total}").',
     keys: [
       // #576/#538: these two render only when the total is at least 2 (ocrNotes.ts).
       'docs.previewModal.ocrInfoPartial',
@@ -1067,9 +1135,9 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstSentence: {
     reason:
       'The count governs a noun, and often a verb, inside a sentence, which agrees with it in every ' +
-      'language. The ru/fr/es/it translations state the count label-first ("Transactions read: ' +
-      '**{count}**", R1); where the English and German sentence can meet 1 ("I read 1 transactions"), ' +
-      'that is F-12.',
+      'language. The ru/fr/es/it translations must state the count label-first ("Transactions read: ' +
+      '**{count}**"); where the English and German sentence can meet 1 ("I read 1 transactions"), ' +
+      'that is the singular slip left to a follow-up.',
     keys: [
       'skills.bankAnalysis.count',
       'skills.bankAnalysis.countPartial',
@@ -1091,7 +1159,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       'A bare figure before a participle or a verb ("{n} failed", "{gb} GB read", "{free} is free"). ' +
       'English and German do not inflect these ("1 failed", "1 fehlgeschlagen"); ru/fr/es/it do, so the ' +
-      'translations use a label or an impersonal form ("failed: {n}", "lecture de {gb} GB", R2).',
+      'translations must use a label or an impersonal form ("failed: {n}", "lecture de {gb} GB").',
     keys: [
       'docs.reindexAllCancelled',
       'docs.reindexAllPartial',
@@ -1111,7 +1179,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   }
 }
 
-/** Listed keys the net cannot see, and how their number reaches them (reviewed by hand, T4.1). */
+/** Listed keys the net cannot see, and how their number reaches them (reviewed by hand, 2026-11-12). */
 const SEEN_BY_HAND: Readonly<Partial<Record<MessageKey, string>>> = {
   'skills.bankAnalysis.figureEcho': '{figures} joins the figureEcho* fragments, whose amounts the net sees',
   'skills.redactionRouting.scan': 'six counts read from a `counts` record (redaction.ts)',
@@ -1164,8 +1232,54 @@ describe('CODE-8 net: a key that shows a number is a plural pair or on the revie
     expect(numberBindings(fileName, code, catalog).map((b) => `${b.key} {${b.placeholder}}`)).toEqual(found)
   })
 
+  // A plural pair, a plain key named under its base, and a plain key that only ends in ".other"
+  // (`packs.addFailed.other` is real and has no `.one`).
+  const pluralCatalog: Catalog = {
+    'b.files.one': '{count} file',
+    'b.files.other': '{count} files',
+    'b.files.none': 'No files',
+    'packs.addFailed.other': 'The archive could not be added.'
+  }
+
+  it.each<[string, string, string[]]>([
+    [
+      'a form picked by a conditional',
+      "t(n === 1 ? 'b.files.one' : 'b.files.other', { count: n })",
+      ['fixture.ts:1 b.files.one', 'fixture.ts:1 b.files.other']
+    ],
+    [
+      'a form picked around two calls',
+      "n === 1 ? t('b.files.one', { count: n }) : t('b.files.other', { count: n })",
+      ['fixture.ts:1 b.files.one', 'fixture.ts:1 b.files.other']
+    ],
+    ['a form in the main-process translator', "tMain('b.files.other', { count: n })", ['fixture.ts:1 b.files.other']],
+    ['a form with the language first', "t(lang, 'b.files.one', { count: 1 })", ['fixture.ts:1 b.files.one']],
+    ['a form English lacks', "t('ru', 'b.files.few' as MessageKey, { count: 2 })", ['fixture.ts:1 b.files.few']],
+    ['a form in a variable', "const key = 'b.files.other'\nctx.tr(key, { count: n })", ['fixture.ts:1 b.files.other']],
+    ['a form in a key table', "const KEYS = { many: 'b.files.other', none: 'b.files.none' }", ['fixture.ts:1 b.files.other']],
+    ['a form in a key/params row', "const row = {\n  key: 'b.files.one',\n  params: { count: 1 }\n}", ['fixture.ts:2 b.files.one']],
+    ['no form in tCount, which takes the base', "tCount(lang, 'b.files', n)", []],
+    ["no form in the renderer's bound tCount", "const { tCount } = useT()\ntCount('b.files', n)", []],
+    ['no form in a plain key named under a base', "t('b.files.none')", []],
+    ['no form in a plain key that only ends in .other', "t('packs.addFailed.other')", []],
+    ['nothing in a comment', "// t('b.files.one', { count: 1 })\nconst x = 1", []]
+  ])('plural forms named in the source: %s', (_title, code, found) => {
+    expect(keyUse('fixture.ts', code, pluralCatalog).pluralForms).toEqual(found)
+  })
+
+  it('src names no plural form: tCount picks every form by the language’s own rule', () => {
+    expect(
+      srcKeyUse().pluralForms,
+      'a plural form is named outside tCount, so it is picked by hand (n === 1 ? …one : …other), which ' +
+        'is wrong in a language with more forms (Russian: 2, 21). Render the pair with tCount(lang, base, ' +
+        'n) (in the renderer, tCount from useT()); the main process has only tMain today: add a ' +
+        'tCountMain to src/main/services/i18n.ts.'
+    ).toEqual([])
+  })
+
   it('every key that shows a number is a .one/.other pair or on NON_GRAMMATICAL', () => {
     const listed = new Set<string>(Object.values(NON_GRAMMATICAL).flatMap((group) => group.keys))
+    // A plural form is exempt: the row above proves src names none, so `tCount` picks each one.
     const offenders = [...keysShowingANumber()]
       .filter(([key]) => !isPluralForm(key) && !listed.has(key))
       .map(([key, why]) => `${key} (${why.join(', ')})`)

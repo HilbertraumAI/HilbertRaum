@@ -100,7 +100,7 @@ describe('WorkspaceGate — failed unlock: focus + announcement (SH-2/SH-12)', (
 
     // The field emptied, the error shows, and focus is back ON the field for the retry
     // (pre-fix it stayed on the now-disabled submit button — a keyboard dead end).
-    // The gate shows its own copy for the reason, not main's `message` (D-17 a).
+    // The gate shows its own copy for the reason, not main's `message` (UI-languages owner call D-17 (a)).
     await screen.findByText(t('en', 'main.workspace.wrongPassword'))
     expect((pw as HTMLInputElement).value).toBe('')
     await waitFor(() => expect(document.activeElement).toBe(pw))

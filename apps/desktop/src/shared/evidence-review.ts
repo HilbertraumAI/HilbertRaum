@@ -103,10 +103,10 @@ export function isPackLanguage(value: unknown): value is EvidencePackLanguage {
 }
 
 /**
- * The language a pack exported from this UI language is written in (owner call D-5 (b),
- * 2026-11-11): the UI language itself when its registry entry writes evidence packs
- * (`evidencePack`), English otherwise. Production passes the real registry entry
- * (`uiLanguageInfo(lang)`).
+ * The language a pack exported from this UI language is written in
+ * (UI-languages owner call D-5 (b), 2026-11-11): the UI language itself when its registry
+ * entry writes evidence packs (`evidencePack`), English otherwise. Production passes the
+ * real registry entry (`uiLanguageInfo(lang)`).
  */
 export function packLanguageFor(
   info: Pick<UiLanguageInfo, 'code' | 'evidencePack'>
