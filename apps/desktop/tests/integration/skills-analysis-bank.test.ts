@@ -872,7 +872,7 @@ describe('bank-statement analysis handler — routed skill-run questions in ever
     const scope = { documentIds: [seedDoc(db, COMPLETE)] }
     const question = t(code, key)
     const trIn = (k: MessageKey, p?: MessageParams): string => t(code, k, p)
-    const ctx = { ...ctxFor(db, scope, question), tr: trIn }
+    const ctx = makeAnalysisCtx(db, scope, question, { skillInstallId: BANK_STATEMENT_INSTALL_ID, locale: code })
     const applies = bankStatementAnalysisHandler.applies({ db, scope, question })
     const res = await bankStatementAnalysisHandler.run!(ctx)
     return { applies, res, trIn, tools: ctx.events.map((e) => e.meta?.toolName) }

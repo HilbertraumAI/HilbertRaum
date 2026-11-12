@@ -165,6 +165,27 @@ describe('summary export panel (plan §8.4)', () => {
     )
   })
 
+  // A UI language with no evidence packs of its own (UI-languages owner call D-5 (b)): the pack is
+  // written in English, and the panel says so in the UI language before the export.
+  it('a Russian UI exports an English pack and says so in Russian', async () => {
+    const exportEvidencePack = vi.fn(async () => makeExportRecord())
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })
+    renderInLanguage(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />, 'ru')
+    const dialog = await openSummary('ru')
+    await openExportPanel(dialog, 'ru')
+
+    expect(within(dialog).getByText(t('ru', 'review.export.packLanguage.en'))).toBeInTheDocument()
+    expect(within(dialog).queryByText(t('ru', 'review.export.packLanguage.de'))).not.toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: t('ru', 'review.export.confirm') }))
+    await waitFor(() =>
+      expect(exportEvidencePack).toHaveBeenCalledWith('r1', {
+        ...EVIDENCE_PACK_OPTION_DEFAULTS,
+        language: 'en',
+        format: 'html'
+      })
+    )
+  })
+
   it('cancel (null result) keeps the panel open with NO history row and NO error', async () => {
     const exportEvidencePack = vi.fn(async () => null)
     stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()), exportEvidencePack })

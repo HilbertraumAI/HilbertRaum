@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import {
   DISPLAY_MAP_KEYS,
   INTERPOLATED_MAP_KEYS,
@@ -20,6 +20,18 @@ import { DOC_TASK_BUSY_MESSAGE } from '../../src/shared/types'
 
 const tDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
 const tEn = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
+
+/** A value for each param of each interpolated persist-canonical message (the set is pinned below). */
+const INTERPOLATED_PARAMS: Partial<Record<MessageKey, MessageParams>> = {
+  'main.ingest.unsupportedType': { ext: '.xyz' },
+  'main.benchmark.warnVeryLowTokens': { model: 'qwen3-30b-a3b-q4' },
+  // #110: the slow-read warning carries the measured effective MB/s.
+  'main.benchmark.warnSlowRead': { mbps: 70 },
+  // §6.5 (issue #95): the recommendation-lowered warning carries TWO values.
+  'main.benchmark.warnRecommendationLowered': { tps: 2.2, model: 'qwen3.6-27b-q4' },
+  // #530: the engine cannot run — the one value is the library's file NAME (never a path).
+  'main.ingest.engineLibraryMissing': { library: 'libgomp.so.1' }
+}
 
 describe('localizeServerCopy (D-L4)', () => {
   it('translates a known persisted constant to German', () => {
@@ -192,16 +204,7 @@ describe('localizeServerCopy (D-L4)', () => {
     // Interpolated messages carry a value in the persisted string, so they live in
     // INTERPOLATED_MAP_KEYS (reverse-matched by a template regex) rather than DISPLAY_MAP_KEYS.
     // A new interpolated constant must land here with its params — or this fails loudly.
-    const params: Partial<Record<MessageKey, MessageParams>> = {
-      'main.ingest.unsupportedType': { ext: '.xyz' },
-      'main.benchmark.warnVeryLowTokens': { model: 'qwen3-30b-a3b-q4' },
-      // #110: the slow-read warning carries the measured effective MB/s.
-      'main.benchmark.warnSlowRead': { mbps: 70 },
-      // §6.5 (issue #95): the recommendation-lowered warning carries TWO values.
-      'main.benchmark.warnRecommendationLowered': { tps: 2.2, model: 'qwen3.6-27b-q4' },
-      // #530: the engine cannot run — the one value is the library's file NAME (never a path).
-      'main.ingest.engineLibraryMissing': { library: 'libgomp.so.1' }
-    }
+    const params = INTERPOLATED_PARAMS
     expect([...INTERPOLATED_MAP_KEYS].sort()).toEqual(Object.keys(params).sort())
     for (const key of INTERPOLATED_MAP_KEYS) {
       const persisted = t('en', key, params[key])
@@ -235,4 +238,25 @@ describe('localizeServerCopy (D-L4)', () => {
     expect(localized).toContain('qwen3.6-27b-q4')
     expect(localized).not.toBe(persisted)
   })
+})
+
+// The map goes English → key → the UI language, so it serves every registered language with no
+// per-language table. A persisted row reads as the UI language's catalog says, and a model
+// answer's citation marker takes the language's display letter (the stored [S{n}] never changes).
+describe('localizeServerCopy in every registered language (D-L4)', () => {
+  it.each(UI_LANGUAGE_CODES.filter((code) => code !== 'en'))(
+    '%s: every persisted English message reads in the UI language, and [S1] takes its marker',
+    (code) => {
+      const tLang = (key: MessageKey, params?: MessageParams): string => t(code, key, params)
+      const persisted = [
+        ...DISPLAY_MAP_KEYS.map((key) => ({ key, params: undefined })),
+        ...INTERPOLATED_MAP_KEYS.map((key) => ({ key, params: INTERPOLATED_PARAMS[key] }))
+      ]
+      const wrong = persisted.filter(
+        ({ key, params }) => localizeServerCopy(tLang, t('en', key, params)) !== t(code, key, params)
+      )
+      expect(wrong.map(({ key }) => key)).toEqual([])
+      expect(localizeServerCopy(tLang, 'See [S1].')).toBe(`See [${t(code, 'chat.sources.marker', { n: '1' })}].`)
+    }
+  )
 })

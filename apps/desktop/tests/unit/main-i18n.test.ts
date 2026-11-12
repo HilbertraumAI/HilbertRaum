@@ -5,6 +5,7 @@ import {
   mainUiLanguage,
   tMain
 } from '../../src/main/services/i18n'
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 
 // Phase 39 — the main process's cached resolved language (i18n record §3.2 D-L3 /
 // §3.3 D-L5): OS-locale guess until settings are readable, then the real setting;
@@ -42,4 +43,20 @@ describe('main-process i18n cache', () => {
     // Reset for any later test in this worker (module-level cache).
     initMainI18n('en-US')
   })
+
+  // Chromium's `app.getLocale()` can report a bare language ('ru'), the way the main process
+  // starts before settings are readable: each registered language starts main in that language.
+  it.each(UI_LANGUAGE_CODES.filter((code) => code !== 'en'))(
+    'an OS locale of %s starts main in that language, and tMain speaks it',
+    (code) => {
+      try {
+        initMainI18n(code)
+        expect(mainUiLanguage()).toBe(code)
+        expect(tMain('main.workspace.wrongPassword')).toBe(t(code, 'main.workspace.wrongPassword'))
+        expect(tMain('main.workspace.wrongPassword')).not.toBe(t('en', 'main.workspace.wrongPassword'))
+      } finally {
+        initMainI18n('en-US')
+      }
+    }
+  )
 })

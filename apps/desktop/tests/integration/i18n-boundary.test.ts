@@ -164,4 +164,21 @@ describe('Phase 41 — emissions localize, persisted rows stay English', () => {
     expect(getDocument(db, id)?.scanDetected).toBe(true)
     expect(getDocument(db, id2)?.scanDetected).toBe(true)
   })
+
+  // A language registered after German, end to end. One language stands for the rest: German,
+  // which differs from English in every main.* key, is what catches a tMain leaking into a row.
+  it('a language registered after German emits in its own language and still persists canonical English', async () => {
+    applyUiLanguageSetting('ru')
+    // Main really speaks Russian here, so the English rows below are not English by default.
+    expect(() => assertDownloadAllowed({ policyAllows: false, settingAllows: false })).toThrow(
+      t('ru', 'main.download.policyDisabled')
+    )
+
+    const id = await importScanPdf()
+    expect(getDocument(db, id)?.errorMessage).toBe(t('en', 'main.ingest.pdfScanDetected'))
+    expect(getDocument(db, id)?.scanDetected).toBe(true)
+    const warnings = buildWarnings({ profile: 'TINY', driveReadMbps: 5, driveWriteMbps: 5, effectiveReadMbps: 70 })
+    expect(warnings).toContain(t('en', 'main.benchmark.warnTiny'))
+    expect(warnings).toContain(t('en', 'main.benchmark.warnSlowRead', { mbps: 70 }))
+  })
 })

@@ -372,10 +372,13 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'puts a no-break space inside « and »',
       'French guillemets without U+00A0 inside — write «\\u00A0…\\u00A0»'
     ),
+    // The one colon a French value may write without a space is the host:port one: a figure,
+    // the colon, then the {port} placeholder (`diag.app.onPort`, 127.0.0.1:{port}). Any other
+    // colon, Erreur:{detail} or Étape 2:{title} alike, needs the no-break space before it.
     forbids(
-      /(?<!\u00A0)[;?!]|(?<!\u00A0):(?![A-Za-z0-9{/\\])/,
+      /(?<!\u00A0)[;?!]|(?<![\u00A0\d]):|(?<=\d):(?!\{port\})/,
       'puts a no-break space before : ; ? !',
-      'French : ; ? ! with a plain space or no space before it — write \\u00A0 (a colon inside a technical token such as host:{port} is exempt)'
+      'French : ; ? ! with a plain space or no space before it — write \\u00A0 (only the host:port colon of 127.0.0.1:{port} is exempt)'
     ),
     forbids(
       /(?<!\u00A0)%/,
@@ -422,10 +425,14 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'keeps the Latin size symbols the formatters print',
       'French values with Go/Mo/Ko — the app prints GB/MB/KB, so the copy must too'
     ),
+    // A tu form counts as a whole word, with no letter or digit on either side (Veux-tu,
+    // Assieds-toi and ton… all count). «ton» is also the noun "tone": straight after an article
+    // or a determiner it cannot be the possessive (le ton, d’un ton, son ton), so it passes there.
+    // After «de» or «est-ce», or with a word in between (un bon ton), the two read alike: reword.
     forbids(
-      /(?:^|[\s(\u00A0])(?:tu|toi|te|ton|ta|tes)(?=[\s,.)\u00A0]|$)|(?:^|[\s(\u00A0])t’/i,
+      /(?<![\p{L}\p{N}])(?:tu|toi|te|ta|tes|(?<!(?:^|[^\p{L}-])(?:le|un|du|au|ce|quel|mon|son|notre|votre|leur)\s)ton)(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])t’/iu,
       'addresses the reader as vous',
-      'French values with tu/ton/ta/tes — the form of address is vous'
+      'French values with tu/toi/te/ton/ta/tes or t’ — the form of address is vous (the noun ton passes right after le, un, du, au, ce, quel or a possessive; otherwise reword)'
     ),
     forbids(
       /[\p{Ll},] Vous(?!\p{L})/u,
@@ -579,6 +586,46 @@ describe('typography per registered language (design-guidelines §7 "Typography"
 
   it.each(rows)('%s: %s', (code, _title, { offenders, message }) => {
     expect(offenders(catalogOf(code)), message).toEqual([])
+  })
+})
+
+// The two French rules that carve out exceptions, tried on samples. The rules are read from
+// TYPOGRAPHY_RULES by their titles, so these rows see whatever the catalog rows above enforce.
+describe('French typography — the colon and address rules on samples', () => {
+  const TITLES = { colon: 'puts a no-break space before : ; ? !', address: 'addresses the reader as vous' } as const
+  const flags = (rule: keyof typeof TITLES, sample: string): boolean => {
+    const found = TYPOGRAPHY_RULES.fr.find((r) => r.title === TITLES[rule])
+    if (found === undefined) throw new Error(`no French typography rule titled ${TITLES[rule]}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['colon', 'the host:port colon', ' sur 127.0.0.1:{port}'],
+    ['colon', 'a no-break space before the colon', 'Erreur\u00A0: {detail}'],
+    ['address', 'the noun after le', 'Changez le ton du texte'],
+    ['address', 'the noun after un', 'un ton neutre'],
+    ['address', 'the noun after d’un', 'd’un ton neutre'],
+    ['address', 'vous', 'Vous pouvez le modifier'],
+    ['address', 'ton inside a word', 'Appuyez sur le bouton']
+  ])('the %s rule accepts %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(false)
+  })
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['colon', 'a bare colon before a placeholder', 'Erreur:{detail}'],
+    ['colon', 'a figure, a colon and another placeholder', 'Étape 2:{title}'],
+    ['colon', 'a colon between two figures', 'Page 3:4'],
+    ['colon', 'a plain space before the colon', 'Erreur : x'],
+    ['colon', 'a host name before the colon', 'localhost:{port}'],
+    ['address', 'the possessive', 'Ouvre ton document'],
+    ['address', 'the possessive after de', 'Le nom de ton fichier'],
+    ['address', 'tu after a hyphen', 'Veux-tu continuer'],
+    ['address', 'toi after a hyphen', 'Assieds-toi'],
+    ['address', 'the elided t’', 'Pour t’aider'],
+    ['address', 'the possessive after est-ce', 'Est-ce ton fichier'],
+    ['address', 'ton before an ellipsis', 'C’est ton…']
+  ])('the %s rule rejects %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(true)
   })
 })
 

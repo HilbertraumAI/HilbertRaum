@@ -209,6 +209,32 @@ describe('Settings → General language picker', () => {
     }
   )
 
+  // A language registered after German, from the picker to the next locked gate: the choice is
+  // patched, the screen switches, the resolved language is mirrored, and the next pre-unlock gate
+  // (no settings readable yet) renders in it from the mirror alone.
+  it('choosing Русский saves it, mirrors it, and the next locked gate renders in Russian', async () => {
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
+    render(
+      <I18nProvider>
+        <SettingsScreen />
+      </I18nProvider>
+    )
+    await userEvent.selectOptions(await findPicker(), 'Русский')
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'ru' })
+    expect(await screen.findByRole('heading', { name: t('ru', 'settings.title') })).toBeInTheDocument()
+    expect(window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('ru')
+    cleanup()
+    // Only the mirror survives into the next start: the gate must set <html lang> itself.
+    document.documentElement.lang = ''
+
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: t('ru', 'gate.unlock.title') })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(t('ru', 'gate.passwordPlaceholder'))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('ru', 'gate.unlock.submit') })).toBeInTheDocument()
+    expect(document.documentElement.lang).toBe('ru')
+  })
+
   it('is reached with the Tab key', async () => {
     stubSettings({ ...DEFAULT_SETTINGS })
     render(

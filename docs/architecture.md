@@ -6100,6 +6100,10 @@ of `de.ts`.
   at display in `DictationButton` — the renderer-internal analogue of the display map.
 - Tests assert via `t('en', key)` / the `en` catalog, never re-typed literals; German
   render smokes live in `tests/renderer/GermanSmoke.test.tsx`.
+  `tests/renderer/LanguageSmoke.test.tsx` (UI languages wave, 2026-11-12) renders the app shell and
+  Settings → General in every registered language other than English (the rail labels, the
+  picker's selection), so a language is proved wired end to end the day it is registered;
+  per-screen depth stays in GermanSmoke, because every screen localizes through the same `useT()`.
 - **The catalog guards iterate the registry** (UI languages wave, 2026-11-11), so a language is
   covered the day it is registered. `tests/unit/i18n.test.ts`: every registered catalog's key set,
   empty values and placeholders (D-L10), that `t` renders each language's own catalog file (a
@@ -6108,18 +6112,21 @@ of `de.ts`.
   keyed by language, so typecheck asks for a list for each new one) and the house dashes.
   `tests/unit/rail-labels.test.ts`: every language's rail labels (no invisible breaks; no word
   longer than the width proxy). `tests/integration/repo-hygiene.test.ts`: each registered
-  language's catalog file keeps the forms of `chat.scope.projectCount` on consecutive lines in
-  CLDR order.
+  language's catalog file keeps all forms of every plural base on consecutive lines in CLDR
+  order (until 2026-11-12 only `chat.scope.projectCount`).
   `tests/unit/i18n-unused-keys.test.ts`: the unused-key scan skips every catalog file and each one
   it skips is a registered language's (an unregistered `xx.ts` fails instead of silently disabling
-  the guard); it also bans the hard-coded en/de pair in `src/` (a union or an array literal naming
-  both, a comparison or `case` against `'en'`/`'de'`, or a catalog lookup — `t`/`tCount` under
+  the guard); it also bans hard-coded interface languages in `src/` (a union or an array literal
+  naming two or more registered codes, such as the old `'en' | 'de'`, a comparison or `case`
+  against a registered code, or a catalog lookup — `t`/`tCount` under
   whatever name the file imports it from `shared/i18n` — handed a registered language other than
   English as a literal, such as `t('de', key)`; `t('en', …)` stays allowed for persisted text; all
-  found through the TypeScript AST, through parentheses, `as`, `satisfies` and `!`) outside
-  `shared/i18n/` and a reviewed list of sites (content languages, the pack languages, the Translate
-  default pair, the translation-language list, the legacy translation-provenance check). Its limits:
-  a code held in a constant, `.includes` / `Set` / `startsWith` / regex tests, an `{ en, de }` key
+  found through the TypeScript AST, through parentheses, `as`, `satisfies` and `!`; the codes
+  come from the registry, so a newly registered language's literals are caught the way German's
+  are, 2026-11-12) outside `shared/i18n/` and a reviewed list of sites (content languages, the pack
+  languages, the Translate default pair, the translation-language list, the legacy
+  translation-provenance check, and German inflection endings that happen to spell two codes).
+  Its limits: a code held in a constant, `.includes` / `Set` / `startsWith` / regex tests, an `{ en, de }` key
   table and a lookup re-bound to another name are not seen. `tests/integration/i18n-boundary.test.ts`:
   no guard key the doc-task pass-through accepts has a `{param}` (the filter is an exact match,
   §3.3 Rule 3). Shared convention (`tests/helpers/i18n-catalogs.ts`): a catalog is
