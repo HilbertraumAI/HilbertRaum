@@ -171,14 +171,18 @@ describe('resolveUiLanguage (D-L2)', () => {
     expect(resolveUiLanguage('de', 'en-US')).toBe('de')
   })
 
-  it("'system' resolves de-prefixed locales to German, everything else to English", () => {
+  it("'system' resolves a registered language's locale to that language, everything else to English", () => {
     expect(resolveUiLanguage('system', 'de')).toBe('de')
     expect(resolveUiLanguage('system', 'de-DE')).toBe('de')
     expect(resolveUiLanguage('system', 'de-AT')).toBe('de')
     expect(resolveUiLanguage('system', 'de_CH')).toBe('de')
     expect(resolveUiLanguage('system', 'DE-DE')).toBe('de')
     expect(resolveUiLanguage('system', 'en-US')).toBe('en')
-    expect(resolveUiLanguage('system', 'fr-FR')).toBe('en')
+    expect(resolveUiLanguage('system', 'es-MX')).toBe('es')
+    expect(resolveUiLanguage('system', 'fr-FR')).toBe('fr')
+    expect(resolveUiLanguage('system', 'it-IT')).toBe('it')
+    expect(resolveUiLanguage('system', 'ru-RU')).toBe('ru')
+    expect(resolveUiLanguage('system', 'pt-BR')).toBe('en')
     // Another language whose tag merely shares a first letter with 'de' is not German.
     expect(resolveUiLanguage('system', 'dv')).toBe('en')
   })

@@ -1538,10 +1538,10 @@ export const fr: UiCatalog<'fr'> = {
     'de verrouillage suit toujours le thème du système.',
   'settings.language.title': 'Langue',
   'settings.language.aria': 'Langue',
-  'settings.language.system': 'System',
+  'settings.language.system': 'Système',
   'settings.language.hint':
-    '«\u00A0Système\u00A0» suit la langue de votre système d’exploitation\u00A0: les systèmes en ' +
-    'allemand utilisent l’allemand, tous les autres l’anglais. Les changements s’appliquent ' +
+    '«\u00A0Système\u00A0» suit la langue de votre système d’exploitation lorsque HilbertRaum la ' +
+    'propose et utilise l’anglais dans les autres cas. Les changements s’appliquent ' +
     'immédiatement.',
   'settings.performance.title': 'Performance',
   'settings.performance.gpu': 'Utiliser l’accélération par carte graphique (GPU)',

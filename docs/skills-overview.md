@@ -30,7 +30,9 @@ Sources of truth, in order of authority:
   shape the model's answer (structure, honesty rules, citations) and run no tools.
 - Every bundled skill leads with **honesty/safety rules** that survive prompt trimming: quote
   printed figures exactly, cite sources, never invent what the document doesn't state, no legal or
-  compliance advice, answer in the user's language (all titles/descriptions are localized EN/DE).
+  compliance advice, answer in the user's language. The instructions stay English; every title and
+  description is localized into all six interface languages (English, German, Spanish, French,
+  Italian, Russian; see [Titles in each interface language](#titles-in-each-interface-language)).
 - The app can **suggest** a fitting skill — in the composer picker (from the question and documents
   in scope) and, since #80, as a one-click **offer on an answer** whose shape probably missed the ask
   ("Run "…" for this question"; clicking re-answers with the skill). Some per-answer offers are
@@ -43,22 +45,41 @@ Sources of truth, in order of authority:
 
 ## Tool skills
 
-| Skill (EN / DE) | id · version | What it can do |
+| Skill | id · version | What it can do |
 |---|---|---|
-| **Bank Statement Analysis** / Kontoauszug-Analyse | `bank-statement` · v1.0.1 | Extract the transaction table from a statement (PDF/CSV/pasted), check that the printed opening/closing balances reconcile with the transactions, categorize transactions, summarize cashflow (in / out / net, per-category totals), and export the transactions to CSV. Flags unreconciled rows before any total and never invents a figure the statement doesn't print. |
-| **Invoice Analysis** / Rechnungsanalyse | `invoice` · v1.1.0 | Extract an invoice's header, line items, and totals; check that the printed totals add up (line items → net, net + tax → gross, stated tax rate); export the line items to CSV or the whole invoice to JSON/XML. Unparsed fields stay blank on purpose — nothing is computed into existence. |
-| **Document Redaction** / Dokument schwärzen | `document-redaction` · v1.1.0 | Create a redacted **copy** of a chosen document: a deterministic rule floor always masks clearly-shaped data (e-mails, phone numbers, IBANs, payment-card numbers, dates, links); with a model running it also masks the names, addresses, and organisation names the model locates (the model only points at spans — it never rewrites text). `.docx` in → `.docx` out with formatting preserved — and since #129 the masking covers the whole file's text (headers/footers, footnotes, comments, tracked-changes deleted text) and scrubs author metadata and link targets; pictures/scanned pages/embedded objects are not checked (the confirm says so). Other formats save as `.txt`. User-started, always confirms before saving. **Best-effort, not a compliance guarantee.** |
-| **Document Edit** / Dokument bearbeiten | `document-edit` · v1.1.0 | Apply targeted **find-and-replace** edits to a chosen document without rewriting it: a running model locates the exact substrings, the app verifies and splices them — everything else stays byte-identical, and text not found verbatim is reported as skipped. `.docx` formatting preserved; always confirms before saving. Requires a running model; never auto-activated. |
+| **Bank Statement Analysis** | `bank-statement` · v1.0.1 | Extract the transaction table from a statement (PDF/CSV/pasted), check that the printed opening/closing balances reconcile with the transactions, categorize transactions, summarize cashflow (in / out / net, per-category totals), and export the transactions to CSV. Flags unreconciled rows before any total and never invents a figure the statement doesn't print. |
+| **Invoice Analysis** | `invoice` · v1.1.0 | Extract an invoice's header, line items, and totals; check that the printed totals add up (line items → net, net + tax → gross, stated tax rate); export the line items to CSV or the whole invoice to JSON/XML. Unparsed fields stay blank on purpose — nothing is computed into existence. |
+| **Document Redaction** | `document-redaction` · v1.1.0 | Create a redacted **copy** of a chosen document: a deterministic rule floor always masks clearly-shaped data (e-mails, phone numbers, IBANs, payment-card numbers, dates, links); with a model running it also masks the names, addresses, and organisation names the model locates (the model only points at spans — it never rewrites text). `.docx` in → `.docx` out with formatting preserved — and since #129 the masking covers the whole file's text (headers/footers, footnotes, comments, tracked-changes deleted text) and scrubs author metadata and link targets; pictures/scanned pages/embedded objects are not checked (the confirm says so). Other formats save as `.txt`. User-started, always confirms before saving. **Best-effort, not a compliance guarantee.** |
+| **Document Edit** | `document-edit` · v1.1.0 | Apply targeted **find-and-replace** edits to a chosen document without rewriting it: a running model locates the exact substrings, the app verifies and splices them — everything else stays byte-identical, and text not found verbatim is reported as skipped. `.docx` formatting preserved; always confirms before saving. Requires a running model; never auto-activated. |
 
 ## Instruction skills (the "Professional Documents" set)
 
-| Skill (EN / DE) | id · version | What it can do |
+| Skill | id · version | What it can do |
 |---|---|---|
-| **Meeting Minutes** / Besprechungsprotokoll | `meeting-protocol` · v1.1.1 | Turn a meeting transcript, rough notes, or an agenda into structured minutes over the **whole** document: summary, context, topics, a decisions table, action items with owners/deadlines (only when explicitly stated), open questions, risks, a polished formal version, and formal motions/votes when the source uses motion language. Never infers decisions, attendees, or deadlines. |
-| **Contract Brief** / Vertragsübersicht | `contract-brief` · v1.0.0 | A plain-language brief of a **whole** contract: parties and roles, key dates and term, obligations, payment terms, termination/renewal, risk clauses actually present (liability, indemnity, IP, …), unusual or unclear points, and a checklist of questions to ask before signing. **Not legal advice** — it never says "safe to sign". |
-| **Deadline & Obligation Finder** / Fristen & Pflichten | `deadline-obligation-finder` · v1.1.0 | Scan a **whole** document for deadlines, notice periods, renewal and payment dates, and obligations — what to do, by when, who must act, and the consequence if missed — plus missing/unclear owners and suggested next actions. Keeps relative triggers ("within 30 days after delivery") instead of computing dates without an explicit anchor. Not a complete compliance calendar. |
-| **What Changed?** / Was hat sich geändert? | `what-changed` · v1.1.0 | Compare **exactly two** document versions and report the material changes in business language: an executive summary, a change table prioritized by impact (price, scope, dates, obligations, liability, …), added and removed text, and meaning-shifting wording ("may" → "must"). Grounded in the app's deterministic word-level redline when available; never guesses which version is "old" or "new". |
-| **Share-Safe Review** / Sicher teilen prüfen | `share-safe-review` · v1.1.0 | Review a **whole** document before sharing it: a clear verdict, a table of visible sensitive information (identifiers, bank details, medical/HR/financial content, secrets, …) informed by an offline pattern pre-scan, a hidden-metadata warning, a pointer to the Document Redaction skill, and a share checklist. **Advisory only** — it never claims a document is anonymized, compliant, or safe to publish. |
+| **Meeting Minutes** | `meeting-protocol` · v1.1.1 | Turn a meeting transcript, rough notes, or an agenda into structured minutes over the **whole** document: summary, context, topics, a decisions table, action items with owners/deadlines (only when explicitly stated), open questions, risks, a polished formal version, and formal motions/votes when the source uses motion language. Never infers decisions, attendees, or deadlines. |
+| **Contract Brief** | `contract-brief` · v1.0.0 | A plain-language brief of a **whole** contract: parties and roles, key dates and term, obligations, payment terms, termination/renewal, risk clauses actually present (liability, indemnity, IP, …), unusual or unclear points, and a checklist of questions to ask before signing. **Not legal advice** — it never says "safe to sign". |
+| **Deadline & Obligation Finder** | `deadline-obligation-finder` · v1.1.0 | Scan a **whole** document for deadlines, notice periods, renewal and payment dates, and obligations — what to do, by when, who must act, and the consequence if missed — plus missing/unclear owners and suggested next actions. Keeps relative triggers ("within 30 days after delivery") instead of computing dates without an explicit anchor. Not a complete compliance calendar. |
+| **What Changed?** | `what-changed` · v1.1.0 | Compare **exactly two** document versions and report the material changes in business language: an executive summary, a change table prioritized by impact (price, scope, dates, obligations, liability, …), added and removed text, and meaning-shifting wording ("may" → "must"). Grounded in the app's deterministic word-level redline when available; never guesses which version is "old" or "new". |
+| **Share-Safe Review** | `share-safe-review` · v1.1.0 | Review a **whole** document before sharing it: a clear verdict, a table of visible sensitive information (identifiers, bank details, medical/HR/financial content, secrets, …) informed by an offline pattern pre-scan, a hidden-metadata warning, a pointer to the Document Redaction skill, and a share checklist. **Advisory only** — it never claims a document is anonymized, compliant, or safe to publish. |
+
+## Titles in each interface language
+
+The app shows a skill's title and description in the interface language and falls back to the
+English text. Both come from the `localized` block of the skill's `SKILL.md` (`de`, `es`, `fr`,
+`it`, `ru`). It is display text only: the instructions stay English, and the model answers in the
+user's language. The descriptions are not repeated here.
+
+| id | English | German | Spanish | French | Italian | Russian |
+|---|---|---|---|---|---|---|
+| `bank-statement` | Bank Statement Analysis | Kontoauszug-Analyse | Análisis de extractos bancarios | Analyse de relevé bancaire | Analisi dell’estratto conto | Анализ банковской выписки |
+| `invoice` | Invoice Analysis | Rechnungsanalyse | Análisis de facturas | Analyse de facture | Analisi della fattura | Анализ счета на оплату |
+| `document-redaction` | Document Redaction | Dokument schwärzen | Ocultar datos personales | Caviarder un document | Oscuramento dei dati personali | Скрытие персональных данных |
+| `document-edit` | Document Edit | Dokument bearbeiten | Editar documento | Modifier un document | Modifica del documento | Редактирование документа |
+| `meeting-protocol` | Meeting Minutes | Besprechungsprotokoll | Acta de reunión | Compte rendu de réunion | Verbale di riunione | Протокол встречи |
+| `contract-brief` | Contract Brief | Vertragsübersicht | Resumen de contrato | Synthèse de contrat | Sintesi del contratto | Обзор договора |
+| `deadline-obligation-finder` | Deadline & Obligation Finder | Fristen & Pflichten | Plazos y obligaciones | Échéances et obligations | Scadenze e obblighi | Сроки и обязательства |
+| `what-changed` | What Changed? | Was hat sich geändert? | ¿Qué cambió? | Qu’est-ce qui a changé&nbsp;? | Cosa è cambiato? | Что изменилось? |
+| `share-safe-review` | Share-Safe Review | Sicher teilen prüfen | Comprobar antes de compartir | Vérifier avant de partager | Controllo prima della condivisione | Проверка перед отправкой |
 
 ## What skills cannot do (deliberate limits)
 

@@ -1451,10 +1451,10 @@ export const es: UiCatalog<'es'> = {
     'siempre sigue el tema del sistema.',
   'settings.language.title': 'Idioma',
   'settings.language.aria': 'Idioma',
-  'settings.language.system': 'System',
+  'settings.language.system': 'Sistema',
   'settings.language.hint':
-    '«Sistema» sigue el idioma de tu sistema operativo: un sistema en alemán usa Deutsch y ' +
-    'cualquier otro usa English. Los cambios se aplican de inmediato.',
+    '«Sistema» sigue el idioma de tu sistema operativo cuando HilbertRaum lo ofrece y, si no, ' +
+    'usa el inglés. Los cambios se aplican de inmediato.',
   'settings.performance.title': 'Rendimiento',
   'settings.performance.gpu': 'Usar la aceleración por GPU',
   'settings.performance.gpuHint':

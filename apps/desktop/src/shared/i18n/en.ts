@@ -1533,8 +1533,8 @@ export const en = {
   'settings.language.aria': 'Language',
   'settings.language.system': 'System',
   'settings.language.hint':
-    '“System” follows your operating system’s language: German systems use Deutsch, ' +
-    'everything else uses English. Changes apply right away.',
+    '“System” follows your operating system’s language when HilbertRaum offers it, and ' +
+    'English otherwise. Changes apply right away.',
   'settings.performance.title': 'Performance',
   'settings.performance.gpu': 'Use GPU acceleration',
   'settings.performance.gpuHint':

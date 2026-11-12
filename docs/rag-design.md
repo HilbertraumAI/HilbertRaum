@@ -2513,8 +2513,8 @@ checkpoint exists; byte-identical to before when none does.
 
 ### 15.5 UX — meter, "summarizing…" notice, transcript marker, settings toggle (§5.1–§5.4, R14, D-a/D-b)
 
-All user-visible strings go through `shared/i18n` (en + de, parity test enforced); internal prompts stay
-English (R12).
+All user-visible strings go through `shared/i18n` (every registered language, parity typecheck- and
+test-enforced); internal prompts stay English (R12).
 - **Context meter (§5.1).** `ContextUsage {usedTokens, window}` (`shared/types.ts`) +
   `getConversationContextUsage(db, runtime|null, manifestsDir, convId)` — a pure read that assembles via
   `buildChatMessages` over `contextWindowOrNextLaunch` (the running runtime's `effectiveContextWindow`; with no

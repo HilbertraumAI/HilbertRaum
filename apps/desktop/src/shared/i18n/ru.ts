@@ -1484,10 +1484,10 @@ export const ru: UiCatalog<'ru'> = {
     'блокировки всегда использует тему системы.',
   'settings.language.title': 'Язык',
   'settings.language.aria': 'Язык',
-  'settings.language.system': 'System',
+  'settings.language.system': 'Как в системе',
   'settings.language.hint':
-    'Вариант «Как в системе» повторяет язык операционной системы: для немецкой системы ' +
-    'выбирается Deutsch, для всех остальных — English. Изменения применяются сразу.',
+    'Вариант «Как в системе» повторяет язык операционной системы, если приложение HilbertRaum ' +
+    'его поддерживает, а иначе включается английский. Изменения применяются сразу.',
   'settings.performance.title': 'Скорость работы',
   'settings.performance.gpu': 'Использовать ускорение на видеокарте',
   'settings.performance.gpuHint':

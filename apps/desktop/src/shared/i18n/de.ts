@@ -1544,8 +1544,8 @@ export const de: Record<keyof typeof en, string> = {
   'settings.language.aria': 'Sprache',
   'settings.language.system': 'System',
   'settings.language.hint':
-    '„System“ folgt der Sprache deines Betriebssystems: Deutsche Systeme verwenden Deutsch, ' +
-    'alle anderen Englisch. Änderungen gelten sofort.',
+    '„System“ folgt der Sprache deines Betriebssystems, wenn HilbertRaum sie anbietet, ' +
+    'sonst Englisch. Änderungen gelten sofort.',
   'settings.performance.title': 'Leistung',
   'settings.performance.gpu': 'Grafikbeschleunigung verwenden',
   'settings.performance.gpuHint':
