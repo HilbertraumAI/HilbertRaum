@@ -2761,18 +2761,24 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   text is in. The lock screen's "HilbertRaum Lite" keeps its spelling.
 - **Search has trouble with the Turkish dotted and dotless I,** whatever the interface language.
   In conversation search and the keyword part of document search, a word typed with the dotless
-  "ı" finds only text written with "ı" ("ısı" doesn't find "ISI"), and a word typed with the
-  capital "İ" finds nothing, not even the same spelling ("İstanbul" finds neither "İSTANBUL" nor
-  "İstanbul"). Typed in small letters with a plain "i" ("isi", "istanbul"), "ISI", "İSTANBUL" and
-  "İstanbul" are all found. Document search also compares meaning, which this doesn't affect, so
-  a passage can still be found that way. The filters on screen (the Documents name filter, the AI
-  Model search and the review's evidence filter) do match I, ı, İ and i.
+  "ı" finds only text written with "ı" ("ısı" doesn't find "ISI"). A word typed with the capital
+  "İ" is split at that letter, and search looks for the pieces: "İstanbul" becomes "i" and
+  "stanbul", so it finds neither "İSTANBUL" nor "İstanbul", and it can list unrelated text that
+  holds a lone "I" or "i" ("I think this is fine"). Typed in small letters with a plain "i"
+  ("isi", "istanbul"), "ISI", "İSTANBUL" and "İstanbul" are all found. Document search also
+  compares meaning, which this doesn't affect, so a passage can still be found that way. The
+  filters on screen (the Documents name filter, the AI Model search and the review's evidence
+  filter) do match I, ı, İ and i.
 - **A letter typed with a separate accent mark may not match.** Most keyboards type an accented
   letter such as "é", "ó", "ş" or "й" as one character, but text from some Mac and Linux sources
   can hold the base letter followed by a separate accent mark, and the two look the same. The
   filters on screen compare such text as it is, so the one form doesn't find the other; the
-  dotted capital "İ" is the exception, which they match in either form. Search splits a word at a
-  separate accent mark, so a word typed that way usually finds nothing.
+  dotted capital "İ" is the exception, which they match in either form. Search cuts a word typed
+  that way at each separate accent mark and looks for the pieces, so it can find nothing or
+  unrelated text: "résumé" typed with separate marks looks for "re" and "sume" and can list a
+  message that starts "Re:". A word whose only accent is on its last letter, such as "café", is
+  still found when that letter is a Latin one, because search ignores the accents of Latin
+  letters; a Cyrillic word such as "мій" typed that way is not.
 - **Two app versions on one computer can show the lock screen in another language.** The
   language you choose is stored in the workspace, but the lock screen's language is remembered by
   the computer. When an older HilbertRaum version opens a workspace set to a language it doesn't

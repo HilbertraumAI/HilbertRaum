@@ -1288,9 +1288,10 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     expect(screen.queryByText('Lease 2026.pdf')).not.toBeInTheDocument()
   })
 
-  // G-5 on any system: both sides of the match go through `foldCase`. Plain toLowerCase() keeps a
-  // typed "ı" dotless (the first search misses) and lowers the title's "İ" to "i" + U+0307 (the
-  // second one misses), so this row goes red when either side drops the fold.
+  // Second UI-languages wave owner call G-5, on any system: both sides of the match go through
+  // `foldCase`. Plain toLowerCase() keeps a typed "ı" dotless (the first search misses) and lowers
+  // the title's "İ" to "i" + U+0307 (the second one misses), so this row goes red when either side
+  // drops the fold.
   it('the name filter folds Turkish I letters on both sides: «ısı» finds «ISI raporu», «istanbul» finds «İSTANBUL kira»', async () => {
     const user = userEvent.setup()
     const dotless = String.fromCharCode(0x0131)

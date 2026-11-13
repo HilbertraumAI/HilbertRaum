@@ -426,8 +426,12 @@ translations by hand, because nothing marks them as stale.
   Italian, Dutch, Polish, Turkish and Ukrainian): the glossary, the form of address (German *du*,
   Russian *вы*, French *vous*, Spanish *tú*, Italian *tu*, Dutch *je*, Polish *ty*, Turkish *siz*,
   Ukrainian *ви*) and the typography. Each glossary is also the comment block at the top of that
-  language's catalog file, and each typography rule a script can check is also an entry in that
-  language's `TYPOGRAPHY_RULES` list in `tests/unit/i18n.test.ts`; change them together.
+  language's catalog file, and each punctuation, script and placeholder rule of the style guide
+  is also an entry in that language's `TYPOGRAPHY_RULES` list in `tests/unit/i18n.test.ts`, as
+  are, for some languages, the wrong forms of address a pattern can catch (French *tu*, Russian
+  *ты*, Dutch *u*, Polish *Pan*, Turkish *sen*); change them together. The glossary, the spelling
+  and the rest of the form of address (such as a Polish verb that shows a gender) are not tested:
+  the reviewer checks them.
 - **Text stored in the database stays English.** A message the app writes to the database or to
   the settings (a document's error, a fixed answer, a default title) is written with
   `t('en', …)` and translated when it is shown, through the display map

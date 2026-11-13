@@ -1530,9 +1530,9 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
 // the same words for every count, so it reads wrong wherever a word agrees with the number
 // ("Retry 1 failed documents?"). It must either become a .one/.other pair rendered through
 // `tCount`, or sit on NON_GRAMMATICAL below with a reason that holds in every registered language
-// and in each one the wave adds (ru, fr, es, it): either nothing agrees with the number, or the
-// translations must be written so that nothing does (the group's reason says how, e.g. label
-// first: "Tokens: {tokens}").
+// and in any language added later: either nothing agrees with the number, or the translations
+// must be written so that nothing does (the group's reason says how, e.g. label first:
+// "Tokens: {tokens}").
 //
 // The net finds these keys two ways:
 //   - in the source: every call that names a catalog key (`t`, `tMain`, `t(lang, …)`, `tr`, `s`,
@@ -1828,10 +1828,10 @@ const isPluralForm = (key: string): boolean => isPluralFormOf(PLURAL_BASES, key)
 
 /**
  * Plain keys that show a number, grouped by what keeps them right in every language. Where a
- * reason says what the ru/fr/es/it translations must do, it is a requirement on catalogs that are
- * not written yet. "The English singular slip" is an English or German sentence that reads wrong
- * at exactly 1 ("1 sections scanned", the kind the "(1 core)" fix corrected): left to a follow-up
- * (owner call, 2026-11-12).
+ * reason says what the translations other than English and German must do, it is a requirement
+ * on every such catalog, today's and any added later. "The English singular slip" is an English
+ * or German sentence that reads wrong at exactly 1 ("1 sections scanned", the kind the "(1 core)"
+ * fix corrected): left to a follow-up (owner call, 2026-11-12).
  */
 const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly MessageKey[] }>> = {
   parenthetical: {
@@ -1990,9 +1990,10 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstNoun: {
     reason:
       'A noun after the figure ("tokens", "sections", "layers") agrees with it in every language. The ' +
-      'ru/fr/es/it translations must put the noun first as a label ("Tokens: {tokens}"), or write a ' +
-      'unit symbol where the figure has decimals ("{tps} tok/s"). English and German read wrong only ' +
-      'where the figure can be exactly 1 (the English singular slip left to a follow-up).',
+      'translations other than English and German must put the noun first as a label ' +
+      '("Tokens: {tokens}"), or write a unit symbol where the figure has decimals ' +
+      '("{tps} tok/s"). English and German read wrong only where the figure can be exactly 1 ' +
+      '(the English singular slip left to a follow-up).',
     keys: [
       'chat.speed.line',
       // The count is at least 2 here (a single page has its own sentence, ocrNotes.ts), so en/de/fr/es/it
@@ -2015,8 +2016,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       '"{a} of {b} <noun>": the noun follows {b}. With b of at least 2 it is plural in en/de/fr/es/it, ' +
       'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere ' +
-      '(in English and German, the singular slip left to a follow-up). The ru/fr/es/it translations ' +
-      'must put the noun first ("Sections: {covered} of {total}").',
+      '(in English and German, the singular slip left to a follow-up). The translations ' +
+      'other than English and German must put the noun first ("Sections: {covered} of {total}").',
     keys: [
       // #576/#538: these two render only when the total is at least 2 (ocrNotes.ts).
       'docs.previewModal.ocrInfoPartial',
@@ -2036,9 +2037,9 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstSentence: {
     reason:
       'The count governs a noun, and often a verb, inside a sentence, which agrees with it in every ' +
-      'language. The ru/fr/es/it translations must state the count label-first ("Transactions read: ' +
-      '**{count}**"); where the English and German sentence can meet 1 ("I read 1 transactions"), ' +
-      'that is the singular slip left to a follow-up.',
+      'language. The translations other than English and German must state the count label-first ' +
+      '("Transactions read: **{count}**"); where the English and German sentence can meet 1 ' +
+      '("I read 1 transactions"), that is the singular slip left to a follow-up.',
     keys: [
       'skills.bankAnalysis.count',
       'skills.bankAnalysis.countPartial',
@@ -2059,8 +2060,9 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   noParticiple: {
     reason:
       'A bare figure before a participle or a verb ("{n} failed", "{gb} GB read", "{free} is free"). ' +
-      'English and German do not inflect these ("1 failed", "1 fehlgeschlagen"); ru/fr/es/it do, so the ' +
-      'translations must use a label or an impersonal form ("failed: {n}", "lecture de {gb} GB").',
+      'English and German do not inflect these ("1 failed", "1 fehlgeschlagen"); other ' +
+      'languages can, so the other translations must use a label or an impersonal form ' +
+      '("failed: {n}", "lecture de {gb} GB").',
     keys: [
       'docs.reindexAllCancelled',
       'docs.reindexAllPartial',

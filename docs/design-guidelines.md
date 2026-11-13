@@ -665,8 +665,11 @@ In this section «…» marks Dutch examples; the copy itself quotes with “…
   for contrast. Buttons and menu items are infinitives with the object in front («Opslaan»,
   «Documenten importeren»), a go-to button is «Naar AI-model» (never «Open AI-model», which reads
   as the company name), instructions are imperatives («Kies», «Probeer het opnieuw»), busy states
-  an infinitive with `…` («Werkruimte laden…»). No third-person pronoun ever stands for a person
-  or a thing; the noun is repeated.
+  an infinitive with `…` («Werkruimte laden…»). No personal pronoun stands for a person («hij»,
+  «zij», «zijn», «haar» for the reader, the reviewer or another user) or for a single thing
+  («hij», «hem», «zijn», «ze», «haar» for a de-word, which the north and the south use
+  differently): the noun is repeated («Sluit de schijf opnieuw aan», not «Sluit hem opnieuw
+  aan»). «Het» for a het-word and plural «ze» are fine.
 - **Glossary** (mirrored in the `nl.ts` header): workspace → werkruimte · drive → schijf (also
   "disk"; never station, stick, drive, apparaat) · vault → versleutelde werkruimte · model → model
   (AI model → AI-model, never KI) · document → document (file → bestand) · re-index → opnieuw
@@ -696,8 +699,9 @@ In this section «…» marks Dutch examples; the copy itself quotes with “…
   it; no em dash — a colon or a new sentence, and the spaced en dash « – » between a label and its
   gloss; no space before `: ; ? ! %`; no no-break space; no exclamation mark; compounds as one word
   or with a hyphen («AI-model», «offlinemodus»); the diaeresis («geïndexeerd»); nothing glued to a
-  placeholder; numbers and dates from `Intl`. The punctuation, script, address-form and placeholder
-  rules are enforced by `TYPOGRAPHY_RULES.nl`; glossary and spelling are checked in review (owner
+  placeholder; numbers and dates from `Intl`. `TYPOGRAPHY_RULES.nl` enforces the punctuation and
+  placeholder rules and bans «u», «uw», «uzelf», «jullie» and «gij»; the rest of the form of
+  address, the glossary and the spelling (compounds, the diaeresis) are checked in review (owner
   decision 2026-11-13).
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms, %), after a
   plain space («{size} GB op schijf»); `{pct}%` without a space. `Intl` prints the Netherlands
@@ -759,9 +763,11 @@ stays great" → «Wybierz mniejszy model – jakość pozostanie bardzo dobra.�
   technical field names; inner «…» only inside them; no apostrophe (a noun before a foreign name
   instead of declining it); `…`; the spaced en dash « – », never the em dash; no space before `, ; :
   ! ? .` or `%`; no no-break space except between the digit groups of a typed figure; numbers and
-  dates from `Intl` («8192», but «98 304» with U+00A0; «4,3»; «75%»). The punctuation, script,
-  address-form and placeholder rules are enforced by `TYPOGRAPHY_RULES.pl`; glossary and spelling
-  are checked in review (owner decision 2026-11-13).
+  dates from `Intl` («8192», but «98 304» with U+00A0; «4,3»; «75%»). `TYPOGRAPHY_RULES.pl`
+  enforces the punctuation and placeholder rules (the preposition before a name included) and bans
+  «Pan», «Pani», «Państwo» and a capital «Ty» or «Twój» mid-sentence; the rest of the form of
+  address (no gendered verb or adjective about the user), the glossary and the spelling are
+  checked in review (owner decision 2026-11-13).
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms, %), never a
   unit word after a figure.
 - **Plurals:** one / few / many / other, on consecutive lines in that order. `one` is exactly 1,
@@ -826,9 +832,12 @@ only set the examples apart; the catalog quotes with “…”.
 - **Typography:** quotes “…” without nesting; ’ for the apostrophe, only after a proper name, an
   acronym or a figure, with no space around it; `…`; no em dash — a colon, a semicolon or a new
   sentence, and the spaced en dash « – » only between a label and its gloss; no space before `, ; :
-  ! ?`; no exclamation mark; Turkish words start with «İ», never a Latin «I»; numbers and dates from
-  `Intl` («8.192», «4,3»). The punctuation, script, address-form and placeholder rules are enforced
-  by `TYPOGRAPHY_RULES.tr`; glossary and spelling are checked in review (owner decision 2026-11-13).
+  ! ?`; no exclamation mark; a Turkish word that starts with «i» is capitalised with «İ», never a
+  Latin «I» («İptal», «İndir»), while the few words that start with «ı» take «I» («ısı», «ışık»,
+  «ılık»); numbers and dates from `Intl` («8.192», «4,3»). `TYPOGRAPHY_RULES.tr` enforces the
+  punctuation, percent and placeholder rules (the unit symbol after a placeholder included) and bans
+  «sen» and a capital «Siz» mid-sentence; the rest of the form of address, the capital «İ», the
+  glossary and the spelling are checked in review (owner decision 2026-11-13).
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms) after the
   figure; the percent sign stands before it without a space («%75», in catalog text `%{pct}`).
 - **Plurals:** one / other, on consecutive lines in that order. `one` is exactly 1, so a form
@@ -888,8 +897,10 @@ own right: no term, spelling or calque is taken from another Slavic catalog.
   the sentence dash is the spaced em dash « — », the en dash only joins numbers; `…`; no space
   before `, . ; : ! ?`; no exclamation mark; a Latin and a Cyrillic letter never touch (PDF-файл);
   the 2019 orthography (проєкт, офлайн, вебсайт); no letter ы, э, ъ or ё; numbers and dates from
-  `Intl`. The punctuation, script, address-form and placeholder rules are enforced by
-  `TYPOGRAPHY_RULES.uk`; glossary and spelling are checked in review (owner decision 2026-11-13).
+  `Intl`. `TYPOGRAPHY_RULES.uk` enforces the punctuation, script and placeholder rules (the
+  apostrophe, the Russian letters, a Latin letter touching a Cyrillic one) but has no address-form
+  rule, so the form of address, the glossary and the spelling (the 2019 orthography) are checked
+  in review (owner decision 2026-11-13).
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, %), never «ГБ»;
   `{pct}%` without a space; `Intl` groups from four digits up with a no-break space.
 - **Plurals:** one / few / many / other, on consecutive lines in that order: nominative singular

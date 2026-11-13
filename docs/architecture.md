@@ -6335,10 +6335,14 @@ meaning error plus a fixed sample. It found three S1 findings (two Dutch labels 
 where a document had moved, and a Ukrainian count idiom applied to a list of page numbers) and
 seventeen S2 findings (glossary, register, wording, quoted labels), all fixed before the
 catalogs were committed; most S3 findings were applied too. The 72 localized skill titles and
-descriptions were all back-translated, with no S1 or S2. Each guide's punctuation, script,
-address-form and placeholder rules became `TYPOGRAPHY_RULES` (Dutch 12, Polish 18, Turkish 17,
-Ukrainian 18 rules), among them the Turkish ban on a suffix glued to a placeholder and the
-Ukrainian ban on ы, э, ъ and ё; glossary and spelling stay a review check.
+descriptions were all back-translated, with no S1 or S2. Each guide's punctuation, script and
+placeholder rules became `TYPOGRAPHY_RULES` (Dutch 12, Polish 18, Turkish 17, Ukrainian 18
+rules), among them the Turkish ban on a suffix glued to a placeholder and the Ukrainian ban on ы,
+э, ъ and ё, and so did the address-form rules a script can check: Dutch bans «u», «uw», «uzelf»,
+«jullie» and «gij», Polish «Pan», «Pani», «Państwo» and a capital «Ty» or «Twój» mid-sentence,
+Turkish «sen» and a capital «Siz» mid-sentence; Ukrainian has none. The rest of the form of
+address (the Polish check for a gendered verb among it), the glossary and the spelling stay a
+review check.
 
 The registry-driven guards covered the four from the day each was registered (catalog parity and
 placeholders, typography, plural layout, ICU pins, the display map, the write gate,
@@ -6361,9 +6365,10 @@ Real-app walk of the dev build in the four languages plus an English and German 
 as in the first wave: every rail destination, every Settings tab, the gates and the chat in its
 states, at 880×600 and maximized, light and dark, each language switched through the saved setting
 and a reload and checked by `<html lang>` and one main-process message before any capture.
-Electron's ICU (78.2) gives the four languages the same plural categories and number formats as
-Node's, in the renderer and in main («8192» but «98&nbsp;304» in Polish, «8&nbsp;192» in
-Ukrainian, «%75» in Turkish). Every rail label was measured with its destination active, at
+Electron's ICU (78.2, the version read in main) gives the four languages the same plural
+categories and number formats as Node's: compared with the Node facts in the renderer and in main,
+they showed no difference («8192» but «98&nbsp;304» in Polish, «8&nbsp;192» in Ukrainian, «%75»
+in Turkish). Every rail label was measured with its destination active, at
 weight 600 in Arial: all fit the 79 px box, the widest being Dutch «Afbeeldingen» at 76.0 px,
 and the Turkish «Yapay zekâ modeli» takes two lines by design. Startup with ten catalogs is no
 slower than the six-language baseline (window ready-to-show median 2,063.8 ms against 2,242.7 ms,
@@ -6402,7 +6407,9 @@ Diagnostics labels that wrap; a Polish «(OCR)”.» alone on a line. Recorded, 
 capitals in a Turkish interface apply Turkish rules to the user's own text (a project called
 "Invoices" would read «INVOİCES»; a document heading "Overview" reads «OVERVİEW»; owner calls
 G-7, G-10); conversation search and keyword retrieval lower without the fold, so «ısı» misses
-"ISI" and a query with «İ» finds nothing, «İstanbul» itself included (owner call G-12); and the
+"ISI", and a query with «İ» is split at it (`buildFtsMatchQuery`, `fts.ts`): «İstanbul» becomes
+"i" OR "stanbul", which matches neither «İstanbul» nor «İSTANBUL» and can return unrelated text
+with a lone "I" (owner call G-12); and the
 first wave's code-built joins, now with one real break, a Ukrainian «23» and «GB» split across
 two lines on a model card by the plain space the code puts before the unit (`shared/format.ts`,
 `ModelsScreen.tsx`), while Turkish shows «15%» in the context meter whose tooltip, from the

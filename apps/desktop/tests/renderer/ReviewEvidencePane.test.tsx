@@ -123,6 +123,31 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     expect(cardTitles()).toEqual(['doc-28.pdf'])
   })
 
+  // The same owner call (G-5) for the two other card facts that hold a document's or a pack's own
+  // text: each has its own fold, so a «İ» in it must match a plain-i query too (plain
+  // toLowerCase() turns «İ» into "i" + U+0307, and "istanbul" is then no substring).
+  const dottedI = String.fromCharCode(0x0130)
+  it.each<[string, Partial<EvidenceSourceSnapshot>]>([
+    ['section label', { sectionLabel: `${dottedI}STANBUL OF${dottedI}S${dottedI}` }],
+    [
+      'knowledge-pack title',
+      {
+        sourceKind: 'archive',
+        archiveTitle: `${dottedI}stanbul rehberi`,
+        packId: 'p1',
+        articlePath: 'A/x'
+      }
+    ]
+  ])('the filter folds a «İ» in the %s: «istanbul» finds its card', (_field, facts) => {
+    const sources = makeSources(30)
+    sources[26] = { ...sources[26]!, ...facts }
+    renderPane(sources)
+    fireEvent.change(screen.getByLabelText(tEn('review.evidence.filterLabel')), {
+      target: { value: 'istanbul' }
+    })
+    expect(cardTitles()).toEqual(['doc-27.pdf'])
+  })
+
   it('no match → honest empty state, zero cards', () => {
     renderPane(makeSources(30))
     fireEvent.change(screen.getByLabelText(tEn('review.evidence.filterLabel')), {

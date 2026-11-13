@@ -67,7 +67,7 @@ export const tr: UiCatalog<'tr'> = {
   'nav.performance': 'Performans',
   'nav.settings': 'Ayarlar',
   'app.lockNow': 'Şimdi kilitle',
-  'app.lockNowTitle': 'Çalışma alanını yeniden şifrele ve kilitle',
+  'app.lockNowTitle': 'Çalışma alanını yeniden şifreler ve kilitler',
   'app.noticeDetails': 'Ayrıntılar',
   'app.noticeGoToModels': 'Yapay zekâ modeli ekranına git',
   'app.fatal.title': 'Uygulama başlatılamadı',
@@ -2280,7 +2280,7 @@ export const tr: UiCatalog<'tr'> = {
     'modeli ekranından ekleyebilirsiniz.',
   'gate.starter.optional':
     'Model indirmek isteğe bağlıdır ve her zaman önce onayınızı ister. Belgeleriniz ve ' +
-    'sohbetleriniz her iki durumda da internet kullanmaz.',
+    'sohbetleriniz her iki durumda da hiçbir zaman internet kullanmaz.',
   'gate.starter.skip': 'Şimdilik atla',
   'gate.starter.addDocuments': 'Belge ekle',
   'gate.starter.chooseModel': 'Yapay zekâ modelini seç',

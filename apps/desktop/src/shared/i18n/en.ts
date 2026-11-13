@@ -3820,7 +3820,7 @@ export const en = {
     'This exported file is stored outside the encrypted HilbertRaum workspace and is not protected by your workspace password.',
   // Shown only when the pack's language differs from the UI language (`packLanguageLineKey`,
   // i18n record D-L11). One full sentence per pack language, never a `{language}` slot:
-  // a language name inside a sentence needs case and lower-casing in ru/fr/es/it.
+  // a language name inside a sentence needs a case ending or lower case in many translations.
   'review.export.packLanguage.en': 'This pack will be written in English.',
   'review.export.packLanguage.de': 'This pack will be written in German.',
   'review.export.options': 'Include in the pack',
