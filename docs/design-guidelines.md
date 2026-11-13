@@ -651,6 +651,264 @@ stays great" → «Scegli un modello più piccolo: la qualità resta ottima.»).
 - **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation (no «Impost.»,
   «ecc.»).
 
+### Dutch microcopy (second UI-languages wave, 2026-11-13 — `architecture.md` i18n record)
+
+Everything above applies to the Dutch copy too — **adapted, never translated literally**;
+machine-drafted and checked by a second model, not yet reviewed by a native speaker (owner decision
+2026-11-13). **One standard Dutch** for the Netherlands and Flanders (`nl-BE` resolves to `nl`):
+the word that is neutral in both. The spec-§11.4 rule binds every warning and error ("Pick a
+smaller model — quality stays great" → «Kies een kleiner model: de kwaliteit blijft uitstekend.»).
+In this section «…» marks Dutch examples; the copy itself quotes with “…”.
+
+- **Form of address: informal «je»** (owner decision 2026-11-13), lower case, everywhere — errors,
+  the lock screen and the Review screen; never «u», «uw» or «jullie», and «jij / jou / jouw» only
+  for contrast. Buttons and menu items are infinitives with the object in front («Opslaan»,
+  «Documenten importeren»), a go-to button is «Naar AI-model» (never «Open AI-model», which reads
+  as the company name), instructions are imperatives («Kies», «Probeer het opnieuw»), busy states
+  an infinitive with `…` («Werkruimte laden…»). No third-person pronoun ever stands for a person
+  or a thing; the noun is repeated.
+- **Glossary** (mirrored in the `nl.ts` header): workspace → werkruimte · drive → schijf (also
+  "disk"; never station, stick, drive, apparaat) · vault → versleutelde werkruimte · model → model
+  (AI model → AI-model, never KI) · document → document (file → bestand) · re-index → opnieuw
+  indexeren · offline → offline (Offline Mode → Offlinemodus) · "Ask my documents" → «Vragen aan
+  mijn documenten» · lock/unlock → vergrendelen/ontgrendelen · password → wachtwoord (never
+  paswoord) · settings → Instellingen · plaintext (developer) mode → onversleuteld (ontwikkelaars)
+  · delete and remove → verwijderen · clear → wissen · cancel → annuleren · chat / conversation →
+  chat / gesprek · skill → skill · token → token · knowledge pack → kennispakket. "Everything
+  stays on this drive" is always «Alles blijft op deze schijf».
+- **Review glossary:** evidence → **onderbouwing** — the noun «bewijs» is banned; «bewijzen»
+  appears only negated in the disclaimers · supported → «Beoordeeld – onderbouwd» / «… deels
+  onderbouwd» / «… niet onderbouwd» · review → beoordeling (evidence review → beoordeling van de
+  onderbouwing) · review item → beoordelingspunt · evidence pack → onderbouwingspakket (never
+  «dossier») · citation → bronverwijzing (never «citaat») · whole-document provenance → herkomst
+  uit een analyse van het hele document (its negation is always «geen bronverwijzingen per zin») ·
+  direct excerpt → direct fragment · source → bron / brondocument · reviewer → «Beoordelaar»
+  (label) / wie beoordeelt (prose) · mark ready / reopen → Beoordeling afronden / heropenen ·
+  outdated → verouderd · a review is «aangemaakt», an answer «gegenereerd». Outside the Review
+  screen "check" and "verify" are «controleren».
+- **Nav labels and screen names:** Start · Chat · Documenten · Vertalen · Afbeeldingen · AI-model ·
+  Prestaties · Instellingen; the rail foot reads «Vergrendelen», «Offline» / «Netwerk aan». A
+  screen reference equals the label, capitalised, without quotes, with a noun in front where it
+  helps («het scherm Vertalen», «in Instellingen», «Naar AI-model»); a string that names a button
+  quotes its exact label in “…”.
+- **Typography:** quotes “…” without nesting — ‘…’ is not used, because its closing mark is the
+  apostrophe; ’ for the apostrophe («PDF’s», «foto’s», «’s avonds»); `…` attached to the word before
+  it; no em dash — a colon or a new sentence, and the spaced en dash « – » between a label and its
+  gloss; no space before `: ; ? ! %`; no no-break space; no exclamation mark; compounds as one word
+  or with a hyphen («AI-model», «offlinemodus»); the diaeresis («geïndexeerd»); nothing glued to a
+  placeholder; numbers and dates from `Intl`. The punctuation, script, address-form and placeholder
+  rules are enforced by `TYPOGRAPHY_RULES.nl`; glossary and spelling are checked in review (owner
+  decision 2026-11-13).
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms, %), after a
+  plain space («{size} GB op schijf»); `{pct}%` without a space. `Intl` prints the Netherlands
+  date pattern for every Dutch locale (a known limitation).
+- **Plurals:** one / other, on consecutive lines in that order. `one` is exactly 1, so a form uses
+  the placeholders of the English form of its category (`packs.addedToast.one` has no `{count}`).
+  Participles and status words do not change with the number, so `.one` and `.other` may be the
+  same text («{count} geselecteerd»). A plain key with a number goes label-first («Gelezen
+  secties: {scanned}»); "and N more" in a plain key is «en nog {count}».
+- **Citation marker:** `B{n}` (bron).
+- **Untranslated by design:** the product name (no article, never in a compound), "HilbertRaum
+  Lite", "HilbertRaum AI Kit", model ids, paths, technical values, the picker's language names.
+  *System* is «Systeem». Language names take a capital («Engels»).
+- **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation (no «inst.»,
+  «bijv.»); a compound of more than two parts becomes a phrase with «van» or «voor».
+
+### Polish microcopy (second UI-languages wave, 2026-11-13 — `architecture.md` i18n record)
+
+Everything above applies to the Polish copy too — **adapted, never translated literally**;
+machine-drafted and checked by a second model, not yet reviewed by a native speaker (owner decision
+2026-11-13). The spec-§11.4 rule binds every warning and error ("Pick a smaller model — quality
+stays great" → «Wybierz mniejszy model – jakość pozostanie bardzo dobra.»).
+
+- **Form of address: informal «ty»** (owner decision 2026-11-13), lower case («twój», never
+  «Twój»), never «Pan / Pani». Buttons and instructions take the imperative («Zapisz», «Wybierz
+  plik»; negative, imperfective: «Nie odłączaj dysku»). What happened is impersonal («Zapisano»,
+  «Nie udało się zapisać pliku», «Nie znaleziono pliku»): a Polish past-tense verb shows gender,
+  so neither the user nor the app is its subject, and no adjective describes the user («Czy na
+  pewno chcesz usunąć…?», not «Czy jesteś pewien?»). The skill answers' "I" becomes impersonal
+  («Odczytano», not «Przeczytałem»). A placeholder never carries grammar: no ending glued to it
+  and no preposition right before a name; a generic noun in front takes the case («w dokumencie
+  „{title}”», «modelu {model}»).
+- **Glossary** (mirrored in the `pl.ts` header): workspace → obszar roboczy · drive → dysk (also
+  "disk"; never pendrive, nośnik, napęd) · vault → zaszyfrowany obszar roboczy · model → model
+  (AI model → model AI; never «SI») · document → dokument · re-index → indeksować ponownie ·
+  offline → offline · "Ask my documents" → „Zapytaj moje dokumenty” · lock/unlock →
+  zablokować/odblokować · password → hasło · settings → Ustawienia · plaintext (developer) mode →
+  bez szyfrowania (tryb programisty) · delete and remove → usunąć · cancel → anulować · skill →
+  umiejętność · token → token (genitive «tokena») · chat → czat. "Everything stays on this
+  drive" is always «Wszystko zostaje na tym dysku».
+- **Review glossary:** evidence → **potwierdzenie / potwierdzenia** — never «dowód» or
+  «ewidencja»; «dowodzić» appears only negated in the disclaimers · supported → «Zweryfikowano –
+  ma potwierdzenie» / «… częściowe potwierdzenie» / «… brak potwierdzenia» · review → weryfikacja
+  (evidence review → weryfikacja potwierdzeń) · review item → punkt weryfikacji · evidence pack
+  → pakiet potwierdzeń (never «akta», «teczka») · citation → odwołanie do źródła (never «cytat»,
+  «przypis») · whole-document provenance → pochodzenie z analizy całego dokumentu (its negation
+  is always «bez odwołań do źródeł dla poszczególnych zdań») · direct excerpt → bezpośredni
+  fragment (never «wyciąg», the bank statement) · source → źródło / dokument źródłowy · reviewer
+  → «Osoba weryfikująca» (never «recenzent», «rewident») · mark ready / reopen → Zakończ / Wznów
+  weryfikację · outdated → nieaktualna · the review is «rozpoczęta», the answer «wygenerowana».
+  Outside the Review screen "check" and "verify" are «sprawdzić».
+- **Nav labels and screen names:** Start · Czat · Dokumenty · Tłumacz · Obrazy · Model AI ·
+  Wydajność · Ustawienia; the rail foot reads «Zablokuj teraz», «Offline» / «Sieć aktywna». A
+  screen reference equals the label, capitalised, without quotes and never declined: «ekran»
+  (or «karta» for a Settings tab) takes the case («na ekranie Model AI»); «w Ustawieniach» and a
+  button's object («Otwórz Model AI») are the two fixed exceptions. A string that names a button
+  quotes its exact label in „…”.
+- **Typography:** quotes „…” — the closing mark is ” (U+201D), not the German “ — also around
+  technical field names; inner «…» only inside them; no apostrophe (a noun before a foreign name
+  instead of declining it); `…`; the spaced en dash « – », never the em dash; no space before `, ; :
+  ! ? .` or `%`; no no-break space except between the digit groups of a typed figure; numbers and
+  dates from `Intl` («8192», but «98 304» with U+00A0; «4,3»; «75%»). The punctuation, script,
+  address-form and placeholder rules are enforced by `TYPOGRAPHY_RULES.pl`; glossary and spelling
+  are checked in review (owner decision 2026-11-13).
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms, %), never a
+  unit word after a figure.
+- **Plurals:** one / few / many / other, on consecutive lines in that order. `one` is exactly 1,
+  so a form uses the placeholders of the English form of its category (`packs.addedToast.one`
+  has no `{count}`); `few` (2–4, 22–24) takes the nominative plural («2 dokumenty»), `many` (0,
+  5–21, 25–31) the genitive plural («21 dokumentów»: 21 is `many`, unlike Russian), `other` only
+  fractions (genitive singular, «1,5 dokumentu»). The impersonal form keeps one verb for all
+  four («Ponownie zindeksowano {count} dokumenty»). A plain key with a number goes label-first
+  with the noun in the nominative plural («Przeanalizowane sekcje: {scanned}»); "and N more" in
+  a plain key is «i jeszcze {count}».
+- **Citation marker:** `Ź{n}` (źródło).
+- **Untranslated by design:** the product name (never declined: «w aplikacji HilbertRaum»),
+  "HilbertRaum Lite", "HilbertRaum AI Kit", model ids, paths, technical values, the picker's
+  language names. *System* is «Systemowy».
+- **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation (no «ust.», «wł.»,
+  «np.»).
+
+### Turkish microcopy (second UI-languages wave, 2026-11-13 — `architecture.md` i18n record)
+
+Everything above applies to the Turkish copy too — **adapted, never translated literally**;
+machine-drafted and checked by a second model, not yet reviewed by a native speaker (owner decision
+2026-11-13). The spec-§11.4 rule binds every warning and error ("Pick a smaller model — quality
+stays great" → «Daha küçük bir model seçin: kalite yine çok iyi olur.»). The «…» in this section
+only set the examples apart; the catalog quotes with “…”.
+
+- **Form of address: «siz»** (owner decision 2026-11-13) in sentences, lower case and usually
+  dropped, with the short polite imperative («seçin», «yeniden deneyin»; never «seçiniz», never
+  «sen»); buttons take the bare imperative («Kaydet», «Sil», «İndir»), "Cancel" is «İptal».
+  Confirmations ask in the passive («Bu sohbet silinsin mi?»). Turkish has no grammatical gender.
+  The skill answers' "I" stays first person («okudum», «bulamadım»).
+- **Glossary** (mirrored in the `tr.ts` header): workspace → çalışma alanı · drive → sürücü (also
+  for "disk"; never «USB bellek» or «disk»; a graphics driver is always «ekran kartı sürücüsü») ·
+  vault → şifreli çalışma alanı · model → model (AI model → yapay zekâ modeli, «zekâ» with â, never
+  «YZ» or «AI») · document → belge · re-index → yeniden dizinle · offline → çevrimdışı · "Ask my
+  documents" → «Belgelerime sor» · lock/unlock → kilitle / kilidini aç · password → parola (never
+  «şifre»: that stem means encryption) · settings → Ayarlar · plaintext (developer) mode →
+  şifrelenmemiş (geliştirici) · chat and conversation → sohbet · answer → yanıt · skill → beceri ·
+  knowledge pack → bilgi paketi · image → görsel · delete / cancel / remove → sil / İptal / kaldır ·
+  install / load / download → kur / yükle / indir. "Everything stays on this drive" is always «Her
+  şey bu sürücüde kalır».
+- **Review glossary:** evidence → **dayanak / dayanaklar** — never «kanıt» or «delil»;
+  «kanıtlamak» appears only negated in the disclaimers · supported → «İncelendi – dayanağı var»
+  / «… kısmen dayanağı var» / «… dayanağı yok» · review → inceleme (evidence review → dayanak
+  incelemesi) · review item → inceleme maddesi · evidence pack → dayanak paketi · citation →
+  kaynak atfı (never «alıntı», «referans») · whole-document provenance → belgenin tamamının
+  analizine dayanan köken (its negation is always «cümle düzeyinde kaynak atfı yok») · direct
+  excerpt → doğrudan alıntı · source → kaynak / kaynak belge · reviewer → «İnceleyen» (label) /
+  inceleyen kişi (prose; never «denetçi», a regulated title) · mark ready / reopen → Hazır olarak
+  işaretle / İncelemeyi yeniden aç · outdated → güncel değil · the review is «başlatıldı», the
+  answer «oluşturuldu». Outside the Review screen "check" is «kontrol et» and the checksum
+  "verify" is «doğrula».
+- **Nav labels and screen names:** Ana sayfa · Sohbet · Belgeler · Çeviri · Görseller · Yapay
+  zekâ modeli · Performans · Ayarlar. A screen reference equals the label, capitalised, without
+  quotes, followed by a generic noun that carries the ending («Yapay zekâ modeli ekranında»,
+  «Ayarlar ekranında», «Tanılama sekmesi»); a string that names a button quotes its exact label
+  in “…” and adds «düğmesi» («“Aranabilir yap (OCR)” düğmesini kullanın»).
+- **Placeholders:** nothing is attached to a `{placeholder}` or to a closing quote — no suffix, no
+  apostrophe plus suffix, no «de/da» or «mi/mı/mu/mü» right after it — because vowel harmony
+  depends on the inserted text. The placeholder is the subject of a passive («{name}
+  indirilemedi»), or a generic noun carries the ending («{model} modelinde», «“{title}” başlıklı
+  sohbet»), or the value is label-first («Model: {model}»).
+- **Typography:** quotes “…” without nesting; ’ for the apostrophe, only after a proper name, an
+  acronym or a figure, with no space around it; `…`; no em dash — a colon, a semicolon or a new
+  sentence, and the spaced en dash « – » only between a label and its gloss; no space before `, ; :
+  ! ?`; no exclamation mark; Turkish words start with «İ», never a Latin «I»; numbers and dates from
+  `Intl` («8.192», «4,3»). The punctuation, script, address-form and placeholder rules are enforced
+  by `TYPOGRAPHY_RULES.tr`; glossary and spelling are checked in review (owner decision 2026-11-13).
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms) after the
+  figure; the percent sign stands before it without a space («%75», in catalog text `%{pct}`).
+- **Plurals:** one / other, on consecutive lines in that order. `one` is exactly 1, so a form
+  uses the placeholders of the English form of its category (`packs.addedToast.one` has no
+  `{count}`). A noun stays singular after any number («5 belge»), so the two forms are often the
+  same text. "{a} of {b}" is «{a} / {b}»; "and N more" in a plain key is «ve {count} tane daha».
+- **Citation marker:** `K{n}` (kaynak).
+- **Untranslated by design:** the product name, "HilbertRaum Lite", "HilbertRaum AI Kit", model
+  ids, paths, technical values, the picker's language names. *System* is «Sistem». The values
+  that CSS shows in capitals (section titles, the conversation date groups) hold no brand or
+  Latin product name, because `lang="tr"` uppercases «i» to «İ».
+- **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation (no «Ayr.», «vb.»,
+  «sn.»).
+
+### Ukrainian microcopy (second UI-languages wave, 2026-11-13 — `architecture.md` i18n record)
+
+Everything above applies to the Ukrainian copy too — **adapted, never translated literally**;
+machine-drafted and checked by a second model, not yet reviewed by a native speaker (owner decision
+2026-11-13). The spec-§11.4 rule binds every warning and error ("Pick a smaller model — quality
+stays great" → «Виберіть меншу модель — якість залишиться високою.»). The copy is Ukrainian in its
+own right: no term, spelling or calque is taken from another Slavic catalog.
+
+- **Form of address: formal «ви»** (owner decision 2026-11-13), lower case, everywhere — including
+  the lock screen and the Review screen; never «ти», never a capital «Ви». A control that acts
+  takes the infinitive («Зберегти», «Скасувати»); a sentence that tells the user what to do takes
+  the «ви» imperative («Виберіть», «Спробуйте ще раз»); a state takes the impersonal -но / -то
+  form («Збережено», «Увімкнено»). Nothing needs the user's gender, and the app never speaks in
+  the first-person past tense («Прочитано…», «Не вдалося знайти…», not «Я прочитав»).
+- **Glossary** (mirrored in the `uk.ts` header): workspace → робочий простір · drive → диск (also
+  "disk"; «на цьому диску», «з цього диска»; never накопичувач, носій, флешка) · vault →
+  зашифрований робочий простір · model → модель (AI model → ШІ-модель, AI engine → ШІ-рушій) ·
+  document → документ · re-index → переіндексувати · offline → офлайн · "Ask my documents" →
+  «Запитати мої документи» · lock/unlock → заблокувати/розблокувати · password → пароль · settings
+  → Параметри («налаштування» is the act of setting up) · plaintext (developer) mode →
+  незашифрований (для розробників) · app → застосунок · skill → навичка · knowledge pack → пакет
+  знань · delete / remove / cancel → видалити / прибрати / скасувати · default → типово.
+  «Завантаження» always means a download; loading from the disk is «запуск», «відкриття» or
+  «Зачекайте…». "Everything stays on this drive" is always «Усе залишається на цьому диску».
+- **Review glossary:** evidence → **обґрунтування** — never «докази» or «підтвердження»;
+  «доводити» appears only negated in the disclaimers · supported → «Перевірено — обґрунтовано» /
+  «… частково обґрунтовано» / «… не обґрунтовано» · review → перевірка (evidence review →
+  перевірка обґрунтування) · review item → пункт перевірки · evidence pack → пакет обґрунтування
+  (never «досьє», «справа») · citation → посилання на джерело (never «цитата») · whole-document
+  provenance → походження з аналізу всього документа (its negation is always «без посилань на
+  джерела для окремих речень») · direct excerpt → прямий уривок · source → джерело /
+  документ-джерело · reviewer → «Особа, яка перевіряє» (never «рецензент», «перевіряючий») · mark
+  ready / reopen → Завершити / Знову відкрити перевірку · outdated → застаріла · the review is
+  «розпочата», the answer «згенерована». Outside the Review screen a check is a verb or carries
+  its object; the checksum is «Звірити контрольну суму».
+- **Nav labels and screen names:** Головна · Чат · Документи · Переклад · Зображення · ШІ-модель ·
+  Швидкодія · Параметри («Налаштування» does not fit the rail). A screen name is never declined:
+  in a sentence it follows the noun «екран» in quotes («на екрані «ШІ-модель»»), in a path it
+  stands bare («Параметри → Діагностика»); a string that names a button quotes its exact label
+  in «».
+- **Typography:** quotes «…», with „…“ only inside them (also around technical field names); the
+  apostrophe is the letter U+02BC, as `Intl` prints it in Ukrainian, never U+2019 or an ASCII quote;
+  the sentence dash is the spaced em dash « — », the en dash only joins numbers; `…`; no space
+  before `, . ; : ! ?`; no exclamation mark; a Latin and a Cyrillic letter never touch (PDF-файл);
+  the 2019 orthography (проєкт, офлайн, вебсайт); no letter ы, э, ъ or ё; numbers and dates from
+  `Intl`. The punctuation, script, address-form and placeholder rules are enforced by
+  `TYPOGRAPHY_RULES.uk`; glossary and spelling are checked in review (owner decision 2026-11-13).
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, %), never «ГБ»;
+  `{pct}%` without a space; `Intl` groups from four digits up with a no-break space.
+- **Plurals:** one / few / many / other, on consecutive lines in that order: nominative singular
+  («{count} документ»), nominative plural («документи»), genitive plural («документів»), and for
+  fractions the genitive singular («документа»). `one` also serves 21, 31, 101, so every form
+  shows `{count}` where the English `other` does (`packs.addedToast.one` → «Додано {count} пакет
+  знань») and no `one` may hold a word that is false for 21. A plain key with a number goes
+  label-first («Проаналізовано розділів: {scanned}»); "and N more" in a plain key is «і ще
+  {count}».
+- **Placeholders:** no ending is glued to a placeholder and no preposition forces a case on it: a
+  generic noun in front («модель {name}», «документ «{title}»»), a label and a colon, or the
+  placeholder as the subject of a present-tense verb.
+- **Citation marker:** `Д{n}` (джерело).
+- **Untranslated by design:** the product name (never declined), "HilbertRaum Lite", "HilbertRaum
+  AI Kit", model ids, paths, technical values, the picker's language names. *System* is
+  «Системна».
+- **Fixed-width surfaces:** a shorter glossary synonym, never an abbreviation (no «налашт.»,
+  «і т. д.»).
+
 ---
 
 ## 8. What to avoid
