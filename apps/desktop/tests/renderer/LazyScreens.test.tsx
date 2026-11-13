@@ -97,7 +97,6 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
         // …plus the chat surface this flow drives (a running model so the chat gate opens):
         listConversations: vi.fn(async () => [conversation]),
         listMessages: vi.fn(async () => messages),
-        listDocuments: vi.fn(async () => []),
         getRuntimeStatus: vi.fn(async () => runtimeStatus({ warmedUp: undefined })),
         getEvidenceReviewForMessage: vi.fn(async () => null),
         createEvidenceReview: vi.fn(async () => makeDetail({ messageId: 'm2' }))

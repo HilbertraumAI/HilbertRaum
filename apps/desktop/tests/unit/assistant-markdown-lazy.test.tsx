@@ -13,7 +13,12 @@ import { t } from '../../src/shared/i18n'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 
-afterEach(cleanup)
+// The ReviewScreen row stubs the bridge; an unmocked call there, during the render or the unmount,
+// fails the row (the other rows touch no bridge).
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 describe('AssistantMarkdownLazy (renderer code-split wrapper)', () => {
   it('is a distinct lazy wrapper, not the aliased synchronous component', () => {
@@ -40,17 +45,18 @@ describe('AssistantMarkdownLazy (renderer code-split wrapper)', () => {
     await waitFor(() => expect(container.querySelector('.katex')).not.toBeNull())
   })
 
-  it('the alias reaches ReviewScreen too: a review item is never shown as raw markdown (#815)', async () => {
-    // The guard above's other side. ReviewScreen imports '../chat/AssistantMarkdownLazy'; with the
-    // alias it gets the synchronous component, so the review suites test the screen without the
-    // lazy chunk. Through the real wrapper React first commits the Suspense fallback (the raw text,
-    // asterisks included) and replaces it once the chunk loads — which can happen inside the same
-    // act() flush that `findBy` waits in, so the end state can't tell the two apart. The row
-    // records every node React adds or removes while the screen loads instead: a fallback that
-    // reached the DOM shows up there even after it was replaced. A fresh module graph, because
-    // React.lazy caches a loaded chunk per graph (a cached one renders with no fallback at all)
-    // and the rows above load it through the file the old alias resolved ReviewScreen's
-    // specifier to.
+  it("tests resolve ReviewScreen's import of the wrapper to the synchronous renderer: no Suspense fallback reaches the DOM (#815)", async () => {
+    // The guard above's other side, and a property of the test alias, not of the shipped app (which
+    // does show the raw text while the chunk loads). ReviewScreen imports
+    // '../chat/AssistantMarkdownLazy'; with the alias it gets the synchronous component, so the
+    // review suites test the screen without the lazy chunk. Through the real wrapper React first
+    // commits the Suspense fallback (the raw text, asterisks included) and replaces it once the
+    // chunk loads — which can happen inside the same act() flush that `findBy` waits in, so the end
+    // state can't tell the two apart. The row records every node React adds or removes while the
+    // screen loads instead: a fallback that reached the DOM shows up there even after it was
+    // replaced. A fresh module graph, because React.lazy caches a loaded chunk per graph (a cached
+    // one renders with no fallback at all): without the alias, ReviewScreen's specifier resolves to
+    // the very wrapper file this file imports statically, whose chunk the rows above have loaded.
     vi.resetModules()
     const [{ ReviewScreen }, session] = await Promise.all([
       import('../../src/renderer/screens/ReviewScreen'),
@@ -75,6 +81,5 @@ describe('AssistantMarkdownLazy (renderer code-split wrapper)', () => {
     record(observer.takeRecords())
     expect(shown.filter((text) => text.includes('**bold**'))).toEqual([])
     expect(within(item).getByText('bold').tagName).toBe('STRONG')
-    assertNoUnexpectedApiCalls()
   })
 })
