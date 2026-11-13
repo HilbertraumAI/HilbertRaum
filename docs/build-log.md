@@ -27,6 +27,16 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-13 — the 2026-11-13 second UI-languages wave entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-13, when the wave closed (PR #817 merged as `ff0c55ea`); a
+short outcome entry with the follow-ups replaces it there. Its record is unchanged: architecture.md
+"Internationalization — design record" and its "Second UI-languages wave QA" section,
+design-guidelines §7, CONTRIBUTING "Translating the interface". Citations of that entry now resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-11-13 — **Second UI languages wave (Dutch, Polish, Turkish, Ukrainian; interface only): in progress on `feat/ui-languages-nl-pl-tr-uk`.** Owner calls 2026-11-13: every catalog stays complete and typecheck-enforced (all ten), one PR with one commit per language, picker order English, Deutsch, Español, Français, Italiano, Nederlands, Polski, Türkçe, Русский, Українська, and the first wave's calls unchanged. Done: the four style guides, `docs/design-guidelines.md` §7 "Dutch/Polish/Turkish/Ukrainian microcopy" (address «je», «ty», «siz», «ви»; machine rules for punctuation, script, address form and placeholders, glossary and spelling checked in review); the four catalogs, registered and typecheck-complete (`nl.ts`, `tr.ts` 2,234 keys, `pl.ts`, `uk.ts` 2,358; machine-drafted, checked by a second model, no native review yet) with the skills' titles in all four; tests for this wave's own risks; one shared case fold so the Documents, AI Model and evidence filters match I, ı, İ and i on any system, and the lock-screen brand marked English so a Turkish interface keeps its spelling (owner calls); the real-app check (all four at the smallest window and maximized, light and dark; ten values shortened or corrected; startup unchanged); the docs (ten languages, the i18n record's second-wave QA section, known limitations). Open: review, CI and the merge._
+
 ## 2026-11-13 — the 2026-11-11 UI-languages wave entry retired verbatim (wave closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-13, when the wave closed (PR #801 merged as `5fde36cf`, PR #802 as
