@@ -24,6 +24,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   nl:                          #   Shown when the app runs in Dutch.
     title: Factuuranalyse
     description: Gebruik deze skill als je de factuurregels en -totalen wilt extraheren, controleren of exporteren.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Fatura analizi
+    description: Bir faturanın kalemlerini ve toplamlarını çıkarmak, kontrol etmek veya dışa aktarmak için kullanılır.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

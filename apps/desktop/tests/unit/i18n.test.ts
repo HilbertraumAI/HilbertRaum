@@ -641,6 +641,96 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'uses no exclamation mark',
       'Dutch values with ! — the tone is calm; end the sentence with a full stop'
     )
+  ],
+  // Turkish: the typography of design-guidelines §7 "Turkish microcopy".
+  tr: [
+    balancedQuotes(
+      '“',
+      '”',
+      'closes every opening “ with ”',
+      'Turkish values with an unbalanced “…” pair — close each “ (U+201C) with ” (U+201D), never with an ASCII quote'
+    ),
+    opensBeforeCloses(
+      '“',
+      '”',
+      'never uses ” as an OPENING quote (the pair is “…”)',
+      '” used before its “ — Turkish opens with “ (U+201C) and closes with ” (U+201D)'
+    ),
+    forbids(
+      /["„‟«»]/u,
+      'uses no ASCII, German or angle quotation mark',
+      'Turkish values with " „ ‟ « or » — quote with “…” (also around technical field names)'
+    ),
+    forbids(
+      /['‘`´]/u,
+      'writes the apostrophe as ’, never as an ASCII quote, a backtick or an accent mark',
+      "Turkish values with ' ‘ ` or ´ — the apostrophe is ’ (U+2019); there is no single-quote pair"
+    ),
+    forbids(
+      /\s’|’(?!\p{L})/u,
+      'joins the apostrophe to the name before it and the suffix after it',
+      'Turkish values with a space next to ’, or with nothing after it — write Windows’ta, HilbertRaum’un'
+    ),
+    forbids(
+      /(?<![\p{L}\p{N}])\p{Ll}+’\p{L}/u,
+      'puts an apostrophe only after a proper name, an acronym or a figure',
+      'Turkish values with an apostrophe after a common (all lower-case) word — common nouns take their suffix directly (belgeyi, sürücüde)'
+    ),
+    forbids(
+      /\}(?:\*\*)?['’]?\p{L}/u,
+      'never glues a suffix to a placeholder',
+      'Turkish values with a letter, or an apostrophe and a letter, right after a closing } — vowel harmony depends on the inserted text; put a generic noun after it ({model} modelinde), go label-first (Model: {model}) or use the passive'
+    ),
+    forbids(
+      /”['’]?\p{L}/u,
+      'never glues a suffix to a closing quote',
+      'Turkish values with a letter right after ” — put a generic noun after the quoted label (“Yeniden dizinle” düğmesine)'
+    ),
+    forbids(
+      /[\d}]\s?%|%\s/u,
+      'writes the percent sign before the figure, without a space',
+      'Turkish values with a figure before % or a space after % — write %{pct}'
+    ),
+    forbids(
+      /\.\.\.|\s…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Turkish values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /—| - /u,
+      'uses no em dash and no bare hyphen as a dash',
+      'Turkish values with — or " - " — use a colon, a semicolon, a new sentence, or the en dash " – " (U+2013) between a label and its gloss'
+    ),
+    forbids(
+      /[^\S\n][,;:!?](?=\s|$)/u,
+      'puts no space before , ; : ! ?',
+      'Turkish values with a space before , ; : ! or ? — remove it'
+    ),
+    forbids(
+      /!/u,
+      'uses no exclamation mark',
+      'Turkish values with ! — the calm tone has none (the English catalog has none either)'
+    ),
+    forbids(
+      /(?<=[\p{Ll}\d,;:”)] )Siz(?:e|i|in|de|den|le|ler\p{L}*|inle)?(?![\p{L}])/u,
+      'keeps siz lower case inside a sentence',
+      'capital Siz / Sizin mid-sentence — the address form is lower-case siz (and usually dropped)'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:sen|seni|senin|sana|sende|senden|seninle)(?![\p{L}])/iu,
+      'never addresses the reader as sen',
+      'an informal sen form — the address form is siz (seçin, belgeleriniz)'
+    ),
+    forbids(
+      /\}\s?(?:saniye|sn\.?|milisaniye|bayt|gigabayt|megabayt)(?![\p{L}])/iu,
+      'keeps the unit symbols the formatters print (GB, MB, KB, B, s, ms, tok/s)',
+      'Turkish values with a unit word after a formatted figure — write the Latin symbol ({seconds} s, {size} GB)'
+    ),
+    forbids(
+      /\}(?:\*\*)?”?\s(?:d[ea]|t[ea]|m[iıuü]|ki)(?![\p{L}])/u,
+      'never puts a harmonising particle (de/da, mi/mı/mu/mü, ki) right after a placeholder',
+      'Turkish values with de/da, mi/mı/mu/mü or ki right after a } — the particle follows the vowels of the inserted text; move it behind a fixed word ({name} indirilsin mi?)'
+    )
   ]
 }
 

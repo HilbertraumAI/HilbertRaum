@@ -24,6 +24,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   nl:                          #   Shown when the app runs in Dutch.
     title: Notulen
     description: "Gebruik deze skill als je een vergadertranscript, ruwe aantekeningen of een agenda wilt omzetten in overzichtelijke, gestructureerde notulen: besluiten, actiepunten en openstaande vragen."
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Toplantı tutanağı
+    description: "Bir toplantı transkriptini, ham notları veya gündemi düzenli ve yapılandırılmış bir tutanağa dönüştürmek için kullanılır: kararlar, yapılacak işler ve açık kalan sorular."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model answers over the WHOLE transcript (not top-k passages).
                                #   With this skill active over a single fully-chunked doc the whole-doc engine

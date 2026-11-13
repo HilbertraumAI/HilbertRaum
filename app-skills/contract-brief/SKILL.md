@@ -24,6 +24,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   nl:                          #   Shown when the app runs in Dutch.
     title: Contractsamenvatting
     description: "Gebruik deze skill als je van een contract of overeenkomst een samenvatting in begrijpelijke taal wilt: partijen, datums, verplichtingen, belangrijke bepalingen en vragen die je kunt stellen. Geen juridisch advies."
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Sözleşme özeti
+    description: "Bir sözleşmenin veya anlaşmanın sade bir dille özetini çıkarmak için kullanılır: taraflar, tarihler, yükümlülükler, önemli hükümler ve sorulmaya değer sorular. Hukuki tavsiye değildir."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

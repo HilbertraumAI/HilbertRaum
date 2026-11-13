@@ -24,6 +24,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   nl:                          #   Shown when the app runs in Dutch.
     title: Termijnen en verplichtingen
     description: "Gebruik deze skill als je in een document de termijnen, opzegtermijnen, verlengings- en betaaldatums en de verplichtingen wilt vinden: wat je moet doen, uiterlijk op welke datum en wat er gebeurt als een termijn wordt overschreden."
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Son tarihler ve yükümlülükler
+    description: "Bir belgedeki son tarihleri, ihbar sürelerini, yenileme ve ödeme tarihlerini ve yükümlülükleri bulmak için kullanılır: ne yapılması gerektiği, hangi tarihe kadar ve kaçırılırsa ne olacağı."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the

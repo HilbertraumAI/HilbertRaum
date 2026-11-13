@@ -24,6 +24,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   nl:                          #   Shown when the app runs in Dutch.
     title: Bankafschriftanalyse
     description: Gebruik deze skill als je de transacties uit een bankafschrift wilt extraheren, in categorieën indelen, afstemmen of samenvatten.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Banka hesap özeti analizi
+    description: Bir banka hesap özetindeki işlemleri çıkarmak, kategorilere ayırmak, özetlemek veya hesap mutabakatı yapmak için kullanılır.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

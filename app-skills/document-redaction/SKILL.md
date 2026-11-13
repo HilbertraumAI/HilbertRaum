@@ -24,6 +24,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   nl:                          #   Shown when the app runs in Dutch.
     title: Persoonsgegevens onleesbaar maken
     description: Gebruik deze skill als je persoonsgegevens in een document onleesbaar wilt maken, anonimiseren of verwijderen.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Kişisel verileri karartma
+    description: Bir belgedeki kişisel verileri karartmak, anonimleştirmek veya kaldırmak için kullanılır.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

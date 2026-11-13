@@ -24,6 +24,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   nl:                          #   Shown when the app runs in Dutch.
     title: Document bewerken
     description: Gebruik deze skill als je in een document gerichte wijzigingen met zoeken en vervangen wilt aanbrengen, zonder het te herschrijven.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Belge düzenleme
+    description: Bir belgede, onu baştan yazmadan, bul ve değiştir yöntemiyle hedefli düzenlemeler yapmak için kullanılır.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40

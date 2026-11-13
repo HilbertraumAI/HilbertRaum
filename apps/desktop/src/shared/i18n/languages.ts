@@ -111,6 +111,14 @@ export const UI_LANGUAGES = [
     pluralCategories: ['one', 'other']
   },
   {
+    code: 'tr',
+    nativeName: 'Türkçe',
+    nativeReviewed: false,
+    evidencePack: false,
+    plural: cldrPlural('tr'),
+    pluralCategories: ['one', 'other']
+  },
+  {
     code: 'ru',
     nativeName: 'Русский',
     nativeReviewed: false,
