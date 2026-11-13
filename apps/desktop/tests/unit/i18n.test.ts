@@ -187,6 +187,24 @@ describe('resolveUiLanguage (D-L2)', () => {
     expect(resolveUiLanguage('system', 'dv')).toBe('en')
   })
 
+  // The second languages wave: Dutch, Polish, Turkish and Ukrainian follow an OS locale with a
+  // region, Belgian Dutch included. Ukrainian is `uk`; `ua` is Ukraine's country code, not a
+  // language, and the ISO 639-2 codes are no alias (`ukr` and `nld` even begin with a registered
+  // code), so each resolves like any language this build does not register.
+  it.each([
+    ['nl-BE', 'nl'],
+    ['pl-PL', 'pl'],
+    ['tr-TR', 'tr'],
+    ['uk-UA', 'uk'],
+    ['ua', 'en'],
+    ['ukr', 'en'],
+    ['nld', 'en'],
+    ['pol', 'en'],
+    ['tur', 'en']
+  ])("'system' with the OS locale %s resolves to %s", (locale, expected) => {
+    expect(resolveUiLanguage('system', locale)).toBe(expected)
+  })
+
   it('tolerates a missing/empty locale (→ English)', () => {
     expect(resolveUiLanguage('system', '')).toBe('en')
     expect(resolveUiLanguage('system', null)).toBe('en')
@@ -973,6 +991,88 @@ describe('French typography — the colon and address rules on samples', () => {
     ['address', 'the elided t’', 'Pour t’aider'],
     ['address', 'the possessive after est-ce', 'Est-ce ton fichier'],
     ['address', 'ton before an ellipsis', 'C’est ton…']
+  ])('the %s rule rejects %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(true)
+  })
+})
+
+// The rules behind the second languages wave's own risks, tried on samples: a Turkish suffix glued
+// to a placeholder or a quoted label (its vowels follow the inserted text), and Ukrainian written
+// with a Russian letter or with an apostrophe other than U+02BC. The catalog rows above pass
+// whenever no value breaks a rule, so a rule that has stopped matching anything passes them too;
+// these rows show each one still catches its offender and lets the correct form through. Read
+// from TYPOGRAPHY_RULES by title, like the French rows.
+describe('Turkish and Ukrainian typography — the suffix, letter and apostrophe rules on samples', () => {
+  const TR_APOSTROPHE = String.fromCharCode(0x2019) // ’, also the mark Ukrainian must not use
+  const UK_APOSTROPHE = String.fromCharCode(0x02bc) // ʼ, a letter
+  const ACUTE = String.fromCharCode(0x00b4) // ´
+  const OPEN = String.fromCharCode(0x201c) // “
+  const CLOSE = String.fromCharCode(0x201d) // ”
+  const TITLES = {
+    'tr placeholder': ['tr', 'never glues a suffix to a placeholder'],
+    'tr quote': ['tr', 'never glues a suffix to a closing quote'],
+    'tr particle': ['tr', 'never puts a harmonising particle (de/da, mi/mı/mu/mü, ki) right after a placeholder'],
+    'uk letter': ['uk', 'uses no Russian letter (ы э ъ ё)'],
+    'uk apostrophe mark': [
+      'uk',
+      'writes the apostrophe as U+02BC, never as an ASCII quote, U+2019, a backtick or an accent'
+    ],
+    'uk apostrophe place': ['uk', 'puts the apostrophe only inside a word, before я ю є ї']
+  } as const
+  const flags = (rule: keyof typeof TITLES, sample: string): boolean => {
+    const [code, title] = TITLES[rule]
+    const found = TYPOGRAPHY_RULES[code].find((r) => r.title === title)
+    if (found === undefined) throw new Error(`no ${code} typography rule titled ${title}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['tr placeholder', 'a generic noun that takes the suffix', '{model} modelinde'],
+    ['tr placeholder', 'label first', 'Model: {model}'],
+    ['tr placeholder', 'a quoted placeholder followed by a noun', `${OPEN}{title}${CLOSE} belgesi`],
+    ['tr quote', 'a noun after the quoted label', `${OPEN}Yeniden dizinle${CLOSE} düğmesine`],
+    ['tr particle', 'the particle behind a fixed word', '{name} indirilsin mi?'],
+    ['tr particle', 'a word that begins like da', '{count} dakika'],
+    ['tr particle', 'a word that begins like mi', '{name} mimarisi'],
+    ['tr particle', 'a word that begins like ki', '{name} kitabı'],
+    ['uk letter', 'і ї є ґ, йо and the apostrophe', `Об${UK_APOSTROPHE}єкт і їжак, ґанок, йогурт`],
+    ['uk apostrophe mark', 'U+02BC', `ім${UK_APOSTROPHE}я`],
+    ['uk apostrophe place', 'before я', `ім${UK_APOSTROPHE}я`],
+    ['uk apostrophe place', 'before ю', `комп${UK_APOSTROPHE}ютер`],
+    ['uk apostrophe place', 'before є', `об${UK_APOSTROPHE}єкт`],
+    ['uk apostrophe place', 'before ї', `сім${UK_APOSTROPHE}ї`],
+    ['uk apostrophe place', 'in capitals', `ОБ${UK_APOSTROPHE}ЄКТ`]
+  ])('the %s rule accepts %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(false)
+  })
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['tr placeholder', 'a suffix after an apostrophe', `{model}${TR_APOSTROPHE}de çalışıyor`],
+    ['tr placeholder', 'a suffix glued on', '{model}de'],
+    ['tr placeholder', 'a suffix after bold markup', `**{name}**${TR_APOSTROPHE}in`],
+    ['tr placeholder', 'a suffix after an ASCII apostrophe', "{name}'e"],
+    ['tr quote', 'a suffix glued on', `${OPEN}Yeniden dizinle${CLOSE}yi seçin`],
+    ['tr quote', 'a suffix after an apostrophe', `${OPEN}{title}${CLOSE}${TR_APOSTROPHE}ı açın`],
+    ['tr particle', 'mi', '{name} mi?'],
+    ['tr particle', 'de', '{model} de çalışır'],
+    ['tr particle', 'mı after bold markup', '**{name}** mı'],
+    ['tr particle', 'ki after a quoted placeholder', `${OPEN}{title}${CLOSE} ki`],
+    ['uk letter', 'ы', 'Мы'],
+    ['uk letter', 'э', 'этот'],
+    ['uk letter', 'ъ', 'Объект'],
+    ['uk letter', 'ё', 'Ещё'],
+    ['uk letter', 'a capital Ы', 'ЫХ'],
+    ['uk letter', 'a capital Э', 'Экран'],
+    ['uk letter', 'a capital Ъ', 'ОБЪЕКТ'],
+    ['uk letter', 'a capital Ё', 'Ёлка'],
+    ['uk apostrophe mark', 'an ASCII quote', "ім'я"],
+    ['uk apostrophe mark', 'U+2019', `ім${TR_APOSTROPHE}я`],
+    ['uk apostrophe mark', 'a backtick', 'ім`я'],
+    ['uk apostrophe mark', 'an acute accent', `ім${ACUTE}я`],
+    ['uk apostrophe place', 'U+02BC used as quotation marks', `${UK_APOSTROPHE}Назва${UK_APOSTROPHE}`],
+    ['uk apostrophe place', 'U+02BC at the end of a word', `ім${UK_APOSTROPHE}`],
+    ['uk apostrophe place', 'U+02BC before а', `ім${UK_APOSTROPHE}а`],
+    ['uk apostrophe place', 'U+02BC after a space', `слово ${UK_APOSTROPHE}я`]
   ])('the %s rule rejects %s', (rule, _label, sample) => {
     expect(flags(rule, sample)).toBe(true)
   })
