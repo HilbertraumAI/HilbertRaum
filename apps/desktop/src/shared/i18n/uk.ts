@@ -194,7 +194,7 @@ export const uk: UiCatalog<'uk'> = {
   'chat.runtime.gpu': '{model} · GPU ({name})',
   'chat.runtime.cpu': '{model} · CPU',
   'chat.runtime.cpuCompat': '{model} · CPU (режим сумісності)',
-  'chat.runtime.demo': '{model} · демонстраційний режим',
+  'chat.runtime.demo': '{model} · демонстрація',
   'chat.runtime.title':
     'ШІ-модель, яка відповідає в цьому чаті, і де вона працює: на відеокарті (GPU) чи на ' +
     'процесорі (CPU). Докладніше: Параметри → Діагностика.',
@@ -2407,7 +2407,7 @@ export const uk: UiCatalog<'uk'> = {
   'indicator.onlineDetail':
     'Завантаження дозволено — чати й документи залишаються на цьому пристрої.',
   'indicator.short.offline': 'Офлайн',
-  'indicator.short.online': 'Мережа увімкнена',
+  'indicator.short.online': 'З мережею',
   'indicator.withLocalApi': '{state} · API працює',
   'indicator.localApiDetail':
     'Інші застосунки на цьому компʼютері можуть використовувати вашу модель. Ніщо не виходить за ' +
@@ -2454,7 +2454,7 @@ export const uk: UiCatalog<'uk'> = {
     'підтвердження. Ваші документи й чати в будь-якому разі не використовують інтернет.',
   'gate.starter.skip': 'Поки що пропустити',
   'gate.starter.addDocuments': 'Додати документи',
-  'gate.starter.chooseModel': 'Вибрати ШІ-модель',
+  'gate.starter.chooseModel': 'Вибрати модель',
   'gate.create.title': 'Створіть пароль',
   'gate.create.hint':
     'Цей пароль захищає все у вашому робочому просторі — документи, чати й нотатки — на цьому ' +
@@ -3251,7 +3251,7 @@ export const uk: UiCatalog<'uk'> = {
   'chat.scope.addPacks': 'Додати пакети…',
   'chat.scope.archivedFallback':
     'Цей проєкт архівовано — відповіді беруться з розділу «Бібліотека».',
-  'chat.scope.answeringFrom': 'Джерела відповідей: {source}',
+  'chat.scope.answeringFrom': 'Джерела: {source}',
   'chat.scope.wholeLibrary.one': 'уся ваша бібліотека — {count} документ',
   'chat.scope.wholeLibrary.few': 'уся ваша бібліотека — {count} документи',
   'chat.scope.wholeLibrary.many': 'уся ваша бібліотека — {count} документів',

@@ -1450,8 +1450,8 @@ export const pl: UiCatalog<'pl'> = {
   'models.verifyAllTitle': 'Ponownie porównaj każdy plik modelu na tym dysku z jego sumą SHA-256',
   'models.verifyAllHint':
     'Każdy model jest sprawdzany przy uruchomieniu. Ta opcja sprawdza zamiast tego wszystkie ' +
-    'pliki modeli na tym dysku – na wolnym dysku może to potrwać kilka minut. Możesz to ' +
-    'zatrzymać w dowolnym momencie; pliki już sprawdzone zostają sprawdzone.',
+    'pliki modeli na tym dysku – na powolnym dysku może to potrwać kilka minut. Możesz to ' +
+    'zatrzymać w dowolnym momencie; wyniki już sprawdzonych plików zostają zachowane.',
   'models.verifyAllStop': 'Zatrzymaj sprawdzanie',
   'models.verifyAllStopping': 'Zatrzymywanie…',
   'models.confirm.title': 'Pobrać model {name}?',
@@ -2259,7 +2259,7 @@ export const pl: UiCatalog<'pl'> = {
   'perf.rating.fast': 'Szybko',
   'perf.rating.pending': 'Oczekuje',
   'perf.rating.approx': 'W przybliżeniu',
-  'perf.rating.slowDrive': 'Wolny dysk',
+  'perf.rating.slowDrive': 'Powolny dysk',
   'perf.profile.TINY': 'Minimalny',
   'perf.profile.LITE': 'Lekki',
   'perf.profile.BALANCED': 'Zrównoważony',
@@ -2551,7 +2551,7 @@ export const pl: UiCatalog<'pl'> = {
     'Nie udało się zmierzyć szybkości dysku, więc zalecenie uwzględnia tylko pamięć RAM i ' +
     'procesor.',
   'main.benchmark.warnSlowDrive':
-    'Ten dysk jest raczej wolny. Modele będą działać, ale ich wczytywanie może trwać dłużej.',
+    'Ten dysk jest raczej powolny. Modele będą działać, ale ich wczytywanie może trwać dłużej.',
   'main.benchmark.warnSpeedSkipped':
     'Tym razem nie zmierzono szybkości generowania tekstu, ponieważ model był zajęty czymś ' +
     'innym. Profil poniżej uwzględnia tylko pamięć RAM, procesor i szybkość dysku – aby uzyskać ' +

@@ -1372,9 +1372,9 @@ export const nl: UiCatalog<'nl'> = {
   'models.verifyAllTitle':
     'Elk modelbestand op deze schijf opnieuw controleren met de SHA-256-controlesom',
   'models.verifyAllHint':
-    'Elk model wordt gecontroleerd als je het start. Dit controleert in plaats daarvan elk ' +
-    'modelbestand op deze schijf: op een trage schijf kan dat enkele minuten duren. Je kunt op ' +
-    'elk moment stoppen; bestanden die al zijn gecontroleerd, blijven gecontroleerd.',
+    'Elk model wordt bij het starten gecontroleerd. Met deze knop controleer je in plaats daarvan ' +
+    'elk modelbestand op deze schijf: op een trage schijf kan de controle enkele minuten duren. Je ' +
+    'kunt op elk moment stoppen; bestanden die al zijn gecontroleerd, blijven gecontroleerd.',
   'models.verifyAllStop': 'Controle stoppen',
   'models.verifyAllStopping': 'Stoppen…',
   'models.confirm.title': '{name} downloaden?',
@@ -2229,7 +2229,7 @@ export const nl: UiCatalog<'nl'> = {
   'perf.others.load': 'modelstart {seconds} s',
   'perf.others.check': 'bestandscontrole {seconds} s',
   'perf.footer':
-    'Het volledige technische rapport met alle ruwe meetwaarden vind je in Instellingen → ' +
+    'Het technische rapport met alle ruwe meetwaarden vind je in Instellingen → ' +
     'Diagnose.',
   'perf.footerLink': 'Naar Diagnose',
   'perf.unknownModel': 'het geladen model',

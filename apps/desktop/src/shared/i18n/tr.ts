@@ -2184,7 +2184,7 @@ export const tr: UiCatalog<'tr'> = {
   'diag.system.title': 'Sistem',
   'diag.system.osPlatform': 'İşletim sistemi / platform',
   'diag.system.freeSpace': 'Boş alan',
-  'diag.system.imagesSize': 'Görsel geçmişinin boyutu',
+  'diag.system.imagesSize': 'Görsel geçmişi boyutu',
   'diag.system.loadFailed':
     'Sistem ayrıntıları henüz yüklenemedi. Bu sekmeyi yeniden açmayı deneyin.',
   'diag.paths.title': 'Konumlar',
