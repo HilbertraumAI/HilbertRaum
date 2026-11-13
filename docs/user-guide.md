@@ -1315,18 +1315,19 @@ inside the encrypted workspace, so before you unlock it the app can't know your 
 
 The interface language works the same way: choose it from the drop-down list under
 **Settings → General → Language** — **System**, **English**, **Deutsch**, **Español**, **Français**,
-**Italiano**, or **Русский**. Each language is listed by its own name, so you can find yours even
-when the app shows a language you don't read. *System* follows your operating system's language
-when HilbertRaum offers it and uses English otherwise. A change applies right away, no restart.
+**Italiano**, **Nederlands**, **Polski**, **Türkçe**, **Русский**, or **Українська**. Each language
+is listed by its own name, so you can find yours even when the app shows a language you don't
+read. *System* follows your operating system's language when HilbertRaum offers it and uses
+English otherwise. A change applies right away, no restart.
 Before you unlock, the lock screen uses the language you last used on this computer. The first
 time, it uses your operating system's language, and it does so once more after the update that
 moved the app's screens to their own address (#560), until you unlock.
 
-The Spanish, French, Italian and Russian translations are machine-translated and were checked by
-a second AI model, but no native speaker has reviewed them yet. You can ask questions in any of
-these languages; the app's handling of questions (for example, when to list every match instead
-of picking the best passages) is tuned for English and German — see
-[known-limitations](known-limitations.md).
+The Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian translations are
+machine-translated and were checked by a second AI model, but no native speaker has reviewed them
+yet; only English and German have been. You can ask questions in any of these languages; the
+app's handling of questions (for example, when to list every match instead of picking the best
+passages) is tuned for English and German — see [known-limitations](known-limitations.md).
 
 ---
 

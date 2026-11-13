@@ -31,8 +31,9 @@ Sources of truth, in order of authority:
 - Every bundled skill leads with **honesty/safety rules** that survive prompt trimming: quote
   printed figures exactly, cite sources, never invent what the document doesn't state, no legal or
   compliance advice, answer in the user's language. The instructions stay English; every title and
-  description is localized into all six interface languages (English, German, Spanish, French,
-  Italian, Russian; see [Titles in each interface language](#titles-in-each-interface-language)).
+  description is localized into all ten interface languages (English, German, Spanish, French,
+  Italian, Dutch, Polish, Turkish, Russian, Ukrainian; see
+  [Titles in each interface language](#titles-in-each-interface-language)).
 - The app can **suggest** a fitting skill — in the composer picker (from the question and documents
   in scope) and, since #80, as a one-click **offer on an answer** whose shape probably missed the ask
   ("Run "…" for this question"; clicking re-answers with the skill). Some per-answer offers are
@@ -66,8 +67,9 @@ Sources of truth, in order of authority:
 
 The app shows a skill's title and description in the interface language and falls back to the
 English text. Both come from the `localized` block of the skill's `SKILL.md` (`de`, `es`, `fr`,
-`it`, `ru`). It is display text only: the instructions stay English, and the model answers in the
-user's language. The descriptions are not repeated here.
+`it`, `nl`, `pl`, `tr`, `ru`, `uk`). It is display text only: the instructions stay English, and
+the model answers in the user's language. The descriptions are not repeated here. The titles are
+in two tables, the second for Dutch, Polish, Turkish and Ukrainian.
 
 | id | English | German | Spanish | French | Italian | Russian |
 |---|---|---|---|---|---|---|
@@ -80,6 +82,18 @@ user's language. The descriptions are not repeated here.
 | `deadline-obligation-finder` | Deadline & Obligation Finder | Fristen & Pflichten | Plazos y obligaciones | Échéances et obligations | Scadenze e obblighi | Сроки и обязательства |
 | `what-changed` | What Changed? | Was hat sich geändert? | ¿Qué cambió? | Qu’est-ce qui a changé&nbsp;? | Cosa è cambiato? | Что изменилось? |
 | `share-safe-review` | Share-Safe Review | Sicher teilen prüfen | Comprobar antes de compartir | Vérifier avant de partager | Controllo prima della condivisione | Проверка перед отправкой |
+
+| id | Dutch | Polish | Turkish | Ukrainian |
+|---|---|---|---|---|
+| `bank-statement` | Bankafschriftanalyse | Analiza wyciągu bankowego | Banka hesap özeti analizi | Аналіз банківської виписки |
+| `invoice` | Factuuranalyse | Analiza faktury | Fatura analizi | Аналіз рахунку на оплату |
+| `document-redaction` | Persoonsgegevens onleesbaar maken | Ukrywanie danych osobowych | Kişisel verileri karartma | Приховування персональних даних |
+| `document-edit` | Document bewerken | Edycja dokumentu | Belge düzenleme | Редагування документа |
+| `meeting-protocol` | Notulen | Protokół ze spotkania | Toplantı tutanağı | Протокол зустрічі |
+| `contract-brief` | Contractsamenvatting | Streszczenie umowy | Sözleşme özeti | Стислий виклад договору |
+| `deadline-obligation-finder` | Termijnen en verplichtingen | Terminy i obowiązki | Son tarihler ve yükümlülükler | Строки та зобовʼязання |
+| `what-changed` | Wat is er veranderd? | Co się zmieniło? | Ne değişti? | Що змінилося? |
+| `share-safe-review` | Controleren voordat je deelt | Sprawdzenie przed udostępnieniem | Paylaşım öncesi kontrol | Перевірити перед поширенням |
 
 ## What skills cannot do (deliberate limits)
 

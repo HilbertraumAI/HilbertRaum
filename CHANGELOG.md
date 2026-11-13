@@ -27,10 +27,11 @@ from its first public `1.0.0` release onward.
 
 ### Added
 
-- **The interface is now available in Spanish, French, Italian and Russian.** Choose Español,
-  Français, Italiano or Русский under Settings → General → Language. The translations were made
-  by machine translation and checked by a second AI model; native speakers haven't reviewed them
-  yet. *System* now also follows an operating system set to one of these languages: if your
+- **The interface is now available in Spanish, French, Italian, Dutch, Polish, Turkish, Russian
+  and Ukrainian.** Choose Español, Français, Italiano, Nederlands, Polski, Türkçe, Русский or
+  Українська under Settings → General → Language. The translations were made by machine
+  translation and checked by a second AI model; native speakers haven't reviewed them yet.
+  *System* now also follows an operating system set to one of these languages: if your
   computer is set to French and you never picked a language, HilbertRaum shows French as soon as
   your workspace is open after the update, and the lock screen follows from then on. Evidence
   packs exported from these languages are written in English, and the export panel says so.
@@ -50,6 +51,12 @@ from its first public `1.0.0` release onward.
   the operating system's language. These messages now match the rest of the screen. Two rare
   refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
   unencrypted one) are still shown in English.
+- **Turkish dotted and dotless I now match in the text filters.** In the Documents name filter,
+  the AI Model search and the review's evidence filter, typing "ısı" didn't find a name written
+  "ISI", and "istanbul" didn't find "İSTANBUL". The Documents filter also compared names by the
+  system's language rules, which under Turkish rules could make a typed "inv" miss "Invoice",
+  whatever interface language you chose. All three filters now treat I, ı, İ and i as the same
+  letter, in every interface language and on every system.
 - **A computer with one processor core now reads "(1 core)".** The hardware details in Settings →
   Diagnostics and on the Performance screen, and the reports their Copy buttons make, said
   "(1 cores)" next to the processor on such a machine (German: "(1 Kerne)").

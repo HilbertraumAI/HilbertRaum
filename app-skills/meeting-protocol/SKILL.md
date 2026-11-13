@@ -21,6 +21,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Протокол встречи
     description: Подходит, когда из расшифровки встречи, черновых заметок или повестки нужно составить аккуратный структурированный протокол — решения, задачи и открытые вопросы.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Notulen
+    description: "Gebruik deze skill als je een vergadertranscript, ruwe aantekeningen of een agenda wilt omzetten in overzichtelijke, gestructureerde notulen: besluiten, actiepunten en openstaande vragen."
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Toplantı tutanağı
+    description: "Bir toplantı transkriptini, ham notları veya gündemi düzenli ve yapılandırılmış bir tutanağa dönüştürmek için kullanılır: kararlar, yapılacak işler ve açık kalan sorular."
+  pl:                          #   Shown when the app runs in Polish.
+    title: Protokół ze spotkania
+    description: "Służy do przekształcania transkrypcji spotkania, luźnych notatek lub porządku obrad w przejrzysty, uporządkowany protokół: decyzje, zadania do wykonania i otwarte kwestie."
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Протокол зустрічі
+    description: "Використовуйте, щоб перетворити текст розмови із зустрічі, чорнові нотатки або порядок денний на чіткий структурований протокол: рішення, завдання й відкриті питання."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model answers over the WHOLE transcript (not top-k passages).
                                #   With this skill active over a single fully-chunked doc the whole-doc engine

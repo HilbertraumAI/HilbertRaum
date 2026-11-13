@@ -21,6 +21,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Редактирование документа
     description: Подходит, когда в документе нужно точечно найти и заменить текст, не переписывая документ целиком.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Document bewerken
+    description: Gebruik deze skill als je in een document gerichte wijzigingen met zoeken en vervangen wilt aanbrengen, zonder het te herschrijven.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Belge düzenleme
+    description: Bir belgede, onu baştan yazmadan, bul ve değiştir yöntemiyle hedefli düzenlemeler yapmak için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Edycja dokumentu
+    description: Służy do wprowadzania w dokumencie punktowych zmian metodą „znajdź i zamień” bez przepisywania go od nowa.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Редагування документа
+    description: Використовуйте, щоб внести в документ точкові зміни за допомогою пошуку та заміни, не переписуючи його.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40

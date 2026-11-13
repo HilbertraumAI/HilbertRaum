@@ -21,6 +21,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Анализ счета на оплату
     description: Подходит, когда нужно извлечь, проверить или экспортировать позиции и итоговые суммы счета на оплату.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Factuuranalyse
+    description: Gebruik deze skill als je de factuurregels en -totalen wilt extraheren, controleren of exporteren.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Fatura analizi
+    description: Bir faturanın kalemlerini ve toplamlarını çıkarmak, kontrol etmek veya dışa aktarmak için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Analiza faktury
+    description: Służy do wyodrębniania, sprawdzania lub eksportowania pozycji i sum faktury.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Аналіз рахунку на оплату
+    description: Використовуйте, щоб витягти, перевірити або експортувати позиції та загальні суми рахунку на оплату.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

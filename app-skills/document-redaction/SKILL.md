@@ -21,6 +21,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Скрытие персональных данных
     description: Подходит, когда в документе нужно скрыть, обезличить или удалить персональные данные.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Persoonsgegevens onleesbaar maken
+    description: Gebruik deze skill als je persoonsgegevens in een document onleesbaar wilt maken, anonimiseren of verwijderen.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Kişisel verileri karartma
+    description: Bir belgedeki kişisel verileri karartmak, anonimleştirmek veya kaldırmak için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Ukrywanie danych osobowych
+    description: Służy do ukrywania, anonimizowania lub usuwania danych osobowych z dokumentu.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Приховування персональних даних
+    description: Використовуйте, щоб приховати, знеособити або прибрати з документа персональні дані.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

@@ -21,6 +21,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Анализ банковской выписки
     description: Подходит, когда нужно извлечь, распределить по категориям, сверить или кратко изложить транзакции из банковской выписки.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Bankafschriftanalyse
+    description: Gebruik deze skill als je de transacties uit een bankafschrift wilt extraheren, in categorieën indelen, afstemmen of samenvatten.
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Banka hesap özeti analizi
+    description: Bir banka hesap özetindeki işlemleri çıkarmak, kategorilere ayırmak, özetlemek veya hesap mutabakatı yapmak için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Analiza wyciągu bankowego
+    description: Służy do wyodrębniania, kategoryzowania, uzgadniania lub podsumowywania transakcji z wyciągu bankowego.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Аналіз банківської виписки
+    description: Використовуйте, щоб витягти, розподілити за категоріями, звірити або підсумувати транзакції з банківської виписки.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

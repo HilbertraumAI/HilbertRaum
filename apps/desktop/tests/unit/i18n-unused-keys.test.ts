@@ -505,6 +505,18 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
     text: "'en' | 'de'",
     reason:
       'EvidencePackLanguage: packs are written in en/de only (UI-languages owner call D-5 (b), i18n record D-L11); a type row in evidence-pack-model.test.ts holds it to the registry'
+  },
+  {
+    file: 'main/services/zim/tables.ts',
+    text: "name === 'tr'",
+    reason:
+      'the HTML table-row tag <tr>, not a language: a caption, row or cell tag ends the current sup/sub mark run (first of two sites)'
+  },
+  {
+    file: 'main/services/zim/tables.ts',
+    text: "name === 'tr'",
+    reason:
+      'the HTML table-row tag <tr>, not a language: a row opens or closes (second of two sites; the scanner records each comparison)'
   }
 ]
 

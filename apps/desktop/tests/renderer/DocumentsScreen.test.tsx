@@ -1082,6 +1082,9 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
 // ---- §11.16 sub-nav declutter: mode switch, counts, "Needs attention", projects, locations
 //      behind "More", the name filter, collapsible panel --------------------------------------
 describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
+  // The Turkish-system row's `String.prototype.toLocaleLowerCase` patch, undone after every row,
+  // so a row that fails or times out half-way cannot leave the faked system to the rows after it.
+  let turkishSystem: { mockRestore: () => void } | null = null
   beforeEach(() => {
     try {
       window.localStorage.clear()
@@ -1090,6 +1093,8 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     }
   })
   afterEach(() => {
+    turkishSystem?.mockRestore()
+    turkishSystem = null
     try {
       window.localStorage.clear()
     } catch {
@@ -1252,6 +1257,62 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     await user.clear(box)
     await user.type(box, 'zzz')
     expect(screen.getByText('No documents match “zzz”.')).toBeInTheDocument()
+  })
+
+  // Second UI-languages wave owner call G-5 (2026-11-13): the filter folds with the shared `foldCase`
+  // (`text-fold.test.ts` owns the letters). It used to lower with the runtime's default locale,
+  // which in the app is Chromium's (the OS language): on a Turkish system "Invoice" became
+  // "ınvoice" and a typed "inv" found nothing. The row runs on such a system: a toLocaleLowerCase()
+  // without a locale lowers in Turkish, through the real ICU data.
+  it('the name filter finds "Invoice" for a typed "inv" on a Turkish system', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'Invoice 2026-03.pdf' }),
+        doc({ id: 'd2', title: 'Lease 2026.pdf' })
+      ])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('Invoice 2026-03.pdf')
+    const lower = String.prototype.toLocaleLowerCase
+    turkishSystem = vi
+      .spyOn(String.prototype, 'toLocaleLowerCase')
+      .mockImplementation(function (this: string, locales?: Intl.LocalesArgument) {
+        return lower.call(this, locales ?? 'tr')
+      })
+    // The system is Turkish for real (a Node without the tr data would make this row vacuous).
+    expect('Invoice'.toLocaleLowerCase().includes('inv')).toBe(false)
+    await user.type(screen.getByRole('searchbox', { name: 'Filter documents by name' }), 'inv')
+    expect(screen.getByText('Invoice 2026-03.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('Lease 2026.pdf')).not.toBeInTheDocument()
+  })
+
+  // Second UI-languages wave owner call G-5, on any system: both sides of the match go through
+  // `foldCase`. Plain toLowerCase() keeps a typed "ı" dotless (the first search misses) and lowers
+  // the title's "İ" to "i" + U+0307 (the second one misses), so this row goes red when either side
+  // drops the fold.
+  it('the name filter folds Turkish I letters on both sides: «ısı» finds «ISI raporu», «istanbul» finds «İSTANBUL kira»', async () => {
+    const user = userEvent.setup()
+    const dotless = String.fromCharCode(0x0131)
+    const istanbul = `${String.fromCharCode(0x0130)}STANBUL kira.pdf`
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'ISI raporu.pdf' }),
+        doc({ id: 'd2', title: istanbul })
+      ])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('ISI raporu.pdf')
+    const box = screen.getByRole('searchbox', { name: 'Filter documents by name' })
+    await user.type(box, `${dotless}s${dotless}`)
+    expect(screen.getByText('ISI raporu.pdf')).toBeInTheDocument()
+    expect(screen.queryByText(istanbul)).not.toBeInTheDocument()
+    await user.clear(box)
+    await user.type(box, 'istanbul')
+    expect(screen.getByText(istanbul)).toBeInTheDocument()
+    expect(screen.queryByText('ISI raporu.pdf')).not.toBeInTheDocument()
   })
 
   it('the Knowledge packs mode replaces the rail and list with the packs panel; the empty state links to it', async () => {

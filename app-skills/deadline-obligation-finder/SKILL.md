@@ -21,6 +21,18 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Сроки и обязательства
     description: Подходит, когда в документе нужно найти крайние сроки, сроки уведомления, даты продления и оплаты, а также обязательства — что сделать, к какому сроку и что будет при пропуске срока.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Termijnen en verplichtingen
+    description: "Gebruik deze skill als je in een document de termijnen, opzegtermijnen, verlengings- en betaaldatums en de verplichtingen wilt vinden: wat je moet doen, uiterlijk op welke datum en wat er gebeurt als een termijn wordt overschreden."
+  tr:                          #   Shown when the app runs in Turkish.
+    title: Son tarihler ve yükümlülükler
+    description: "Bir belgedeki son tarihleri, ihbar sürelerini, yenileme ve ödeme tarihlerini ve yükümlülükleri bulmak için kullanılır: ne yapılması gerektiği, hangi tarihe kadar ve kaçırılırsa ne olacağı."
+  pl:                          #   Shown when the app runs in Polish.
+    title: Terminy i obowiązki
+    description: "Służy do wyszukiwania w dokumencie terminów, okresów wypowiedzenia, dat przedłużenia i płatności oraz obowiązków: co trzeba zrobić, do kiedy i co się stanie po przekroczeniu terminu."
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Строки та зобовʼязання
+    description: "Використовуйте, щоб знайти в документі кінцеві строки, строки попередження, дати продовження й оплати, а також зобовʼязання: що зробити, до якої дати й що станеться, якщо строк пропущено."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the

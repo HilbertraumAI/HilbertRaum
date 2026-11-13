@@ -187,6 +187,23 @@ describe('resolveUiLanguage (D-L2)', () => {
     expect(resolveUiLanguage('system', 'dv')).toBe('en')
   })
 
+  // The second languages wave: Dutch, Polish, Turkish and Ukrainian follow an OS locale with a
+  // region, Belgian Dutch included. Ukrainian is `uk`; `ua` is Ukraine's country code, not a
+  // language, and the ISO 639-2 codes are no alias (`ukr` and `nld` even begin with a registered
+  // code; `i18n-registry.test.ts` owns the prefix trap in general), so each resolves like any
+  // language this build does not register.
+  it.each([
+    ['nl-BE', 'nl'],
+    ['pl-PL', 'pl'],
+    ['tr-TR', 'tr'],
+    ['uk-UA', 'uk'],
+    ['ua', 'en'],
+    ['ukr', 'en'],
+    ['nld', 'en']
+  ])("'system' with the OS locale %s resolves to %s", (locale, expected) => {
+    expect(resolveUiLanguage('system', locale)).toBe(expected)
+  })
+
   it('tolerates a missing/empty locale (→ English)', () => {
     expect(resolveUiLanguage('system', '')).toBe('en')
     expect(resolveUiLanguage('system', null)).toBe('en')
@@ -576,6 +593,355 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'keeps the unit symbols the formatters print (GB, MB, KB, s, ms)',
       'a Cyrillic unit symbol next to the Latin ones the app prints'
     )
+  ],
+  // Dutch: the typography of design-guidelines §7 "Dutch microcopy".
+  nl: [
+    balancedQuotes(
+      '“',
+      '”',
+      'closes every opening “ with ”',
+      'Dutch values with an unbalanced “…” pair — close each “ (U+201C) with ” (U+201D), never with an ASCII quote'
+    ),
+    opensBeforeCloses(
+      '“',
+      '”',
+      'never uses ” as an OPENING quote (the pair is “…”)',
+      '” used before its “ — Dutch opens with “ (U+201C) and closes with ” (U+201D)'
+    ),
+    forbids(
+      /["„‟«»]/u,
+      'uses no ASCII, low or angle quotation mark',
+      'Dutch values with " „ ‟ « or » — quote with “…” (also around technical field names)'
+    ),
+    forbids(
+      /['‘‚`´]/u,
+      'writes the apostrophe as ’ and uses no single quotation marks',
+      "Dutch values with ' ‘ ‚ ` or ´ — the apostrophe is ’ (U+2019: pdf’s, ’s avonds); quotes are “…” and never nested, so reword"
+    ),
+    forbids(
+      /\}(?:[\p{L}\p{N}]|[’-]\p{L})/u,
+      'glues no ending, genitive or compound part to a placeholder',
+      'Dutch values with a letter, ’s or a hyphenated word glued to a closing } — put a noun in front (de documenten van {name}, context van {context} tokens)'
+    ),
+    forbids(
+      /\.\.\.|[^\S\n]…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Dutch values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /—| - /u,
+      'uses no em dash and no bare hyphen as a dash',
+      'Dutch values with — or " - " — use a colon, a new sentence, or the en dash " – " (U+2013)'
+    ),
+    forbids(
+      /[^\S\n][;:!?](?=\s|$)/u,
+      'puts no space before ; : ! ?',
+      'Dutch values with a space before ; : ! or ? — remove it (that is the French convention)'
+    ),
+    forbids(
+      /\s%/u,
+      'puts no space before %',
+      'Dutch values with a space before % — write {pct}% as Intl prints it'
+    ),
+    forbids(
+      /[\u00A0\u202F\u2009]/u,
+      'uses no no-break or thin space',
+      'Dutch values with U+00A0, U+202F or U+2009 — Dutch typography needs none; use a plain space'
+    ),
+    forbids(
+      /(?<![\p{L}\p{N}{’-])(?:u|uw|uzelf|jullie|gij)(?![\p{L}\p{N}}’-])/iu,
+      'addresses the reader as je',
+      'Dutch values with u, uw, uzelf, jullie or gij — the form of address is je (possessive je; jij/jou/jouw only for contrast)'
+    ),
+    forbids(
+      /!/u,
+      'uses no exclamation mark',
+      'Dutch values with ! — the tone is calm; end the sentence with a full stop'
+    )
+  ],
+  // Turkish: the typography of design-guidelines §7 "Turkish microcopy".
+  tr: [
+    balancedQuotes(
+      '“',
+      '”',
+      'closes every opening “ with ”',
+      'Turkish values with an unbalanced “…” pair — close each “ (U+201C) with ” (U+201D), never with an ASCII quote'
+    ),
+    opensBeforeCloses(
+      '“',
+      '”',
+      'never uses ” as an OPENING quote (the pair is “…”)',
+      '” used before its “ — Turkish opens with “ (U+201C) and closes with ” (U+201D)'
+    ),
+    forbids(
+      /["„‟«»]/u,
+      'uses no ASCII, German or angle quotation mark',
+      'Turkish values with " „ ‟ « or » — quote with “…” (also around technical field names)'
+    ),
+    forbids(
+      /['‘`´]/u,
+      'writes the apostrophe as ’, never as an ASCII quote, a backtick or an accent mark',
+      "Turkish values with ' ‘ ` or ´ — the apostrophe is ’ (U+2019); there is no single-quote pair"
+    ),
+    forbids(
+      /\s’|’(?!\p{L})/u,
+      'joins the apostrophe to the name before it and the suffix after it',
+      'Turkish values with a space next to ’, or with nothing after it — write Windows’ta, HilbertRaum’un'
+    ),
+    forbids(
+      /(?<![\p{L}\p{N}])\p{Ll}+’\p{L}/u,
+      'puts an apostrophe only after a proper name, an acronym or a figure',
+      'Turkish values with an apostrophe after a common (all lower-case) word — common nouns take their suffix directly (belgeyi, sürücüde)'
+    ),
+    forbids(
+      /\}(?:\*\*)?['’]?\p{L}/u,
+      'never glues a suffix to a placeholder',
+      'Turkish values with a letter, or an apostrophe and a letter, right after a closing } — vowel harmony depends on the inserted text; put a generic noun after it ({model} modelinde), go label-first (Model: {model}) or use the passive'
+    ),
+    forbids(
+      /”['’]?\p{L}/u,
+      'never glues a suffix to a closing quote',
+      'Turkish values with a letter right after ” — put a generic noun after the quoted label (“Yeniden dizinle” düğmesine)'
+    ),
+    forbids(
+      /[\d}]\s?%|%\s/u,
+      'writes the percent sign before the figure, without a space',
+      'Turkish values with a figure before % or a space after % — write %{pct}'
+    ),
+    forbids(
+      /\.\.\.|\s…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Turkish values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /—| - /u,
+      'uses no em dash and no bare hyphen as a dash',
+      'Turkish values with — or " - " — use a colon, a semicolon, a new sentence, or the en dash " – " (U+2013) between a label and its gloss'
+    ),
+    forbids(
+      /[^\S\n][,;:!?](?=\s|$)/u,
+      'puts no space before , ; : ! ?',
+      'Turkish values with a space before , ; : ! or ? — remove it'
+    ),
+    forbids(
+      /!/u,
+      'uses no exclamation mark',
+      'Turkish values with ! — the calm tone has none (the English catalog has none either)'
+    ),
+    forbids(
+      /(?<=[\p{Ll}\d,;:”)] )Siz(?:e|i|in|de|den|le|ler\p{L}*|inle)?(?![\p{L}])/u,
+      'keeps siz lower case inside a sentence',
+      'capital Siz / Sizin mid-sentence — the address form is lower-case siz (and usually dropped)'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:sen|seni|senin|sana|sende|senden|seninle)(?![\p{L}])/iu,
+      'never addresses the reader as sen',
+      'an informal sen form — the address form is siz (seçin, belgeleriniz)'
+    ),
+    forbids(
+      /\}\s?(?:saniye|sn\.?|milisaniye|bayt|gigabayt|megabayt)(?![\p{L}])/iu,
+      'keeps the unit symbols the formatters print (GB, MB, KB, B, s, ms, tok/s)',
+      'Turkish values with a unit word after a formatted figure — write the Latin symbol ({seconds} s, {size} GB)'
+    ),
+    forbids(
+      /\}(?:\*\*)?”?\s(?:d[ea]|t[ea]|m[iıuü]|ki)(?![\p{L}])/u,
+      'never puts a harmonising particle (de/da, mi/mı/mu/mü, ki) right after a placeholder',
+      'Turkish values with de/da, mi/mı/mu/mü or ki right after a } — the particle follows the vowels of the inserted text; move it behind a fixed word ({name} indirilsin mi?)'
+    )
+  ],
+  // Polish: the typography of design-guidelines §7 "Polish microcopy".
+  pl: [
+    balancedQuotes(
+      '„',
+      '”',
+      'closes every opening „ with ”',
+      'Polish values with an unbalanced „…” pair — close each „ (U+201E) with ” (U+201D)'
+    ),
+    opensBeforeCloses(
+      '„',
+      '”',
+      'never uses ” before its „ (the pair is „…”, not ”…„)',
+      '” used before its „ — Polish opens low with „ and closes high with ”'
+    ),
+    forbids(
+      /["“‟]/u,
+      'uses no ASCII quote and no “ (the German closing mark, the English opening mark)',
+      'Polish values with " “ or ‟ — quote with „…” (U+201E, U+201D), also around technical field names'
+    ),
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every inner « with »',
+      'Polish values with an unbalanced «…» pair — close each « with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » before its « (the inner pair is «…», not »…«)',
+      '» used before its « — the inner quotation opens with « and closes with »'
+    ),
+    forbids(
+      /(?:^|”)[^„]*«/u,
+      'uses «…» only inside „…”',
+      'Polish values with « outside an open „…” pair — the first-level quotes are „…”; «…» is only for a quotation inside one'
+    ),
+    forbids(
+      /['’‘‚`´]/u,
+      'uses no apostrophe and no single quotation mark',
+      'Polish values with an apostrophe, a single quote, a backtick or an accent mark — quote with „…”, and put a noun before a foreign name instead of declining it (w przeglądarce Chrome)'
+    ),
+    forbids(
+      /\.\.\.|[^\S\n]…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Polish values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /—| - /u,
+      'uses the spaced en dash as the house dash',
+      'Polish values with an em dash or a bare " - " — use " – " (U+2013), a colon or a new sentence'
+    ),
+    forbids(
+      /\p{L}–|–\p{L}/u,
+      'puts a space on each side of an en dash between words',
+      'Polish values with an en dash touching a letter — write " – " (only figures and placeholders may touch it, as in a range)'
+    ),
+    forbids(
+      /[^\S\n][,;:!?.](?=\s|$)/u,
+      'puts no space before , ; : ! ? .',
+      'Polish values with a space before a punctuation mark — remove it'
+    ),
+    forbids(
+      /\s%/u,
+      'attaches % to the figure',
+      'Polish values with a space before % — write {pct}% (Intl prints 75%)'
+    ),
+    forbids(
+      /(?<!\d)\u00A0|\u00A0(?!\d)|[\u202F\u2009\u00AD\u200B]/u,
+      'uses a no-break space only between the digit groups of a typed figure',
+      'Polish values with U+00A0 outside a typed figure (200\\u00A0000), or with U+202F, U+2009, U+00AD or U+200B — catalog text uses plain spaces'
+    ),
+    forbids(
+      /\d[ ,.]\d{3}(?!\d)/u,
+      'groups a typed figure with a no-break space',
+      'Polish values with a typed figure grouped by a plain space, a comma or a full stop — write 200\\u00A0000'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:Pan|Pani|Pana|Panu|Panem|Panią|Państwo|Państwa|Państwu)(?![\p{L}])/u,
+      'never addresses the reader as Pan, Pani or Państwo',
+      'Polish values with Pan/Pani/Państwo — use the imperative or an impersonal form'
+    ),
+    forbids(
+      /[\p{Ll},] (?:Ty|Ciebie|Cię|Tobie|Ci|Tobą|Twój|Twoja|Twoje|Twojego|Twojej|Twojemu|Twoją|Twoim|Twoich|Twoimi|Twoi)(?![\p{L}])/u,
+      'writes ty and twój in lower case mid-sentence',
+      'Polish values with a capital Ty/Twój/Cię mid-sentence — the courtesy capital belongs to letters, not to an interface'
+    ),
+    forbids(
+      /\}[’'-]?\p{L}/u,
+      'glues no ending to a placeholder',
+      'Polish values with a letter or a hyphenated ending right after a {placeholder} — the inserted text cannot be declined; put a noun in front or go label-first'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:w|we|z|ze|do|od|na|o|u|po|przez|dla|bez|przy|nad|pod|za|przed|między|według|dzięki|oprócz|wśród|podczas|wobec|obok|spośród|zamiast|wewnątrz|poza)[^\S\n]+[„«]?\{(?:name|model|modelId|title|titles|document|query|site|library|vendor|recipient|source|archive|family|tool|engine|cpu|button|label|kind|basis|category|categories|field)\}/iu,
+      'puts no preposition right before a name placeholder',
+      'Polish values with a preposition right before {name}, {model}, {title} … — the inserted name cannot take the case; put a noun in front (w dokumencie „{title}”, z modelem {model}) or go label-first'
+    )
+  ],
+  // Ukrainian: the typography of design-guidelines §7 "Ukrainian microcopy".
+  uk: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Ukrainian values with an unbalanced «…» pair — close each « with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » as an OPENING quote (the pair is «…», not »…«)',
+      '» used before its « — Ukrainian opens with « and closes with »'
+    ),
+    balancedQuotes(
+      '„',
+      '“',
+      'closes every inner „ with “',
+      'Ukrainian values with an unbalanced „…“ pair — the inner pair opens with „ (U+201E) and closes with “ (U+201C)'
+    ),
+    opensBeforeCloses(
+      '„',
+      '“',
+      'never uses “ as an OPENING quote (the inner pair is „…“, not “…”)',
+      '“ used before its „ — an English pair was left in; quote with «…»'
+    ),
+    forbids(
+      /["”‟‘‚‹›]/u,
+      'uses no ASCII, English or single quotation mark',
+      'Ukrainian values with a foreign quotation mark — quote with «…» (also around technical field names); „…“ only inside «…»'
+    ),
+    forbids(
+      /^(?:[^«»]|«[^«»]*»)*„/u,
+      'uses „…“ only inside «…»',
+      'Ukrainian values with „ outside a «…» pair — the first-level quotes are «…»'
+    ),
+    forbids(
+      /«\s|\s»/u,
+      'puts no space inside «…»',
+      'Ukrainian values with a space inside the guillemets — «текст», not « текст »'
+    ),
+    forbids(
+      /['\u2019`\u00B4]/u,
+      'writes the apostrophe as U+02BC, never as an ASCII quote, U+2019, a backtick or an accent',
+      'Ukrainian values with an ASCII quote, U+2019, a backtick or an acute accent — the apostrophe is the letter U+02BC, as ICU prints it in the Ukrainian weekday names'
+    ),
+    forbids(
+      /(?<![\p{L}])\u02BC|\u02BC(?![яюєї])/iu,
+      'puts the apostrophe only inside a word, before я ю є ї',
+      'Ukrainian values with U+02BC outside a word or not before я/ю/є/ї — it is a letter, never a quotation mark'
+    ),
+    forbids(
+      /[\u044B\u044D\u044A\u0451]/iu,
+      'uses no Russian letter (ы э ъ ё)',
+      'Ukrainian values with ы, э, ъ or ё — Ukrainian writes и, е, the apostrophe (U+02BC) and йо/ьо; the word was probably not translated into Ukrainian'
+    ),
+    forbids(
+      /\p{Script=Latin}\p{Script=Cyrillic}|\p{Script=Cyrillic}\p{Script=Latin}/u,
+      'never lets a Latin and a Cyrillic letter touch',
+      'Ukrainian values where a Latin letter touches a Cyrillic one — a look-alike (Latin i, o, a, e, c, p, x, y) inside a Ukrainian word, or an ending glued to a Latin term; join with a hyphen (PDF-файл)'
+    ),
+    forbids(
+      /\S—|—\S/u,
+      'puts a space on each side of the em dash',
+      'Ukrainian values with an em dash that touches a word — write space, U+2014, space'
+    ),
+    forbids(
+      /\s–|–\s| - /u,
+      'uses no spaced en dash and no bare hyphen as a dash',
+      'Ukrainian values with a spaced en dash or " - " — the sentence dash is the spaced em dash; the en dash only joins numbers (2–4)'
+    ),
+    forbids(
+      /\.\.\.|[^\S\n]…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Ukrainian values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /[^\S\n][,.;:!?](?=\s|$)/u,
+      'puts no space before , . ; : ! ?',
+      'Ukrainian values with a space before a punctuation mark — attach it to the word before it'
+    ),
+    forbids(
+      /!/u,
+      'uses no exclamation mark',
+      'Ukrainian values with ! — the copy is calm (design-guidelines §7); end the sentence with a full stop'
+    ),
+    forbids(
+      /(?<!\d)\u00A0|\u00A0(?!\d)|\u202F|\d \d{3}(?!\d)|\d,\d{3}(?!\d)/u,
+      'groups a typed figure with U+00A0 and uses no other no-break space',
+      'Ukrainian values with a no-break space outside a figure, a narrow no-break space, or a typed figure grouped with a plain space or a comma — write the group separator as \\u00A0, as Intl prints it'
+    ),
+    forbids(
+      /\}[\p{L}\u02BC]|\}-\p{Script=Cyrillic}/u,
+      'glues no ending to a placeholder',
+      'Ukrainian values with a letter or a hyphenated ending right after a {placeholder} — the inserted text cannot be declined; put a generic noun in front (модель {model}) or use a label and a colon'
+    )
   ]
 }
 
@@ -624,6 +990,93 @@ describe('French typography — the colon and address rules on samples', () => {
     ['address', 'the elided t’', 'Pour t’aider'],
     ['address', 'the possessive after est-ce', 'Est-ce ton fichier'],
     ['address', 'ton before an ellipsis', 'C’est ton…']
+  ])('the %s rule rejects %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(true)
+  })
+})
+
+// The rules behind the second languages wave's own risks, tried on samples: a Turkish suffix glued
+// to a placeholder or a quoted label (its vowels follow the inserted text), and Ukrainian written
+// with a Russian letter or with an apostrophe other than U+02BC. The catalog rows above pass
+// whenever no value breaks a rule, so a rule that has stopped matching anything passes them too;
+// these rows show each one still catches its offender and lets the correct form through. Read
+// from TYPOGRAPHY_RULES by title, like the French rows.
+describe('Turkish and Ukrainian typography — the suffix, letter and apostrophe rules on samples', () => {
+  const TR_APOSTROPHE = String.fromCharCode(0x2019) // ’, also the mark Ukrainian must not use
+  const UK_APOSTROPHE = String.fromCharCode(0x02bc) // ʼ, a letter
+  const ACUTE = String.fromCharCode(0x00b4) // ´
+  const OPEN = String.fromCharCode(0x201c) // “
+  const CLOSE = String.fromCharCode(0x201d) // ”
+  const TITLES = {
+    'tr placeholder': ['tr', 'never glues a suffix to a placeholder'],
+    'tr quote': ['tr', 'never glues a suffix to a closing quote'],
+    'tr particle': ['tr', 'never puts a harmonising particle (de/da, mi/mı/mu/mü, ki) right after a placeholder'],
+    'uk letter': ['uk', 'uses no Russian letter (ы э ъ ё)'],
+    'uk apostrophe mark': [
+      'uk',
+      'writes the apostrophe as U+02BC, never as an ASCII quote, U+2019, a backtick or an accent'
+    ],
+    'uk apostrophe place': ['uk', 'puts the apostrophe only inside a word, before я ю є ї']
+  } as const
+  const flags = (rule: keyof typeof TITLES, sample: string): boolean => {
+    const [code, title] = TITLES[rule]
+    const found = TYPOGRAPHY_RULES[code].find((r) => r.title === title)
+    if (found === undefined) throw new Error(`no ${code} typography rule titled ${title}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['tr placeholder', 'a generic noun that takes the suffix', '{model} modelinde'],
+    ['tr placeholder', 'label first', 'Model: {model}'],
+    ['tr placeholder', 'a quoted placeholder followed by a noun', `${OPEN}{title}${CLOSE} belgesi`],
+    ['tr quote', 'a noun after the quoted label', `${OPEN}Yeniden dizinle${CLOSE} düğmesine`],
+    ['tr particle', 'the particle behind a fixed word', '{name} indirilsin mi?'],
+    ['tr particle', 'a word that begins like da', '{count} dakika'],
+    ['tr particle', 'a word that begins like mi', '{name} mimarisi'],
+    ['tr particle', 'a word that begins like ki', '{name} kitabı'],
+    ['uk letter', 'і ї є ґ, йо and the apostrophe', `Об${UK_APOSTROPHE}єкт і їжак, ґанок, йогурт`],
+    ['uk apostrophe mark', 'U+02BC', `ім${UK_APOSTROPHE}я`],
+    ['uk apostrophe place', 'before я', `ім${UK_APOSTROPHE}я`],
+    ['uk apostrophe place', 'before ю', `комп${UK_APOSTROPHE}ютер`],
+    ['uk apostrophe place', 'before є', `об${UK_APOSTROPHE}єкт`],
+    ['uk apostrophe place', 'before ї', `сім${UK_APOSTROPHE}ї`],
+    ['uk apostrophe place', 'in capitals', `ОБ${UK_APOSTROPHE}ЄКТ`]
+  ])('the %s rule accepts %s', (rule, _label, sample) => {
+    expect(flags(rule, sample)).toBe(false)
+  })
+
+  it.each<[keyof typeof TITLES, string, string]>([
+    ['tr placeholder', 'a suffix after an apostrophe', `{model}${TR_APOSTROPHE}de çalışıyor`],
+    ['tr placeholder', 'a suffix glued on', '{model}de'],
+    ['tr placeholder', 'a suffix after bold markup', `**{name}**${TR_APOSTROPHE}in`],
+    ['tr placeholder', 'a suffix after an ASCII apostrophe', "{name}'e"],
+    ['tr quote', 'a suffix glued on', `${OPEN}Yeniden dizinle${CLOSE}yi seçin`],
+    ['tr quote', 'a suffix after an apostrophe', `${OPEN}{title}${CLOSE}${TR_APOSTROPHE}ı açın`],
+    ['tr particle', 'mi', '{name} mi?'],
+    ['tr particle', 'de', '{model} de çalışır'],
+    ['tr particle', 'mı after bold markup', '**{name}** mı'],
+    ['tr particle', 'ki after a quoted placeholder', `${OPEN}{title}${CLOSE} ki`],
+    ['tr particle', 'da', '{name} da'],
+    ['tr particle', 'te', '{name} te'],
+    ['tr particle', 'ta', '{name} ta'],
+    ['tr particle', 'mu', '{name} mu?'],
+    ['tr particle', 'mü', '{name} mü?'],
+    ['uk letter', 'ы', 'Мы'],
+    ['uk letter', 'э', 'этот'],
+    ['uk letter', 'ъ', 'Объект'],
+    ['uk letter', 'ё', 'Ещё'],
+    ['uk letter', 'a capital Ы', 'ЫХ'],
+    ['uk letter', 'a capital Э', 'Экран'],
+    ['uk letter', 'a capital Ъ', 'ОБЪЕКТ'],
+    ['uk letter', 'a capital Ё', 'Ёлка'],
+    ['uk apostrophe mark', 'an ASCII quote', "ім'я"],
+    ['uk apostrophe mark', 'U+2019', `ім${TR_APOSTROPHE}я`],
+    ['uk apostrophe mark', 'a backtick', 'ім`я'],
+    ['uk apostrophe mark', 'an acute accent', `ім${ACUTE}я`],
+    ['uk apostrophe place', 'U+02BC used as quotation marks', `${UK_APOSTROPHE}Назва${UK_APOSTROPHE}`],
+    ['uk apostrophe place', 'U+02BC at the end of a word', `ім${UK_APOSTROPHE}`],
+    ['uk apostrophe place', 'U+02BC before а', `ім${UK_APOSTROPHE}а`],
+    ['uk apostrophe place', 'U+02BC after a space', `слово ${UK_APOSTROPHE}я`]
   ])('the %s rule rejects %s', (rule, _label, sample) => {
     expect(flags(rule, sample)).toBe(true)
   })
@@ -1077,9 +1530,9 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
 // the same words for every count, so it reads wrong wherever a word agrees with the number
 // ("Retry 1 failed documents?"). It must either become a .one/.other pair rendered through
 // `tCount`, or sit on NON_GRAMMATICAL below with a reason that holds in every registered language
-// and in each one the wave adds (ru, fr, es, it): either nothing agrees with the number, or the
-// translations must be written so that nothing does (the group's reason says how, e.g. label
-// first: "Tokens: {tokens}").
+// and in any language added later: either nothing agrees with the number, or the translations
+// must be written so that nothing does (the group's reason says how, e.g. label first:
+// "Tokens: {tokens}").
 //
 // The net finds these keys two ways:
 //   - in the source: every call that names a catalog key (`t`, `tMain`, `t(lang, …)`, `tr`, `s`,
@@ -1375,10 +1828,10 @@ const isPluralForm = (key: string): boolean => isPluralFormOf(PLURAL_BASES, key)
 
 /**
  * Plain keys that show a number, grouped by what keeps them right in every language. Where a
- * reason says what the ru/fr/es/it translations must do, it is a requirement on catalogs that are
- * not written yet. "The English singular slip" is an English or German sentence that reads wrong
- * at exactly 1 ("1 sections scanned", the kind the "(1 core)" fix corrected): left to a follow-up
- * (owner call, 2026-11-12).
+ * reason says what the translations other than English and German must do, it is a requirement
+ * on every such catalog, today's and any added later. "The English singular slip" is an English
+ * or German sentence that reads wrong at exactly 1 ("1 sections scanned", the kind the "(1 core)"
+ * fix corrected): left to a follow-up (owner call, 2026-11-12).
  */
 const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly MessageKey[] }>> = {
   parenthetical: {
@@ -1537,9 +1990,10 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstNoun: {
     reason:
       'A noun after the figure ("tokens", "sections", "layers") agrees with it in every language. The ' +
-      'ru/fr/es/it translations must put the noun first as a label ("Tokens: {tokens}"), or write a ' +
-      'unit symbol where the figure has decimals ("{tps} tok/s"). English and German read wrong only ' +
-      'where the figure can be exactly 1 (the English singular slip left to a follow-up).',
+      'translations other than English and German must put the noun first as a label ' +
+      '("Tokens: {tokens}"), or write a unit symbol where the figure has decimals ' +
+      '("{tps} tok/s"). English and German read wrong only where the figure can be exactly 1 ' +
+      '(the English singular slip left to a follow-up).',
     keys: [
       'chat.speed.line',
       // The count is at least 2 here (a single page has its own sentence, ocrNotes.ts), so en/de/fr/es/it
@@ -1562,8 +2016,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       '"{a} of {b} <noun>": the noun follows {b}. With b of at least 2 it is plural in en/de/fr/es/it, ' +
       'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere ' +
-      '(in English and German, the singular slip left to a follow-up). The ru/fr/es/it translations ' +
-      'must put the noun first ("Sections: {covered} of {total}").',
+      '(in English and German, the singular slip left to a follow-up). The translations ' +
+      'other than English and German must put the noun first ("Sections: {covered} of {total}").',
     keys: [
       // #576/#538: these two render only when the total is at least 2 (ocrNotes.ts).
       'docs.previewModal.ocrInfoPartial',
@@ -1583,9 +2037,9 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstSentence: {
     reason:
       'The count governs a noun, and often a verb, inside a sentence, which agrees with it in every ' +
-      'language. The ru/fr/es/it translations must state the count label-first ("Transactions read: ' +
-      '**{count}**"); where the English and German sentence can meet 1 ("I read 1 transactions"), ' +
-      'that is the singular slip left to a follow-up.',
+      'language. The translations other than English and German must state the count label-first ' +
+      '("Transactions read: **{count}**"); where the English and German sentence can meet 1 ' +
+      '("I read 1 transactions"), that is the singular slip left to a follow-up.',
     keys: [
       'skills.bankAnalysis.count',
       'skills.bankAnalysis.countPartial',
@@ -1606,8 +2060,9 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   noParticiple: {
     reason:
       'A bare figure before a participle or a verb ("{n} failed", "{gb} GB read", "{free} is free"). ' +
-      'English and German do not inflect these ("1 failed", "1 fehlgeschlagen"); ru/fr/es/it do, so the ' +
-      'translations must use a label or an impersonal form ("failed: {n}", "lecture de {gb} GB").',
+      'English and German do not inflect these ("1 failed", "1 fehlgeschlagen"); other ' +
+      'languages can, so the other translations must use a label or an impersonal form ' +
+      '("failed: {n}", "lecture de {gb} GB").',
     keys: [
       'docs.reindexAllCancelled',
       'docs.reindexAllPartial',

@@ -2711,35 +2711,74 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 
-- **The interface comes in six languages, but the app understands questions best in English and
-  German.** English, German, Spanish, French, Italian and Russian are offered under Settings →
-  General → Language. You can ask questions in any of them, but the rules that decide how a
-  question is answered — whether it asks for a complete list, which notes lead the answer, when a
-  skill is suggested or started, and how a knowledge pack is searched — recognise English and
-  German wording only. Three cases you can run into: the document chat's example question "Find
-  every mention of …", asked over several documents or one too large to read whole, gets the
-  best-matching passages in every language, but only in English and German does the answer say
-  when it could not read every section; in a chat about one document, a
-  thank-you such as "Gracias", "Grazie" or "Спасибо!" is taken for a question about it and can
-  start a read of the whole document; and the knowledge-pack search counts the Spanish word "es"
-  and the French "des" as German words, so it can take a Spanish or French question for German.
+- **The interface comes in ten languages, but the app understands questions best in English and
+  German.** English, German, Spanish, French, Italian, Dutch, Polish, Turkish, Russian and
+  Ukrainian are offered under Settings → General → Language. You can ask questions in any of
+  them, but the rules that decide how a question is answered — whether it asks for a complete
+  list, which notes lead the answer, when a skill is suggested or started, and how a knowledge
+  pack is searched — recognise English and German wording only. Cases you can run into: the
+  document chat's example question "Find every mention of …", asked over several documents or one
+  too large to read whole, gets the best-matching passages in every language, but only in English
+  and German does the answer say when it could not read every section; in a chat about one
+  document, a thank-you such as "Gracias", "Grazie", "Bedankt!", "Dziękuję!", "Teşekkürler!",
+  "Спасибо!" or "Дякую!" is taken for a question about it and can start a read of the whole
+  document (the check for small talk knows English and German words only, and drops letters such
+  as ę, ş and every Cyrillic letter); and the knowledge-pack search counts the Spanish word "es",
+  the French "des" and the Dutch "wie", "was", "die" and "man" as German words, so it can take a
+  Spanish, French or Dutch question for German ("Wie is de man op de foto?" counts as German).
 - **Only the English and German interface has been reviewed by native speakers.** The Spanish,
-  French, Italian and Russian text was machine-translated and checked by a second AI model; no
-  native speaker has reviewed it yet. The app shows no notice about this.
+  French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian text was machine-translated and
+  checked by a second AI model; no native speaker has reviewed it yet. The app shows no notice
+  about this.
 - **Text recognition (OCR) reads German and English; speech was not tested in the new
-  languages.** The OCR files the app installs cover German and English only, so a scan or photo
-  in another language may be read with errors. Dictation and audio import detect the spoken
-  language on their own; how well that works in Spanish, French, Italian or Russian has not been
-  measured.
-- **Evidence packs are written in English or German.** From a Spanish, French, Italian or Russian
-  interface the pack is written in English, and the export panel says so. The answer inside the
-  pack is quoted as it was written, and so are the notes the app puts in front of a document
-  answer (for example "I answered from … only" or the heads-up that a total is the model's own
-  arithmetic), which are written in the interface language of the moment: an English pack
-  exported from a French interface can quote French lines.
+  languages.** The OCR files the app installs cover German and English only, none of the other
+  interface languages (#810), so a scan or photo in another language may be read with errors.
+  Dictation and audio import detect the spoken language on their own; how well that works in
+  Spanish, French, Italian, Dutch, Polish, Turkish, Russian or Ukrainian has not been measured.
+- **Evidence packs are written in English or German.** From any other interface language
+  (Spanish, French, Italian, Dutch, Polish, Turkish, Russian or Ukrainian) the pack is written in
+  English, and the export panel says so. The answer inside the pack is quoted as it was written,
+  and so are the notes the app puts in front of a document answer (for example "I answered from
+  … only" or the heads-up that a total is the model's own arithmetic), which are written in the
+  interface language of the moment: an English pack exported from a French interface can quote
+  French lines.
 - **Spanish figures use the Spain number format** for every Spanish-speaking user: a full stop
   between thousands and a decimal comma (98.304, 4,3 GB), which readers used to the Mexican or US
   format can misread.
+- **Dutch dates use the Netherlands pattern** for every Dutch-speaking user, in Belgium too:
+  13-11-2026, not the Belgian 13/11/2026.
+- **A few figures ignore the language's own way of writing them.** The context meter in the chat
+  and an audio file's transcribing badge on the Documents screen put the percent sign after the
+  figure ("15%"), where Turkish puts it first ("%15"). Sizes are written with an ordinary space
+  before GB or MB, so a line can break between a figure and its unit (seen in Ukrainian on a model
+  card: "23" at the end of one line, "GB" at the start of the next).
+- **With a Turkish interface, words shown in capitals follow Turkish rules, your own text
+  included.** Some labels are shown in capital letters (section titles, the date groups and
+  project names in the conversation list, the section headings in a document's preview). In a
+  Turkish interface they are capitalised the Turkish way, where a dotted "i" becomes "İ": that is
+  right for Turkish words, but a project you named in English, or a document's own English
+  heading, changes too ("Overview" reads "OVERVİEW"). The app can't know which language your own
+  text is in. The lock screen's "HilbertRaum Lite" keeps its spelling.
+- **Search has trouble with the Turkish dotted and dotless I,** whatever the interface language.
+  In conversation search and the keyword part of document search, a word typed with the dotless
+  "ı" finds only text written with "ı" ("ısı" doesn't find "ISI"). A word typed with the capital
+  "İ" is split at that letter, and search looks for the pieces: "İstanbul" becomes "i" and
+  "stanbul", so it finds neither "İSTANBUL" nor "İstanbul", and it can list unrelated text that
+  holds a lone "I" or "i" ("I think this is fine"). Typed in small letters with a plain "i"
+  ("isi", "istanbul"), "ISI", "İSTANBUL" and "İstanbul" are all found. Document search also
+  compares meaning, which this doesn't affect, so a passage can still be found that way. The
+  filters on screen (the Documents name filter, the AI Model search and the review's evidence
+  filter) do match I, ı, İ and i.
+- **A letter typed with a separate accent mark may not match.** Most keyboards type an accented
+  letter such as "é", "ó", "ş" or "й" as one character, but text from some Mac and Linux sources
+  can hold the base letter followed by a separate accent mark, and the two look the same. The
+  filters on screen compare such text as it is, so the one form doesn't find the other; the
+  dotted capital "İ" is the exception, which they match in either form. Search cuts a word typed
+  that way at each separate accent mark and looks for the pieces, so it can find nothing or
+  unrelated text: "résumé" typed with separate marks looks for "re" and "sume" and can list a
+  message that starts "Re:". A word whose only accent is on its last letter, such as "café", is
+  still found when that letter is a Latin one, because search ignores the accents of Latin
+  letters; a Cyrillic word such as "мій" typed that way is not.
 - **Two app versions on one computer can show the lock screen in another language.** The
   language you choose is stored in the workspace, but the lock screen's language is remembered by
   the computer. When an older HilbertRaum version opens a workspace set to a language it doesn't
@@ -2772,8 +2811,7 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   English.** The D-L4 display map covers the finite persist-canonical set (exact match, plus five
   interpolated messages matched by their template), so anything else in
   `documents.error_message`, such as a raw parser-library error (a pdfjs exception message),
-  shows English in a German, Spanish, French, Italian or Russian UI. Rare failure-path remnants,
-  accepted.
+  shows English in every other interface language. Rare failure-path remnants, accepted.
 - **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now**, whatever
   the interface language. Translating them is content work, tracked separately from UI i18n.
 - **A conversation transcript can legitimately mix languages.** Old answers, model output,

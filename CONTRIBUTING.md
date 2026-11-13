@@ -406,24 +406,32 @@ is to keep `node_modules` on a native filesystem (ext4/Btrfs/APFS); the portable
 - Match the surrounding code's style and comment density.
 
 ## Translating the interface
-The interface is available in six languages: English, German, Spanish, French, Italian and
-Russian. The design is recorded in [`docs/architecture.md`](docs/architecture.md)
-"Internationalization — design record" (cited below as "the i18n record").
+The interface is available in ten languages: English, German, Spanish, French, Italian, Dutch,
+Polish, Turkish, Russian and Ukrainian. The design is recorded in
+[`docs/architecture.md`](docs/architecture.md) "Internationalization — design record" (cited
+below as "the i18n record").
 
 ### UI text
 Interface copy lives in the catalogs under `apps/desktop/src/shared/i18n/`: `en.ts` is the source
 of truth, `languages.ts` is the registry of languages, and each language has its own catalog
-(`de.ts`, `es.ts`, `fr.ts`, `it.ts`, `ru.ts`). A pull request that adds or changes UI text writes it
-in **all six** catalogs. `npm run typecheck` fails on a missing or misspelt key, and
-`tests/unit/i18n.test.ts` fails on an empty value or a placeholder that differs from English.
+(`de.ts`, `es.ts`, `fr.ts`, `it.ts`, `nl.ts`, `pl.ts`, `tr.ts`, `ru.ts`, `uk.ts`). A pull request
+that adds or changes UI text writes it in **all ten** catalogs. `npm run typecheck` fails on a
+missing or misspelt key, and `tests/unit/i18n.test.ts` fails on an empty value or a placeholder
+that differs from English.
 Typecheck checks presence, not freshness: when you change an English value, update its
 translations by hand, because nothing marks them as stale.
 
 - **Where each language's rules live.** [`docs/design-guidelines.md`](docs/design-guidelines.md)
-  §7 has one "microcopy" section per language ("German microcopy", then Russian, French, Spanish
-  and Italian): the glossary, the form of address (German *du*, Russian *вы*, French *vous*,
-  Spanish *tú*, Italian *tu*) and the typography. Each glossary is also the comment block at the
-  top of that language's catalog file; change both together.
+  §7 has one "microcopy" section per language ("German microcopy", then Russian, French, Spanish,
+  Italian, Dutch, Polish, Turkish and Ukrainian): the glossary, the form of address (German *du*,
+  Russian *вы*, French *vous*, Spanish *tú*, Italian *tu*, Dutch *je*, Polish *ty*, Turkish *siz*,
+  Ukrainian *ви*) and the typography. Each glossary is also the comment block at the top of that
+  language's catalog file, and each punctuation, script and placeholder rule of the style guide
+  is also an entry in that language's `TYPOGRAPHY_RULES` list in `tests/unit/i18n.test.ts`, as
+  are, for some languages, the wrong forms of address a pattern can catch (French *tu*, Russian
+  *ты*, Dutch *u*, Polish *Pan*, Turkish *sen*); change them together. The glossary, the spelling
+  and the rest of the form of address (such as a Polish verb that shows a gender) are not tested:
+  the reviewer checks them.
 - **Text stored in the database stays English.** A message the app writes to the database or to
   the settings (a document's error, a fixed answer, a default title) is written with
   `t('en', …)` and translated when it is shown, through the display map
@@ -446,7 +454,8 @@ translations by hand, because nothing marks them as stale.
   label has an invisible break or a word longer than the rail allows), the plural-layout row in
   `tests/integration/repo-hygiene.test.ts` (all forms of a plural key on consecutive lines, in
   CLDR order), and `tests/unit/i18n-unused-keys.test.ts` (unused keys, and no interface language
-  named in `src/` outside the registry and a reviewed list of sites).
+  named in `src/` outside the registry and a reviewed list of sites, such as the two
+  `zim/tables.ts` checks for the HTML table-row tag `<tr>`, which spells the Turkish code).
 
 ### How a new translation is checked
 Translations are drafted from the language's style guide and glossary (its "microcopy" section),
@@ -463,21 +472,27 @@ S1 and S2 findings are fixed before the pull request merges; S3 findings at the 
 judgement. A catalog nobody has reviewed natively keeps `nativeReviewed: false` in the registry.
 
 ### Adding a language
-1. Add its entry to `UI_LANGUAGES` in `apps/desktop/src/shared/i18n/languages.ts` (the order is
-   the order in the language picker): `code` (the lower-case primary language subtag),
-   `nativeName` (its own name), `nativeReviewed: false` until a native speaker has reviewed it,
-   `evidencePack: false` (evidence packs stay English or German), `plural: cldrPlural('<code>')`
-   and `pluralCategories` (the forms `Intl.PluralRules` gives that language, in CLDR order).
+1. Add its entry to `UI_LANGUAGES` in `apps/desktop/src/shared/i18n/languages.ts`. The order is
+   the order in the language picker: English first (it is the fallback), then Deutsch, then the
+   other languages whose own names are written in Latin letters, in alphabetical order of those
+   names (Español, Français, Italiano, Nederlands, Polski, Türkçe), then the Cyrillic ones, also
+   alphabetical (Русский, Українська). The entry holds `code` (the lower-case primary language
+   subtag, such as `uk`, never a country code such as `ua`), `nativeName` (its own name),
+   `nativeReviewed: false` until a native speaker has reviewed it, `evidencePack: false`
+   (evidence packs stay English or German), `plural: cldrPlural('<code>')` and
+   `pluralCategories` (the forms `Intl.PluralRules` gives that language, in CLDR order).
 2. Write `apps/desktop/src/shared/i18n/<code>.ts` as `export const <code>: UiCatalog<'<code>'>`,
    with its glossary as the header comment. Typecheck then asks for every key and every extra
    plural form, and refuses `packExport.*` keys.
 3. Import it in `index.ts` and add it to `CATALOGS`. Don't re-export it from `index.ts` (only `en`
    and `de` are exported there): a named export such as `it` would shadow vitest's global `it`.
    Tests read catalogs through `catalogOf(code)` (`tests/helpers/i18n-catalogs.ts`).
-4. Add `TYPOGRAPHY_RULES.<code>` in `tests/unit/i18n.test.ts` (typecheck asks for it).
+4. Add `TYPOGRAPHY_RULES.<code>` in `tests/unit/i18n.test.ts` (typecheck asks for it): the
+   punctuation, script, address-form and placeholder rules of its style guide.
 5. Add a `localized.<code>` title and description to each bundled skill's `app-skills/*/SKILL.md`
-   (`tests/integration/skills-skillmd-parity.test.ts` checks every one) and a column for it to
-   the titles table in [`docs/skills-overview.md`](docs/skills-overview.md).
+   (`tests/integration/skills-skillmd-parity.test.ts` checks every one), and its titles to the
+   titles tables in [`docs/skills-overview.md`](docs/skills-overview.md): a column in the last
+   table, or a new table once that one has as many languages as the first.
 6. Add a "<Language> microcopy" section to `docs/design-guidelines.md` §7.
 7. Check the layout in the running app: a word that doesn't fit a fixed-width surface such as the
    navigation rail takes a shorter synonym from the glossary, never an abbreviation.
@@ -485,7 +500,9 @@ judgement. A catalog nobody has reviewed natively keeps `nativeReviewed: false` 
    [`docs/user-guide.md`](docs/user-guide.md) (Settings → General → Language), the
    "Internationalization" section of [`docs/known-limitations.md`](docs/known-limitations.md)
    (native-review status), the `uiLanguage` codes in
-   [`docs/data-contracts.md`](docs/data-contracts.md), and a `CHANGELOG.md` entry.
+   [`docs/data-contracts.md`](docs/data-contracts.md), the i18n record in
+   [`docs/architecture.md`](docs/architecture.md) (its opening paragraph, D-L7 and D-L10), the
+   language list at the top of this section, and a `CHANGELOG.md` entry.
 
 ## Scripts mirror canonical TypeScript modules
 The self-contained shell scripts (`scripts/*.{ps1,sh}`) re-implement logic whose canonical,

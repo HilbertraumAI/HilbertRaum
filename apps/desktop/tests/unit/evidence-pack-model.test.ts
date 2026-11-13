@@ -74,9 +74,9 @@ describe('pack language for a UI language (UI-languages owner call D-5 (b), i18n
     }
   })
 
-  // Fixture entries: the registry has no language without evidence packs yet (ru/fr/es/it
-  // will join with `evidencePack: false`). The 'de' row proves the flag decides, not
-  // whether the code happens to be a pack language.
+  // Fixture entries, so each row states the flag it tests: every registered language other than
+  // English and German has `evidencePack: false`, the 'fr' row's input. The 'de' row proves the
+  // flag decides, not whether the code happens to be a pack language.
   it.each<Pick<UiLanguageInfo, 'code' | 'evidencePack'>>([
     { code: 'fr', evidencePack: false },
     { code: 'de', evidencePack: false }

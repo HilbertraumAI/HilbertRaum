@@ -3,6 +3,7 @@ import {
   availableFamilies,
   groupModelVariants,
   matchesLibraryView,
+  matchesModelSearch,
   modelVariantName,
   variantGroupFace,
   variantGroupOrder,
@@ -299,6 +300,27 @@ describe('availableFamilies (#313)', () => {
     expect(
       availableFamilies([zeta, zeta2, alpha], { activeChat: null, view: 'browse', task: 'all' })
     ).toEqual(['alpha', 'zeta'])
+  })
+})
+
+// Second UI-languages wave owner call G-5 (2026-11-13): the search folds with the shared `foldCase`
+// (`text-fold.test.ts` owns the letters). Plain toLowerCase() missed both rows: "İ" lowers to
+// "i" + U+0307, and "ı" stays dotless.
+describe('matchesModelSearch — a Turkish keyboard finds the model (shared foldCase)', () => {
+  const phi = model('Phi-4 mini instruct', { family: 'phi' })
+  it.each([
+    ['caps lock', `PH${String.fromCharCode(0x0130)}`],
+    ['the dotless-i key', `ph${String.fromCharCode(0x0131)}`]
+  ])('%s: a typed "%s" finds "Phi-4 mini instruct"', (_how, query) => {
+    expect(matchesModelSearch(phi, query)).toBe(true)
+  })
+
+  // The other side: a name written with Turkish capitals, which plain toLowerCase() turns into
+  // "i" + U+0307 per "İ". The id is the same name (the `model` helper), so only the fold can match.
+  it('an ASCII "mini" finds a model whose name has the capital dotted I (the haystack side)', () => {
+    const dotted = String.fromCharCode(0x0130)
+    const caps = model(`PH${dotted}-4 M${dotted}N${dotted}`, { family: 'phi' })
+    expect(matchesModelSearch(caps, 'mini')).toBe(true)
   })
 })
 
