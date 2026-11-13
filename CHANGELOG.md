@@ -52,8 +52,8 @@ from its first public `1.0.0` release onward.
   refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
   unencrypted one) are still shown in English.
 - **Turkish dotted and dotless I now match in the text filters.** In the Documents name filter,
-  the AI Model search and the review's evidence filter, typing «ısı» didn't find a name written
-  «ISI», and «istanbul» didn't find «İSTANBUL». The Documents filter also compared names by the
+  the AI Model search and the review's evidence filter, typing "ısı" didn't find a name written
+  "ISI", and "istanbul" didn't find "İSTANBUL". The Documents filter also compared names by the
   system's language rules, which under Turkish rules could make a typed "inv" miss "Invoice",
   whatever interface language you chose. All three filters now treat I, ı, İ and i as the same
   letter, in every interface language and on every system.
