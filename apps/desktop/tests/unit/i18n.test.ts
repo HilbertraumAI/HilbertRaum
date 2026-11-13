@@ -576,6 +576,71 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'keeps the unit symbols the formatters print (GB, MB, KB, s, ms)',
       'a Cyrillic unit symbol next to the Latin ones the app prints'
     )
+  ],
+  // Dutch: the typography of design-guidelines §7 "Dutch microcopy".
+  nl: [
+    balancedQuotes(
+      '“',
+      '”',
+      'closes every opening “ with ”',
+      'Dutch values with an unbalanced “…” pair — close each “ (U+201C) with ” (U+201D), never with an ASCII quote'
+    ),
+    opensBeforeCloses(
+      '“',
+      '”',
+      'never uses ” as an OPENING quote (the pair is “…”)',
+      '” used before its “ — Dutch opens with “ (U+201C) and closes with ” (U+201D)'
+    ),
+    forbids(
+      /["„‟«»]/u,
+      'uses no ASCII, low or angle quotation mark',
+      'Dutch values with " „ ‟ « or » — quote with “…” (also around technical field names)'
+    ),
+    forbids(
+      /['‘‚`´]/u,
+      'writes the apostrophe as ’ and uses no single quotation marks',
+      "Dutch values with ' ‘ ‚ ` or ´ — the apostrophe is ’ (U+2019: pdf’s, ’s avonds); quotes are “…” and never nested, so reword"
+    ),
+    forbids(
+      /\}(?:[\p{L}\p{N}]|[’-]\p{L})/u,
+      'glues no ending, genitive or compound part to a placeholder',
+      'Dutch values with a letter, ’s or a hyphenated word glued to a closing } — put a noun in front (de documenten van {name}, context van {context} tokens)'
+    ),
+    forbids(
+      /\.\.\.|[^\S\n]…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Dutch values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /—| - /u,
+      'uses no em dash and no bare hyphen as a dash',
+      'Dutch values with — or " - " — use a colon, a new sentence, or the en dash " – " (U+2013)'
+    ),
+    forbids(
+      /[^\S\n][;:!?](?=\s|$)/u,
+      'puts no space before ; : ! ?',
+      'Dutch values with a space before ; : ! or ? — remove it (that is the French convention)'
+    ),
+    forbids(
+      /\s%/u,
+      'puts no space before %',
+      'Dutch values with a space before % — write {pct}% as Intl prints it'
+    ),
+    forbids(
+      /[\u00A0\u202F\u2009]/u,
+      'uses no no-break or thin space',
+      'Dutch values with U+00A0, U+202F or U+2009 — Dutch typography needs none; use a plain space'
+    ),
+    forbids(
+      /(?<![\p{L}\p{N}{’-])(?:u|uw|uzelf|jullie|gij)(?![\p{L}\p{N}}’-])/iu,
+      'addresses the reader as je',
+      'Dutch values with u, uw, uzelf, jullie or gij — the form of address is je (possessive je; jij/jou/jouw only for contrast)'
+    ),
+    forbids(
+      /!/u,
+      'uses no exclamation mark',
+      'Dutch values with ! — the tone is calm; end the sentence with a full stop'
+    )
   ]
 }
 

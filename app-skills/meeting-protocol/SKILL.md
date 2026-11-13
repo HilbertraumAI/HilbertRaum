@@ -21,6 +21,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Протокол встречи
     description: Подходит, когда из расшифровки встречи, черновых заметок или повестки нужно составить аккуратный структурированный протокол — решения, задачи и открытые вопросы.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Notulen
+    description: "Gebruik deze skill als je een vergadertranscript, ruwe aantekeningen of een agenda wilt omzetten in overzichtelijke, gestructureerde notulen: besluiten, actiepunten en openstaande vragen."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model answers over the WHOLE transcript (not top-k passages).
                                #   With this skill active over a single fully-chunked doc the whole-doc engine

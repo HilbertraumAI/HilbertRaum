@@ -21,6 +21,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Проверка перед отправкой
     description: Подходит, когда документ нужно проверить перед отправкой — видимые конфиденциальные сведения и практические риски при отправке. Только рекомендации, а не обезличивание.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Controleren voordat je deelt
+    description: "Gebruik deze skill als je een document wilt controleren voordat je het deelt: zichtbare gevoelige informatie en praktische risico’s van het delen. Alleen adviserend; geen anonimisering."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the review reads the WHOLE document (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

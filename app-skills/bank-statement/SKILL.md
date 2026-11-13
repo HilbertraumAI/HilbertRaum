@@ -21,6 +21,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Анализ банковской выписки
     description: Подходит, когда нужно извлечь, распределить по категориям, сверить или кратко изложить транзакции из банковской выписки.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Bankafschriftanalyse
+    description: Gebruik deze skill als je de transacties uit een bankafschrift wilt extraheren, in categorieën indelen, afstemmen of samenvatten.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

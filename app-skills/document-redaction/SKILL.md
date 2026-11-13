@@ -21,6 +21,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Скрытие персональных данных
     description: Подходит, когда в документе нужно скрыть, обезличить или удалить персональные данные.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Persoonsgegevens onleesbaar maken
+    description: Gebruik deze skill als je persoonsgegevens in een document onleesbaar wilt maken, anonimiseren of verwijderen.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

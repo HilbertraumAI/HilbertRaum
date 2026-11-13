@@ -21,6 +21,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Редактирование документа
     description: Подходит, когда в документе нужно точечно найти и заменить текст, не переписывая документ целиком.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Document bewerken
+    description: Gebruik deze skill als je in een document gerichte wijzigingen met zoeken en vervangen wilt aanbrengen, zonder het te herschrijven.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40

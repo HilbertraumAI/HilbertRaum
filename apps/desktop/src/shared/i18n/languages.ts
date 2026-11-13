@@ -103,6 +103,14 @@ export const UI_LANGUAGES = [
     pluralCategories: ['one', 'many', 'other']
   },
   {
+    code: 'nl',
+    nativeName: 'Nederlands',
+    nativeReviewed: false,
+    evidencePack: false,
+    plural: cldrPlural('nl'),
+    pluralCategories: ['one', 'other']
+  },
+  {
     code: 'ru',
     nativeName: 'Русский',
     nativeReviewed: false,

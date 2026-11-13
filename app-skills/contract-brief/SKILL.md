@@ -21,6 +21,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   ru:                          #   Shown when the app runs in Russian.
     title: Обзор договора
     description: Подходит, когда нужен понятный обзор договора или соглашения — стороны, даты, обязательства, ключевые условия и вопросы, которые стоит задать. Не является юридической консультацией.
+  nl:                          #   Shown when the app runs in Dutch.
+    title: Contractsamenvatting
+    description: "Gebruik deze skill als je van een contract of overeenkomst een samenvatting in begrijpelijke taal wilt: partijen, datums, verplichtingen, belangrijke bepalingen en vragen die je kunt stellen. Geen juridisch advies."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the
