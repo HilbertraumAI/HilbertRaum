@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Streszczenie umowy
     description: "Służy do przygotowania streszczenia umowy lub porozumienia prostym językiem: strony umowy, daty, obowiązki, kluczowe postanowienia i pytania, które warto zadać. To nie jest porada prawna."
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Стислий виклад договору
+    description: "Використовуйте, щоб отримати стислий виклад договору або угоди простою мовою: сторони, дати, зобовʼязання, ключові умови та запитання, які варто поставити. Це не юридична консультація."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

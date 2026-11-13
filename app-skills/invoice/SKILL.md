@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Analiza faktury
     description: Służy do wyodrębniania, sprawdzania lub eksportowania pozycji i sum faktury.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Аналіз рахунку на оплату
+    description: Використовуйте, щоб витягти, перевірити або експортувати позиції та загальні суми рахунку на оплату.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

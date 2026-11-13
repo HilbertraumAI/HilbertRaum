@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Terminy i obowiązki
     description: "Służy do wyszukiwania w dokumencie terminów, okresów wypowiedzenia, dat przedłużenia i płatności oraz obowiązków: co trzeba zrobić, do kiedy i co się stanie po przekroczeniu terminu."
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Строки та зобовʼязання
+    description: "Використовуйте, щоб знайти в документі кінцеві строки, строки попередження, дати продовження й оплати, а також зобовʼязання: що зробити, до якої дати й що станеться, якщо строк пропущено."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the

@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Sprawdzenie przed udostępnieniem
     description: "Służy do sprawdzenia dokumentu przed udostępnieniem: widoczne informacje wrażliwe i praktyczne ryzyka związane z udostępnianiem. Ma wyłącznie charakter doradczy i nie jest anonimizacją."
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Перевірити перед поширенням
+    description: "Використовуйте, щоб перевірити документ перед поширенням: видима чутлива інформація та практичні ризики поширення. Має лише рекомендаційний характер і не знеособлює документ."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the review reads the WHOLE document (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

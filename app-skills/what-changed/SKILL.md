@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Co się zmieniło?
     description: Służy do porównania dwóch wersji dokumentu, umowy, regulaminu lub oferty i wskazania istotnych zmian, a nie tylko surowych różnic.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Що змінилося?
+    description: Використовуйте, щоб порівняти дві версії документа, договору, політики або пропозиції й побачити суттєві зміни, а не лише необроблений перелік відмінностей.
 kind: instruction
 analysis: compare              # A3/§8.2: the model compares BOTH whole versions (not top-k passages). With this
                                #   skill active over EXACTLY TWO fully-chunked docs the compare engine is the

@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Edycja dokumentu
     description: Służy do wprowadzania w dokumencie punktowych zmian metodą „znajdź i zamień” bez przepisywania go od nowa.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Редагування документа
+    description: Використовуйте, щоб внести в документ точкові зміни за допомогою пошуку та заміни, не переписуючи його.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40

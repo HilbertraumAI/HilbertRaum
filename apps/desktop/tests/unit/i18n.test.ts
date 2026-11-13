@@ -828,6 +828,103 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'puts no preposition right before a name placeholder',
       'Polish values with a preposition right before {name}, {model}, {title} … — the inserted name cannot take the case; put a noun in front (w dokumencie „{title}”, z modelem {model}) or go label-first'
     )
+  ],
+  // Ukrainian: the typography of design-guidelines §7 "Ukrainian microcopy".
+  uk: [
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every opening « with »',
+      'Ukrainian values with an unbalanced «…» pair — close each « with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » as an OPENING quote (the pair is «…», not »…«)',
+      '» used before its « — Ukrainian opens with « and closes with »'
+    ),
+    balancedQuotes(
+      '„',
+      '“',
+      'closes every inner „ with “',
+      'Ukrainian values with an unbalanced „…“ pair — the inner pair opens with „ (U+201E) and closes with “ (U+201C)'
+    ),
+    opensBeforeCloses(
+      '„',
+      '“',
+      'never uses “ as an OPENING quote (the inner pair is „…“, not “…”)',
+      '“ used before its „ — an English pair was left in; quote with «…»'
+    ),
+    forbids(
+      /["”‟‘‚‹›]/u,
+      'uses no ASCII, English or single quotation mark',
+      'Ukrainian values with a foreign quotation mark — quote with «…» (also around technical field names); „…“ only inside «…»'
+    ),
+    forbids(
+      /^(?:[^«»]|«[^«»]*»)*„/u,
+      'uses „…“ only inside «…»',
+      'Ukrainian values with „ outside a «…» pair — the first-level quotes are «…»'
+    ),
+    forbids(
+      /«\s|\s»/u,
+      'puts no space inside «…»',
+      'Ukrainian values with a space inside the guillemets — «текст», not « текст »'
+    ),
+    forbids(
+      /['\u2019`\u00B4]/u,
+      'writes the apostrophe as U+02BC, never as an ASCII quote, U+2019, a backtick or an accent',
+      'Ukrainian values with an ASCII quote, U+2019, a backtick or an acute accent — the apostrophe is the letter U+02BC, as ICU prints it in the Ukrainian weekday names'
+    ),
+    forbids(
+      /(?<![\p{L}])\u02BC|\u02BC(?![яюєї])/iu,
+      'puts the apostrophe only inside a word, before я ю є ї',
+      'Ukrainian values with U+02BC outside a word or not before я/ю/є/ї — it is a letter, never a quotation mark'
+    ),
+    forbids(
+      /[\u044B\u044D\u044A\u0451]/iu,
+      'uses no Russian letter (ы э ъ ё)',
+      'Ukrainian values with ы, э, ъ or ё — Ukrainian writes и, е, the apostrophe (U+02BC) and йо/ьо; the word was probably not translated into Ukrainian'
+    ),
+    forbids(
+      /\p{Script=Latin}\p{Script=Cyrillic}|\p{Script=Cyrillic}\p{Script=Latin}/u,
+      'never lets a Latin and a Cyrillic letter touch',
+      'Ukrainian values where a Latin letter touches a Cyrillic one — a look-alike (Latin i, o, a, e, c, p, x, y) inside a Ukrainian word, or an ending glued to a Latin term; join with a hyphen (PDF-файл)'
+    ),
+    forbids(
+      /\S—|—\S/u,
+      'puts a space on each side of the em dash',
+      'Ukrainian values with an em dash that touches a word — write space, U+2014, space'
+    ),
+    forbids(
+      /\s–|–\s| - /u,
+      'uses no spaced en dash and no bare hyphen as a dash',
+      'Ukrainian values with a spaced en dash or " - " — the sentence dash is the spaced em dash; the en dash only joins numbers (2–4)'
+    ),
+    forbids(
+      /\.\.\.|[^\S\n]…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Ukrainian values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /[^\S\n][,.;:!?](?=\s|$)/u,
+      'puts no space before , . ; : ! ?',
+      'Ukrainian values with a space before a punctuation mark — attach it to the word before it'
+    ),
+    forbids(
+      /!/u,
+      'uses no exclamation mark',
+      'Ukrainian values with ! — the copy is calm (design-guidelines §7); end the sentence with a full stop'
+    ),
+    forbids(
+      /(?<!\d)\u00A0|\u00A0(?!\d)|\u202F|\d \d{3}(?!\d)|\d,\d{3}(?!\d)/u,
+      'groups a typed figure with U+00A0 and uses no other no-break space',
+      'Ukrainian values with a no-break space outside a figure, a narrow no-break space, or a typed figure grouped with a plain space or a comma — write the group separator as \\u00A0, as Intl prints it'
+    ),
+    forbids(
+      /\}[\p{L}\u02BC]|\}-\p{Script=Cyrillic}/u,
+      'glues no ending to a placeholder',
+      'Ukrainian values with a letter or a hyphenated ending right after a {placeholder} — the inserted text cannot be declined; put a generic noun in front (модель {model}) or use a label and a colon'
+    )
   ]
 }
 

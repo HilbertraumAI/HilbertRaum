@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Ukrywanie danych osobowych
     description: Służy do ukrywania, anonimizowania lub usuwania danych osobowych z dokumentu.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Приховування персональних даних
+    description: Використовуйте, щоб приховати, знеособити або прибрати з документа персональні дані.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

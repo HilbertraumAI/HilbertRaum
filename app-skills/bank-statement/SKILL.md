@@ -30,6 +30,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   pl:                          #   Shown when the app runs in Polish.
     title: Analiza wyciągu bankowego
     description: Służy do wyodrębniania, kategoryzowania, uzgadniania lub podsumowywania transakcji z wyciągu bankowego.
+  uk:                          #   Shown when the app runs in Ukrainian.
+    title: Аналіз банківської виписки
+    description: Використовуйте, щоб витягти, розподілити за категоріями, звірити або підсумувати транзакції з банківської виписки.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29
