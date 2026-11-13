@@ -38,6 +38,7 @@ import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { initialTranslateChoice, setLastTranslateChoice } from '../lib/translateSession'
 import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
 import { useEventCallback } from '../lib/useEventCallback'
+import { foldCase } from '../lib/textFold'
 import { useOcrInstall } from '../lib/useOcrInstall'
 import { useT, type I18n } from '../i18n'
 import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
@@ -880,9 +881,11 @@ export function DocumentsScreen({
       section.kind === 'project'
         ? docs.filter((d) => (d.collections ?? []).some((c) => c.id === section.id))
         : docs.filter((d) => inSection(d, section))
-    // §11.16: the name filter narrows the section (a case-insensitive substring of the title).
-    const query = filter.trim().toLocaleLowerCase()
-    const narrowed = query ? sectioned.filter((d) => d.title.toLocaleLowerCase().includes(query)) : sectioned
+    // §11.16: the name filter narrows the section (a case-insensitive substring of the title),
+    // folded with the shared `foldCase`, never the OS locale (a Turkish OS lowered "Invoice" to
+    // "ınvoice", so "inv" found nothing).
+    const query = foldCase(filter.trim())
+    const narrowed = query ? sectioned.filter((d) => foldCase(d.title).includes(query)) : sectioned
     return section.kind === 'recent'
       ? [...narrowed].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
       : narrowed

@@ -7,6 +7,7 @@ import type {
   EvidenceSourceSnapshot
 } from '@shared/types'
 import { formatCitationLabel } from '../lib/displayMap'
+import { foldCase } from '../lib/textFold'
 import { PROVENANCE_CARD_CAP } from '../chat/SourcesDisclosure'
 import type { I18n } from '../i18n'
 
@@ -39,20 +40,20 @@ const CAPTION_KEY = {
 const RELATIONS = ['supports', 'qualifies', 'contradicts', 'context'] as const
 type Relation = (typeof RELATIONS)[number]
 
-/** True when `source` matches the filter query (already lowercased). Matches the VISIBLE
- *  card facts: title, snippet, section label, the marker as DISPLAYED (review FIX-2 —
- *  `formatCitationLabel`, so a German reviewer typing the "Q3" the card shows matches;
- *  the raw machine "S3" keeps matching too), and the page number. */
+/** True when `source` matches the filter query (already folded with the shared `foldCase`,
+ *  like every card fact here). Matches the VISIBLE card facts: title, snippet, section label,
+ *  the marker as DISPLAYED (review FIX-2 — `formatCitationLabel`, so a German reviewer typing
+ *  the "Q3" the card shows matches; the raw machine "S3" keeps matching too), and the page number. */
 function matchesSourceFilter(source: EvidenceSourceSnapshot, q: string, t: I18n['t']): boolean {
   return (
-    source.documentTitle.toLowerCase().includes(q) ||
-    (source.snippet ?? '').toLowerCase().includes(q) ||
-    (source.sectionLabel ?? '').toLowerCase().includes(q) ||
+    foldCase(source.documentTitle).includes(q) ||
+    foldCase(source.snippet ?? '').includes(q) ||
+    foldCase(source.sectionLabel ?? '').includes(q) ||
     // ZIM wave (#294 review M11): the knowledge-pack title is a searchable card fact too.
-    (source.archiveTitle ?? '').toLowerCase().includes(q) ||
-    (source.machineLabel ?? '').toLowerCase().includes(q) ||
+    foldCase(source.archiveTitle ?? '').includes(q) ||
+    foldCase(source.machineLabel ?? '').includes(q) ||
     (source.machineLabel != null &&
-      formatCitationLabel(t, source.machineLabel).toLowerCase().includes(q)) ||
+      foldCase(formatCitationLabel(t, source.machineLabel)).includes(q)) ||
     (source.pageNumber != null && String(source.pageNumber).includes(q))
   )
 }
@@ -110,7 +111,7 @@ export function EvidencePane({
   // (below it every card is already on screen). Filtering narrows BEFORE the cap.
   const [filter, setFilter] = useState('')
   const filterId = useId()
-  const query = filter.trim().toLowerCase()
+  const query = foldCase(filter.trim())
   const filtered =
     query === '' ? sources : sources.filter((s) => matchesSourceFilter(s, query, t))
   const shown = filtered.length > revealed ? filtered.slice(0, revealed) : filtered

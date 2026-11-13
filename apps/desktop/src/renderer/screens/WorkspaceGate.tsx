@@ -209,11 +209,13 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   // Vertical brand lockup (guidelines §7): the sealed-room mark sits centered above the
   // edition word so "Lite" reads as part of the mark, not a loose label beside it. The mark
   // is theme-aware via CSS (gate-safe pre-unlock); the visible "HilbertRaum Lite" edition
-  // line announces the brand, so the mark itself stays decorative.
+  // line announces the brand, so the mark itself stays decorative. The edition line is English in
+  // every UI language: CSS uppercases it, and uppercasing follows the language, so under
+  // <html lang="tr"> it would read "HİLBERTRAUM LİTE" (second UI-languages wave owner call G-6, 2026-11-13).
   const brand = (
     <div className="gate-brand">
       <BrandMark size={36} />
-      <span className="gate-brand-edition">HilbertRaum Lite</span>
+      <span className="gate-brand-edition" lang="en">HilbertRaum Lite</span>
     </div>
   )
 

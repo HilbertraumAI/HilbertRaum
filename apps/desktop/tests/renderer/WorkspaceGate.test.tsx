@@ -429,6 +429,24 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
   })
 })
 
+// Second UI-languages wave owner call G-6 (2026-11-13): CSS uppercases the edition line
+// (`.gate-brand-edition`), and uppercasing follows the element's language, so under a Turkish UI
+// Chromium would show "HİLBERTRAUM LİTE". jsdom renders no text-transform; the row asserts the
+// language the brand text resolves to, which is what Chromium's uppercasing reads.
+describe('WorkspaceGate — the edition name stays English in a Turkish UI', () => {
+  afterEach(() => {
+    window.localStorage.clear()
+    document.documentElement.removeAttribute('lang')
+  })
+
+  it('"HilbertRaum Lite" resolves to lang="en" under <html lang="tr">', () => {
+    stubApi({})
+    renderInLanguage(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />, 'tr')
+    expect(document.documentElement.lang).toBe('tr')
+    expect(screen.getByText('HilbertRaum Lite').closest('[lang]')?.getAttribute('lang')).toBe('en')
+  })
+})
+
 // UI-languages owner call D-17 (a): before unlock the gate renders in the localStorage mirror's
 // language, while main emits its failure `message` in its own cached language (the OS locale
 // until settings are readable). Every row renders the gate in German and lets main answer in

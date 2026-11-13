@@ -1254,6 +1254,39 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     expect(screen.getByText('No documents match “zzz”.')).toBeInTheDocument()
   })
 
+  // Second UI-languages wave owner call G-5 (2026-11-13): the filter folds with the shared `foldCase`
+  // (`text-fold.test.ts` owns the letters). It used to lower with the runtime's default locale,
+  // which in the app is Chromium's (the OS language): on a Turkish system "Invoice" became
+  // "ınvoice" and a typed "inv" found nothing. The row runs on such a system: a toLocaleLowerCase()
+  // without a locale lowers in Turkish, through the real ICU data.
+  it('the name filter finds "Invoice" for a typed "inv" on a Turkish system', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'Invoice 2026-03.pdf' }),
+        doc({ id: 'd2', title: 'Lease 2026.pdf' })
+      ])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('Invoice 2026-03.pdf')
+    const lower = String.prototype.toLocaleLowerCase
+    const turkishSystem = vi
+      .spyOn(String.prototype, 'toLocaleLowerCase')
+      .mockImplementation(function (this: string, locales?: Intl.LocalesArgument) {
+        return lower.call(this, locales ?? 'tr')
+      })
+    try {
+      // The system is Turkish for real (a Node without the tr data would make this row vacuous).
+      expect('Invoice'.toLocaleLowerCase().includes('inv')).toBe(false)
+      await user.type(screen.getByRole('searchbox', { name: 'Filter documents by name' }), 'inv')
+      expect(screen.getByText('Invoice 2026-03.pdf')).toBeInTheDocument()
+      expect(screen.queryByText('Lease 2026.pdf')).not.toBeInTheDocument()
+    } finally {
+      turkishSystem.mockRestore()
+    }
+  })
+
   it('the Knowledge packs mode replaces the rail and list with the packs panel; the empty state links to it', async () => {
     const user = userEvent.setup()
     stubApi({

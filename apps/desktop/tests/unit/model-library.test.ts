@@ -3,6 +3,7 @@ import {
   availableFamilies,
   groupModelVariants,
   matchesLibraryView,
+  matchesModelSearch,
   modelVariantName,
   variantGroupFace,
   variantGroupOrder,
@@ -299,6 +300,19 @@ describe('availableFamilies (#313)', () => {
     expect(
       availableFamilies([zeta, zeta2, alpha], { activeChat: null, view: 'browse', task: 'all' })
     ).toEqual(['alpha', 'zeta'])
+  })
+})
+
+// Second UI-languages wave owner call G-5 (2026-11-13): the search folds with the shared `foldCase`
+// (`text-fold.test.ts` owns the letters). Plain toLowerCase() missed both rows: "İ" lowers to
+// "i" + U+0307, and "ı" stays dotless.
+describe('matchesModelSearch — a Turkish keyboard finds the model (shared foldCase)', () => {
+  const phi = model('Phi-4 mini instruct', { family: 'phi' })
+  it.each([
+    ['caps lock', `PH${String.fromCharCode(0x0130)}`],
+    ['the dotless-i key', `ph${String.fromCharCode(0x0131)}`]
+  ])('%s: a typed "%s" finds "Phi-4 mini instruct"', (_how, query) => {
+    expect(matchesModelSearch(phi, query)).toBe(true)
   })
 })
 

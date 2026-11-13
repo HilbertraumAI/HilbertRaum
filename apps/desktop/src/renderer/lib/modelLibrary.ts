@@ -1,5 +1,6 @@
 import type { ModelInfo } from '@shared/types'
 import { isModelInstalled, isModelOnDrive, isModelRunnableHere } from './modelAvailability'
+import { foldCase } from './textFold'
 
 export type ModelTask = 'chat' | 'documents' | 'translation' | 'vision' | 'transcriber'
 export type LibraryView = 'installed' | 'browse'
@@ -120,7 +121,9 @@ export function variantGroupOrder(group: ModelVariantGroup): ModelInfo[] {
   return [face, ...group.models.filter((m) => m !== face)]
 }
 
+/** Every word of `query` is a substring of the model's name, id or family, both sides folded with
+ *  the shared `foldCase` (so a Turkish keyboard's "ı" or "İ" finds an "i"). */
 export function matchesModelSearch(model: ModelInfo, query: string): boolean {
-  const haystack = `${model.displayName} ${model.id} ${model.family}`.toLowerCase()
-  return query.toLowerCase().trim().split(/\s+/).every((word) => haystack.includes(word))
+  const haystack = foldCase(`${model.displayName} ${model.id} ${model.family}`)
+  return foldCase(query).trim().split(/\s+/).every((word) => haystack.includes(word))
 }
