@@ -8,9 +8,10 @@ import { resolveNavTarget } from '../../src/renderer/navigation'
 import type { PreloadApi } from '../../src/preload'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import { appShellStubs } from '../helpers/app-shell'
-import { modelsScreenStubs } from '../helpers/model-fixtures'
+import { chatScreenStubs } from '../helpers/chat-screen'
+import { ENGINE_INSTALLED, modelsScreenStubs } from '../helpers/model-fixtures'
 import { LAZY_SCREEN_WAIT } from '../helpers/hang-budget'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
 // Information architecture (guidelines §2, rail rework 2026-09-05): three rail groups
@@ -18,7 +19,12 @@ import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '.
 // the brand mark, Privacy/Skills/Diagnostics folded into Settings tabs, and the navigate()
 // virtual targets, including every legacy alias older entry points still use.
 
-afterEach(cleanup)
+// Every screen these rows open reads a stubbed bridge (#815): an unmocked call answers `undefined`,
+// so the screen would run on its error path while the shell assertions still passed.
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
   it('maps the eight real screens to themselves', () => {
@@ -77,8 +83,11 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
 // ---- App shell -------------------------------------------------------------------
 
 const stubAppShell = (over: Partial<PreloadApi> = {}): void =>
-  stubApi(
-    appShellStubs({
+  stubApi({
+    // The Chat destination (the brand-mark row visits it) mounts ChatScreen: its reads, under the
+    // shell's calm defaults (no model running), which spread last.
+    ...chatScreenStubs(),
+    ...appShellStubs({
       ...modelsScreenStubs(),
       getAppStatus: vi.fn(async () => appStatus({ appName: 'x', appVersion: '0', machineRamGb: 16 })),
       // Settings tabs (visited via the offline badge):
@@ -87,7 +96,7 @@ const stubAppShell = (over: Partial<PreloadApi> = {}): void =>
       getLogTail: vi.fn(async () => []),
       ...over
     })
-  )
+  })
 
 describe('App shell: three rail groups, Home behind the brand mark (rail rework 2026-09-05)', () => {
   it('renders exactly Chat · Documents · Translate · Images ‖ AI Model · Performance ‖ Settings, with no Home, Skills, Privacy or Diagnostics items', async () => {
@@ -269,7 +278,11 @@ describe('SettingsScreen — tabs (Phase 26)', () => {
       getRuntimeInstall: vi.fn(async () => null),
       // #327: the Acceleration line reads its device from the snapshot, not settings.gpuProbe.
       getPerformance: vi.fn(async () => performanceSnapshot()),
-      getLogTail: vi.fn(async () => [])
+      getLogTail: vi.fn(async () => []),
+      // The Diagnostics tab reads the engine's versions and re-reads its card when an engine
+      // verdict lands: the engine in place, no verdict.
+      getEngineStatus: vi.fn(async () => ENGINE_INSTALLED),
+      onEngineProblemsChanged: vi.fn(() => () => {})
     })
   }
 
