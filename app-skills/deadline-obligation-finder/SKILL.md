@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Son tarihler ve yükümlülükler
     description: "Bir belgedeki son tarihleri, ihbar sürelerini, yenileme ve ödeme tarihlerini ve yükümlülükleri bulmak için kullanılır: ne yapılması gerektiği, hangi tarihe kadar ve kaçırılırsa ne olacağı."
+  pl:                          #   Shown when the app runs in Polish.
+    title: Terminy i obowiązki
+    description: "Służy do wyszukiwania w dokumencie terminów, okresów wypowiedzenia, dat przedłużenia i płatności oraz obowiązków: co trzeba zrobić, do kiedy i co się stanie po przekroczeniu terminu."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the finder scans the WHOLE document for deadlines/obligations (not
                                #   top-k passages). With this skill active over a single fully-chunked doc the

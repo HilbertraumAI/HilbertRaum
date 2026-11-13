@@ -6,6 +6,7 @@ import { it } from './it'
 import { ru } from './ru'
 import { nl } from './nl'
 import { tr } from './tr'
+import { pl } from './pl'
 import {
   UI_LANGUAGE_CODES,
   pluralKeyFor,
@@ -68,7 +69,7 @@ export type CountMessageKey = {
 
 // One catalog per registered language, each checked against its own required key set
 // (`UiCatalog`). Leaving a registered code out of this map is a compile error.
-const CATALOGS: { readonly [C in UiLanguage]: UiCatalog<C> } = { en, de, es, fr, it, ru, nl, tr }
+const CATALOGS: { readonly [C in UiLanguage]: UiCatalog<C> } = { en, de, es, fr, it, ru, nl, tr, pl }
 
 /** `lang`'s catalog as a plain string map, for a lookup by a computed key. */
 function catalogOf(lang: UiLanguage): Record<string, string> {

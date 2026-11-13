@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Banka hesap özeti analizi
     description: Bir banka hesap özetindeki işlemleri çıkarmak, kategorilere ayırmak, özetlemek veya hesap mutabakatı yapmak için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Analiza wyciągu bankowego
+    description: Służy do wyodrębniania, kategoryzowania, uzgadniania lub podsumowywania transakcji z wyciągu bankowego.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

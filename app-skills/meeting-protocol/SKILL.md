@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Toplantı tutanağı
     description: "Bir toplantı transkriptini, ham notları veya gündemi düzenli ve yapılandırılmış bir tutanağa dönüştürmek için kullanılır: kararlar, yapılacak işler ve açık kalan sorular."
+  pl:                          #   Shown when the app runs in Polish.
+    title: Protokół ze spotkania
+    description: "Służy do przekształcania transkrypcji spotkania, luźnych notatek lub porządku obrad w przejrzysty, uporządkowany protokół: decyzje, zadania do wykonania i otwarte kwestie."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model answers over the WHOLE transcript (not top-k passages).
                                #   With this skill active over a single fully-chunked doc the whole-doc engine

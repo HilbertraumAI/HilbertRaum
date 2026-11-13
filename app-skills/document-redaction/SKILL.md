@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Kişisel verileri karartma
     description: Bir belgedeki kişisel verileri karartmak, anonimleştirmek veya kaldırmak için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Ukrywanie danych osobowych
+    description: Służy do ukrywania, anonimizowania lub usuwania danych osobowych z dokumentu.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

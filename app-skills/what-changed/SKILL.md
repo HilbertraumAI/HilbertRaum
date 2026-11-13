@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Ne değişti?
     description: Bir belgenin, sözleşmenin, politikanın veya teklifin iki sürümünü karşılaştırıp yalnızca ham farkları değil, önemli değişiklikleri görmek için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Co się zmieniło?
+    description: Służy do porównania dwóch wersji dokumentu, umowy, regulaminu lub oferty i wskazania istotnych zmian, a nie tylko surowych różnic.
 kind: instruction
 analysis: compare              # A3/§8.2: the model compares BOTH whole versions (not top-k passages). With this
                                #   skill active over EXACTLY TWO fully-chunked docs the compare engine is the

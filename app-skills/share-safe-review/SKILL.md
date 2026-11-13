@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Paylaşım öncesi kontrol
     description: "Bir belgeyi paylaşmadan önce kontrol etmek için kullanılır: görünür hassas bilgiler ve paylaşımın pratik riskleri. Yalnızca tavsiye niteliğindedir; anonimleştirme değildir."
+  pl:                          #   Shown when the app runs in Polish.
+    title: Sprawdzenie przed udostępnieniem
+    description: "Służy do sprawdzenia dokumentu przed udostępnieniem: widoczne informacje wrażliwe i praktyczne ryzyka związane z udostępnianiem. Ma wyłącznie charakter doradczy i nie jest anonimizacją."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the review reads the WHOLE document (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

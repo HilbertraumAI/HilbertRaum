@@ -731,6 +731,103 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'never puts a harmonising particle (de/da, mi/mı/mu/mü, ki) right after a placeholder',
       'Turkish values with de/da, mi/mı/mu/mü or ki right after a } — the particle follows the vowels of the inserted text; move it behind a fixed word ({name} indirilsin mi?)'
     )
+  ],
+  // Polish: the typography of design-guidelines §7 "Polish microcopy".
+  pl: [
+    balancedQuotes(
+      '„',
+      '”',
+      'closes every opening „ with ”',
+      'Polish values with an unbalanced „…” pair — close each „ (U+201E) with ” (U+201D)'
+    ),
+    opensBeforeCloses(
+      '„',
+      '”',
+      'never uses ” before its „ (the pair is „…”, not ”…„)',
+      '” used before its „ — Polish opens low with „ and closes high with ”'
+    ),
+    forbids(
+      /["“‟]/u,
+      'uses no ASCII quote and no “ (the German closing mark, the English opening mark)',
+      'Polish values with " “ or ‟ — quote with „…” (U+201E, U+201D), also around technical field names'
+    ),
+    balancedQuotes(
+      '«',
+      '»',
+      'closes every inner « with »',
+      'Polish values with an unbalanced «…» pair — close each « with » (U+00BB)'
+    ),
+    opensBeforeCloses(
+      '«',
+      '»',
+      'never uses » before its « (the inner pair is «…», not »…«)',
+      '» used before its « — the inner quotation opens with « and closes with »'
+    ),
+    forbids(
+      /(?:^|”)[^„]*«/u,
+      'uses «…» only inside „…”',
+      'Polish values with « outside an open „…” pair — the first-level quotes are „…”; «…» is only for a quotation inside one'
+    ),
+    forbids(
+      /['’‘‚`´]/u,
+      'uses no apostrophe and no single quotation mark',
+      'Polish values with an apostrophe, a single quote, a backtick or an accent mark — quote with „…”, and put a noun before a foreign name instead of declining it (w przeglądarce Chrome)'
+    ),
+    forbids(
+      /\.\.\.|[^\S\n]…/u,
+      'writes the ellipsis as one character, attached to the word before it',
+      'Polish values with three full stops or a space before … — use … (U+2026) with no space before it'
+    ),
+    forbids(
+      /—| - /u,
+      'uses the spaced en dash as the house dash',
+      'Polish values with an em dash or a bare " - " — use " – " (U+2013), a colon or a new sentence'
+    ),
+    forbids(
+      /\p{L}–|–\p{L}/u,
+      'puts a space on each side of an en dash between words',
+      'Polish values with an en dash touching a letter — write " – " (only figures and placeholders may touch it, as in a range)'
+    ),
+    forbids(
+      /[^\S\n][,;:!?.](?=\s|$)/u,
+      'puts no space before , ; : ! ? .',
+      'Polish values with a space before a punctuation mark — remove it'
+    ),
+    forbids(
+      /\s%/u,
+      'attaches % to the figure',
+      'Polish values with a space before % — write {pct}% (Intl prints 75%)'
+    ),
+    forbids(
+      /(?<!\d)\u00A0|\u00A0(?!\d)|[\u202F\u2009\u00AD\u200B]/u,
+      'uses a no-break space only between the digit groups of a typed figure',
+      'Polish values with U+00A0 outside a typed figure (200\\u00A0000), or with U+202F, U+2009, U+00AD or U+200B — catalog text uses plain spaces'
+    ),
+    forbids(
+      /\d[ ,.]\d{3}(?!\d)/u,
+      'groups a typed figure with a no-break space',
+      'Polish values with a typed figure grouped by a plain space, a comma or a full stop — write 200\\u00A0000'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:Pan|Pani|Pana|Panu|Panem|Panią|Państwo|Państwa|Państwu)(?![\p{L}])/u,
+      'never addresses the reader as Pan, Pani or Państwo',
+      'Polish values with Pan/Pani/Państwo — use the imperative or an impersonal form'
+    ),
+    forbids(
+      /[\p{Ll},] (?:Ty|Ciebie|Cię|Tobie|Ci|Tobą|Twój|Twoja|Twoje|Twojego|Twojej|Twojemu|Twoją|Twoim|Twoich|Twoimi|Twoi)(?![\p{L}])/u,
+      'writes ty and twój in lower case mid-sentence',
+      'Polish values with a capital Ty/Twój/Cię mid-sentence — the courtesy capital belongs to letters, not to an interface'
+    ),
+    forbids(
+      /\}[’'-]?\p{L}/u,
+      'glues no ending to a placeholder',
+      'Polish values with a letter or a hyphenated ending right after a {placeholder} — the inserted text cannot be declined; put a noun in front or go label-first'
+    ),
+    forbids(
+      /(?<![\p{L}])(?:w|we|z|ze|do|od|na|o|u|po|przez|dla|bez|przy|nad|pod|za|przed|między|według|dzięki|oprócz|wśród|podczas|wobec|obok|spośród|zamiast|wewnątrz|poza)[^\S\n]+[„«]?\{(?:name|model|modelId|title|titles|document|query|site|library|vendor|recipient|source|archive|family|tool|engine|cpu|button|label|kind|basis|category|categories|field)\}/iu,
+      'puts no preposition right before a name placeholder',
+      'Polish values with a preposition right before {name}, {model}, {title} … — the inserted name cannot take the case; put a noun in front (w dokumencie „{title}”, z modelem {model}) or go label-first'
+    )
   ]
 }
 

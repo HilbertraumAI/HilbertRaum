@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Sözleşme özeti
     description: "Bir sözleşmenin veya anlaşmanın sade bir dille özetini çıkarmak için kullanılır: taraflar, tarihler, yükümlülükler, önemli hükümler ve sorulmaya değer sorular. Hukuki tavsiye değildir."
+  pl:                          #   Shown when the app runs in Polish.
+    title: Streszczenie umowy
+    description: "Służy do przygotowania streszczenia umowy lub porozumienia prostym językiem: strony umowy, daty, obowiązki, kluczowe postanowienia i pytania, które warto zadać. To nie jest porada prawna."
 kind: instruction
 analysis: whole-doc            # A3/§8.2: the model briefs the WHOLE contract (not top-k passages). With this
                                #   skill active over a single fully-chunked doc the whole-doc engine is the

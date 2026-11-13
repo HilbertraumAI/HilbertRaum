@@ -27,6 +27,9 @@ localized:                     # Per-locale DISPLAY overrides for title/descript
   tr:                          #   Shown when the app runs in Turkish.
     title: Belge düzenleme
     description: Bir belgede, onu baştan yazmadan, bul ve değiştir yöntemiyle hedefli düzenlemeler yapmak için kullanılır.
+  pl:                          #   Shown when the app runs in Polish.
+    title: Edycja dokumentu
+    description: Służy do wprowadzania w dokumencie punktowych zmian metodą „znajdź i zamień” bez przepisywania go od nowa.
 kind: tool                     # Tier-2: the app-orchestrated tool below is effective.
 compatibility:
   minAppVersion: 0.1.40
