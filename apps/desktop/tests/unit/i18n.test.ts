@@ -190,7 +190,8 @@ describe('resolveUiLanguage (D-L2)', () => {
   // The second languages wave: Dutch, Polish, Turkish and Ukrainian follow an OS locale with a
   // region, Belgian Dutch included. Ukrainian is `uk`; `ua` is Ukraine's country code, not a
   // language, and the ISO 639-2 codes are no alias (`ukr` and `nld` even begin with a registered
-  // code), so each resolves like any language this build does not register.
+  // code; `i18n-registry.test.ts` owns the prefix trap in general), so each resolves like any
+  // language this build does not register.
   it.each([
     ['nl-BE', 'nl'],
     ['pl-PL', 'pl'],
@@ -198,9 +199,7 @@ describe('resolveUiLanguage (D-L2)', () => {
     ['uk-UA', 'uk'],
     ['ua', 'en'],
     ['ukr', 'en'],
-    ['nld', 'en'],
-    ['pol', 'en'],
-    ['tur', 'en']
+    ['nld', 'en']
   ])("'system' with the OS locale %s resolves to %s", (locale, expected) => {
     expect(resolveUiLanguage('system', locale)).toBe(expected)
   })
@@ -1057,6 +1056,11 @@ describe('Turkish and Ukrainian typography — the suffix, letter and apostrophe
     ['tr particle', 'de', '{model} de çalışır'],
     ['tr particle', 'mı after bold markup', '**{name}** mı'],
     ['tr particle', 'ki after a quoted placeholder', `${OPEN}{title}${CLOSE} ki`],
+    ['tr particle', 'da', '{name} da'],
+    ['tr particle', 'te', '{name} te'],
+    ['tr particle', 'ta', '{name} ta'],
+    ['tr particle', 'mu', '{name} mu?'],
+    ['tr particle', 'mü', '{name} mü?'],
     ['uk letter', 'ы', 'Мы'],
     ['uk letter', 'э', 'этот'],
     ['uk letter', 'ъ', 'Объект'],

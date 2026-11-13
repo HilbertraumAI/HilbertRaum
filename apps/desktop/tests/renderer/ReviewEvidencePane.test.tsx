@@ -106,17 +106,20 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
 
   // Second UI-languages wave owner call G-5 (2026-11-13): the filter folds with the shared `foldCase`
   // (`text-fold.test.ts` owns the letters). Plain toLowerCase() kept "ı" dotless and lowered "İ"
-  // to "i" + U+0307, so neither search below found its card.
-  it('the filter folds Turkish I letters: a typed «ısı» finds the «ISI» title, «istanbul» the «İSTANBUL» snippet', () => {
+  // to "i" + U+0307, so neither search below found its card. Each side has its own failure: the
+  // title's "İ" fails without the title-side fold; the typed «ısı» fails without the query-side
+  // fold, and the snippet's own lower-case «ısı» fails without the snippet-side fold.
+  it('the filter folds Turkish I letters: «istanbul» finds the «İSTANBUL» title, a typed «ısı» the «ısı» snippet', () => {
     const dotless = String.fromCharCode(0x0131)
+    const istanbul = `${String.fromCharCode(0x0130)}STANBUL kira.pdf`
     const sources = makeSources(30)
-    sources[25] = { ...sources[25]!, documentTitle: 'ISI raporu.pdf' }
-    sources[27] = { ...sources[27]!, snippet: `${String.fromCharCode(0x0130)}STANBUL kira` }
+    sources[25] = { ...sources[25]!, documentTitle: istanbul }
+    sources[27] = { ...sources[27]!, snippet: `${dotless}s${dotless} yal${dotless}t${dotless}m${dotless}` }
     renderPane(sources)
     const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))
-    fireEvent.change(input, { target: { value: `${dotless}s${dotless}` } })
-    expect(cardTitles()).toEqual(['ISI raporu.pdf'])
     fireEvent.change(input, { target: { value: 'istanbul' } })
+    expect(cardTitles()).toEqual([istanbul])
+    fireEvent.change(input, { target: { value: `${dotless}s${dotless}` } })
     expect(cardTitles()).toEqual(['doc-28.pdf'])
   })
 

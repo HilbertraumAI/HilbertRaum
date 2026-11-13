@@ -314,6 +314,14 @@ describe('matchesModelSearch — a Turkish keyboard finds the model (shared fold
   ])('%s: a typed "%s" finds "Phi-4 mini instruct"', (_how, query) => {
     expect(matchesModelSearch(phi, query)).toBe(true)
   })
+
+  // The other side: a name written with Turkish capitals, which plain toLowerCase() turns into
+  // "i" + U+0307 per "İ". The id is the same name (the `model` helper), so only the fold can match.
+  it('an ASCII "mini" finds a model whose name has the capital dotted I (the haystack side)', () => {
+    const dotted = String.fromCharCode(0x0130)
+    const caps = model(`PH${dotted}-4 M${dotted}N${dotted}`, { family: 'phi' })
+    expect(matchesModelSearch(caps, 'mini')).toBe(true)
+  })
 })
 
 // DV-2 + issue #93 item 3 — display order of the chat model picker. Keys, in order: installed first
