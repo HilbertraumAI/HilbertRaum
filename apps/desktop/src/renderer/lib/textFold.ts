@@ -3,8 +3,8 @@
 // fold, so I, ı, İ and i match each other in every interface language and on every OS).
 //
 // Why not `toLocaleLowerCase()`: without an argument it lowers in the runtime's default locale,
-// which in the renderer is Chromium's (the OS language or `--lang`), not the app's UI language. On
-// a Turkish system "Invoice" lowers to "ınvoice", and a typed "inv" finds nothing. Plain
+// not the app's UI language. Under a Turkish default locale "Invoice" lowers to "ınvoice", and a
+// typed "inv" finds nothing (shown in Node and jsdom; `--lang=tr-TR` did not reproduce it). Plain
 // `toLowerCase()` never reads a locale, but it keeps the Turkish letters apart: "ı" stays dotless,
 // and "İ" lowers to "i" followed by U+0307 (combining dot above). The fold lowers without a
 // locale, then turns both back into a plain "i". Nothing else changes (no accent stripping), so

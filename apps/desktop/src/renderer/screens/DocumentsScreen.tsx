@@ -882,8 +882,8 @@ export function DocumentsScreen({
         ? docs.filter((d) => (d.collections ?? []).some((c) => c.id === section.id))
         : docs.filter((d) => inSection(d, section))
     // §11.16: the name filter narrows the section (a case-insensitive substring of the title),
-    // folded with the shared `foldCase`, never the OS locale (a Turkish OS lowered "Invoice" to
-    // "ınvoice", so "inv" found nothing).
+    // folded with the shared `foldCase`, never the runtime's default locale (under a Turkish one
+    // "Invoice" lowers to "ınvoice", so "inv" would find nothing).
     const query = foldCase(filter.trim())
     const narrowed = query ? sectioned.filter((d) => foldCase(d.title).includes(query)) : sectioned
     return section.kind === 'recent'

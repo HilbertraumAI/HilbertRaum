@@ -1,9 +1,10 @@
 // The ENGLISH catalog — the source of truth for every message key (i18n record §3.1,
 // D-L1). Flat keys, `{name}` interpolation placeholders, `.one`/`.other` plural pairs.
 // `de.ts` is typed `Record<MessageKey, string>` against this object, and every other
-// catalog (`es.ts`, `fr.ts`, `it.ts`, `ru.ts`) `UiCatalog<'<code>'>` (D-L10: these keys,
-// plus the extra plural forms of its language, minus `packExport.*` when the language
-// writes no evidence packs), so `npm run typecheck` fails when the catalogs drift apart.
+// catalog (`es.ts`, `fr.ts`, `it.ts`, `nl.ts`, `pl.ts`, `tr.ts`, `ru.ts`, `uk.ts`)
+// `UiCatalog<'<code>'>` (D-L10: these keys, plus the extra plural forms of its language,
+// minus `packExport.*` when the language writes no evidence packs), so
+// `npm run typecheck` fails when the catalogs drift apart.
 //
 // English values for strings that already shipped MUST stay byte-identical to the
 // pre-i18n literals: ~323 existing test assertions query this copy, and the default

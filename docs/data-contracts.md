@@ -283,8 +283,9 @@ units, not verified UTF-8 bytes) applied to the normalized value.
 the weight-file hash cache).
 **The i18n phases (39–42) added `uiLanguage`** (`UiLanguageSetting`, default `'system'`;
 architecture.md i18n record D-L2, D-L9, §3.2): `'system'` or a code of the language registry
-(`UI_LANGUAGES` in `shared/i18n/languages.ts`; since the 2026-11 UI languages wave `en`, `de`,
-`es`, `fr`, `it`, `ru`). `UiLanguageSetting` is derived from the registry, so registering a
+(`UI_LANGUAGES` in `shared/i18n/languages.ts`; since the two 2026-11 UI-languages waves `en`,
+`de`, `es`, `fr`, `it`, `nl`, `pl`, `tr`, `ru`, `uk`, in registry order; Ukrainian is `uk`, never
+the country code `ua`). `UiLanguageSetting` is derived from the registry, so registering a
 language widens the union. The write gate (`updateSettings`) stores only an `isUiLanguageSetting`
 value and drops anything else. The READ path does not validate the row: a value this build does
 not register (a newer build's language on a shared drive) comes back as stored, resolves like
@@ -1623,8 +1624,9 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   maps its UI language through `packLanguageFor(uiLanguageInfo(lang))` (`shared/evidence-review.ts`,
   UI-languages owner call D-5 (b), 2026-11-11; architecture.md i18n record D-L11): the UI language when its
   registry entry has `evidencePack: true`, else `'en'`, so it is always one of these two values,
-  whatever the UI language — English and German write their own; Spanish, French, Italian and
-  Russian (registered 2026-11-12, `evidencePack: false`) map to `'en'`) and
+  whatever the UI language — English and German write their own; the other eight, Spanish,
+  French, Italian and Russian (registered 2026-11-12) and Dutch, Polish, Turkish and Ukrainian
+  (registered 2026-11-13), all `evidencePack: false`, map to `'en'`) and
   `EvidencePackOptions { language, includeReviewerNotes, includeSourceExcerpts,
   includeDocumentHashes, includeUnreviewedItems, includeTechnicalDetails }` (spec §16.2).
   Defaults live in `EVIDENCE_PACK_OPTION_DEFAULTS` (`shared/evidence-review.ts`): everything

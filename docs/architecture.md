@@ -5929,9 +5929,10 @@ as-built notes, original research — is in git history:
 `git show 5059ed8:docs/i18n-plan.md`). Phases 39–42 made the entire user-visible surface
 available in English and German, selectable in Settings → General (default: follow the OS),
 with the pre-unlock gate already in the right language: no new runtime dependency, no network,
-no behavior change outside copy. Since the UI languages wave (2026-11-11/12) the interface has
-**six languages**: English and German, natively reviewed, and Spanish, French, Italian and
-Russian, machine-drafted and checked by a second model, with no native-speaker review yet
+no behavior change outside copy. The UI languages wave (2026-11-11/12) added Spanish, French,
+Italian and Russian, and the second UI-languages wave (2026-11-13) Dutch, Polish, Turkish and
+Ukrainian, so the interface has **ten languages**: English and German, natively reviewed, and the
+other eight, machine-drafted and checked by a second model, with no native-speaker review yet
 (D-L12); still no dependency and no network. **§ numbers below are preserved from the plan —
 code comments cite them as "i18n record §N"** (the German style rules of §3.5 live in
 `design-guidelines.md` "German microcopy", the other languages' in the sections after it)._
@@ -5941,16 +5942,16 @@ code comments cite them as "i18n record §N"** (the German style rules of §3.5 
 | ID | Decision |
 |---|---|
 | D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. `de.ts` is typed `Record<keyof typeof en, string>`, so typecheck enforces catalog parity — removing a key is a compile error. i18next/react-intl were rejected: async resource loading + ICU machinery en/de don't need, and a provider-suspense would have churned hundreds of green synchronous tests. **Amended 2026-11-11 (UI languages wave, D-L9):** plurals are chosen per language. Each registry entry carries a plural rule and the plural forms its catalog must provide. English and German keep the exact `n === 1` rule (`.one` for exactly 1, else `.other`), so their output is unchanged; a language with more forms uses the built-in `Intl.PluralRules` and carries the extra forms as `<base>.few` / `<base>.many`. If a catalog lacks the selected form, `.other` is used. Still no dependency. Every registered catalog is typed against its own required key set, so parity stays typecheck-enforced for every language. |
-| D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). **Amended 2026-11-11:** the setting accepts any registered language (D-L9). `'system'` follows the OS locale's **primary subtag** (lower-cased, split on `-` or `_`) when that language is registered, and is English otherwise; a tag that merely begins with a registered code (`deu`, `frr-DE`) does not match. A stored value this build does not know (for example a language added by a newer build on a shared drive) resolves like `'system'`. **Amended 2026-11-12 (UI languages wave, PR-B):** with Spanish, French, Italian and Russian registered, an OS locale in any of them resolves to that language (an `fr-FR` system gets French). The hint under the picker (`settings.language.hint`) names no languages, so registering one never makes it false (UI-languages owner call D-12 (a)): *System* follows the operating system's language when HilbertRaum offers it, and English otherwise. |
+| D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). **Amended 2026-11-11:** the setting accepts any registered language (D-L9). `'system'` follows the OS locale's **primary subtag** (lower-cased, split on `-` or `_`) when that language is registered, and is English otherwise; a tag that merely begins with a registered code (`deu`, `frr-DE`) does not match. A stored value this build does not know (for example a language added by a newer build on a shared drive) resolves like `'system'`. **Amended 2026-11-12 (UI languages wave, PR-B):** with Spanish, French, Italian and Russian registered, an OS locale in any of them resolves to that language (an `fr-FR` system gets French). The hint under the picker (`settings.language.hint`) names no languages, so registering one never makes it false (UI-languages owner call D-12 (a)): *System* follows the operating system's language when HilbertRaum offers it, and English otherwise. **Amended 2026-11-13 (second UI-languages wave):** the same holds for Dutch, Polish, Turkish and Ukrainian. Only the primary subtag counts, so `nl-BE` gives Dutch and `uk-UA` Ukrainian, while `ua` (Ukraine's country code, not a language code) and the three-letter codes `ukr` and `nld` give English. |
 | D-L3 | Pre-unlock language: renderer = the `hilbertraum.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. **Amended 2026-11-11 (UI languages wave, UI-languages owner call D-17 (a)):** before unlock the two can differ (the mirror holds the chosen language, `app.getLocale()` the OS's), so the gate (`WorkspaceGate.tsx`) no longer shows main's `message` for a failed unlock or create. It renders the failure from its `reason` code through its own `t()`, with the same `main.workspace.*` key main emits, one table per call; typecheck makes each table cover every reason. Main's `message` shows only for a reason a table maps to `null` (main never sends it for that call; the one that does occur is create's free-text `refused`, the vault's own sentence, which has no catalog key) and for a reason the tables lack. Main's too-short refusal never reaches the gate, which applies the same floor (`MIN_PASSWORD_LENGTH`, `shared/types.ts`) before it sends. **Amended 2026-11-12 (review of PR #801):** the two tables live in `shared/workspace-failure-keys.ts` (the gate imports it; main doesn't read it), and `tests/integration/workspace-ipc.test.ts` drives main's real unlock and create handlers into every branch the gate can receive (all but create's too-short refusal, which the gate's own floor keeps from being sent), in every registered language, checking main's `message` against the gate's key (a `null` entry must be free text: the same in every language and no catalog value), so a key changed on one side alone turns red. |
 | D-L4 | **Persist canonical English, translate at display**: an exact-match display map over the finite static persisted set (`renderer/lib/displayMap.ts`). Keeps the `scanDetected` contract and pre-i18n rows valid; persisted copy is retroactively language-switchable. |
 | D-L5 | **Ephemeral main→user strings localize at emission** via `tMain()` + the cached language; the IPC error transport (`friendlyIpcError`) is unchanged. |
 | D-L6 | LLM prompts stay English and unchanged (Phase-29 benchmark comparability; models follow the question's language). Task-output language = a future feature; documented in `known-limitations.md` ("Internationalization"). |
-| D-L7 | German address form = informal **„du"** (lowercase mid-sentence), a deliberate brand choice (user decision 2026-06-13); glossary pinned in `de.ts`. Human review of the German copy gates the wave (the user is the reviewer). **Amended 2026-11-12 (UI languages wave):** the address form is chosen per language (UI-languages owner call D-3): Russian formal «вы» (lower case mid-sentence), French formal «vous», Spanish informal «tú», Italian informal «tu». Each language's glossary, typography and length rules are its `design-guidelines.md` section ("Russian/French/Spanish/Italian microcopy", after "German microcopy"), and the glossary is pinned as the comment on top of its catalog file, as in `de.ts`. On a fixed-width surface such as the rail, a word that does not fit is replaced by a shorter synonym, never an abbreviation (UI-languages owner call D-10 (a)). Those four catalogs are machine-drafted and checked by a second model; no native speaker has reviewed them (`nativeReviewed: false`, D-L12). |
+| D-L7 | German address form = informal **„du"** (lowercase mid-sentence), a deliberate brand choice (user decision 2026-06-13); glossary pinned in `de.ts`. Human review of the German copy gates the wave (the user is the reviewer). **Amended 2026-11-12 (UI languages wave):** the address form is chosen per language (UI-languages owner call D-3): Russian formal «вы» (lower case mid-sentence), French formal «vous», Spanish informal «tú», Italian informal «tu». Each language's glossary, typography and length rules are its `design-guidelines.md` section ("Russian/French/Spanish/Italian microcopy", after "German microcopy"), and the glossary is pinned as the comment on top of its catalog file, as in `de.ts`. On a fixed-width surface such as the rail, a word that does not fit is replaced by a shorter synonym, never an abbreviation (UI-languages owner call D-10 (a)). Those four catalogs are machine-drafted and checked by a second model; no native speaker has reviewed them (`nativeReviewed: false`, D-L12). **Amended 2026-11-13 (second UI-languages wave):** Dutch informal «je», Polish informal «ty» (the imperative on buttons and in instructions, impersonal past forms in the app's messages, so nothing needs the user's gender), Turkish «siz» (the short polite imperative in sentences, the bare imperative on buttons) and Ukrainian formal «ви», each lower case mid-sentence. Their rules are the "Dutch/Polish/Turkish/Ukrainian microcopy" sections after "Italian microcopy", each glossary pinned on top of its catalog file; these four catalogs are machine-drafted and checked by a second model too, with no native-speaker review (`nativeReviewed: false`). |
 | D-L8 | Default-English + synchronous `t()` keeps the ~323 pre-existing English copy assertions green; migrated assertions reference the `en` catalog instead of re-typed literals. English values for shipped strings stay **byte-identical** to the pre-i18n literals. |
 | D-L9 | **Language registry (2026-11-11, UI languages wave).** `shared/i18n/languages.ts` holds `UI_LANGUAGES`, one entry per interface language, English first: `code`, `nativeName`, `nativeReviewed`, `evidencePack`, `plural`, `pluralCategories`. `UiLanguage`, `UiLanguageSetting`, `isUiLanguage`, `isUiLanguageSetting`, the catalog types and locale resolution are derived from it; nothing else decides which languages exist (`CATALOGS` and the pack-language table name them and are compile-checked against the registry). `pluralCategories` is pinned in the registry rather than read from ICU at runtime, so an ICU update cannot change which keys a catalog needs without a code change; a test compares the pin with the running ICU. There is no completeness tier: every registered language is complete and typecheck-enforced (owner call 2026-11-11). A language whose `evidencePack` is false does not carry the `packExport.*` keys, which render only inside an evidence pack. |
-| D-L10 | **Every registered catalog is required (2026-11-11, UI languages wave).** UI-languages owner call D-2 (a): every registered language's catalog is complete and typecheck-enforced; there is no partial or pending tier. D-L1's parity mechanism is extended per language: each catalog is checked against `UiCatalog<code>` by the `CATALOGS` map (`index.ts`), and a new language's file is declared `UiCatalog<'xx'>` (`de.ts` keeps the equivalent `Record<keyof typeof en, string>`); the type's key set is every English key plus one `<base>.<form>` key per plural base for each form in the language's `pluralCategories` beyond `.one`/`.other` (Russian `.few` and `.many`; French, Spanish and Italian `.many`). A language whose `evidencePack` is false has no `packExport.*` key at all, the extra plural forms of a `packExport.*` base included (UI-languages owner call D-14 (a)): they render only inside a pack, which stays English or German (D-L11). The runtime parity test in `tests/unit/i18n.test.ts` is the belt to the type: per registered catalog it checks the same key set and adds what a type cannot say, no empty value and the English placeholders per key (a form English lacks is compared with its base's `.other`). Why: a partial catalog shows two languages on one screen, and a pending list needs a release check. The cost is that every pull request that adds or changes UI text writes it in every registered catalog. Typecheck checks presence, not freshness: a changed English value does not flag translations that went stale (true for German since D-L1). **Amended 2026-11-12 (UI languages wave, PR-B):** the first languages registered under it are Spanish, French, Italian and Russian (`es.ts`, `fr.ts`, `it.ts`, `ru.ts`; 2,296 keys each for the three with one, many and other, 2,358 for Russian with one, few, many and other, against English's 2,337; no `packExport.*`). None of the four is exported from `index.ts` (only `en` and `de` are, as before): a named `it` export would shadow vitest's global `it` in any test that imported it, so tests read catalogs through `catalogOf(code)` (`tests/helpers/i18n-catalogs.ts`). |
-| D-L11 | **Evidence-pack language (2026-11-11, UI languages wave).** Packs are written in English or German only (UI-languages owner call D-5 (b), 2026-11-11). `packLanguageFor(info)` (`shared/evidence-review.ts`) maps a UI language's registry entry to the pack language: the language itself when its `evidencePack` flag is set, English otherwise. The export panel (`ReviewSummaryView.tsx`) sends that language, and main's boundary (`resolveEvidencePackOptions`) keeps only a pack language (`isPackLanguage`, else English). The pack languages are `EvidencePackLanguage` (`'en' \| 'de'`); a type row in `evidence-pack-model.test.ts` holds it equal to the registered codes whose `evidencePack` is true, and the pack renderer (`render-html.ts`) takes only that type, so a language without the `packExport.*` keys (D-L9) never reaches it. When the pack language differs from the UI language, the export panel says so in one full sentence per pack language (`review.export.packLanguage.en` / `.de`, chosen by `packLanguageLineKey`): no `{language}` placeholder and no `nativeName`, because a language name inside a sentence needs grammatical case and lower-casing in Russian, French, Spanish and Italian ("на английском", "en anglais"). With only English and German registered the line never showed; since Spanish, French, Italian and Russian are registered (2026-11-12), the export panel of each of their interfaces shows the English-pack line (`.en`) in that interface's language, and the German line still has no reader (only a German interface writes German packs). |
+| D-L10 | **Every registered catalog is required (2026-11-11, UI languages wave).** UI-languages owner call D-2 (a): every registered language's catalog is complete and typecheck-enforced; there is no partial or pending tier. D-L1's parity mechanism is extended per language: each catalog is checked against `UiCatalog<code>` by the `CATALOGS` map (`index.ts`), and a new language's file is declared `UiCatalog<'xx'>` (`de.ts` keeps the equivalent `Record<keyof typeof en, string>`); the type's key set is every English key plus one `<base>.<form>` key per plural base for each form in the language's `pluralCategories` beyond `.one`/`.other` (Russian `.few` and `.many`; French, Spanish and Italian `.many`). A language whose `evidencePack` is false has no `packExport.*` key at all, the extra plural forms of a `packExport.*` base included (UI-languages owner call D-14 (a)): they render only inside a pack, which stays English or German (D-L11). The runtime parity test in `tests/unit/i18n.test.ts` is the belt to the type: per registered catalog it checks the same key set and adds what a type cannot say, no empty value and the English placeholders per key (a form English lacks is compared with its base's `.other`). Why: a partial catalog shows two languages on one screen, and a pending list needs a release check. The cost is that every pull request that adds or changes UI text writes it in every registered catalog. Typecheck checks presence, not freshness: a changed English value does not flag translations that went stale (true for German since D-L1). **Amended 2026-11-12 (UI languages wave, PR-B):** the first languages registered under it are Spanish, French, Italian and Russian (`es.ts`, `fr.ts`, `it.ts`, `ru.ts`; 2,296 keys each for the three with one, many and other, 2,358 for Russian with one, few, many and other, against English's 2,337; no `packExport.*`). None of the four is exported from `index.ts` (only `en` and `de` are, as before): a named `it` export would shadow vitest's global `it` in any test that imported it, so tests read catalogs through `catalogOf(code)` (`tests/helpers/i18n-catalogs.ts`). **Amended 2026-11-13 (second UI-languages wave; second UI-languages wave owner call G-1 (a): the rule stands with ten languages):** Dutch, Polish, Turkish and Ukrainian (`nl.ts`, `pl.ts`, `tr.ts`, `uk.ts`): 2,234 keys each for Dutch and Turkish, whose forms are English's one and other, and 2,358 each for Polish and Ukrainian with one, few, many and other (English's 2,337 less the 103 `packExport.*` keys, plus a `.few` and a `.many` for each of the 62 plural bases outside `packExport.*`). Dutch and Turkish use their CLDR rule too (`cldrPlural`), which picks `.one` for the count 1 alone, as English's rule does. The four are declared `UiCatalog<'xx'>` and, like the first four, not exported from `index.ts`. A pull request that adds or changes UI text now writes it in ten catalogs. |
+| D-L11 | **Evidence-pack language (2026-11-11, UI languages wave).** Packs are written in English or German only (UI-languages owner call D-5 (b), 2026-11-11). `packLanguageFor(info)` (`shared/evidence-review.ts`) maps a UI language's registry entry to the pack language: the language itself when its `evidencePack` flag is set, English otherwise. The export panel (`ReviewSummaryView.tsx`) sends that language, and main's boundary (`resolveEvidencePackOptions`) keeps only a pack language (`isPackLanguage`, else English). The pack languages are `EvidencePackLanguage` (`'en' \| 'de'`); a type row in `evidence-pack-model.test.ts` holds it equal to the registered codes whose `evidencePack` is true, and the pack renderer (`render-html.ts`) takes only that type, so a language without the `packExport.*` keys (D-L9) never reaches it. When the pack language differs from the UI language, the export panel says so in one full sentence per pack language (`review.export.packLanguage.en` / `.de`, chosen by `packLanguageLineKey`): no `{language}` placeholder and no `nativeName`, because a language name inside a sentence needs grammatical case and lower-casing in Russian, French, Spanish and Italian ("на английском", "en anglais"). With only English and German registered the line never showed; since Spanish, French, Italian and Russian are registered (2026-11-12), and Dutch, Polish, Turkish and Ukrainian (2026-11-13), the export panel of each of their interfaces shows the English-pack line (`.en`) in that interface's language, and the German line still has no reader (only a German interface writes German packs). |
 | D-L12 | **Native-review status (2026-11-11, UI languages wave).** Each registry entry carries `nativeReviewed`: true when a native speaker has reviewed the catalog (English; German by the owner, D-L7), false for a machine-drafted one. UI-languages owner call D-4 (c), 2026-11-11: a machine-drafted catalog ships with **no notice in the app**; the flag records the status for a later native review and for `known-limitations.md`. Nothing renders from it today. |
 
 **UI-languages owner calls (2026-11-11/12).** This record and code comments cite the UI languages
@@ -5959,8 +5960,9 @@ in this file. D-2 (a): every registered catalog is complete and typecheck-enforc
 address form per language (D-L7) · D-4 (c): a machine-drafted catalog ships with no in-app note ·
 D-5 (b): evidence packs stay English or German · D-6 (a): the language picker is a native
 `<select>`, *System* first and then the registered languages in registry order (English, Deutsch;
-then Español, Français, Italiano, Русский) · D-7 (a): *System* follows the OS into any registered
-language · D-8 (a): English and German keep the exact `n === 1` plural rule · D-10 (a): a shorter
+then Español, Français, Italiano, Русский; since 2026-11-13 the order of G-3 below) · D-7 (a):
+*System* follows the OS into any registered language · D-8 (a): English and German keep the
+exact `n === 1` plural rule · D-10 (a): a shorter
 synonym, never an abbreviation, where a fixed-width surface is too narrow · D-11 (a): "(1 core)" on
 a single-core machine · D-12 (a): the *System* hint names no languages (D-L2) · D-13 (a): the
 picker's *System* label is translated · D-14 (a): no `packExport.*` keys in a catalog whose language
@@ -5971,13 +5973,30 @@ form shows the number; English and German plain number keys that read wrong at e
 sections scanned", "I read 1 transactions"; the `NON_GRAMMATICAL` groups in
 `tests/unit/i18n.test.ts` that say so) are a follow-up.
 
+**Second UI-languages wave owner calls (2026-11-13).** This record and code comments cite the
+second wave's decision gates as "second UI-languages wave owner call G-n". G-1 (a): every
+registered catalog stays complete and typecheck-enforced with ten languages (D-L10) · G-2 (a): one
+pull request, one commit per language · G-3 (a): the picker order English, Deutsch, then the
+other names written in Latin letters in alphabetical order (Español, Français, Italiano,
+Nederlands, Polski, Türkçe), then the Cyrillic ones (Русский, Українська) · G-4 (a): D-4 (c),
+D-5 (b), D-7 (a), D-10 (a), D-16 (a) and the Latin unit symbols carry over unchanged · G-5: the
+three text filters (Documents names, AI Model search, review evidence) fold case with one shared
+helper, `renderer/lib/textFold.ts` (§5) · G-6: the lock screen's edition line "HilbertRaum Lite"
+is marked `lang="en"`, so CSS capitals never give it a Turkish «İ» · G-7: user project names that
+CSS shows in capitals take the interface language's casing (a known limitation) · G-10: so does a
+document's own section heading in the preview (recorded with G-7) · G-12: conversation search and
+keyword retrieval keep their plain lower-casing (`fts.ts`; a known limitation and a follow-up) ·
+G-8, G-9, G-11: the real-app check's remaining layout and wording findings accepted as recorded,
+or collected for follow-up ("Second UI-languages wave QA" below).
+
 ### §3.1 The i18n module
 
 `apps/desktop/src/shared/i18n/` (importable from both processes): `en.ts` is the
 source-of-truth catalog (~600 keys at the Phase-39 record; ~1,700 by 2026-08 — #151 AR-2;
 `MessageKey = keyof typeof en`), `de.ts` the typed
 German catalog with the §3.5 glossary pinned on top, and `es.ts`, `fr.ts`, `it.ts` and `ru.ts`
-(2026-11-12) the Spanish, French, Italian and Russian catalogs, each with its glossary pinned
+(2026-11-12) and `nl.ts`, `pl.ts`, `tr.ts` and `uk.ts` (2026-11-13) the Spanish, French,
+Italian, Russian, Dutch, Polish, Turkish and Ukrainian catalogs, each with its glossary pinned
 on top the same way (D-L7). `languages.ts` is the registry (D-L9)
 with the plural rules, the catalog types (`CatalogFor`, `UiCatalog<code>`) and two pure
 cores that take the registry data as arguments, `pluralKeyFor` and `resolveUiLanguageIn`.
@@ -5990,8 +6009,9 @@ English and German: `.one` for exactly 1, else `.other`; a missing form falls ba
 `resolveUiLanguage(setting, osLocale)`. A new language's catalog is declared
 `UiCatalog<'xx'>`: a missing key, a misspelt key or a plural form the language does not
 have fails `npm run typecheck`. All catalogs are static imports, bundled into the main,
-renderer and preview builds (about 270 KB of source per language; the tools build
-tree-shakes them).
+renderer and preview builds (220–340 KB of source per language, the Cyrillic ones largest; each
+of the second wave's four added about 243 KB to the main and to the renderer bundle; the tools
+build tree-shakes them).
 
 ### §3.2 The setting and its resolution
 
@@ -6028,6 +6048,28 @@ tree-shakes them).
   `npm run dev -- -- -- --lang=<tag>` (electron-vite's CLI overwrites `ELECTRON_CLI_ARGS`);
   the production build takes it as
   `npm run start --workspace apps/desktop -- --skipBuild -- --lang=<tag>`.
+  **Re-measured 2026-11-13** (the same machine and Electron, ten languages registered, setting
+  *System*; `app.getSystemLocale()` is `de-AT` in every leg):
+
+  | `--lang` | `navigator.language` | `app.getLocale()` | UI language |
+  |---|---|---|---|
+  | `nl-NL`, `nl-BE` | `nl` | `nl` | Dutch |
+  | `pl-PL` | `pl` | `pl` | Polish |
+  | `tr-TR` | `tr` | `tr` | Turkish |
+  | `uk-UA` | `uk` | `uk` | Ukrainian |
+  | `en-US` | `en-US` | `en-US` | English |
+  | `de-AT` | `de` | `de` | German |
+  | none | `de` | `de` | German |
+
+  `<html lang>`, the rail and a main-process message followed the UI language in every leg.
+  Chromium ships no `nl-BE` locale (its locale files have `nl`), so that leg reports plain `nl`
+  and cannot show the region subtag at work; the resolver's unit rows (`nl-BE`, `pl-PL`,
+  `tr-TR`, `uk-UA`) do. Renderer and main plural categories and number formats for the four
+  languages equal those measured in Node (ICU 77.1; Electron has 78.2): no difference. `--lang`
+  does not stand in for a Turkish operating system in one respect: under `--lang=tr-TR` the
+  renderer's `Intl` default locale is `tr`, yet `'Invoice'.toLocaleLowerCase()` still returns
+  "invoice", so the Turkish-locale fault the shared fold removes (§5) is shown only by the jsdom
+  rows, which fake a Turkish default locale.
 
 ### §3.3 The two-rule boundary for main-process strings
 
@@ -6081,13 +6123,15 @@ tree-shakes them).
   `skills-analysis-bank.test.ts`, one row per registered language). The match is against the
   catalog text as it is now, so changing the wording of either question in any language changes
   what the handler recognises: a turn saved with the old wording, regenerated or sent again in a
-  language whose text no English or German stem catches (Spanish, French, Italian or Russian, the
-  Spanish and Italian breakdown questions aside, which contain the stem `categor`), gets a model
-  answer instead of the template. A structured intent (the finished run's tool sent with the
-  request) would need no text match; the exact match is the chosen fix (owner call 2026-11-12).
+  language whose text no English or German stem catches, gets a model answer instead of the
+  template: for the summary question every language but English and German; for the breakdown
+  question French, Russian and Ukrainian, because the Spanish, Italian, Dutch, Polish and Turkish
+  ones contain the stem `categor` or `kategor` (2026-11-13). A structured intent (the finished
+  run's tool sent with the request) would need no text match; the exact match is the chosen fix
+  (owner call 2026-11-12).
 - The product name "HilbertRaum" is never translated; language names in the
   picker stay in their own language (each registry entry's `nativeName`: `English`, `Deutsch`,
-  `Español`, `Français`, `Italiano`, `Русский`),
+  `Español`, `Français`, `Italiano`, `Nederlands`, `Polski`, `Türkçe`, `Русский`, `Українська`),
   so someone on a UI they can't read can still find their way back, while the picker's *System*
   label is translated (`settings.language.system`, UI-languages owner call D-13 (a), 2026-11-11; the picker is a
   native `<select>` built from the registry since then); technical values (model ids,
@@ -6104,9 +6148,9 @@ D-L6 row and `known-limitations.md`.
 
 See `design-guidelines.md` → "German microcopy (D-L7)": the glossary, the informal-du
 rules, and §11.4 tone adaptation. The glossary is also pinned as the comment block on top
-of `de.ts`. Russian, French, Spanish and Italian follow the same pattern (D-L7): their
-"microcopy" sections come after the German one, and each glossary is pinned on top of its
-catalog file.
+of `de.ts`. Russian, French, Spanish and Italian, and since 2026-11-13 Dutch, Polish, Turkish
+and Ukrainian, follow the same pattern (D-L7): their "microcopy" sections come after the German
+one, and each glossary is pinned on top of its catalog file.
 
 ### §5 Renderer conventions (the Phase-40 sweep rules, kept for future strings)
 
@@ -6150,7 +6194,9 @@ catalog file.
   come from the registry, so a newly registered language's literals are caught the way German's
   are, 2026-11-12) outside `shared/i18n/` and a reviewed list of sites (content languages, the pack
   languages, the Translate default pair, the translation-language list, the legacy
-  translation-provenance check, and German inflection endings that happen to spell two codes).
+  translation-provenance check, German inflection endings that happen to spell two codes, and,
+  since Turkish is registered, the two `zim/tables.ts` comparisons with the HTML table-row tag
+  `<tr>`).
   Its limits: a code held in a constant, `.includes` / `Set` / `startsWith` / regex tests, an `{ en, de }` key
   table and a lookup re-bound to another name are not seen. `tests/integration/i18n-boundary.test.ts`:
   no guard key the doc-task pass-through accepts has a `{param}` (the filter is an exact match,
@@ -6160,8 +6206,9 @@ catalog file.
   a number is either a `.one`/`.other` pair rendered through `tCount`, or a plain key on the
   reviewed `NON_GRAMMATICAL` list in `tests/unit/i18n.test.ts`, grouped by the reason it stays
   right in every registered language: nothing agrees with the figure (a count in parentheses, an
-  ordinal, a unit symbol, an identifier, a money amount, a constant), the ru/fr/es/it
-  translations must be written so nothing does (label first, no participle after a bare count), or
+  ordinal, a unit symbol, an identifier, a money amount, a constant), the translations other than
+  English and German must be written so nothing does (label first, no participle after a bare
+  count), or
   the key renders only inside an English or German evidence pack (D-L11). English and German keep
   their wording; where it reads wrong at exactly 1 ("1 sections scanned") that is a follow-up
   (owner call 2026-11-12, legend above). The
@@ -6183,13 +6230,27 @@ catalog file.
 - **Never pair a key whose figure is shown with fraction digits** unless `tCount` first learns
   the displayed digits (`new Intl.PluralRules(code, { minimumFractionDigits })`): CLDR selects by
   the digits the reader sees, so Russian and Italian "1,0" is `other` although `select(1)` is
-  `one`. Put such a figure before a unit symbol, or write the key label first.
+  `one` (so are Dutch, Polish and Ukrainian "1,0"; Turkish "1,0" stays `one`). Put such a figure
+  before a unit symbol, or write the key label first.
 - **A plural form may add `{count}` in a language whose `one` is not exactly 1, and must when its
-  plural form shows the number** (owner calls 2026-11-12). Russian `.one` also serves 21, 31, …,
-  and French `.one` serves 0 and 1.5, so a form English writes without a number ("Knowledge pack
-  added") shows `{count}` there, or 21 packs would read as one; `tCount` always supplies it. The
-  parity rule decides by probing the language's rule, so Spanish and Italian (`one` = 1 alone) get
-  neither the licence nor the duty. No other placeholder may be added or dropped.
+  plural form shows the number** (owner calls 2026-11-12). Russian and Ukrainian `.one` also serve
+  21, 31, 101, …, and French `.one` serves 0 and 1.5, so a form English writes without a number
+  ("Knowledge pack added") shows `{count}` there, or 21 packs would read as one; `tCount` always
+  supplies it. The parity rule decides by probing the language's rule, so Spanish, Italian, Dutch,
+  Polish and Turkish (`one` = 1 alone) get neither the licence nor the duty. No other placeholder
+  may be added or dropped.
+- **A text filter folds case with `foldCase`** (`renderer/lib/textFold.ts`; second UI-languages
+  wave owner call G-5, 2026-11-13), on both sides: the query and the text. Its sites are the
+  Documents name filter, the AI Model search and the review evidence filter. Never call
+  `toLocaleLowerCase()` without a locale: it lowers in the runtime's default locale, not the UI
+  language, and a Turkish default locale lowers "Invoice" to "ınvoice" (shown in Node and jsdom;
+  `--lang=tr-TR` did not reproduce it in the app, §3.2, and a Turkish operating system was not
+  tested), so a typed "inv" would find nothing. `foldCase` lowers with `toLowerCase()`, which
+  reads no locale, and then turns the dotless «ı» and the «i» + U+0307 that «İ» lowers to into a
+  plain «i», so I, ı, İ and i match each other in every interface language and on every system.
+  Nothing else changes (no accent stripping, no Unicode normalization), so English and German
+  text folds exactly as `toLowerCase()` folds it. The main process's search does not use it
+  (`fts.ts`; second UI-languages wave owner call G-12).
 
 ### Phase-42 QA (as built)
 
@@ -6262,6 +6323,94 @@ from `--lang=ru` in both processes; English and German `innerText` against the p
 changed only by the four new picker names and the *System* hint. The packaged build was not re-made
 (it needs the network): the builder config keeps every Electron locale file, and the last packaged
 build ships es, fr, it and ru.
+
+### Second UI-languages wave QA (as built, 2026-11-13)
+
+Dutch, Polish, Turkish and Ukrainian were drafted from English by an AI model in six chunks per
+language (24 drafting runs), each bound to its accepted style guide (the "microcopy" sections of
+`design-guidelines.md` §7), and each chunk was checked by a second model (24 runs): glossary,
+placeholders, plural forms (Ukrainian `one` read with 21 and 101), endings next to a placeholder,
+register, quoted button names, and a back-translation into English of the keys most exposed to a
+meaning error plus a fixed sample. It found three S1 findings (two Dutch labels that misnamed
+where a document had moved, and a Ukrainian count idiom applied to a list of page numbers) and
+seventeen S2 findings (glossary, register, wording, quoted labels), all fixed before the
+catalogs were committed; most S3 findings were applied too. The 72 localized skill titles and
+descriptions were all back-translated, with no S1 or S2. Each guide's punctuation, script,
+address-form and placeholder rules became `TYPOGRAPHY_RULES` (Dutch 12, Polish 18, Turkish 17,
+Ukrainian 18 rules), among them the Turkish ban on a suffix glued to a placeholder and the
+Ukrainian ban on ы, э, ъ and ё; glossary and spelling stay a review check.
+
+The registry-driven guards covered the four from the day each was registered (catalog parity and
+placeholders, typography, plural layout, ICU pins, the display map, the write gate,
+LanguageSmoke, the picker, skills parity, rail labels). New rows cover the rest, each shown to fail
+on a planted fault: the resolver sends `nl-BE`, `pl-PL`, `tr-TR` and `uk-UA` to their language
+and `ua`, `ukr` and `nld` to English, and the Turkish suffix and the Ukrainian letter and
+apostrophe rules are tried on accepted and rejected samples. Planted faults also showed the
+existing rows hold for this wave's risks: the plural duty and licence (a Ukrainian `.one` without
+`{count}` fails, a Dutch, Polish or Turkish `.one` with it fails) and the two `zim/tables.ts`
+exceptions to the hard-coded-language ban (one removed fails). The Documents name filter used to
+lower names with `toLocaleLowerCase()` and the runtime's default locale, which under a Turkish
+locale turns "Invoice" into "ınvoice", so "inv" found nothing whatever the UI language (shown in
+Node and jsdom; `--lang=tr-TR` does not reproduce it, §3.2); the AI Model search and the evidence
+filter read no locale but kept ı and İ apart from i. All three now fold with `foldCase` (§5;
+second UI-languages wave owner call G-5), with rows on both sides of each filter. The lock
+screen's "HilbertRaum Lite", which CSS shows in capitals, is marked `lang="en"` (second
+UI-languages wave owner call G-6). No English or German catalog value changed.
+
+Real-app walk of the dev build in the four languages plus an English and German regression pass,
+as in the first wave: every rail destination, every Settings tab, the gates and the chat in its
+states, at 880×600 and maximized, light and dark, each language switched through the saved setting
+and a reload and checked by `<html lang>` and one main-process message before any capture.
+Electron's ICU (78.2) gives the four languages the same plural categories and number formats as
+Node's, in the renderer and in main («8192» but «98&nbsp;304» in Polish, «8&nbsp;192» in
+Ukrainian, «%75» in Turkish). Every rail label was measured with its destination active, at
+weight 600 in Arial: all fit the 79 px box, the widest being Dutch «Afbeeldingen» at 76.0 px,
+and the Turkish «Yapay zekâ modeli» takes two lines by design. Startup with ten catalogs is no
+slower than the six-language baseline (window ready-to-show median 2,063.8 ms against 2,242.7 ms,
+gate visible 2,136.5 ms against 2,328.8 ms, five runs each, same machine). In a Turkish interface
+Turkish words take Turkish capitals («DİĞER», «KİTAPLIK»), the lock screen shows «HILBERTRAUM
+LITE», and the Documents filter gives the same results for "inv", «ısı» and «istanbul» in all
+four combinations of `--lang` `tr-TR` or `en-US` with a Turkish or English UI, as does the AI
+Model search for its queries (the evidence filter shows only above 24 sources and was not
+reached). The other legs of the first wave passed for the four: the `--lang` legs (§3.2), the
+locked gate in one language with a lock-screen language other than the OS's, the import picker's
+title and filters, the English-pack line in the export panel, no spell-check dictionary request
+under `--lang=uk-UA`, the production bundle resolving Ukrainian from `--lang=uk`, and English and
+German `innerText` changed only by the four new picker names (timestamps, measured figures,
+paths and the network indicator's start state aside). The packaged build was not re-made (it
+needs the network); the builder config still keeps every Electron locale file, `nl`, `pl`, `tr`
+and `uk` among them.
+
+Fixed after the walk and a second model's screenshot review, ten values, copy only (UI-languages
+owner call D-10 where a surface is fixed-width):
+
+- Polish `models.verifyAllHint`: «na powolnym dysku» («wolnym» can mean "free"), tautology gone.
+- Polish `perf.rating.slowDrive`: «Powolny dysk», was «Wolny dysk», for the same reason.
+- Polish `main.benchmark.warnSlowDrive`: «raczej powolny», was «raczej wolny», likewise.
+- Ukrainian `indicator.short.online`: «З мережею», one line in the rail foot instead of two.
+- Ukrainian `chat.runtime.demo`: «{model} · демонстрація», no longer cut off in the chat header.
+- Ukrainian `chat.scope.answeringFrom`: «Джерела: {source}», so the skill trigger beside it fits.
+- Ukrainian `gate.starter.chooseModel`: «Вибрати модель», as on Home, no break after «ШІ-».
+- Dutch `models.verifyAllHint`: «Met deze knop controleer je …», no pronoun for a thing.
+- Dutch `perf.footer`: «volledige» dropped, so the line fits.
+- Turkish `diag.system.imagesSize`: «Görsel geçmişi boyutu», one line.
+
+Accepted as they are (second UI-languages wave owner calls G-8, G-9): at 880×600 the document rows
+squeeze the name (Ukrainian to 32 px, English to 85 px), the pattern the first wave already left
+for follow-up; skill descriptions cut with an ellipsis at maximized in Dutch, Polish and Turkish;
+Diagnostics labels that wrap; a Polish «(OCR)”.» alone on a line. Recorded, not changed: CSS
+capitals in a Turkish interface apply Turkish rules to the user's own text (a project called
+"Invoices" would read «INVOİCES»; a document heading "Overview" reads «OVERVİEW»; owner calls
+G-7, G-10); conversation search and keyword retrieval lower without the fold, so «ısı» misses
+"ISI" and a query with «İ» finds nothing, «İstanbul» itself included (owner call G-12); and the
+first wave's code-built joins, now with one real break, a Ukrainian «23» and «GB» split across
+two lines on a model card by the plain space the code puts before the unit (`shared/format.ts`,
+`ModelsScreen.tsx`), while Turkish shows «15%» in the context meter whose tooltip, from the
+catalog, reads «%15». Eight findings that are wrong in English too (layout at 880×600, a few
+English wordings) were collected for follow-up (owner call G-11).
+Native review is open for all eight machine-drafted catalogs (#813), with two words this check
+left for it: Turkish «Uygulanamaz» ("not applicable", which may read "cannot be applied or
+enforced") and Polish «Wolno» ("slow", which can also read "allowed").
 
 ## Encrypted workspace (Phase 9 + audit rounds)
 - **`services/security/crypto.ts`** — KDF (Argon2id default, scrypt legacy; descriptor-supplied
