@@ -6,11 +6,12 @@ import { t } from '../../src/shared/i18n'
 import type { Conversation, Message } from '../../src/shared/types'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { appShellStubs } from '../helpers/app-shell'
+import { chatScreenStubs } from '../helpers/chat-screen'
 import { modelsScreenStubs } from '../helpers/model-fixtures'
 import { LAZY_SCREEN_WAIT } from '../helpers/hang-budget'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { appStatus, runtimeStatus } from '../helpers/status'
-import { makeDetail } from '../helpers/evidenceReview'
+import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
 
 // Route-level code split (full-audit 2026-07-10 PF-6): Documents/Translate/Images/Models/
 // Settings/Skills are React.lazy chunks behind the per-screen ErrorBoundary's Suspense.
@@ -19,9 +20,12 @@ import { makeDetail } from '../helpers/evidenceReview'
 // full-<App/> suites (AppLock, I18n, InformationArchitecture) keep covering that every
 // destination still RENDERS; this one covers the fallback → content sequence itself.
 
+// The screens behind each boundary read a stubbed bridge (#815): an unmocked call answers
+// `undefined`, so a screen would render its error path while the fallback assertions still passed.
 afterEach(() => {
   cleanup()
   purgeReviewSession()
+  assertNoUnexpectedApiCalls()
 })
 
 function stubAppShell(): void {
@@ -84,18 +88,20 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
         citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 12, snippet: '…' }]
       }
     ]
-    stubApi(
-      appShellStubs({
+    // The chat surface's calm reads first, the shell's defaults over them, this flow's own data
+    // last; `stubReviewApi` adds the freshness read every review open makes.
+    stubReviewApi({
+      ...chatScreenStubs(),
+      ...appShellStubs({
         getAppStatus: vi.fn(async () => appStatus({ appName: 'x', appVersion: '0', activeModelId: 'm1', machineRamGb: 16 })),
         // …plus the chat surface this flow drives (a running model so the chat gate opens):
         listConversations: vi.fn(async () => [conversation]),
         listMessages: vi.fn(async () => messages),
-        listDocuments: vi.fn(async () => []),
         getRuntimeStatus: vi.fn(async () => runtimeStatus({ warmedUp: undefined })),
         getEvidenceReviewForMessage: vi.fn(async () => null),
         createEvidenceReview: vi.fn(async () => makeDetail({ messageId: 'm2' }))
       })
-    )
+    })
     render(<App />)
     const nav = await screen.findByRole('navigation')
 

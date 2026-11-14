@@ -413,8 +413,11 @@ only the electron-vite **output** format is a choice. As built:
   internal module but contains only streamdown+katex — no real mermaid/cytoscape/d3 (no longer in
   the tree at all since streamdown 2.6, see above). The fallback renders the raw text in a `.md`
   container during the (local, offline, few-ms) load — no blank flash. Tests render markdown
-  synchronously: `vitest.config.ts` aliases `./AssistantMarkdownLazy` → the real component so render
-  assertions don't have to await Suspense.
+  synchronously: `vitest.config.ts` aliases the two specifiers the app imports the wrapper by
+  (`./AssistantMarkdownLazy` from the chat barrel and Transcript, `../chat/AssistantMarkdownLazy` from
+  ReviewScreen; one regex, #815) → the real component, so render assertions don't have to await
+  Suspense. `tests/unit/assistant-markdown-lazy.test.tsx` imports the wrapper by a longer path the
+  alias doesn't match, so it alone drives the real lazy chunk, and it pins both sides.
 - **Route-level code split (full-audit 2026-07-10 PF-6).** Six screens — Documents, Settings,
   Models, Images, Skills, Translate — are `React.lazy` in `App.tsx`, each a separate async chunk
   fetched on first navigation. Initial `index-*.js`: **1,255 kB → 998 kB (−20.5%)**; the split-out
