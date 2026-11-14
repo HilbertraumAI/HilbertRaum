@@ -742,7 +742,7 @@ export const ru: UiCatalog<'ru'> = {
   'docs.failed.remove': 'Убрать',
   'docs.failed.removeTitle': 'Убрать этот документ с ошибкой импорта из списка',
   'docs.failed.retry': 'Повторить',
-  'docs.failed.lead': 'Не удалось добавить этот файл.',
+  'docs.failed.lead': 'Не удалось обработать этот файл.',
   'docs.backToChat': 'Назад в чат',
   'docs.failed.retryTitle': 'Заново прочитать и подготовить этот файл',
   'docs.moreActions': 'Другие действия: {title}',

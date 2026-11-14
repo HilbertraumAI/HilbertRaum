@@ -417,6 +417,8 @@ Qualität bleibt top.").
 - **Typography:** German quotation marks „…“ (and ’ for apostrophes); German
   decimal/date conventions come from passing the resolved locale to
   `toLocaleString`/`Intl.NumberFormat`, never from hand-formatting.
+  A percent sign after a figure takes U+00A0 before it (`{pct}\u00A0%`), never a plain
+  space and never none; `TYPOGRAPHY_RULES.de` refuses both after a placeholder (#804, 2026-11-14).
 - **Untranslated by design:** the product name / "Lite" brand line, language names in the
   picker, technical values (model ids, paths, profile codes, "llama.cpp <version>").
 - **Text expansion is a layout problem:** German runs ~30 % longer — fix overflows with

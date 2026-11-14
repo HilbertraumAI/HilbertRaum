@@ -169,8 +169,8 @@ export const de: Record<keyof typeof en, string> = {
     'Dein Modell wird gestartet — große Modelle brauchen einen Moment zum Laden. Es geht ' +
     'hier automatisch weiter, sobald es bereit ist.',
   'chat.noModel.startingProgress':
-    'Dein Modell wird gestartet — die Modelldatei ({gb} GB) wird gelesen, bisher etwa ' +
-    '{pct} %. Es geht hier automatisch weiter, sobald es bereit ist.',
+    'Dein Modell wird gestartet — die Modelldatei ({gb} GB) wird gelesen, bisher etwa {pct}\u00A0%. ' +
+    'Es geht hier automatisch weiter, sobald es bereit ist.',
   'chat.noModel.open': 'KI-Modell öffnen',
   'chat.noModel.recheck': 'Erneut prüfen',
   'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',
@@ -464,7 +464,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.compaction.viewSummary': 'Zusammenfassung der früheren Nachrichten anzeigen',
   'chat.context.label': 'Speicher',
   // RD-3-Glossar: deutscher Plural ist „Token", nicht „Tokens" (full-audit 2026-07-11 CODE-43).
-  'chat.context.usageTooltip': 'Speicher für dieses Gespräch: {pct} % belegt (etwa {used} von {window} Token).',
+  'chat.context.usageTooltip':
+    'Speicher für dieses Gespräch: {pct}\u00A0% belegt (etwa {used} von {window} Token).',
   'chat.context.willSummarize': 'Bei vollem Speicher werden ältere Nachrichten automatisch zusammengefasst, um Platz zu schaffen.',
   // Ehrliches Signal (§L0): erscheint bei einer Antwort, die an einer Token-Grenze abgeschnitten wurde.
   // #498: die Beschriftung nennt KEINE Ursache mehr; der Tooltip wird über `Message.truncatedCause`
@@ -739,7 +740,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.failed.remove': 'Entfernen',
   'docs.failed.removeTitle': 'Diesen fehlgeschlagenen Import aus der Liste entfernen',
   'docs.failed.retry': 'Erneut versuchen',
-  'docs.failed.lead': 'Diese Datei konnte nicht hinzugefügt werden.',
+  'docs.failed.lead': 'Diese Datei konnte nicht verarbeitet werden.',
   // #573 — siehe en.ts.
   'docs.backToChat': 'Zurück zum Chat',
   'docs.failed.retryTitle': 'Diese Datei noch einmal einlesen und vorbereiten',
@@ -1080,7 +1081,7 @@ export const de: Record<keyof typeof en, string> = {
   // kein hängendes Leerzeichen). Wird von `amountText` im Handler gebaut.
   'skills.invoiceAnalysis.net': '- Netto: **{value}**',
   'skills.invoiceAnalysis.tax': '- Steuer: **{value}**',
-  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{value}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}\u00A0%): **{value}**',
   'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{value}**',
   'skills.invoiceAnalysis.positionsHeading': 'Positionen:',
   'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
@@ -1269,7 +1270,7 @@ export const de: Record<keyof typeof en, string> = {
     'Modell-Dateien werden geprüft… Die erste Prüfung nach dem Hinzufügen oder ' +
     'Aktualisieren eines Modells kann bei großen Dateien ein paar Minuten dauern; danach ' +
     'wird das Ergebnis gemerkt und es geht sofort.',
-  'models.checkingProgress': 'Modell {n} von {m} wird geprüft: {name} — {pct} %',
+  'models.checkingProgress': 'Modell {n} von {m} wird geprüft: {name} — {pct}\u00A0%',
   'models.state.installed': 'Installiert',
   'models.state.missing': 'Nicht heruntergeladen',
   'models.state.checksumFailed': 'Nicht prüfbar',
@@ -1296,7 +1297,7 @@ export const de: Record<keyof typeof en, string> = {
     'Für Downloads schalte in den Einstellungen „Internetzugriff für Downloads und Updates erlauben“ ' +
     'ein.',
   'models.download.verifying': 'Die heruntergeladene Datei wird geprüft…',
-  'models.download.progress': 'Wird heruntergeladen… {pct} % ({received} von {total})',
+  'models.download.progress': 'Wird heruntergeladen… {pct}\u00A0% ({received} von {total})',
   'models.download.progressNoTotal': 'Wird heruntergeladen… bisher {received}',
   'models.download.cancel': 'Download abbrechen',
   'models.download.cancelled':
@@ -1371,7 +1372,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.engineProblem.stillFailing': 'Sie kann immer noch nicht starten. Prüf, ob die Installation abgeschlossen ist, und versuch es dann noch einmal.',
   'models.engineProblem.fixed': 'Die KI-Engine läuft wieder.',
   'models.engineProblem.voiceFixed': 'Die Sprach-Engine läuft wieder.',
-  'models.engine.progress': 'KI-Engine wird heruntergeladen… {pct} %',
+  'models.engine.progress': 'KI-Engine wird heruntergeladen… {pct}\u00A0%',
   'models.engine.downloadingNoTotal': 'KI-Engine wird heruntergeladen…',
   'models.engine.verifying': 'KI-Engine wird geprüft…',
   'models.engine.extracting': 'KI-Engine wird entpackt…',
@@ -1409,7 +1410,7 @@ export const de: Record<keyof typeof en, string> = {
   'ocr.install.lang.eng': 'Englisch',
   'ocr.install.lang.osd': 'Seitenausrichtung (dreht quer liegende Seiten richtig herum)',
   'ocr.install.starting': 'Download wird gestartet…',
-  'ocr.install.progress': 'OCR-Dateien werden heruntergeladen… {pct} %',
+  'ocr.install.progress': 'OCR-Dateien werden heruntergeladen… {pct}\u00A0%',
   'ocr.install.verifying': 'OCR-Dateien werden geprüft…',
   'ocr.install.activating': 'Texterkennung wird gestartet…',
   'ocr.install.failed': 'Die OCR-Dateien konnten nicht installiert werden.',
@@ -2430,7 +2431,7 @@ export const de: Record<keyof typeof en, string> = {
   'gate.finishing.hint':
     'Wir schauen kurz nach, was schon auf diesem Laufwerk ist. Der erste Blick auf eine ' +
     'große KI-Modell-Datei kann ein paar Minuten dauern.',
-  'gate.finishing.progress': 'KI-Modell {n} von {m} wird geprüft: {name} — {pct} %',
+  'gate.finishing.progress': 'KI-Modell {n} von {m} wird geprüft: {name} — {pct}\u00A0%',
   'gate.finishing.skip': 'Überspringen — direkt zur App',
   'gate.starter.title': 'Eine letzte Sache',
   'gate.starter.noModel':
@@ -3208,7 +3209,7 @@ export const de: Record<keyof typeof en, string> = {
     'Ich habe die {license}-Lizenzbedingungen von kiwix-tools gelesen und akzeptiere sie',
   'packs.tools.confirm.start': 'Download starten',
   'packs.tools.sizeUnknown': 'unbekannt',
-  'packs.tools.progress': 'Wissenspaket-Werkzeuge werden installiert… {pct} %',
+  'packs.tools.progress': 'Wissenspaket-Werkzeuge werden installiert… {pct}\u00A0%',
   'packs.tools.downloadingNoTotal': 'Wissenspaket-Werkzeuge werden installiert…',
   'packs.tools.verifying': 'Wissenspaket-Werkzeuge werden geprüft…',
   'packs.tools.extracting': 'Wissenspaket-Werkzeuge werden entpackt…',

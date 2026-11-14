@@ -662,7 +662,7 @@ export const tr: UiCatalog<'tr'> = {
   'docs.failed.remove': 'Kaldır',
   'docs.failed.removeTitle': 'İçe aktarılamayan bu belgeyi listeden kaldırır',
   'docs.failed.retry': 'Yeniden dene',
-  'docs.failed.lead': 'Bu dosya eklenemedi.',
+  'docs.failed.lead': 'Bu dosya işlenemedi.',
   'docs.backToChat': 'Sohbete dön',
   'docs.failed.retryTitle': 'Bu dosyayı yeniden okur ve hazırlar',
   'docs.moreActions': 'Diğer işlemler: {title}',

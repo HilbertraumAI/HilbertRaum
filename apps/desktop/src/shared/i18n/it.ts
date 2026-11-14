@@ -731,7 +731,7 @@ export const it: UiCatalog<'it'> = {
   'docs.failed.remove': 'Rimuovi',
   'docs.failed.removeTitle': 'Rimuovi dall’elenco questa importazione non riuscita',
   'docs.failed.retry': 'Riprova',
-  'docs.failed.lead': 'Non è stato possibile aggiungere questo file.',
+  'docs.failed.lead': 'Non è stato possibile elaborare questo file.',
   'docs.backToChat': 'Torna alla chat',
   'docs.failed.retryTitle': 'Rileggi e prepara di nuovo questo file',
   'docs.moreActions': 'Altre azioni per «{title}»',

@@ -731,7 +731,7 @@ export const en = {
   'docs.failed.remove': 'Remove',
   'docs.failed.removeTitle': 'Remove this failed import from the list',
   'docs.failed.retry': 'Try again',
-  'docs.failed.lead': 'This file couldn’t be added.',
+  'docs.failed.lead': 'This file couldn’t be processed.',
   // #573: shown only after a chat's "Go to Documents" — returns to that conversation.
   'docs.backToChat': 'Back to chat',
   'docs.failed.retryTitle': 'Read and prepare this file again',

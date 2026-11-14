@@ -559,17 +559,20 @@ describe('ChatScreen — a failed attachment points to Documents (#570)', () => 
     expect(screen.getByRole('button', { name: 'Go to Documents' })).toBeInTheDocument()
   })
 
-  // #807: a message the display map does not know (a parser's or the OS's own words) reads under the
+  // #807: a message the display map does not know (a parser's or the OS's own words) reads under a
   // translated lead, its own text kept as the line below; a message the app knows reads as before.
+  // Code review 2026-11-14: the lead is the chat's own sentence naming the file ("Couldn't add
+  // broken.pdf to this chat."), no longer the document row's `docs.failed.lead`.
   it.each([
-    ['an unknown failure keeps its own words under the lead', 'other', true],
+    ['an unknown failure keeps its own words under a lead that names the file', 'other', true],
     ['a failure the app knows keeps its message, with no lead', 'known', false]
   ] as const)('%s, and no button', async (_failure, kind, lead) => {
     renderAttachBorn({ docs: [failedDoc('d1', 'broken.pdf', kind)] })
     bridge.drop(chatMain(), 'broken.pdf', '/tmp/broken.pdf')
     const own = await screen.findByText(STORED[kind])
     const banner = own.closest('.banner-text') as HTMLElement
-    expect(banner.textContent).toBe(lead ? `${en['docs.failed.lead']}${STORED[kind]}` : STORED[kind])
+    const leadText = t('en', 'chat.attach.failed', { name: 'broken.pdf' })
+    expect(banner.textContent).toBe(lead ? `${leadText}${STORED[kind]}` : STORED[kind])
     // Under the lead, its own words are a line of their own rather than running on after it.
     expect(own.tagName === 'P').toBe(lead)
     expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()

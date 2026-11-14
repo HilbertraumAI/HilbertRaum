@@ -178,7 +178,8 @@ export interface ServerCopy {
   text: string
   /** Whether `raw` was one of the app's own messages: the exact map, an interpolated family, or the
    *  doc-task-busy substring. False only for the pass-through (a library's or the OS's own words),
-   *  which a failed row and the chat attach banner show under the translated `docs.failed.lead`. */
+   *  which a failed row shows under the translated `docs.failed.lead` and the chat attach banner
+   *  under `chat.attach.failed` (it names the file). */
   recognized: boolean
 }
 

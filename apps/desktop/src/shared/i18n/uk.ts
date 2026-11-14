@@ -760,7 +760,7 @@ export const uk: UiCatalog<'uk'> = {
   'docs.failed.remove': 'Прибрати',
   'docs.failed.removeTitle': 'Прибрати цей невдалий імпорт зі списку',
   'docs.failed.retry': 'Спробувати ще раз',
-  'docs.failed.lead': 'Не вдалося додати цей файл.',
+  'docs.failed.lead': 'Не вдалося обробити цей файл.',
   'docs.backToChat': 'Назад до чату',
   'docs.failed.retryTitle': 'Ще раз прочитати й підготувати цей файл',
   'docs.moreActions': 'Інші дії з документом «{title}»',

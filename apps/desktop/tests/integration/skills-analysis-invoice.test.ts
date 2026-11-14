@@ -195,13 +195,15 @@ describe('invoice analysis handler — honest completeness gate (U1, §2.3)', ()
   })
 })
 
-// #804: the tax rate is written in the main process's language figures. It was passed raw, so a 5.5 %
-// rate read "5.5" in German too. The app hands the builder `tMain`, so each row sets main's language.
-describe('invoice analysis handler — the tax rate in the main language (#804)', () => {
+// #804, code review 2026-11-14: the tax rate prints as the plain figure, like the amounts beside it.
+// Round B wrote it in the UI language's figures, so a German line read "5,5 %" beside "5.50 EUR"; the
+// owner took the plain figure back, so every figure on the line uses a dot. The app hands the builder
+// `tMain`, so each row sets main's language: a rate localized again shows in the German row.
+describe('invoice analysis handler — the tax rate prints like the amounts (#804)', () => {
   it.each([
     ['en', '- Tax (5.5%): **5.50 EUR**'],
-    ['de', '- Steuer (5,5%): **5.50 EUR**']
-  ] as const)('%s: a tax rate of 5.5 reads in the language’s figures', (code, taxLine) => {
+    ['de', '- Steuer (5.5\u00A0%): **5.50 EUR**']
+  ] as const)('%s: a tax rate of 5.5 prints with a dot, as the amounts do', (code, taxLine) => {
     const invoice: InvoiceInput = {
       header: { currency: 'EUR' },
       lineItems: [{ description: 'Widget', lineTotal: 100, currency: 'EUR' }],

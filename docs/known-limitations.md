@@ -2748,6 +2748,10 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   format can misread.
 - **Dutch dates use the Netherlands pattern** for every Dutch-speaking user, in Belgium too:
   13-11-2026, not the Belgian 13/11/2026.
+- **Figures in a skill's answer are written with a dot in every language.** The invoice and
+  bank-statement answers quote the amounts they read with a decimal point ("5.50 EUR"), whatever
+  the interface language, and the tax rate in an invoice answer is written the same way, so a
+  German answer reads "Steuer (5.5 %)" rather than "5,5 %".
 - **Two texts still ignore the language's own way of writing them.** In Settings → Diagnostics →
   Activity, every entry is written "time — type: message", with a dash that Spanish, French,
   Italian, Dutch, Polish and Turkish don't use there. And the app's refusal to start a model that needs
@@ -2819,8 +2823,9 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   The D-L4 display map covers the finite persist-canonical set (exact match, plus five
   interpolated messages matched by their template), so anything else in
   `documents.error_message`, such as a raw parser-library error (a pdfjs exception message), is
-  shown as it was written. On a failed document's row and in the chat's banner for a failed
-  attachment, a line in the interface language ("This file couldn't be added.") stands above it.
+  shown as it was written. A line in the interface language stands above it: "This file couldn't
+  be processed." on a failed document's row, and "Couldn't add report.pdf to this chat." (with
+  the file's name) in the chat's banner for a failed attachment.
   The Documents banner for a failed summary, translation or text-recognition task, the file
   translation's banner and the evidence-pack export error show such text on its own. Rare
   failure-path remnants, accepted.

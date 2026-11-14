@@ -86,11 +86,13 @@ from its first public `1.0.0` release onward.
   across two lines between the figure and the unit. The chat's context meter and an audio file's
   transcribing badge write the percentage the language's way (Turkish "%15", French and Spanish
   "15 %"), and German now shows "15 %" there too. In French, Spanish and German the space before
-  the sign is a no-break space, so the figure and the sign stay on one line. A label and its value
-  are joined the way the language does it (French puts a space before the colon). The licence link
-  in the model-download and knowledge-pack-tools dialogs now sits on its own line instead of after
-  a dash. A model card's memory figures and the tax rate in an invoice answer use the language's
-  decimal separator. The Spanish review summary no longer shows two colons
+  the sign is a no-break space, so the figure and the sign stay on one line; German now writes it
+  before every percentage, in the download, check and install progress lines too. A label and its
+  value are joined the way the language does it (French puts a space before the colon). The
+  licence link in the model-download and knowledge-pack-tools dialogs now sits on its own line
+  instead of after a dash. A model card's memory figures use the language's decimal separator.
+  The tax rate in an invoice answer keeps its decimal point, like the amounts beside it, so a
+  German answer reads "Steuer (5.5 %)". The Spanish review summary no longer shows two colons
   ("Revisado: respaldado: 0"): the decisions read "Revisado (respaldado)" (#804).
 - **Counts of exactly 1 now read right in English and German.** Answers and coverage lines such as
   "I read 1 transactions", "Based on 1 of 1 sections" or "1 line(s) …" now put the count after a
@@ -99,11 +101,12 @@ from its first public `1.0.0` release onward.
   items decided: 0 of 2"). The other languages already wrote these counts this way. One English
   line is unchanged: the speed line under an answer still reads "1 tokens" after a one-token
   answer (#806).
-- **A file that can't be added now says so in your language.** When importing or attaching a
-  document fails with an error the app doesn't recognise, such as a file reader's own English
-  message ("Invalid PDF structure."), the document's row on the Documents screen and the chat's
-  banner for a failed attachment now show "This file couldn't be added." in the interface language
-  above that message. Messages the app recognises read as before (#807).
+- **A file that can't be read now says so in your language.** When importing, re-indexing or
+  attaching a document fails with an error the app doesn't recognise, such as a file reader's own
+  English message ("Invalid PDF structure."), a line in the interface language now stands above
+  that message: "This file couldn't be processed." on the document's row on the Documents screen,
+  and "Couldn't add report.pdf to this chat.", with the file's name, in the chat's banner for a
+  failed attachment. Messages the app recognises read as before (#807).
 
 ## [0.1.65] — 2026-11-11
 

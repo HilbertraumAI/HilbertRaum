@@ -6003,14 +6003,15 @@ more, and a size built in code takes the same space (`unitJoin`, §5) · G-4 (a)
 joins and percent signs come from the catalog patterns `common.labelValue` and `common.percent`
 (German then shows "15 %" in the context meter and the transcribing badge, with a no-break space
 since the real-app check, below), the licence link sits on a line of its own, raw numbers take
-the language's figures, the copied reports keep their plain code-built joins and the units their
-Latin symbols, and the brand link's tooltip and the Spain pattern of Spanish figures stay as they
-are (§5) · G-5 (a): the English and German sentences that read wrong at exactly 1 put the count
+the language's figures (the invoice tax rate excepted since the code review, below), the copied
+reports keep their plain code-built joins and the units their Latin symbols, and the brand
+link's tooltip and the Spain pattern of Spanish figures stay as they are (§5) · G-5 (a): the English and German sentences that read wrong at exactly 1 put the count
 after a label, `chat.speed.line` excepted (§5) · G-7 (a): a support report copied in any language
 but English and German carries an English copy in the same paste (§5) · G-10 (a): the English and
 German copy fixes of #805, each changed sentence read by the owner before it was translated ·
 G-12 (a): one generic lead, "This file couldn’t be added.", above an unrecognised error on a
-failed document row and in the chat's attach banner (§3.3 Rule 1).
+failed document row and in the chat's attach banner (§3.3 Rule 1; amended at the code review,
+below).
 G-6, G-8, G-9 and G-11 decide the language select, search and sorting, layout, and how questions
 in the new languages are recognised; this legend records them when their changes land. Made
 while the catalog changes were built (2026-11-14): the Spanish review decision labels put the
@@ -6023,7 +6024,13 @@ app can give the answer again without the skill, as the auto-skill tooltip does 
 link, now on its own line, starts with a capital ("Read the license") · the Privacy tab's
 "internet access is enabled" line names the OCR files too. Made at the real-app check
 (2026-11-14): German's `common.percent` writes U+00A0 before the sign, as Spanish and French do,
-because a plain space let "19" wrap above "%" in the context meter at 880×600 (§5).
+because a plain space let "19" wrap above "%" in the context meter at 880×600 (§5). Made at the
+code review (2026-11-14), amending G-4 and G-12: the invoice answer's tax rate prints as the plain
+figure again, with a dot like the amounts beside it, since a skill answer's figures print with a
+dot in every language (§5) · the chat's attach banner leads with `chat.attach.failed`, which names
+the file, and `docs.failed.lead`, now "This file couldn’t be processed.", serves the failed
+document row alone (§3.3 Rule 1) · every German percent after a figure takes U+00A0, not only
+`common.percent`, and a German typography rule refuses `{x}%` and `{x} %` (§5).
 
 ### §3.1 The i18n module
 
@@ -6126,14 +6133,17 @@ build tree-shakes them).
   already-persisted rows. Interpolated persisted constants are reverse-matched by template
   regex instead (`INTERPOLATED_MAP_KEYS`). Unknown strings (e.g. raw parser-library errors)
   render as-is by design. **Amended 2026-11-14 (open-issues wave, #807; open-issues wave owner
-  call G-12):** a failed document row (`DocRow.tsx`) and the chat's attach banner
-  (`ChatScreen.tsx`) show such a string under a translated lead, `docs.failed.lead` ("This file
-  couldn’t be added."), with the string itself as the detail line, so the row says in the
-  interface language what happened. `classifyServerCopy()` returns the display text and whether
-  the map recognised the string (the exact map, the five interpolated families or the
-  doc-task-busy substring), and only a string it does not recognise gets the lead;
-  `localizeServerCopy()` keeps its signature and returns the text alone. Stored data is
-  unchanged, so rows stored before the change get the lead too. Everywhere else an unknown string
+  call G-12; the two leads as the code review settled them the same day):** a failed document
+  row (`DocRow.tsx`) shows such a string under a translated lead, `docs.failed.lead` ("This
+  file couldn’t be processed.", true for a failed import, re-index or text recognition alike),
+  and the chat's attach banner (`ChatScreen.tsx`) under its own lead, `chat.attach.failed`
+  ("Couldn't add {name} to this chat."), which names the file; each keeps the string itself as
+  the detail line, so the row and the banner say in the interface language what happened.
+  `classifyServerCopy()` returns the display text and whether the map recognised the string (the
+  exact map, the five interpolated families or the doc-task-busy substring), and only a string it
+  does not recognise gets a lead; `localizeServerCopy()` keeps its signature and returns the
+  text alone. Stored data is unchanged, so rows stored before the change get the lead too.
+  Everywhere else an unknown string
   still renders as-is, the Documents banner for a failed summary, translation or OCR task, the
   file translation's banner and the evidence-pack export error among them. A hygiene test pins
   `DISPLAY_MAP_KEYS` +
@@ -6227,9 +6237,12 @@ one, and each glossary is pinned on top of its catalog file.
     Russian and Ukrainian, `{pct}` + U+00A0 + `%` in German, Spanish and French, `%{pct}` in
     Turkish. Its sites: the chat's context meter (`ContextMeter.tsx`) and an audio file's
     transcribing badge (`badgeFor`, `screens/documents/format.tsx`), so German shows "15 %"
-    there, spaced as its catalog's `{pct} %` values are but with a no-break space: a plain one let
-    "19" wrap above "%" in the context meter at 880×600 (owner call at the real-app check,
-    2026-11-14). Those other German values, inside longer sentences, keep a plain space.
+    there with a no-break space: a plain one let "19" wrap above "%" in the context meter at
+    880×600 (owner call at the real-app check, 2026-11-14). German writes the same U+00A0 before
+    every percent sign after a figure, in the longer sentences too (the context meter's tooltip,
+    the model-start panel, the download, check and install progress lines, the invoice answer's
+    tax line; code review, 2026-11-14), and its `TYPOGRAPHY_RULES` refuse a `{placeholder}`
+    followed by `%` or ` %` (`tests/unit/i18n.test.ts`, with accept and refuse samples).
   - `tNodes(t, key, nodes)` (`renderer/i18nNodes.tsx`) renders a pattern whose placeholders carry
     markup, which `t` cannot, since it returns a string: the bold role name of a Performance row,
     the glyph before a review decision, the bold type label of an activity line. It asks `t` for
@@ -6256,10 +6269,12 @@ one, and each glossary is pinned on top of its catalog file.
     and the report, takes the join as an argument: the card passes `unitJoin(lang)`, the report a
     plain space.
   - Raw numbers in copy take the language's figures: a model card's memory figures
-    (`toLocaleString(lang)`, `ModelsScreen.tsx`) and the invoice answer's tax rate
-    (`toLocaleString(mainUiLanguage())`, `skills/analysis/invoice.ts`). The licence link in the
-    model-download and knowledge-pack-tools dialogs sits on a line of its own, so no language needs
-    a separator before it.
+    (`toLocaleString(lang)`, `ModelsScreen.tsx`). A skill answer's figures do not: they print
+    with a dot in every language, as the app read them, and the invoice answer's tax rate prints
+    the same way (`String(taxRatePercent)`, `skills/analysis/invoice.ts`), so one line never mixes
+    "5,5" with "5.50 EUR" (code review, 2026-11-14, which took back the rate's localization). The
+    licence link in the model-download and knowledge-pack-tools dialogs sits on a line of its own,
+    so no language needs a separator before it.
   - The guard: `tests/unit/label-value-joins.test.ts` scans `src/renderer/**/*.tsx` through the
     TypeScript AST for the join shapes the renderer has used (a JSX colon after an expression or an
     element, a `${a}: ${b}` or `… — ${b}` template, a `': '` or `' — '` string) and fails on any

@@ -314,6 +314,13 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       '“',
       'never uses “ as an OPENING quote (the pair is „…“, not “…”)',
       '“ used before its „ — German opens low, closes high'
+    ),
+    // #804, code review 2026-11-14: German writes a percent after a figure with U+00A0, as
+    // `common.percent` does, so the sign never wraps to a line of its own and every value agrees.
+    forbids(
+      /\} ?%/,
+      'separates a {placeholder} from % with a no-break space',
+      'German values with {x}% or {x} % — write {pct}\\u00A0%'
     )
   ],
   // Spanish: the typography of design-guidelines §7 "Spanish microcopy".
@@ -1194,6 +1201,36 @@ describe('figure and unit — the no-break space before a unit symbol, on sample
     ['nl', true]
   ] as const)('%s: a typed figure grouped with U+00A0 is refused: %s', (code, refused) => {
     expect(flags(code, NBSP_RULES[code], `200${NBSP}000`)).toBe(refused)
+  })
+})
+
+// The German percent rule (#804, code review 2026-11-14), tried on samples so a rule that has
+// stopped matching anything cannot pass the catalog row alone. Read from TYPOGRAPHY_RULES by title.
+describe('German typography — the percent rule on samples (#804)', () => {
+  const NBSP = String.fromCharCode(0xa0)
+  const TITLE = 'separates a {placeholder} from % with a no-break space'
+  const flags = (sample: string): boolean => {
+    const found = TYPOGRAPHY_RULES.de.find((r) => r.title === TITLE)
+    if (found === undefined) throw new Error(`no de typography rule titled ${TITLE}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each([
+    ['a no-break space', `{pct}${NBSP}%`],
+    ['a no-break space inside parentheses', `- Steuer ({rate}${NBSP}%): **{value}**`],
+    ['a no-break space before a full stop', `bisher etwa {pct}${NBSP}%. Es geht weiter`],
+    ['a percent sign after a word', 'Angaben in %']
+  ])('accepts %s', (_label, sample) => {
+    expect(flags(sample)).toBe(false)
+  })
+
+  it.each([
+    ['a plain space', '{pct} %'],
+    ['no space', '{pct}%'],
+    ['no space inside parentheses', '- Steuer ({rate}%): **{value}**'],
+    ['a plain space in a longer value', 'Modell {n} von {m} wird geprüft: {name} — {pct} %']
+  ])('refuses %s', (_label, sample) => {
+    expect(flags(sample)).toBe(true)
   })
 })
 

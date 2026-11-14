@@ -2202,7 +2202,8 @@ export function ChatScreen({
         setDocs(fresh)
         if (activeIdRef.current === convId) await refreshAttachments(convId)
         // Per-file failure: show the friendly error (canonical English → display map); #807: a
-        // message the map does not know is the detail under the translated lead. #570: the
+        // message the map does not know is the detail under a translated lead that names the file
+        // (code review 2026-11-14: the chat's own "Couldn't add {name}…", not the row's). #570: the
         // file whose fix is known leads — a scan, then a photo that needs the OCR files — read from
         // the structured flag, never the stored (localized) text; its copy points to Documents.
         if (job.failed > 0) {
@@ -2219,7 +2220,7 @@ export function ChatScreen({
                 ? { message: t('chat.attach.failed', { name: failed.title }) }
                 : copy.recognized
                   ? { message: copy.text }
-                  : { message: t('docs.failed.lead'), detail: copy.text }),
+                  : { message: t('chat.attach.failed', { name: failed.title }), detail: copy.text }),
               ...(kind ? { remedy: { kind, name: failed.title, conversationId: convId } } : {})
             }
             if (activeIdRef.current === convId) setErrorState(state)
