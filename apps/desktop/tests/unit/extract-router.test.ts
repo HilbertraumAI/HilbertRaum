@@ -647,6 +647,11 @@ describe('routeQuestion — the example chips in every interface language (#809)
     }
   })
 
+  it.each(otherLanguages)('%s: the summarize chip followed by another question is a plain question', (code) => {
+    const question = `${t(code, 'chat.example.summarize')}. ${t(code, 'chat.example.paymentTerms')}`
+    expect(routeQuestion({ ...index, question })).toEqual(plain)
+  })
+
   it.each(UI_LANGUAGE_CODES)('%s: the every-mention chip, with its own word or another term, gets the label', (code) => {
     const chip = t(code, 'chat.example.indemnity')
     const ownTerm = withOwnTerm(chip)
@@ -685,7 +690,13 @@ describe('routeQuestion — the example chips in every interface language (#809)
     ["Qu'est-ce qui différencie les deux offres ?", { engine: 'compare', confidence: 'high' }],
     // controls: the English words still match where \b let them
     ['Lease A vs. lease B', { engine: 'compare', confidence: 'high' }],
-    ['What is the diff between the two versions?', { engine: 'compare', confidence: 'high' }]
+    ['What is the diff between the two versions?', { engine: 'compare', confidence: 'high' }],
+    // … and not where it did not: glued to a digit or "_" (a bare letter lookaround would match these)
+    ['10vs20', plain],
+    ['diff2', plain],
+    ['file_diff', plain],
+    ['vs 2', { engine: 'compare', confidence: 'high' }],
+    ['diff:', { engine: 'compare', confidence: 'high' }]
   ] as const)('%s → %o over two documents', (question, decision) => {
     expect(routeQuestion({ ...index, documentCount: 2, question })).toEqual(decision)
   })

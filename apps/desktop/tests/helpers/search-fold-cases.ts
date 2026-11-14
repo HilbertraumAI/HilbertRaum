@@ -48,6 +48,9 @@ export interface SearchFoldCase {
 export const SEARCH_FOLD_CASES: SearchFoldCase[] = [
   // The index stores «Isı» as `isı` and «ISI» as `isi`: only the ı/i spellings reach them.
   { typed: '«ısı»', query: ISI, finds: ['ısı yalıtımı', 'Isı yalıtımı raporu', 'ISI raporu'] },
+  // A capital I lowers to "i": «Isı» becomes `isı`, spelled `isi` too, so it finds «Isı» and «ISI»;
+  // no spelling adds an ı, so it misses «ısı yalıtımı» (the same residual as «isi» below).
+  { typed: '«Isı»', query: `Is${DOTLESS_I}`, finds: ['Isı yalıtımı raporu', 'ISI raporu'] },
   // toLowerCase() leaves "i" + U+0307, and the mark used to split the word into "i" OR "stanbul".
   { typed: '«İstanbul»', query: `${CAPITAL_DOTTED_I}stanbul`, finds: ['İSTANBUL gezisi', 'İstanbul gezisi', 'istanbul'] },
   // Without NFC each separate mark cut the word: "re" OR "sume" found only "Re: the offer".
