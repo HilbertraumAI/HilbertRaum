@@ -121,19 +121,32 @@ const COMPARE_RE =
 // #809 (open-issues wave owner call G-11): the document-mode example chips (`ChatScreen.tsx`) fill the composer
 // with a catalog question in the interface language, while the words above are English and German. So the two
 // chips the router serves are recognised in every registered catalog (i18n record §3.3 rule 3, like the bank
-// skill's routed questions): read at run time, never copied, composed, lowered and trimmed on both sides. The
-// summarize chip, by its whole text, is a summary ask. The every-mention chip is recognised by its FRAME, the
-// text around its quoted example word, whatever stands in the quotes ("Busca cada mención de «fianza»"), and gets
-// the labelled answer the English and German chips get by their own words (step 4b); a catalog value with no
-// quoted segment is recognised by its whole text.
-const catalogValues = (key: MessageKey): string[] =>
-  UI_LANGUAGE_CODES.map((code) => lowerCaseNfc(t(code, key)).trim())
+// skill's routed questions): read at run time, never copied, composed, lowered and trimmed on both sides, and
+// without the sentence end either side may close with (`chipText`). The summarize chip, by its whole text, is a
+// summary ask. The every-mention chip is recognised by its FRAME, the text around its quoted example word,
+// whatever stands in the quotes ("Busca cada mención de «fianza»"), and gets the labelled answer the English and
+// German chips get by their own words (step 4b); a catalog value with no quoted segment is recognised by its
+// whole text.
+// The sentence ends stripped from the end of a chip and of a question: the catalogs close their sentences with
+// ".", "…" and "?", and a user may add "!" ("Resume este documento.", "Résumez ce document !").
+const SENTENCE_END = '.!?…'
+
+/** `text` composed, lowered and trimmed, without the sentence end (and the spaces) it closes with. */
+function chipText(text: string): string {
+  const lowered = lowerCaseNfc(text).trim()
+  let end = lowered.length
+  while (end > 0 && (SENTENCE_END.includes(lowered[end - 1]!) || /\s/u.test(lowered[end - 1]!))) end--
+  return lowered.slice(0, end)
+}
+
+const catalogValues = (key: MessageKey): string[] => UI_LANGUAGE_CODES.map((code) => chipText(t(code, key)))
 const SUMMARIZE_CHIPS = new Set(catalogValues('chat.example.summarize'))
 // An opening quote and the quotes that close it: ' ', „ “ (German) or „ ” (Polish), « », “ ”.
 const CLOSING_QUOTES: Readonly<Record<string, string>> = { "'": "'", '„': '“”', '«': '»', '“': '”' }
 
 /** A catalog value's text up to and including its opening quote and from its closing quote on, or null when
- *  it quotes nothing. An apostrophe inside a word ("tenant's") opens no quote. */
+ *  it quotes nothing. An apostrophe inside a word ("tenant's") opens no quote, and an opening quote that no
+ *  quote closes gives way to the next one. */
 function quoteFrame(value: string): { before: string; after: string } | null {
   for (let i = 0; i < value.length; i++) {
     const closers = CLOSING_QUOTES[value[i]!]
@@ -141,7 +154,6 @@ function quoteFrame(value: string): { before: string; after: string } | null {
     for (let j = i + 1; j < value.length; j++) {
       if (closers.includes(value[j]!)) return { before: value.slice(0, i + 1), after: value.slice(j) }
     }
-    return null
   }
   return null
 }
@@ -150,12 +162,12 @@ const MENTION_CHIPS = catalogValues('chat.example.indemnity').map((value) => quo
 
 /** Is the question one of the catalogs' summarize chips? */
 function isSummarizeChip(question: string): boolean {
-  return SUMMARIZE_CHIPS.has(lowerCaseNfc(question).trim())
+  return SUMMARIZE_CHIPS.has(chipText(question))
 }
 
 /** Is the question one of the catalogs' every-mention chips, with any text in its quotes? */
 function isMentionChip(question: string): boolean {
-  const q = lowerCaseNfc(question).trim()
+  const q = chipText(question)
   return MENTION_CHIPS.some((chip) => {
     if (typeof chip === 'string') return q === chip
     const inQuotes = q.slice(chip.before.length, q.length - chip.after.length)
@@ -777,7 +789,9 @@ export function mapQuestionToRecordType(question: string): ExtractRecordType {
 
 /** Classify a question into an engine choice (pure; plan §4.4). */
 export function routeQuestion(input: RouteInput): RouteDecision {
-  const q = input.question ?? ''
+  // #809: composed once (NFC), so every check below reads a letter typed with a separate accent ("e" + U+0301)
+  // as the one letter its words are written with («différence»).
+  const q = (input.question ?? '').normalize('NFC')
   const docs = input.documentCount ?? 0
 
   // Steps 2–5 keep their historical numbers ("the step-5 fallthrough" is cited in code and docs);

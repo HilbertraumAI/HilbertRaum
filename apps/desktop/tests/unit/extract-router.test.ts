@@ -647,6 +647,13 @@ describe('routeQuestion — the example chips in every interface language (#809)
     }
   })
 
+  it.each(UI_LANGUAGE_CODES)('%s: the summarize chip closed by a sentence end still gets the tree summary', (code) => {
+    const chip = t(code, 'chat.example.summarize')
+    for (const question of [`${chip}.`, `${chip} !`, `${chip}…`, `${chip}?! `]) {
+      expect(routeQuestion({ ...index, question }), question).toEqual({ engine: 'tree-summary', confidence: 'high' })
+    }
+  })
+
   it.each(otherLanguages)('%s: the summarize chip followed by another question is a plain question', (code) => {
     const question = `${t(code, 'chat.example.summarize')}. ${t(code, 'chat.example.paymentTerms')}`
     expect(routeQuestion({ ...index, question })).toEqual(plain)
@@ -656,7 +663,7 @@ describe('routeQuestion — the example chips in every interface language (#809)
     const chip = t(code, 'chat.example.indemnity')
     const ownTerm = withOwnTerm(chip)
     expect(ownTerm, 'the chip quotes its example word').not.toBe(chip)
-    for (const question of [chip, ownTerm]) {
+    for (const question of [chip, ownTerm, `${chip}.`, `${ownTerm} ?`]) {
       for (const extractAvailable of [true, false]) {
         expect(routeQuestion({ ...index, extractAvailable, question }), question).toEqual(labelled)
       }
@@ -680,6 +687,8 @@ describe('routeQuestion — the example chips in every interface language (#809)
     ['Y a-t-il un différentiel de prix ?', plain], // pre-fix: compare
     ['Quelle est la différence entre les deux contrats ?', { engine: 'compare', confidence: 'high' }],
     ['Quelles sont les différences ?', { engine: 'compare', confidence: 'high' }],
+    // the "é" typed as "e" + a separate acute accent: the router composes the question first
+    [`Quelle est la diffe${String.fromCharCode(0x0301)}rence entre les deux contrats ?`, { engine: 'compare', confidence: 'high' }],
     ['Le loyer est-il différent ?', { engine: 'compare', confidence: 'high' }],
     ['La clause de résiliation est-elle différente ?', { engine: 'compare', confidence: 'high' }],
     ['Les deux contrats sont-ils différents ?', { engine: 'compare', confidence: 'high' }],

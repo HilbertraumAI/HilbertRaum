@@ -87,38 +87,37 @@ describe('buildFtsMatchQuery', () => {
   const dotless = (spelled: string): string => spelled.replaceAll('1', DOTLESS_I) // "1s1" → ısı
   const phrases = (match: string | null): string[] => (match ?? '').split(' OR ')
 
-  it('spells a word holding ı both ways: the typed words first, then the other spellings in a fixed order', () => {
-    expect(buildFtsMatchQuery(dotless('1s1 raporu'))).toBe(
-      dotless('"1s1" OR "raporu" OR "is1" OR "1si" OR "isi"')
-    )
+  // Stored text holds a word holding ı as typed, with a capital first letter («Isı», stored isı) or in
+  // capitals («ISI», stored isi), so those are the only spellings added (owner call of 2026-11-14).
+  it('adds the stored spellings of a word holding ı: the typed words first, then capital first letter, then capitals', () => {
+    expect(buildFtsMatchQuery(dotless('1s1 raporu'))).toBe(dotless('"1s1" OR "raporu" OR "is1" OR "isi"'))
+    // Only the first letter is ı (ırmak) or the word does not start with ı (kır): one spelling each.
+    expect(buildFtsMatchQuery(dotless('1rmak k1r'))).toBe(dotless('"1rmak" OR "k1r" OR "irmak" OR "kir"'))
     // An extra spelling that is already in the query is not repeated.
-    expect(buildFtsMatchQuery(dotless('1s1 isi'))).toBe(dotless('"1s1" OR "isi" OR "is1" OR "1si"'))
+    expect(buildFtsMatchQuery(dotless('1s1 isi'))).toBe(dotless('"1s1" OR "isi" OR "is1"'))
   })
 
-  it('a word with four ı gets all 16 spellings; one with five stays as typed', () => {
-    const four = dotless('1s1t1c1') // ısıtıcı (heater)
-    expect(phrases(buildFtsMatchQuery(four))).toHaveLength(16)
-    expect(phrases(buildFtsMatchQuery(four))[0]).toBe(`"${four}"`)
-    expect(phrases(buildFtsMatchQuery(four)).at(-1)).toBe('"isitici"')
-    const five = dotless('k1s1tlay1c1l1k') // kısıtlayıcılık
-    expect(buildFtsMatchQuery(five)).toBe(`"${five}"`)
+  it('a word with many ı gets exactly its stored spellings, whatever their number', () => {
+    // kısıtlayıcılık (five ı, a consonant first): typed and in capitals.
+    expect(buildFtsMatchQuery(dotless('k1s1tlay1c1l1k'))).toBe(dotless('"k1s1tlay1c1l1k" OR "kisitlayicilik"'))
+    // ısıtıcılık (five ı, ı first): typed, capital first letter, capitals.
+    expect(buildFtsMatchQuery(dotless('1s1t1c1l1k'))).toBe(
+      dotless('"1s1t1c1l1k" OR "is1t1c1l1k" OR "isiticilik"')
+    )
   })
 
   it('stops at 32 phrases: the typed words are kept, the other spellings are cut', () => {
     const words = Array.from({ length: 30 }, (_, i) => `w${i}`)
-    // 30 words + ısı = 31 typed words, so one other spelling fits.
+    // 30 words + ısı = 31 typed words, so one other spelling fits (capital first letter), not two.
     expect(phrases(buildFtsMatchQuery([...words, dotless('1s1')].join(' ')))).toEqual([
       ...words.map((w) => `"${w}"`),
       dotless('"1s1"'),
       dotless('"is1"')
     ])
-    // ısıtıcı sınıfını ısı: the three typed words, ısıtıcı's 15 other spellings, then 14 of sınıfını's
-    // 15 fill the cap, and none of ısı's is left.
-    const full = phrases(buildFtsMatchQuery(dotless('1s1t1c1 s1n1f1n1 1s1')))
-    expect(full).toHaveLength(32)
-    expect(full.slice(0, 3)).toEqual(dotless('"1s1t1c1" "s1n1f1n1" "1s1"').split(' '))
-    expect(full.at(-1)).toBe(dotless('"s1nifini"')) // the 14th: every ı but the first as "i"
-    expect(full).not.toContain(dotless('"is1"'))
+    // ısıtıcı sınıfını ısı: every word's spellings fit, word by word after the three typed words.
+    expect(phrases(buildFtsMatchQuery(dotless('1s1t1c1 s1n1f1n1 1s1')))).toEqual(
+      dotless('"1s1t1c1" "s1n1f1n1" "1s1" "is1t1c1" "isitici" "sinifini" "is1" "isi"').split(' ')
+    )
     // 33 typed words: the query is the first 32 of them, as before, with no room for another spelling.
     expect(phrases(buildFtsMatchQuery([...words, 'x', dotless('1s1'), 'y'].join(' ')))).toEqual([
       ...words.map((w) => `"${w}"`),
@@ -133,6 +132,17 @@ describe('buildFtsMatchQuery', () => {
     expect(buildFtsMatchQuery(`r${'e' + acute}sum${'e' + acute}`)).toBe(`"r${composedE}sum${composedE}"`)
     expect(buildFtsMatchQuery(`${String.fromCharCode(0x0130)}stanbul`)).toBe('"istanbul"')
     expect(buildFtsMatchQuery(`I${String.fromCharCode(0x0307)}STANBUL`)).toBe('"istanbul"')
+  })
+
+  // Owner call of 2026-11-14: a word starts with a letter or digit and keeps its marks, so a mark NFC
+  // cannot compose stays inside its phrase, and a mark with no letter before it never becomes one.
+  it('keeps a mark inside a word, and a mark that starts a word never becomes a phrase', () => {
+    const acute = String.fromCharCode(0x0301)
+    const privetStressed = String.fromCharCode(0x043f, 0x0440, 0x0438, 0x0432, 0x0435, 0x0301, 0x0442)
+    expect(buildFtsMatchQuery(privetStressed)).toBe(`"${privetStressed}"`)
+    expect(buildFtsMatchQuery(acute)).toBeNull()
+    expect(buildFtsMatchQuery(`note ${acute}${acute} here`)).toBe('"note" OR "here"')
+    expect(buildFtsMatchQuery(`note ${acute}x`)).toBe('"note" OR "x"')
   })
 
   // The MATCH builder as it was before #818, kept only as the reference for the guard row below.

@@ -247,9 +247,14 @@ describe('isSmallTalk — the ten interface languages (#809)', () => {
     'Bedankt!', 'Dank je wel!', 'Dziękuję!', 'Teşekkürler!', 'Спасибо!', 'Дякую!', 'Дякую вам', 'Спасибо тебе',
     // Capitals: the capital dotted İ lowers to a plain "i" before the split.
     `${DOTTED_CAPITAL_I}Y${DOTTED_CAPITAL_I} GÜNLER`, 'TEŞEKKÜRLER',
+    // … and the capital I lowers to a dotted "i": the dotless ı is folded on both sides, so Turkish typed in
+    // capitals or without ı meets the lists, and so does Turkish typed with ı.
+    'HOŞÇAKALIN', 'NASILSINIZ', 'nasil gidiyor', 'Hoşçakalın!', 'Nasılsınız?',
     `Dzie${OGONEK}kuje${OGONEK}!`,
     // The German "passt" forms (owner call, 2026-11-14) and the English "a lot" forms are whole-question forms.
-    'Danke, passt', 'Vielen Dank, passt', 'Passt!', 'Thank you a lot.'
+    'Danke, passt', 'Vielen Dank, passt', 'Passt!', 'Thank you a lot.',
+    // … with a closing or another acknowledgement (owner call, 2026-11-14)
+    'Thanks a lot, bye!', 'Ok, thank you a lot', 'Alles klar, passt!', 'Passt, vielen Dank!'
   ])('%s → small talk', (q) => {
     expect(isSmallTalk(q)).toBe(true)
   })

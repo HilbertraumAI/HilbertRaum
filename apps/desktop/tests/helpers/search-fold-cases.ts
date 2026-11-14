@@ -1,12 +1,13 @@
 // The keyword-search rows of #818 (open-issues wave owner call G-8: the query side composes, lowers
-// and spells ı both ways; the index is unchanged), shared by the suites of the app's two FTS tables:
-// `conversation-search.test.ts` (messages_fts through `searchMessages`) and `hybrid-search.test.ts`
-// (chunks_fts through `keywordSearchChunks`). Both tables use fts5's default unicode61 tokenizer and
-// both callers build their MATCH with `buildFtsMatchQuery`, so one table of stored texts and typed
-// queries holds for each. What unicode61 stores (measured, SQLite 3.50.4): I, İ and I/i + U+0307 as
-// "i"; ı as ı; a Latin accent, composed or as a separate mark, dropped; a Cyrillic й (U+0439) kept,
-// but и + U+0306 as a bare и. Every Turkish letter and every composed or decomposed letter is built
-// from code points, so no editor can compose it or swap it for an ASCII look-alike.
+// and adds the stored spellings of ı; the index is unchanged), shared by the suites of the app's two
+// FTS tables: `conversation-search.test.ts` (messages_fts through `searchMessages`) and
+// `hybrid-search.test.ts` (chunks_fts through `keywordSearchChunks`). Both tables use fts5's default
+// unicode61 tokenizer and both callers build their MATCH with `buildFtsMatchQuery`, so one table of
+// stored texts and typed queries holds for each. What unicode61 stores (measured, SQLite 3.50.4):
+// I, İ and I/i + U+0307 as "i"; ı as ı; a Latin accent, composed or as a separate mark, dropped; a
+// Cyrillic й (U+0439) kept, but и + U+0306 as a bare и; a mark with no one-code-point form (the
+// Russian stress mark, е + U+0301) dropped. Every Turkish letter and every composed or decomposed
+// letter is built from code points, so no editor can compose it or swap it for an ASCII look-alike.
 
 const cp = (...points: number[]): string => String.fromCharCode(...points)
 const DOTLESS_I = cp(0x0131)
@@ -18,6 +19,8 @@ const E_SEPARATE_ACUTE = 'e' + cp(0x0301) // e + U+0301 (combining acute)
 const CYRILLIC_MI = cp(0x043c, 0x0456) // мі
 const CYRILLIC_SHORT_I = cp(0x0439) // й, one code point
 const CYRILLIC_SEPARATE_BREVE = cp(0x0438, 0x0306) // и + U+0306 (combining breve)
+const PRIVET = cp(0x043f, 0x0440, 0x0438, 0x0432, 0x0435, 0x0442) // привет (hello)
+const PRIVET_STRESSED = cp(0x043f, 0x0440, 0x0438, 0x0432, 0x0435, 0x0301, 0x0442) // привет, U+0301 on the е
 
 /** The stored texts, by a readable label (a failing row prints labels, not invisible marks). */
 export const SEARCH_FOLD_STORED = {
@@ -32,7 +35,9 @@ export const SEARCH_FOLD_STORED = {
   'résumé, separate marks': `r${E_SEPARATE_ACUTE}sum${E_SEPARATE_ACUTE} attached`,
   'Re: the offer': 'Re: the offer',
   'мій, composed': `${CYRILLIC_MI}${CYRILLIC_SHORT_I} file`,
-  'мій, separate mark': `${CYRILLIC_MI}${CYRILLIC_SEPARATE_BREVE} file`
+  'мій, separate mark': `${CYRILLIC_MI}${CYRILLIC_SEPARATE_BREVE} file`,
+  привет: `${PRIVET} again`,
+  'привет, stress mark': `${PRIVET_STRESSED} again`
 } as const
 
 export type SearchFoldLabel = keyof typeof SEARCH_FOLD_STORED
@@ -65,6 +70,10 @@ export const SEARCH_FOLD_CASES: SearchFoldCase[] = [
   // mark now finds the composed text (it found only the separate-mark text before #818).
   { typed: '«мій» composed', query: `${CYRILLIC_MI}${CYRILLIC_SHORT_I}`, finds: ['мій, composed'] },
   { typed: '«мій» with a separate mark', query: `${CYRILLIC_MI}${CYRILLIC_SEPARATE_BREVE}`, finds: ['мій, composed'] },
+  // The stress mark has no one-code-point form, so NFC keeps it; it used to cut the word into
+  // "приве" OR "т", which found nothing. Kept inside the phrase, unicode61 drops it as it does in
+  // the stored text, so both stored forms are found.
+  { typed: '«привет» with a stress mark', query: PRIVET_STRESSED, finds: ['привет', 'привет, stress mark'] },
   // The residual G-8 accepted: no spelling adds an ı, so a typed «isi» misses «ısı» and «Isı».
   { typed: '«isi»', query: 'isi', finds: ['ISI raporu'] }
 ]

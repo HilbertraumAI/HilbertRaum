@@ -1,4 +1,4 @@
-import { lowerCaseNfc } from '../../../shared/text-fold'
+import { foldCase } from '../../../shared/text-fold'
 import { wordIncludes } from './tools/money'
 
 // W5 — the ONE canonical bilingual trigger vocabulary per app skill (audit §3.2/§4.1/§4.2/§8.3).
@@ -586,18 +586,26 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
 // via W1's in-prompt notice). Privacy: the question is CONTENT — matched here, NEVER logged.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Collapse a question to its word tokens — the small-talk normalizer. `lowerCaseNfc` composes and lowers it
- *  without a locale ("İYİ" → "iyi"); a token is a run of letters and digits in any script (#809, open-issues
- *  wave owner call G-11: «Дякую!» and «Dziękuję!» keep every letter). Apostrophes are DROPPED (not split on)
- *  so a contraction stays one token ("how's" → "hows", "d'accord" → "daccord"); the Ukrainian apostrophe
- *  U+02BC is a letter and stays inside its word. */
+/** Collapse a question to its word tokens — the small-talk normalizer. `foldCase` composes and lowers it
+ *  without a locale ("İYİ" → "iyi") and writes the dotless ı as "i", so Turkish typed in capitals or on a
+ *  keyboard without ı ("HOŞÇAKALIN", "nasil gidiyor") meets the lists, which are folded the same way
+ *  (`foldedSet`). A token is a run of letters and digits in any script (#809, open-issues wave owner call
+ *  G-11: «Дякую!» and «Dziękuję!» keep every letter). Apostrophes are DROPPED (not split on) so a contraction
+ *  stays one token ("how's" → "hows", "d'accord" → "daccord"); the Ukrainian apostrophe U+02BC is a letter and
+ *  stays inside its word. */
 function smallTalkTokens(question: string): string[] {
-  return lowerCaseNfc(question)
+  return foldCase(question)
     .replace(/['’‘´`]/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .split(' ')
     .filter((t) => t.length > 0)
+}
+
+/** A small-talk list as `smallTalkTokens` reads a question: every entry through the same `foldCase` (the entries
+ *  stay written as the language writes them). */
+function foldedSet(entries: readonly string[]): ReadonlySet<string> {
+  return new Set(entries.map(foldCase))
 }
 
 /** Greeting / thanks / closing / acknowledgement tokens (EN+DE, then the other eight interface languages). A
@@ -608,7 +616,7 @@ function smallTalkTokens(question: string): string[] {
  *  "Bene?", "Goed?", "Dobrze?", "Хорошо?" or "Добре?" still reads as small talk, as the German "Gut?" does), and
  *  an adjective or numeral that inflects with its noun ("buenos", "mille", "большое") only inside an exact form
  *  below. */
-const SMALL_TALK_WORDS = new Set<string>([
+const SMALL_TALK_WORDS = foldedSet([
   // greetings
   'hi', 'hii', 'hiya', 'hey', 'heya', 'hello', 'yo', 'sup', 'howdy', 'there',
   'hallo', 'hallöchen', 'servus', 'moin', 'na',
@@ -650,6 +658,8 @@ const SMALL_TALK_WORDS = new Set<string>([
   'merhaba', 'selam', 'günaydın', 'günaydin', 'teşekkürler', 'tesekkurler', 'sağol', 'sagol', 'sağolun',
   'eyvallah', 'çok', 'görüşürüz', 'hoşçakal', 'tamam', 'tamamdır', 'tamamdir', 'harika', 'süper', 'mükemmel',
   'güzel', 'iyi', 'anladım', 'anladim', 'nasılsın', 'nasilsin', 'naber', 'hoşçakalın',
+  // Russian and Ukrainian share five words (ок, окей, супер, прекрасно, круто), listed in both blocks: removing
+  // one from one block leaves it active through the other.
   // Russian: greetings, thanks, intensifiers, acknowledgements, closings
   'привет', 'приветик', 'здравствуйте', 'здравствуй', 'здрасте', 'спасибо', 'спс', 'благодарю', 'пожалуйста',
   'очень', 'пока', 'хорошо', 'отлично', 'прекрасно', 'замечательно', 'супер', 'круто', 'ладно', 'ок', 'окей',
@@ -663,7 +673,7 @@ const SMALL_TALK_WORDS = new Set<string>([
 /** Whole-question chit-chat / assistant-meta forms (EN+DE, then the other eight interface languages),
  *  compared against the NORMALIZED full question (so "how are you going to fix X" — a real ask — never
  *  matches "how are you"). */
-const SMALL_TALK_EXACT = new Set<string>([
+const SMALL_TALK_EXACT = foldedSet([
   'how are you', 'how are you doing', 'how are you today', 'how is it going', 'hows it going',
   'how do you do', 'whats up', 'who are you', 'what are you', 'what can you do',
   'what can you help with', 'what can you help me with', 'tell me a joke', 'nice to meet you', 'good bot',
@@ -674,6 +684,9 @@ const SMALL_TALK_EXACT = new Set<string>([
   // their thanks and acknowledgements are whole-question forms.
   'thanks a lot', 'thank you a lot', 'ok thanks a lot', 'great thanks a lot', 'perfect thanks a lot', 'passt',
   'passt danke', 'passt super', 'danke passt', 'vielen dank passt', 'ok passt', 'super passt',
+  // … and with a closing or another acknowledgement (owner call, 2026-11-14)
+  'thanks a lot bye', 'thank you a lot bye', 'ok thank you a lot',
+  'alles klar passt', 'klar passt', 'passt vielen dank', 'passt danke schön', 'passt danke dir',
   // Spanish: greetings and thanks formulas, "vale" and its acknowledgements
   'buenos días', 'buenos dias', 'buenas tardes', 'buenas noches', 'buenas', 'hola buenos días', 'qué tal',
   'que tal', 'hola qué tal', 'hola que tal', 'cómo estás', 'como estas', 'muchas gracias', 'muchísimas gracias',
