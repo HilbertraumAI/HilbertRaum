@@ -204,7 +204,7 @@ models, the AI engine, the optional knowledge-pack tools and the optional text-r
 files — each one only after you confirm it, each one verified before use. None of it ever
 happens by itself:
 
-1. Open **Settings** and make sure **Allow internet access for model downloads and updates**
+1. Open **Settings** and make sure **Allow internet access for downloads and updates**
    is on (it is **on by default**, including on prepared commercial drives, unless this drive's
    builder deliberately disabled downloads in the drive's policy — rare; the app is fully usable
    without it either way). The same setting also gates engine and knowledge-pack-tool downloads.

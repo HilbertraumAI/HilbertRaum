@@ -117,7 +117,7 @@ describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Se
     const btn = await screen.findByRole('button', { name: 'Download' })
     expect(btn).toBeDisabled()
     expect(
-      screen.getByText(/turn on “Allow internet access for model downloads and updates” in Settings/)
+      screen.getByText(t('en', 'models.downloads.enableInSettings'))
     ).toBeInTheDocument()
     expect(screen.queryByText(/drive’s policy/)).not.toBeInTheDocument()
   })
@@ -1614,7 +1614,7 @@ describe('ModelsScreen — the licence link names its host and is https-only (#2
         }
       })
     )
-    const link = dialog.getByRole('link', { name: /read the license/ })
+    const link = dialog.getByRole('link', { name: t('en', 'models.confirm.readLicense') })
     expect(link).toHaveAttribute('href', 'https://licenses.example.test/qwen/LICENSE')
     expect(dialog.getByText(/licenses\.example\.test/)).toBeInTheDocument()
   })
@@ -1630,7 +1630,7 @@ describe('ModelsScreen — the licence link names its host and is https-only (#2
         }
       })
     )
-    expect(dialog.queryByRole('link', { name: /read the license/ })).not.toBeInTheDocument()
+    expect(dialog.queryByRole('link', { name: t('en', 'models.confirm.readLicense') })).not.toBeInTheDocument()
     expect(dialog.getByText(/apache-2\.0/)).toBeInTheDocument() // the licence name still shows
   })
 })
@@ -2123,7 +2123,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     const dialog = within(screen.getByRole('dialog'))
     expect(screen.getByRole('dialog')).toHaveTextContent(second.displayName)
     expect(dialog.getByText('https://example.test/retry-q6.gguf')).toBeInTheDocument()
-    expect(dialog.getByRole('link', { name: /read the license/ })).toHaveAttribute(
+    expect(dialog.getByRole('link', { name: t('en', 'models.confirm.readLicense') })).toHaveAttribute(
       'href',
       'https://licenses.example.test/q6/LICENSE'
     )

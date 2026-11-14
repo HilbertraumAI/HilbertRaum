@@ -1108,8 +1108,8 @@ export const tr: UiCatalog<'tr'> = {
   'models.usesSpace': 'Sürücüde {size} yer kaplar',
   'models.downloads.blockedByPolicy': 'İndirmeler bu sürücünün ilkesi gereği kapalı.',
   'models.downloads.enableInSettings':
-    'İndirme yapmak için Ayarlar ekranında “Model indirmeleri ve güncellemeler için internet ' +
-    'erişimine izin ver” seçeneğini açın.',
+    'İndirme yapmak için Ayarlar ekranında “İndirmeler ve güncellemeler için internet erişimine izin ' +
+    'ver” seçeneğini açın.',
   'models.download.verifying': 'İndirilen dosya doğrulanıyor…',
   'models.download.progress': 'İndiriliyor… %{pct} ({received} / {total})',
   'models.download.progressNoTotal': 'İndiriliyor… şu ana kadar {received}',
@@ -1326,7 +1326,7 @@ export const tr: UiCatalog<'tr'> = {
   'models.confirm.size': 'Boyut',
   'models.confirm.license': 'Lisans',
   'models.confirm.from': 'Kaynak',
-  'models.confirm.readLicense': 'lisansı oku',
+  'models.confirm.readLicense': 'Lisansı oku',
   'models.confirm.hint':
     'İndirilen dosya kullanılmadan önce doğrulanır. Uygulamanın yaptığı tek ağ isteği budur; ' +
     'sizinle veya belgelerinizle ilgili hiçbir şey gönderilmez.',
@@ -1347,7 +1347,7 @@ export const tr: UiCatalog<'tr'> = {
   'settings.saved': 'Kaydedildi',
   'settings.saveFailed': 'Bu ayar kaydedilemedi. Yeniden deneyin.',
   'settings.network.title': 'Gizlilik ve çevrimdışı mod',
-  'settings.network.allow': 'Model indirmeleri ve güncellemeler için internet erişimine izin ver',
+  'settings.network.allow': 'İndirmeler ve güncellemeler için internet erişimine izin ver',
   'settings.network.hint':
     'Varsayılan olarak açıktır; böylece yeni bir kurulum ilk açılışta bir model indirebilir. ' +
     'Kapalıyken uygulama internete hiç bağlanmaz. Açıldığında modeller, yapay zekâ motoru, ' +
@@ -2569,8 +2569,8 @@ export const tr: UiCatalog<'tr'> = {
   'main.task.workspaceLocked': 'Çalışma alanı kilitli. Belgelerle çalışmak için kilidini açın.',
   'main.download.policyDisabled': 'İndirmeler bu sürücünün ilkesi gereği kapalı.',
   'main.download.networkOff':
-    'İnternet erişimi kapalı. Önce Ayarlar ekranında “Model indirmeleri ve güncellemeler için ' +
-    'internet erişimine izin ver” seçeneğini açın.',
+    'İnternet erişimi kapalı. Önce Ayarlar ekranında “İndirmeler ve güncellemeler için internet ' +
+    'erişimine izin ver” seçeneğini açın.',
   'main.download.alreadyRunning': 'Başka bir indirme zaten sürüyor. Modeller tek tek indirilir.',
   'main.download.stoppedNetworkOff':
     'İnternet erişimi kapalı olduğu için süren indirme durdu. İndirmeyi tamamlamak için Ayarlar ' +

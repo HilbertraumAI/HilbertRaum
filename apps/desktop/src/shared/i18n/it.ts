@@ -1213,8 +1213,8 @@ export const it: UiCatalog<'it'> = {
   'models.usesSpace': 'Occupa {size} di spazio sull’unità',
   'models.downloads.blockedByPolicy': 'I download sono disattivati dai criteri di questa unità.',
   'models.downloads.enableInSettings':
-    'Per scaricare, attiva «Consenti l’accesso a Internet per download e aggiornamenti dei modelli» ' +
-    'nelle Impostazioni.',
+    'Per scaricare, attiva «Consenti l’accesso a Internet per download e aggiornamenti» nelle ' +
+    'Impostazioni.',
   'models.download.verifying': 'Controllo del file scaricato in corso…',
   'models.download.progress': 'Download in corso… {pct}% ({received} su {total})',
   'models.download.progressNoTotal': 'Download in corso… finora {received}',
@@ -1451,7 +1451,7 @@ export const it: UiCatalog<'it'> = {
   'models.confirm.size': 'Dimensioni',
   'models.confirm.license': 'Licenza',
   'models.confirm.from': 'Origine',
-  'models.confirm.readLicense': 'leggi la licenza',
+  'models.confirm.readLicense': 'Leggi la licenza',
   'models.confirm.hint':
     'Il file scaricato viene controllato prima dell’uso. È l’unica richiesta di rete fatta ' +
     'dall’app: non viene inviato nulla su di te o sui tuoi documenti.',
@@ -1472,8 +1472,7 @@ export const it: UiCatalog<'it'> = {
   'settings.saved': 'Salvato',
   'settings.saveFailed': 'Non è stato possibile salvare questa impostazione. Riprova.',
   'settings.network.title': 'Privacy e modalità offline',
-  'settings.network.allow':
-    'Consenti l’accesso a Internet per download e aggiornamenti dei modelli',
+  'settings.network.allow': 'Consenti l’accesso a Internet per download e aggiornamenti',
   'settings.network.hint':
     'Attivata per impostazione predefinita, così una nuova installazione può scaricare subito un ' +
     'modello. Quando è disattivata, l’app non si connette mai a Internet. Quando è attiva, ' +
@@ -2775,8 +2774,8 @@ export const it: UiCatalog<'it'> = {
     'L’area di lavoro è bloccata. Sbloccala per lavorare con i documenti.',
   'main.download.policyDisabled': 'I download sono disattivati dai criteri di questa unità.',
   'main.download.networkOff':
-    'L’accesso a Internet è disattivato. Prima attiva «Consenti l’accesso a Internet per ' +
-    'download e aggiornamenti dei modelli» nelle Impostazioni.',
+    'L’accesso a Internet è disattivato. Prima attiva «Consenti l’accesso a Internet per download e ' +
+    'aggiornamenti» nelle Impostazioni.',
   'main.download.alreadyRunning':
     'È già in corso un altro download. I modelli si scaricano uno alla volta.',
   'main.download.stoppedNetworkOff':

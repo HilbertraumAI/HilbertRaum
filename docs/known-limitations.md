@@ -3364,7 +3364,7 @@ reports and phase plans were working papers; their full text lives in git histor
   of integrity verification — and it is replaced **wholesale** the first time someone installs
   the family from inside the app or the script (the installer pre-cleans the family's directory
   before extracting), so a manually provisioned drive is not stranded, only superseded. The
-  in-app install needs **Settings → Allow internet access for model downloads and updates** on
+  in-app install needs **Settings → Allow internet access for downloads and updates** on
   and a drive policy that permits downloads (the same gate models and the engine use). Linux and
   macOS builders without the in-app path use the script.
 - **On Windows, an archive can only be added if its file name, and any folder it sits in outside

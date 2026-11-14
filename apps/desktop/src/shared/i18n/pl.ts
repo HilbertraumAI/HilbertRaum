@@ -1235,8 +1235,8 @@ export const pl: UiCatalog<'pl'> = {
   'models.usesSpace': 'Zajmuje {size} miejsca na dysku',
   'models.downloads.blockedByPolicy': 'Pobieranie jest wyłączone przez zasady tego dysku.',
   'models.downloads.enableInSettings':
-    'Aby pobierać pliki, włącz w Ustawieniach opcję „Zezwalaj na dostęp do internetu, aby pobierać ' +
-    'modele i aktualizacje”.',
+    'Aby rozpocząć pobieranie, włącz w Ustawieniach opcję „Zezwalaj na dostęp do internetu, aby ' +
+    'pobierać pliki i aktualizacje”.',
   'models.download.verifying': 'Sprawdzanie pobranego pliku…',
   'models.download.progress': 'Pobieranie… {pct}% ({received} z {total})',
   'models.download.progressNoTotal': 'Pobieranie… pobrano: {received}',
@@ -1462,7 +1462,7 @@ export const pl: UiCatalog<'pl'> = {
   'models.confirm.size': 'Rozmiar',
   'models.confirm.license': 'Licencja',
   'models.confirm.from': 'Źródło',
-  'models.confirm.readLicense': 'przeczytaj licencję',
+  'models.confirm.readLicense': 'Przeczytaj licencję',
   'models.confirm.hint':
     'Pobrany plik jest sprawdzany przed użyciem. To jedyne połączenie z siecią, jakie nawiązuje ' +
     'aplikacja – nie są wysyłane żadne informacje o tobie ani o twoich dokumentach.',
@@ -1484,7 +1484,7 @@ export const pl: UiCatalog<'pl'> = {
   'settings.saved': 'Zapisano',
   'settings.saveFailed': 'Nie udało się zapisać tego ustawienia. Spróbuj ponownie.',
   'settings.network.title': 'Prywatność i tryb offline',
-  'settings.network.allow': 'Zezwalaj na dostęp do internetu, aby pobierać modele i aktualizacje',
+  'settings.network.allow': 'Zezwalaj na dostęp do internetu, aby pobierać pliki i aktualizacje',
   'settings.network.hint':
     'Domyślnie włączone, aby nowa instalacja mogła od razu pobrać model. Gdy ta opcja jest ' +
     'wyłączona, aplikacja nie łączy się z internetem. Po jej włączeniu można pobierać modele, ' +
@@ -2756,8 +2756,8 @@ export const pl: UiCatalog<'pl'> = {
     'Obszar roboczy jest zablokowany. Odblokuj go, aby pracować z dokumentami.',
   'main.download.policyDisabled': 'Pobieranie jest wyłączone przez zasady tego dysku.',
   'main.download.networkOff':
-    'Dostęp do internetu jest wyłączony. Najpierw włącz w Ustawieniach opcję „Zezwalaj na dostęp ' +
-    'do internetu, aby pobierać modele i aktualizacje”.',
+    'Dostęp do internetu jest wyłączony. Najpierw włącz w Ustawieniach opcję „Zezwalaj na dostęp do ' +
+    'internetu, aby pobierać pliki i aktualizacje”.',
   'main.download.alreadyRunning': 'Trwa już inne pobieranie. Modele są pobierane pojedynczo.',
   'main.download.stoppedNetworkOff':
     'Dostęp do internetu jest wyłączony, więc trwające pobieranie zostało zatrzymane. Aby je ' +

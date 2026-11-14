@@ -74,7 +74,7 @@ The first time you need them, the **Knowledge packs** panel offers to install th
 states the download size, the license and the source (`download.kiwix.org`), and asks you to
 accept the license before it fetches and SHA-256-verifies the pinned kiwix-tools 3.8.1 build
 for your platform. A mirror of that offer sits on the **AI Model** screen. The install needs
-**Settings → Allow internet access for model downloads and updates** to be on (it is on by
+**Settings → Allow internet access for downloads and updates** to be on (it is on by
 default) and a drive policy that permits downloads.
 
 From the repository you can provision them up front instead, without the app:

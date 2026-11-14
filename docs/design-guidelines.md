@@ -566,7 +566,8 @@ pequeño: la calidad sigue siendo excelente.").
   agregar · skill → habilidad · knowledge pack → paquete de conocimiento · check / verify /
   review → comprobar / verificar / revisar (never swapped).
 - **Review glossary:** evidence → **evidencia** — never «prueba»; «demostrar» appears only negated
-  in the disclaimers («por sí sola no demuestra») · supported → respaldado («Revisado: respaldado»)
+  in the disclaimers («por sí sola no demuestra») · supported → respaldado
+  («Revisado (respaldado)»: parentheses, since a colon would double the colon of a label–value line)
   · review → revisión (evidence review → revisión de evidencia) · review item → punto de revisión
   · evidence pack → paquete de evidencia · citation → referencia a la fuente (never «cita») ·
   whole-document provenance → procedencia de un análisis del documento completo (its negation is

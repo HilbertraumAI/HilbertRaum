@@ -539,7 +539,7 @@ screen): confirm the files (German, English and the page-orientation data, about
 checked, text recognition starts **without a restart** — the row then offers **Make searchable
 (OCR)**. A photo that failed for the same reason reads with **Try again** afterwards. The download
 follows the usual gates: if the button is greyed out, the drive policy or **Settings → Allow
-internet access for model downloads and updates** is blocking downloads, and the row says which.
+internet access for downloads and updates** is blocking downloads, and the row says which.
 
 Without internet (or on a drive you set up yourself), add the files instead by re-running
 `prepare-drive --with-assets`, or fetch only the OCR family with `fetch-runtime --family ocr`
@@ -880,7 +880,7 @@ kiwix-manage. The Knowledge packs panel (and a mirror row on the AI Model screen
 install them for you: a dialog states the download size, the GPL-3.0-or-later license and the
 source (`download.kiwix.org`), and asks you to accept the license before it fetches and
 SHA-256-verifies the pinned kiwix-tools 3.8.1 release for your platform. That install needs
-**Settings → Allow internet access for model downloads and updates** to be on (it is on by
+**Settings → Allow internet access for downloads and updates** to be on (it is on by
 default) and a drive policy that permits downloads.
 
 **Without the in-app path (a scripted or Linux/macOS drive): run the fetch script.** From the

@@ -1150,8 +1150,7 @@ export const nl: UiCatalog<'nl'> = {
   'models.downloads.blockedByPolicy':
     'Downloads zijn uitgeschakeld door het beleid van deze schijf.',
   'models.downloads.enableInSettings':
-    'Zet “Internettoegang toestaan voor modeldownloads en updates” aan in Instellingen om te ' +
-    'downloaden.',
+    'Zet “Internettoegang toestaan voor downloads en updates” aan in Instellingen om te downloaden.',
   'models.download.verifying': 'Het gedownloade bestand wordt gecontroleerd…',
   'models.download.progress': 'Downloaden… {pct}% ({received} van {total})',
   'models.download.progressNoTotal': 'Downloaden… tot nu toe {received}',
@@ -1383,7 +1382,7 @@ export const nl: UiCatalog<'nl'> = {
   'models.confirm.size': 'Grootte',
   'models.confirm.license': 'Licentie',
   'models.confirm.from': 'Afkomstig van',
-  'models.confirm.readLicense': 'licentie lezen',
+  'models.confirm.readLicense': 'Licentie lezen',
   'models.confirm.hint':
     'Het gedownloade bestand wordt vóór gebruik gecontroleerd. Dit is het enige netwerkverzoek ' +
     'dat de app doet: er wordt niets over jou of je documenten verstuurd.',
@@ -1405,7 +1404,7 @@ export const nl: UiCatalog<'nl'> = {
   'settings.saved': 'Opgeslagen',
   'settings.saveFailed': 'Deze instelling kon niet worden opgeslagen. Probeer het opnieuw.',
   'settings.network.title': 'Privacy en offlinemodus',
-  'settings.network.allow': 'Internettoegang toestaan voor modeldownloads en updates',
+  'settings.network.allow': 'Internettoegang toestaan voor downloads en updates',
   'settings.network.hint':
     'Standaard aan, zodat een nieuwe installatie meteen een model kan downloaden. Staat dit uit, ' +
     'dan maakt de app geen verbinding met internet. Zet je het aan, dan zijn downloads mogelijk ' +
@@ -2688,8 +2687,8 @@ export const nl: UiCatalog<'nl'> = {
     'De werkruimte is vergrendeld. Ontgrendel de werkruimte om met documenten te werken.',
   'main.download.policyDisabled': 'Downloads zijn uitgeschakeld door het beleid van deze schijf.',
   'main.download.networkOff':
-    'Internettoegang staat uit. Zet eerst “Internettoegang toestaan voor modeldownloads en ' +
-    'updates” aan in Instellingen.',
+    'Internettoegang staat uit. Zet eerst “Internettoegang toestaan voor downloads en updates” aan ' +
+    'in Instellingen.',
   'main.download.alreadyRunning':
     'Er loopt al een andere download. Modellen worden één voor één gedownload.',
   'main.download.stoppedNetworkOff':

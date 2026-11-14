@@ -1255,8 +1255,8 @@ export const fr: UiCatalog<'fr'> = {
   'models.downloads.blockedByPolicy':
     'Les téléchargements sont désactivés par la politique de ce disque.',
   'models.downloads.enableInSettings':
-    'Pour télécharger, activez «\u00A0Autoriser l’accès à Internet pour les téléchargements de ' +
-    'modèles et les mises à jour\u00A0» dans les Paramètres.',
+    'Pour télécharger, activez «\u00A0Autoriser l’accès à Internet pour les téléchargements et les ' +
+    'mises à jour\u00A0» dans les Paramètres.',
   'models.download.verifying': 'Vérification du fichier téléchargé…',
   'models.download.progress': 'Téléchargement… {pct}\u00A0% ({received} sur {total})',
   'models.download.progressNoTotal': 'Téléchargement… déjà {received}',
@@ -1501,7 +1501,7 @@ export const fr: UiCatalog<'fr'> = {
   'models.confirm.size': 'Taille',
   'models.confirm.license': 'Licence',
   'models.confirm.from': 'Source',
-  'models.confirm.readLicense': 'lire la licence',
+  'models.confirm.readLicense': 'Lire la licence',
   'models.confirm.hint':
     'Le fichier téléchargé est vérifié avant d’être utilisé. C’est la seule requête réseau de ' +
     'l’application\u00A0: rien sur vous ni sur vos documents n’est envoyé.',
@@ -1522,8 +1522,7 @@ export const fr: UiCatalog<'fr'> = {
   'settings.saved': 'Enregistré',
   'settings.saveFailed': 'Ce paramètre n’a pas pu être enregistré. Réessayez.',
   'settings.network.title': 'Confidentialité et mode hors ligne',
-  'settings.network.allow':
-    'Autoriser l’accès à Internet pour les téléchargements de modèles et les mises à jour',
+  'settings.network.allow': 'Autoriser l’accès à Internet pour les téléchargements et les mises à jour',
   'settings.network.hint':
     'Option activée par défaut, pour qu’une nouvelle installation puisse télécharger un modèle ' +
     'dès le départ. Quand elle est désactivée, l’application ne se connecte jamais à Internet. ' +
@@ -2883,8 +2882,8 @@ export const fr: UiCatalog<'fr'> = {
   'main.download.policyDisabled':
     'Les téléchargements sont désactivés par la politique de ce disque.',
   'main.download.networkOff':
-    'L’accès à Internet est désactivé. Activez d’abord «\u00A0Autoriser l’accès à Internet pour ' +
-    'les téléchargements de modèles et les mises à jour\u00A0» dans les Paramètres.',
+    'L’accès à Internet est désactivé. Activez d’abord «\u00A0Autoriser l’accès à Internet pour les ' +
+    'téléchargements et les mises à jour\u00A0» dans les Paramètres.',
   'main.download.alreadyRunning':
     'Un autre téléchargement est déjà en cours. Les modèles se téléchargent un par un.',
   'main.download.stoppedNetworkOff':

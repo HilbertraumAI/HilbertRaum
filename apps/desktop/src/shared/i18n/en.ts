@@ -1278,7 +1278,7 @@ export const en = {
   'models.usesSpace': 'Uses {size} of drive space',
   'models.downloads.blockedByPolicy': 'Downloads are disabled by this drive’s policy.',
   'models.downloads.enableInSettings':
-    'To download, turn on “Allow internet access for model downloads and updates” in Settings.',
+    'To download, turn on “Allow internet access for downloads and updates” in Settings.',
   'models.download.verifying': 'Verifying the downloaded file…',
   'models.download.progress': 'Downloading… {pct}% ({received} of {total})',
   'models.download.progressNoTotal': 'Downloading… {received} so far',
@@ -1502,7 +1502,7 @@ export const en = {
   'models.confirm.size': 'Size',
   'models.confirm.license': 'License',
   'models.confirm.from': 'From',
-  'models.confirm.readLicense': 'read the license',
+  'models.confirm.readLicense': 'Read the license',
   'models.confirm.hint':
     'The downloaded file is verified before it is used. This is the only network request ' +
     'the app makes — nothing about you or your documents is sent.',
@@ -1527,7 +1527,7 @@ export const en = {
   // with the control keeping its last-confirmed (server) state.
   'settings.saveFailed': 'This setting couldn’t be saved. Please try again.',
   'settings.network.title': 'Privacy & Offline Mode',
-  'settings.network.allow': 'Allow internet access for model downloads and updates',
+  'settings.network.allow': 'Allow internet access for downloads and updates',
   'settings.network.hint':
     'On by default, so a fresh install can fetch a model out of the box. When off, the app ' +
     'makes no internet calls. Turning it on enables downloads for models, the AI engine, the ' +
@@ -1657,7 +1657,9 @@ export const en = {
   'skills.autoFire.title': 'Apply a matching skill automatically',
   'skills.autoFire.toggle': 'Apply a matching skill automatically',
   'skills.autoFire.hint':
-    'When on, the app may apply a clearly matching app skill to an answer on its own, so you don’t have to pick it. Only app skills, never ones you made or imported. You’ll always see which skill was used, and you can answer without it for that turn. Off by default.',
+    'When on, the app may apply a clearly matching app skill to an answer on its own, so you don’t ' +
+    'have to pick it. Only app skills, never ones you made or imported. You’ll always see which ' +
+    'skill was used, and you can get an answer without it for that turn. Off by default.',
   'skills.autoFire.on': 'Automatic skills on',
   'skills.autoFire.off': 'Automatic skills off',
   // SH-8 (#149): a failed auto-fire SETTINGS save — distinct from the list-load failure copy.
@@ -2808,8 +2810,8 @@ export const en = {
   'main.task.workspaceLocked': 'Workspace is locked. Unlock it to work with documents.',
   'main.download.policyDisabled': 'Downloads are disabled by this drive’s policy.',
   'main.download.networkOff':
-    'Internet access is turned off. Turn on “Allow internet access for model ' +
-    'downloads and updates” in Settings first.',
+    'Internet access is turned off. Turn on “Allow internet access for downloads and updates” in ' +
+    'Settings first.',
   'main.download.alreadyRunning': 'Another download is already running. One model downloads at a time.',
   'main.download.stoppedNetworkOff':
     'Internet access is off, so the download that was running has stopped. To finish it, turn internet access back on in Settings.',

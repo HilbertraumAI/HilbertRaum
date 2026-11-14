@@ -1182,8 +1182,8 @@ export const es: UiCatalog<'es'> = {
   'models.downloads.blockedByPolicy':
     'Las descargas están desactivadas por la política de esta unidad.',
   'models.downloads.enableInSettings':
-    'Para descargar, activa «Permitir el acceso a internet para descargar modelos y actualizaciones» ' +
-    'en Ajustes.',
+    'Para descargar, activa «Permitir el acceso a internet para descargas y actualizaciones» en ' +
+    'Ajustes.',
   'models.download.verifying': 'Verificando el archivo descargado…',
   'models.download.progress': 'Descargando… {pct}\u00A0% ({received} de {total})',
   'models.download.progressNoTotal': 'Descargando… {received} hasta ahora',
@@ -1415,7 +1415,7 @@ export const es: UiCatalog<'es'> = {
   'models.confirm.size': 'Tamaño',
   'models.confirm.license': 'Licencia',
   'models.confirm.from': 'Dirección de descarga',
-  'models.confirm.readLicense': 'leer la licencia',
+  'models.confirm.readLicense': 'Leer la licencia',
   'models.confirm.hint':
     'El archivo descargado se verifica antes de usarse. Es la única solicitud de red que hace la ' +
     'aplicación: no se envía nada sobre ti ni sobre tus documentos.',
@@ -1436,8 +1436,7 @@ export const es: UiCatalog<'es'> = {
   'settings.saved': 'Guardado',
   'settings.saveFailed': 'No se pudo guardar este ajuste. Vuelve a intentarlo.',
   'settings.network.title': 'Privacidad y modo sin conexión',
-  'settings.network.allow':
-    'Permitir el acceso a internet para descargar modelos y actualizaciones',
+  'settings.network.allow': 'Permitir el acceso a internet para descargas y actualizaciones',
   'settings.network.hint':
     'Activado de forma predeterminada, para que una instalación nueva pueda descargar un modelo ' +
     'desde el primer momento. Si está desactivado, la aplicación no se conecta a internet. Si lo ' +
@@ -1596,9 +1595,9 @@ export const es: UiCatalog<'es'> = {
   'skills.autoFire.toggle': 'Aplicar automáticamente una habilidad adecuada',
   'skills.autoFire.hint':
     'Si está activado, la aplicación puede aplicar por sí sola a una respuesta una habilidad ' +
-    'integrada que encaje claramente, para que no tengas que elegirla. Solo habilidades ' +
-    'integradas, nunca las que creaste o importaste. Siempre verás qué habilidad se usó y podrás ' +
-    'responder sin ella a esa pregunta. Desactivado de forma predeterminada.',
+    'integrada que encaje claramente, para que no tengas que elegirla. Solo habilidades integradas, ' +
+    'nunca las que creaste o importaste. Siempre verás qué habilidad se usó y podrás obtener sin ' +
+    'ella una respuesta a esa pregunta. Desactivado de forma predeterminada.',
   'skills.autoFire.on': 'Habilidades automáticas activadas',
   'skills.autoFire.off': 'Habilidades automáticas desactivadas',
   'skills.autoFire.saveFailed': 'No se pudo guardar el ajuste de habilidades automáticas.',
@@ -2735,7 +2734,7 @@ export const es: UiCatalog<'es'> = {
     'Las descargas están desactivadas por la política de esta unidad.',
   'main.download.networkOff':
     'El acceso a internet está desactivado. Primero activa «Permitir el acceso a internet para ' +
-    'descargar modelos y actualizaciones» en Ajustes.',
+    'descargas y actualizaciones» en Ajustes.',
   'main.download.alreadyRunning':
     'Ya hay otra descarga en curso. Los modelos se descargan de uno en uno.',
   'main.download.stoppedNetworkOff':
@@ -3650,9 +3649,9 @@ export const es: UiCatalog<'es'> = {
   'review.item.selectionTag': 'Texto seleccionado en la revisión',
   'review.selection.remove': 'Quitar selección',
   'review.decision.groupAria': 'Decisión',
-  'review.decision.supported': 'Revisado: respaldado',
-  'review.decision.partly_supported': 'Revisado: respaldado en parte',
-  'review.decision.not_supported': 'Revisado: no respaldado',
+  'review.decision.supported': 'Revisado (respaldado)',
+  'review.decision.partly_supported': 'Revisado (respaldado en parte)',
+  'review.decision.not_supported': 'Revisado (no respaldado)',
   'review.decision.follow_up': 'Requiere seguimiento',
   'review.decision.not_reviewed': 'Sin revisar',
   'review.decision.not_applicable': 'No aplicable',

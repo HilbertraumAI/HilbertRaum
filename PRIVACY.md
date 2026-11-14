@@ -94,7 +94,7 @@ setting is now **on by default** so a fresh install can fetch models out of the 
 stays bounded: every download is explicit and confirmed, and you can turn it off in Settings:
 
 ```
-[x] Allow internet access for model downloads and updates
+[x] Allow internet access for downloads and updates
 ```
 
 Switching it off also stops a download or install that is running, and a notice says so. A

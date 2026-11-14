@@ -1293,8 +1293,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.downloads.blockedByPolicy':
     'Downloads sind durch die Richtlinie dieses Laufwerks deaktiviert.',
   'models.downloads.enableInSettings':
-    'Für Downloads schalte in den Einstellungen „Internetzugriff für Modell-Downloads und Updates ' +
-    'erlauben“ ein.',
+    'Für Downloads schalte in den Einstellungen „Internetzugriff für Downloads und Updates erlauben“ ' +
+    'ein.',
   'models.download.verifying': 'Die heruntergeladene Datei wird geprüft…',
   'models.download.progress': 'Wird heruntergeladen… {pct} % ({received} von {total})',
   'models.download.progressNoTotal': 'Wird heruntergeladen… bisher {received}',
@@ -1540,7 +1540,7 @@ export const de: Record<keyof typeof en, string> = {
   // CODE-7 (full-audit 2026-07-11): ein abgelehntes Speichern darf nie stumm bleiben.
   'settings.saveFailed': 'Diese Einstellung konnte nicht gespeichert werden. Bitte versuch es erneut.',
   'settings.network.title': 'Privatsphäre & Offline-Modus',
-  'settings.network.allow': 'Internetzugriff für Modell-Downloads und Updates erlauben',
+  'settings.network.allow': 'Internetzugriff für Downloads und Updates erlauben',
   'settings.network.hint':
     'Standardmäßig an, damit eine frische Installation gleich Modelle herunterladen kann. ' +
     'Ausgeschaltet stellt die App keinerlei Internetverbindung her. Eingeschaltet ermöglicht ' +
@@ -1688,7 +1688,10 @@ export const de: Record<keyof typeof en, string> = {
   'skills.autoFire.title': 'Passenden Skill automatisch anwenden',
   'skills.autoFire.toggle': 'Passenden Skill automatisch anwenden',
   'skills.autoFire.hint':
-    'Wenn eingeschaltet, darf die App einen eindeutig passenden App-Skill von sich aus auf eine Antwort anwenden, damit du ihn nicht selbst wählen musst. Nur App-Skills, nie selbst erstellte oder importierte. Du siehst immer, welcher Skill verwendet wurde, und kannst für diese Antwort ohne ihn antworten. Standardmäßig aus.',
+    'Wenn eingeschaltet, darf die App einen eindeutig passenden App-Skill von sich aus auf eine ' +
+    'Antwort anwenden, damit du ihn nicht selbst wählen musst. Nur App-Skills, nie selbst erstellte ' +
+    'oder importierte. Du siehst immer, welcher Skill verwendet wurde, und kannst dir für diese ' +
+    'Antwort auch ohne ihn antworten lassen. Standardmäßig aus.',
   'skills.autoFire.on': 'Automatische Skills an',
   'skills.autoFire.off': 'Automatische Skills aus',
   // SH-8 (#149): fehlgeschlagenes Speichern der Auto-Skills-Einstellung – nicht die Ladefehler-Meldung.
@@ -2776,8 +2779,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.download.policyDisabled':
     'Downloads sind durch die Richtlinie dieses Laufwerks deaktiviert.',
   'main.download.networkOff':
-    'Der Internetzugriff ist ausgeschaltet. Schalte zuerst „Internetzugriff für ' +
-    'Modell-Downloads und Updates erlauben“ in den Einstellungen ein.',
+    'Der Internetzugriff ist ausgeschaltet. Schalte zuerst „Internetzugriff für Downloads und ' +
+    'Updates erlauben“ in den Einstellungen ein.',
   'main.download.alreadyRunning':
     'Es läuft bereits ein Download. Modelle werden einzeln heruntergeladen.',
   'main.download.stoppedNetworkOff':
