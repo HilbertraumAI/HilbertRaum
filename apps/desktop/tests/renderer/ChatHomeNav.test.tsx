@@ -35,7 +35,7 @@ afterEach(() => {
 
 /** Open conversation-row "⋯" menu → "Delete conversation" → the confirm dialog. */
 async function openDeleteConfirm(user: ReturnType<typeof userEvent.setup>, title: string): Promise<void> {
-  await user.click(screen.getByRole('button', { name: `Options for conversation "${title}"` }))
+  await user.click(screen.getByRole('button', { name: t('en', 'chat.list.rowOptionsAria', { title }) }))
   await user.click(await screen.findByRole('menuitem', { name: /delete conversation/i }))
   await screen.findByRole('dialog')
 }
@@ -261,8 +261,9 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
     renderChatScreen({ initialMode: 'documents', initialScopePackIds: ['p1'] })
 
     // The handoff shows in the footer affordance: the pack, and the honest "documents off" tail.
+    const packSource = `${t('en', 'chat.scope.packNamed', { name: 'Wikipedia (English)' })} · ${t('en', 'chat.scope.documentsOffSuffix')}`
     expect(
-      await screen.findByRole('button', { name: /answering from: Pack: Wikipedia \(English\) · documents off/i })
+      await screen.findByRole('button', { name: t('en', 'chat.scope.answeringFrom', { source: packSource }) })
     ).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /new document q&a/i }))
     await waitFor(() =>

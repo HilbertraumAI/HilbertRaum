@@ -131,7 +131,7 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
     expect(downloadEngine).toHaveBeenCalledWith({ families: ['kiwix_tools'] })
 
     expect(
-      await screen.findByText('Installing the knowledge-pack tools… 50 %', undefined, { timeout: hangBudgetMs(5_000) })
+      await screen.findByText(tr('en', 'packs.tools.progress', { pct: 50 }), undefined, { timeout: hangBudgetMs(5_000) })
     ).toBeInTheDocument()
     toolsInstalled = true
     expect(

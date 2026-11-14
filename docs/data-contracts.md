@@ -1056,8 +1056,8 @@ head's own weights + KV.
   `api.getPolicy` + `PreloadApi`. `main/index.ts` calls `assertOfflinePosture()` in `initBackend()`
   and applies the dev/prod CSP response header in `createWindow()`.
 ✅ **Renderer:** `PrivacyScreen.tsx` (spec §7.10/§18.1 copy) replaces the placeholder — offline
-  statement, "where your data lives" (`getDriveStatus`), live network state (off by default /
-  disabled by policy), plaintext-dev-mode caveat, logs-local guarantee. Sidebar `offline-badge` is a
+  statement, "where your data lives" (`getDriveStatus`), live network state (turned off in Settings /
+  disabled by policy / allowed; the default is allowed, #805), plaintext-dev-mode caveat, logs-local guarantee. Sidebar `offline-badge` is a
   live button (reads `getPolicy`, links to Privacy).
 
 ### Encrypted workspace (Phase 9 live)

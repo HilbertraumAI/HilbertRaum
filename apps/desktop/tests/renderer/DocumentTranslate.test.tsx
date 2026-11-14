@@ -4,6 +4,7 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
+import { t } from '../../src/shared/i18n'
 import type { AppStatus, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -66,7 +67,7 @@ const appStatus = (over: Partial<AppStatus> = {}): AppStatus => baseAppStatus({ 
 async function openTranslateModal(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
   await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
-  expect(await screen.findByText(/Translate "contract.pdf"/)).toBeInTheDocument()
+  expect(await screen.findByText(t('en', 'docs.translateModal.title', { title: 'contract.pdf' }))).toBeInTheDocument()
 }
 
 /** Pick the pair in the modal's selects (by language CODE) and hit Translate. */

@@ -288,7 +288,7 @@ describe('DocumentsScreen', () => {
     expect(deleteDocument).not.toHaveBeenCalled()
 
     const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveTextContent(/Delete "contract.pdf"\?/)
+    expect(dialog).toHaveTextContent(translate('en', 'docs.deleteConfirm.title', { title: 'contract.pdf' }))
     await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d1'))
@@ -949,7 +949,9 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
     const del = screen.getByRole('menuitem', { name: /delete/i })
     expect(del).toBeInTheDocument()
     await user.click(del)
-    expect(await screen.findByRole('dialog')).toHaveTextContent(/Delete "contract.pdf"\?/)
+    expect(await screen.findByRole('dialog')).toHaveTextContent(
+      translate('en', 'docs.deleteConfirm.title', { title: 'contract.pdf' })
+    )
   })
 
   it('the selection toolbar appears only on selection and its bulk Delete confirms then deletes', async () => {

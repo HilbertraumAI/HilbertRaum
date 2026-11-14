@@ -1050,21 +1050,21 @@ export const nl: UiCatalog<'nl'> = {
     'garantie: namen en ongebruikelijke notaties worden niet herkend, dus controleer de ' +
     'opgeslagen kopie voordat je die deelt.',
   'skills.editRouting.answer':
-    'Klik op de knop **{button}** vlak boven het berichtvak om deze wijzigingen aan te brengen, ' +
-    'en kies daarna waar de bewerkte kopie moet worden opgeslagen. De actie draait volledig op ' +
-    'dit apparaat en voert alleen de exacte wijzigingen met zoeken en vervangen uit waar je om ' +
-    'hebt gevraagd: overal waar de tekst letterlijk voorkomt, terwijl al het andere ongewijzigd ' +
-    'blijft. Het document wordt nooit herschreven, dus er kan niets worden verzonnen of anders ' +
-    'geformuleerd. In deze fase wordt een kopie met gewone tekst (.txt) opgeslagen; controleer ' +
-    'de kopie voordat je die deelt.',
+    'Klik op de knop **{button}** vlak boven het berichtvak om deze wijzigingen aan te brengen, en ' +
+    'kies daarna waar de bewerkte kopie moet worden opgeslagen. De actie draait volledig op dit ' +
+    'apparaat en voert alleen de exacte wijzigingen met zoeken en vervangen uit waar je om hebt ' +
+    'gevraagd: overal waar de tekst letterlijk voorkomt, terwijl al het andere ongewijzigd blijft. ' +
+    'Het document wordt nooit herschreven, dus er kan niets worden verzonnen of anders geformuleerd. ' +
+    'Een Word-document blijft .docx; andere indelingen worden als gewone tekst (.txt) opgeslagen. ' +
+    'Controleer de kopie voordat je die deelt.',
   'skills.editRouting.answerMulti':
-    'Klik op de knop **{button}** vlak boven het berichtvak, kies welk document je wilt bewerken ' +
-    'en kies daarna waar de bewerkte kopie moet worden opgeslagen. De actie werkt met één ' +
-    'document tegelijk, draait volledig op dit apparaat en voert alleen de exacte wijzigingen ' +
-    'met zoeken en vervangen uit waar je om hebt gevraagd: overal waar de tekst letterlijk ' +
-    'voorkomt, terwijl al het andere ongewijzigd blijft. Het document wordt nooit herschreven. ' +
-    'In deze fase wordt een kopie met gewone tekst (.txt) opgeslagen; controleer de kopie ' +
-    'voordat je die deelt.',
+    'Klik op de knop **{button}** vlak boven het berichtvak, kies welk document je wilt bewerken en ' +
+    'kies daarna waar de bewerkte kopie moet worden opgeslagen. De actie werkt met één document ' +
+    'tegelijk, draait volledig op dit apparaat en voert alleen de exacte wijzigingen met zoeken en ' +
+    'vervangen uit waar je om hebt gevraagd: overal waar de tekst letterlijk voorkomt, terwijl al ' +
+    'het andere ongewijzigd blijft. Het document wordt nooit herschreven. Een Word-document blijft ' +
+    '.docx; andere indelingen worden als gewone tekst (.txt) opgeslagen. Controleer de kopie voordat ' +
+    'je die deelt.',
   'skills.redactionRouting.scan':
     'Ik heb het hele document doorzocht op persoonsgegevens in een duidelijk herkenbare notatie. ' +
     'Gevonden – e-mailadressen: {email}, telefoonnummers: {phone}, IBAN’s: {iban}, ' +
@@ -1145,12 +1145,12 @@ export const nl: UiCatalog<'nl'> = {
   'models.hint.small': 'Klein en snel: vlotte antwoorden op bijna elke computer.',
   'models.hint.balanced': 'Gebalanceerd: werkt goed op de meeste laptops.',
   'models.hint.large': 'Groot: de sterkste antwoorden; heeft een krachtige computer nodig.',
-  'models.usesSpace': 'Gebruikt {size} op de schijf.',
+  'models.usesSpace': 'Gebruikt {size} op de schijf',
   'models.downloads.blockedByPolicy':
     'Downloads zijn uitgeschakeld door het beleid van deze schijf.',
   'models.downloads.enableInSettings':
-    'Zet “Internettoegang toestaan voor modeldownloads en updates” aan in Instellingen om ' +
-    'modellen te downloaden.',
+    'Zet “Internettoegang toestaan voor modeldownloads en updates” aan in Instellingen om te ' +
+    'downloaden.',
   'models.download.verifying': 'Het gedownloade bestand wordt gecontroleerd…',
   'models.download.progress': 'Downloaden… {pct}% ({received} van {total})',
   'models.download.progressNoTotal': 'Downloaden… tot nu toe {received}',
@@ -1757,10 +1757,10 @@ export const nl: UiCatalog<'nl'> = {
   'privacy.offlineOn': '● Offlinemodus: aan',
   'privacy.offlineOff': '○ Netwerktoegang ingeschakeld',
   'privacy.statement.offline':
-    'De offlinemodus staat aan. HilbertRaum draait het AI-model op je laptop. Je vragen, ' +
+    'De offlinemodus staat aan. HilbertRaum draait het AI-model op deze computer. Je vragen, ' +
     'documenten, embeddings en chatgeschiedenis blijven lokaal.',
   'privacy.statement.online':
-    'HilbertRaum draait het AI-model op je laptop. Je vragen, documenten, embeddings en ' +
+    'HilbertRaum draait het AI-model op deze computer. Je vragen, documenten, embeddings en ' +
     'chatgeschiedenis blijven lokaal. Ook als internettoegang is ingeschakeld, gebruiken alleen ' +
     'downloads het netwerk: modellen, de AI-engine, de optionele hulpprogramma’s voor ' +
     'kennispakketten en de optionele bestanden voor tekstherkenning (OCR).',
@@ -1771,10 +1771,11 @@ export const nl: UiCatalog<'nl'> = {
   'privacy.network.title': 'Huidige netwerkstatus',
   'privacy.networkState.noPolicy': 'De offlinemodus staat aan.',
   'privacy.networkState.disabledByPolicy': 'Netwerktoegang uitgeschakeld door beleid.',
-  'privacy.networkState.offDefault': 'De offlinemodus staat aan (netwerk standaard uit).',
+  'privacy.networkState.offDefault':
+    'De offlinemodus staat aan (internettoegang is in Instellingen uitgezet).',
   'privacy.networkState.enabled':
-    'Internettoegang is ingeschakeld voor downloads: modellen, de AI-engine en de optionele ' +
-    'hulpprogramma’s voor kennispakketten.',
+    'Internettoegang is ingeschakeld voor downloads: modellen, de AI-engine, de optionele ' +
+    'hulpprogramma’s voor kennispakketten en de optionele bestanden voor tekstherkenning (OCR).',
   'privacy.network.noFiles': 'Geen vragen of bestanden verlaten dit apparaat.',
   'privacy.network.effective': 'Werkelijke status',
   'privacy.network.effectiveOffline': 'Offline (geen internetverbindingen)',
@@ -1784,7 +1785,7 @@ export const nl: UiCatalog<'nl'> = {
   'privacy.network.policyNo': 'Nee (uitgeschakeld door beleid)',
   'privacy.network.yourSetting': 'Je instelling',
   'privacy.network.settingAllowed': 'Internettoegang toegestaan',
-  'privacy.network.settingOff': 'Uit (standaard)',
+  'privacy.network.settingOff': 'Uit',
   'privacy.network.telemetry': 'Telemetrie',
   'privacy.network.telemetryValue':
     'Niets verlaat dit apparaat: er is geen tracking om uit te zetten',
@@ -2337,7 +2338,7 @@ export const nl: UiCatalog<'nl'> = {
   'password.strength.okay': 'Oké',
   'password.strength.strong': 'Sterk',
   'password.strength.veryStrong': 'Zeer sterk',
-  'password.strength.minHint': 'Gebruik minstens 8 tekens.',
+  'password.strength.minHint': 'Gebruik minstens {min} tekens.',
   'password.strength.longerHint':
     'Langer is sterker: 12 of meer tekens, of een paar woorden zonder verband, werken goed.',
   // ---- Workspace gate (WorkspaceGate.tsx) ----

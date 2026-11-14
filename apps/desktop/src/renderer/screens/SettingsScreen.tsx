@@ -338,7 +338,7 @@ function ChangePasswordCard(): JSX.Element {
           t={t}
         />
         {next.length > 0 && <PasswordStrengthMeter strength={strength} t={t} />}
-        {strength.hintKey && <p className="hint">{t(strength.hintKey)}</p>}
+        {strength.hintKey && <p className="hint">{t(strength.hintKey, strength.hintParams)}</p>}
         <PasswordField
           placeholder={t('settings.changePassword.confirm')}
           autoComplete="new-password"

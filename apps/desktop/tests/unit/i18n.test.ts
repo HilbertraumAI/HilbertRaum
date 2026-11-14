@@ -1212,6 +1212,26 @@ describe('German typography — quotation marks (design-guidelines §7 "Typograp
   })
 })
 
+describe('a quoted label is the real one — the partial re-index toast (#805 W1)', () => {
+  // The toast sends the user to the Documents rail entry that lists the failed documents. A quote
+  // there must be the entry's own label (`docs.smart.attention`), or the toast names a place the
+  // screen does not show (it used to send them to "the Failed imports tab"). English,
+  // German and Spanish quote it (the owner-approved W1 scope); a language that describes the entry
+  // unquoted is not asserted (Italian, S-W2-3), but whatever a language does quote must be the label.
+  const NAMES_THE_LABEL: readonly UiLanguage[] = ['en', 'de', 'es']
+  /** The text inside each pair of double quotation marks, any house style ("…", “…”, „…“, «…»). */
+  const quoted = (value: string): string[] =>
+    [...value.matchAll(/["“„«]([^"“”„«»]+)["”“»]/g)].map((match) => match[1].trim())
+
+  it.each(UI_LANGUAGE_CODES)('%s: docs.reindexAllPartial quotes exactly the docs.smart.attention label', (code) => {
+    const catalog = catalogOf(code)
+    const label = catalog['docs.smart.attention']
+    const spans = quoted(catalog['docs.reindexAllPartial'])
+    if (NAMES_THE_LABEL.includes(code)) expect(spans, `${code} names the rail entry (W1)`).not.toEqual([])
+    expect(spans.filter((span) => span !== label), `a quote that is not the rail label "${label}"`).toEqual([])
+  })
+})
+
 describe('house dashes — knowledge-pack copy (#301 P6, plan §9.23 (c)4)', () => {
   // A sentence-level break uses a real dash: English the em dash "—", German the em dash or
   // the en dash "–"; a bare ASCII hyphen standing in for one (space-hyphen-space) is a typo,
@@ -2083,6 +2103,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     keys: [
       'main.workspace.passwordTooShort',
       'main.workspace.newPasswordTooShort',
+      'password.strength.minHint', // #805 S4: "{min}" is MIN_PASSWORD_LENGTH (passwordStrength)
       'skills.import.note.listTruncated',
       'skills.import.note.localizedTooMany'
     ]

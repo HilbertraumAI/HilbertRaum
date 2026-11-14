@@ -872,7 +872,9 @@ describe('ScopePopover — knowledge packs', () => {
         />
       </I18nProvider>
     )
-    expect(screen.getByRole('button')).toHaveTextContent('Pack: Klimawandel von Wikipedia (disabled)')
+    expect(screen.getByRole('button')).toHaveTextContent(
+      tr('en', 'chat.scope.packNamedState', { name: pack().title, state: tr('en', 'chat.scope.packDisabled') })
+    )
     disabled.unmount()
     const missing = render(
       <I18nProvider>
@@ -885,14 +887,16 @@ describe('ScopePopover — knowledge packs', () => {
         />
       </I18nProvider>
     )
-    expect(screen.getByRole('button')).toHaveTextContent('Pack: Klimawandel von Wikipedia (not available)')
+    expect(screen.getByRole('button')).toHaveTextContent(
+      tr('en', 'chat.scope.packNamedState', { name: pack().title, state: tr('en', 'chat.scope.packUnavailable') })
+    )
     missing.unmount()
     render(
       <I18nProvider>
         <ScopePopover docs={[doc]} collections={collections} packs={[pack()]} scope={scope} onChangeScope={() => {}} />
       </I18nProvider>
     )
-    expect(screen.getByRole('button')).toHaveTextContent('Pack: Klimawandel von Wikipedia')
+    expect(screen.getByRole('button')).toHaveTextContent(tr('en', 'chat.scope.packNamed', { name: pack().title }))
     expect(screen.getByRole('button')).not.toHaveTextContent('(')
   })
 
@@ -912,7 +916,9 @@ describe('ScopePopover — knowledge packs', () => {
       </I18nProvider>
     )
     const trigger = screen.getByRole('button')
-    expect(trigger).toHaveTextContent('Pack: Klimawandel von Wikipedia · documents off')
+    expect(trigger).toHaveTextContent(
+      `${tr('en', 'chat.scope.packNamed', { name: pack().title })} · ${tr('en', 'chat.scope.documentsOffSuffix')}`
+    )
     await user.click(trigger)
     expect(await screen.findByText(/Files attached to this chat are still used/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /All documents/ }))

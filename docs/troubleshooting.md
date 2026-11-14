@@ -230,7 +230,7 @@ and restart the app. On a **prepared drive** this message is genuine drive polic
 
 ## "Offline Mode is ON — is something wrong?"
 
-**No. That is the intended state.** HilbertRaum runs the AI model on your laptop and
+**No. That is the intended state.** HilbertRaum runs the AI model on this computer and
 keeps your data local. The core app — chat, documents, search — never goes online; the only
 optional network feature, model/engine downloads, is permitted even on a prepared commercial
 drive but never runs by itself — every download asks for your explicit confirmation first.

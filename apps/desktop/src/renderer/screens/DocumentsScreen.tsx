@@ -480,7 +480,7 @@ export function DocumentsScreen({
             // the user it STOPPED early rather than finished, with what got through. A completed
             // batch gets a summary toast too (PR review): the loop continues past per-document
             // failures (locked/deleted/crashed docs), so without a summary a partial outcome
-            // looked identical to a full success until you noticed the Failed imports tab.
+            // looked identical to a full success until you noticed the "Needs attention" list.
             if (job.cancelled) {
               showToast(t('docs.reindexAllCancelled', { done: job.completed, total: job.total }))
             } else if (job.failed > 0) {

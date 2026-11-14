@@ -1,6 +1,6 @@
 # HilbertRaum — User Guide
 
-HilbertRaum is a private AI workspace that runs **entirely on your laptop**, from
+HilbertRaum is a private AI workspace that runs **entirely on your computer**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
 **no cloud, no account, and no internet required**.
 

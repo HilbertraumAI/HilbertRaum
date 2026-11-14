@@ -1132,17 +1132,19 @@ export const pl: UiCatalog<'pl'> = {
   'skills.editRouting.answer':
     'Aby wprowadzić te zmiany, kliknij przycisk **{button}** tuż nad polem wiadomości, a potem ' +
     'wybierz, gdzie zapisać edytowaną kopię. Narzędzie działa w całości na tym urządzeniu i ' +
-    'wprowadza tylko dokładne zmiany metodą „znajdź i zamień”, o które prosisz – wszędzie tam, ' +
-    'gdzie tekst występuje dosłownie, a całą resztę pozostawia bez zmian. Nigdy nie przepisuje ' +
-    'dokumentu, więc niczego nie może wymyślić ani przeredagować. Na tym etapie zapisywana jest ' +
-    'kopia w postaci pliku tekstowego (.txt); sprawdź ją przed udostępnieniem.',
+    'wprowadza tylko dokładne zmiany metodą „znajdź i zamień”, o które prosisz – wszędzie tam, gdzie ' +
+    'tekst występuje dosłownie, a całą resztę pozostawia bez zmian. Nigdy nie przepisuje dokumentu, ' +
+    'więc niczego nie może wymyślić ani przeredagować. Dokument Word zachowuje format .docx; ' +
+    'dokumenty w innych formatach są zapisywane jako pliki tekstowe (.txt). Sprawdź kopię przed ' +
+    'udostępnieniem.',
   'skills.editRouting.answerMulti':
     'Aby wprowadzić te zmiany, kliknij przycisk **{button}** tuż nad polem wiadomości i wybierz ' +
     'dokument do edycji, a potem miejsce zapisu edytowanej kopii. Narzędzie przetwarza jeden ' +
     'dokument naraz, działa w całości na tym urządzeniu i wprowadza tylko dokładne zmiany metodą ' +
     '„znajdź i zamień”, o które prosisz – wszędzie tam, gdzie tekst występuje dosłownie, a całą ' +
-    'resztę pozostawia bez zmian. Nigdy nie przepisuje dokumentu. Na tym etapie zapisywana jest ' +
-    'kopia w postaci pliku tekstowego (.txt); sprawdź ją przed udostępnieniem.',
+    'resztę pozostawia bez zmian. Nigdy nie przepisuje dokumentu. Dokument Word zachowuje format ' +
+    '.docx; dokumenty w innych formatach są zapisywane jako pliki tekstowe (.txt). Sprawdź kopię ' +
+    'przed udostępnieniem.',
   'skills.redactionRouting.scan':
     'Przeszukano cały dokument pod kątem danych osobowych w wyraźnym formacie. Wykryte dane – ' +
     'adresy e-mail: {email}, numery telefonów: {phone}, numery IBAN: {iban}, numery kart ' +
@@ -1229,11 +1231,11 @@ export const pl: UiCatalog<'pl'> = {
   'models.hint.small': 'Mały i zwinny – szybkie odpowiedzi na prawie każdym komputerze.',
   'models.hint.balanced': 'Zrównoważony – dobrze działa na większości laptopów.',
   'models.hint.large': 'Duży – najlepsze odpowiedzi; wymaga wydajnego komputera.',
-  'models.usesSpace': 'Zajmuje {size} miejsca na dysku.',
+  'models.usesSpace': 'Zajmuje {size} miejsca na dysku',
   'models.downloads.blockedByPolicy': 'Pobieranie jest wyłączone przez zasady tego dysku.',
   'models.downloads.enableInSettings':
-    'Aby pobierać modele, włącz w Ustawieniach opcję „Zezwalaj na dostęp do internetu, aby ' +
-    'pobierać modele i aktualizacje”.',
+    'Aby pobierać pliki, włącz w Ustawieniach opcję „Zezwalaj na dostęp do internetu, aby pobierać ' +
+    'modele i aktualizacje”.',
   'models.download.verifying': 'Sprawdzanie pobranego pliku…',
   'models.download.progress': 'Pobieranie… {pct}% ({received} z {total})',
   'models.download.progressNoTotal': 'Pobieranie… pobrano: {received}',
@@ -1826,13 +1828,13 @@ export const pl: UiCatalog<'pl'> = {
   'privacy.offlineOn': '● Tryb offline: włączony',
   'privacy.offlineOff': '○ Dostęp do sieci włączony',
   'privacy.statement.offline':
-    'Tryb offline jest włączony. HilbertRaum uruchamia model AI na twoim laptopie. Twoje ' +
-    'pytania, dokumenty, dane wyszukiwania i historia czatów zostają lokalnie.',
+    'Tryb offline jest włączony. HilbertRaum uruchamia model AI na tym komputerze. Twoje pytania, ' +
+    'dokumenty, dane wyszukiwania i historia czatów zostają lokalnie.',
   'privacy.statement.online':
-    'HilbertRaum uruchamia model AI na twoim laptopie. Twoje pytania, dokumenty, dane ' +
-    'wyszukiwania i historia czatów zostają lokalnie – nawet gdy dostęp do internetu jest ' +
-    'włączony, z sieci korzysta tylko pobieranie (modeli, silnika AI, opcjonalnych narzędzi ' +
-    'pakietów wiedzy i opcjonalnych plików rozpoznawania tekstu (OCR)).',
+    'HilbertRaum uruchamia model AI na tym komputerze. Twoje pytania, dokumenty, dane wyszukiwania i ' +
+    'historia czatów zostają lokalnie – nawet gdy dostęp do internetu jest włączony, z sieci ' +
+    'korzysta tylko pobieranie (modeli, silnika AI, opcjonalnych narzędzi pakietów wiedzy i ' +
+    'opcjonalnych plików rozpoznawania tekstu (OCR)).',
   'privacy.statement.noUploads':
     'Ta aplikacja nie wysyła twoich danych do dostawców AI w chmurze. Nie przesyła pytań, ' +
     'dokumentów ani danych wyszukiwania; nie ma w niej telemetrii, analityki ani zdalnego ' +
@@ -1840,10 +1842,11 @@ export const pl: UiCatalog<'pl'> = {
   'privacy.network.title': 'Bieżący stan sieci',
   'privacy.networkState.noPolicy': 'Tryb offline jest włączony.',
   'privacy.networkState.disabledByPolicy': 'Dostęp do sieci wyłączony przez zasady dysku.',
-  'privacy.networkState.offDefault': 'Tryb offline jest włączony (sieć domyślnie wyłączona).',
+  'privacy.networkState.offDefault':
+    'Tryb offline jest włączony (dostęp do internetu jest wyłączony w Ustawieniach).',
   'privacy.networkState.enabled':
-    'Dostęp do internetu jest włączony na potrzeby pobierania modeli, silnika AI i opcjonalnych ' +
-    'narzędzi pakietów wiedzy.',
+    'Dostęp do internetu jest włączony na potrzeby pobierania modeli, silnika AI, opcjonalnych ' +
+    'narzędzi pakietów wiedzy i opcjonalnych plików rozpoznawania tekstu (OCR).',
   'privacy.network.noFiles': 'Żadne pytania ani pliki nie opuszczają tego urządzenia.',
   'privacy.network.effective': 'Rzeczywisty stan',
   'privacy.network.effectiveOffline': 'Offline (bez połączeń z internetem)',
@@ -1853,7 +1856,7 @@ export const pl: UiCatalog<'pl'> = {
   'privacy.network.policyNo': 'Nie (wyłączone przez zasady dysku)',
   'privacy.network.yourSetting': 'Twoje ustawienie',
   'privacy.network.settingAllowed': 'Dostęp do internetu dozwolony',
-  'privacy.network.settingOff': 'Wyłączone (domyślnie)',
+  'privacy.network.settingOff': 'Wyłączone',
   'privacy.network.telemetry': 'Telemetria',
   'privacy.network.telemetryValue':
     'Nic nie opuszcza tego urządzenia – nie ma śledzenia do wyłączenia',
@@ -2424,7 +2427,7 @@ export const pl: UiCatalog<'pl'> = {
   'password.strength.okay': 'Średnie',
   'password.strength.strong': 'Silne',
   'password.strength.veryStrong': 'Bardzo silne',
-  'password.strength.minHint': 'Użyj co najmniej 8 znaków.',
+  'password.strength.minHint': 'Użyj co najmniej {min} znaków.',
   'password.strength.longerHint':
     'Dłuższe znaczy silniejsze – dobrze sprawdza się 12 lub więcej znaków albo kilka ' +
     'niepowiązanych słów.',

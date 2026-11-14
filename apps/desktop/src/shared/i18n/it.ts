@@ -255,8 +255,8 @@ export const it: UiCatalog<'it'> = {
   'chat.skill.usedTitle': 'Questa risposta è stata elaborata con la skill «{title}».',
   'chat.skill.autoFired': 'Risposta con la skill {title}',
   'chat.skill.autoFiredTitle':
-    'L’app ha applicato automaticamente la skill «{title}» a questa risposta. Puoi rispondere ' +
-    'senza la skill.',
+    'L’app ha applicato automaticamente la skill «{title}» a questa risposta. Puoi ottenere una ' +
+    'risposta senza la skill.',
   'chat.skill.answerWithout': 'Rispondi senza la skill',
   'chat.skill.answerWithoutBlockedByReview':
     'Questa risposta ha una verifica dei riscontri. Rispondere di nuovo eliminerebbe la verifica ' +
@@ -1111,19 +1111,20 @@ export const it: UiCatalog<'it'> = {
     'formati insoliti, quindi controlla la copia salvata prima di condividerla.',
   'skills.editRouting.answer':
     'Per apportare queste modifiche, scegli **{button}**, il pulsante subito sopra il campo del ' +
-    'messaggio, poi indica dove salvare la copia modificata. Lo strumento funziona interamente ' +
-    'su questo dispositivo e applica solo le sostituzioni esatte (trova e sostituisci) che hai ' +
-    'chiesto, ovunque trovi il testo in forma identica, senza cambiare nient’altro. Non riscrive ' +
-    'mai il documento, quindi non può inventare né riformulare nulla. In questa fase viene ' +
-    'salvata una copia in un file di testo (.txt): controllala prima di condividerla.',
+    'messaggio, poi indica dove salvare la copia modificata. Lo strumento funziona interamente su ' +
+    'questo dispositivo e applica solo le sostituzioni esatte (trova e sostituisci) che hai chiesto, ' +
+    'ovunque trovi il testo in forma identica, senza cambiare nient’altro. Non riscrive mai il ' +
+    'documento, quindi non può inventare né riformulare nulla. Un documento Word mantiene il formato ' +
+    '.docx; gli altri formati vengono salvati come file di testo (.txt). Controlla la copia prima di ' +
+    'condividerla.',
   'skills.editRouting.answerMulti':
     'Per apportare queste modifiche, scegli **{button}**, il pulsante subito sopra il campo del ' +
-    'messaggio, seleziona il documento da modificare, poi indica dove salvare la copia ' +
-    'modificata. Lo strumento elabora un documento alla volta, funziona interamente su questo ' +
-    'dispositivo e applica solo le sostituzioni esatte (trova e sostituisci) che hai chiesto, ' +
-    'ovunque trovi il testo in forma identica, senza cambiare nient’altro. Non riscrive mai il ' +
-    'documento. In questa fase viene salvata una copia in un file di testo (.txt): controllala ' +
-    'prima di condividerla.',
+    'messaggio, seleziona il documento da modificare, poi indica dove salvare la copia modificata. ' +
+    'Lo strumento elabora un documento alla volta, funziona interamente su questo dispositivo e ' +
+    'applica solo le sostituzioni esatte (trova e sostituisci) che hai chiesto, ovunque trovi il ' +
+    'testo in forma identica, senza cambiare nient’altro. Non riscrive mai il documento. Un ' +
+    'documento Word mantiene il formato .docx; gli altri formati vengono salvati come file di testo ' +
+    '(.txt). Controlla la copia prima di condividerla.',
   'skills.redactionRouting.scan':
     'Ho esaminato l’intero documento alla ricerca di dati personali in formati chiaramente ' +
     'riconoscibili. Ecco cosa ho rilevato. Indirizzi e-mail: {email}; numeri di telefono: ' +
@@ -1208,11 +1209,11 @@ export const it: UiCatalog<'it'> = {
   'models.hint.small': 'Piccolo e rapido: risposte veloci su quasi tutti i computer.',
   'models.hint.balanced': 'Bilanciato: funziona bene sulla maggior parte dei portatili.',
   'models.hint.large': 'Grande: le risposte migliori; richiede un computer potente.',
-  'models.usesSpace': 'Occupa {size} di spazio sull’unità.',
+  'models.usesSpace': 'Occupa {size} di spazio sull’unità',
   'models.downloads.blockedByPolicy': 'I download sono disattivati dai criteri di questa unità.',
   'models.downloads.enableInSettings':
-    'Per scaricare modelli, attiva «Consenti l’accesso a Internet per download e aggiornamenti ' +
-    'dei modelli» nelle Impostazioni.',
+    'Per scaricare, attiva «Consenti l’accesso a Internet per download e aggiornamenti dei modelli» ' +
+    'nelle Impostazioni.',
   'models.download.verifying': 'Controllo del file scaricato in corso…',
   'models.download.progress': 'Download in corso… {pct}% ({received} su {total})',
   'models.download.progressNoTotal': 'Download in corso… finora {received}',
@@ -1830,13 +1831,13 @@ export const it: UiCatalog<'it'> = {
   'privacy.offlineOn': '● Modalità offline: attiva',
   'privacy.offlineOff': '○ Accesso alla rete attivo',
   'privacy.statement.offline':
-    'La modalità offline è attiva. HilbertRaum esegue il modello IA sul tuo portatile. Le tue ' +
+    'La modalità offline è attiva. HilbertRaum esegue il modello IA su questo computer. Le tue ' +
     'domande, i tuoi documenti, gli embedding e la cronologia delle chat restano in locale.',
   'privacy.statement.online':
-    'HilbertRaum esegue il modello IA sul tuo portatile. Le tue domande, i tuoi documenti, gli ' +
-    'embedding e la cronologia delle chat restano in locale: anche con l’accesso a Internet ' +
-    'attivo, usano la rete solo i download, cioè modelli, motore IA, strumenti opzionali per i ' +
-    'pacchetti di conoscenze e file opzionali per il riconoscimento del testo (OCR).',
+    'HilbertRaum esegue il modello IA su questo computer. Le tue domande, i tuoi documenti, gli ' +
+    'embedding e la cronologia delle chat restano in locale: anche con l’accesso a Internet attivo, ' +
+    'usano la rete solo i download, cioè modelli, motore IA, strumenti opzionali per i pacchetti di ' +
+    'conoscenze e file opzionali per il riconoscimento del testo (OCR).',
   'privacy.statement.noUploads':
     'Questa app non invia i tuoi dati a fornitori di IA nel cloud. Non ci sono caricamenti di ' +
     'domande, documenti o embedding, né telemetria, né statistiche di utilizzo, né invio remoto ' +
@@ -1845,10 +1846,10 @@ export const it: UiCatalog<'it'> = {
   'privacy.networkState.noPolicy': 'La modalità offline è attiva.',
   'privacy.networkState.disabledByPolicy': 'Accesso alla rete disattivato dai criteri dell’unità.',
   'privacy.networkState.offDefault':
-    'La modalità offline è attiva (rete disattivata per impostazione predefinita).',
+    'La modalità offline è attiva (l’accesso a Internet è disattivato nelle Impostazioni).',
   'privacy.networkState.enabled':
-    'L’accesso a Internet è attivo per i download: modelli, motore IA e strumenti opzionali per ' +
-    'i pacchetti di conoscenze.',
+    'L’accesso a Internet è attivo per i download: modelli, motore IA, strumenti opzionali per i ' +
+    'pacchetti di conoscenze e file opzionali per il riconoscimento del testo (OCR).',
   'privacy.network.noFiles': 'Né le domande né i file escono da questo dispositivo.',
   'privacy.network.effective': 'Stato effettivo',
   'privacy.network.effectiveOffline': 'Offline (nessuna connessione a Internet)',
@@ -1858,7 +1859,7 @@ export const it: UiCatalog<'it'> = {
   'privacy.network.policyNo': 'No (disattivata dai criteri)',
   'privacy.network.yourSetting': 'La tua impostazione',
   'privacy.network.settingAllowed': 'Accesso a Internet consentito',
-  'privacy.network.settingOff': 'Disattivata (predefinita)',
+  'privacy.network.settingOff': 'Disattivata',
   'privacy.network.telemetry': 'Telemetria',
   'privacy.network.telemetryValue':
     'Nulla esce da questo dispositivo: non c’è nessun tracciamento da disattivare',
@@ -2430,7 +2431,7 @@ export const it: UiCatalog<'it'> = {
   'password.strength.okay': 'Media',
   'password.strength.strong': 'Forte',
   'password.strength.veryStrong': 'Molto forte',
-  'password.strength.minHint': 'Usa almeno 8 caratteri.',
+  'password.strength.minHint': 'Usa almeno {min} caratteri.',
   'password.strength.longerHint':
     'Più è lunga, più è forte: vanno bene 12 o più caratteri, oppure alcune parole senza legame ' +
     'tra loro.',
@@ -3095,15 +3096,15 @@ export const it: UiCatalog<'it'> = {
     'l’operazione per aggiornarlo.',
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.library': 'Libreria',
-  'chat.scope.projectNamed': 'Progetto: {name}',
+  'chat.scope.projectNamed': 'Progetto «{name}»',
   'chat.scope.projectCount.one': '{count} progetto',
   'chat.scope.projectCount.many': '{count} di progetti',
   'chat.scope.projectCount.other': '{count} progetti',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Pacchetti di conoscenze',
   'chat.scope.packUnavailable': 'non disponibile',
-  'chat.scope.packNamed': 'Pacchetto: {name}',
-  'chat.scope.packNamedState': 'Pacchetto: {name} ({state})',
+  'chat.scope.packNamed': 'Pacchetto «{name}»',
+  'chat.scope.packNamedState': 'Pacchetto «{name}» ({state})',
   'chat.scope.packCount.one': '{count} pacchetto di conoscenze',
   'chat.scope.packCount.many': '{count} di pacchetti di conoscenze',
   'chat.scope.packCount.other': '{count} pacchetti di conoscenze',

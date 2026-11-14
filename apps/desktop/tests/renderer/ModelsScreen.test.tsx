@@ -1418,7 +1418,7 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     })
     const user = userEvent.setup()
     render(<ModelsScreen />)
-    expect(await screen.findByText(/Uses 14\.4 GB of drive space\./)).toBeInTheDocument()
+    expect(await screen.findByText(/Uses 14\.4 GB of drive space/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Download' }))
     expect(within(screen.getByRole('dialog')).getByText('14.4 GB')).toBeInTheDocument()
   })

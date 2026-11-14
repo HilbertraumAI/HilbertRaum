@@ -1,11 +1,11 @@
 # Privacy Notice — HilbertRaum
 
-HilbertRaum runs AI models **locally** on your laptop. This document explains, in plain
+HilbertRaum runs AI models **locally** on your computer. This document explains, in plain
 language, what the app does and does not do with your data.
 
 ## The short version
 
-> Offline Mode is on. HilbertRaum runs the AI model on your laptop.
+> Offline Mode is on. HilbertRaum runs the AI model on this computer.
 > Your prompts, documents, embeddings, and chat history stay local.
 
 This app does not send your data to cloud AI providers. One optional feature lets other programs

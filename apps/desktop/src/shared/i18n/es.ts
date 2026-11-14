@@ -245,8 +245,8 @@ export const es: UiCatalog<'es'> = {
   'chat.skill.usedTitle': 'Esta respuesta se generó con la habilidad «{title}».',
   'chat.skill.autoFired': 'Se respondió con «{title}»',
   'chat.skill.autoFiredTitle':
-    'La aplicación usó automáticamente la habilidad «{title}» en esta respuesta. Puedes ' +
-    'responder sin ella.',
+    'La aplicación usó automáticamente la habilidad «{title}» en esta respuesta. Puedes obtener una ' +
+    'respuesta sin ella.',
   'chat.skill.answerWithout': 'Responder sin ella',
   'chat.skill.answerWithoutBlockedByReview':
     'Esta respuesta tiene una revisión de evidencia. Volver a responder eliminaría la revisión ' +
@@ -618,8 +618,8 @@ export const es: UiCatalog<'es'> = {
   'docs.reindexAllDone.many': 'Se reindexaron {count} de documentos.',
   'docs.reindexAllDone.other': 'Se reindexaron {count} documentos.',
   'docs.reindexAllPartial':
-    'Documentos reindexados: {done} de {total}; con errores: {failed}. Los documentos con ' +
-    'errores se quedan en la lista de importaciones con errores.',
+    'Documentos reindexados: {done} de {total}; con errores: {failed}. Los documentos con errores se ' +
+    'quedan en «Requiere atención».',
   'docs.supported.base':
     'Formatos compatibles: TXT, Markdown, PDF, DOCX, CSV y grabaciones de audio (WAV, MP3, FLAC, ' +
     'OGG), que se transcriben en esta unidad',
@@ -1081,17 +1081,19 @@ export const es: UiCatalog<'es'> = {
   'skills.editRouting.answer':
     'Para hacer estos cambios, haz clic en el botón **{button}**, justo encima del cuadro de ' +
     'mensaje, y luego elige dónde guardar la copia editada. Se ejecuta por completo en este ' +
-    'dispositivo y solo aplica los cambios exactos de buscar y reemplazar que pediste, en todos ' +
-    'los lugares donde el texto aparece tal cual, sin cambiar nada más. Nunca reescribe el ' +
-    'documento, así que no puede inventar ni reformular nada. En esta fase se guarda una copia ' +
-    'de texto sin formato (.txt); revísala antes de compartirla.',
+    'dispositivo y solo aplica los cambios exactos de buscar y reemplazar que pediste, en todos los ' +
+    'lugares donde el texto aparece tal cual, sin cambiar nada más. Nunca reescribe el documento, ' +
+    'así que no puede inventar ni reformular nada. Un documento de Word conserva su formato .docx; ' +
+    'los demás formatos se guardan como texto sin formato (.txt). Revisa la copia antes de ' +
+    'compartirla.',
   'skills.editRouting.answerMulti':
     'Para hacer estos cambios, haz clic en el botón **{button}**, justo encima del cuadro de ' +
-    'mensaje, elige el documento que quieres editar y luego dónde guardar la copia editada. ' +
-    'Trabaja con un documento a la vez, se ejecuta por completo en este dispositivo y solo ' +
-    'aplica los cambios exactos de buscar y reemplazar que pediste, en todos los lugares donde ' +
-    'el texto aparece tal cual, sin cambiar nada más. Nunca reescribe el documento. En esta fase ' +
-    'se guarda una copia de texto sin formato (.txt); revísala antes de compartirla.',
+    'mensaje, elige el documento que quieres editar y luego dónde guardar la copia editada. Trabaja ' +
+    'con un documento a la vez, se ejecuta por completo en este dispositivo y solo aplica los ' +
+    'cambios exactos de buscar y reemplazar que pediste, en todos los lugares donde el texto aparece ' +
+    'tal cual, sin cambiar nada más. Nunca reescribe el documento. Un documento de Word conserva su ' +
+    'formato .docx; los demás formatos se guardan como texto sin formato (.txt). Revisa la copia ' +
+    'antes de compartirla.',
   'skills.redactionRouting.scan':
     'Analicé todo el documento en busca de datos personales con un formato claro. Esto es lo que ' +
     'detecté. Direcciones de correo electrónico: {email}; números de teléfono: {phone}; IBAN: ' +
@@ -1175,12 +1177,12 @@ export const es: UiCatalog<'es'> = {
   'models.hint.small': 'Pequeño y ágil: respuestas rápidas en casi cualquier equipo.',
   'models.hint.balanced': 'Equilibrado: funciona bien en la mayoría de los equipos.',
   'models.hint.large': 'Grande: las mejores respuestas; necesita un equipo potente.',
-  'models.usesSpace': 'Ocupa {size} de espacio en la unidad.',
+  'models.usesSpace': 'Ocupa {size} de espacio en la unidad',
   'models.downloads.blockedByPolicy':
     'Las descargas están desactivadas por la política de esta unidad.',
   'models.downloads.enableInSettings':
-    'Para descargar modelos, activa «Permitir el acceso a internet para descargar modelos y ' +
-    'actualizaciones» en Ajustes.',
+    'Para descargar, activa «Permitir el acceso a internet para descargar modelos y actualizaciones» ' +
+    'en Ajustes.',
   'models.download.verifying': 'Verificando el archivo descargado…',
   'models.download.progress': 'Descargando… {pct}\u00A0% ({received} de {total})',
   'models.download.progressNoTotal': 'Descargando… {received} hasta ahora',
@@ -1783,12 +1785,12 @@ export const es: UiCatalog<'es'> = {
   'privacy.offlineOn': '● Modo sin conexión: activado',
   'privacy.offlineOff': '○ Acceso a la red activado',
   'privacy.statement.offline':
-    'El modo sin conexión está activado. HilbertRaum ejecuta el modelo de IA en tu equipo. Tus ' +
+    'El modo sin conexión está activado. HilbertRaum ejecuta el modelo de IA en este equipo. Tus ' +
     'preguntas, documentos, embeddings e historial de chat no salen de él.',
   'privacy.statement.online':
-    'HilbertRaum ejecuta el modelo de IA en tu equipo. Tus preguntas, documentos, embeddings e ' +
-    'historial de chat no salen de él. Aunque el acceso a internet esté activado, solo usan la ' +
-    'red las descargas: modelos, el motor de IA, las herramientas opcionales de los paquetes de ' +
+    'HilbertRaum ejecuta el modelo de IA en este equipo. Tus preguntas, documentos, embeddings e ' +
+    'historial de chat no salen de él. Aunque el acceso a internet esté activado, solo usan la red ' +
+    'las descargas: modelos, el motor de IA, las herramientas opcionales de los paquetes de ' +
     'conocimiento y los archivos opcionales de reconocimiento de texto (OCR).',
   'privacy.statement.noUploads':
     'Esta aplicación no envía tus datos a proveedores de IA en la nube. No hay envíos de ' +
@@ -1799,10 +1801,11 @@ export const es: UiCatalog<'es'> = {
   'privacy.networkState.disabledByPolicy':
     'Acceso a la red desactivado por la política de la unidad.',
   'privacy.networkState.offDefault':
-    'El modo sin conexión está activado (red desactivada de forma predeterminada).',
+    'El modo sin conexión está activado (el acceso a internet está desactivado en Ajustes).',
   'privacy.networkState.enabled':
-    'El acceso a internet está activado para las descargas: modelos, el motor de IA y las ' +
-    'herramientas opcionales de los paquetes de conocimiento.',
+    'El acceso a internet está activado para las descargas: modelos, el motor de IA, las ' +
+    'herramientas opcionales de los paquetes de conocimiento y los archivos opcionales de ' +
+    'reconocimiento de texto (OCR).',
   'privacy.network.noFiles': 'Ni las preguntas ni los archivos salen de este dispositivo.',
   'privacy.network.effective': 'Estado efectivo',
   'privacy.network.effectiveOffline': 'Sin conexión (no se usa internet)',
@@ -1812,7 +1815,7 @@ export const es: UiCatalog<'es'> = {
   'privacy.network.policyNo': 'No (desactivado por la política)',
   'privacy.network.yourSetting': 'Tu ajuste',
   'privacy.network.settingAllowed': 'Acceso a internet permitido',
-  'privacy.network.settingOff': 'Desactivado (predeterminado)',
+  'privacy.network.settingOff': 'Desactivado',
   'privacy.network.telemetry': 'Telemetría',
   'privacy.network.telemetryValue':
     'Nada sale de este dispositivo: no hay ningún rastreo que desactivar',
@@ -2383,7 +2386,7 @@ export const es: UiCatalog<'es'> = {
   'password.strength.okay': 'Aceptable',
   'password.strength.strong': 'Fuerte',
   'password.strength.veryStrong': 'Muy fuerte',
-  'password.strength.minHint': 'Usa al menos 8 caracteres.',
+  'password.strength.minHint': 'Usa al menos {min} caracteres.',
   'password.strength.longerHint':
     'Cuanto más larga, más fuerte: funcionan bien 12 caracteres o más, o unas cuantas palabras ' +
     'sin relación entre sí.',
@@ -3059,15 +3062,15 @@ export const es: UiCatalog<'es'> = {
     'actualizarlo.',
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.library': 'Biblioteca',
-  'chat.scope.projectNamed': 'Proyecto: {name}',
+  'chat.scope.projectNamed': 'Proyecto «{name}»',
   'chat.scope.projectCount.one': '{count} proyecto',
   'chat.scope.projectCount.many': '{count} de proyectos',
   'chat.scope.projectCount.other': '{count} proyectos',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Paquetes de conocimiento',
   'chat.scope.packUnavailable': 'no disponible',
-  'chat.scope.packNamed': 'Paquete: {name}',
-  'chat.scope.packNamedState': 'Paquete: {name} ({state})',
+  'chat.scope.packNamed': 'Paquete «{name}»',
+  'chat.scope.packNamedState': 'Paquete «{name}» ({state})',
   'chat.scope.packCount.one': '{count} paquete de conocimiento',
   'chat.scope.packCount.many': '{count} de paquetes de conocimiento',
   'chat.scope.packCount.other': '{count} paquetes de conocimiento',

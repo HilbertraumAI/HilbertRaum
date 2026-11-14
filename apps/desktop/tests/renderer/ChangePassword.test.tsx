@@ -9,6 +9,7 @@ import {
   type AppSettings,
   type WorkspaceActionResult
 } from '../../src/shared/types'
+import { t } from '../../src/shared/i18n'
 import { stubApi } from '../helpers/renderer'
 
 // Phase 32: the Settings → General "Change password" card. Reuses the Phase-27
@@ -118,6 +119,8 @@ describe('Settings → Change password (Phase 32)', () => {
     const belowFloor = 'a'.repeat(MIN_PASSWORD_LENGTH - 1)
     await fillCard(user, 'old-password', belowFloor, belowFloor)
     expect(button).toBeDisabled()
+    // The too-short hint names the same floor (#805 S4): the catalog writes `{min}`, this card fills it.
+    expect(screen.getByText(t('en', 'password.strength.minHint', { min: MIN_PASSWORD_LENGTH }))).toBeInTheDocument()
 
     await user.type(screen.getByLabelText('New password'), 'a')
     await user.type(screen.getByLabelText('Confirm new password'), 'a')

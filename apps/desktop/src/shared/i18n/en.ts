@@ -213,7 +213,7 @@ export const en = {
   'chat.list.empty': 'No conversations yet.',
   'chat.list.docMeta': 'Documents',
   'chat.list.otherGroup': 'Other / Library',
-  'chat.list.rowOptionsAria': 'Options for conversation "{title}"',
+  'chat.list.rowOptionsAria': 'Options for conversation “{title}”',
   'chat.search.placeholder': 'Search conversations…',
   'chat.search.aria': 'Search conversations',
   'chat.search.resultsAria': 'Search results',
@@ -252,7 +252,8 @@ export const en = {
   // one-click undo re-runs the same question without the skill). Never a silent surprise.
   'chat.skill.autoFired': 'Answered with {title}',
   'chat.skill.autoFiredTitle':
-    'The app applied the skill “{title}” to this answer automatically. You can answer without it.',
+    'The app applied the skill “{title}” to this answer automatically. You can get an answer without ' +
+    'it.',
   'chat.skill.answerWithout': 'Answer without it',
   // AUD-01: the undo re-answers the turn, which deletes this reply — and the message foreign key
   // cascades that delete through the reply's evidence review. The affordance is DISABLED rather
@@ -538,9 +539,9 @@ export const en = {
   // ---- Documents (DocumentsScreen.tsx) ----
   'docs.title': 'Documents',
   'docs.lead':
-    'Import documents to ask questions about them. Each file is copied into your workspace ' +
-    'and prepared for search — everything stays on this drive. Ask from the Chat screen\'s ' +
-    '"Ask my documents" mode.',
+    'Import documents to ask questions about them. Each file is copied into your workspace and ' +
+    'prepared for search — everything stays on this drive. Ask from the Chat screen\'s “Ask my ' +
+    'documents” mode.',
   'docs.status.queued': 'Waiting',
   'docs.status.extracting': 'Reading',
   'docs.status.preparing': 'Preparing',
@@ -560,7 +561,7 @@ export const en = {
   'docs.task.ocrBusyTitle': 'The scanned pages are being read',
   'docs.task.treeBusyTitle': 'A deep index is being built for the whole document',
   'docs.task.extractBusyTitle':
-    'The whole document is being scanned so it can answer "list every…" questions',
+    'The whole document is being scanned so it can answer “list every…” questions',
   'docs.task.categorizeBusy': 'Categorizing transactions…',
   'docs.task.categorizeBusyTitle': 'The statement’s transactions are being categorized',
   // OCR-R P1 (FE-4/FE-5): the OCR task's final step is the minutes-long re-ingest, not page
@@ -579,7 +580,7 @@ export const en = {
   'docs.provenance.generatedBefore': 'Generated from ',
   // #340 Tier-2: a knowledge-pack article saved as a document — the archive is the source.
   'docs.provenance.articleBefore': 'Saved from the knowledge pack ',
-  'docs.provenance.articleUnknownArchive': 'a knowledge pack',
+  'docs.provenance.articleUnknownArchive': '(name unknown)',
   'docs.import.busy': 'Importing…',
   'docs.import.files': 'Import files',
   'docs.import.folder': 'Import folder',
@@ -620,7 +621,8 @@ export const en = {
   // Plural pair ({done} → tCount's {count}) — "Re-indexed 1 documents." (CODE-8).
   'docs.reindexAllDone.one': 'Re-indexed {count} document.',
   'docs.reindexAllDone.other': 'Re-indexed {count} documents.',
-  'docs.reindexAllPartial': 'Re-indexed {done} of {total} — {failed} failed. Failed documents stay on the Failed imports tab.',
+  'docs.reindexAllPartial':
+    'Re-indexed {done} of {total} — {failed} failed. Failed documents stay under “Needs attention”.',
   'docs.supported.base':
     'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +
     'which are transcribed on this drive',
@@ -640,7 +642,7 @@ export const en = {
   'docs.meta.type.text': 'Text',
   'docs.meta.type.audio': 'Audio',
   'docs.meta.type.image': 'Image',
-  'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" on this row to read the pages on this drive.',
+  'docs.scan.ocrOffer': 'Use “Make searchable (OCR)” on this row to read the pages on this drive.',
   // #410: the in-app download first (the install control sits under the row's banner); the
   // drive-setup script stays the DIY alternative. `…Offline` is the copy when this drive has no
   // usable download list, so there is no button to point at.
@@ -653,11 +655,11 @@ export const en = {
     '"fetch-runtime --family ocr".',
   // #410: appended at DISPLAY time to a failed photo row whose stored error is
   // `main.ingest.imageNeedsOcr` (persist-canonical — its own text never changes).
-  'docs.photo.ocrMissing': 'Download the OCR files below, then use "Try again" to read this photo.',
+  'docs.photo.ocrMissing': 'Download the OCR files below, then use “Try again” to read this photo.',
   'docs.photo.ocrMissingOffline':
-    'Add the OCR files with the drive setup ("fetch-runtime --family ocr"), then use "Try again" ' +
-    'to read this photo.',
-  'docs.photo.ocrReady': 'Text recognition is ready now — use "Try again" to read this photo.',
+    'Add the OCR files with the drive setup ("fetch-runtime --family ocr"), then use “Try again” to ' +
+    'read this photo.',
+  'docs.photo.ocrReady': 'Text recognition is ready now — use “Try again” to read this photo.',
   // Scan-row explanation + Documents banner when the OCR files are on the drive but the
   // recognizer cannot run in this build (#232; default wording from #219, owner review pending).
   'docs.scan.ocrUnavailable':
@@ -742,11 +744,11 @@ export const en = {
   'docs.audioConfirm.body':
     'Each recording is copied into your workspace and transcribed on this drive — ' +
     'a long recording can take a while. You can keep using the app meanwhile.',
-  'docs.deleteConfirm.title': 'Delete "{title}"?',
+  'docs.deleteConfirm.title': 'Delete “{title}”?',
   'docs.deleteConfirm.body':
     'This permanently removes the document, its extracted text, and its search index from ' +
     'your workspace. The original file outside the workspace is not touched.',
-  'docs.translateModal.title': 'Translate "{title}"',
+  'docs.translateModal.title': 'Translate “{title}”',
   'docs.translateModal.aria': 'Translate {title}',
   'docs.translateModal.hint':
     'The local model writes a translated copy as a new document — searchable and ' +
@@ -868,9 +870,9 @@ export const en = {
   // pass (e.g. a reasoning model at indexing time), not a document with nothing to list. Say
   // so actively and point at the fix, like `analysis.wholeDocHint` does.
   'analysis.listing.unparsedHint':
-    '**Heads-up:** most sections could not be read when this document was indexed, so this ' +
-    'result is unreliable. Open Documents and run "Build deep index" again — sections that ' +
-    'could not be read are retried (a larger model helps).',
+    '**Heads-up:** most sections could not be read when this document was indexed, so this result is ' +
+    'unreliable. Open Documents and run “Build deep index” again — sections that could not be read ' +
+    'are retried (a larger model helps).',
   'analysis.listing.unparsedHintAmountSkill':
     'For a bank statement, the bank-statement skill in the chat’s skill menu reads the ' +
     'amounts exactly.',
@@ -891,9 +893,9 @@ export const en = {
   // #641: shown only when the answer really left sections out, and it promises only what the
   // deep index adds to a chat answer — a list drawn from every section, not "a complete answer".
   'analysis.wholeDocHint':
-    '**Heads-up:** this answer is based only on the most relevant sections, so it may miss ' +
-    'items. For a list that covers every section, open Documents, choose "Build deep index" ' +
-    'for the document, and ask again.',
+    '**Heads-up:** this answer is based only on the most relevant sections, so it may miss items. ' +
+    'For a list that covers every section, open Documents, choose “Build deep index” for the ' +
+    'document, and ask again.',
   // #641: the same honesty for a question about "all" of something that the deep index cannot
   // answer either (an explain request, or a thing it does not collect) — so no advice to build it.
   'analysis.partialAnswerHint':
@@ -1025,10 +1027,12 @@ export const en = {
   // Phase 1.6: a taxonomy CSV referenced by name — honest refusals naming the file, never a silent
   // fixed-taxonomy fallback.
   'skills.bankAnalysis.customTaxonomyNotFound':
-    'I couldn’t find “{name}” among your documents. Import the file first (Documents → Import), then ask again.',
+    'I couldn’t find “{name}” among your documents. Import the file first (Documents → Import ' +
+    'files), then ask again.',
   'skills.bankAnalysis.customTaxonomyUnparseable':
-    'I read “{name}” but couldn’t use it as a category list. Expected one category per line — a label, ' +
-    'optionally followed by keywords after a semicolon (for example “Kinder;Schule, Kita, Taschengeld”).',
+    'I read “{name}” but couldn’t use it as a category list. Expected one category per line — a ' +
+    'label, optionally followed by keywords after a semicolon (for example “Kids;School, Daycare, ' +
+    'Pocket money”).',
   // Result-tables §5 (Phase 3): the honesty note under an answer whose table carries model-filled
   // DERIVED columns — a derived value is a label, never a parser figure.
   'skills.bankAnalysis.derivedColumnsNote':
@@ -1182,19 +1186,21 @@ export const en = {
   // regenerating the prose (which hallucinates). Deterministic + content-free (no model call, no read);
   // `{button}` is the SkillRunBar's own label so the wording matches the affordance the user sees.
   'skills.editRouting.answer':
-    'To make these edits, click the **{button}** button just above the message box, then choose where to ' +
-    'save the edited copy. It runs entirely on this device and applies only the exact find-and-replace ' +
-    'changes you asked for — everywhere the text is found verbatim, leaving everything else unchanged. It ' +
-    'never rewrites the document, so it can’t invent or reword anything. This phase saves a plain text ' +
-    '(.txt) copy; review it before you share it.',
+    'To make these edits, click the **{button}** button just above the message box, then choose ' +
+    'where to save the edited copy. It runs entirely on this device and applies only the exact ' +
+    'find-and-replace changes you asked for — everywhere the text is found verbatim, leaving ' +
+    'everything else unchanged. It never rewrites the document, so it can’t invent or reword ' +
+    'anything. A Word document keeps its .docx format; other formats are saved as plain text (.txt). ' +
+    'Review the copy before you share it.',
   // U-1: the same routing answer when MORE THAN ONE document is in scope. The tool edits one document at a
   // time, so the copy is honest about that and points at the run button's own target chooser.
   'skills.editRouting.answerMulti':
-    'To make these edits, click the **{button}** button just above the message box and pick which document ' +
-    'to edit, then choose where to save the edited copy. It works on one document at a time, runs entirely ' +
-    'on this device, and applies only the exact find-and-replace changes you asked for — everywhere the ' +
-    'text is found verbatim, leaving everything else unchanged. It never rewrites the document. This phase ' +
-    'saves a plain text (.txt) copy; review it before you share it.',
+    'To make these edits, click the **{button}** button just above the message box and pick which ' +
+    'document to edit, then choose where to save the edited copy. It works on one document at a ' +
+    'time, runs entirely on this device, and applies only the exact find-and-replace changes you ' +
+    'asked for — everywhere the text is found verbatim, leaving everything else unchanged. It never ' +
+    'rewrites the document. A Word document keeps its .docx format; other formats are saved as plain ' +
+    'text (.txt). Review the copy before you share it.',
   // U2 dry-run (audit §3.4): an INFORMATIONAL "what personal data is in here?" ask over a single document
   // gets the deterministic per-category counts (COUNTS only — never a detected value) instead of the button
   // deflection. Runs the same offline detectors the tool would; still no file write.
@@ -1268,13 +1274,12 @@ export const en = {
   'models.hint.small': 'Small and quick — fast answers on nearly any machine.',
   'models.hint.balanced': 'Balanced — works well on most laptops.',
   'models.hint.large': 'Large — strongest answers; needs a powerful machine.',
-  'models.usesSpace': 'Uses {size} of drive space.',
+  'models.usesSpace': 'Uses {size} of drive space',
   'models.downloads.blockedByPolicy': 'Downloads are disabled by this drive’s policy.',
   'models.downloads.enableInSettings':
-    'To download models, turn on “Allow internet access for model downloads and updates” ' +
-    'in Settings.',
+    'To download, turn on “Allow internet access for model downloads and updates” in Settings.',
   'models.download.verifying': 'Verifying the downloaded file…',
-  'models.download.progress': 'Downloading… {pct} % ({received} of {total})',
+  'models.download.progress': 'Downloading… {pct}% ({received} of {total})',
   'models.download.progressNoTotal': 'Downloading… {received} so far',
   'models.download.cancel': 'Cancel download',
   'models.download.cancelled': 'Download cancelled — starting it again resumes where it stopped.',
@@ -1349,7 +1354,7 @@ export const en = {
   'models.engineProblem.stillFailing': "It still can't start. Check that the installation finished, then try again.",
   'models.engineProblem.fixed': 'The AI engine runs again.',
   'models.engineProblem.voiceFixed': 'The voice engine runs again.',
-  'models.engine.progress': 'Downloading the AI engine… {pct} %',
+  'models.engine.progress': 'Downloading the AI engine… {pct}%',
   'models.engine.downloadingNoTotal': 'Downloading the AI engine…',
   'models.engine.verifying': 'Verifying the AI engine…',
   'models.engine.extracting': 'Unpacking the AI engine…',
@@ -1389,7 +1394,7 @@ export const en = {
   'ocr.install.lang.eng': 'English',
   'ocr.install.lang.osd': 'Page orientation (turns sideways pages upright)',
   'ocr.install.starting': 'Starting the download…',
-  'ocr.install.progress': 'Downloading the OCR files… {pct} %',
+  'ocr.install.progress': 'Downloading the OCR files… {pct}%',
   'ocr.install.verifying': 'Checking the OCR files…',
   'ocr.install.activating': 'Starting text recognition…',
   'ocr.install.failed': 'The OCR files could not be installed.',
@@ -1805,13 +1810,13 @@ export const en = {
   'privacy.offlineOff': '○ Network access enabled',
   // spec §18.1 — the offline statement (verbatim in English).
   'privacy.statement.offline':
-    'Offline Mode is on. HilbertRaum runs the AI model on your laptop. Your ' +
-    'prompts, documents, embeddings, and chat history stay local.',
+    'Offline Mode is on. HilbertRaum runs the AI model on this computer. Your prompts, documents, ' +
+    'embeddings, and chat history stay local.',
   'privacy.statement.online':
-    'HilbertRaum runs the AI model on your laptop. Your prompts, documents, ' +
-    'embeddings, and chat history stay local — even with internet access enabled, only ' +
-    'downloads (models, the AI engine, the optional knowledge-pack tools and the optional ' +
-    'text-recognition (OCR) files) use the network.',
+    'HilbertRaum runs the AI model on this computer. Your prompts, documents, embeddings, and chat ' +
+    'history stay local — even with internet access enabled, only downloads (models, the AI engine, ' +
+    'the optional knowledge-pack tools and the optional text-recognition (OCR) files) use the ' +
+    'network.',
   'privacy.statement.noUploads':
     'This app does not send your data to cloud AI providers. There are no prompt, ' +
     'document, or embedding uploads, no telemetry, no analytics, and no remote crash ' +
@@ -1819,10 +1824,10 @@ export const en = {
   'privacy.network.title': 'Current network state',
   'privacy.networkState.noPolicy': 'Offline Mode is on.',
   'privacy.networkState.disabledByPolicy': 'Network access disabled by policy.',
-  'privacy.networkState.offDefault': 'Offline Mode is on (network off by default).',
+  'privacy.networkState.offDefault': 'Offline Mode is on (internet access is turned off in Settings).',
   'privacy.networkState.enabled':
-    'Internet access is enabled for downloads: models, the AI engine, and the optional ' +
-    'knowledge-pack tools.',
+    'Internet access is enabled for downloads: models, the AI engine, the optional knowledge-pack ' +
+    'tools and the optional text-recognition (OCR) files.',
   'privacy.network.noFiles': 'No prompts or files leave this device.',
   'privacy.network.effective': 'Effective state',
   'privacy.network.effectiveOffline': 'Offline (no internet calls)',
@@ -1832,7 +1837,7 @@ export const en = {
   'privacy.network.policyNo': 'No (disabled by policy)',
   'privacy.network.yourSetting': 'Your setting',
   'privacy.network.settingAllowed': 'Internet access allowed',
-  'privacy.network.settingOff': 'Off (default)',
+  'privacy.network.settingOff': 'Off',
   'privacy.network.telemetry': 'Telemetry',
   'privacy.network.telemetryValue': 'Nothing leaves this device — there’s no tracking to turn off',
   'privacy.network.hint':
@@ -1995,8 +2000,8 @@ export const en = {
   'diag.audit.collection_renamed': 'Project renamed',
   'diag.audit.collection_archived': 'Project archive changed',
   'diag.audit.collection_deleted': 'Project deleted',
-  'diag.audit.documents_added_to_collection': 'Documents added to a collection',
-  'diag.audit.documents_removed_from_collection': 'Documents removed from a collection',
+  'diag.audit.documents_added_to_collection': 'Documents added to a section or a project',
+  'diag.audit.documents_removed_from_collection': 'Documents removed from a section or a project',
   'diag.audit.document_lifecycle_changed': 'Document lifecycle changed',
   'diag.audit.skill_imported': 'Skill imported',
   'diag.audit.skill_deleted': 'Skill deleted',
@@ -2436,7 +2441,7 @@ export const en = {
   'password.strength.okay': 'Okay',
   'password.strength.strong': 'Strong',
   'password.strength.veryStrong': 'Very strong',
-  'password.strength.minHint': 'Use at least 8 characters.',
+  'password.strength.minHint': 'Use at least {min} characters.',
   'password.strength.longerHint':
     'Longer is stronger — 12 or more characters, or a few unrelated words, work well.',
 
@@ -2780,9 +2785,9 @@ export const en = {
   'main.task.sourceUnreadable':
     'The stored copy of this document could not be read. Re-import the document, then try again.',
   'main.task.needsOcr':
-    'Text recognition needs the OCR files, which are not on this drive. Download them with ' +
-    '"Download OCR files" on the scanned document or on the AI Model screen — or, on a drive ' +
-    'you set up yourself, add them with "fetch-runtime --family ocr".',
+    'Text recognition needs the OCR files, which are not on this drive. Download them with “Download ' +
+    'OCR files” on the scanned document or on the AI Model screen — or, on a drive you set up ' +
+    'yourself, add them with "fetch-runtime --family ocr".',
   // Files present but the recognizer cannot run in this build (#232).
   'main.task.ocrUnavailable':
     'Text recognition (OCR) is not available in this build: the OCR files are on this drive, but ' +
@@ -3112,15 +3117,15 @@ export const en = {
 
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.library': 'Library',
-  'chat.scope.projectNamed': 'Project: {name}',
+  'chat.scope.projectNamed': 'Project “{name}”',
   'chat.scope.projectCount.one': '{count} project',
   'chat.scope.projectCount.other': '{count} projects',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Knowledge packs',
   'chat.scope.packUnavailable': 'not available',
-  'chat.scope.packNamed': 'Pack: {name}',
+  'chat.scope.packNamed': 'Pack “{name}”',
   // #340 nit: the chip names a ticked pack that is disabled / unavailable WITH that state.
-  'chat.scope.packNamedState': 'Pack: {name} ({state})',
+  'chat.scope.packNamedState': 'Pack “{name}” ({state})',
   'chat.scope.packCount.one': '{count} knowledge pack',
   'chat.scope.packCount.other': '{count} knowledge packs',
   // Documents toggle (#301 P4, finding M10): the explicit "answer from the packs, not from my
@@ -3226,7 +3231,7 @@ export const en = {
   'packs.tools.confirm.ack': 'I have read and accept the {license} license terms of kiwix-tools',
   'packs.tools.confirm.start': 'Start download',
   'packs.tools.sizeUnknown': 'unknown',
-  'packs.tools.progress': 'Installing the knowledge-pack tools… {pct} %',
+  'packs.tools.progress': 'Installing the knowledge-pack tools… {pct}%',
   'packs.tools.downloadingNoTotal': 'Installing the knowledge-pack tools…',
   'packs.tools.verifying': 'Verifying the knowledge-pack tools…',
   'packs.tools.extracting': 'Unpacking the knowledge-pack tools…',
@@ -3586,8 +3591,8 @@ export const en = {
   'translate.file.err.unsupported':
     "That file type can't be translated. Try a PDF, Word, Markdown, or text file.",
   'translate.file.err.scanned':
-    'This PDF looks like a scan with no readable text. Make it searchable first in Documents — ' +
-    '"Make searchable (OCR)" — then translate it.',
+    'This PDF looks like a scan with no readable text. Make it searchable first in Documents — “Make ' +
+    'searchable (OCR)” — then translate it.',
   'translate.file.err.scannedAction': 'Go to Documents',
   'translate.file.err.importFailed': "The document couldn't be read. Try again.",
   'translate.file.err.runtimeFailed': "The document couldn't be translated. Try again.",

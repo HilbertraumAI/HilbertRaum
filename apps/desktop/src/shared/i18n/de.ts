@@ -272,7 +272,8 @@ export const de: Record<keyof typeof en, string> = {
   // (ein Klick beantwortet dieselbe Frage ohne den Skill neu). Nie eine stille Überraschung.
   'chat.skill.autoFired': 'Beantwortet mit {title}',
   'chat.skill.autoFiredTitle':
-    'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
+    'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst dir auch ' +
+    'ohne ihn antworten lassen.',
   'chat.skill.answerWithout': 'Ohne ihn antworten',
   // AUD-01: Der Rückgängig-Weg beantwortet den Turn neu und löscht dabei diese Antwort — der
   // Fremdschlüssel der Nachricht reißt die Nachweis-Prüfung mit. Die Schaltfläche wird deshalb
@@ -586,7 +587,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.provenance.generatedBefore': 'Erzeugt aus ',
   // #340 Tier-2: ein aus einem Wissenspaket gespeicherter Artikel — die Quelle ist das Archiv.
   'docs.provenance.articleBefore': 'Gespeichert aus dem Wissenspaket ',
-  'docs.provenance.articleUnknownArchive': 'einem Wissenspaket',
+  'docs.provenance.articleUnknownArchive': '(Name unbekannt)',
   'docs.import.busy': 'Wird importiert…',
   'docs.import.files': 'Dateien importieren',
   'docs.import.folder': 'Ordner importieren',
@@ -631,7 +632,9 @@ export const de: Record<keyof typeof en, string> = {
   // Plural-Paar ({done} → tCounts {count}) — „1 Dokumente neu indexiert." (CODE-8).
   'docs.reindexAllDone.one': '{count} Dokument neu indexiert.',
   'docs.reindexAllDone.other': '{count} Dokumente neu indexiert.',
-  'docs.reindexAllPartial': '{done} von {total} neu indexiert – {failed} fehlgeschlagen. Fehlgeschlagene Dokumente bleiben im Tab „Fehlgeschlagene Importe“.',
+  'docs.reindexAllPartial':
+    '{done} von {total} neu indexiert – {failed} fehlgeschlagen. Fehlgeschlagene Dokumente bleiben ' +
+    'unter „Braucht Aufmerksamkeit“.',
   'docs.supported.base':
     'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +
     'die auf diesem Laufwerk transkribiert werden',
@@ -1031,7 +1034,8 @@ export const de: Record<keyof typeof en, string> = {
   // Phase 1.6: eine per Name referenzierte Taxonomie-CSV — ehrliche Ablehnung mit Dateiname, nie ein
   // stiller Rückfall auf die feste Taxonomie.
   'skills.bankAnalysis.customTaxonomyNotFound':
-    'Ich konnte „{name}“ nicht in deinen Dokumenten finden. Importiere die Datei zuerst (Dokumente → Import) und frag dann erneut.',
+    'Ich konnte „{name}“ nicht in deinen Dokumenten finden. Importiere die Datei zuerst (Dokumente → ' +
+    'Dateien importieren) und frag dann erneut.',
   'skills.bankAnalysis.customTaxonomyUnparseable':
     'Ich habe „{name}“ gelesen, konnte es aber nicht als Kategorienliste verwenden. Erwartet wird eine ' +
     'Kategorie pro Zeile — ein Label, optional gefolgt von Stichworten nach einem Semikolon (z. B. ' +
@@ -1200,21 +1204,23 @@ export const de: Record<keyof typeof en, string> = {
   // Antwort der Bearbeitungs-Weiterleitung (Phase 8, #23): eine Aktions-Skill verweist auf ihre eigene
   // Schaltfläche, statt den Text neu zu erzeugen (was halluziniert). Deterministisch + inhaltsfrei.
   'skills.editRouting.answer':
-    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}** und ' +
-    'wähle anschließend, wo die bearbeitete Kopie gespeichert werden soll. Sie läuft vollständig auf ' +
-    'diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – ' +
-    'überall dort, wo der Text wörtlich gefunden wird, und lässt alles andere unverändert. Sie schreibt ' +
-    'das Dokument nie neu, kann also nichts erfinden oder umformulieren. In dieser Phase wird eine ' +
-    'einfache Textkopie (.txt) gespeichert; prüfe sie, bevor du sie teilst.',
+    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche ' +
+    '**{button}** und wähle anschließend, wo die bearbeitete Kopie gespeichert werden soll. Sie ' +
+    'läuft vollständig auf diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen ' +
+    'an, die du angegeben hast – überall dort, wo der Text wörtlich gefunden wird, und lässt alles ' +
+    'andere unverändert. Sie schreibt das Dokument nie neu, kann also nichts erfinden oder ' +
+    'umformulieren. Ein Word-Dokument behält sein .docx-Format; andere Formate werden als einfacher ' +
+    'Text (.txt) gespeichert. Prüfe die Kopie, bevor du sie teilst.',
   // U-1: dieselbe Antwort, wenn MEHR ALS EIN Dokument im Bereich liegt. Das Werkzeug bearbeitet jeweils
   // ein Dokument, daher verweist die Antwort auf die Zielauswahl der Schaltfläche.
   'skills.editRouting.answerMulti':
-    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}**, wähle ' +
-    'aus, welches Dokument bearbeitet werden soll, und lege anschließend fest, wo die bearbeitete Kopie ' +
-    'gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft vollständig auf diesem Gerät ' +
-    'und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – überall dort, ' +
-    'wo der Text wörtlich gefunden wird, und lässt alles andere unverändert. Sie schreibt das Dokument ' +
-    'nie neu. In dieser Phase wird eine einfache Textkopie (.txt) gespeichert; prüfe sie, bevor du sie ' +
+    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche ' +
+    '**{button}**, wähle aus, welches Dokument bearbeitet werden soll, und lege anschließend fest, ' +
+    'wo die bearbeitete Kopie gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft ' +
+    'vollständig auf diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die ' +
+    'du angegeben hast – überall dort, wo der Text wörtlich gefunden wird, und lässt alles andere ' +
+    'unverändert. Sie schreibt das Dokument nie neu. Ein Word-Dokument behält sein .docx-Format; ' +
+    'andere Formate werden als einfacher Text (.txt) gespeichert. Prüfe die Kopie, bevor du sie ' +
     'teilst.',
 
   // ---- Models ----
@@ -1280,12 +1286,12 @@ export const de: Record<keyof typeof en, string> = {
   'models.hint.small': 'Klein und flott — schnelle Antworten auf fast jedem Gerät.',
   'models.hint.balanced': 'Ausgewogen — läuft gut auf den meisten Laptops.',
   'models.hint.large': 'Groß — stärkste Antworten; braucht einen leistungsstarken Rechner.',
-  'models.usesSpace': 'Belegt {size} Speicherplatz auf dem Laufwerk.',
+  'models.usesSpace': 'Belegt {size} Speicherplatz auf dem Laufwerk',
   'models.downloads.blockedByPolicy':
     'Downloads sind durch die Richtlinie dieses Laufwerks deaktiviert.',
   'models.downloads.enableInSettings':
-    'Um Modelle herunterzuladen, schalte in den Einstellungen „Internetzugriff für ' +
-    'Modell-Downloads und Updates erlauben“ ein.',
+    'Für Downloads schalte in den Einstellungen „Internetzugriff für Modell-Downloads und Updates ' +
+    'erlauben“ ein.',
   'models.download.verifying': 'Die heruntergeladene Datei wird geprüft…',
   'models.download.progress': 'Wird heruntergeladen… {pct} % ({received} von {total})',
   'models.download.progressNoTotal': 'Wird heruntergeladen… bisher {received}',
@@ -1496,9 +1502,9 @@ export const de: Record<keyof typeof en, string> = {
   'models.verifyAllTitle':
     'Jede Modelldatei auf diesem Laufwerk erneut gegen ihre SHA-256-Prüfsumme prüfen',
   'models.verifyAllHint':
-    'Jedes Modell wird beim Start geprüft. Hiermit werden stattdessen alle Modelldateien auf ' +
-    'diesem Laufwerk geprüft — auf einem langsamen Laufwerk kann das mehrere Minuten dauern. ' +
-    'Sie können jederzeit abbrechen; bereits geprüfte Dateien bleiben geprüft.',
+    'Jedes Modell wird beim Start geprüft. Hiermit werden stattdessen alle Modelldateien auf diesem ' +
+    'Laufwerk geprüft — auf einem langsamen Laufwerk kann das mehrere Minuten dauern. Du kannst ' +
+    'jederzeit abbrechen; bereits geprüfte Dateien bleiben geprüft.',
   // #420 — siehe en.ts.
   'models.verifyAllStop': 'Prüfung abbrechen',
   'models.verifyAllStopping': 'Wird abgebrochen…',
@@ -1815,13 +1821,13 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.offlineOn': '● Offline-Modus: AN',
   'privacy.offlineOff': '○ Netzwerkzugriff aktiviert',
   'privacy.statement.offline':
-    'Der Offline-Modus ist an. HilbertRaum führt das KI-Modell auf deinem ' +
-    'Laptop aus. Deine Fragen, Dokumente, Embeddings und Chat-Verläufe bleiben lokal.',
+    'Der Offline-Modus ist an. HilbertRaum führt das KI-Modell auf diesem Computer aus. Deine ' +
+    'Fragen, Dokumente, Embeddings und Chat-Verläufe bleiben lokal.',
   'privacy.statement.online':
-    'HilbertRaum führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
-    'Dokumente, Embeddings und Chat-Verläufe bleiben lokal — auch mit aktiviertem ' +
-    'Internetzugriff nutzen nur Downloads (Modelle, die KI-Engine, die optionalen ' +
-    'Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR)) das Netzwerk.',
+    'HilbertRaum führt das KI-Modell auf diesem Computer aus. Deine Fragen, Dokumente, Embeddings ' +
+    'und Chat-Verläufe bleiben lokal — auch mit aktiviertem Internetzugriff nutzen nur Downloads ' +
+    '(Modelle, die KI-Engine, die optionalen Wissenspaket-Werkzeuge und die optionalen ' +
+    'Texterkennungs-Dateien (OCR)) das Netzwerk.',
   'privacy.statement.noUploads':
     'Diese App sendet deine Daten an keine Cloud-KI-Anbieter. Es gibt keine Uploads von ' +
     'Fragen, Dokumenten oder Embeddings, keine Telemetrie, keine Analytik und keine ' +
@@ -1829,10 +1835,11 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.title': 'Aktueller Netzwerkstatus',
   'privacy.networkState.noPolicy': 'Der Offline-Modus ist an.',
   'privacy.networkState.disabledByPolicy': 'Netzwerkzugriff durch Richtlinie deaktiviert.',
-  'privacy.networkState.offDefault': 'Der Offline-Modus ist an (Netzwerk standardmäßig aus).',
+  'privacy.networkState.offDefault':
+    'Der Offline-Modus ist an (Internetzugriff ist in den Einstellungen ausgeschaltet).',
   'privacy.networkState.enabled':
-    'Internetzugriff ist für Downloads aktiviert: Modelle, die KI-Engine und die optionalen ' +
-    'Wissenspaket-Werkzeuge.',
+    'Internetzugriff ist für Downloads aktiviert: Modelle, die KI-Engine, die optionalen ' +
+    'Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR).',
   'privacy.network.noFiles': 'Keine Fragen oder Dateien verlassen dieses Gerät.',
   'privacy.network.effective': 'Effektiver Zustand',
   'privacy.network.effectiveOffline': 'Offline (keine Internetzugriffe)',
@@ -1842,7 +1849,7 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.policyNo': 'Nein (durch Richtlinie deaktiviert)',
   'privacy.network.yourSetting': 'Deine Einstellung',
   'privacy.network.settingAllowed': 'Internetzugriff erlaubt',
-  'privacy.network.settingOff': 'Aus (Standard)',
+  'privacy.network.settingOff': 'Aus',
   'privacy.network.telemetry': 'Telemetrie',
   'privacy.network.telemetryValue':
     'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
@@ -2006,8 +2013,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.collection_renamed': 'Projekt umbenannt',
   'diag.audit.collection_archived': 'Projektarchiv geändert',
   'diag.audit.collection_deleted': 'Projekt gelöscht',
-  'diag.audit.documents_added_to_collection': 'Dokumente zu einer Sammlung hinzugefügt',
-  'diag.audit.documents_removed_from_collection': 'Dokumente aus einer Sammlung entfernt',
+  'diag.audit.documents_added_to_collection': 'Dokumente zu einem Bereich oder Projekt hinzugefügt',
+  'diag.audit.documents_removed_from_collection': 'Dokumente aus einem Bereich oder Projekt entfernt',
   'diag.audit.document_lifecycle_changed': 'Dokumentstatus geändert',
   'diag.audit.skill_imported': 'Skill importiert',
   'diag.audit.skill_deleted': 'Skill gelöscht',
@@ -2393,7 +2400,7 @@ export const de: Record<keyof typeof en, string> = {
   'password.strength.okay': 'Okay',
   'password.strength.strong': 'Stark',
   'password.strength.veryStrong': 'Sehr stark',
-  'password.strength.minHint': 'Verwende mindestens 8 Zeichen.',
+  'password.strength.minHint': 'Verwende mindestens {min} Zeichen.',
   'password.strength.longerHint':
     'Länger ist stärker — 12 oder mehr Zeichen oder ein paar zusammenhanglose Wörter ' +
     'funktionieren gut.',
@@ -3091,15 +3098,15 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review erledigt (2026-06-14). ----
   'chat.scope.library': 'Bibliothek',
-  'chat.scope.projectNamed': 'Projekt: {name}',
+  'chat.scope.projectNamed': 'Projekt „{name}“',
   'chat.scope.projectCount.one': '{count} Projekt',
   'chat.scope.projectCount.other': '{count} Projekte',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Wissenspakete',
   'chat.scope.packUnavailable': 'nicht verfügbar',
-  'chat.scope.packNamed': 'Paket: {name}',
+  'chat.scope.packNamed': 'Paket „{name}“',
   // #340: der Chip nennt ein angehaktes, aber deaktiviertes / nicht verfügbares Paket MIT diesem Zustand.
-  'chat.scope.packNamedState': 'Paket: {name} ({state})',
+  'chat.scope.packNamedState': 'Paket „{name}“ ({state})',
   'chat.scope.packCount.one': '{count} Wissenspaket',
   'chat.scope.packCount.other': '{count} Wissenspakete',
   // Dokumente-Schalter (#301 P4, Befund M10): die ausdrückliche Wahl „aus den Paketen
@@ -3244,7 +3251,9 @@ export const de: Record<keyof typeof en, string> = {
   'packs.listLabel': 'Wissenspakete',
   'packs.removeTitle': 'Dieses Wissenspaket entfernen?',
   'packs.removeConfirm': 'Paket entfernen',
-  'packs.removeBody': 'Das Paket wird nur aus HilbertRaum entfernt – die Archivdatei auf dem Datenträger bleibt unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
+  'packs.removeBody':
+    'Das Paket wird nur aus HilbertRaum entfernt – die Archivdatei auf dem Laufwerk bleibt ' +
+    'unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
   'chat.scope.docCount.one': '{count} Dokument',
   'chat.scope.docCount.other': '{count} Dokumente',
   'chat.scope.filesInChat.one': '{count} Datei in diesem Chat',

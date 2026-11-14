@@ -1011,21 +1011,21 @@ export const tr: UiCatalog<'tr'> = {
     'elden geldiğince yapılan bir ilk taramadır, garanti değildir: adları veya alışılmadık ' +
     'biçimleri yakalayamaz; bu yüzden kaydedilen kopyayı paylaşmadan önce gözden geçirin.',
   'skills.editRouting.answer':
-    'Bu düzenlemeleri yapmak için mesaj kutusunun hemen üstündeki **{button}** düğmesine ' +
-    'tıklayın, ardından düzenlenmiş kopyanın kaydedileceği yeri seçin. Bu işlem tamamen bu ' +
-    'cihazda çalışır ve yalnızca istediğiniz bul ve değiştir düzenlemelerini birebir uygular: ' +
-    'metnin aynen bulunduğu her yeri değiştirir, geri kalan her şeyi olduğu gibi bırakır. ' +
-    'Belgeyi hiçbir zaman baştan yazmaz; bu yüzden hiçbir şey uyduramaz veya başka sözcüklerle ' +
-    'yeniden yazamaz. Şu aşamada kopya bir metin dosyası (.txt) olarak kaydedilir; paylaşmadan ' +
-    'önce kopyayı gözden geçirin.',
-  'skills.editRouting.answerMulti':
-    'Bu düzenlemeleri yapmak için mesaj kutusunun hemen üstündeki **{button}** düğmesine ' +
-    'tıklayıp düzenlenecek belgeyi seçin, ardından düzenlenmiş kopyanın kaydedileceği yeri ' +
-    'seçin. Bu işlem her seferinde tek bir belgeyi işler, tamamen bu cihazda çalışır ve yalnızca ' +
-    'istediğiniz bul ve değiştir düzenlemelerini birebir uygular: metnin aynen bulunduğu her ' +
-    'yeri değiştirir, geri kalan her şeyi olduğu gibi bırakır. Belgeyi hiçbir zaman baştan ' +
-    'yazmaz. Şu aşamada kopya bir metin dosyası (.txt) olarak kaydedilir; paylaşmadan önce ' +
+    'Bu düzenlemeleri yapmak için mesaj kutusunun hemen üstündeki **{button}** düğmesine tıklayın, ' +
+    'ardından düzenlenmiş kopyanın kaydedileceği yeri seçin. Bu işlem tamamen bu cihazda çalışır ve ' +
+    'yalnızca istediğiniz bul ve değiştir düzenlemelerini birebir uygular: metnin aynen bulunduğu ' +
+    'her yeri değiştirir, geri kalan her şeyi olduğu gibi bırakır. Belgeyi hiçbir zaman baştan ' +
+    'yazmaz; bu yüzden hiçbir şey uyduramaz veya başka sözcüklerle yeniden yazamaz. Word belgeleri ' +
+    '.docx biçimini korur; diğer biçimler metin dosyası (.txt) olarak kaydedilir. Paylaşmadan önce ' +
     'kopyayı gözden geçirin.',
+  'skills.editRouting.answerMulti':
+    'Bu düzenlemeleri yapmak için mesaj kutusunun hemen üstündeki **{button}** düğmesine tıklayıp ' +
+    'düzenlenecek belgeyi seçin, ardından düzenlenmiş kopyanın kaydedileceği yeri seçin. Bu işlem ' +
+    'her seferinde tek bir belgeyi işler, tamamen bu cihazda çalışır ve yalnızca istediğiniz bul ve ' +
+    'değiştir düzenlemelerini birebir uygular: metnin aynen bulunduğu her yeri değiştirir, geri ' +
+    'kalan her şeyi olduğu gibi bırakır. Belgeyi hiçbir zaman baştan yazmaz. Word belgeleri .docx ' +
+    'biçimini korur; diğer biçimler metin dosyası (.txt) olarak kaydedilir. Paylaşmadan önce kopyayı ' +
+    'gözden geçirin.',
   'skills.redactionRouting.scan':
     'Belgenin tamamını, biçimi açıkça belli olan kişisel veriler için taradım. Algılananlar – ' +
     'e-posta adresleri: {email}, telefon numaraları: {phone}, IBAN numaraları: {iban}, ödeme ' +
@@ -1104,10 +1104,10 @@ export const tr: UiCatalog<'tr'> = {
   'models.hint.small': 'Küçük ve hızlı: neredeyse her bilgisayarda çabuk yanıtlar.',
   'models.hint.balanced': 'Dengeli: çoğu dizüstü bilgisayarda iyi çalışır.',
   'models.hint.large': 'Büyük: en güçlü yanıtlar; yüksek performanslı bir bilgisayar gerektirir.',
-  'models.usesSpace': 'Sürücüde {size} yer kaplar.',
+  'models.usesSpace': 'Sürücüde {size} yer kaplar',
   'models.downloads.blockedByPolicy': 'İndirmeler bu sürücünün ilkesi gereği kapalı.',
   'models.downloads.enableInSettings':
-    'Model indirmek için Ayarlar ekranında “Model indirmeleri ve güncellemeler için internet ' +
+    'İndirme yapmak için Ayarlar ekranında “Model indirmeleri ve güncellemeler için internet ' +
     'erişimine izin ver” seçeneğini açın.',
   'models.download.verifying': 'İndirilen dosya doğrulanıyor…',
   'models.download.progress': 'İndiriliyor… %{pct} ({received} / {total})',
@@ -1685,13 +1685,13 @@ export const tr: UiCatalog<'tr'> = {
   'privacy.offlineOn': '● Çevrimdışı mod: açık',
   'privacy.offlineOff': '○ Ağ erişimi açık',
   'privacy.statement.offline':
-    'Çevrimdışı mod açık. HilbertRaum yapay zekâ modelini dizüstü bilgisayarınızda çalıştırır. ' +
-    'Sorularınız, belgeleriniz, gömme vektörleriniz ve sohbet geçmişiniz yerelde kalır.',
+    'Çevrimdışı mod açık. HilbertRaum yapay zekâ modelini bu bilgisayarda çalıştırır. Sorularınız, ' +
+    'belgeleriniz, gömme vektörleriniz ve sohbet geçmişiniz yerelde kalır.',
   'privacy.statement.online':
-    'HilbertRaum yapay zekâ modelini dizüstü bilgisayarınızda çalıştırır. Sorularınız, ' +
-    'belgeleriniz, gömme vektörleriniz ve sohbet geçmişiniz yerelde kalır; internet erişimi ' +
-    'açıkken bile ağı yalnızca indirmeler (modeller, yapay zekâ motoru, isteğe bağlı bilgi ' +
-    'paketi araçları ve isteğe bağlı metin tanıma (OCR) dosyaları) kullanır.',
+    'HilbertRaum yapay zekâ modelini bu bilgisayarda çalıştırır. Sorularınız, belgeleriniz, gömme ' +
+    'vektörleriniz ve sohbet geçmişiniz yerelde kalır; internet erişimi açıkken bile ağı yalnızca ' +
+    'indirmeler (modeller, yapay zekâ motoru, isteğe bağlı bilgi paketi araçları ve isteğe bağlı ' +
+    'metin tanıma (OCR) dosyaları) kullanır.',
   'privacy.statement.noUploads':
     'Bu uygulama verilerinizi bulut tabanlı yapay zekâ sağlayıcılarına göndermez. Soru, belge ' +
     'veya gömme vektörü gönderimi, telemetri, kullanım analizi ve uzaktan çökme raporlaması ' +
@@ -1699,10 +1699,10 @@ export const tr: UiCatalog<'tr'> = {
   'privacy.network.title': 'Şu anki ağ durumu',
   'privacy.networkState.noPolicy': 'Çevrimdışı mod açık.',
   'privacy.networkState.disabledByPolicy': 'Ağ erişimi ilke gereği kapalı.',
-  'privacy.networkState.offDefault': 'Çevrimdışı mod açık (ağ varsayılan olarak kapalı).',
+  'privacy.networkState.offDefault': 'Çevrimdışı mod açık (internet erişimi Ayarlar ekranında kapalı).',
   'privacy.networkState.enabled':
-    'İnternet erişimi indirmeler için açık: modeller, yapay zekâ motoru ve isteğe bağlı bilgi ' +
-    'paketi araçları.',
+    'İnternet erişimi indirmeler için açık: modeller, yapay zekâ motoru, isteğe bağlı bilgi paketi ' +
+    'araçları ve isteğe bağlı metin tanıma (OCR) dosyaları.',
   'privacy.network.noFiles': 'Hiçbir soru veya dosya bu cihazdan dışarı çıkmaz.',
   'privacy.network.effective': 'Uygulanan durum',
   'privacy.network.effectiveOffline': 'Çevrimdışı (internete bağlanılmıyor)',
@@ -1712,7 +1712,7 @@ export const tr: UiCatalog<'tr'> = {
   'privacy.network.policyNo': 'Hayır (ilke gereği kapalı)',
   'privacy.network.yourSetting': 'Ayarınız',
   'privacy.network.settingAllowed': 'İnternet erişimine izin verildi',
-  'privacy.network.settingOff': 'Kapalı (varsayılan)',
+  'privacy.network.settingOff': 'Kapalı',
   'privacy.network.telemetry': 'Telemetri',
   'privacy.network.telemetryValue':
     'Hiçbir şey bu cihazdan dışarı çıkmaz; kapatılacak bir izleme yok',
@@ -2253,7 +2253,7 @@ export const tr: UiCatalog<'tr'> = {
   'password.strength.okay': 'Orta',
   'password.strength.strong': 'Güçlü',
   'password.strength.veryStrong': 'Çok güçlü',
-  'password.strength.minHint': 'En az 8 karakter kullanın.',
+  'password.strength.minHint': 'En az {min} karakter kullanın.',
   'password.strength.longerHint':
     'Uzun parola daha güçlüdür: 12 veya daha fazla karakter ya da birbiriyle ilgisiz birkaç ' +
     'sözcük iyi sonuç verir.',
