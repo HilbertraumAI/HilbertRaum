@@ -76,8 +76,8 @@ export function ContextMeter({ usage }: { usage: ContextUsage }): JSX.Element | 
       </span>
       {/* Always-visible percentage (aria-hidden — the meter's aria-valuetext already carries the
           accessible reading). Tabular figures so it doesn't jitter as it climbs. The language's own
-          percent pattern (#804): Turkish puts the sign first, French and Spanish a no-break space
-          before it, German a space, as the tooltip beside it does. */}
+          percent pattern (#804): Turkish puts the sign first; French, Spanish and German a
+          no-break space before it (German's tooltip sentence beside it keeps a plain space). */}
       <span className="context-meter-pct" aria-hidden="true">
         {t('common.percent', { pct })}
       </span>
