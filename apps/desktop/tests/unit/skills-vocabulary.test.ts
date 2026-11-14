@@ -224,6 +224,70 @@ describe('W7 — SKA-11 small-talk thanks/ack variants + the never-fires guard (
   })
 })
 
+// #809 (open-issues wave owner call G-11) — small talk in all ten interface languages. Pre-fix every row of the
+// first table was a real question to the detector: its tokens kept only a–z, digits and äöüß («Дякую!» left no
+// token at all, «Dziękuję!» became "dzi kuj") and no thanks of the eight new languages was listed. The guard
+// table is the real questions the lists were checked against, across all ten languages.
+describe('isSmallTalk — the ten interface languages (#809)', () => {
+  const DOTTED_CAPITAL_I = String.fromCharCode(0x0130)
+  // «Dziękuję!» written with separate marks (e + U+0328), as text pasted from some systems arrives.
+  const OGONEK = String.fromCharCode(0x0328)
+
+  it.each([
+    // Per language: a greeting, a thanks with an intensifier, an acknowledgement with thanks.
+    '¡Hola!', 'Muchísimas gracias', 'Vale, gracias.',
+    'Bonjour !', 'Merci beaucoup !', "D'accord, merci.",
+    'Buongiorno!', 'Grazie mille!', 'Perfetto, grazie!',
+    'Hoi!', 'Hartelijk bedankt!', 'Oké, bedankt!',
+    'Cześć!', 'Dziękuję bardzo!', 'Dobrze, dzięki!',
+    'Merhaba!', 'Çok teşekkürler!', 'Tamam, teşekkürler.',
+    'Привет!', 'Спасибо большое!', 'Хорошо, спасибо!',
+    'Привіт!', 'Щиро дякую!', 'Добре, дякую!',
+    // The issue's own examples, and thanks with a "to you".
+    'Bedankt!', 'Dank je wel!', 'Dziękuję!', 'Teşekkürler!', 'Спасибо!', 'Дякую!', 'Дякую вам', 'Спасибо тебе',
+    // Capitals: the capital dotted İ lowers to a plain "i" before the split.
+    `${DOTTED_CAPITAL_I}Y${DOTTED_CAPITAL_I} GÜNLER`, 'TEŞEKKÜRLER',
+    `Dzie${OGONEK}kuje${OGONEK}!`,
+    // The German "passt" forms (owner call, 2026-11-14) and the English "a lot" forms are whole-question forms.
+    'Danke, passt', 'Vielen Dank, passt', 'Passt!', 'Thank you a lot.'
+  ])('%s → small talk', (q) => {
+    expect(isSmallTalk(q)).toBe(true)
+  })
+
+  it.each([
+    // es
+    'Gracias, ¿y qué dice el contrato sobre la rescisión?', 'Vale, ¿cuándo vence la factura?', '¿Está bien?',
+    '¿Cuál es la prima del seguro?',
+    // fr
+    'Merci, et que dit le contrat sur la résiliation ?', 'Très bien, quelles sont les échéances ?',
+    'Le transport est compris ?', 'Merci beaucoup, maintenant résume le document', 'A Nice ?', 'Ça va ?',
+    // it
+    'Grazie, e cosa dice il contratto sulla disdetta?', 'Va bene?', 'Vale ancora la garanzia?',
+    'Cosa devo fare prima della scadenza?', 'Vale molto?',
+    // nl
+    'Bedankt, en wat staat er in het contract over opzegging?', 'Hoe is het met de betalingstermijn?',
+    'Is de prijs prima?', 'Wat is de premie per maand?', 'Graag!', 'Alles graag',
+    // pl
+    'Dzięki, a co mówi umowa o wypowiedzeniu?', 'Która część umowy dotyczy kar?', 'W porządku?',
+    'Dobrze, jakie są terminy płatności?', 'A lot?',
+    // tr
+    'Teşekkürler, peki sözleşmede fesih süresi ne kadar?', 'Tamam, şimdi belgeyi özetle.',
+    'Bu teklif iyi mi, yoksa çok mu pahalı?', 'Peki sure?',
+    // ru
+    'Спасибо, а что в договоре сказано о расторжении?', 'Хорошо, какие сроки оплаты?',
+    'Какой класс энергоэффективности указан?', 'Всё хорошо в этом договоре?', 'Ага', 'Что вам должны по договору?',
+    // uk
+    'Дякую, а який строк дії договору?', 'Добре, тепер підсумуй документ.', 'Чи все добре з цим рахунком?',
+    'Все гаразд?', 'Все добре?', 'Що вам потрібно від договору?',
+    // de: «Passt alles?» / «Passt so?» ask whether it fits
+    'Passt alles?', 'Passt so?',
+    // Every letter now counts: pre-fix the Cyrillic word was dropped and "ok" alone was left.
+    'Ok, почему?'
+  ])('%s → a real question, not small talk', (q) => {
+    expect(isSmallTalk(q)).toBe(false)
+  })
+})
+
 describe('W7 — SKA-19 synthesis asks veto the needle (§3.3)', () => {
   it('the extended deliverable synonyms keep a "what is the …" synthesis ask on the whole-doc engine', () => {
     for (const q of [

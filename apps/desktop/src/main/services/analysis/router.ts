@@ -1,4 +1,6 @@
 import type { ExtractRecordType } from '../../../shared/types'
+import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../../shared/i18n'
+import { lowerCaseNfc } from '../../../shared/text-fold'
 
 // The task router (whole-document-analysis plan §4.4, Phase 3) — a PURE function that maps a
 // free-text question to an answer engine. No DB, no model, no I/O: the caller passes the facts
@@ -106,8 +108,66 @@ const AGGREGATION_RE =
 // fass(e|t|en)…zusammen alternative catches the split shape alongside the compound stem.
 const SUMMARY_RE =
   /\b(summar(?:y|ise|ize|ies)|overview|tl;?dr|gist|whole document|entire document)\b|\b(ganzes? dokument)\b|\b(zusammenfass|fass(?:e|t|en)?\b.*?\bzusammen\b)|überblick/i
+// #809 (open-issues wave owner call G-11): the English words are bounded by lookarounds on letters, digits and
+// "_" instead of \b. On ASCII text those are exactly \b's word characters, so English matches where it did; but
+// "é" now counts as a letter, so «différend» (a dispute) no longer matches "diff". The French compare words
+// matched only by that accident and are listed themselves (owner call, 2026-11-14): «différence(s)»,
+// «différent(e)(s)», «diffère(nt)» and «différencier» with its forms. Still no compare: «différé(e)(s)» and
+// «différer» (deferred), «différemment», «différentiel(le)(s)». The German stems keep their \b (prefix match,
+// compounds).
 const COMPARE_RE =
-  /\b(compare|comparison|difference|differences|versus|vs\.?|diff)\b|\b(vergleich|unterschied)/i
+  /(?<![\p{L}\p{N}_])(compare|comparison|difference|differences|différences?|différente?s?|diffère(?:nt)?|différenci\p{L}+|versus|vs\.?|diff)(?![\p{L}\p{N}_])|\b(vergleich|unterschied)/iu
+
+// #809 (open-issues wave owner call G-11): the document-mode example chips (`ChatScreen.tsx`) fill the composer
+// with a catalog question in the interface language, while the words above are English and German. So the two
+// chips the router serves are recognised in every registered catalog (i18n record §3.3 rule 3, like the bank
+// skill's routed questions): read at run time, never copied, composed, lowered and trimmed on both sides. The
+// summarize chip, by its whole text, is a summary ask. The every-mention chip is recognised by its FRAME, the
+// text around its quoted example word, whatever stands in the quotes ("Busca cada mención de «fianza»"), and gets
+// the labelled answer the English and German chips get by their own words (step 4b); a catalog value with no
+// quoted segment is recognised by its whole text.
+const catalogValues = (key: MessageKey): string[] =>
+  UI_LANGUAGE_CODES.map((code) => lowerCaseNfc(t(code, key)).trim())
+const SUMMARIZE_CHIPS = new Set(catalogValues('chat.example.summarize'))
+// An opening quote and the quotes that close it: ' ', „ “ (German) or „ ” (Polish), « », “ ”.
+const CLOSING_QUOTES: Readonly<Record<string, string>> = { "'": "'", '„': '“”', '«': '»', '“': '”' }
+
+/** A catalog value's text up to and including its opening quote and from its closing quote on, or null when
+ *  it quotes nothing. An apostrophe inside a word ("tenant's") opens no quote. */
+function quoteFrame(value: string): { before: string; after: string } | null {
+  for (let i = 0; i < value.length; i++) {
+    const closers = CLOSING_QUOTES[value[i]!]
+    if (closers === undefined || /\p{L}/u.test(value[i - 1] ?? '')) continue
+    for (let j = i + 1; j < value.length; j++) {
+      if (closers.includes(value[j]!)) return { before: value.slice(0, i + 1), after: value.slice(j) }
+    }
+    return null
+  }
+  return null
+}
+
+const MENTION_CHIPS = catalogValues('chat.example.indemnity').map((value) => quoteFrame(value) ?? value)
+
+/** Is the question one of the catalogs' summarize chips? */
+function isSummarizeChip(question: string): boolean {
+  return SUMMARIZE_CHIPS.has(lowerCaseNfc(question).trim())
+}
+
+/** Is the question one of the catalogs' every-mention chips, with any text in its quotes? */
+function isMentionChip(question: string): boolean {
+  const q = lowerCaseNfc(question).trim()
+  return MENTION_CHIPS.some((chip) => {
+    if (typeof chip === 'string') return q === chip
+    const inQuotes = q.slice(chip.before.length, q.length - chip.after.length)
+    return q.startsWith(chip.before) && q.endsWith(chip.after) && inQuotes.trim() !== ''
+  })
+}
+
+/** A summary ask: the summary words, or a summarize chip (#809). */
+function isSummaryAsk(text: string): boolean {
+  return SUMMARY_RE.test(text) || isSummarizeChip(text)
+}
+
 // Issue #641: an explain/describe intent. "Erkläre was in diesem Arztbrief steht inkl. aller
 // Abkürzungen" matched the alle[rsn]? quantifier above and, once a deep index existed, got the
 // listing engine's item dump instead of an explanation. The quantifier here modifies an explain
@@ -624,7 +684,7 @@ function paidInThePast(words: readonly string[]): boolean {
 function isSumSentence(sentence: string): boolean {
   const { raw, words } = sentenceTokens(sentence)
   const asks = LIST_VERB_RE.test(sentence) || words.some((w) => RECKONING_SIGNALS.has(w))
-  if (EXPLAIN_RE.test(sentence) || SUMMARY_RE.test(sentence) || sentenceKind(sentence, asks) === 'verdict') return false
+  if (EXPLAIN_RE.test(sentence) || isSummaryAsk(sentence) || sentenceKind(sentence, asks) === 'verdict') return false
   const head = questionWordAtHead(words)
   if (NON_AMOUNT_QUESTION_WORDS.has(head ?? '')) return false
   const at = pastFillers(words, 0)
@@ -741,7 +801,7 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   // #649: a sum ask joins the aggregation route; it sums amounts, whatever else it names.
   const sumAsk = isSumAsk(q)
   const wantsCoverage = wantsListing || AGGREGATION_RE.test(q) || sumAsk
-  const wantsSummary = SUMMARY_RE.test(q)
+  const wantsSummary = isSummaryAsk(q)
 
   // 2. Compare (needs two documents). A compare intent without 2 docs is low-confidence and
   //    falls back to labelled relevance (plan §4.4) — it does NOT fall through to coverage.
@@ -782,8 +842,9 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   // 4b. #641: a list/count trigger the listing cannot serve (an explain request, an untyped {X})
   //     — LABELLED relevance: the caller may say the answer can miss items, but never recommends
   //     the deep index, which would not answer it either. #644: a quantifier inside a question
-  //     ("When is each payment due?") is labelled the same way: the answer covers several items.
-  if (triggerShape === 'list' || triggerShape === 'modifier') {
+  //     ("When is each payment due?") is labelled the same way: the answer covers several items. #809: so is
+  //     the every-mention chip of any catalog, which reaches this step by its frame.
+  if (triggerShape === 'list' || triggerShape === 'modifier' || isMentionChip(q)) {
     return { engine: 'relevance', confidence: 'low', fallback: 'partial' }
   }
 

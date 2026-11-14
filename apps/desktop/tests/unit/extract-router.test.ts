@@ -8,6 +8,7 @@ import {
 } from '../../src/main/services/analysis/router'
 import { isClassificationTrigger } from '../../src/main/services/analysis/classify'
 import { parseExtraction } from '../../src/main/services/analysis/extract'
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 
 // Whole-document-analysis Phase 3 (plan §4.2/§4.4, §7): the PURE task router (classification +
 // precedence + low-confidence→relevance + open-vocab→type mapping, EN+DE) and the tolerant
@@ -622,6 +623,71 @@ describe('routeQuestion — precedence + non-coverage', () => {
       routeQuestion({ question: 'summarize this document', treeAvailable: false, extractAvailable: false })
         .engine
     ).toBe('relevance')
+  })
+})
+
+// #809 (open-issues wave owner call G-11): the document-mode example chips fill the composer in the interface
+// language, and the router's words are English and German. Pre-fix, in the eight other languages, the summarize
+// chip got the plain answer over a ready deep index (en/de: the tree summary) and the every-mention chip the
+// plain answer without its "may miss items" label (en/de: labelled). The chips are read from the catalogs.
+describe('routeQuestion — the example chips in every interface language (#809)', () => {
+  const index = { documentCount: 1, treeAvailable: true, extractAvailable: true }
+  const labelled = { engine: 'relevance', confidence: 'low', fallback: 'partial' }
+  const plain = { engine: 'relevance', confidence: 'high' }
+  // The every-mention chip with the user's own term in its quotes (the quotes of the ten catalogs).
+  const withOwnTerm = (chip: string): string => chip.replace(/(['„«“])[^'„«“”»]*(['“”»])/u, '$1force majeure$2')
+  // English and German reach the label by their own words ("every", "jede"), with or without the chip's quotes.
+  const otherLanguages = UI_LANGUAGE_CODES.filter((code) => code !== 'en' && code !== 'de')
+
+  it.each(UI_LANGUAGE_CODES)('%s: the summarize chip gets the tree summary over a ready deep index', (code) => {
+    const chip = t(code, 'chat.example.summarize')
+    for (const question of [chip, chip.toUpperCase()]) {
+      expect(routeQuestion({ ...index, question }), question).toEqual({ engine: 'tree-summary', confidence: 'high' })
+      expect(routeQuestion({ ...index, treeAvailable: false, question }), question).toEqual(plain)
+    }
+  })
+
+  it.each(UI_LANGUAGE_CODES)('%s: the every-mention chip, with its own word or another term, gets the label', (code) => {
+    const chip = t(code, 'chat.example.indemnity')
+    const ownTerm = withOwnTerm(chip)
+    expect(ownTerm, 'the chip quotes its example word').not.toBe(chip)
+    for (const question of [chip, ownTerm]) {
+      for (const extractAvailable of [true, false]) {
+        expect(routeQuestion({ ...index, extractAvailable, question }), question).toEqual(labelled)
+      }
+    }
+  })
+
+  it.each(otherLanguages)('%s: the chip without its quotes, or followed by another question, is a plain question', (code) => {
+    const chip = t(code, 'chat.example.indemnity')
+    for (const question of [chip.replace(/['„«“”»]/gu, ''), `${chip}. ${t(code, 'chat.example.paymentTerms')}`]) {
+      expect(routeQuestion({ ...index, question }), question).toEqual(plain)
+    }
+  })
+
+  // "diff" ended at the "é" (JS \b is ASCII-defined), so a dispute routed to compare; the French compare words
+  // are listed (owner call, 2026-11-14), the other "diff…" words are plain questions.
+  it.each([
+    ['Le différend porte sur quoi ?', plain], // pre-fix: compare
+    ['Le paiement est-il différé ?', plain], // pre-fix: compare
+    ['Peut-on différer le paiement ?', plain], // pre-fix: compare
+    ['Les frais sont-ils traités différemment ?', plain], // pre-fix: compare
+    ['Y a-t-il un différentiel de prix ?', plain], // pre-fix: compare
+    ['Quelle est la différence entre les deux contrats ?', { engine: 'compare', confidence: 'high' }],
+    ['Quelles sont les différences ?', { engine: 'compare', confidence: 'high' }],
+    ['Le loyer est-il différent ?', { engine: 'compare', confidence: 'high' }],
+    ['La clause de résiliation est-elle différente ?', { engine: 'compare', confidence: 'high' }],
+    ['Les deux contrats sont-ils différents ?', { engine: 'compare', confidence: 'high' }],
+    ['Quelles clauses sont différentes ?', { engine: 'compare', confidence: 'high' }],
+    ['En quoi les deux contrats diffèrent-ils ?', { engine: 'compare', confidence: 'high' }],
+    ['En quoi le contrat A diffère-t-il du contrat B ?', { engine: 'compare', confidence: 'high' }],
+    ['Comment différencier les deux offres ?', { engine: 'compare', confidence: 'high' }],
+    ["Qu'est-ce qui différencie les deux offres ?", { engine: 'compare', confidence: 'high' }],
+    // controls: the English words still match where \b let them
+    ['Lease A vs. lease B', { engine: 'compare', confidence: 'high' }],
+    ['What is the diff between the two versions?', { engine: 'compare', confidence: 'high' }]
+  ] as const)('%s → %o over two documents', (question, decision) => {
+    expect(routeQuestion({ ...index, documentCount: 2, question })).toEqual(decision)
   })
 })
 
