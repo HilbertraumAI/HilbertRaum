@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type BenchmarkResult, type RuntimeStatus } from '../../src/shared/types'
 import { normalizeBenchmarkResult } from '../../src/shared/benchmark-schema'
+import { t, tCount, UI_LANGUAGE_CODES, type MessageKey, type UiLanguage } from '../../src/shared/i18n'
+import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 import { appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
@@ -80,15 +82,20 @@ function stubDiagnostics(
   })
 }
 
-function renderDiagnostics() {
-  return render(
+/** The tab under its ToastProvider; `lang` goes through `renderInLanguage` (English when omitted). */
+function renderDiagnostics(lang?: UiLanguage) {
+  const ui = (
     <ToastProvider>
       <SettingsScreen tab="diagnostics" />
     </ToastProvider>
   )
+  return lang ? renderInLanguage(ui, lang) : render(ui)
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  window.localStorage.clear()
+})
 
 describe('Settings → Diagnostics (advanced) — the local API row', () => {
   it('reports the live counters, and shows the same line in the copy report', async () => {
@@ -384,5 +391,71 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     expect(
       await screen.findByText(/Logs saved to D:\\exports\\hilbertraum-logs\.txt/)
     ).toBeInTheDocument()
+  })
+})
+
+// #812 (owner call G-7): the maintainers read English and German. In any other interface language
+// each report's Copy pastes the report, one divider line naming English, then the same report built
+// in English, so a support request stays readable. The English half is compared with what an
+// English interface copies from the same data, never with typed text.
+describe('Settings → Diagnostics (advanced) — an English copy for support (#812)', () => {
+  const DIVIDER = '--- English ---'
+  const OTHER_LANGUAGES = UI_LANGUAGE_CODES.filter((code) => code !== 'en' && code !== 'de')
+  const REPORTS: ReadonlyArray<{ name: string; button: number; title: MessageKey; lines: (lang: UiLanguage) => string[] }> = [
+    {
+      name: 'App & runtime',
+      button: 0,
+      title: 'diag.app.title',
+      lines: (lang) => [
+        `${t(lang, 'diag.app.version')}: HilbertRaum 0.1.20`,
+        `${t(lang, 'diag.app.runtime')}: ${t(lang, 'diag.app.stopped')}`
+      ]
+    },
+    {
+      name: 'Hardware benchmark',
+      button: 1,
+      title: 'diag.bench.title',
+      lines: (lang) => [
+        `${t(lang, 'diag.bench.cpu')}: Test CPU${tCount(lang, 'diag.bench.cores', 8)}`,
+        `${t(lang, 'diag.bench.lastRun')}: ${new Date(benchmark.ranAt).toLocaleString(lang)}`
+      ]
+    }
+  ]
+
+  /** What one card's Copy hands the clipboard bridge with the interface in `lang`; unmounts after. */
+  async function copiedIn(lang: UiLanguage, button: number): Promise<string> {
+    stubDiagnostics()
+    renderDiagnostics(lang)
+    // Both cards have loaded: the version and the CPU name are system values, alike in every language.
+    await screen.findByText('HilbertRaum 0.1.20')
+    await screen.findByText('Test CPU', { exact: false })
+    await userEvent.click(screen.getAllByRole('button', { name: t(lang, 'diag.copy') })[button])
+    await waitFor(() => expect(lastCopied).not.toBeNull())
+    const text = lastCopied ?? ''
+    cleanup()
+    window.localStorage.clear()
+    return text
+  }
+
+  describe.each(REPORTS)('the $name report', ({ button, title, lines }) => {
+    it.each(OTHER_LANGUAGES)('in %s: the report, a line naming English, then the English report', async (lang) => {
+      const english = await copiedIn('en', button)
+      const [local, englishHalf, ...rest] = (await copiedIn(lang, button)).split(`\n${DIVIDER}\n`)
+      expect(rest).toEqual([])
+      expect(englishHalf).toBe(english)
+      // The first half is the interface-language report: its own title and wording, as many lines
+      // as the English one, the system values untouched.
+      const localLines = local.split('\n')
+      expect(localLines[0]).toBe(t(lang, title))
+      expect(localLines).toHaveLength(english.split('\n').length)
+      for (const line of lines(lang)) expect(localLines).toContain(line)
+    })
+
+    it.each(['en', 'de'] as const)('in %s: the report alone, as before', async (lang) => {
+      const text = await copiedIn(lang, button)
+      expect(text).not.toMatch(/^--- .+ ---$/m)
+      expect(text.split('\n')[0]).toBe(t(lang, title))
+      for (const line of lines(lang)) expect(text.split('\n')).toContain(line)
+    })
   })
 })

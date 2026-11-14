@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Banner, Button, ErrorBanner, useToast } from '../../components'
+import { withEnglishCopy, type LanguageBinding } from '../../components/translator'
 import { useT, type I18n } from '../../i18n'
 import { tNodes } from '../../i18nNodes'
 import { localizeServerCopy } from '../../lib/displayMap'
@@ -120,7 +121,7 @@ function auditLabel(type: AuditEventType, t: I18n['t']): string {
 function accelerationLabel(
   runtime: RuntimeStatus | null,
   currentGpu: PerformanceSnapshot['currentGpu'],
-  t: I18n['t']
+  { t }: LanguageBinding
 ): string {
   if (runtime?.running && runtime.backend) {
     if (runtime.backend === 'gpu')
@@ -143,7 +144,7 @@ function fmtNum(n: number, lang: UiLanguage): string {
 
 /** The one-line runtime status, shared by the card row and the copy report so they can
  *  never drift. */
-function runtimeStatusLine(runtime: RuntimeStatus | null, t: I18n['t']): string {
+function runtimeStatusLine(runtime: RuntimeStatus | null, { t }: LanguageBinding): string {
   if (!runtime) return t('diag.app.unknown')
   if (!runtime.running) return t('diag.app.stopped')
   return t('diag.app.runtimeRunning', {
@@ -155,7 +156,7 @@ function runtimeStatusLine(runtime: RuntimeStatus | null, t: I18n['t']): string 
 
 /** The one-line local-API status, shared by the card row and the copy report. Counts
  *  only — the endpoint records nothing about who called or what was asked (D1). */
-function localApiStatusLine(api: LocalApiStatus | null | undefined, t: I18n['t']): string {
+function localApiStatusLine(api: LocalApiStatus | null | undefined, { t }: LanguageBinding): string {
   if (api == null) return t('diag.localApi.off')
   if (api.lastError === 'port_in_use') return t('diag.localApi.portInUse')
   if (api.lastError === 'start_failed') return t('diag.localApi.startFailed')
@@ -169,7 +170,7 @@ function localApiStatusLine(api: LocalApiStatus | null | undefined, t: I18n['t']
 
 /** #530: one Diagnostics line for an engine the OS refused — the reason in words, then the
  *  technical values untranslated (§7: the library name and the exit code live here only). */
-function engineProblemLine(problem: EngineProblem, t: I18n['t']): string {
+function engineProblemLine(problem: EngineProblem, { t }: LanguageBinding): string {
   const detail = engineProblemTechnicalDetail(problem)
   const line = t('diag.engine.cannotRun', { reason: t(engineProblemDiagKey(problem)) })
   return detail ? `${line} (${detail})` : line
@@ -186,7 +187,7 @@ const ENGINE_TECH_NAME: Readonly<Record<string, string>> = {
  * #516: one phrase per engine (or `cpu/` fallback) on the drive that is not this app's pinned
  * build — older, newer or unrecorded. Empty when everything matches, so the row is hidden then.
  */
-function engineVersionLines(versions: readonly EngineVersionInfo[] | undefined, t: I18n['t']): string[] {
+function engineVersionLines(versions: readonly EngineVersionInfo[] | undefined, { t }: LanguageBinding): string[] {
   const phrase = (engine: string, relation: EngineVersionRelation, installed: string | null, pinned: string): string | null => {
     if (relation === 'current') return null
     if (relation === 'unknown' || installed === null) return t('diag.engineVersion.unknown', { engine, pinned })
@@ -206,30 +207,32 @@ function engineVersionLines(versions: readonly EngineVersionInfo[] | undefined, 
 }
 
 /** #530: the label of an engine's Diagnostics line. */
-function engineProblemLabel(problem: EngineProblem, t: I18n['t']): string {
+function engineProblemLabel(problem: EngineProblem, { t }: LanguageBinding): string {
   return t(problem.family === 'whisper_cpp' ? 'diag.app.voiceEngine' : 'diag.app.engine')
 }
 
 /** Plain-text rendering of the "App & runtime" card for the Copy button — the same labels
- *  + values shown on screen, so a user can paste the lot into a support message. */
+ *  + values shown on screen, so a user can paste the lot into a support message. Built from one
+ *  language binding, so `withEnglishCopy` can build it a second time in English (#812). */
 function buildAppRuntimeReport(
   app: AppStatus | null,
   runtime: RuntimeStatus | null,
   currentGpu: PerformanceSnapshot['currentGpu'],
   install: RuntimeInstallInfo | null,
-  t: I18n['t'],
+  tr: LanguageBinding,
   versions?: readonly EngineVersionInfo[]
 ): string {
-  const versionLines = engineVersionLines(versions, t)
+  const { t } = tr
+  const versionLines = engineVersionLines(versions, tr)
   return [
     t('diag.app.title'),
     `${t('diag.app.version')}: ${app ? `${app.appName} ${app.appVersion}` : t('diag.app.unknown')}`,
     `${t('diag.app.selectedModel')}: ${app?.activeModelId ?? t('diag.app.noneSelected')}`,
     `${t('diag.app.profile')}: ${app?.hardwareProfile ?? t('diag.app.unknown')}`,
-    `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, t)}`,
-    `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, currentGpu, t)}`,
-    ...(app?.engineProblems ?? []).map((p) => `${engineProblemLabel(p, t)}: ${engineProblemLine(p, t)}`),
-    `${t('diag.localApi.label')}: ${localApiStatusLine(app?.localApi, t)}`,
+    `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, tr)}`,
+    `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, currentGpu, tr)}`,
+    ...(app?.engineProblems ?? []).map((p) => `${engineProblemLabel(p, tr)}: ${engineProblemLine(p, tr)}`),
+    `${t('diag.localApi.label')}: ${localApiStatusLine(app?.localApi, tr)}`,
     `${t('diag.app.runtimeBuild')}: ${
       install ? `llama.cpp ${install.version} (${install.backend})` : t('diag.app.noInstallMarker')
     }`,
@@ -248,7 +251,7 @@ function buildAppRuntimeReport(
  * chunk-count fallback — and every result persisted before `speedBasis` existed, which were all
  * chunk-based — is marked approximate (it counts SSE chunks over wall time including prefill).
  */
-function tokensPerSecondValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+function tokensPerSecondValue(bench: BenchmarkResult, { t, lang }: LanguageBinding): string {
   if (bench.tokensPerSecond == null) return t('diag.bench.tokensNotMeasured')
   const basis = bench.speedBasis
   const exact = basis?.basis === 'timings'
@@ -270,12 +273,7 @@ function tokensPerSecondValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
  * before "MB/s" differs: the card passes the language's `unitJoin`, the Copy text a plain space,
  * so a pasted report stays searchable (#804).
  */
-function effectiveReadValue(
-  bench: BenchmarkResult,
-  t: I18n['t'],
-  lang: UiLanguage,
-  join: string
-): string {
+function effectiveReadValue(bench: BenchmarkResult, { t, lang }: LanguageBinding, join: string): string {
   const sample = bench.effectiveRead
   if (!sample) return t('diag.bench.effectiveReadNone')
   const value = `${fmtNum(sample.mbps, lang)}${join}MB/s`
@@ -293,7 +291,7 @@ function effectiveReadValue(
  * `UNKNOWN_RAN_AT` sentinel the PR #303 audit H1 validators use rather than inventing a "now"
  * for a legacy profile-only blob), and `new Date('')` prints "Invalid Date" — say "unknown".
  */
-function lastRunValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+function lastRunValue(bench: BenchmarkResult, { t, lang }: LanguageBinding): string {
   const ran = new Date(bench.ranAt)
   return Number.isNaN(ran.getTime()) ? t('diag.app.unknown') : ran.toLocaleString(lang)
 }
@@ -312,23 +310,20 @@ function lastRunValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): s
  *     report carry `hardwareProfile`, and THAT one is live rather than recorded.
  * Keeping rows in the report that the card no longer shows would also break this file's standing
  * invariant — card row and Copy text render from the same helpers "so the two can never disagree".
+ * Built from one language binding, so `withEnglishCopy` can build it a second time in English (#812).
  */
-function buildBenchmarkReport(
-  bench: BenchmarkResult,
-  t: I18n['t'],
-  tCount: I18n['tCount'],
-  lang: UiLanguage
-): string {
+function buildBenchmarkReport(bench: BenchmarkResult, tr: LanguageBinding): string {
+  const { t, tCount, lang } = tr
   const lines = [
     t('diag.bench.title'),
     `${t('diag.bench.ram')}: ${bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} GB` : t('diag.app.unknown')}`,
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('diag.app.unknown')) + (bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : '')}`,
     `${t('diag.bench.osArch')}: ${bench.os || t('diag.app.unknown')} (${bench.arch || t('diag.app.unknown')})`,
     `${t('diag.bench.gpu')}: ${bench.gpu ?? t('diag.bench.notDetected')}`,
-    `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, t, lang, ' ')}`,
+    `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, tr, ' ')}`,
     `${t('diag.bench.driveWrite')}: ${bench.driveWriteMbps != null ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
-    `${t('diag.bench.tokens')}: ${tokensPerSecondValue(bench, t, lang)}`,
-    `${t('diag.bench.lastRun')}: ${lastRunValue(bench, t, lang)}`
+    `${t('diag.bench.tokens')}: ${tokensPerSecondValue(bench, tr)}`,
+    `${t('diag.bench.lastRun')}: ${lastRunValue(bench, tr)}`
   ]
   // Warnings are persisted canonical English — localize the known set at render (D-L4).
   for (const w of bench.warnings) lines.push(`- ${localizeServerCopy(t, w)}`)
@@ -336,7 +331,8 @@ function buildBenchmarkReport(
 }
 
 export function DiagnosticsTab(): JSX.Element {
-  const { t, tCount, lang } = useT()
+  const i18n = useT()
+  const { t, tCount, lang } = i18n
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [bench, setBench] = useState<BenchmarkResult | null>(null)
   const [app, setApp] = useState<AppStatus | null>(null)
@@ -349,7 +345,7 @@ export function DiagnosticsTab(): JSX.Element {
   const [install, setInstall] = useState<RuntimeInstallInfo | null>(null)
   // #516: the drive's engines against this app's pin (the "Engine versions" row).
   const [engineVersions, setEngineVersions] = useState<EngineVersionInfo[] | undefined>(undefined)
-  const versionLines = engineVersionLines(engineVersions, t)
+  const versionLines = engineVersionLines(engineVersions, i18n)
   const [logTail, setLogTail] = useState<string[] | null>(null)
   const [showLogs, setShowLogs] = useState(false)
   // full-audit 2026-07-11 CODE-27: "Try GPU again" was the one handler in this file without
@@ -537,17 +533,17 @@ export function DiagnosticsTab(): JSX.Element {
           <dt>{t('diag.app.profile')}</dt>
           <dd>{app?.hardwareProfile ?? t('diag.app.unknown')}</dd>
           <dt>{t('diag.app.runtime')}</dt>
-          <dd>{runtimeStatusLine(runtime, t)}</dd>
+          <dd>{runtimeStatusLine(runtime, i18n)}</dd>
           <dt>{t('diag.app.acceleration')}</dt>
-          <dd>{accelerationLabel(runtime, currentGpu, t)}</dd>
+          <dd>{accelerationLabel(runtime, currentGpu, i18n)}</dd>
           {(app?.engineProblems ?? []).map((p) => (
             <Fragment key={p.family}>
-              <dt>{engineProblemLabel(p, t)}</dt>
-              <dd>{engineProblemLine(p, t)}</dd>
+              <dt>{engineProblemLabel(p, i18n)}</dt>
+              <dd>{engineProblemLine(p, i18n)}</dd>
             </Fragment>
           ))}
           <dt>{t('diag.localApi.label')}</dt>
-          <dd>{localApiStatusLine(app?.localApi, t)}</dd>
+          <dd>{localApiStatusLine(app?.localApi, i18n)}</dd>
           <dt>{t('diag.app.runtimeBuild')}</dt>
           <dd>
             {install
@@ -589,7 +585,9 @@ export function DiagnosticsTab(): JSX.Element {
           <Button
             size="sm"
             title={t('diag.copyTitle')}
-            onClick={() => copyReport(buildAppRuntimeReport(app, runtime, currentGpu, install, t, engineVersions))}
+            onClick={() =>
+              copyReport(withEnglishCopy(i18n, (tr) => buildAppRuntimeReport(app, runtime, currentGpu, install, tr, engineVersions)))
+            }
           >
             {t('diag.copy')}
           </Button>
@@ -619,7 +617,7 @@ export function DiagnosticsTab(): JSX.Element {
               <Button
                 size="sm"
                 title={t('diag.copyTitle')}
-                onClick={() => copyReport(buildBenchmarkReport(bench, t, tCount, lang))}
+                onClick={() => copyReport(withEnglishCopy(i18n, (tr) => buildBenchmarkReport(bench, tr)))}
               >
                 {t('diag.copy')}
               </Button>
@@ -641,7 +639,7 @@ export function DiagnosticsTab(): JSX.Element {
               <dt>{t('diag.bench.gpu')}</dt>
               <dd>{bench.gpu ?? t('diag.bench.notDetected')}</dd>
               <dt>{t('diag.bench.effectiveRead')}</dt>
-              <dd>{effectiveReadValue(bench, t, lang, unitJoin(lang))}</dd>
+              <dd>{effectiveReadValue(bench, i18n, unitJoin(lang))}</dd>
               <dt>{t('diag.bench.driveWrite')}</dt>
               <dd>
                 {bench.driveWriteMbps != null
@@ -649,9 +647,9 @@ export function DiagnosticsTab(): JSX.Element {
                   : t('diag.bench.notMeasured')}
               </dd>
               <dt>{t('diag.bench.tokens')}</dt>
-              <dd>{tokensPerSecondValue(bench, t, lang)}</dd>
+              <dd>{tokensPerSecondValue(bench, i18n)}</dd>
               <dt>{t('diag.bench.lastRun')}</dt>
-              <dd>{lastRunValue(bench, t, lang)}</dd>
+              <dd>{lastRunValue(bench, i18n)}</dd>
             </dl>
 
             {bench.warnings.length > 0 && (

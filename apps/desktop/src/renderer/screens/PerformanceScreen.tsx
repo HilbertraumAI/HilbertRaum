@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge, Button, ErrorBanner, useToast } from '../components'
+import { withEnglishCopy, type LanguageBinding } from '../components/translator'
 import { useT, type I18n } from '../i18n'
 import { tNodes } from '../i18nNodes'
 import { localizeServerCopy } from '../lib/displayMap'
@@ -144,7 +145,7 @@ function otherLoadNote(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): 
 
 /** The model's display name when the catalog knows it, else its id (an old result may name
  *  a model no longer in the catalog), else the "loaded model" placeholder. */
-function modelName(id: string | null | undefined, models: ModelInfo[], t: I18n['t']): string {
+function modelName(id: string | null | undefined, models: ModelInfo[], { t }: LanguageBinding): string {
   if (!id) return t('perf.unknownModel')
   return models.find((m) => m.id === id)?.displayName ?? id
 }
@@ -228,7 +229,7 @@ function speedIsApprox(bench: Pick<BenchmarkResult, 'speedBasis'>): boolean {
  * the chunk fallback is marked approximate and names its chunk count; an ABSENT basis is
  * approximate with NO window — the app never invents one.
  */
-function speedBasisNote(bench: Pick<BenchmarkResult, 'speedBasis'>, t: I18n['t'], lang: UiLanguage): string {
+function speedBasisNote(bench: Pick<BenchmarkResult, 'speedBasis'>, { t, lang }: LanguageBinding): string {
   const basis = bench.speedBasis
   if (basis?.basis === 'timings') return t('diag.bench.tokensOver', { tokens: fmtNumSafe(basis.tokens, lang) })
   const approx = t('perf.tile.speed.approx')
@@ -238,7 +239,8 @@ function speedBasisNote(bench: Pick<BenchmarkResult, 'speedBasis'>, t: I18n['t']
 /** Plain-text rendering of the "This computer" card for the Copy button (mirrors the
  *  Diagnostics report shape so support sees the same figures either way). `currentMachine`
  *  decides the heading: the report is pasted into a support message, where "This computer"
- *  over another machine's figures misattributes every line under it (L6). */
+ *  over another machine's figures misattributes every line under it (L6). Built from one
+ *  language binding, so `withEnglishCopy` can build it a second time in English (#812). */
 function buildReport(
   bench: BenchmarkResult,
   graphics: GraphicsFigure,
@@ -246,10 +248,9 @@ function buildReport(
   contextTokens: number | null,
   currentMachine: boolean,
   live: LiveRecommendation | null,
-  t: I18n['t'],
-  tCount: I18n['tCount'],
-  lang: UiLanguage
+  tr: LanguageBinding
 ): string {
+  const { t, tCount, lang } = tr
   const graphicsLine =
     graphics.kind === 'device'
       ? `${vramGb(graphics.mb, lang)} ${t(graphics.integrated ? 'perf.tile.graphics.unitShared' : 'perf.tile.graphics.unit')} (${graphics.name ?? ''})`
@@ -261,12 +262,12 @@ function buildReport(
   // Timings: "Measured with X on DATE, over N tokens". Chunks / no basis: the tile's own
   // qualifier after a full stop, with the chunk window only when the record carries one.
   const speedSub = t('perf.tile.speed.sub', {
-    model: modelName(bench.measuredModelId, models, t),
+    model: modelName(bench.measuredModelId, models, tr),
     when: fmtDate(bench.ranAt, lang)
   })
   const speedProvenance = speedIsApprox(bench)
-    ? `${speedSub}. ${speedBasisNote(bench, t, lang)}`
-    : `${speedSub}, ${speedBasisNote(bench, t, lang)}`
+    ? `${speedSub}. ${speedBasisNote(bench, tr)}`
+    : `${speedSub}, ${speedBasisNote(bench, tr)}`
   const lines = [
     currentMachine
       ? t('perf.card.title')
@@ -299,11 +300,11 @@ function buildReport(
   // Then the result's own pick, which is what the check said at the time.
   if (live) {
     lines.push(
-      `${t(currentMachine ? 'perf.recommendation.next' : 'perf.recommendation.nextOnThisComputer')}: ${live.modelId ? `${modelName(live.modelId, models, t)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
+      `${t(currentMachine ? 'perf.recommendation.next' : 'perf.recommendation.nextOnThisComputer')}: ${live.modelId ? `${modelName(live.modelId, models, tr)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
     )
     if (contextTokens != null) lines.push(`${t('models.context.title')}: ${tCount('models.tech.contextValue', contextTokens, { count: contextTokens.toLocaleString(lang) })}`)
   }
-  lines.push(`${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`)
+  lines.push(`${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, tr) : t('diag.bench.noMatch')}`)
   lines.push(`${t('diag.bench.lastRun')}: ${fmtDateTime(bench.ranAt, lang)}`)
   // `?? []` is the H1 defence above: a throw here would lose the report inside the click (#746).
   for (const w of bench.warnings ?? []) lines.push(`- ${localizeServerCopy(t, w)}`)
@@ -352,7 +353,8 @@ export interface PerformanceScreenProps {
 }
 
 export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.Element {
-  const { t, tCount, lang } = useT()
+  const i18n = useT()
+  const { t, tCount, lang } = i18n
   const toast = useToast()
   const [snap, setSnap] = useState<PerformanceSnapshot | null>(null)
   const [models, setModels] = useState<ModelInfo[]>([])
@@ -618,17 +620,17 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   // saved `recommendedModelId` is history and is labelled as such where it still shows.
   const live = snap?.recommendation ?? null
   const recommended = live?.modelId ? models.find((m) => m.id === live.modelId) ?? null : null
-  const recommendedName = live?.modelId ? modelName(live.modelId, models, t) : null
+  const recommendedName = live?.modelId ? modelName(live.modelId, models, i18n) : null
   const atCheckTimeName =
     bench?.recommendedModelId && live && bench.recommendedModelId !== live.modelId
-      ? modelName(bench.recommendedModelId, models, t)
+      ? modelName(bench.recommendedModelId, models, i18n)
       : null
   // The context the LIVE recommended model would launch with, resolved MAIN-SIDE by the launch
   // path's own helper (PR #303 audit M5 residual): recomputing it here with `??` over the
   // catalog entry showed a "0-token context" for a model whose manifest states no recommended
   // window, while the runtime starts such a model on the settings default.
   const contextTokens = snap?.placement.recommendedContextTokens ?? null
-  const speedModelName = bench ? modelName(bench.measuredModelId, models, t) : ''
+  const speedModelName = bench ? modelName(bench.measuredModelId, models, i18n) : ''
   const speedApprox = bench != null && bench.tokensPerSecond != null && speedIsApprox(bench)
   const canStartRecommended =
     recommended != null &&
@@ -848,7 +850,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         <div className="perf-model-line">
           {p.model
             ? tCount('perf.model.line', p.model.contextTokens, {
-                model: modelName(p.model.id, models, t),
+                model: modelName(p.model.id, models, i18n),
                 size: fmt1(p.model.sizeOnDiskGb, lang),
                 context: p.model.contextTokens.toLocaleString(lang)
               })
@@ -933,8 +935,8 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                   label: <strong>{t(`perf.role.${r.role}`)}</strong>,
                   value: r.modelId
                     ? r.sizeOnDiskGb != null
-                      ? t('perf.models.row', { model: modelName(r.modelId, models, t), size: gbOf(r.sizeOnDiskGb) })
-                      : t('perf.models.rowNoSize', { model: modelName(r.modelId, models, t) })
+                      ? t('perf.models.row', { model: modelName(r.modelId, models, i18n), size: gbOf(r.sizeOnDiskGb) })
+                      : t('perf.models.rowNoSize', { model: modelName(r.modelId, models, i18n) })
                     : t('perf.models.none')
                 })}
               </div>
@@ -1018,7 +1020,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   function stepItems(): JSX.Element[] {
     // The speed step only exists when a runtime is up; a run with no model shows it skipped.
     const speedLabel = runtimeModelId
-      ? t('perf.step.speed', { model: modelName(runtimeModelId, models, t) })
+      ? t('perf.step.speed', { model: modelName(runtimeModelId, models, i18n) })
       : t('perf.step.speedSkipped')
     const labels: Record<BenchmarkProgressStep, string> = {
       system: t('perf.step.system'),
@@ -1120,7 +1122,13 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 <Button
                   variant="ghost"
                   title={t('diag.copyTitle')}
-                  onClick={() => copyReport(buildReport(bench, graphics, models, contextTokens, snap?.currentMachine ?? true, live, t, tCount, lang))}
+                  onClick={() =>
+                    copyReport(
+                      withEnglishCopy(i18n, (tr) =>
+                        buildReport(bench, graphics, models, contextTokens, snap?.currentMachine ?? true, live, tr)
+                      )
+                    )
+                  }
                 >
                   {t('perf.copy')}
                 </Button>
@@ -1160,7 +1168,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 </div>
                 <div className="perf-row-sub">
                   {t('perf.observed.answerSub', {
-                    model: modelName(observed.lastAnswer.modelId, models, t),
+                    model: modelName(observed.lastAnswer.modelId, models, i18n),
                     when: fmtDateTime(observed.lastAnswer.at, lang),
                     tokens: fmtNum(observed.lastAnswer.tokens, lang)
                   })}
@@ -1179,7 +1187,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 </div>
                 <div className="perf-row-sub">
                   {t('perf.observed.loadSub', {
-                    model: modelName(observed.lastModelLoad.modelId, models, t),
+                    model: modelName(observed.lastModelLoad.modelId, models, i18n),
                     gb: fmt1(observed.lastModelLoad.bytes / 1e9, lang),
                     mbps: fmtNum(observed.lastModelLoad.mbps, lang)
                   })}
@@ -1198,7 +1206,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 </div>
                 <div className="perf-row-sub">
                   {t('perf.observed.checkSub', {
-                    model: modelName(observed.lastChecksum.modelId, models, t),
+                    model: modelName(observed.lastChecksum.modelId, models, i18n),
                     when: fmtDate(observed.lastChecksum.at, lang),
                     gb: fmt1(observed.lastChecksum.bytes / 1e9, lang)
                   })}
@@ -1223,7 +1231,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           <div className="perf-rows">
             {snap.otherMachines.map((entry) => {
               const model = entry.tokensPerSecond != null ? entry.measuredModelId : entry.recommendedModelId
-              const name = modelName(model, models, t)
+              const name = modelName(model, models, i18n)
               const slowDrive = entry.effectiveRead != null && entry.effectiveRead.mbps < SLOW_READ_MBPS
               // Provenance travels with the figure (L6): a chunk-counted or a legacy
               // (absent-basis) reading is rated with the neutral "Approximate" pill and carries
@@ -1231,7 +1239,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               // tokens/s figure this machine could be compared against. A timings reading names
               // the window it covers instead.
               const approx = speedIsApprox(entry)
-              const basisNote = entry.tokensPerSecond != null ? speedBasisNote(entry, t, lang) : null
+              const basisNote = entry.tokensPerSecond != null ? speedBasisNote(entry, i18n) : null
               return (
                 <div className="perf-row" key={`${entry.cpuModel}|${entry.ramGb}|${entry.ranAt}`}>
                   <div className="perf-row-main">

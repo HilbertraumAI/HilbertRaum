@@ -517,6 +517,12 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
     text: "name === 'tr'",
     reason:
       'the HTML table-row tag <tr>, not a language: a row opens or closes (second of two sites; the scanner records each comparison)'
+  },
+  {
+    file: 'renderer/components/translator.ts',
+    text: "['en', 'de']",
+    reason:
+      'the languages support READS a copied report in (#812, owner call G-7: the maintainers read English and German), not a list of interface languages: a newly registered language must get the English half too, so it must not be derived from UI_LANGUAGES'
   }
 ]
 
