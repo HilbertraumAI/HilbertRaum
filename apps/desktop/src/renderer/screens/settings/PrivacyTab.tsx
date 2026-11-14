@@ -6,7 +6,7 @@ import type { AppSettings, DriveStatus, PolicyStatus } from '@shared/types'
 
 // "Privacy & data" tab of the Settings screen (spec §7.10 + §18.1).
 // Renders the offline statement verbatim, shows where data lives,
-// the live network state (off by default / disabled by policy), the plaintext-dev-mode
+// the live network state (turned off in Settings / disabled by policy / allowed), the plaintext-dev-mode
 // caveat, and the logs-are-local guarantee. Privacy is a posture expressed everywhere;
 // this tab is the place that spells it out (guidelines §2).
 

@@ -1634,8 +1634,8 @@ computed at the stamp site: `chunksCovered` = the **distinct cited chunks**, `ch
 `documentChunkCount` over the DISTINCT documents the retrieved chunks came from** (a single-doc scope → that
 one doc's section count; a multi-doc scope **sums** across the docs actually drawn on), `fullyChunked` = true
 iff every such doc is `fully_chunked`. `CoverageMeter`'s relevance branch renders the fraction
-(`coverage.relevance.counted` — EN *"Based on {covered} of {total} sections"* / DE *"Basiert auf {covered} von
-{total} Abschnitten"*) **only when `chunksTotal > 0`**; a NULL-coverage legacy turn (the `chunksCovered:0,
+(`coverage.relevance.counted` — EN *"Based on sections: {covered} of {total}"* / DE *"Basiert auf Abschnitten:
+{covered} von {total}"*, label-first since #806) **only when `chunksTotal > 0`**; a NULL-coverage legacy turn (the `chunksCovered:0,
 chunksTotal:0` fallback [Transcript](../apps/desktop/src/renderer/chat/Transcript.tsx) passes) keeps the flat
 `coverage.relevance` label **byte-identical**. **`mode` stays `relevance`** — the multi-doc case is kept honest
 by **wording, not math** (never "whole document" from this path); the §14.5 wording gate and the
@@ -2146,12 +2146,13 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   top-k search and the same fixed reply; an offer of a skill with an analysis engine stays (architecture.md
   §5.2 "as built", the #733 / #779 notes).
 - **"Whole document" wording gate (RAG-1, backend audit 2026-06-27):** `buildListingAnswer` says
-  *"across the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
+  *"Searched the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
   chunking invariant holds AND every in-scope chunk actually carries a `__scan__` marker. `fullyChunked`
   alone proves "stored chunks are complete," NOT "we scanned every in-scope document": in a multi-document
   scope where extraction ran on only some docs, `fullyChunked` is true but `scannedChunks < totalChunks`,
-  so the wording honestly falls back to *"across N sections scanned"* (the over-claim H7 forbids). A
-  single fully-extracted document still satisfies both conditions, so its wording is unchanged.
+  so the wording honestly falls back to *"Search result — … found: N; sections scanned: N"* (the
+  over-claim H7 forbids). A single fully-extracted document still satisfies both conditions, so its
+  wording is unchanged.
 
 ### 14.6 Symmetric compare + lazy node vectors (Phase 4, plan §4.3/§3.1, H4/H5/H8/L6)
 

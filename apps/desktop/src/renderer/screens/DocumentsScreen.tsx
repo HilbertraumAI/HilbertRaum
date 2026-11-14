@@ -480,7 +480,7 @@ export function DocumentsScreen({
             // the user it STOPPED early rather than finished, with what got through. A completed
             // batch gets a summary toast too (PR review): the loop continues past per-document
             // failures (locked/deleted/crashed docs), so without a summary a partial outcome
-            // looked identical to a full success until you noticed the Failed imports tab.
+            // looked identical to a full success until you noticed the "Needs attention" list.
             if (job.cancelled) {
               showToast(t('docs.reindexAllCancelled', { done: job.completed, total: job.total }))
             } else if (job.failed > 0) {
@@ -627,7 +627,7 @@ export function DocumentsScreen({
         showToast(t(kind === 'reindex' ? 'docs.reindexDone' : 'docs.deleteDone', { title: d.title }))
       }
     } catch (e) {
-      setError(`${d.title}: ${friendlyIpcError(e)}`)
+      setError(t('common.labelValue', { label: d.title, value: friendlyIpcError(e) }))
     } finally {
       setBusy(null)
     }
@@ -832,7 +832,7 @@ export function DocumentsScreen({
       // common cause (a stale stored path on a relocated drive) is fixed in the resolver and
       // the menu now disables the entry outright when the copy is genuinely gone, so what
       // reaches here is the race — the copy vanished between the list refresh and the click.
-      setError(`${d.title}: ${friendlyIpcError(e)}`)
+      setError(t('common.labelValue', { label: d.title, value: friendlyIpcError(e) }))
     }
   }
 

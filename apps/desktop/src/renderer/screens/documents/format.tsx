@@ -66,12 +66,13 @@ export const DOC_ROW_OVERSCAN = 10
 /**
  * Per-document status badge. Audio in `extracting` is honestly "Transcribing…" —
  * listening to a recording takes real time — with the coarse percent the
- * docs IPC merges in while whisper works.
+ * docs IPC merges in while whisper works, written in the language's percent pattern (#804).
  */
 export function badgeFor(d: DocumentInfo, t: I18n['t']): { label: string; tone: BadgeTone; icon: string } {
   const base = STATUS_BADGE[d.status]
   if (d.status === 'extracting' && d.mimeType?.startsWith('audio/')) {
-    const pct = d.transcriptionProgress != null ? ` ${d.transcriptionProgress}%` : ''
+    const pct =
+      d.transcriptionProgress != null ? ` ${t('common.percent', { pct: d.transcriptionProgress })}` : ''
     return { tone: base.tone, icon: base.icon, label: `${t('docs.status.transcribing')}${pct}` }
   }
   return { tone: base.tone, icon: base.icon, label: t(base.labelKey) }

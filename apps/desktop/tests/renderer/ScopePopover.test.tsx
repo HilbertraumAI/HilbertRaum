@@ -4,8 +4,9 @@ import { screen, cleanup, type RenderResult } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentProps } from 'react'
 import { ScopePopover } from '../../src/renderer/chat/ScopePopover'
-import { t, type UiLanguage } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES, type UiLanguage } from '../../src/shared/i18n'
 import { makeCollection, makeDocumentInfo } from '../helpers/chat-fixtures'
+import { knowledgePack, WIKIPEDIA_EN_PACK } from '../helpers/knowledge-pack-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
 
 // Audit FE-6 — the pending-attachment chips are keyed by name+index so each chip's key is unique
@@ -141,6 +142,29 @@ describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
     expect(screen.getByRole('button').textContent).toContain(
       t('en', 'chat.scope.answeringFrom', { source })
     )
+  })
+
+  // #805 C3: the chip's own "Answering from:" carries its only colon; a project or a pack is named
+  // in quotes ("Project “Tax 2026”"), never after a second colon ("Answering from: Project: Tax
+  // 2026"), in every registered language. The name check keeps the row on the named-source branch:
+  // the whole-library fallback has one colon too.
+  it.each(UI_LANGUAGE_CODES)('%s: a chip naming a project or a pack holds exactly one colon (#805 C3)', (code) => {
+    const project = makeCollection({ id: 'tax', name: 'Tax 2026', type: 'project', builtin: false })
+    const pack = knowledgePack({ ...WIKIPEDIA_EN_PACK })
+    const projectScope = { collectionIds: [project.id], documentIds: [] }
+    const packScope = { collectionIds: [], documentIds: [], packIds: [pack.id] }
+    const named: [string, Partial<ComponentProps<typeof ScopePopover>>][] = [
+      [project.name, { docs: [makeDocumentInfo()], collections: [project], scope: projectScope }],
+      [pack.title, { packs: [pack], scope: packScope }],
+      [pack.title, { packs: [{ ...pack, enabled: false }], scope: packScope }]
+    ]
+    for (const [name, props] of named) {
+      const { unmount } = renderPopover(props, code)
+      const chip = screen.getByRole('button').textContent ?? ''
+      expect(chip).toContain(name)
+      expect(chip.split(':').length - 1, chip).toBe(1)
+      unmount()
+    }
   })
 
   it('renders the German chip label (forced via the localStorage mirror, D-L8)', () => {

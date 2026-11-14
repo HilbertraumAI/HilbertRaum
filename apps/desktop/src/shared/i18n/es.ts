@@ -154,9 +154,8 @@ export const es: UiCatalog<'es'> = {
     'Tu modelo se está iniciando: los modelos grandes tardan un poco en cargarse. Esta pantalla ' +
     'continuará automáticamente cuando esté listo.',
   'chat.noModel.startingProgress':
-    'Tu modelo se está iniciando: se está leyendo el archivo del modelo ({gb} GB) y va ' +
-    'aproximadamente por el {pct}\u00A0%. Esta pantalla continuará automáticamente cuando esté ' +
-    'listo.',
+    'Tu modelo se está iniciando: se está leyendo el archivo del modelo ({gb}\u00A0GB) y va ' +
+    'aproximadamente por el {pct}\u00A0%. Esta pantalla continuará automáticamente cuando esté listo.',
   'chat.noModel.open': 'Ir a Modelo de IA',
   'chat.noModel.recheck': 'Volver a comprobar',
   'chat.empty.title': 'Haz una pregunta general o sobre tus documentos.',
@@ -246,8 +245,8 @@ export const es: UiCatalog<'es'> = {
   'chat.skill.usedTitle': 'Esta respuesta se generó con la habilidad «{title}».',
   'chat.skill.autoFired': 'Se respondió con «{title}»',
   'chat.skill.autoFiredTitle':
-    'La aplicación usó automáticamente la habilidad «{title}» en esta respuesta. Puedes ' +
-    'responder sin ella.',
+    'La aplicación usó automáticamente la habilidad «{title}» en esta respuesta. Puedes obtener una ' +
+    'respuesta sin ella.',
   'chat.skill.answerWithout': 'Responder sin ella',
   'chat.skill.answerWithoutBlockedByReview':
     'Esta respuesta tiene una revisión de evidencia. Volver a responder eliminaría la revisión ' +
@@ -479,7 +478,7 @@ export const es: UiCatalog<'es'> = {
   'chat.truncated.hint.cap':
     'Esta respuesta sobre documentos alcanzó la longitud fija que la aplicación permite para una ' +
     'respuesta. Pide al modelo que continúe donde se detuvo.',
-  'chat.speed.line': '{tps} tok/s · {ttft} s hasta el primer token · tokens: {tokens}',
+  'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s hasta el primer token · tokens: {tokens}',
   'chat.speed.hint':
     'Con qué rapidez se generó esta respuesta: la velocidad de decodificación del motor de IA, ' +
     'la espera hasta la primera palabra y el número de tokens generados. Solo se muestra en las ' +
@@ -619,8 +618,8 @@ export const es: UiCatalog<'es'> = {
   'docs.reindexAllDone.many': 'Se reindexaron {count} de documentos.',
   'docs.reindexAllDone.other': 'Se reindexaron {count} documentos.',
   'docs.reindexAllPartial':
-    'Documentos reindexados: {done} de {total}; con errores: {failed}. Los documentos con ' +
-    'errores se quedan en la lista de importaciones con errores.',
+    'Documentos reindexados: {done} de {total}; con errores: {failed}. Los documentos con errores se ' +
+    'quedan en «Requiere atención».',
   'docs.supported.base':
     'Formatos compatibles: TXT, Markdown, PDF, DOCX, CSV y grabaciones de audio (WAV, MP3, FLAC, ' +
     'OGG), que se transcriben en esta unidad',
@@ -712,6 +711,7 @@ export const es: UiCatalog<'es'> = {
   'docs.failed.remove': 'Quitar',
   'docs.failed.removeTitle': 'Quitar de la lista esta importación con errores',
   'docs.failed.retry': 'Volver a intentarlo',
+  'docs.failed.lead': 'No se pudo procesar este archivo.',
   'docs.backToChat': 'Volver al chat',
   'docs.failed.retryTitle': 'Volver a leer y preparar este archivo',
   'docs.moreActions': 'Más acciones para «{title}»',
@@ -1082,17 +1082,19 @@ export const es: UiCatalog<'es'> = {
   'skills.editRouting.answer':
     'Para hacer estos cambios, haz clic en el botón **{button}**, justo encima del cuadro de ' +
     'mensaje, y luego elige dónde guardar la copia editada. Se ejecuta por completo en este ' +
-    'dispositivo y solo aplica los cambios exactos de buscar y reemplazar que pediste, en todos ' +
-    'los lugares donde el texto aparece tal cual, sin cambiar nada más. Nunca reescribe el ' +
-    'documento, así que no puede inventar ni reformular nada. En esta fase se guarda una copia ' +
-    'de texto sin formato (.txt); revísala antes de compartirla.',
+    'dispositivo y solo aplica los cambios exactos de buscar y reemplazar que pediste, en todos los ' +
+    'lugares donde el texto aparece tal cual, sin cambiar nada más. Nunca reescribe el documento, ' +
+    'así que no puede inventar ni reformular nada. Un documento de Word conserva su formato .docx; ' +
+    'los demás formatos se guardan como texto sin formato (.txt). Revisa la copia antes de ' +
+    'compartirla.',
   'skills.editRouting.answerMulti':
     'Para hacer estos cambios, haz clic en el botón **{button}**, justo encima del cuadro de ' +
-    'mensaje, elige el documento que quieres editar y luego dónde guardar la copia editada. ' +
-    'Trabaja con un documento a la vez, se ejecuta por completo en este dispositivo y solo ' +
-    'aplica los cambios exactos de buscar y reemplazar que pediste, en todos los lugares donde ' +
-    'el texto aparece tal cual, sin cambiar nada más. Nunca reescribe el documento. En esta fase ' +
-    'se guarda una copia de texto sin formato (.txt); revísala antes de compartirla.',
+    'mensaje, elige el documento que quieres editar y luego dónde guardar la copia editada. Trabaja ' +
+    'con un documento a la vez, se ejecuta por completo en este dispositivo y solo aplica los ' +
+    'cambios exactos de buscar y reemplazar que pediste, en todos los lugares donde el texto aparece ' +
+    'tal cual, sin cambiar nada más. Nunca reescribe el documento. Un documento de Word conserva su ' +
+    'formato .docx; los demás formatos se guardan como texto sin formato (.txt). Revisa la copia ' +
+    'antes de compartirla.',
   'skills.redactionRouting.scan':
     'Analicé todo el documento en busca de datos personales con un formato claro. Esto es lo que ' +
     'detecté. Direcciones de correo electrónico: {email}; números de teléfono: {phone}; IBAN: ' +
@@ -1176,12 +1178,12 @@ export const es: UiCatalog<'es'> = {
   'models.hint.small': 'Pequeño y ágil: respuestas rápidas en casi cualquier equipo.',
   'models.hint.balanced': 'Equilibrado: funciona bien en la mayoría de los equipos.',
   'models.hint.large': 'Grande: las mejores respuestas; necesita un equipo potente.',
-  'models.usesSpace': 'Ocupa {size} de espacio en la unidad.',
+  'models.usesSpace': 'Ocupa {size} de espacio en la unidad',
   'models.downloads.blockedByPolicy':
     'Las descargas están desactivadas por la política de esta unidad.',
   'models.downloads.enableInSettings':
-    'Para descargar modelos, activa «Permitir el acceso a internet para descargar modelos y ' +
-    'actualizaciones» en Ajustes.',
+    'Para descargar, activa «Permitir el acceso a internet para descargas y actualizaciones» en ' +
+    'Ajustes.',
   'models.download.verifying': 'Verificando el archivo descargado…',
   'models.download.progress': 'Descargando… {pct}\u00A0% ({received} de {total})',
   'models.download.progressNoTotal': 'Descargando… {received} hasta ahora',
@@ -1324,12 +1326,12 @@ export const es: UiCatalog<'es'> = {
   'ocr.install.outcome.unchanged':
     'Los archivos de OCR ya están en su sitio. Si el reconocimiento de texto sigue sin estar ' +
     'disponible, reinicia HilbertRaum.',
-  'models.ram.needs': 'Necesita al menos {min} GB de RAM',
-  'models.ram.machine': '; este equipo tiene unos {ram} GB',
+  'models.ram.needs': 'Necesita al menos {min}\u00A0GB de RAM',
+  'models.ram.machine': '; este equipo tiene unos {ram}\u00A0GB',
   'models.ram.advice': '. Elige un modelo más pequeño: la calidad sigue siendo excelente.',
   'models.badge.active': 'Activo',
   'models.badge.recommended': 'Recomendado para este equipo',
-  'models.badge.ramNeeded': 'Necesita ≥{min} GB de RAM',
+  'models.badge.ramNeeded': 'Necesita ≥{min}\u00A0GB de RAM',
   'models.automatic.installed': 'Instalado: se usa automáticamente. No hay nada que iniciar.',
   'models.automatic.notInstalled':
     'Se usa automáticamente una vez instalado: no hace falta configurar nada.',
@@ -1413,7 +1415,7 @@ export const es: UiCatalog<'es'> = {
   'models.confirm.size': 'Tamaño',
   'models.confirm.license': 'Licencia',
   'models.confirm.from': 'Dirección de descarga',
-  'models.confirm.readLicense': 'leer la licencia',
+  'models.confirm.readLicense': 'Leer la licencia',
   'models.confirm.hint':
     'El archivo descargado se verifica antes de usarse. Es la única solicitud de red que hace la ' +
     'aplicación: no se envía nada sobre ti ni sobre tus documentos.',
@@ -1434,8 +1436,7 @@ export const es: UiCatalog<'es'> = {
   'settings.saved': 'Guardado',
   'settings.saveFailed': 'No se pudo guardar este ajuste. Vuelve a intentarlo.',
   'settings.network.title': 'Privacidad y modo sin conexión',
-  'settings.network.allow':
-    'Permitir el acceso a internet para descargar modelos y actualizaciones',
+  'settings.network.allow': 'Permitir el acceso a internet para descargas y actualizaciones',
   'settings.network.hint':
     'Activado de forma predeterminada, para que una instalación nueva pueda descargar un modelo ' +
     'desde el primer momento. Si está desactivado, la aplicación no se conecta a internet. Si lo ' +
@@ -1594,9 +1595,9 @@ export const es: UiCatalog<'es'> = {
   'skills.autoFire.toggle': 'Aplicar automáticamente una habilidad adecuada',
   'skills.autoFire.hint':
     'Si está activado, la aplicación puede aplicar por sí sola a una respuesta una habilidad ' +
-    'integrada que encaje claramente, para que no tengas que elegirla. Solo habilidades ' +
-    'integradas, nunca las que creaste o importaste. Siempre verás qué habilidad se usó y podrás ' +
-    'responder sin ella a esa pregunta. Desactivado de forma predeterminada.',
+    'integrada que encaje claramente, para que no tengas que elegirla. Solo habilidades integradas, ' +
+    'nunca las que creaste o importaste. Siempre verás qué habilidad se usó y podrás obtener sin ' +
+    'ella una respuesta a esa pregunta. Desactivado de forma predeterminada.',
   'skills.autoFire.on': 'Habilidades automáticas activadas',
   'skills.autoFire.off': 'Habilidades automáticas desactivadas',
   'skills.autoFire.saveFailed': 'No se pudo guardar el ajuste de habilidades automáticas.',
@@ -1784,12 +1785,12 @@ export const es: UiCatalog<'es'> = {
   'privacy.offlineOn': '● Modo sin conexión: activado',
   'privacy.offlineOff': '○ Acceso a la red activado',
   'privacy.statement.offline':
-    'El modo sin conexión está activado. HilbertRaum ejecuta el modelo de IA en tu equipo. Tus ' +
+    'El modo sin conexión está activado. HilbertRaum ejecuta el modelo de IA en este equipo. Tus ' +
     'preguntas, documentos, embeddings e historial de chat no salen de él.',
   'privacy.statement.online':
-    'HilbertRaum ejecuta el modelo de IA en tu equipo. Tus preguntas, documentos, embeddings e ' +
-    'historial de chat no salen de él. Aunque el acceso a internet esté activado, solo usan la ' +
-    'red las descargas: modelos, el motor de IA, las herramientas opcionales de los paquetes de ' +
+    'HilbertRaum ejecuta el modelo de IA en este equipo. Tus preguntas, documentos, embeddings e ' +
+    'historial de chat no salen de él. Aunque el acceso a internet esté activado, solo usan la red ' +
+    'las descargas: modelos, el motor de IA, las herramientas opcionales de los paquetes de ' +
     'conocimiento y los archivos opcionales de reconocimiento de texto (OCR).',
   'privacy.statement.noUploads':
     'Esta aplicación no envía tus datos a proveedores de IA en la nube. No hay envíos de ' +
@@ -1800,10 +1801,11 @@ export const es: UiCatalog<'es'> = {
   'privacy.networkState.disabledByPolicy':
     'Acceso a la red desactivado por la política de la unidad.',
   'privacy.networkState.offDefault':
-    'El modo sin conexión está activado (red desactivada de forma predeterminada).',
+    'El modo sin conexión está activado (el acceso a internet está desactivado en Ajustes).',
   'privacy.networkState.enabled':
-    'El acceso a internet está activado para las descargas: modelos, el motor de IA y las ' +
-    'herramientas opcionales de los paquetes de conocimiento.',
+    'El acceso a internet está activado para las descargas: modelos, el motor de IA, las ' +
+    'herramientas opcionales de los paquetes de conocimiento y los archivos opcionales de ' +
+    'reconocimiento de texto (OCR).',
   'privacy.network.noFiles': 'Ni las preguntas ni los archivos salen de este dispositivo.',
   'privacy.network.effective': 'Estado efectivo',
   'privacy.network.effectiveOffline': 'Sin conexión (no se usa internet)',
@@ -1813,7 +1815,7 @@ export const es: UiCatalog<'es'> = {
   'privacy.network.policyNo': 'No (desactivado por la política)',
   'privacy.network.yourSetting': 'Tu ajuste',
   'privacy.network.settingAllowed': 'Acceso a internet permitido',
-  'privacy.network.settingOff': 'Desactivado (predeterminado)',
+  'privacy.network.settingOff': 'Desactivado',
   'privacy.network.telemetry': 'Telemetría',
   'privacy.network.telemetryValue':
     'Nada sale de este dispositivo: no hay ningún rastreo que desactivar',
@@ -2056,8 +2058,8 @@ export const es: UiCatalog<'es'> = {
   'perf.notChecked': 'Todavía sin comprobar',
   'perf.otherMachine':
     'Este resultado se midió en otro equipo. Vuelve a hacer la comprobación para medir este.',
-  'perf.report.otherComputer': 'Otro equipo: {cpu}, {ram} GB de RAM',
-  'perf.verdict.speed': 'Este equipo ejecuta {model} a unos {tps} tok/s.',
+  'perf.report.otherComputer': 'Otro equipo: {cpu}, {ram}\u00A0GB de RAM',
+  'perf.verdict.speed': 'Este equipo ejecuta {model} a unos {tps}\u00A0tok/s.',
   'perf.verdict.noSpeed':
     '{model} es el que mejor se ajusta a la memoria de este equipo ({basis}). La velocidad se ' +
     'mide después de ejecutar un modelo.',
@@ -2086,48 +2088,50 @@ export const es: UiCatalog<'es'> = {
   'perf.tile.memory.unified': 'Memoria unificada',
   'perf.tile.memory.unifiedSub': 'Compartida por el procesador y los núcleos gráficos',
   'perf.model.title': 'Tu modelo',
-  'perf.model.line.one': '{model} · {size} GB en la unidad · contexto de {context} token',
-  'perf.model.line.many': '{model} · {size} GB en la unidad · contexto de {context} de tokens',
-  'perf.model.line.other': '{model} · {size} GB en la unidad · contexto de {context} tokens',
+  'perf.model.line.one': '{model} · {size}\u00A0GB en la unidad · contexto de {context} token',
+  'perf.model.line.many': '{model} · {size}\u00A0GB en la unidad · contexto de {context} de tokens',
+  'perf.model.line.other': '{model} · {size}\u00A0GB en la unidad · contexto de {context} tokens',
   'perf.model.none':
     'Todavía no hay ningún modelo seleccionado. Elige uno en la pantalla Modelo de IA.',
-  'perf.model.need': 'Ocupa {need} GB con este contexto.',
+  'perf.model.need': 'Ocupa {need}\u00A0GB con este contexto.',
   'perf.model.needEstimate':
-    'Necesita al menos {need} GB para los pesos, más la caché de contexto, que se mide en el ' +
+    'Necesita al menos {need}\u00A0GB para los pesos, más la caché de contexto, que se mide en el ' +
     'primer inicio.',
   'perf.model.gpu':
-    'Cabe en la memoria gráfica ({budget} GB): todas las capas ({layers}) en la GPU.',
-  'perf.model.gpuEstimate': 'Debería caber en la memoria gráfica ({budget} GB).',
+    'Cabe en la memoria gráfica ({budget}\u00A0GB): todas las capas ({layers}) en la GPU.',
+  'perf.model.gpuEstimate': 'Debería caber en la memoria gráfica ({budget}\u00A0GB).',
   'perf.model.partial':
-    'La memoria gráfica tiene {budget} GB. Capas en la GPU: {gpuLayers} de {layers}; unos ' +
-    '{spill} GB se ejecutan desde la RAM. Las respuestas son más lentas.',
+    'La memoria gráfica tiene {budget}\u00A0GB. Capas en la GPU: {gpuLayers} de {layers}; unos ' +
+    '{spill}\u00A0GB se ejecutan desde la RAM. Las respuestas son más lentas.',
   'perf.model.partialFree':
-    'Capas en la GPU: {gpuLayers} de {layers}; unos {spill} GB se ejecutan desde la RAM, porque ' +
-    'al iniciarse el modelo había {free} GB libres de los {budget} GB de la tarjeta y el motor ' +
-    'reserva un margen de seguridad de {margin} GB. Las respuestas son más lentas. Reinicia el ' +
-    'modelo cuando la tarjeta esté libre.',
+    'Capas en la GPU: {gpuLayers} de {layers}; unos {spill}\u00A0GB se ejecutan desde la RAM, porque ' +
+    'al iniciarse el modelo había {free}\u00A0GB libres de los {budget}\u00A0GB de la tarjeta y el ' +
+    'motor reserva un margen de seguridad de {margin}\u00A0GB. Las respuestas son más lentas. ' +
+    'Reinicia el modelo cuando la tarjeta esté libre.',
   'perf.model.partialMargin':
-    'Capas en la GPU: {gpuLayers} de {layers}; unos {spill} GB se ejecutan desde la RAM. La ' +
-    'tarjeta estaba libre ({free} de {budget} GB), pero el motor también reserva {working} GB ' +
-    'para búferes de trabajo y un margen de seguridad de {margin} GB, y saca capas enteras de la ' +
-    'tarjeta cuando la suma se acerca al límite. Las respuestas son más lentas.',
+    'Capas en la GPU: {gpuLayers} de {layers}; unos {spill}\u00A0GB se ejecutan desde la RAM. La ' +
+    'tarjeta estaba libre ({free} de {budget}\u00A0GB), pero el motor también reserva ' +
+    '{working}\u00A0GB para búferes de trabajo y un margen de seguridad de {margin}\u00A0GB, y saca ' +
+    'capas enteras de la tarjeta cuando la suma se acerca al límite. Las respuestas son más lentas.',
   'perf.model.partialMarginNoWorking':
-    'Capas en la GPU: {gpuLayers} de {layers}; unos {spill} GB se ejecutan desde la RAM. La ' +
-    'tarjeta estaba libre ({free} de {budget} GB), pero el motor también reserva búferes de ' +
-    'trabajo y un margen de seguridad de {margin} GB, y saca capas enteras de la tarjeta cuando ' +
+    'Capas en la GPU: {gpuLayers} de {layers}; unos {spill}\u00A0GB se ejecutan desde la RAM. La ' +
+    'tarjeta estaba libre ({free} de {budget}\u00A0GB), pero el motor también reserva búferes de ' +
+    'trabajo y un margen de seguridad de {margin}\u00A0GB, y saca capas enteras de la tarjeta cuando ' +
     'la suma se acerca al límite. Las respuestas son más lentas.',
   'perf.model.partialEstimate':
-    'La memoria gráfica tiene {budget} GB: unos {spill} GB se ejecutarán desde la RAM. Las ' +
+    'La memoria gráfica tiene {budget}\u00A0GB: unos {spill}\u00A0GB se ejecutarán desde la RAM. Las ' +
     'respuestas serán más lentas.',
-  'perf.model.cpu': 'Se ejecuta en el procesador desde la RAM ({budget} GB).',
-  'perf.model.cpuEstimate': 'Se ejecutará en el procesador desde la RAM ({budget} GB).',
+  'perf.model.cpu': 'Se ejecuta en el procesador desde la RAM ({budget}\u00A0GB).',
+  'perf.model.cpuEstimate': 'Se ejecutará en el procesador desde la RAM ({budget}\u00A0GB).',
   'perf.model.unified':
-    'Cabe en la memoria unificada ({ram} GB, con hasta {budget} GB disponibles para el modelo).',
-  'perf.model.unifiedEstimate':
-    'Debería caber en la memoria unificada ({ram} GB, con hasta {budget} GB disponibles para el ' +
+    'Cabe en la memoria unificada ({ram}\u00A0GB, con hasta {budget}\u00A0GB disponibles para el ' +
     'modelo).',
+  'perf.model.unifiedEstimate':
+    'Debería caber en la memoria unificada ({ram}\u00A0GB, con hasta {budget}\u00A0GB disponibles ' +
+    'para el modelo).',
   'perf.model.tooLarge':
-    'Es demasiado grande para este equipo ({budget} GB disponibles). Elige un modelo más pequeño.',
+    'Es demasiado grande para este equipo ({budget}\u00A0GB disponibles). Elige un modelo más ' +
+    'pequeño.',
   'perf.model.unknown':
     'Se medirá dónde se carga el modelo la primera vez que se inicie en este equipo.',
   'perf.model.unknownObserved': 'El motor no informó dónde se cargó el modelo.',
@@ -2156,7 +2160,7 @@ export const es: UiCatalog<'es'> = {
   'perf.role.reranker': 'Búsqueda en documentos (reordenación)',
   'perf.role.embeddings': 'Búsqueda en documentos (índice)',
   'perf.role.transcriber': 'Voz',
-  'perf.models.row': '{model} · {size} GB',
+  'perf.models.row': '{model} · {size}\u00A0GB',
   'perf.models.rowNoSize': '{model}',
   'perf.models.none': 'No hay ningún modelo instalado para esta función.',
   'perf.models.device.gpu': 'tarjeta gráfica',
@@ -2169,15 +2173,15 @@ export const es: UiCatalog<'es'> = {
   'perf.models.lifetime.per-use': 'solo se ejecuta mientras se usa',
   'perf.models.split': 'capas en la tarjeta: {gpuLayers} de {layers}',
   'perf.models.card':
-    'Tarjeta gráfica: chat {chat} GB + traducción {translation} GB, de {vram} GB.',
-  'perf.models.cardReranker': 'Tarjeta gráfica: reordenación {reranker} GB, de {vram} GB.',
+    'Tarjeta gráfica: chat {chat}\u00A0GB + traducción {translation}\u00A0GB, de {vram}\u00A0GB.',
+  'perf.models.cardReranker': 'Tarjeta gráfica: reordenación {reranker}\u00A0GB, de {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Ahora mismo los dos están en la tarjeta. El que se inició en segundo lugar recibió lo que ' +
     'quedaba y va más lento; detenlo y vuelve a iniciarlo cuando el otro haya liberado la ' +
     'memoria.',
-  'perf.models.ram': 'Todo cargado a la vez necesita unos {sum} GB de los {ram} GB de RAM.',
+  'perf.models.ram': 'Todo cargado a la vez necesita unos {sum}\u00A0GB de los {ram}\u00A0GB de RAM.',
   'perf.models.memory':
-    'Todo cargado a la vez necesita unos {sum} GB de los {budget} GB de memoria unificada ' +
+    'Todo cargado a la vez necesita unos {sum}\u00A0GB de los {budget}\u00A0GB de memoria unificada ' +
     'disponibles para los modelos.',
   'perf.models.ramTooMuch': 'Demasiado a la vez',
   'perf.models.ramOk': 'Cabe',
@@ -2195,7 +2199,7 @@ export const es: UiCatalog<'es'> = {
     'gráfica.',
   'perf.tile.graphics.off':
     'La aceleración por GPU está desactivada. Los modelos se ejecutan en el procesador.',
-  'perf.tile.graphics.small': 'Menos de {min} GB: los modelos se ejecutan en el procesador.',
+  'perf.tile.graphics.small': 'Menos de {min}\u00A0GB: los modelos se ejecutan en el procesador.',
   'perf.tile.graphics.integrated':
     'Integrada, con memoria compartida: los modelos se ejecutan en el procesador.',
   'perf.tile.graphics.unitShared': 'GB compartidos',
@@ -2206,11 +2210,11 @@ export const es: UiCatalog<'es'> = {
   'perf.rating.notRecorded': 'Sin registrar',
   'perf.rating.none': 'Ninguna',
   'perf.rating.unknown': 'Desconocida',
-  'perf.others.subGpu': '{cpu}, {ram} GB de RAM, {vram} GB de VRAM · {when}',
+  'perf.others.subGpu': '{cpu}, {ram}\u00A0GB de RAM, {vram}\u00A0GB de VRAM · {when}',
   'perf.tile.drive': 'Unidad',
   'perf.tile.drive.unit': 'MB/s de lectura',
-  'perf.tile.drive.load': 'Medida al cargar un modelo el {when}; lectura: {gb} GB',
-  'perf.tile.drive.hash': 'Medida en una comprobación de archivos el {when}; lectura: {gb} GB',
+  'perf.tile.drive.load': 'Medida al cargar un modelo el {when}; lectura: {gb}\u00A0GB',
+  'perf.tile.drive.hash': 'Medida en una comprobación de archivos el {when}; lectura: {gb}\u00A0GB',
   'perf.tile.drive.none': 'Todavía sin medir',
   'perf.tile.drive.noneHint':
     'Se mide en la primera carga de un modelo o en la primera comprobación de archivos',
@@ -2253,13 +2257,13 @@ export const es: UiCatalog<'es'> = {
     'valores de la unidad de arriba.',
   'perf.observed.none':
     'En esta sesión todavía no se observó nada. Hazle una pregunta al modelo o inícialo.',
-  'perf.observed.answer': 'Última respuesta: {tps} tok/s, primer token a los {ttft} s',
+  'perf.observed.answer': 'Última respuesta: {tps}\u00A0tok/s, primer token a los {ttft}\u00A0s',
   'perf.observed.answerSub': '{model}, {when}, tokens: {tokens}',
-  'perf.observed.load': 'Carga del modelo: {seconds} s',
-  'perf.observed.loadSub': '{model}; lectura desde esta unidad: {gb} GB a {mbps} MB/s',
-  'perf.observed.check': 'Comprobación de archivos: {seconds} s',
+  'perf.observed.load': 'Carga del modelo: {seconds}\u00A0s',
+  'perf.observed.loadSub': '{model}; lectura desde esta unidad: {gb}\u00A0GB a {mbps}\u00A0MB/s',
+  'perf.observed.check': 'Comprobación de archivos: {seconds}\u00A0s',
   'perf.observed.checkSub':
-    '{model}: comprobación completa de archivos el {when}; lectura: {gb} GB',
+    '{model}: comprobación completa de archivos el {when}; lectura: {gb}\u00A0GB',
   'perf.observed.oncePerModel': 'Una vez por modelo',
   'perf.others.title': 'Otros equipos en los que se usó esta unidad',
   'perf.others.hint':
@@ -2268,11 +2272,11 @@ export const es: UiCatalog<'es'> = {
   'perf.others.none':
     'Todavía no hay ninguno. Si conectas la unidad a otro equipo, ese equipo se comprobará ' +
     'automáticamente.',
-  'perf.others.row': '{tps} tok/s con {model}',
+  'perf.others.row': '{tps}\u00A0tok/s con {model}',
   'perf.others.rowNoSpeed': 'Recomendado: {model}; velocidad sin medir',
-  'perf.others.sub': '{cpu}, {ram} GB de RAM · {when}',
-  'perf.others.load': 'carga del modelo: {seconds} s',
-  'perf.others.check': 'comprobación de archivos: {seconds} s',
+  'perf.others.sub': '{cpu}, {ram}\u00A0GB de RAM · {when}',
+  'perf.others.load': 'carga del modelo: {seconds}\u00A0s',
+  'perf.others.check': 'comprobación de archivos: {seconds}\u00A0s',
   'perf.footer':
     'El informe técnico completo, con todos los valores sin procesar, está en la pestaña ' +
     'Diagnóstico de Ajustes.',
@@ -2299,8 +2303,8 @@ export const es: UiCatalog<'es'> = {
   'diag.bench.notDetected': 'no detectada',
   'diag.bench.effectiveRead': 'Velocidad de lectura medida',
   'diag.bench.effectiveReadNone': 'todavía sin medir: se mide al iniciar un modelo',
-  'diag.bench.effectiveReadLoad': 'al cargar un modelo el {when}; lectura: {gb} GB',
-  'diag.bench.effectiveReadHash': 'en una comprobación de archivos el {when}; lectura: {gb} GB',
+  'diag.bench.effectiveReadLoad': 'al cargar un modelo el {when}; lectura: {gb}\u00A0GB',
+  'diag.bench.effectiveReadHash': 'en una comprobación de archivos el {when}; lectura: {gb}\u00A0GB',
   'diag.bench.driveWrite': 'Escritura en la unidad',
   'diag.bench.notMeasured': 'sin medir',
   'diag.bench.tokens': 'Velocidad de generación (tok/s)',
@@ -2361,6 +2365,8 @@ export const es: UiCatalog<'es'> = {
   'common.cancel': 'Cancelar',
   'common.remove': 'Quitar',
   'common.apply': 'Aplicar',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}\u00A0%',
   'indicator.offline': 'Local · Sin conexión',
   'indicator.online': 'Local · Descargas permitidas',
   'indicator.offlineDetail': 'Todo se queda en esta unidad. No se usa ninguna conexión a internet.',
@@ -2380,7 +2386,7 @@ export const es: UiCatalog<'es'> = {
   'password.strength.okay': 'Aceptable',
   'password.strength.strong': 'Fuerte',
   'password.strength.veryStrong': 'Muy fuerte',
-  'password.strength.minHint': 'Usa al menos 8 caracteres.',
+  'password.strength.minHint': 'Usa al menos {min} caracteres.',
   'password.strength.longerHint':
     'Cuanto más larga, más fuerte: funcionan bien 12 caracteres o más, o unas cuantas palabras ' +
     'sin relación entre sí.',
@@ -2523,15 +2529,15 @@ export const es: UiCatalog<'es'> = {
     'velocidad de la unidad: para obtener una medición completa, vuelve a hacer la prueba de ' +
     'rendimiento cuando nada más esté usando el modelo.',
   'main.benchmark.warnSlowRead':
-    'La lectura desde esta unidad fue de unos {mbps} MB/s. Al iniciar un modelo se lee todo su ' +
+    'La lectura desde esta unidad fue de unos {mbps}\u00A0MB/s. Al iniciar un modelo se lee todo su ' +
     'archivo a esa velocidad, así que en esta unidad los modelos tardarán en iniciarse.',
   'main.benchmark.warnVeryLowTokens':
     'La generación de texto fue muy lenta con el modelo cargado ({model}), así que el perfil ' +
     'asignado bajó un nivel. Si ese modelo es más grande que el recomendado, inicia el modelo ' +
     'recomendado y vuelve a hacer la prueba de rendimiento.',
   'main.benchmark.warnRecommendationLowered':
-    'La generación de texto alcanzó unos {tps} tok/s con el modelo cargado ({model}), así que el ' +
-    'modelo recomendado bajó un nivel de tamaño para que las respuestas sigan siendo rápidas en ' +
+    'La generación de texto alcanzó unos {tps}\u00A0tok/s con el modelo cargado ({model}), así que ' +
+    'el modelo recomendado bajó un nivel de tamaño para que las respuestas sigan siendo rápidas en ' +
     'este equipo.',
   'main.benchmark.locked':
     'El espacio de trabajo está bloqueado. Desbloquéalo para hacer la prueba de rendimiento.',
@@ -2728,7 +2734,7 @@ export const es: UiCatalog<'es'> = {
     'Las descargas están desactivadas por la política de esta unidad.',
   'main.download.networkOff':
     'El acceso a internet está desactivado. Primero activa «Permitir el acceso a internet para ' +
-    'descargar modelos y actualizaciones» en Ajustes.',
+    'descargas y actualizaciones» en Ajustes.',
   'main.download.alreadyRunning':
     'Ya hay otra descarga en curso. Los modelos se descargan de uno en uno.',
   'main.download.stoppedNetworkOff':
@@ -3056,15 +3062,15 @@ export const es: UiCatalog<'es'> = {
     'actualizarlo.',
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.library': 'Biblioteca',
-  'chat.scope.projectNamed': 'Proyecto: {name}',
+  'chat.scope.projectNamed': 'Proyecto «{name}»',
   'chat.scope.projectCount.one': '{count} proyecto',
   'chat.scope.projectCount.many': '{count} de proyectos',
   'chat.scope.projectCount.other': '{count} proyectos',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Paquetes de conocimiento',
   'chat.scope.packUnavailable': 'no disponible',
-  'chat.scope.packNamed': 'Paquete: {name}',
-  'chat.scope.packNamedState': 'Paquete: {name} ({state})',
+  'chat.scope.packNamed': 'Paquete «{name}»',
+  'chat.scope.packNamedState': 'Paquete «{name}» ({state})',
   'chat.scope.packCount.one': '{count} paquete de conocimiento',
   'chat.scope.packCount.many': '{count} de paquetes de conocimiento',
   'chat.scope.packCount.other': '{count} paquetes de conocimiento',
@@ -3643,9 +3649,9 @@ export const es: UiCatalog<'es'> = {
   'review.item.selectionTag': 'Texto seleccionado en la revisión',
   'review.selection.remove': 'Quitar selección',
   'review.decision.groupAria': 'Decisión',
-  'review.decision.supported': 'Revisado: respaldado',
-  'review.decision.partly_supported': 'Revisado: respaldado en parte',
-  'review.decision.not_supported': 'Revisado: no respaldado',
+  'review.decision.supported': 'Revisado (respaldado)',
+  'review.decision.partly_supported': 'Revisado (respaldado en parte)',
+  'review.decision.not_supported': 'Revisado (no respaldado)',
   'review.decision.follow_up': 'Requiere seguimiento',
   'review.decision.not_reviewed': 'Sin revisar',
   'review.decision.not_applicable': 'No aplicable',

@@ -3,8 +3,15 @@ import { randomUUID } from 'node:crypto'
 import type { Db } from '../../src/main/services/db'
 import {
   BANK_STATEMENT_INSTALL_ID,
-  bankStatementAnalysisHandler
+  bankStatementAnalysisHandler,
+  buildBankAnswer
 } from '../../src/main/services/skills/analysis/bank-statement'
+import {
+  reconcileBalances,
+  summarizeCashflow,
+  type CompletenessStatus,
+  type TransactionInput
+} from '../../src/main/services/skills/tools/bank-statement'
 import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams, type UiLanguage } from '../../src/shared/i18n'
 import type { RetrievalScope } from '../../src/shared/types'
 import { BANK_FIXTURES } from '../fixtures/real-layouts/corpus'
@@ -183,6 +190,60 @@ describe('bank-statement analysis handler — honest completeness gate (U1, §2.
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
     // The body presents the verified total (complete), and it no longer contradicts the headline.
     expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
+  })
+
+  // #806: each count line the answer builder writes reads right at 1 and at 2, in English and German
+  // ("I read 1 transactions" and "1 line(s)" before). The count and the dropped figure differ in every
+  // row, so a swapped placeholder shows. The unverified caveat is matched by its count clause.
+  type BankLine = 'count' | 'countPartial' | 'countContradicted' | 'unverifiedCaveat'
+  const BANK_LINES: Record<'en' | 'de', Record<BankLine, (n: number, d: number) => string>> = {
+    en: {
+      count: (n: number) => `I read the whole statement. Transactions: **${n}**.`,
+      countPartial: (n: number, d: number) =>
+        `Transactions read: **${n}**. Lines with a figure I couldn’t parse into a transaction: **${d}** — so ` +
+        'this may not be every transaction. Check those lines against the document.',
+      countContradicted: (n: number) =>
+        `Transactions read: **${n}**. This statement’s printed balances don’t add up against them — so I ` +
+        'can’t confirm these are all of them.',
+      unverifiedCaveat: (n: number) => `across the whole document (total: **${n}**). The statement`
+    },
+    de: {
+      count: (n: number) => `Ich habe den ganzen Auszug gelesen. Buchungen: **${n}**.`,
+      countPartial: (n: number, d: number) =>
+        `Gelesene Buchungen: **${n}**. Zeilen mit einer Zahl, die ich nicht als Buchung erfassen konnte: ` +
+        `**${d}** — es sind also vielleicht nicht alle Buchungen. Prüf diese Zeilen im Dokument.`,
+      countContradicted: (n: number) =>
+        `Gelesene Buchungen: **${n}**. Die aufgedruckten Salden dieses Auszugs gehen damit nicht auf — ` +
+        'ich kann daher nicht bestätigen, dass das alle sind.',
+      unverifiedCaveat: (n: number) => `im ganzen Dokument gelesen habe (insgesamt: **${n}**). Der Auszug`
+    }
+  }
+  const BANK_CASES: Array<[BankLine, CompletenessStatus, boolean]> = [
+    ['count', 'complete', false],
+    ['countPartial', 'unverified', true],
+    ['countContradicted', 'contradicted', false],
+    ['unverifiedCaveat', 'unverified', false]
+  ]
+  it.each(
+    (['en', 'de'] as const).flatMap((code) =>
+      BANK_CASES.flatMap(([line, status, dropped]) => [1, 2].map((n) => [code, line, n, status, dropped] as const))
+    )
+  )('%s: the %s line with %i read states the count label-first (#806)', (code, line, n, status, dropped) => {
+    const rows: TransactionInput[] = [
+      { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR' },
+      { date: '2026-01-03', description: 'Salary', amount: 2500, currency: 'EUR' }
+    ].slice(0, n)
+    const d = 3 - n // 2 dropped beside 1 read, 1 beside 2
+    const answer = buildBankAnswer((k, p) => t(code, k, p), {
+      rows,
+      summary: summarizeCashflow(rows),
+      reconcile: reconcileBalances(rows),
+      categories: null,
+      status,
+      droppedRowCount: dropped ? d : 0
+    })
+    if (line === 'unverifiedCaveat') expect(answer).toContain(BANK_LINES[code][line](n, d))
+    else expect(answer.split('\n')[0]).toBe(BANK_LINES[code][line](n, d))
   })
 })
 

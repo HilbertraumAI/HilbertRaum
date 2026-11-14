@@ -4,13 +4,21 @@ import { render, screen, cleanup, waitFor, within, act, fireEvent } from '@testi
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { RAIL_COLLAPSED_KEY, LOCATIONS_MORE_KEY } from '../../src/renderer/screens/documents/types'
-import { en, t as translate } from '../../src/shared/i18n'
+import {
+  en,
+  t as translate,
+  UI_LANGUAGE_CODES,
+  type MessageKey,
+  type MessageParams,
+  type UiLanguage
+} from '../../src/shared/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { startTask, clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { AppStatus, Collection, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { appStatus as appStatusFixture } from '../helpers/status'
+import { renderInLanguage } from '../helpers/render-language'
 
 // PERF-5: count DocRow renders test-side — production's memo object, inner component wrapped (no src seam).
 const rowRenders = vi.hoisted(() => new Map<string, number>())
@@ -288,7 +296,7 @@ describe('DocumentsScreen', () => {
     expect(deleteDocument).not.toHaveBeenCalled()
 
     const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveTextContent(/Delete "contract.pdf"\?/)
+    expect(dialog).toHaveTextContent(translate('en', 'docs.deleteConfirm.title', { title: 'contract.pdf' }))
     await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d1'))
@@ -925,6 +933,92 @@ describe('DocumentsScreen', () => {
   })
 })
 
+// #807: a failed row whose stored message the display map does not know (a parser's or the OS's own
+// words, stored as-is) says what happened in the interface language: the translated lead, ABOVE the
+// raw text, which stays as the detail line. The app's own messages read as before, with no lead.
+describe('DocumentsScreen — the lead above a failure message the app does not know (#807)', () => {
+  afterEach(() => window.localStorage.clear())
+
+  const RAW = 'Invalid PDF structure.'
+
+  /** The failed row's banner text in `lang` (its text content is the lines in DOM order). */
+  async function failedBanner(lang: UiLanguage, over: Partial<DocumentInfo>): Promise<HTMLElement> {
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd9', title: 'broken.pdf', status: 'failed', chunkCount: 0, ...over })
+      ]),
+      listCollections: vi.fn(async () => []),
+      getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: true })),
+      getReindexAllJob: vi.fn(async () => null),
+      getActiveImportJob: vi.fn(async () => null)
+    })
+    renderInLanguage(<DocumentsScreen />, lang)
+    const row = (await screen.findByText('broken.pdf')).closest('.doc-row') as HTMLElement
+    return row.querySelector('.banner-text') as HTMLElement
+  }
+
+  it.each(UI_LANGUAGE_CODES)('%s: an unknown message reads under the translated lead, the raw text kept', async (lang) => {
+    const banner = await failedBanner(lang, { errorMessage: RAW })
+    const lead = translate(lang, 'docs.failed.lead')
+    // A block of its own, so it sits above the raw text rather than running into it.
+    expect(within(banner).getByText(lead).tagName).toBe('P')
+    expect(banner.textContent).toBe(`${lead}${RAW}`)
+  })
+
+  // One message of each display-map branch a document row can carry: the exact map and the five
+  // interpolated families (the very same classifier serves the benchmark warnings).
+  const tDe = (key: MessageKey, params?: MessageParams): string => translate('de', key, params)
+  const tEn = (key: MessageKey, params?: MessageParams): string => translate('en', key, params)
+  it.each([
+    { family: 'a persisted constant', raw: en['main.ingest.parseTimeout'], shown: tDe('main.ingest.parseTimeout') },
+    {
+      family: 'unsupported type',
+      raw: tEn('main.ingest.unsupportedType', { ext: '.xyz' }),
+      shown: tDe('main.ingest.unsupportedType', { ext: '.xyz' })
+    },
+    {
+      family: 'unsupported type, legacy wording',
+      raw: 'Unsupported file type: .xyz',
+      shown: tDe('main.ingest.unsupportedType', { ext: '.xyz' })
+    },
+    {
+      family: 'very low tokens',
+      raw: tEn('main.benchmark.warnVeryLowTokens', { model: 'qwen3-4b' }),
+      shown: tDe('main.benchmark.warnVeryLowTokens', { model: 'qwen3-4b' })
+    },
+    {
+      family: 'slow read',
+      raw: tEn('main.benchmark.warnSlowRead', { mbps: '70' }),
+      shown: tDe('main.benchmark.warnSlowRead', { mbps: '70' })
+    },
+    {
+      family: 'recommendation lowered',
+      raw: tEn('main.benchmark.warnRecommendationLowered', { tps: '2.2', model: 'qwen3-4b' }),
+      shown: tDe('main.benchmark.warnRecommendationLowered', { tps: '2.2', model: 'qwen3-4b' })
+    },
+    {
+      family: 'engine library missing',
+      raw: tEn('main.ingest.engineLibraryMissing', { library: 'libgomp.so.1' }),
+      shown: tDe('main.ingest.engineLibraryMissing', { library: 'libgomp.so.1' })
+    }
+  ])('de: $family reads as before, with no lead', async ({ raw, shown }) => {
+    const banner = await failedBanner('de', { errorMessage: raw })
+    expect(shown).not.toBe(raw) // genuinely translated, so the row proves the map read it
+    expect(banner.textContent).toBe(shown)
+  })
+
+  it('de: a detected scan keeps its warning and OCR offer, with no lead', async () => {
+    const banner = await failedBanner('de', {
+      errorMessage: en['main.ingest.pdfScanDetected'],
+      scanDetected: true
+    })
+    // The offer joins once the OCR verdict lands.
+    await waitFor(() =>
+      expect(banner.textContent).toBe(`${tDe('main.ingest.pdfScanDetected')} ${tDe('docs.scan.ocrOffer')}`)
+    )
+  })
+})
+
 // ---- §11.6 refinement: action overflow, MIME→label, selection toolbar, status badges ----
 describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () => {
   it('the "⋯" overflow exposes Summarize/Translate/Re-index/Build deep index/Add to project + a destructive Delete that opens ConfirmDialog', async () => {
@@ -949,7 +1043,9 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
     const del = screen.getByRole('menuitem', { name: /delete/i })
     expect(del).toBeInTheDocument()
     await user.click(del)
-    expect(await screen.findByRole('dialog')).toHaveTextContent(/Delete "contract.pdf"\?/)
+    expect(await screen.findByRole('dialog')).toHaveTextContent(
+      translate('en', 'docs.deleteConfirm.title', { title: 'contract.pdf' })
+    )
   })
 
   it('the selection toolbar appears only on selection and its bulk Delete confirms then deletes', async () => {

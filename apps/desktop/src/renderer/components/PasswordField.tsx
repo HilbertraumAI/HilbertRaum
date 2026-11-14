@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { Button } from './Button'
 import { englishTranslator, type Translator } from './translator'
-import type { MessageKey } from '@shared/i18n'
+import type { MessageKey, MessageParams } from '@shared/i18n'
 import { MIN_PASSWORD_LENGTH } from '@shared/types'
 
 // Password input + advisory strength meter, shared by the first-run flow
@@ -17,6 +17,9 @@ export interface PasswordStrength {
   labelKey: MessageKey | null
   /** Advisory hint as a MessageKey, or null when there is nothing to suggest. */
   hintKey: MessageKey | null
+  /** The hint's params: the too-short hint names the floor itself (#805), so the copy follows
+   *  MIN_PASSWORD_LENGTH instead of repeating its value. */
+  hintParams?: MessageParams
 }
 
 /**
@@ -28,7 +31,12 @@ export interface PasswordStrength {
 export function passwordStrength(pw: string): PasswordStrength {
   if (pw.length === 0) return { score: 0, labelKey: null, hintKey: null }
   if (pw.length < MIN_PASSWORD_LENGTH) {
-    return { score: 1, labelKey: 'password.strength.tooShort', hintKey: 'password.strength.minHint' }
+    return {
+      score: 1,
+      labelKey: 'password.strength.tooShort',
+      hintKey: 'password.strength.minHint',
+      hintParams: { min: MIN_PASSWORD_LENGTH }
+    }
   }
   let score = 1
   if (pw.length >= 12) score += 1

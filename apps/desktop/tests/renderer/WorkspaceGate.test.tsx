@@ -11,6 +11,7 @@ import {
   type ModelInfo,
   type ModelVerifyProgress
 } from '../../src/shared/types'
+import { catalogOf } from '../helpers/i18n-catalogs'
 import { modelInfo } from '../helpers/model-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
@@ -74,13 +75,17 @@ describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', (
     expect(label('a'.repeat(MIN_PASSWORD_LENGTH))).not.toBe('Too short')
   })
 
-  // The hint under a too-short password writes the floor as a figure ("Use at least 8
-  // characters."), in every catalog: a moved floor, or a translation that drops the figure, would
-  // otherwise leave the hint naming a length main doesn't enforce.
+  // The hint under a too-short password names the floor main enforces, in every catalog (#805 S4):
+  // the catalog value carries `{min}` and no figure of its own, and passwordStrength hands it
+  // MIN_PASSWORD_LENGTH. A copied figure would leave the hint naming a length main doesn't
+  // enforce the day the floor moves; a dropped param would render "{min}".
   it.each(UI_LANGUAGE_CODES)('%s: the too-short hint names the shared floor (MIN_PASSWORD_LENGTH)', (code) => {
-    const hintKey = passwordStrength('a'.repeat(MIN_PASSWORD_LENGTH - 1)).hintKey
+    const { hintKey, hintParams } = passwordStrength('a'.repeat(MIN_PASSWORD_LENGTH - 1))
     expect(hintKey).not.toBeNull()
-    expect(t(code, hintKey!)).toMatch(new RegExp(`(^|\\D)${MIN_PASSWORD_LENGTH}(\\D|$)`))
+    const value = catalogOf(code)[hintKey!]
+    expect(value).toContain('{min}')
+    expect(value).not.toMatch(/\d/)
+    expect(t(code, hintKey!, hintParams)).toMatch(new RegExp(`(^|\\D)${MIN_PASSWORD_LENGTH}(\\D|$)`))
   })
 })
 

@@ -117,7 +117,7 @@ describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Se
     const btn = await screen.findByRole('button', { name: 'Download' })
     expect(btn).toBeDisabled()
     expect(
-      screen.getByText(/turn on “Allow internet access for model downloads and updates” in Settings/)
+      screen.getByText(t('en', 'models.downloads.enableInSettings'))
     ).toBeInTheDocument()
     expect(screen.queryByText(/drive’s policy/)).not.toBeInTheDocument()
   })
@@ -565,6 +565,36 @@ describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)'
     render(<ModelsScreen />)
     await screen.findByText('Qwen3 4B Instruct')
     expect(screen.getByRole('button', { name: t('en', 'models.use') })).toBeDisabled()
+  })
+
+  // #804: the RAM figures take the UI language's decimal separator (they were passed raw, so a 5.5 GB
+  // minimum read "5.5" in every language, and so did the machine's RAM in the badge's hint), and the
+  // card's code-built sizes put U+00A0 before "GB" (`fmtGbNum` and the manifest-size fallback of
+  // `fmtGb`: the Ukrainian walk saw «23 GB» break there). Compared by code point: the default
+  // normalizer folds U+00A0 into a plain space.
+  it('in Ukrainian, fractional RAM figures read 5,5 and 3,5 in the badge and its hint, and the card’s sizes put U+00A0 before GB', async () => {
+    const NBSP = String.fromCharCode(0xa0)
+    try {
+      stub({
+        models: [model({ state: 'installed', insufficientRam: true, recommendedMinRamGb: 5.5 })],
+        appStatus: { machineRamGb: 3.5 }
+      })
+      renderInLanguage(<ModelsScreen />, 'uk')
+      await screen.findByText('Qwen3 4B Instruct')
+      const badge = t('uk', 'models.badge.ramNeeded', { min: '5,5' })
+      expect(badge).toContain(`5,5${NBSP}GB`) // the catalog's own U+00A0, so the row below compares it
+      expect(screen.getByText(badge, { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) })).toHaveAttribute(
+        'title',
+        t('uk', 'models.ram.needs', { min: '5,5' }) + t('uk', 'models.ram.machine', { ram: '3,5' }) + t('uk', 'models.ram.advice')
+      )
+      expect(document.querySelector('.model-sub')?.textContent).toContain(
+        t('uk', 'models.library.memory', { size: `5,5${NBSP}GB` })
+      )
+      // The manifest's 2.7 GB (no byte size on this line), the fallback of `fmtGb`.
+      expect(document.querySelector('.model-sub')?.textContent).toContain(t('uk', 'models.usesSpace', { size: `2,7${NBSP}GB` }))
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
   })
 
   it('shows the disabled Starting… spinner for the in-flight model instead of the action', async () => {
@@ -1397,7 +1427,7 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     })
     const user = userEvent.setup()
     render(<ModelsScreen />)
-    expect(await screen.findByText(/Uses 14\.4 GB of drive space\./)).toBeInTheDocument()
+    expect(await screen.findByText(/Uses 14\.4 GB of drive space/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Download' }))
     expect(within(screen.getByRole('dialog')).getByText('14.4 GB')).toBeInTheDocument()
   })
@@ -1593,7 +1623,7 @@ describe('ModelsScreen — the licence link names its host and is https-only (#2
         }
       })
     )
-    const link = dialog.getByRole('link', { name: /read the license/ })
+    const link = dialog.getByRole('link', { name: t('en', 'models.confirm.readLicense') })
     expect(link).toHaveAttribute('href', 'https://licenses.example.test/qwen/LICENSE')
     expect(dialog.getByText(/licenses\.example\.test/)).toBeInTheDocument()
   })
@@ -1609,7 +1639,7 @@ describe('ModelsScreen — the licence link names its host and is https-only (#2
         }
       })
     )
-    expect(dialog.queryByRole('link', { name: /read the license/ })).not.toBeInTheDocument()
+    expect(dialog.queryByRole('link', { name: t('en', 'models.confirm.readLicense') })).not.toBeInTheDocument()
     expect(dialog.getByText(/apache-2\.0/)).toBeInTheDocument() // the licence name still shows
   })
 })
@@ -2102,7 +2132,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     const dialog = within(screen.getByRole('dialog'))
     expect(screen.getByRole('dialog')).toHaveTextContent(second.displayName)
     expect(dialog.getByText('https://example.test/retry-q6.gguf')).toBeInTheDocument()
-    expect(dialog.getByRole('link', { name: /read the license/ })).toHaveAttribute(
+    expect(dialog.getByRole('link', { name: t('en', 'models.confirm.readLicense') })).toHaveAttribute(
       'href',
       'https://licenses.example.test/q6/LICENSE'
     )

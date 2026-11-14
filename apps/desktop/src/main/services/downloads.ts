@@ -6,7 +6,7 @@ import { mainUiLanguage, tMain } from './i18n'
 import type { ModelManifest } from '../../shared/manifest'
 import type { DownloadJob } from '../../shared/types'
 import { isUnresolvedDownloadResult } from '../../shared/downloads'
-import { fmt1 } from '../../shared/format'
+import { fmt1, unitJoin } from '../../shared/format'
 import { freeBytes } from './disk-space'
 import {
   planModelDownloads,
@@ -818,10 +818,11 @@ async function assertRoomFor(tasks: ModelDownloadTask[]): Promise<void> {
   // rather than "0.1 GB" — decimal, one decimal, like every disk size (`fmtDiskSize`). And they must
   // never read alike: free space rounds down to the tenth; the size rounds as shown elsewhere,
   // unless that prints the same tenth as the free space, and then up — which always differs, since
-  // needed > free.
+  // needed > free. The figure and its unit are joined the way the UI language's catalog joins them
+  // (`unitJoin`, #804), so the refusal reads like the download dialog beside it.
   const [unit, label]: [number, string] =
     needed >= 1e9 ? [1e9, 'GB'] : needed >= 1e6 ? [1e6, 'MB'] : [1e3, 'KB']
-  const shown = (bytes: number): string => `${fmt1(bytes / unit, lang)} ${label}`
+  const shown = (bytes: number): string => `${fmt1(bytes / unit, lang)}${unitJoin(lang)}${label}`
   const tenth = unit / 10
   const freeShown = shown(Math.floor(free / tenth) * tenth)
   let neededShown = shown(needed)

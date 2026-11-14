@@ -117,7 +117,7 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
     expect(within(dialog).getByText('18 MB')).toBeInTheDocument()
     const licenseDt = within(dialog).getByText('License')
     expect(licenseDt.nextElementSibling?.textContent).toContain('GPL-3.0-or-later')
-    const licenseLink = within(dialog).getByRole('link', { name: 'read the license' })
+    const licenseLink = within(dialog).getByRole('link', { name: tr('en', 'models.confirm.readLicense') })
     expect(licenseLink).toHaveAttribute('href', 'https://www.gnu.org/licenses/gpl-3.0.html')
     expect(within(dialog).getByText('www.gnu.org')).toBeInTheDocument()
     const fromDt = within(dialog).getByText('From')
@@ -131,7 +131,7 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
     expect(downloadEngine).toHaveBeenCalledWith({ families: ['kiwix_tools'] })
 
     expect(
-      await screen.findByText('Installing the knowledge-pack tools… 50 %', undefined, { timeout: hangBudgetMs(5_000) })
+      await screen.findByText(tr('en', 'packs.tools.progress', { pct: 50 }), undefined, { timeout: hangBudgetMs(5_000) })
     ).toBeInTheDocument()
     toolsInstalled = true
     expect(

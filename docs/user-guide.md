@@ -1,6 +1,6 @@
 # HilbertRaum — User Guide
 
-HilbertRaum is a private AI workspace that runs **entirely on your laptop**, from
+HilbertRaum is a private AI workspace that runs **entirely on your computer**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
 **no cloud, no account, and no internet required**.
 
@@ -204,7 +204,7 @@ models, the AI engine, the optional knowledge-pack tools and the optional text-r
 files — each one only after you confirm it, each one verified before use. None of it ever
 happens by itself:
 
-1. Open **Settings** and make sure **Allow internet access for model downloads and updates**
+1. Open **Settings** and make sure **Allow internet access for downloads and updates**
    is on (it is **on by default**, including on prepared commercial drives, unless this drive's
    builder deliberately disabled downloads in the drive's policy — rare; the app is fully usable
    without it either way). The same setting also gates engine and knowledge-pack-tool downloads.
@@ -509,8 +509,8 @@ your files.
 4. Each answer carries **▸ Sources (N)** — click it to see the cited files, with
    page/section and the exact passage each citation came from. If the documents don't
    contain the answer, the app says so rather than guessing.
-   A short honesty line under the answer says how much it drew on — e.g. *"Based on 3 of
-   12 sections"* — so you can tell an answer rested on a few passages, not the whole
+   A short honesty line under the answer says how much it drew on — e.g. *"Based on sections:
+   3 of 12"* — so you can tell an answer rested on a few passages, not the whole
    document. When the chat answers from **one** document that is short enough for the AI model
    to read at once — about 3 pages with the smallest models, about 7 with most, more if you
    raise the context size — the app gives the model the whole document instead, and the line

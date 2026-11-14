@@ -266,7 +266,7 @@ describe('validateManifest — optional download block (Phase 12)', () => {
 
   // #236: `license_url` renders as a link in the download dialog, so it takes the same
   // https-only rule as `download.url` — a hostile manifest cannot plant an http: or
-  // javascript: destination behind the fixed "read the license" label.
+  // javascript: destination behind the fixed "Read the license" label.
   it('rejects a non-https license_url (http:, javascript:, a bare host) — #236', () => {
     for (const bad of ['http://example.test/LICENSE', 'javascript:alert(1)', 'example.test/LICENSE', '']) {
       const res = validateManifest(rawManifest({ download: downloadBlock({ license_url: bad }) }))

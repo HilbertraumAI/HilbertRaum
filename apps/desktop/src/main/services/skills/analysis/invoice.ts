@@ -535,6 +535,8 @@ export function buildInvoiceAnswer(
         totals.taxRatePercent !== undefined
           ? tr('skills.invoiceAnalysis.taxWithRate', {
               value: amountText(totals.taxTotal, currency),
+              // The plain figure, as the amounts beside it print (code review 2026-11-14, #804): a
+              // 5.5 % rate reads "5.5" in every language, so one line never mixes a dot and a comma.
               rate: String(totals.taxRatePercent)
             })
           : tr('skills.invoiceAnalysis.tax', { value: amountText(totals.taxTotal, currency) })

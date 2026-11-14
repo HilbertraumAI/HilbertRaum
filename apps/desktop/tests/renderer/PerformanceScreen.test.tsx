@@ -13,7 +13,7 @@ import {
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { t, tCount } from '../../src/shared/i18n'
+import { t, tCount, UI_LANGUAGE_CODES, type UiLanguage } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/shared/format'
 import { effectiveReadSample } from '../helpers/benchmark-records'
 import { catalogOf } from '../helpers/i18n-catalogs'
@@ -1825,6 +1825,53 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
     )
     expect(contextAt).toBe(liveAt + 1)
     expect(contextAt).toBeLessThan(savedAt)
+  })
+})
+
+// #812 (open-issues wave owner call G-7): the maintainers read English and German. In any other
+// interface language Copy report pastes the report, one divider line naming English, then the
+// same report built in English. The English half is compared with what an English interface
+// copies from the same snapshot, never with typed text.
+describe('PerformanceScreen: an English copy of the report for support (#812)', () => {
+  const DIVIDER = '--- English ---'
+  const OTHER_LANGUAGES = UI_LANGUAGE_CODES.filter((code) => code !== 'en' && code !== 'de')
+  /** Lines the interface-language report must carry: the system values (CPU, model) stay as they are,
+   *  and a size keeps a plain space before its unit in every language's copy (#804). */
+  const localLinesOf = (lang: UiLanguage): string[] => [
+    `${t(lang, 'perf.tile.memory')}: ${fmt1(15.7, lang)} ${t(lang, 'perf.tile.memory.unit')}`,
+    `${t(lang, 'diag.bench.cpu')}: Intel Core i7-1260P${tCount(lang, 'diag.bench.cores', 12)}`,
+    `${t(lang, 'models.context.title')}: ${tCount(lang, 'models.tech.contextValue', 8192, { count: (8192).toLocaleString(lang) })}`,
+    `${t(lang, 'perf.recommendation.atCheckTime')}: ${MODELS[0].displayName}`
+  ]
+
+  /** Copy report with the interface in `lang`; unmounts after. */
+  async function copiedIn(lang: UiLanguage): Promise<string> {
+    install(snapshot())
+    renderPerformanceScreen({ lang })
+    const text = await copiedReport(t(lang, 'perf.copy'))
+    cleanup()
+    window.localStorage.clear()
+    return text
+  }
+
+  it.each(OTHER_LANGUAGES)('in %s: the report, a line naming English, then the English report', async (lang) => {
+    const english = await copiedIn('en')
+    const [local, englishHalf, ...rest] = (await copiedIn(lang)).split(`\n${DIVIDER}\n`)
+    expect(rest).toEqual([])
+    expect(englishHalf).toBe(english)
+    // The first half is the interface-language report: its own heading and wording, as many lines
+    // as the English one.
+    const lines = local.split('\n')
+    expect(lines[0]).toBe(t(lang, 'perf.card.title'))
+    expect(lines).toHaveLength(english.split('\n').length)
+    for (const line of localLinesOf(lang)) expect(lines).toContain(line)
+  })
+
+  it.each(['en', 'de'] as const)('in %s: the report alone, as before', async (lang) => {
+    const text = await copiedIn(lang)
+    expect(text).not.toMatch(/^--- .+ ---$/m)
+    expect(text.split('\n')[0]).toBe(t(lang, 'perf.card.title'))
+    for (const line of localLinesOf(lang)) expect(text.split('\n')).toContain(line)
   })
 })
 

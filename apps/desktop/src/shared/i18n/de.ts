@@ -169,8 +169,8 @@ export const de: Record<keyof typeof en, string> = {
     'Dein Modell wird gestartet — große Modelle brauchen einen Moment zum Laden. Es geht ' +
     'hier automatisch weiter, sobald es bereit ist.',
   'chat.noModel.startingProgress':
-    'Dein Modell wird gestartet — die Modelldatei ({gb} GB) wird gelesen, bisher etwa ' +
-    '{pct} %. Es geht hier automatisch weiter, sobald es bereit ist.',
+    'Dein Modell wird gestartet — die Modelldatei ({gb} GB) wird gelesen, bisher etwa {pct}\u00A0%. ' +
+    'Es geht hier automatisch weiter, sobald es bereit ist.',
   'chat.noModel.open': 'KI-Modell öffnen',
   'chat.noModel.recheck': 'Erneut prüfen',
   'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',
@@ -272,7 +272,8 @@ export const de: Record<keyof typeof en, string> = {
   // (ein Klick beantwortet dieselbe Frage ohne den Skill neu). Nie eine stille Überraschung.
   'chat.skill.autoFired': 'Beantwortet mit {title}',
   'chat.skill.autoFiredTitle':
-    'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
+    'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst dir auch ' +
+    'ohne ihn antworten lassen.',
   'chat.skill.answerWithout': 'Ohne ihn antworten',
   // AUD-01: Der Rückgängig-Weg beantwortet den Turn neu und löscht dabei diese Antwort — der
   // Fremdschlüssel der Nachricht reißt die Nachweis-Prüfung mit. Die Schaltfläche wird deshalb
@@ -463,7 +464,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.compaction.viewSummary': 'Zusammenfassung der früheren Nachrichten anzeigen',
   'chat.context.label': 'Speicher',
   // RD-3-Glossar: deutscher Plural ist „Token", nicht „Tokens" (full-audit 2026-07-11 CODE-43).
-  'chat.context.usageTooltip': 'Speicher für dieses Gespräch: {pct} % belegt (etwa {used} von {window} Token).',
+  'chat.context.usageTooltip':
+    'Speicher für dieses Gespräch: {pct}\u00A0% belegt (etwa {used} von {window} Token).',
   'chat.context.willSummarize': 'Bei vollem Speicher werden ältere Nachrichten automatisch zusammengefasst, um Platz zu schaffen.',
   // Ehrliches Signal (§L0): erscheint bei einer Antwort, die an einer Token-Grenze abgeschnitten wurde.
   // #498: die Beschriftung nennt KEINE Ursache mehr; der Tooltip wird über `Message.truncatedCause`
@@ -586,7 +588,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.provenance.generatedBefore': 'Erzeugt aus ',
   // #340 Tier-2: ein aus einem Wissenspaket gespeicherter Artikel — die Quelle ist das Archiv.
   'docs.provenance.articleBefore': 'Gespeichert aus dem Wissenspaket ',
-  'docs.provenance.articleUnknownArchive': 'einem Wissenspaket',
+  'docs.provenance.articleUnknownArchive': '(Name unbekannt)',
   'docs.import.busy': 'Wird importiert…',
   'docs.import.files': 'Dateien importieren',
   'docs.import.folder': 'Ordner importieren',
@@ -631,7 +633,9 @@ export const de: Record<keyof typeof en, string> = {
   // Plural-Paar ({done} → tCounts {count}) — „1 Dokumente neu indexiert." (CODE-8).
   'docs.reindexAllDone.one': '{count} Dokument neu indexiert.',
   'docs.reindexAllDone.other': '{count} Dokumente neu indexiert.',
-  'docs.reindexAllPartial': '{done} von {total} neu indexiert – {failed} fehlgeschlagen. Fehlgeschlagene Dokumente bleiben im Tab „Fehlgeschlagene Importe“.',
+  'docs.reindexAllPartial':
+    '{done} von {total} neu indexiert – {failed} fehlgeschlagen. Fehlgeschlagene Dokumente bleiben ' +
+    'unter „Braucht Aufmerksamkeit“.',
   'docs.supported.base':
     'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +
     'die auf diesem Laufwerk transkribiert werden',
@@ -736,6 +740,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.failed.remove': 'Entfernen',
   'docs.failed.removeTitle': 'Diesen fehlgeschlagenen Import aus der Liste entfernen',
   'docs.failed.retry': 'Erneut versuchen',
+  'docs.failed.lead': 'Diese Datei konnte nicht verarbeitet werden.',
   // #573 — siehe en.ts.
   'docs.backToChat': 'Zurück zum Chat',
   'docs.failed.retryTitle': 'Diese Datei noch einmal einlesen und vorbereiten',
@@ -819,7 +824,7 @@ export const de: Record<keyof typeof en, string> = {
     'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen und ' +
     'Listen-Antworten können alles abdecken',
   'coverage.relevance': 'Basiert auf den relevantesten Passagen — nicht auf dem ganzen Dokument',
-  'coverage.relevance.counted': 'Basiert auf {covered} von {total} Abschnitten',
+  'coverage.relevance.counted': 'Basiert auf Abschnitten: {covered} von {total}',
   'coverage.capped.whole': 'Deckt das ganze Dokument ab',
   'coverage.capped.beginning': 'Deckt den Anfang des Dokuments ab',
   'coverage.tree.whole': 'Deckt das ganze Dokument ab (tief indexiert)',
@@ -840,12 +845,11 @@ export const de: Record<keyof typeof en, string> = {
   // U1 (audit §2.3 / ux-10): entschärft von „Jeder Treffer …", das die Vollständigkeit der EXTRAKTION
   // überzeichnete. „Gelesen" ist die ehrliche Aussage — jeder Abschnitt wurde GELESEN, ohne zu behaupten,
   // jeder Treffer sei erfasst.
-  'coverage.extract.whole': 'Im ganzen Dokument gelesen — {scanned} Abschnitte durchsucht',
+  'coverage.extract.whole': 'Im ganzen Dokument gelesen — durchsuchte Abschnitte: {scanned}',
   'coverage.extract.wholeUnparsed':
-    'Im ganzen Dokument gelesen — {scanned} Abschnitte durchsucht, {unparsed} nicht lesbar',
-  'coverage.extract.sections': 'In {scanned} durchsuchten Abschnitten gelesen',
-  'coverage.extract.sectionsUnparsed':
-    'In {scanned} durchsuchten Abschnitten gelesen, {unparsed} nicht lesbar',
+    'Im ganzen Dokument gelesen — durchsuchte Abschnitte: {scanned}, nicht lesbar: {unparsed}',
+  'coverage.extract.sections': 'Durchsuchte Abschnitte: {scanned}',
+  'coverage.extract.sectionsUnparsed': 'Durchsuchte Abschnitte: {scanned}, nicht lesbar: {unparsed}',
 
   // ---- „Liste alle X"-Antwort (Phase 3) — D-L7-Review ausstehend ----
   'analysis.kind.generic': 'Einträge',
@@ -854,10 +858,11 @@ export const de: Record<keyof typeof en, string> = {
   'analysis.kind.party': 'Parteien',
   'analysis.kind.obligation': 'Pflichten',
   'analysis.listing.coverageWhole':
-    '{count} {kind} im ganzen Dokument gefunden — {scanned} Abschnitte durchsucht{unparsed}:',
+    'Das ganze Dokument durchsucht — gefundene {kind}: {count}; durchsuchte Abschnitte: ' +
+    '{scanned}{unparsed}:',
   'analysis.listing.coverageSections':
-    '{count} {kind} in {scanned} durchsuchten Abschnitten gefunden{unparsed}:',
-  'analysis.listing.empty': 'Keine {kind} in {scanned} durchsuchten Abschnitten gefunden{unparsed}.',
+    'Suchergebnis — gefundene {kind}: {count}; durchsuchte Abschnitte: {scanned}{unparsed}:',
+  'analysis.listing.empty': 'Keine {kind} gefunden — durchsuchte Abschnitte: {scanned}{unparsed}.',
   'analysis.listing.unparsedSuffix': ' ({k} nicht lesbar)',
   'analysis.listing.item': '- {value} (×{count})',
   'analysis.listing.caveat':
@@ -916,17 +921,18 @@ export const de: Record<keyof typeof en, string> = {
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
   // extrahierten Buchungstabelle erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt
   // und werden unverändert als Parameter durchgereicht.
-  'skills.bankAnalysis.count': 'Ich habe **{count}** Buchungen über den ganzen Auszug gelesen.',
+  'skills.bankAnalysis.count': 'Ich habe den ganzen Auszug gelesen. Buchungen: **{count}**.',
   // U1 (audit §2.3): die ehrlich abgesicherte Kopfzeile (du-Form). Jeder Abschnitt wurde gelesen, aber
   // **{dropped}** Zeile(n) mit einer Zahl ließen sich nicht als Buchung erfassen — also nicht zwingend alle.
   'skills.bankAnalysis.countPartial':
-    'Ich habe **{count}** Buchungen gelesen. Bei **{dropped}** Zeile(n) stand eine Zahl, die ich nicht als ' +
-    'Buchung erfassen konnte — es sind also vielleicht nicht alle Buchungen. Prüf diese Zeilen im Dokument.',
+    'Gelesene Buchungen: **{count}**. Zeilen mit einer Zahl, die ich nicht als Buchung erfassen ' +
+    'konnte: **{dropped}** — es sind also vielleicht nicht alle Buchungen. Prüf diese Zeilen im ' +
+    'Dokument.',
   // U1 (audit §2.3): die CONTRADICTED-D56-Kopfzeile — keine „ganzer Auszug"-Behauptung über einem Text, der
   // sagt, dass die aufgedruckten Salden nicht aufgehen (behebt den Selbstwiderspruch der alten Kopfzeile).
   'skills.bankAnalysis.countContradicted':
-    'Ich habe **{count}** Buchungen gelesen, aber die aufgedruckten Salden dieses Auszugs gehen damit nicht ' +
-    'auf — ich kann daher nicht bestätigen, dass das alle sind.',
+    'Gelesene Buchungen: **{count}**. Die aufgedruckten Salden dieses Auszugs gehen damit nicht auf ' +
+    '— ich kann daher nicht bestätigen, dass das alle sind.',
   // U1 (audit §2.3 / ux-11): der leere Fall ist keine Sackgasse mehr — es liegt am Leser, nicht am Dokument,
   // und der nächste Schritt wird genannt (OCR bei einem Scan; sonst ist das Layout evtl. nicht maschinenlesbar).
   'skills.bankAnalysis.empty':
@@ -983,10 +989,10 @@ export const de: Record<keyof typeof en, string> = {
   // bestätigt, dass ich jede Zeile erfasst habe, aber es WIDERSPRICHT dem Gelesenen auch nichts. Also gebe
   // ich eine klar GEKENNZEICHNETE Summe der gelesenen Zeilen an — keinen geprüften Auszugssaldo.
   'skills.bankAnalysis.unverifiedCaveat':
-    'Diese Zahlen sind die Summe der **{count}** Buchungen, die ich über das ganze Dokument gelesen habe. ' +
-    'Der Auszug enthält keinen Anfangs- und Endsaldo, daher kann ich nicht bestätigen, dass das alle ' +
-    'Buchungen sind — versteh sie als Summe der angezeigten Zeilen, nicht als geprüften Auszugssaldo. ' +
-    'Nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+    'Diese Zahlen sind die Summe aller Buchungen, die ich im ganzen Dokument gelesen habe ' +
+    '(insgesamt: **{count}**). Der Auszug enthält keinen Anfangs- und Endsaldo, daher kann ich nicht ' +
+    'bestätigen, dass das alle Buchungen sind — versteh sie als Summe der angezeigten Zeilen, nicht ' +
+    'als geprüften Auszugssaldo. Nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
   // R5 (Audit §5.7): der eine ehrliche Datumshinweis — nur angehängt, wenn das Dokument keinen Hinweis auf
   // tag- vs. monatszuerst gab und die Daten daher tagzuerst gelesen wurden (die de-AT-Voreinstellung).
   // Assistenzstimme in DU-Form (Plan §0). Inhaltsfrei.
@@ -1031,7 +1037,8 @@ export const de: Record<keyof typeof en, string> = {
   // Phase 1.6: eine per Name referenzierte Taxonomie-CSV — ehrliche Ablehnung mit Dateiname, nie ein
   // stiller Rückfall auf die feste Taxonomie.
   'skills.bankAnalysis.customTaxonomyNotFound':
-    'Ich konnte „{name}“ nicht in deinen Dokumenten finden. Importiere die Datei zuerst (Dokumente → Import) und frag dann erneut.',
+    'Ich konnte „{name}“ nicht in deinen Dokumenten finden. Importiere die Datei zuerst (Dokumente → ' +
+    'Dateien importieren) und frag dann erneut.',
   'skills.bankAnalysis.customTaxonomyUnparseable':
     'Ich habe „{name}“ gelesen, konnte es aber nicht als Kategorienliste verwenden. Erwartet wird eine ' +
     'Kategorie pro Zeile — ein Label, optional gefolgt von Stichworten nach einem Semikolon (z. B. ' +
@@ -1047,12 +1054,13 @@ export const de: Record<keyof typeof en, string> = {
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
   // extrahierten Rechnung erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt und werden
   // unverändert als Parameter durchgereicht.
-  'skills.invoiceAnalysis.count': 'Ich habe die ganze Rechnung gelesen — **{count}** Positionen.',
+  'skills.invoiceAnalysis.count': 'Ich habe die ganze Rechnung gelesen. Positionen: **{count}**.',
   // U1 (audit §2.3): die ehrlich abgesicherte Kopfzeile (du-Form) — jeder Abschnitt gelesen, aber
   // **{dropped}** Zeile(n) mit einer Zahl ließen sich nicht erfassen, also nicht zwingend die ganze Rechnung.
   'skills.invoiceAnalysis.countPartial':
-    'Ich habe **{count}** Positionen gelesen. Bei **{dropped}** Zeile(n) stand eine Zahl, die ich nicht als ' +
-    'Position erfassen konnte — es sind also vielleicht nicht alle Positionen. Prüf diese Zeilen im Dokument.',
+    'Gelesene Positionen: **{count}**. Zeilen mit einer Zahl, die ich nicht als Position erfassen ' +
+    'konnte: **{dropped}** — es sind also vielleicht nicht alle Positionen. Prüf diese Zeilen im ' +
+    'Dokument.',
   // U1 (audit §2.3 / ux-11): der leere Fall nennt einen nächsten Schritt statt in einer Sackgasse zu enden.
   'skills.invoiceAnalysis.empty':
     'Ich habe das ganze Dokument durchsucht, konnte aber keine Positionen oder Beträge daraus lesen. Die ' +
@@ -1073,7 +1081,7 @@ export const de: Record<keyof typeof en, string> = {
   // kein hängendes Leerzeichen). Wird von `amountText` im Handler gebaut.
   'skills.invoiceAnalysis.net': '- Netto: **{value}**',
   'skills.invoiceAnalysis.tax': '- Steuer: **{value}**',
-  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{value}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}\u00A0%): **{value}**',
   'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{value}**',
   'skills.invoiceAnalysis.positionsHeading': 'Positionen:',
   'skills.invoiceAnalysis.positionItem': '- {description} · {amount} {currency}',
@@ -1153,8 +1161,8 @@ export const de: Record<keyof typeof en, string> = {
   // passende Dokument ein (mit dem ehrlichen `scopeNarrowed`-Hinweis) oder bittet dich zu wählen.
   // Deterministisch, inhaltsfrei (Titel + Anzahl, kein Dokumenttext), kein Modellaufruf. Du-Form.
   'skills.analysis.scopeNarrowed':
-    'Ich habe nur **{title}** ausgewertet — die übrigen {count} Dokument(e) im Bereich habe ich nicht ' +
-    'gelesen. Um ein anderes auszuwerten, wähle genau dieses Dokument aus (oder nenne die Datei in ' +
+    'Ich habe nur **{title}** ausgewertet. Weitere Dokumente im Bereich, die ich nicht gelesen habe: ' +
+    '{count}. Um ein anderes auszuwerten, wähle genau dieses Dokument aus (oder nenne die Datei in ' +
     'deiner Frage) und frage erneut.',
   // Kein eindeutig bestes Dokument (0 oder mehrere Treffer): bitte um die Auswahl EINES Dokuments.
   'skills.analysis.selectOne':
@@ -1163,8 +1171,8 @@ export const de: Record<keyof typeof en, string> = {
     'deiner Frage) und frage erneut.',
   // what-changed-Vergleich braucht GENAU zwei Dokumente; bitte um deren Auswahl (Audit §3.4).
   'skills.analysis.selectTwo':
-    'Für einen Vergleich wähle bitte genau **zwei** Dokumente (oder zwei Versionen) aus — im Moment ' +
-    'sind {count} im Bereich. Wähle die beiden zu vergleichenden aus und frage erneut.',
+    'Für einen Vergleich wähle bitte genau **zwei** Dokumente (oder zwei Versionen) aus. Im Moment ' +
+    'im Bereich: {count}. Wähle die beiden zu vergleichenden aus und frage erneut.',
 
   // Antwort der Schwärzungs-Weiterleitung: eine Aktions-Skill verweist auf ihre eigene Schaltfläche
   // statt eine Top-k-Antwort zu erzeugen. Deterministisch + inhaltsfrei (kein Modellaufruf, kein
@@ -1200,21 +1208,23 @@ export const de: Record<keyof typeof en, string> = {
   // Antwort der Bearbeitungs-Weiterleitung (Phase 8, #23): eine Aktions-Skill verweist auf ihre eigene
   // Schaltfläche, statt den Text neu zu erzeugen (was halluziniert). Deterministisch + inhaltsfrei.
   'skills.editRouting.answer':
-    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}** und ' +
-    'wähle anschließend, wo die bearbeitete Kopie gespeichert werden soll. Sie läuft vollständig auf ' +
-    'diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – ' +
-    'überall dort, wo der Text wörtlich gefunden wird, und lässt alles andere unverändert. Sie schreibt ' +
-    'das Dokument nie neu, kann also nichts erfinden oder umformulieren. In dieser Phase wird eine ' +
-    'einfache Textkopie (.txt) gespeichert; prüfe sie, bevor du sie teilst.',
+    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche ' +
+    '**{button}** und wähle anschließend, wo die bearbeitete Kopie gespeichert werden soll. Sie ' +
+    'läuft vollständig auf diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen ' +
+    'an, die du angegeben hast – überall dort, wo der Text wörtlich gefunden wird, und lässt alles ' +
+    'andere unverändert. Sie schreibt das Dokument nie neu, kann also nichts erfinden oder ' +
+    'umformulieren. Ein Word-Dokument behält sein .docx-Format; andere Formate werden als einfacher ' +
+    'Text (.txt) gespeichert. Prüfe die Kopie, bevor du sie teilst.',
   // U-1: dieselbe Antwort, wenn MEHR ALS EIN Dokument im Bereich liegt. Das Werkzeug bearbeitet jeweils
   // ein Dokument, daher verweist die Antwort auf die Zielauswahl der Schaltfläche.
   'skills.editRouting.answerMulti':
-    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche **{button}**, wähle ' +
-    'aus, welches Dokument bearbeitet werden soll, und lege anschließend fest, wo die bearbeitete Kopie ' +
-    'gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft vollständig auf diesem Gerät ' +
-    'und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die du angegeben hast – überall dort, ' +
-    'wo der Text wörtlich gefunden wird, und lässt alles andere unverändert. Sie schreibt das Dokument ' +
-    'nie neu. In dieser Phase wird eine einfache Textkopie (.txt) gespeichert; prüfe sie, bevor du sie ' +
+    'Um diese Änderungen vorzunehmen, klicke direkt über dem Eingabefeld auf die Schaltfläche ' +
+    '**{button}**, wähle aus, welches Dokument bearbeitet werden soll, und lege anschließend fest, ' +
+    'wo die bearbeitete Kopie gespeichert werden soll. Sie verarbeitet jeweils ein Dokument, läuft ' +
+    'vollständig auf diesem Gerät und wendet nur die genauen Suchen-und-Ersetzen-Änderungen an, die ' +
+    'du angegeben hast – überall dort, wo der Text wörtlich gefunden wird, und lässt alles andere ' +
+    'unverändert. Sie schreibt das Dokument nie neu. Ein Word-Dokument behält sein .docx-Format; ' +
+    'andere Formate werden als einfacher Text (.txt) gespeichert. Prüfe die Kopie, bevor du sie ' +
     'teilst.',
 
   // ---- Models ----
@@ -1260,7 +1270,7 @@ export const de: Record<keyof typeof en, string> = {
     'Modell-Dateien werden geprüft… Die erste Prüfung nach dem Hinzufügen oder ' +
     'Aktualisieren eines Modells kann bei großen Dateien ein paar Minuten dauern; danach ' +
     'wird das Ergebnis gemerkt und es geht sofort.',
-  'models.checkingProgress': 'Modell {n} von {m} wird geprüft: {name} — {pct} %',
+  'models.checkingProgress': 'Modell {n} von {m} wird geprüft: {name} — {pct}\u00A0%',
   'models.state.installed': 'Installiert',
   'models.state.missing': 'Nicht heruntergeladen',
   'models.state.checksumFailed': 'Nicht prüfbar',
@@ -1280,14 +1290,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.hint.small': 'Klein und flott — schnelle Antworten auf fast jedem Gerät.',
   'models.hint.balanced': 'Ausgewogen — läuft gut auf den meisten Laptops.',
   'models.hint.large': 'Groß — stärkste Antworten; braucht einen leistungsstarken Rechner.',
-  'models.usesSpace': 'Belegt {size} Speicherplatz auf dem Laufwerk.',
+  'models.usesSpace': 'Belegt {size} Speicherplatz auf dem Laufwerk',
   'models.downloads.blockedByPolicy':
     'Downloads sind durch die Richtlinie dieses Laufwerks deaktiviert.',
   'models.downloads.enableInSettings':
-    'Um Modelle herunterzuladen, schalte in den Einstellungen „Internetzugriff für ' +
-    'Modell-Downloads und Updates erlauben“ ein.',
+    'Für Downloads schalte in den Einstellungen „Internetzugriff für Downloads und Updates erlauben“ ' +
+    'ein.',
   'models.download.verifying': 'Die heruntergeladene Datei wird geprüft…',
-  'models.download.progress': 'Wird heruntergeladen… {pct} % ({received} von {total})',
+  'models.download.progress': 'Wird heruntergeladen… {pct}\u00A0% ({received} von {total})',
   'models.download.progressNoTotal': 'Wird heruntergeladen… bisher {received}',
   'models.download.cancel': 'Download abbrechen',
   'models.download.cancelled':
@@ -1362,7 +1372,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.engineProblem.stillFailing': 'Sie kann immer noch nicht starten. Prüf, ob die Installation abgeschlossen ist, und versuch es dann noch einmal.',
   'models.engineProblem.fixed': 'Die KI-Engine läuft wieder.',
   'models.engineProblem.voiceFixed': 'Die Sprach-Engine läuft wieder.',
-  'models.engine.progress': 'KI-Engine wird heruntergeladen… {pct} %',
+  'models.engine.progress': 'KI-Engine wird heruntergeladen… {pct}\u00A0%',
   'models.engine.downloadingNoTotal': 'KI-Engine wird heruntergeladen…',
   'models.engine.verifying': 'KI-Engine wird geprüft…',
   'models.engine.extracting': 'KI-Engine wird entpackt…',
@@ -1400,7 +1410,7 @@ export const de: Record<keyof typeof en, string> = {
   'ocr.install.lang.eng': 'Englisch',
   'ocr.install.lang.osd': 'Seitenausrichtung (dreht quer liegende Seiten richtig herum)',
   'ocr.install.starting': 'Download wird gestartet…',
-  'ocr.install.progress': 'OCR-Dateien werden heruntergeladen… {pct} %',
+  'ocr.install.progress': 'OCR-Dateien werden heruntergeladen… {pct}\u00A0%',
   'ocr.install.verifying': 'OCR-Dateien werden geprüft…',
   'ocr.install.activating': 'Texterkennung wird gestartet…',
   'ocr.install.failed': 'Die OCR-Dateien konnten nicht installiert werden.',
@@ -1496,9 +1506,9 @@ export const de: Record<keyof typeof en, string> = {
   'models.verifyAllTitle':
     'Jede Modelldatei auf diesem Laufwerk erneut gegen ihre SHA-256-Prüfsumme prüfen',
   'models.verifyAllHint':
-    'Jedes Modell wird beim Start geprüft. Hiermit werden stattdessen alle Modelldateien auf ' +
-    'diesem Laufwerk geprüft — auf einem langsamen Laufwerk kann das mehrere Minuten dauern. ' +
-    'Sie können jederzeit abbrechen; bereits geprüfte Dateien bleiben geprüft.',
+    'Jedes Modell wird beim Start geprüft. Hiermit werden stattdessen alle Modelldateien auf diesem ' +
+    'Laufwerk geprüft — auf einem langsamen Laufwerk kann das mehrere Minuten dauern. Du kannst ' +
+    'jederzeit abbrechen; bereits geprüfte Dateien bleiben geprüft.',
   // #420 — siehe en.ts.
   'models.verifyAllStop': 'Prüfung abbrechen',
   'models.verifyAllStopping': 'Wird abgebrochen…',
@@ -1531,7 +1541,7 @@ export const de: Record<keyof typeof en, string> = {
   // CODE-7 (full-audit 2026-07-11): ein abgelehntes Speichern darf nie stumm bleiben.
   'settings.saveFailed': 'Diese Einstellung konnte nicht gespeichert werden. Bitte versuch es erneut.',
   'settings.network.title': 'Privatsphäre & Offline-Modus',
-  'settings.network.allow': 'Internetzugriff für Modell-Downloads und Updates erlauben',
+  'settings.network.allow': 'Internetzugriff für Downloads und Updates erlauben',
   'settings.network.hint':
     'Standardmäßig an, damit eine frische Installation gleich Modelle herunterladen kann. ' +
     'Ausgeschaltet stellt die App keinerlei Internetverbindung her. Eingeschaltet ermöglicht ' +
@@ -1679,7 +1689,10 @@ export const de: Record<keyof typeof en, string> = {
   'skills.autoFire.title': 'Passenden Skill automatisch anwenden',
   'skills.autoFire.toggle': 'Passenden Skill automatisch anwenden',
   'skills.autoFire.hint':
-    'Wenn eingeschaltet, darf die App einen eindeutig passenden App-Skill von sich aus auf eine Antwort anwenden, damit du ihn nicht selbst wählen musst. Nur App-Skills, nie selbst erstellte oder importierte. Du siehst immer, welcher Skill verwendet wurde, und kannst für diese Antwort ohne ihn antworten. Standardmäßig aus.',
+    'Wenn eingeschaltet, darf die App einen eindeutig passenden App-Skill von sich aus auf eine ' +
+    'Antwort anwenden, damit du ihn nicht selbst wählen musst. Nur App-Skills, nie selbst erstellte ' +
+    'oder importierte. Du siehst immer, welcher Skill verwendet wurde, und kannst dir für diese ' +
+    'Antwort auch ohne ihn antworten lassen. Standardmäßig aus.',
   'skills.autoFire.on': 'Automatische Skills an',
   'skills.autoFire.off': 'Automatische Skills aus',
   // SH-8 (#149): fehlgeschlagenes Speichern der Auto-Skills-Einstellung – nicht die Ladefehler-Meldung.
@@ -1815,13 +1828,13 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.offlineOn': '● Offline-Modus: AN',
   'privacy.offlineOff': '○ Netzwerkzugriff aktiviert',
   'privacy.statement.offline':
-    'Der Offline-Modus ist an. HilbertRaum führt das KI-Modell auf deinem ' +
-    'Laptop aus. Deine Fragen, Dokumente, Embeddings und Chat-Verläufe bleiben lokal.',
+    'Der Offline-Modus ist an. HilbertRaum führt das KI-Modell auf diesem Computer aus. Deine ' +
+    'Fragen, Dokumente, Embeddings und Chat-Verläufe bleiben lokal.',
   'privacy.statement.online':
-    'HilbertRaum führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
-    'Dokumente, Embeddings und Chat-Verläufe bleiben lokal — auch mit aktiviertem ' +
-    'Internetzugriff nutzen nur Downloads (Modelle, die KI-Engine, die optionalen ' +
-    'Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR)) das Netzwerk.',
+    'HilbertRaum führt das KI-Modell auf diesem Computer aus. Deine Fragen, Dokumente, Embeddings ' +
+    'und Chat-Verläufe bleiben lokal — auch mit aktiviertem Internetzugriff nutzen nur Downloads ' +
+    '(Modelle, die KI-Engine, die optionalen Wissenspaket-Werkzeuge und die optionalen ' +
+    'Texterkennungs-Dateien (OCR)) das Netzwerk.',
   'privacy.statement.noUploads':
     'Diese App sendet deine Daten an keine Cloud-KI-Anbieter. Es gibt keine Uploads von ' +
     'Fragen, Dokumenten oder Embeddings, keine Telemetrie, keine Analytik und keine ' +
@@ -1829,10 +1842,11 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.title': 'Aktueller Netzwerkstatus',
   'privacy.networkState.noPolicy': 'Der Offline-Modus ist an.',
   'privacy.networkState.disabledByPolicy': 'Netzwerkzugriff durch Richtlinie deaktiviert.',
-  'privacy.networkState.offDefault': 'Der Offline-Modus ist an (Netzwerk standardmäßig aus).',
+  'privacy.networkState.offDefault':
+    'Der Offline-Modus ist an (Internetzugriff ist in den Einstellungen ausgeschaltet).',
   'privacy.networkState.enabled':
-    'Internetzugriff ist für Downloads aktiviert: Modelle, die KI-Engine und die optionalen ' +
-    'Wissenspaket-Werkzeuge.',
+    'Internetzugriff ist für Downloads aktiviert: Modelle, die KI-Engine, die optionalen ' +
+    'Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR).',
   'privacy.network.noFiles': 'Keine Fragen oder Dateien verlassen dieses Gerät.',
   'privacy.network.effective': 'Effektiver Zustand',
   'privacy.network.effectiveOffline': 'Offline (keine Internetzugriffe)',
@@ -1842,7 +1856,7 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.policyNo': 'Nein (durch Richtlinie deaktiviert)',
   'privacy.network.yourSetting': 'Deine Einstellung',
   'privacy.network.settingAllowed': 'Internetzugriff erlaubt',
-  'privacy.network.settingOff': 'Aus (Standard)',
+  'privacy.network.settingOff': 'Aus',
   'privacy.network.telemetry': 'Telemetrie',
   'privacy.network.telemetryValue':
     'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
@@ -2006,8 +2020,8 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.collection_renamed': 'Projekt umbenannt',
   'diag.audit.collection_archived': 'Projektarchiv geändert',
   'diag.audit.collection_deleted': 'Projekt gelöscht',
-  'diag.audit.documents_added_to_collection': 'Dokumente zu einer Sammlung hinzugefügt',
-  'diag.audit.documents_removed_from_collection': 'Dokumente aus einer Sammlung entfernt',
+  'diag.audit.documents_added_to_collection': 'Dokumente zu einem Bereich oder Projekt hinzugefügt',
+  'diag.audit.documents_removed_from_collection': 'Dokumente aus einem Bereich oder Projekt entfernt',
   'diag.audit.document_lifecycle_changed': 'Dokumentstatus geändert',
   'diag.audit.skill_imported': 'Skill importiert',
   'diag.audit.skill_deleted': 'Skill gelöscht',
@@ -2368,6 +2382,8 @@ export const de: Record<keyof typeof en, string> = {
   'common.cancel': 'Abbrechen',
   'common.remove': 'Entfernen',
   'common.apply': 'Übernehmen',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}\u00A0%',
   'indicator.offline': 'Lokal · Offline',
   'indicator.online': 'Lokal · Downloads erlaubt',
   'indicator.offlineDetail':
@@ -2391,7 +2407,7 @@ export const de: Record<keyof typeof en, string> = {
   'password.strength.okay': 'Okay',
   'password.strength.strong': 'Stark',
   'password.strength.veryStrong': 'Sehr stark',
-  'password.strength.minHint': 'Verwende mindestens 8 Zeichen.',
+  'password.strength.minHint': 'Verwende mindestens {min} Zeichen.',
   'password.strength.longerHint':
     'Länger ist stärker — 12 oder mehr Zeichen oder ein paar zusammenhanglose Wörter ' +
     'funktionieren gut.',
@@ -2415,7 +2431,7 @@ export const de: Record<keyof typeof en, string> = {
   'gate.finishing.hint':
     'Wir schauen kurz nach, was schon auf diesem Laufwerk ist. Der erste Blick auf eine ' +
     'große KI-Modell-Datei kann ein paar Minuten dauern.',
-  'gate.finishing.progress': 'KI-Modell {n} von {m} wird geprüft: {name} — {pct} %',
+  'gate.finishing.progress': 'KI-Modell {n} von {m} wird geprüft: {name} — {pct}\u00A0%',
   'gate.finishing.skip': 'Überspringen — direkt zur App',
   'gate.starter.title': 'Eine letzte Sache',
   'gate.starter.noModel':
@@ -2764,8 +2780,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.download.policyDisabled':
     'Downloads sind durch die Richtlinie dieses Laufwerks deaktiviert.',
   'main.download.networkOff':
-    'Der Internetzugriff ist ausgeschaltet. Schalte zuerst „Internetzugriff für ' +
-    'Modell-Downloads und Updates erlauben“ in den Einstellungen ein.',
+    'Der Internetzugriff ist ausgeschaltet. Schalte zuerst „Internetzugriff für Downloads und ' +
+    'Updates erlauben“ in den Einstellungen ein.',
   'main.download.alreadyRunning':
     'Es läuft bereits ein Download. Modelle werden einzeln heruntergeladen.',
   'main.download.stoppedNetworkOff':
@@ -3089,15 +3105,15 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review erledigt (2026-06-14). ----
   'chat.scope.library': 'Bibliothek',
-  'chat.scope.projectNamed': 'Projekt: {name}',
+  'chat.scope.projectNamed': 'Projekt „{name}“',
   'chat.scope.projectCount.one': '{count} Projekt',
   'chat.scope.projectCount.other': '{count} Projekte',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Wissenspakete',
   'chat.scope.packUnavailable': 'nicht verfügbar',
-  'chat.scope.packNamed': 'Paket: {name}',
+  'chat.scope.packNamed': 'Paket „{name}“',
   // #340: der Chip nennt ein angehaktes, aber deaktiviertes / nicht verfügbares Paket MIT diesem Zustand.
-  'chat.scope.packNamedState': 'Paket: {name} ({state})',
+  'chat.scope.packNamedState': 'Paket „{name}“ ({state})',
   'chat.scope.packCount.one': '{count} Wissenspaket',
   'chat.scope.packCount.other': '{count} Wissenspakete',
   // Dokumente-Schalter (#301 P4, Befund M10): die ausdrückliche Wahl „aus den Paketen
@@ -3193,7 +3209,7 @@ export const de: Record<keyof typeof en, string> = {
     'Ich habe die {license}-Lizenzbedingungen von kiwix-tools gelesen und akzeptiere sie',
   'packs.tools.confirm.start': 'Download starten',
   'packs.tools.sizeUnknown': 'unbekannt',
-  'packs.tools.progress': 'Wissenspaket-Werkzeuge werden installiert… {pct} %',
+  'packs.tools.progress': 'Wissenspaket-Werkzeuge werden installiert… {pct}\u00A0%',
   'packs.tools.downloadingNoTotal': 'Wissenspaket-Werkzeuge werden installiert…',
   'packs.tools.verifying': 'Wissenspaket-Werkzeuge werden geprüft…',
   'packs.tools.extracting': 'Wissenspaket-Werkzeuge werden entpackt…',
@@ -3242,7 +3258,9 @@ export const de: Record<keyof typeof en, string> = {
   'packs.listLabel': 'Wissenspakete',
   'packs.removeTitle': 'Dieses Wissenspaket entfernen?',
   'packs.removeConfirm': 'Paket entfernen',
-  'packs.removeBody': 'Das Paket wird nur aus HilbertRaum entfernt – die Archivdatei auf dem Datenträger bleibt unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
+  'packs.removeBody':
+    'Das Paket wird nur aus HilbertRaum entfernt – die Archivdatei auf dem Laufwerk bleibt ' +
+    'unangetastet. Chats, die es genutzt haben, greifen einfach nicht mehr darauf zu.',
   'chat.scope.docCount.one': '{count} Dokument',
   'chat.scope.docCount.other': '{count} Dokumente',
   'chat.scope.filesInChat.one': '{count} Datei in diesem Chat',
@@ -3782,7 +3800,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.summary.completed': 'Abgeschlossen',
   'packExport.summary.lastExported': 'Vorheriger Export',
   'packExport.summary.decisions': 'Entscheidungen',
-  'packExport.summary.progress': '{decided} von {required} erforderlichen Punkten entschieden',
+  'packExport.summary.progress': 'Erforderliche Punkte entschieden: {decided} von {required}',
   'packExport.summary.followUps': 'Offene Nachprüfungen: {count}',
   'packExport.summary.generalNote': 'Allgemeine Notiz',
   'packExport.summary.noGeneralNote': 'Keine allgemeine Notiz aufgezeichnet.',
@@ -3839,7 +3857,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.coverage.modeStructured':
     'Diese Antwort ist eine strukturierte Extraktion, die deterministisch aus den Quelldokumenten erzeugt wurde.',
   'packExport.coverage.inputStatement':
-    'Abdeckung der Eingabe: {covered} von {total} indexierten Abschnitten standen dem Modell zur Verfügung.',
+    'Dem Modell verfügbare indexierte Abschnitte (Abdeckung der Eingabe): {covered} von {total}.',
   'packExport.coverage.inputUnknown':
     'Zu dieser Antwort wurden keine Abdeckungsinformationen aufgezeichnet.',
   'packExport.coverage.noTruncationRecord':

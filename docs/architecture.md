@@ -5971,7 +5971,9 @@ version · D-17 (a): the lock screen renders unlock/create errors in its own lan
 plural form may add `{count}` where the language's `one` isn't exactly 1, and must when its plural
 form shows the number; English and German plain number keys that read wrong at exactly 1 ("1
 sections scanned", "I read 1 transactions"; the `NON_GRAMMATICAL` groups in
-`tests/unit/i18n.test.ts` that say so) are a follow-up.
+`tests/unit/i18n.test.ts` that say so) are a follow-up. **Amended 2026-11-14:** that follow-up is
+done; the eighteen such keys now state their count label-first in English and German too, and only
+`chat.speed.line` ("1 tokens") is left as it was (open-issues wave owner call G-5, §5).
 
 **Second UI-languages wave owner calls (2026-11-13).** This record and code comments cite the
 second wave's decision gates as "second UI-languages wave owner call G-n". G-1 (a): every
@@ -5988,6 +5990,47 @@ document's own section heading in the preview (recorded with G-7) · G-12: conve
 keyword retrieval keep their plain lower-casing (`fts.ts`; a known limitation and a follow-up) ·
 G-8, G-9, G-11: the real-app check's remaining layout and wording findings accepted as recorded,
 or collected for follow-up ("Second UI-languages wave QA" below).
+
+**Open-issues wave owner calls (2026-11-13/14).** This record and code comments cite the decision
+gates of the open-issues wave (the i18n follow-ups the two language waves filed, and two older
+issues) as "open-issues wave owner call G-n", or "open-issues wave G-n" where a line is short;
+they are not the second UI-languages wave's G-numbers above. G-1, G-2: the wave's scope and the
+order of its pull requests, with #804, #805, #806, #807 and #812 in one · G-3 (a): in the
+Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian catalogs a figure or a
+placeholder and a unit symbol (GB, MB, KB, B, MB/s, tok/s, ms, s) are joined by U+00A0, the
+Dutch, Polish and Ukrainian rules against a no-break space allow it in exactly that one position
+more, and a size built in code takes the same space (`unitJoin`, §5) · G-4 (a): label-value
+joins and percent signs come from the catalog patterns `common.labelValue` and `common.percent`
+(German then shows "15 %" in the context meter and the transcribing badge, with a no-break space
+since the real-app check, below), the licence link sits on a line of its own, raw numbers take
+the language's figures (the invoice tax rate excepted since the code review, below), the copied
+reports keep their plain code-built joins and the units their Latin symbols, and the brand
+link's tooltip and the Spain pattern of Spanish figures stay as they are (§5) · G-5 (a): the English and German sentences that read wrong at exactly 1 put the count
+after a label, `chat.speed.line` excepted (§5) · G-7 (a): a support report copied in any language
+but English and German carries an English copy in the same paste (§5) · G-10 (a): the English and
+German copy fixes of #805, each changed sentence read by the owner before it was translated ·
+G-12 (a): one generic lead, "This file couldn’t be added.", above an unrecognised error on a
+failed document row and in the chat's attach banner (§3.3 Rule 1; amended at the code review,
+below).
+G-6, G-8, G-9 and G-11 decide the language select, search and sorting, layout, and how questions
+in the new languages are recognised; this legend records them when their changes land. Made
+while the catalog changes were built (2026-11-14): the Spanish review decision labels put the
+decision in parentheses («Revisado (respaldado)»), because the Spanish style guide has no spaced
+dash and a colon inside the label doubled the colon of the review summary's label-value join ·
+the internet switch is labelled "Allow internet access for downloads and updates", without
+"model", since it also gates the engine, the knowledge-pack tools and the OCR files, and the two
+sentences that quote it follow · the auto-skill setting's hint (`skills.autoFire.hint`) says the
+app can give the answer again without the skill, as the auto-skill tooltip does · the licence
+link, now on its own line, starts with a capital ("Read the license") · the Privacy tab's
+"internet access is enabled" line names the OCR files too. Made at the real-app check
+(2026-11-14): German's `common.percent` writes U+00A0 before the sign, as Spanish and French do,
+because a plain space let "19" wrap above "%" in the context meter at 880×600 (§5). Made at the
+code review (2026-11-14), amending G-4 and G-12: the invoice answer's tax rate prints as the plain
+figure again, with a dot like the amounts beside it, since a skill answer's figures print with a
+dot in every language (§5) · the chat's attach banner leads with `chat.attach.failed`, which names
+the file, and `docs.failed.lead`, now "This file couldn’t be processed.", serves the failed
+document row alone (§3.3 Rule 1) · every German percent after a figure takes U+00A0, not only
+`common.percent`, and a German typography rule refuses `{x}%` and `{x} %` (§5).
 
 ### §3.1 The i18n module
 
@@ -6089,7 +6132,21 @@ build tree-shakes them).
   **persist-canonical section is a data contract**: editing a value breaks the match for
   already-persisted rows. Interpolated persisted constants are reverse-matched by template
   regex instead (`INTERPOLATED_MAP_KEYS`). Unknown strings (e.g. raw parser-library errors)
-  render as-is by design. A hygiene test pins `DISPLAY_MAP_KEYS` +
+  render as-is by design. **Amended 2026-11-14 (open-issues wave, #807; open-issues wave owner
+  call G-12; the two leads as the code review settled them the same day):** a failed document
+  row (`DocRow.tsx`) shows such a string under a translated lead, `docs.failed.lead` ("This
+  file couldn’t be processed.", true for a failed import, re-index or text recognition alike),
+  and the chat's attach banner (`ChatScreen.tsx`) under its own lead, `chat.attach.failed`
+  ("Couldn't add {name} to this chat."), which names the file; each keeps the string itself as
+  the detail line, so the row and the banner say in the interface language what happened.
+  `classifyServerCopy()` returns the display text and whether the map recognised the string (the
+  exact map, the five interpolated families or the doc-task-busy substring), and only a string it
+  does not recognise gets a lead; `localizeServerCopy()` keeps its signature and returns the
+  text alone. Stored data is unchanged, so rows stored before the change get the lead too.
+  Everywhere else an unknown string
+  still renders as-is, the Documents banner for a failed summary, translation or OCR task, the
+  file translation's banner and the evidence-pack export error among them. A hygiene test pins
+  `DISPLAY_MAP_KEYS` +
   `INTERPOLATED_MAP_KEYS` ↔ the persist-canonical section key-for-key.
 - **Rule 2 — emit localized (D-L5).** Anything ephemeral (IPC guard throws, task-status
   errors, download/policy refusals, preflight problems, `runtime:notice`, dialog titles +
@@ -6163,8 +6220,93 @@ one, and each glossary is pinned on top of its catalog file.
   the old `toFixed`).
 - Inline JSX islands (`<code>`, `<strong>`) use before/after key pairs
   (`app.fatal.hintBefore/After`).
+- **A label and its value, a figure and its unit, and a figure and its percent sign are joined
+  the language's way, never by code** (open-issues wave, #804, 2026-11-14; open-issues wave owner
+  calls G-3, G-4). A `": "` or `" — "` typed between a label and its value, or a plain space
+  between a figure and its unit, is English typography in every language: French puts U+00A0
+  before a colon, Turkish writes the percent sign first, and a plain space lets a line break
+  between "23" and "GB". This settles the code-built joins both UI-languages waves' QA recorded
+  for follow-up (below). The pieces, as built:
+  - `common.labelValue` joins a label and its value on screen and in an accessible name:
+    `{label}: {value}` in nine catalogs, `{label}` + U+00A0 + `: {value}` in French. Its sites:
+    the Performance screen's model rows and its "Recommended at the time of the check" line, the
+    review summary's decision counts and its Copy SHA-256 button name, an evidence link's Remove
+    link button name, the Documents error banners that name a document, and the type label of a
+    Diagnostics activity line.
+  - `common.percent` writes a percent per catalog: `{pct}%` in English, Italian, Dutch, Polish,
+    Russian and Ukrainian, `{pct}` + U+00A0 + `%` in German, Spanish and French, `%{pct}` in
+    Turkish. Its sites: the chat's context meter (`ContextMeter.tsx`) and an audio file's
+    transcribing badge (`badgeFor`, `screens/documents/format.tsx`), so German shows "15 %"
+    there with a no-break space: a plain one let "19" wrap above "%" in the context meter at
+    880×600 (owner call at the real-app check, 2026-11-14). German writes the same U+00A0 before
+    every percent sign after a figure, in the longer sentences too (the context meter's tooltip,
+    the model-start panel, the download, check and install progress lines, the invoice answer's
+    tax line; code review, 2026-11-14), and its `TYPOGRAPHY_RULES` refuse a `{placeholder}`
+    followed by `%` or ` %` (`tests/unit/i18n.test.ts`, with accept and refuse samples).
+  - `tNodes(t, key, nodes)` (`renderer/i18nNodes.tsx`) renders a pattern whose placeholders carry
+    markup, which `t` cannot, since it returns a string: the bold role name of a Performance row,
+    the glyph before a review decision, the bold type label of an activity line. It asks `t` for
+    the pattern with each placeholder left unfilled (so `t`'s fallback to English still applies),
+    splits it at the placeholders and puts each node in its place; a placeholder with no node
+    stays literal, as `t` leaves a missing param.
+  - `unitJoin(lang)` (`shared/format.ts`) is the space between a figure and its unit symbol for a
+    size or a speed built in code: a plain space in English and German, so their output is
+    unchanged, and U+00A0 in the other eight. It reads a table typed over the registry, so
+    typecheck asks a newly registered language for its space. The disk-size formatters
+    (`fmtDiskGb`, `fmtDiskSize`, `fmtPackSize`), main's not-enough-space refusal for a model
+    download (`downloads.ts`), the model card's sizes (`ModelsScreen.tsx`) and the Diagnostics
+    rows (memory, read and write speed, free space) use it.
+  - The catalogs follow the same rule: in Spanish, French, Italian, Dutch, Polish, Turkish,
+    Russian and Ukrainian a figure or a `{placeholder}` and a unit symbol (French's list: GB, MB,
+    KB, B, MB/s, tok/s, ms, s) are joined by U+00A0, and each of those languages'
+    `TYPOGRAPHY_RULES` refuses a plain space there (`joinsFigureAndUnit` in
+    `tests/unit/i18n.test.ts`); the Dutch, Polish and Ukrainian rules against a no-break space
+    allow it in exactly that one position more. English and German write a plain space.
+  - The three copied reports (Settings → Diagnostics: App & runtime and Hardware benchmark; the
+    Performance screen's report) keep a plain `": "` and plain spaces in the joins their builders
+    make in code, so a pasted report stays searchable; their lines that come from the catalog
+    follow it, U+00A0 included. `effectiveReadValue` (`DiagnosticsTab.tsx`), shared by the card
+    and the report, takes the join as an argument: the card passes `unitJoin(lang)`, the report a
+    plain space.
+  - Raw numbers in copy take the language's figures: a model card's memory figures
+    (`toLocaleString(lang)`, `ModelsScreen.tsx`). A skill answer's figures do not: they print
+    with a dot in every language, as the app read them, and the invoice answer's tax rate prints
+    the same way (`String(taxRatePercent)`, `skills/analysis/invoice.ts`), so one line never mixes
+    "5,5" with "5.50 EUR" (code review, 2026-11-14, which took back the rate's localization). The
+    licence link in the model-download and knowledge-pack-tools dialogs sits on a line of its own,
+    so no language needs a separator before it.
+  - The guard: `tests/unit/label-value-joins.test.ts` scans `src/renderer/**/*.tsx` through the
+    TypeScript AST for the join shapes the renderer has used (a JSX colon after an expression or an
+    element, a `${a}: ${b}` or `… — ${b}` template, a `': '` or `' — '` string) and fails on any
+    join that is not on its `ALLOWED` list, and on an entry that no longer matches a join.
+    `ALLOWED` holds, each with its reason, the three report builders, the brand link's tooltip and
+    accessible name in `App.tsx` (the product name, then the screen it opens), one accessible name
+    in `ReviewScreen.tsx` (an action, then the item it acts on) and the screenshot harness
+    `preview/preview.tsx`. Its limits: a join built from variables, or one in a `.ts` file, is not
+    seen.
+  - Left as they are: the dash typed in code between an activity line's time and its entry
+    (`DiagnosticsTab.tsx`); the main process's refusal to start a model that needs more memory than
+    the computer has, which is English (`registerModelIpc.ts`); and Spanish figures, which `Intl`
+    writes in the Spain pattern for every Spanish-speaking user, since it is given the language
+    code alone. The Spanish review decision labels put the decision in parentheses («Revisado
+    (respaldado)»), so the summary's join adds the only colon (owner call of 2026-11-14 in the
+    open-issues legend above).
 - Shared components RECEIVE a bound `t` prop/argument (`components/translator.ts`,
   `englishTranslator` default) — they stay pure and provider-less tests keep working (⑤).
+- **A support report carries an English copy** (open-issues wave, #812, 2026-11-14; open-issues
+  wave owner call G-7). The report builders (`buildAppRuntimeReport` and `buildBenchmarkReport` in
+  `DiagnosticsTab.tsx`, `buildReport` in `PerformanceScreen.tsx`) take one `LanguageBinding`
+  (`{ t, tCount, lang }`, `components/translator.ts`; `useT()`'s value is one) instead of separate
+  arguments, so a report is built in one language throughout. `withEnglishCopy(binding, build)`
+  returns `build(binding)` in an English or German interface; in any other it returns that
+  report, a divider line naming English by its registry name (`--- English ---`), then
+  `build(englishBinding)`. The three Copy buttons copy through it. The English half has plain
+  spaces throughout, as the English catalog does, and equals the report an English interface
+  copies from the same data (`DiagnosticsCopySave.test.tsx`, `PerformanceScreen.test.tsx`, through
+  the real buttons in every registered language). The languages a report is read in as it is,
+  `['en', 'de']`, are the languages the maintainers read, not derived from the registry, so a
+  newly registered language gets the English half too; the list is a reviewed exception to the
+  hard-coded-language ban in `tests/unit/i18n-unused-keys.test.ts`.
 - `MIC_BLOCKED_MESSAGE` stays canonical English in `lib/dictation.ts` and is exact-matched
   at display in `DictationButton` — the renderer-internal analogue of the display map.
 - Tests assert via `t('en', key)` / the `en` catalog, never re-typed literals; German
@@ -6211,7 +6353,16 @@ one, and each glossary is pinned on top of its catalog file.
   count), or
   the key renders only inside an English or German evidence pack (D-L11). English and German keep
   their wording; where it reads wrong at exactly 1 ("1 sections scanned") that is a follow-up
-  (owner call 2026-11-12, legend above). The
+  (owner call 2026-11-12, legend above). **Amended 2026-11-14 (open-issues wave, #806;
+  open-issues wave owner call G-5):** the eighteen English and German keys whose count can be
+  exactly 1 now state it label-first too ("Sections scanned: 1", "I read the whole invoice. Line
+  items: **1**.", "Based on sections: 1 of 1"), the "(s)" forms among them; two of them are
+  evidence-pack lines ("Required items decided: {decided} of {required}" and the input-coverage
+  line). `LABEL_FIRST_AT_ONE`, beside `NON_GRAMMATICAL`, lists them, and a row refuses in their
+  English and German values a count followed by a word (except "of"/"von" between two counts) and
+  a plural crutch such as "line(s)", "Dokument(e)" or "Zeile(n)". English and German keep a noun
+  after the figure only where the figure is never 1 (each group's reason says where).
+  `chat.speed.line` is left as it is, so English reads "1 tokens" after a one-token answer. The
   net finds such keys two ways: in the source, a TypeScript-AST scan of every call or
   `{ key, params }` table that fills a placeholder with a number or with text formatted from one
   (two variable hops back); in the catalog, placeholder names that always carry a number

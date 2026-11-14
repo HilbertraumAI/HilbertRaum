@@ -39,7 +39,7 @@ import type {
   RuntimeStatus
 } from '@shared/types'
 import { isUnresolvedDownloadResult } from '@shared/downloads'
-import { fmt1, fmtDiskGb } from '@shared/format'
+import { fmt1, fmtDiskGb, unitJoin } from '@shared/format'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 
 // "AI Model" screen (guidelines §2/§3 principle: singular mental model).
@@ -86,7 +86,7 @@ const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; i
  * rounded from 10 GB up to a whole number, so a card reading 14.4 offered "13 GB" in its dialog).
  */
 function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): string {
-  return bytes != null ? fmtDiskGb(bytes, lang) : `${fmt1(fallbackGb, lang)} GB`
+  return bytes != null ? fmtDiskGb(bytes, lang) : `${fmt1(fallbackGb, lang)}${unitJoin(lang)}GB`
 }
 
 /**
@@ -110,10 +110,11 @@ function licenseLink(url: string | null | undefined): { href: string; host: stri
 /**
  * A GB number that is ALREADY a GB value (manifest fields, not bytes) → locale string
  * (M-U5). Unlike `fmtGb` this does not round the manifest figure away; it only routes
- * the decimal separator + grouping through the UI language (German "4,5 GB").
+ * the decimal separator + grouping through the UI language (German "4,5 GB"), and the space before
+ * the unit (`unitJoin`, #804).
  */
 function fmtGbNum(gb: number, lang: UiLanguage): string {
-  return `${gb.toLocaleString(lang)} GB`
+  return `${gb.toLocaleString(lang)}${unitJoin(lang)}GB`
 }
 
 /**
@@ -1051,11 +1052,13 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     // model may start the built-in mock (developer + policy gates).
     const canMockStart = Boolean(m.startableAsMock)
     // RAM gate: this machine has less memory than the model's minimum. Select/Start are
-    // disabled (the main process refuses installed weights too); copy stays friendly.
+    // disabled (the main process refuses installed weights too); copy stays friendly. The figures
+    // take the UI language's decimal separator (#804), like `fmtGbNum`.
     const ramTooLow = m.insufficientRam === true
+    const minRam = m.recommendedMinRamGb.toLocaleString(lang)
     const ramHint = ramTooLow
-      ? t('models.ram.needs', { min: m.recommendedMinRamGb }) +
-        (machineRam != null ? t('models.ram.machine', { ram: machineRam }) : '') +
+      ? t('models.ram.needs', { min: minRam }) +
+        (machineRam != null ? t('models.ram.machine', { ram: machineRam.toLocaleString(lang) }) : '') +
         t('models.ram.advice')
       : undefined
     // A start in flight (server truth, survives a revisit): this model's own, or any.
@@ -1088,7 +1091,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             )}
             {ramTooLow && (
               <Badge tone="warning" icon="⚠" title={ramHint}>
-                {t('models.badge.ramNeeded', { min: m.recommendedMinRamGb })}
+                {t('models.badge.ramNeeded', { min: minRam })}
               </Badge>
             )}
             <Badge tone={STATE_BADGE[m.state].tone} icon={STATE_BADGE[m.state].icon}>
@@ -1314,9 +1317,9 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           <dt>{t('models.confirm.license')}</dt>
           <dd>
             {m.license}
+            {/* #804: the link on a line of its own, so no language needs a separator before it. */}
             {license && (
-              <>
-                {' — '}
+              <div>
                 <a href={license.href} target="_blank" rel="noreferrer">
                   {t('models.confirm.readLicense')}
                 </a>
@@ -1324,7 +1327,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
                 {' ('}
                 <code>{license.host}</code>
                 {')'}
-              </>
+              </div>
             )}
           </dd>
           <dt>{t('models.confirm.from')}</dt>

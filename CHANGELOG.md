@@ -42,6 +42,27 @@ from its first public `1.0.0` release onward.
   show System, English and Deutsch as three buttons side by side; it is now a list, with room for
   more languages. The choices and how they work are unchanged, and a change still applies right
   away.
+- **The internet setting now names everything it allows.** In Settings, "Allow internet access for
+  model downloads and updates" is now "Allow internet access for downloads and updates": the same
+  switch also covers the AI engine, the knowledge-pack tools and the text-recognition (OCR) files.
+  On Settings → Privacy & data, the line shown while internet access is allowed now lists the OCR
+  files too, and the line shown while it is off no longer says the network is off "by default"
+  (it is on by default); it says internet access is turned off in Settings (#805).
+- **Clearer wording in a number of places.** The privacy statement says the AI model runs "on this
+  computer", not "on your laptop". After a re-index in which some documents failed, the message
+  points to "Needs attention" instead of a "Failed imports" tab that no longer exists. The note on
+  find-and-replace edits says a Word document keeps its .docx format and other formats are saved
+  as plain text. In the Activity log, the type label and the type filter no longer call a section
+  or a project a "collection" (the entry's own stored message still does). The chat's scope names
+  a project as Project “Tax 2026” instead of "Project: Tax 2026". The automatic-skill setting's
+  hint and the note on an answer it applied say you can get an answer without the skill. The
+  licence link reads "Read the license". These are fixed in English and German, and in the other
+  languages wherever their text had the same slip (#805).
+- **Copy reports for support now include an English copy.** In any interface language but English
+  and German, the Copy buttons in Settings → Diagnostics (App & runtime, Hardware benchmark) and
+  Copy report on the Performance screen copy the report in your language, then a line "--- English ---", then
+  the same report in English, so the people helping you can read it. In English and German you
+  get one report, as before (#812).
 
 ### Fixed
 
@@ -60,6 +81,32 @@ from its first public `1.0.0` release onward.
 - **A computer with one processor core now reads "(1 core)".** The hardware details in Settings →
   Diagnostics and on the Performance screen, and the reports their Copy buttons make, said
   "(1 cores)" next to the processor on such a machine (German: "(1 Kerne)").
+- **Sizes, percentages and labels now follow each language's typography.** In Spanish, French,
+  Italian, Dutch, Polish, Turkish, Russian and Ukrainian a size such as "23 GB" no longer breaks
+  across two lines between the figure and the unit. The chat's context meter and an audio file's
+  transcribing badge write the percentage the language's way (Turkish "%15", French and Spanish
+  "15 %"), and German now shows "15 %" there too. In French, Spanish and German the space before
+  the sign is a no-break space, so the figure and the sign stay on one line; German now writes it
+  before every percentage, in the download, check and install progress lines too. A label and its
+  value are joined the way the language does it (French puts a space before the colon). The
+  licence link in the model-download and knowledge-pack-tools dialogs now sits on its own line
+  instead of after a dash. A model card's memory figures use the language's decimal separator.
+  The tax rate in an invoice answer keeps its decimal point, like the amounts beside it, so a
+  German answer reads "Steuer (5.5 %)". The Spanish review summary no longer shows two colons
+  ("Revisado: respaldado: 0"): the decisions read "Revisado (respaldado)" (#804).
+- **Counts of exactly 1 now read right in English and German.** Answers and coverage lines such as
+  "I read 1 transactions", "Based on 1 of 1 sections" or "1 line(s) …" now put the count after a
+  label: "I read the whole statement. Transactions: 1.", "Based on sections: 1 of 1". The two
+  evidence-pack lines that count decided items and input coverage read the same way ("Required
+  items decided: 0 of 2"). The other languages already wrote these counts this way. One English
+  line is unchanged: the speed line under an answer still reads "1 tokens" after a one-token
+  answer (#806).
+- **A file that can't be read now says so in your language.** When importing, re-indexing or
+  attaching a document fails with an error the app doesn't recognise, such as a file reader's own
+  English message ("Invalid PDF structure."), a line in the interface language now stands above
+  that message: "This file couldn't be processed." on the document's row on the Documents screen,
+  and "Couldn't add report.pdf to this chat.", with the file's name, in the chat's banner for a
+  failed attachment. Messages the app recognises read as before (#807).
 
 ## [0.1.65] — 2026-11-11
 

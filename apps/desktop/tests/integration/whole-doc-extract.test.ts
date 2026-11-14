@@ -10,7 +10,7 @@ import {
 import { buildListingAnswer } from '../../src/main/services/analysis/listing-answer'
 import { ModelSlotArbiter } from '../../src/main/services/analysis/model-slot-arbiter'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import { EXTRACT_RECORD_TYPES, type RetrievalScope } from '../../src/shared/types'
+import { EXTRACT_RECORD_TYPES, type ExtractionListing, type RetrievalScope } from '../../src/shared/types'
 import {
   docTaskManager,
   docTaskRuntime,
@@ -391,8 +391,8 @@ describe('aggregateExtractions', () => {
   it('a multi-doc scope with extraction on only ONE doc says "sections scanned", NOT "whole document" [RAG-1]', async () => {
     // Two indexed, fully-chunked documents, but extraction ran on only A. `fullyChunked` is
     // true (neither doc is missing the marker), yet only A's chunks carry a `__scan__` marker
-    // → scannedChunks < totalChunks. The over-claim the H7 invariant forbids is "across the
-    // whole document"; the honest wording is "across N sections scanned".
+    // → scannedChunks < totalChunks. The over-claim the H7 invariant forbids is "the whole
+    // document"; the honest wording is "sections scanned: N".
     const a = await importText(w, 'Pay @@alice@@ and @@bob@@.', { name: 'a.txt' })
     const b = await importText(w, 'Some unrelated text with no tokens to extract.', { name: 'b.txt' })
     await extractOf(a) // NOT b
@@ -445,6 +445,48 @@ describe('aggregateExtractions', () => {
     const answer = buildListingAnswer(db, listing, tr)
     expect(answer).not.toMatch(/Build deep index/)
     expect(answer).not.toMatch(/bank-statement skill/)
+  })
+
+  // #806: the coverage line leading every listing answer reads right at 1 and at 2, in English and
+  // German ("Found 1 dates … 1 sections scanned" before). The listing is built by hand so the found
+  // and scanned counts and the whole-document branch are set exactly; no item names a source
+  // section, so no chunk is read. Where a line holds both counts they differ (2 sections scanned
+  // beside 1 found, 1 beside 2), so a swapped placeholder shows; the empty line holds only the
+  // scanned count, which is the row's own.
+  type ListingLine = 'coverageWhole' | 'coverageSections' | 'empty'
+  const LISTING_LINES: Record<'en' | 'de', Record<ListingLine, (found: number, scanned: number) => string>> = {
+    en: {
+      coverageWhole: (n, s) => `Searched the whole document — dates found: ${n}; sections scanned: ${s}:`,
+      coverageSections: (n, s) => `Search result — dates found: ${n}; sections scanned: ${s}:`,
+      empty: (_n, s) => `No dates found — sections scanned: ${s}.`
+    },
+    de: {
+      coverageWhole: (n, s) => `Das ganze Dokument durchsucht — gefundene Daten: ${n}; durchsuchte Abschnitte: ${s}:`,
+      coverageSections: (n, s) => `Suchergebnis — gefundene Daten: ${n}; durchsuchte Abschnitte: ${s}:`,
+      empty: (_n, s) => `Keine Daten gefunden — durchsuchte Abschnitte: ${s}.`
+    }
+  }
+  it.each(
+    (['en', 'de'] as const).flatMap((code) =>
+      (['coverageWhole', 'coverageSections', 'empty'] as const).flatMap((line) =>
+        [1, 2].map((n) => [code, line, n] as const)
+      )
+    )
+  )('%s: the %s line at %i states the counts label-first (#806)', (code, line, n) => {
+    const scanned = line === 'empty' ? n : 3 - n
+    const listing: ExtractionListing = {
+      recordType: 'date',
+      items:
+        line === 'empty'
+          ? []
+          : ['2026-01-15', '2026-02-01'].slice(0, n).map((value) => ({ value, count: 1, sourceChunkIds: [] })),
+      scannedChunks: scanned,
+      unparsedChunks: 0,
+      totalChunks: scanned,
+      fullyChunked: line !== 'coverageSections'
+    }
+    const answer = buildListingAnswer(db, listing, (k, p) => t(code, k, p))
+    expect(answer.split('\n')[0]).toBe(LISTING_LINES[code][line](n, scanned))
   })
 
   // Issue #54 (owner decision 2026-07-17, option 1): an aggregation-shaped ask (categorize /

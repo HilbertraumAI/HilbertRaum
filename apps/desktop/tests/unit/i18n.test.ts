@@ -72,14 +72,15 @@ describe('t — lookup and interpolation', () => {
 
   it('U1/ux-10: the extract coverage badge is softened from "Every match found" (overclaim) to "Read"', () => {
     // "Every match found" asserted the EXTRACTION was exhaustive — a small model / unusual layout can miss
-    // a match. The honest claim is that every section was READ, not that every match was captured.
+    // a match. The honest claim is that every section was READ (or scanned, the label-first
+    // "Sections scanned: 3" of #806), not that every match was captured.
     for (const key of ['coverage.extract.whole', 'coverage.extract.sections'] as MessageKey[]) {
       // Supply the {scanned} param so the REAL German renders — without it, a missing param makes `t('de')`
       // fall back to English, and the negative assertion would inspect English (vacuously passing).
       expect(t('en', key, { scanned: 3 })).not.toMatch(/every match/i)
-      expect(t('en', key, { scanned: 3 })).toMatch(/read/i)
+      expect(t('en', key, { scanned: 3 })).toMatch(/\b(read|scanned)\b/i)
       expect(t('de', key, { scanned: 3 })).not.toMatch(/jeder treffer/i)
-      expect(t('de', key, { scanned: 3 })).toMatch(/gelesen/i)
+      expect(t('de', key, { scanned: 3 })).toMatch(/gelesen|durchsucht/i)
     }
   })
 })
@@ -275,6 +276,25 @@ function forbids(pattern: RegExp, title: string, message: string): TypographyRul
   }
 }
 
+/**
+ * The unit symbols the formatters print (`shared/format.ts`, `unitJoin`), as a catalog writes them
+ * after a figure: a symbol, then no letter and no apostrophe ("{n} s" is seconds, "{n} sezioni" is
+ * not). French's list, which the seven other catalogs that write U+00A0 there share (#804,
+ * open-issues wave owner call G-3).
+ */
+const UNIT_SYMBOL = '(?:GB|MB|KB|B|MB/s|tok/s|ms|s)(?![\\p{L}’])'
+
+/** A plain space between a figure or a {placeholder} and a unit symbol: the catalog must write
+ *  U+00A0 there, as `unitJoin` does for a size built in code, so the two never mix on a screen and
+ *  a size cannot wrap between "23" and "GB" (#804). */
+function joinsFigureAndUnit(language: string): TypographyRule {
+  return forbids(
+    new RegExp(`[}\\d] ${UNIT_SYMBOL}`, 'u'),
+    'joins a figure and its unit symbol with a no-break space',
+    `${language} values with a plain space between a figure and its unit — write \\u00A0`
+  )
+}
+
 // The rules run over the CATALOG VALUES only: a catalog file's own comments are not shipped
 // copy, and technical field names inside notes ("{field}", "language") legitimately keep
 // straight ASCII pairs. Typecheck makes every registered language list its rules here.
@@ -294,6 +314,13 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       '“',
       'never uses “ as an OPENING quote (the pair is „…“, not “…”)',
       '“ used before its „ — German opens low, closes high'
+    ),
+    // #804, code review 2026-11-14: German writes a percent after a figure with U+00A0, as
+    // `common.percent` does, so the sign never wraps to a line of its own and every value agrees.
+    forbids(
+      /\} ?%/,
+      'separates a {placeholder} from % with a no-break space',
+      'German values with {x}% or {x} % — write {pct}\\u00A0%'
     )
   ],
   // Spanish: the typography of design-guidelines §7 "Spanish microcopy".
@@ -363,7 +390,8 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       /[^\u00A0]%/,
       'separates a figure from % with a no-break space',
       'Spanish values with % not preceded by U+00A0 — write {pct}\\u00A0%'
-    )
+    ),
+    joinsFigureAndUnit('Spanish')
   ],
   // French: the typography of design-guidelines §7 "French microcopy".
   fr: [
@@ -432,11 +460,7 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'writes the œ ligature',
       'French values with "oeu"/"oei" — write œ (cœur, œuvre, œil, nœud)'
     ),
-    forbids(
-      /[}\d] (?:GB|MB|KB|B|MB\/s|tok\/s|ms|s)(?![\p{L}’])/u,
-      'joins a figure and its unit symbol with a no-break space',
-      'French values with a plain space between a figure and its unit — write \\u00A0'
-    ),
+    joinsFigureAndUnit('French'),
     forbids(
       /[}\d][\u00A0 ](?:Go|Mo|Ko|octets?)(?!\p{L})/u,
       'keeps the Latin size symbols the formatters print',
@@ -520,7 +544,8 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       /[^\S\n][;:!?](?=\s|$)/u,
       'puts no space before ; : ! ?',
       'Italian values with a space before ; : ! or ? — that is the French convention'
-    )
+    ),
+    joinsFigureAndUnit('Italian')
   ],
   // Russian: the typography of design-guidelines §7 "Russian microcopy".
   ru: [
@@ -592,7 +617,8 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       /(?<![А-Яа-я])(?:[ГМКТ][Бб]|кБ|сек|мс)(?![А-Яа-я])/,
       'keeps the unit symbols the formatters print (GB, MB, KB, s, ms)',
       'a Cyrillic unit symbol next to the Latin ones the app prints'
-    )
+    ),
+    joinsFigureAndUnit('Russian')
   ],
   // Dutch: the typography of design-guidelines §7 "Dutch microcopy".
   nl: [
@@ -644,10 +670,12 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'Dutch values with a space before % — write {pct}% as Intl prints it'
     ),
     forbids(
-      /[\u00A0\u202F\u2009]/u,
-      'uses no no-break or thin space',
-      'Dutch values with U+00A0, U+202F or U+2009 — Dutch typography needs none; use a plain space'
+      new RegExp(`[\\u202F\\u2009]|(?<![}\\d])\\u00A0|\\u00A0(?!${UNIT_SYMBOL})`, 'u'),
+      'uses no no-break or thin space, but U+00A0 between a figure and its unit symbol',
+      'Dutch values with U+202F, U+2009, or U+00A0 anywhere but between a figure and its unit symbol ' +
+        '({size}\\u00A0GB) — Dutch typography needs none elsewhere; use a plain space'
     ),
+    joinsFigureAndUnit('Dutch'),
     forbids(
       /(?<![\p{L}\p{N}{’-])(?:u|uw|uzelf|jullie|gij)(?![\p{L}\p{N}}’-])/iu,
       'addresses the reader as je',
@@ -708,6 +736,7 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'writes the percent sign before the figure, without a space',
       'Turkish values with a figure before % or a space after % — write %{pct}'
     ),
+    joinsFigureAndUnit('Turkish'),
     forbids(
       /\.\.\.|\s…/u,
       'writes the ellipsis as one character, attached to the word before it',
@@ -816,10 +845,15 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'Polish values with a space before % — write {pct}% (Intl prints 75%)'
     ),
     forbids(
-      /(?<!\d)\u00A0|\u00A0(?!\d)|[\u202F\u2009\u00AD\u200B]/u,
-      'uses a no-break space only between the digit groups of a typed figure',
-      'Polish values with U+00A0 outside a typed figure (200\\u00A0000), or with U+202F, U+2009, U+00AD or U+200B — catalog text uses plain spaces'
+      new RegExp(
+        `(?<![}\\d])\\u00A0|(?<=\\})\\u00A0(?!${UNIT_SYMBOL})|(?<=\\d)\\u00A0(?!\\d|${UNIT_SYMBOL})|[\\u202F\\u2009\\u00AD\\u200B]`,
+        'u'
+      ),
+      'uses a no-break space only between the digit groups of a typed figure, or between a figure and its unit symbol',
+      'Polish values with U+00A0 outside a typed figure (200\\u00A0000) and not before a unit symbol ({size}\\u00A0GB), ' +
+        'or with U+202F, U+2009, U+00AD or U+200B — catalog text uses plain spaces'
     ),
+    joinsFigureAndUnit('Polish'),
     forbids(
       /\d[ ,.]\d{3}(?!\d)/u,
       'groups a typed figure with a no-break space',
@@ -933,10 +967,15 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'Ukrainian values with ! — the copy is calm (design-guidelines §7); end the sentence with a full stop'
     ),
     forbids(
-      /(?<!\d)\u00A0|\u00A0(?!\d)|\u202F|\d \d{3}(?!\d)|\d,\d{3}(?!\d)/u,
-      'groups a typed figure with U+00A0 and uses no other no-break space',
-      'Ukrainian values with a no-break space outside a figure, a narrow no-break space, or a typed figure grouped with a plain space or a comma — write the group separator as \\u00A0, as Intl prints it'
+      new RegExp(
+        `(?<![}\\d])\\u00A0|(?<=\\})\\u00A0(?!${UNIT_SYMBOL})|(?<=\\d)\\u00A0(?!\\d|${UNIT_SYMBOL})|\\u202F|\\d \\d{3}(?!\\d)|\\d,\\d{3}(?!\\d)`,
+        'u'
+      ),
+      'groups a typed figure with U+00A0, joins a figure and its unit symbol with it, and uses no other no-break space',
+      'Ukrainian values with a no-break space outside a figure and not before a unit symbol ({size}\\u00A0GB), a narrow no-break space, ' +
+        'or a typed figure grouped with a plain space or a comma — write the group separator as \\u00A0, as Intl prints it'
     ),
+    joinsFigureAndUnit('Ukrainian'),
     forbids(
       /\}[\p{L}\u02BC]|\}-\p{Script=Cyrillic}/u,
       'glues no ending to a placeholder',
@@ -1082,6 +1121,119 @@ describe('Turkish and Ukrainian typography — the suffix, letter and apostrophe
   })
 })
 
+// The figure-unit rule (#804, open-issues wave owner call G-3) and the three no-break-space rules
+// it relaxes, tried on samples: every catalog that writes U+00A0 before a unit symbol refuses the
+// plain space there, and Dutch, Polish and Ukrainian allow U+00A0 in exactly that one position
+// more. Read from TYPOGRAPHY_RULES by title, like the rows above.
+describe('figure and unit — the no-break space before a unit symbol, on samples (#804)', () => {
+  const NBSP = String.fromCharCode(0xa0)
+  const UNIT_RULE = 'joins a figure and its unit symbol with a no-break space'
+  const NBSP_RULES = {
+    nl: 'uses no no-break or thin space, but U+00A0 between a figure and its unit symbol',
+    pl: 'uses a no-break space only between the digit groups of a typed figure, or between a figure and its unit symbol',
+    uk: 'groups a typed figure with U+00A0, joins a figure and its unit symbol with it, and uses no other no-break space'
+  } as const
+  const flags = (code: UiLanguage, title: string, sample: string): boolean => {
+    const found = TYPOGRAPHY_RULES[code].find((r) => r.title === title)
+    if (found === undefined) throw new Error(`no ${code} typography rule titled ${title}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each(['es', 'fr', 'it', 'nl', 'pl', 'tr', 'ru', 'uk'] as const)(
+    '%s refuses a plain space between a figure and its unit, and takes U+00A0 there',
+    (code) => {
+      expect(flags(code, UNIT_RULE, '{size} GB')).toBe(true)
+      expect(flags(code, UNIT_RULE, `{size}${NBSP}GB`)).toBe(false)
+    }
+  )
+
+  it.each([
+    ['a no-break space', `{size}${NBSP}GB`],
+    ['a word that begins with s', '{count} sezioni'],
+    ['a word that begins with B', '{count} Bytes'],
+    ['a word that begins with MB', '{count} MBit'],
+    ['a unit after a word', 'Speicher GB']
+  ])('the unit rule accepts %s', (_label, sample) => {
+    expect(flags('es', UNIT_RULE, sample)).toBe(false)
+  })
+
+  it.each([
+    ['GB after a placeholder', '{gb} GB'],
+    ['GB after a typed figure', '4,5 GB'],
+    ['MB', '{size} MB'],
+    ['KB', '2,0 KB'],
+    ['B', '512 B'],
+    ['MB/s', '{mbps} MB/s'],
+    ['tok/s', '{tps} tok/s'],
+    ['ms', '{ms} ms'],
+    ['s', '{ttft} s'],
+    ['s before a full stop', '{seconds} s.'],
+    ['a second unit in one value', `{tps}${NBSP}tok/s · {ttft} s`]
+  ])('the unit rule refuses a plain space before %s', (_label, sample) => {
+    expect(flags('es', UNIT_RULE, sample)).toBe(true)
+  })
+
+  it.each(
+    (['nl', 'pl', 'uk'] as const).flatMap((code) => [
+      [code, 'GB after a placeholder', `{size}${NBSP}GB`],
+      [code, 'MB/s after a typed figure', `5${NBSP}MB/s`],
+      [code, 's after a placeholder', `{ttft}${NBSP}s`]
+    ])
+  )('%s: the no-break-space rule allows U+00A0 before a unit symbol (%s)', (code, _label, sample) => {
+    expect(flags(code, NBSP_RULES[code], sample)).toBe(false)
+  })
+
+  it.each(
+    (['nl', 'pl', 'uk'] as const).flatMap((code) => [
+      [code, 'after a placeholder, before a word', `{name}${NBSP}model`],
+      [code, 'between two words', `a${NBSP}b`],
+      [code, 'before a word that begins with s', `{count}${NBSP}sekund`],
+      [code, 'before a unit, after a word', `Speicher${NBSP}GB`]
+    ])
+  )('%s: the no-break-space rule still refuses U+00A0 %s', (code, _label, sample) => {
+    expect(flags(code, NBSP_RULES[code], sample)).toBe(true)
+  })
+
+  // The digit groups of a typed figure keep their U+00A0 in Polish and Ukrainian; Dutch has none.
+  it.each([
+    ['pl', false],
+    ['uk', false],
+    ['nl', true]
+  ] as const)('%s: a typed figure grouped with U+00A0 is refused: %s', (code, refused) => {
+    expect(flags(code, NBSP_RULES[code], `200${NBSP}000`)).toBe(refused)
+  })
+})
+
+// The German percent rule (#804, code review 2026-11-14), tried on samples so a rule that has
+// stopped matching anything cannot pass the catalog row alone. Read from TYPOGRAPHY_RULES by title.
+describe('German typography — the percent rule on samples (#804)', () => {
+  const NBSP = String.fromCharCode(0xa0)
+  const TITLE = 'separates a {placeholder} from % with a no-break space'
+  const flags = (sample: string): boolean => {
+    const found = TYPOGRAPHY_RULES.de.find((r) => r.title === TITLE)
+    if (found === undefined) throw new Error(`no de typography rule titled ${TITLE}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each([
+    ['a no-break space', `{pct}${NBSP}%`],
+    ['a no-break space inside parentheses', `- Steuer ({rate}${NBSP}%): **{value}**`],
+    ['a no-break space before a full stop', `bisher etwa {pct}${NBSP}%. Es geht weiter`],
+    ['a percent sign after a word', 'Angaben in %']
+  ])('accepts %s', (_label, sample) => {
+    expect(flags(sample)).toBe(false)
+  })
+
+  it.each([
+    ['a plain space', '{pct} %'],
+    ['no space', '{pct}%'],
+    ['no space inside parentheses', '- Steuer ({rate}%): **{value}**'],
+    ['a plain space in a longer value', 'Modell {n} von {m} wird geprüft: {name} — {pct} %']
+  ])('refuses %s', (_label, sample) => {
+    expect(flags(sample)).toBe(true)
+  })
+})
+
 describe('German typography — quotation marks (design-guidelines §7 "Typography")', () => {
   it('the strings the sweep corrected read with German closers', () => {
     expect(de['images.avail.ocrPointer']).toContain('„Durchsuchbar machen (OCR)“')
@@ -1096,6 +1248,26 @@ describe('German typography — quotation marks (design-guidelines §7 "Typograp
 
   it('does not touch the English catalog (straight quotes stay straight there)', () => {
     expect(en['images.avail.ocrPointer']).not.toMatch(/„|“/)
+  })
+})
+
+describe('a quoted label is the real one — the partial re-index toast (#805 W1)', () => {
+  // The toast sends the user to the Documents rail entry that lists the failed documents. A quote
+  // there must be the entry's own label (`docs.smart.attention`), or the toast names a place the
+  // screen does not show (it used to send them to "the Failed imports tab"). English,
+  // German and Spanish quote it (the owner-approved W1 scope); a language that describes the entry
+  // unquoted is not asserted (Italian, S-W2-3), but whatever a language does quote must be the label.
+  const NAMES_THE_LABEL: readonly UiLanguage[] = ['en', 'de', 'es']
+  /** The text inside each pair of double quotation marks, any house style ("…", “…”, „…“, «…»). */
+  const quoted = (value: string): string[] =>
+    [...value.matchAll(/["“„«]([^"“”„«»]+)["”“»]/g)].map((match) => match[1].trim())
+
+  it.each(UI_LANGUAGE_CODES)('%s: docs.reindexAllPartial quotes exactly the docs.smart.attention label', (code) => {
+    const catalog = catalogOf(code)
+    const label = catalog['docs.smart.attention']
+    const spans = quoted(catalog['docs.reindexAllPartial'])
+    if (NAMES_THE_LABEL.includes(code)) expect(spans, `${code} names the rail entry (W1)`).not.toEqual([])
+    expect(spans.filter((span) => span !== label), `a quote that is not the rail label "${label}"`).toEqual([])
   })
 })
 
@@ -1829,9 +2001,11 @@ const isPluralForm = (key: string): boolean => isPluralFormOf(PLURAL_BASES, key)
 /**
  * Plain keys that show a number, grouped by what keeps them right in every language. Where a
  * reason says what the translations other than English and German must do, it is a requirement
- * on every such catalog, today's and any added later. "The English singular slip" is an English
- * or German sentence that reads wrong at exactly 1 ("1 sections scanned", the kind the "(1 core)"
- * fix corrected): left to a follow-up (owner call, 2026-11-12).
+ * on every such catalog, today's and any added later. An English or German sentence that read
+ * wrong at exactly 1 ("1 sections scanned", the kind the "(1 core)" fix corrected) now states its
+ * count label-first too (#806, open-issues wave owner call G-5); LABEL_FIRST_AT_ONE below names
+ * those keys and the row under it holds them to that shape. They stay listed here: they still show
+ * a number with no plural pair.
  */
 const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly MessageKey[] }>> = {
   parenthetical: {
@@ -1851,7 +2025,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'skills.redactionRouting.scan',
       'models.library.showVariants',
       'models.library.hideVariants',
-      'main.dialog.openLink.truncated' // #236: "characters not shown: {hidden}."
+      'main.dialog.openLink.truncated', // #236: "characters not shown: {hidden}."
+      'common.labelValue' // #804: "{label}: {value}", a review decision's count after the colon
     ]
   },
   ratio: {
@@ -1909,6 +2084,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'models.ram.needs',
       'models.ram.machine',
       'models.badge.ramNeeded',
+      'common.percent',
       'perf.report.otherComputer',
       'perf.model.need',
       'perf.model.needEstimate',
@@ -1968,6 +2144,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     keys: [
       'main.workspace.passwordTooShort',
       'main.workspace.newPasswordTooShort',
+      'password.strength.minHint', // #805 S4: "{min}" is MIN_PASSWORD_LENGTH (passwordStrength)
       'skills.import.note.listTruncated',
       'skills.import.note.localizedTooMany'
     ]
@@ -1976,7 +2153,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       'Renders only inside an evidence pack, which is written in English or German (UI-languages owner ' +
       'call D-5 (b)); no other language carries packExport.* keys (UI-languages owner call D-14 (a)). ' +
-      'An English or German pack line that reads wrong at exactly 1 is the singular slip left to a follow-up.',
+      'Every pack line is a label ("Item {n}") or states its count after one ("Outstanding follow-ups: ' +
+      '{count}", "Required items decided: {decided} of {required}", #806), so nothing agrees with it at 1.',
     keys: [
       'packExport.meta.formatValue',
       'packExport.meta.formatValuePdf',
@@ -1992,8 +2170,10 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'A noun after the figure ("tokens", "sections", "layers") agrees with it in every language. The ' +
       'translations other than English and German must put the noun first as a label ' +
       '("Tokens: {tokens}"), or write a unit symbol where the figure has decimals ' +
-      '("{tps} tok/s"). English and German read wrong only where the figure can be exactly 1 ' +
-      '(the English singular slip left to a follow-up).',
+      '("{tps} tok/s"). English and German keep the noun after the figure only where it cannot be 1 ' +
+      '(the Performance and benchmark figures, a page count of at least 2); where it can, they put ' +
+      'the noun first too ("Sections scanned: {scanned}", #806). One exception is left as it is ' +
+      '(#806, open-issues wave owner call G-5): chat.speed.line reads "1 tokens" after a one-token answer.',
     keys: [
       'chat.speed.line',
       // The count is at least 2 here (a single page has its own sentence, ocrNotes.ts), so en/de/fr/es/it
@@ -2015,9 +2195,11 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstOf: {
     reason:
       '"{a} of {b} <noun>": the noun follows {b}. With b of at least 2 it is plural in en/de/fr/es/it, ' +
-      'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere ' +
-      '(in English and German, the singular slip left to a follow-up). The translations ' +
-      'other than English and German must put the noun first ("Sections: {covered} of {total}").',
+      'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere. ' +
+      'The translations other than English and German must put the noun first ("Sections: {covered} ' +
+      'of {total}"). English and German keep the noun after {b} only where b is at least 2 (a deep ' +
+      'index in progress, the OCR page counts, the layer counts); where b can be 1 they put it first ' +
+      'too ("Based on sections: {covered} of {total}", #806).',
     keys: [
       // #576/#538: these two render only when the total is at least 2 (ocrNotes.ts).
       'docs.previewModal.ocrInfoPartial',
@@ -2038,8 +2220,11 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       'The count governs a noun, and often a verb, inside a sentence, which agrees with it in every ' +
       'language. The translations other than English and German must state the count label-first ' +
-      '("Transactions read: **{count}**"); where the English and German sentence can meet 1 ' +
-      '("I read 1 transactions"), that is the singular slip left to a follow-up.',
+      '("Transactions read: **{count}**"), and English and German do so too wherever the count can ' +
+      'be 1 (#806). Three keep the count inside the English and German sentence because it never ' +
+      'meets 1 there: skills.analysis.selectOne (two or more documents in scope), packs.addPartial ' +
+      '(a partial add has at least one added and one failed archive) and review.evidence.shownCount ' +
+      '(shown only while more sources remain).',
     keys: [
       'skills.bankAnalysis.count',
       'skills.bankAnalysis.countPartial',
@@ -2081,6 +2266,35 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     ]
   }
 }
+
+/**
+ * #806 (open-issues wave owner call G-5): the NON_GRAMMATICAL keys whose count can be exactly 1 and
+ * whose English and German sentence used to put a word after it ("I read 1 transactions", "Read
+ * across 1 sections scanned", "the other 1 document(s)"). Both catalogs now state these counts
+ * label-first, as the other eight already did. Only these keys, not their whole groups:
+ * `chat.speed.line` ("{tokens} tokens") stays as it is (open-issues wave G-5), and the rest never
+ * meet 1 (each group's reason says why).
+ */
+const LABEL_FIRST_AT_ONE: readonly MessageKey[] = [
+  'skills.bankAnalysis.count',
+  'skills.bankAnalysis.countPartial',
+  'skills.bankAnalysis.countContradicted',
+  'skills.bankAnalysis.unverifiedCaveat',
+  'skills.invoiceAnalysis.count',
+  'skills.invoiceAnalysis.countPartial',
+  'skills.analysis.scopeNarrowed',
+  'skills.analysis.selectTwo',
+  'analysis.listing.coverageWhole',
+  'analysis.listing.coverageSections',
+  'analysis.listing.empty',
+  'coverage.extract.whole',
+  'coverage.extract.wholeUnparsed',
+  'coverage.extract.sections',
+  'coverage.extract.sectionsUnparsed',
+  'coverage.relevance.counted',
+  'packExport.summary.progress',
+  'packExport.coverage.inputStatement'
+]
 
 /** Listed keys the net cannot see, and how their number reaches them (reviewed by hand, 2026-11-12). */
 const SEEN_BY_HAND: Readonly<Partial<Record<MessageKey, string>>> = {
@@ -2219,6 +2433,35 @@ describe('CODE-8 net: a key that shows a number is a plural pair or on the revie
       expect(isPluralForm(key), `${key} is a plural form: take it off NON_GRAMMATICAL`).toBe(false)
       expect(placeholders(values[key]).length, `${key} shows no figure any more`).toBeGreaterThan(0)
     }
+  })
+
+  // #806: a count that can be 1 is followed by no word in English or German ("**1** transactions",
+  // "1 sections scanned"), except "of"/"von" between two figures ("{decided} of {required}"), and no
+  // word carries a plural crutch ("line(s)", "Dokument(e)", "Zeile(n)"). The lookahead keeps the
+  // figure after "of" unconsumed, so "{a} of {b} sections" is still caught at {b}.
+  it.each([
+    ['en', en, 'of'],
+    ['de', de, 'von']
+  ] as const)('%s: the keys that can show 1 state the count label-first (#806)', (code, catalog, of) => {
+    const values = catalog as Record<string, string>
+    const offenders: string[] = []
+    for (const key of LABEL_FIRST_AT_ONE) {
+      const value = values[key]
+      expect(value, `${code}: LABEL_FIRST_AT_ONE names ${key}, which is not in the catalog`).toBeDefined()
+      const counts = placeholders(value).filter((p) => NUMBER_PLACEHOLDERS.has(p.slice(1, -1)))
+      expect(counts.length, `${code}: ${key} shows no count: take it off LABEL_FIRST_AT_ONE`).toBeGreaterThan(0)
+      for (const m of value.matchAll(/\{(\w+)\}\**\s+(\p{L}+)(?=(\s+\**\{\w+\})?)/gu)) {
+        if (!NUMBER_PLACEHOLDERS.has(m[1]) || (m[2] === of && m[3] !== undefined)) continue
+        offenders.push(`${key}: “${m[0]}”`)
+      }
+      for (const m of value.matchAll(/\p{L}\((?:e?s|e?n|e)\)/gu)) offenders.push(`${key}: “${m[0]}”`)
+    }
+    expect(
+      offenders,
+      `${code}: a word after a count that can be 1 agrees with it ("1 sections"), and a plural crutch ` +
+        'reads wrong at every count. State the count label-first ("Line items: **{count}**", ' +
+        `"Sections scanned: {scanned}"); "${of}" may stand only between two figures.`
+    ).toEqual([])
   })
 
   it('the net finds every listed key except the reviewed hand-found ones', () => {

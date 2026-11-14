@@ -749,6 +749,7 @@ export const fr: UiCatalog<'fr'> = {
   'docs.failed.remove': 'Retirer',
   'docs.failed.removeTitle': 'Retirer cette importation en échec de la liste',
   'docs.failed.retry': 'Réessayer',
+  'docs.failed.lead': 'Ce fichier n’a pas pu être traité.',
   'docs.backToChat': 'Retour au Chat',
   'docs.failed.retryTitle': 'Relire et préparer à nouveau ce fichier',
   'docs.moreActions': 'Autres actions pour «\u00A0{title}\u00A0»',
@@ -1146,21 +1147,21 @@ export const fr: UiCatalog<'fr'> = {
     'Il s’agit d’une première passe faite au mieux, sans garantie\u00A0: elle ne détecte ni les ' +
     'noms ni les formats inhabituels, relisez donc la copie enregistrée avant de la partager.',
   'skills.editRouting.answer':
-    'Pour effectuer ces modifications, cliquez sur le bouton **{button}** juste au-dessus de la ' +
-    'zone de message, puis choisissez où enregistrer la copie modifiée. L’opération s’exécute ' +
-    'entièrement sur cet appareil et applique uniquement les remplacements exacts (rechercher et ' +
-    'remplacer) que vous avez demandés, partout où le texte figure mot pour mot, sans rien ' +
-    'changer d’autre. Elle ne réécrit jamais le document\u00A0: elle ne peut donc rien inventer ' +
-    'ni reformuler. À ce stade, une copie en texte simple (.txt) est enregistrée\u00A0; ' +
-    'relisez-la avant de la partager.',
+    'Pour effectuer ces modifications, cliquez sur le bouton **{button}** juste au-dessus de la zone ' +
+    'de message, puis choisissez où enregistrer la copie modifiée. L’opération s’exécute entièrement ' +
+    'sur cet appareil et applique uniquement les remplacements exacts (rechercher et remplacer) que ' +
+    'vous avez demandés, partout où le texte figure mot pour mot, sans rien changer d’autre. Elle ne ' +
+    'réécrit jamais le document\u00A0: elle ne peut donc rien inventer ni reformuler. Un document ' +
+    'Word reste au format .docx\u00A0; les autres formats sont enregistrés en texte simple (.txt). ' +
+    'Relisez la copie avant de la partager.',
   'skills.editRouting.answerMulti':
-    'Pour effectuer ces modifications, cliquez sur le bouton **{button}** juste au-dessus de la ' +
-    'zone de message et sélectionnez le document à modifier, puis choisissez où enregistrer la ' +
-    'copie modifiée. L’opération traite un document à la fois, s’exécute entièrement sur cet ' +
-    'appareil et applique uniquement les remplacements exacts (rechercher et remplacer) que vous ' +
-    'avez demandés, partout où le texte figure mot pour mot, sans rien changer d’autre. Elle ne ' +
-    'réécrit jamais le document. À ce stade, une copie en texte simple (.txt) est ' +
-    'enregistrée\u00A0; relisez-la avant de la partager.',
+    'Pour effectuer ces modifications, cliquez sur le bouton **{button}** juste au-dessus de la zone ' +
+    'de message et sélectionnez le document à modifier, puis choisissez où enregistrer la copie ' +
+    'modifiée. L’opération traite un document à la fois, s’exécute entièrement sur cet appareil et ' +
+    'applique uniquement les remplacements exacts (rechercher et remplacer) que vous avez demandés, ' +
+    'partout où le texte figure mot pour mot, sans rien changer d’autre. Elle ne réécrit jamais le ' +
+    'document. Un document Word reste au format .docx\u00A0; les autres formats sont enregistrés en ' +
+    'texte simple (.txt). Relisez la copie avant de la partager.',
   'skills.redactionRouting.scan':
     'J’ai parcouru le document entier à la recherche de données personnelles au format bien ' +
     'reconnaissable. Éléments détectés – adresses e-mail\u00A0: {email}, numéros de ' +
@@ -1250,12 +1251,12 @@ export const fr: UiCatalog<'fr'> = {
     'Équilibré\u00A0: fonctionne bien sur la plupart des ordinateurs portables.',
   'models.hint.large':
     'Grand\u00A0: les meilleures réponses\u00A0; nécessite un ordinateur puissant.',
-  'models.usesSpace': 'Occupe {size} sur le disque.',
+  'models.usesSpace': 'Occupe {size} sur le disque',
   'models.downloads.blockedByPolicy':
     'Les téléchargements sont désactivés par la politique de ce disque.',
   'models.downloads.enableInSettings':
-    'Pour télécharger des modèles, activez «\u00A0Autoriser l’accès à Internet pour les ' +
-    'téléchargements de modèles et les mises à jour\u00A0» dans les Paramètres.',
+    'Pour télécharger, activez «\u00A0Autoriser l’accès à Internet pour les téléchargements et les ' +
+    'mises à jour\u00A0» dans les Paramètres.',
   'models.download.verifying': 'Vérification du fichier téléchargé…',
   'models.download.progress': 'Téléchargement… {pct}\u00A0% ({received} sur {total})',
   'models.download.progressNoTotal': 'Téléchargement… déjà {received}',
@@ -1500,7 +1501,7 @@ export const fr: UiCatalog<'fr'> = {
   'models.confirm.size': 'Taille',
   'models.confirm.license': 'Licence',
   'models.confirm.from': 'Source',
-  'models.confirm.readLicense': 'lire la licence',
+  'models.confirm.readLicense': 'Lire la licence',
   'models.confirm.hint':
     'Le fichier téléchargé est vérifié avant d’être utilisé. C’est la seule requête réseau de ' +
     'l’application\u00A0: rien sur vous ni sur vos documents n’est envoyé.',
@@ -1521,8 +1522,7 @@ export const fr: UiCatalog<'fr'> = {
   'settings.saved': 'Enregistré',
   'settings.saveFailed': 'Ce paramètre n’a pas pu être enregistré. Réessayez.',
   'settings.network.title': 'Confidentialité et mode hors ligne',
-  'settings.network.allow':
-    'Autoriser l’accès à Internet pour les téléchargements de modèles et les mises à jour',
+  'settings.network.allow': 'Autoriser l’accès à Internet pour les téléchargements et les mises à jour',
   'settings.network.hint':
     'Option activée par défaut, pour qu’une nouvelle installation puisse télécharger un modèle ' +
     'dès le départ. Quand elle est désactivée, l’application ne se connecte jamais à Internet. ' +
@@ -1897,15 +1897,15 @@ export const fr: UiCatalog<'fr'> = {
   'privacy.offlineOn': '● Mode hors ligne\u00A0: activé',
   'privacy.offlineOff': '○ Accès réseau activé',
   'privacy.statement.offline':
-    'Le mode hors ligne est activé. HilbertRaum exécute le modèle d’IA sur votre ordinateur ' +
-    'portable. Vos consignes, vos documents, les représentations vectorielles et l’historique ' +
-    'des conversations restent en local.',
+    'Le mode hors ligne est activé. HilbertRaum exécute le modèle d’IA sur cet ordinateur. Vos ' +
+    'consignes, vos documents, les représentations vectorielles et l’historique des conversations ' +
+    'restent en local.',
   'privacy.statement.online':
-    'HilbertRaum exécute le modèle d’IA sur votre ordinateur portable. Vos consignes, vos ' +
-    'documents, les représentations vectorielles et l’historique des conversations restent en ' +
-    'local\u00A0: même avec l’accès à Internet activé, seuls les téléchargements (modèles, ' +
-    'moteur d’IA, outils facultatifs des packs de connaissances et fichiers facultatifs de ' +
-    'reconnaissance de texte (OCR)) utilisent le réseau.',
+    'HilbertRaum exécute le modèle d’IA sur cet ordinateur. Vos consignes, vos documents, les ' +
+    'représentations vectorielles et l’historique des conversations restent en local\u00A0: même ' +
+    'avec l’accès à Internet activé, seuls les téléchargements (modèles, moteur d’IA, outils ' +
+    'facultatifs des packs de connaissances et fichiers facultatifs de reconnaissance de texte ' +
+    '(OCR)) utilisent le réseau.',
   'privacy.statement.noUploads':
     'Cette application n’envoie pas vos données à des fournisseurs d’IA dans le cloud. Aucun ' +
     'envoi de consignes, de documents ou de représentations vectorielles, aucune télémétrie, ' +
@@ -1913,10 +1913,11 @@ export const fr: UiCatalog<'fr'> = {
   'privacy.network.title': 'État actuel du réseau',
   'privacy.networkState.noPolicy': 'Le mode hors ligne est activé.',
   'privacy.networkState.disabledByPolicy': 'Accès réseau désactivé par la politique du disque.',
-  'privacy.networkState.offDefault': 'Le mode hors ligne est activé (réseau désactivé par défaut).',
+  'privacy.networkState.offDefault':
+    'Le mode hors ligne est activé (accès à Internet désactivé dans les Paramètres).',
   'privacy.networkState.enabled':
-    'L’accès à Internet est activé pour les téléchargements\u00A0: modèles, moteur d’IA et ' +
-    'outils facultatifs des packs de connaissances.',
+    'L’accès à Internet est activé pour les téléchargements\u00A0: modèles, moteur d’IA, outils ' +
+    'facultatifs des packs de connaissances et fichiers facultatifs de reconnaissance de texte (OCR).',
   'privacy.network.noFiles': 'Aucune consigne ni aucun fichier ne quitte cet appareil.',
   'privacy.network.effective': 'État effectif',
   'privacy.network.effectiveOffline': 'Hors ligne (aucune connexion à Internet)',
@@ -1926,7 +1927,7 @@ export const fr: UiCatalog<'fr'> = {
   'privacy.network.policyNo': 'Non (désactivé par la politique du disque)',
   'privacy.network.yourSetting': 'Votre choix',
   'privacy.network.settingAllowed': 'Accès à Internet autorisé',
-  'privacy.network.settingOff': 'Désactivé (par défaut)',
+  'privacy.network.settingOff': 'Désactivé',
   'privacy.network.telemetry': 'Télémétrie',
   'privacy.network.telemetryValue':
     'Rien ne quitte cet appareil\u00A0: il n’y a aucun suivi à désactiver',
@@ -2503,6 +2504,8 @@ export const fr: UiCatalog<'fr'> = {
   'common.cancel': 'Annuler',
   'common.remove': 'Retirer',
   'common.apply': 'Appliquer',
+  'common.labelValue': '{label}\u00A0: {value}',
+  'common.percent': '{pct}\u00A0%',
   'indicator.offline': 'Local · Hors ligne',
   'indicator.online': 'Local · Téléchargements autorisés',
   'indicator.offlineDetail':
@@ -2524,7 +2527,7 @@ export const fr: UiCatalog<'fr'> = {
   'password.strength.okay': 'Correct',
   'password.strength.strong': 'Fort',
   'password.strength.veryStrong': 'Très fort',
-  'password.strength.minHint': 'Utilisez au moins 8 caractères.',
+  'password.strength.minHint': 'Utilisez au moins {min} caractères.',
   'password.strength.longerHint':
     'Un mot de passe plus long est plus sûr\u00A0: 12 caractères ou plus, ou quelques mots sans ' +
     'rapport entre eux, conviennent bien.',
@@ -2879,8 +2882,8 @@ export const fr: UiCatalog<'fr'> = {
   'main.download.policyDisabled':
     'Les téléchargements sont désactivés par la politique de ce disque.',
   'main.download.networkOff':
-    'L’accès à Internet est désactivé. Activez d’abord «\u00A0Autoriser l’accès à Internet pour ' +
-    'les téléchargements de modèles et les mises à jour\u00A0» dans les Paramètres.',
+    'L’accès à Internet est désactivé. Activez d’abord «\u00A0Autoriser l’accès à Internet pour les ' +
+    'téléchargements et les mises à jour\u00A0» dans les Paramètres.',
   'main.download.alreadyRunning':
     'Un autre téléchargement est déjà en cours. Les modèles se téléchargent un par un.',
   'main.download.stoppedNetworkOff':
@@ -3219,15 +3222,15 @@ export const fr: UiCatalog<'fr'> = {
     'le mettre à jour.',
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.library': 'Bibliothèque',
-  'chat.scope.projectNamed': 'Projet\u00A0: {name}',
+  'chat.scope.projectNamed': 'Projet «\u00A0{name}\u00A0»',
   'chat.scope.projectCount.one': '{count} projet',
   'chat.scope.projectCount.many': '{count} projets',
   'chat.scope.projectCount.other': '{count} projets',
   // ---- Knowledge packs (ZIM wave: ScopePopover / SourcesDisclosure / ArticleModal / PacksPanel) ----
   'chat.scope.packsTitle': 'Packs de connaissances',
   'chat.scope.packUnavailable': 'non disponible',
-  'chat.scope.packNamed': 'Pack\u00A0: {name}',
-  'chat.scope.packNamedState': 'Pack\u00A0: {name} ({state})',
+  'chat.scope.packNamed': 'Pack «\u00A0{name}\u00A0»',
+  'chat.scope.packNamedState': 'Pack «\u00A0{name}\u00A0» ({state})',
   'chat.scope.packCount.one': '{count} pack de connaissances',
   'chat.scope.packCount.many': '{count} packs de connaissances',
   'chat.scope.packCount.other': '{count} packs de connaissances',

@@ -1240,7 +1240,7 @@ describe('T10 — effective document scope under the documents-off flag (P4, M10
     // Leg (A)'s conversation: p1 ticked, documents off.
     expect(resolveScope(h.db, conv.id).noDocuments).toBe(true)
     expect(scopeSources(getConversation(h.db, conv.id)!.scope, [], tt, tCount, [pack])).toBe(
-      `Pack: Wikipedia (DE) · ${t('en', 'chat.scope.documentsOffSuffix')}`
+      `${t('en', 'chat.scope.packNamed', { name: pack.title })} · ${t('en', 'chat.scope.documentsOffSuffix')}`
     )
     // Row 7's conversation before its reset: documents off, no pack left.
     expect(scopeSources(lastStoredOff, [], tt, tCount, [pack])).toBe(
