@@ -94,10 +94,10 @@ describe('formatSize — decimal units (#768) and the DR-9 GB tier', () => {
 })
 
 describe('badgeFor — the transcribing percent in the language’s own pattern (#804)', () => {
-  // English keeps "Transcribing… 42%" (DocumentsScreen.test.tsx). German writes a space before the
-  // sign, French U+00A0, Turkish the sign first, as each catalog's `common.percent` does.
+  // English keeps "Transcribing… 42%" (DocumentsScreen.test.tsx). German and French write U+00A0
+  // before the sign, Turkish the sign first, as each catalog's `common.percent` does.
   it.each([
-    ['de', '15 %'],
+    ['de', '15<nbsp>%'],
     ['fr', '15<nbsp>%'],
     ['tr', '%15']
   ] as const)('%s reads %s', (lang, percent) => {

@@ -6001,27 +6001,29 @@ placeholder and a unit symbol (GB, MB, KB, B, MB/s, tok/s, ms, s) are joined by 
 Dutch, Polish and Ukrainian rules against a no-break space allow it in exactly that one position
 more, and a size built in code takes the same space (`unitJoin`, §5) · G-4 (a): label-value
 joins and percent signs come from the catalog patterns `common.labelValue` and `common.percent`
-(German then shows "15 %" in the context meter and the transcribing badge), the licence link
-sits on a line of its own, raw numbers take the language's figures, the copied reports keep their
-plain code-built joins and the units their Latin symbols, and the brand link's tooltip and the
-Spain pattern of Spanish figures stay as they are (§5) · G-5 (a): the English and German
-sentences that read wrong at exactly 1 put the count after a label, `chat.speed.line` excepted
-(§5) · G-7 (a): a support report copied in any language but English and German carries an
-English copy in the same paste (§5) · G-10 (a): the English and German copy fixes of #805, each
-changed sentence read by the owner before it was translated · G-12 (a): one generic lead, "This
-file couldn’t be added.", above an unrecognised error on a failed document row and in the chat's
-attach banner (§3.3 Rule 1).
-G-6, G-8, G-9 and G-11 decide the language select, search and sorting, layout and question
-wording; this legend records them when their changes land. Made while the catalog changes were
-built (2026-11-14): the Spanish review decision labels put the decision in parentheses
-(«Revisado (respaldado)»), because the Spanish style guide has no spaced dash and a colon inside
-the label doubled the colon of the review summary's label-value join · the internet switch is
-labelled "Allow internet access for downloads and updates", without "model", since it also gates
-the engine, the knowledge-pack tools and the OCR files, and the two sentences that quote it follow
-· the auto-skill setting's hint (`skills.autoFire.hint`) says the app can give the answer again
-without the skill, as the auto-skill tooltip does · the licence link, now on its own line,
-starts with a capital ("Read the license") · the Privacy tab's "internet access is enabled" line
-names the OCR files too.
+(German then shows "15 %" in the context meter and the transcribing badge, with a no-break space
+since the real-app check, below), the licence link sits on a line of its own, raw numbers take
+the language's figures, the copied reports keep their plain code-built joins and the units their
+Latin symbols, and the brand link's tooltip and the Spain pattern of Spanish figures stay as they
+are (§5) · G-5 (a): the English and German sentences that read wrong at exactly 1 put the count
+after a label, `chat.speed.line` excepted (§5) · G-7 (a): a support report copied in any language
+but English and German carries an English copy in the same paste (§5) · G-10 (a): the English and
+German copy fixes of #805, each changed sentence read by the owner before it was translated ·
+G-12 (a): one generic lead, "This file couldn’t be added.", above an unrecognised error on a
+failed document row and in the chat's attach banner (§3.3 Rule 1).
+G-6, G-8, G-9 and G-11 decide the language select, search and sorting, layout, and how questions
+in the new languages are recognised; this legend records them when their changes land. Made
+while the catalog changes were built (2026-11-14): the Spanish review decision labels put the
+decision in parentheses («Revisado (respaldado)»), because the Spanish style guide has no spaced
+dash and a colon inside the label doubled the colon of the review summary's label-value join ·
+the internet switch is labelled "Allow internet access for downloads and updates", without
+"model", since it also gates the engine, the knowledge-pack tools and the OCR files, and the two
+sentences that quote it follow · the auto-skill setting's hint (`skills.autoFire.hint`) says the
+app can give the answer again without the skill, as the auto-skill tooltip does · the licence
+link, now on its own line, starts with a capital ("Read the license") · the Privacy tab's
+"internet access is enabled" line names the OCR files too. Made at the real-app check
+(2026-11-14): German's `common.percent` writes U+00A0 before the sign, as Spanish and French do,
+because a plain space let "19" wrap above "%" in the context meter at 880×600 (§5).
 
 ### §3.1 The i18n module
 
@@ -6222,10 +6224,12 @@ one, and each glossary is pinned on top of its catalog file.
     link button name, the Documents error banners that name a document, and the type label of a
     Diagnostics activity line.
   - `common.percent` writes a percent per catalog: `{pct}%` in English, Italian, Dutch, Polish,
-    Russian and Ukrainian, `{pct} %` in German, `{pct}` + U+00A0 + `%` in Spanish and French,
-    `%{pct}` in Turkish. Its sites: the chat's context meter (`ContextMeter.tsx`) and an audio
-    file's transcribing badge (`badgeFor`, `screens/documents/format.tsx`), so German shows
-    "15 %" there, as its catalog's other percents do.
+    Russian and Ukrainian, `{pct}` + U+00A0 + `%` in German, Spanish and French, `%{pct}` in
+    Turkish. Its sites: the chat's context meter (`ContextMeter.tsx`) and an audio file's
+    transcribing badge (`badgeFor`, `screens/documents/format.tsx`), so German shows "15 %"
+    there, spaced as its catalog's `{pct} %` values are but with a no-break space: a plain one let
+    "19" wrap above "%" in the context meter at 880×600 (owner call at the real-app check,
+    2026-11-14). Those other German values, inside longer sentences, keep a plain space.
   - `tNodes(t, key, nodes)` (`renderer/i18nNodes.tsx`) renders a pattern whose placeholders carry
     markup, which `t` cannot, since it returns a string: the bold role name of a Performance row,
     the glyph before a review decision, the bold type label of an activity line. It asks `t` for

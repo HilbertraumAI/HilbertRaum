@@ -1698,7 +1698,7 @@ toggle or remove is an independent operation; Add packs… and Refresh keep thei
 file is doing; (3) the meta line shows the archive's language as a NAME in the UI language via
 `Intl.DisplayNames` ("German" / "Deutsch"), the raw ISO 639-3 code only when the platform cannot
 name it; (4) the "Answering from:" chip names a ticked pack that is disabled or unavailable WITH
-that state, in the popover row's own words ("Pack: … (disabled)"), so the readout never claims a
+that state, in the popover row's own words ("Pack “…” (disabled)"), so the readout never claims a
 source the ask will skip; (5) `.footer-menu-btn` carries its own `min-width: 0; max-width: 100%`
 (pinned by `zim-ui-layout-rules.test.ts`), not only under `.scope-footer-wrap`; (6) Chat refetches
 packs at `reconcile-end` / `mutation` only, never at `reconcile-start`. The collision surface is

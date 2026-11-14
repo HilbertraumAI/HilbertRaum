@@ -1835,8 +1835,10 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
 describe('PerformanceScreen: an English copy of the report for support (#812)', () => {
   const DIVIDER = '--- English ---'
   const OTHER_LANGUAGES = UI_LANGUAGE_CODES.filter((code) => code !== 'en' && code !== 'de')
-  /** Lines the interface-language report must carry: the system values (CPU, model) stay as they are. */
+  /** Lines the interface-language report must carry: the system values (CPU, model) stay as they are,
+   *  and a size keeps a plain space before its unit in every language's copy (#804). */
   const localLinesOf = (lang: UiLanguage): string[] => [
+    `${t(lang, 'perf.tile.memory')}: ${fmt1(15.7, lang)} ${t(lang, 'perf.tile.memory.unit')}`,
     `${t(lang, 'diag.bench.cpu')}: Intel Core i7-1260P${tCount(lang, 'diag.bench.cores', 12)}`,
     `${t(lang, 'models.context.title')}: ${tCount(lang, 'models.tech.contextValue', 8192, { count: (8192).toLocaleString(lang) })}`,
     `${t(lang, 'perf.recommendation.atCheckTime')}: ${MODELS[0].displayName}`

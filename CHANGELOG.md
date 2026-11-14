@@ -52,11 +52,12 @@ from its first public `1.0.0` release onward.
   computer", not "on your laptop". After a re-index in which some documents failed, the message
   points to "Needs attention" instead of a "Failed imports" tab that no longer exists. The note on
   find-and-replace edits says a Word document keeps its .docx format and other formats are saved
-  as plain text. The Activity log no longer calls a section or a project a "collection". The
-  chat's scope names a project as Project “Tax 2026” instead of "Project: Tax 2026". The
-  automatic-skill setting's hint and the note on an answer it applied say you can get an answer
-  without the skill. The licence link reads "Read the license". These are fixed in English and
-  German, and in the other languages wherever their text had the same slip (#805).
+  as plain text. In the Activity log, the type label and the type filter no longer call a section
+  or a project a "collection" (the entry's own stored message still does). The chat's scope names
+  a project as Project “Tax 2026” instead of "Project: Tax 2026". The automatic-skill setting's
+  hint and the note on an answer it applied say you can get an answer without the skill. The
+  licence link reads "Read the license". These are fixed in English and German, and in the other
+  languages wherever their text had the same slip (#805).
 - **Copy reports for support now include an English copy.** In any interface language but English
   and German, the Copy buttons in Settings → Diagnostics (App & runtime, Hardware benchmark) and
   Copy report on the Performance screen copy the report in your language, then a line "--- English ---", then
@@ -84,17 +85,20 @@ from its first public `1.0.0` release onward.
   Italian, Dutch, Polish, Turkish, Russian and Ukrainian a size such as "23 GB" no longer breaks
   across two lines between the figure and the unit. The chat's context meter and an audio file's
   transcribing badge write the percentage the language's way (Turkish "%15", French and Spanish
-  "15 %"), and German now shows "15 %" there too. A label and its value are joined the way the
-  language does it (French puts a space before the colon). The licence link in the model-download
-  and knowledge-pack-tools dialogs now sits on its own line instead of after a dash. A model card's
-  memory figures and the tax rate in an invoice answer use the language's decimal separator. The
-  Spanish review summary no longer shows two colons ("Revisado: respaldado: 0"): the decisions
-  read "Revisado (respaldado)" (#804).
+  "15 %"), and German now shows "15 %" there too. In French, Spanish and German the space before
+  the sign is a no-break space, so the figure and the sign stay on one line. A label and its value
+  are joined the way the language does it (French puts a space before the colon). The licence link
+  in the model-download and knowledge-pack-tools dialogs now sits on its own line instead of after
+  a dash. A model card's memory figures and the tax rate in an invoice answer use the language's
+  decimal separator. The Spanish review summary no longer shows two colons
+  ("Revisado: respaldado: 0"): the decisions read "Revisado (respaldado)" (#804).
 - **Counts of exactly 1 now read right in English and German.** Answers and coverage lines such as
   "I read 1 transactions", "Based on 1 of 1 sections" or "1 line(s) …" now put the count after a
   label: "I read the whole statement. Transactions: 1.", "Based on sections: 1 of 1". The two
   evidence-pack lines that count decided items and input coverage read the same way ("Required
-  items decided: 0 of 2"). The other languages already wrote these counts this way (#806).
+  items decided: 0 of 2"). The other languages already wrote these counts this way. One English
+  line is unchanged: the speed line under an answer still reads "1 tokens" after a one-token
+  answer (#806).
 - **A file that can't be added now says so in your language.** When importing or attaching a
   document fails with an error the app doesn't recognise, such as a file reader's own English
   message ("Invalid PDF structure."), the document's row on the Documents screen and the chat's

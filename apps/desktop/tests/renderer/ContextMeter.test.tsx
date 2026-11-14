@@ -115,11 +115,12 @@ describe('ContextMeter — memory gauge, not a progress bar (#25, D69)', () => {
     expect(meter?.getAttribute('title')?.includes(t('en', 'chat.context.willSummarize'))).toBe(headsUp)
   })
 
-  // #804: the visible percent is the language's own pattern, as the tooltip beside it is: German a
-  // space before the sign, French U+00A0, Turkish the sign first. Compared by code point (U+00A0
-  // spelled out): testing-library's text matchers fold U+00A0 into a plain space.
+  // #804: the visible percent is the language's own pattern, as the tooltip beside it is: German and
+  // French U+00A0 before the sign (German's is the owner's 2026-11-14 call: a plain space let "19"
+  // wrap above "%" at 880×600), Turkish the sign first. Compared by code point (U+00A0 spelled
+  // out): testing-library's text matchers fold U+00A0 into a plain space.
   it.each([
-    ['de', '15 %'],
+    ['de', '15<nbsp>%'],
     ['fr', '15<nbsp>%'],
     ['tr', '%15']
   ] as const)('%s shows the percent as %s', (lang, percent) => {

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DownloadManager, assertDownloadAllowed } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
-import { tMain } from '../../src/main/services/i18n'
+import { applyUiLanguageSetting, tMain } from '../../src/main/services/i18n'
 import { weightPath, mmprojPath, type HashStore } from '../../src/main/services/models'
 import {
   latestEffectiveRead,
@@ -12,6 +12,7 @@ import {
 } from '../../src/main/services/read-speed'
 import type { ModelManifest, ModelRole } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
+import type { UiLanguage } from '../../src/shared/i18n'
 import { tempRoot } from '../helpers/db-fixtures'
 import { deferred } from '../helpers/deferred'
 import { OPEN_GATES, bodyFetch, hangingFetch, rangeFetch, routedFetch, runToEnd } from '../helpers/download-fixtures'
@@ -74,6 +75,7 @@ afterEach(() => {
   seams.verifyHook = null
   seams.rmHook = null
   seams.freeBytes = null
+  applyUiLanguageSetting('en') // main's language is module-global: a row that sets another must not leak it
 })
 
 // Phase 18 — the in-app model downloader (architecture.md "In-app model downloader"). Everything
@@ -297,16 +299,21 @@ describe('download gates', () => {
   // #768: before this check a drive with 13.5 GB free took a 14.4 GB download and stopped on ENOSPC near the end. The
   // refusal comes with the others, before the job exists: nothing is listed, audited or requested.
   describe('free space on the drive (#768)', () => {
-    it.each([
-      ['clearly short', 14_439_363_584, 13_500_000_000, '14.4 GB', '13.5 GB'],
+    const NBSP = String.fromCharCode(0xa0)
+    it.each<[string, UiLanguage, number, number, string, string]>([
+      ['clearly short', 'en', 14_439_363_584, 13_500_000_000, '14.4 GB', '13.5 GB'],
       // Rounded half, 14.39 GB free would read 14.4 GB, the size itself: free space rounds down.
-      ['free rounds down, never up to the size', 14_439_363_584, 14_390_000_000, '14.4 GB', '14.3 GB'],
+      ['free rounds down, never up to the size', 'en', 14_439_363_584, 14_390_000_000, '14.4 GB', '14.3 GB'],
       // Both in the same tenth: the size rounds up instead, so the two figures still differ.
-      ['the size and the free space in the same tenth', 14_439_363_584, 14_420_000_000, '14.5 GB', '14.4 GB'],
+      ['the size and the free space in the same tenth', 'en', 14_439_363_584, 14_420_000_000, '14.5 GB', '14.4 GB'],
       // Under a gigabyte (a projector, the rest of a resume) both read in MB, not "0.1 GB" against "0.0 GB".
-      ['a shortfall under a gigabyte', 40_000_000, 15_000_000, '40.0 MB', '15.0 MB']
-    ])('refuses a download larger than the free space (%s), naming both figures, before any job, audit or request', async (_title, sizeBytes, freeBytes, needed, free) => {
+      ['a shortfall under a gigabyte', 'en', 40_000_000, 15_000_000, '40.0 MB', '15.0 MB'],
+      // #804: in main's language, joined as its catalog joins a figure and its unit (U+00A0 outside English
+      // and German), so the refusal reads like the download dialog beside it. toThrow compares by code point.
+      ['main speaks French', 'fr', 14_439_363_584, 13_500_000_000, `14,4${NBSP}GB`, `13,5${NBSP}GB`]
+    ])('refuses a download larger than the free space (%s), naming both figures, before any job, audit or request', async (_title, lang, sizeBytes, freeBytes, needed, free) => {
       seams.freeBytes = freeBytes
+      applyUiLanguageSetting(lang)
       const fetchSpy = vi.fn()
       const audit = vi.fn()
       const mgr = new DownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, audit })

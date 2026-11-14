@@ -2382,7 +2382,7 @@ export const de: Record<keyof typeof en, string> = {
   'common.remove': 'Entfernen',
   'common.apply': 'Übernehmen',
   'common.labelValue': '{label}: {value}',
-  'common.percent': '{pct} %',
+  'common.percent': '{pct}\u00A0%',
   'indicator.offline': 'Lokal · Offline',
   'indicator.online': 'Lokal · Downloads erlaubt',
   'indicator.offlineDetail':

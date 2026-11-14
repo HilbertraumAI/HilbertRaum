@@ -2146,12 +2146,13 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   top-k search and the same fixed reply; an offer of a skill with an analysis engine stays (architecture.md
   §5.2 "as built", the #733 / #779 notes).
 - **"Whole document" wording gate (RAG-1, backend audit 2026-06-27):** `buildListingAnswer` says
-  *"across the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
+  *"Searched the whole document"* only when **`fullyChunked && scannedChunks >= totalChunks`** — i.e. the
   chunking invariant holds AND every in-scope chunk actually carries a `__scan__` marker. `fullyChunked`
   alone proves "stored chunks are complete," NOT "we scanned every in-scope document": in a multi-document
   scope where extraction ran on only some docs, `fullyChunked` is true but `scannedChunks < totalChunks`,
-  so the wording honestly falls back to *"Sections scanned: N"* (the over-claim H7 forbids). A
-  single fully-extracted document still satisfies both conditions, so its wording is unchanged.
+  so the wording honestly falls back to *"Search result — … found: N; sections scanned: N"* (the
+  over-claim H7 forbids). A single fully-extracted document still satisfies both conditions, so its
+  wording is unchanged.
 
 ### 14.6 Symmetric compare + lazy node vectors (Phase 4, plan §4.3/§3.1, H4/H5/H8/L6)
 

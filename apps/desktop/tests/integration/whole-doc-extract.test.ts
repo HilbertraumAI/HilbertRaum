@@ -450,18 +450,20 @@ describe('aggregateExtractions', () => {
   // #806: the coverage line leading every listing answer reads right at 1 and at 2, in English and
   // German ("Found 1 dates … 1 sections scanned" before). The listing is built by hand so the found
   // and scanned counts and the whole-document branch are set exactly; no item names a source
-  // section, so no chunk is read.
+  // section, so no chunk is read. Where a line holds both counts they differ (2 sections scanned
+  // beside 1 found, 1 beside 2), so a swapped placeholder shows; the empty line holds only the
+  // scanned count, which is the row's own.
   type ListingLine = 'coverageWhole' | 'coverageSections' | 'empty'
-  const LISTING_LINES: Record<'en' | 'de', Record<ListingLine, (n: number) => string>> = {
+  const LISTING_LINES: Record<'en' | 'de', Record<ListingLine, (found: number, scanned: number) => string>> = {
     en: {
-      coverageWhole: (n) => `Searched the whole document — dates found: ${n}; sections scanned: ${n}:`,
-      coverageSections: (n) => `Search result — dates found: ${n}; sections scanned: ${n}:`,
-      empty: (n) => `No dates found — sections scanned: ${n}.`
+      coverageWhole: (n, s) => `Searched the whole document — dates found: ${n}; sections scanned: ${s}:`,
+      coverageSections: (n, s) => `Search result — dates found: ${n}; sections scanned: ${s}:`,
+      empty: (_n, s) => `No dates found — sections scanned: ${s}.`
     },
     de: {
-      coverageWhole: (n) => `Das ganze Dokument durchsucht — gefundene Daten: ${n}; durchsuchte Abschnitte: ${n}:`,
-      coverageSections: (n) => `Suchergebnis — gefundene Daten: ${n}; durchsuchte Abschnitte: ${n}:`,
-      empty: (n) => `Keine Daten gefunden — durchsuchte Abschnitte: ${n}.`
+      coverageWhole: (n, s) => `Das ganze Dokument durchsucht — gefundene Daten: ${n}; durchsuchte Abschnitte: ${s}:`,
+      coverageSections: (n, s) => `Suchergebnis — gefundene Daten: ${n}; durchsuchte Abschnitte: ${s}:`,
+      empty: (_n, s) => `Keine Daten gefunden — durchsuchte Abschnitte: ${s}.`
     }
   }
   it.each(
@@ -471,19 +473,20 @@ describe('aggregateExtractions', () => {
       )
     )
   )('%s: the %s line at %i states the counts label-first (#806)', (code, line, n) => {
+    const scanned = line === 'empty' ? n : 3 - n
     const listing: ExtractionListing = {
       recordType: 'date',
       items:
         line === 'empty'
           ? []
           : ['2026-01-15', '2026-02-01'].slice(0, n).map((value) => ({ value, count: 1, sourceChunkIds: [] })),
-      scannedChunks: n,
+      scannedChunks: scanned,
       unparsedChunks: 0,
-      totalChunks: n,
+      totalChunks: scanned,
       fullyChunked: line !== 'coverageSections'
     }
     const answer = buildListingAnswer(db, listing, (k, p) => t(code, k, p))
-    expect(answer.split('\n')[0]).toBe(LISTING_LINES[code][line](n))
+    expect(answer.split('\n')[0]).toBe(LISTING_LINES[code][line](n, scanned))
   })
 
   // Issue #54 (owner decision 2026-07-17, option 1): an aggregation-shaped ask (categorize /

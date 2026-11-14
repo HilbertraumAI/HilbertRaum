@@ -1461,9 +1461,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   no-anchor `03.05.26` booking row still counts), so a memo / FX-reference continuation line (the geometry
   Valuta second baseline, whose DESCRIPTION leads) and a money-less header are excluded — they carry figures
   but were never transactions, and counting them would falsely gate a correctly-read statement. When `> 0`
-  the deterministic answer **replaces the "across the whole statement" / "the whole invoice" headline** with
-  an honest *"Transactions read: **N**. Lines with a figure I couldn't parse into a transaction: **M** …"*
-  (`countPartial`, the invoice's "Line items read"; EN+DE du-form) —
+  the deterministic answer **replaces the "I read the whole statement." / "I read the whole invoice."
+  headline** with an honest *"Transactions read: **N**. Lines with a figure I couldn't parse into a
+  transaction: **M** …"* (`countPartial`, the invoice's "Line items read"; EN+DE du-form) —
   **except** when the D56 balance PROOF holds (`status === 'complete'`: printed opening + Σ == closing ties
   out over the kept rows, so a dropped line provably did not move the balance and the read IS whole) — the
   proof outranks the parse-gap hedge and the plain whole-statement count stands. A D56-**contradicted**
@@ -2754,6 +2754,10 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   more memory than the computer has is in English, with English figures ("… needs at least 16 GB
   RAM; this computer has about 8 GB …"), in every interface language; the AI Model screen already
   disables Start for such a model and says why in the interface language.
+- **The speed line under an answer can read "1 tokens".** In English, the line under a finished
+  chat answer ("42 tok/s · 1.8 s to first token · 615 tokens") ends in "1 tokens" after a
+  one-token answer. The other count sentences that read wrong at exactly 1 in English and German
+  were fixed; this one was left as it is.
 - **With a Turkish interface, words shown in capitals follow Turkish rules, your own text
   included.** Some labels are shown in capital letters (section titles, the date groups and
   project names in the conversation list, the section headings in a document's preview). In a

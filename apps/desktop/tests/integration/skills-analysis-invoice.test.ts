@@ -7,6 +7,7 @@ import {
 } from '../../src/main/services/skills/analysis/invoice'
 import { validateInvoiceTotals, type InvoiceInput } from '../../src/main/services/skills/tools/invoice'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
+import { applyUiLanguageSetting, tMain } from '../../src/main/services/i18n'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { RetrievalScope } from '../../src/shared/types'
 import { openFreshDb } from '../helpers/db-fixtures'
@@ -191,6 +192,28 @@ describe('invoice analysis handler — honest completeness gate (U1, §2.3)', ()
       droppedRowCount: line === 'countPartial' ? d : 0
     })
     expect(answer.split('\n')[0]).toBe(INVOICE_LINES[code][line](n, d))
+  })
+})
+
+// #804: the tax rate is written in the main process's language figures. It was passed raw, so a 5.5 %
+// rate read "5.5" in German too. The app hands the builder `tMain`, so each row sets main's language.
+describe('invoice analysis handler — the tax rate in the main language (#804)', () => {
+  it.each([
+    ['en', '- Tax (5.5%): **5.50 EUR**'],
+    ['de', '- Steuer (5,5%): **5.50 EUR**']
+  ] as const)('%s: a tax rate of 5.5 reads in the language’s figures', (code, taxLine) => {
+    const invoice: InvoiceInput = {
+      header: { currency: 'EUR' },
+      lineItems: [{ description: 'Widget', lineTotal: 100, currency: 'EUR' }],
+      totals: { netTotal: 100, taxTotal: 5.5, taxRatePercent: 5.5, grossTotal: 105.5 }
+    }
+    applyUiLanguageSetting(code)
+    try {
+      const answer = buildInvoiceAnswer(tMain, { invoice, validation: validateInvoiceTotals(invoice) })
+      expect(answer.split('\n')).toContain(taxLine)
+    } finally {
+      applyUiLanguageSetting('en') // module-global: never leak German into the rest of the file
+    }
   })
 })
 

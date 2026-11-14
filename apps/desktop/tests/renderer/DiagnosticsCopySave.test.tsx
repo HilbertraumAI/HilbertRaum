@@ -7,6 +7,7 @@ import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type BenchmarkResult, type RuntimeStatus } from '../../src/shared/types'
 import { normalizeBenchmarkResult } from '../../src/shared/benchmark-schema'
 import { t, tCount, UI_LANGUAGE_CODES, type MessageKey, type UiLanguage } from '../../src/shared/i18n'
+import { fmt1 } from '../../src/shared/format'
 import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 import { appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
@@ -52,6 +53,18 @@ const benchmark: BenchmarkResult = {
   },
   ranAt: '2026-06-15T12:00:00Z',
   warnings: []
+}
+
+const NBSP = String.fromCharCode(0xa0)
+
+/** The fixture's code-built sizes as `lang` writes them, with `join` between figure and unit (#804). */
+function sizesOf(lang: UiLanguage, join: string): { ram: string; read: string; write: string } {
+  const when = new Date(benchmark.effectiveRead!.at).toLocaleDateString(lang)
+  return {
+    ram: `${fmt1(16, lang)}${join}GB`,
+    read: `${(70.4).toLocaleString(lang)}${join}MB/s (${t(lang, 'diag.bench.effectiveReadLoad', { gb: fmt1(6, lang), when })})`,
+    write: `${(90).toLocaleString(lang)}${join}MB/s`
+  }
 }
 
 // Capture what the renderer hands to Electron's native clipboard bridge
@@ -394,6 +407,35 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
   })
 })
 
+// #804: on screen the tab's code-built sizes join figure and unit the way the language's catalog does
+// (U+00A0 outside English and German, so a size cannot wrap between "16,0" and "GB"); the copied report
+// keeps a plain space (the #812 rows below). Compared by code point: the default normalizer folds U+00A0
+// into a plain space.
+describe('Settings → Diagnostics (advanced) — the space between a figure and its unit (#804)', () => {
+  /** The `<dd>` text under `label` on the card headed `card` (labels repeat across cards). */
+  function valueOn(card: string, label: string): string | null | undefined {
+    const box = screen.getByRole('heading', { name: card }).closest('.card')
+    const dt = Array.from(box?.querySelectorAll('dt') ?? []).find((el) => el.textContent === label)
+    return dt?.nextElementSibling?.textContent
+  }
+
+  it.each([
+    ['uk', NBSP],
+    ['en', ' ']
+  ] as const)('in %s: the benchmark and System cards join each size with the catalog’s space', async (lang, join) => {
+    stubDiagnostics()
+    renderDiagnostics(lang)
+    await screen.findByText('Test CPU', { exact: false })
+    await screen.findByText(t(lang, 'diag.system.freeSpace'))
+    const want = sizesOf(lang, join)
+    const bench = t(lang, 'diag.bench.title')
+    expect(valueOn(bench, t(lang, 'diag.bench.ram'))).toBe(want.ram)
+    expect(valueOn(bench, t(lang, 'diag.bench.effectiveRead'))).toBe(want.read)
+    expect(valueOn(bench, t(lang, 'diag.bench.driveWrite'))).toBe(want.write)
+    expect(valueOn(t(lang, 'diag.system.title'), t(lang, 'diag.system.freeSpace'))).toBe(`${fmt1(10, lang)}${join}GB`)
+  })
+})
+
 // #812 (open-issues wave owner call G-7): the maintainers read English and German. In any other
 // interface language each report's Copy pastes the report, one divider line naming English, then
 // the same report built in English, so a support request stays readable. The English half is
@@ -415,10 +457,19 @@ describe('Settings → Diagnostics (advanced) — an English copy for support (#
       name: 'Hardware benchmark',
       button: 1,
       title: 'diag.bench.title',
-      lines: (lang) => [
-        `${t(lang, 'diag.bench.cpu')}: Test CPU${tCount(lang, 'diag.bench.cores', 8)}`,
-        `${t(lang, 'diag.bench.lastRun')}: ${new Date(benchmark.ranAt).toLocaleString(lang)}`
-      ]
+      // #804: the code-built sizes keep a plain space in every language's copy, so a pasted report
+      // stays searchable (the card's U+00A0 is the describe above). The English half equals the
+      // English copy, whose own row below holds these lines, so this covers both halves.
+      lines: (lang) => {
+        const plain = sizesOf(lang, ' ')
+        return [
+          `${t(lang, 'diag.bench.ram')}: ${plain.ram}`,
+          `${t(lang, 'diag.bench.cpu')}: Test CPU${tCount(lang, 'diag.bench.cores', 8)}`,
+          `${t(lang, 'diag.bench.effectiveRead')}: ${plain.read}`,
+          `${t(lang, 'diag.bench.driveWrite')}: ${plain.write}`,
+          `${t(lang, 'diag.bench.lastRun')}: ${new Date(benchmark.ranAt).toLocaleString(lang)}`
+        ]
+      }
     }
   ]
 
