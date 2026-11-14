@@ -6056,7 +6056,19 @@ passt", "vielen dank passt", "ok passt" and "super passt", are whole-message for
 question «Passt so?» is none, and «Alles gut?» and "all good?" stay small talk · the French
 compare family is listed: «différence(s)», «différent(e)(s)», «diffère(nt)» and «différencier»
 with its forms route to compare, while «différend», «différé(e)(s)», «différer», «différemment»
-and «différentiel(le)(s)» do not (`COMPARE_RE`).
+and «différentiel(le)(s)» do not (`COMPARE_RE`). Made at the code review of #818 and #809
+(2026-11-14), amending G-8 and G-11: a search word holding «ı» gets only the spellings stored
+text can have, at most two (the first «ı» as "i" when the word starts with «ı», as a capital
+first letter is stored, and every «ı» as "i", as capitals are), not every mix, and with no limit
+on the number of «ı» · a search word keeps the marks inside it, so a mark with no one-character
+form, such as a Russian stress mark, no longer cuts it, and the index drops that mark from the
+stored text too ([`rag-design.md`](rag-design.md) §11 "Keyword index") · eight more English and
+German whole-message forms: "thanks a lot bye", "thank you a lot bye", "ok thank you a lot",
+"alles klar passt", "klar passt", "passt vielen dank", "passt danke schön" and "passt danke dir".
+Made with them, inside G-11: the small-talk check folds «ı» to "i" on both sides (`foldCase`), so
+Turkish typed in capitals is recognised; the router composes the question (NFC) once before
+every check; the two chips still count with a closing ".", "!", "?" or "…"; and the quote-frame
+reader passes over an opening quote that nothing closes.
 
 ### §3.1 The i18n module
 
@@ -6216,8 +6228,9 @@ build tree-shakes them).
   the composer in the UI language, while the task router's word lists (`analysis/router.ts`) are
   English and German, the French compare words aside. The router reads `chat.example.summarize`
   and `chat.example.indemnity` from every registered catalog when the module loads, never copied,
-  and compares them composed, lowered (`lowerCaseNfc`) and trimmed, as it does the question. The
-  summarize chip, by its whole text, is a summary ask (`isSummaryAsk`). The every-mention chip is
+  and compares them composed, lowered (`lowerCaseNfc`) and trimmed, as it does the question, both
+  without a closing ".", "!", "?" or "…" (`chipText`). The summarize chip, by its whole text, is a
+  summary ask (`isSummaryAsk`). The every-mention chip is
   recognised by its frame: the text up to and including its opening quote and from its closing
   quote on, with any text that isn't blank
   inside the quotes, so a user who puts their own word in the quotes keeps the route. The quote
@@ -6458,10 +6471,12 @@ one, and each glossary is pinned on top of its catalog file.
   interface language and on every system. Nothing else changes (no accent stripping), and NFC
   leaves already-composed text as it is, so English and German text as keyboards type it folds
   exactly as `toLowerCase()` folds it. The main process lowers the same way: the keyword-search
-  query (`fts.ts` `buildFtsMatchQuery`), the small-talk check and the router's chip match call
-  `lowerCaseNfc`. The search keeps «ı» apart from «i», because the index does, and spells a word
-  holding «ı» both ways instead ([`rag-design.md`](rag-design.md) §11 "Keyword index"; second
-  UI-languages wave owner call G-12, changed by open-issues wave owner call G-8).
+  query (`fts.ts` `buildFtsMatchQuery`) and the router's chip match call `lowerCaseNfc`, and the
+  small-talk check calls `foldCase` on the question and on its lists, so Turkish typed in
+  capitals meets them. The search keeps «ı» apart from «i», because the index does, and adds the
+  spellings the index stores a word holding «ı» under instead ([`rag-design.md`](rag-design.md)
+  §11 "Keyword index"; second UI-languages wave owner call G-12, changed by open-issues wave
+  owner call G-8).
 
 ### Phase-42 QA (as built)
 

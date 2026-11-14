@@ -2784,12 +2784,11 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   finds "İSTANBUL", "İstanbul" and "istanbul", and no unrelated "I think …"). Search never adds
   an "ı" you didn't type, though: "isi", "Isı" or "ISI" typed doesn't find text written "ısı",
   and "kir" doesn't find "kır", while "kır" finds "kir". To find every form, type the word in
-  small letters with "ı" where it belongs. Search tries the other spellings for up to four "ı"
-  in a word and looks for at most 32 words and spellings in all, the words you typed first, so
-  in a very long search the extra spellings can be left out. Document search also compares
-  meaning, which this doesn't affect, so a passage can still be found that way. The filters on
-  screen (the Documents name filter, the AI Model search and the review's evidence filter) match
-  I, ı, İ and i every way round.
+  small letters with "ı" where it belongs. Search looks for at most 32 words and spellings in
+  all, the words you typed first, so in a very long search the extra spellings can be left out.
+  Document search also compares meaning, which this doesn't affect, so a passage can still be
+  found that way. The filters on screen (the Documents name filter, the AI Model search and the
+  review's evidence filter) match I, ı, İ and i every way round.
 - **Search can't find a Cyrillic word stored with a separate accent mark.** Most keyboards type
   an accented letter such as "é", "ş" or "й" as one character, but text from some Mac and Linux
   sources can hold the base letter followed by a separate accent mark, and the two look the

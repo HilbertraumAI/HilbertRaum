@@ -113,7 +113,9 @@ from its first public `1.0.0` release onward.
   "İstanbul" nor "İSTANBUL", and could list unrelated text with a lone "I". It is now one word
   and finds the word in small letters and in capitals. A word typed with "ı" now also finds it
   in capitals ("ısı" finds "Isı" and "ISI"). A word typed with separate accent marks is searched
-  like the same word typed as one character, instead of being cut at each mark. The Documents
+  like the same word typed as one character, instead of being cut at each mark, and an accent
+  that has no one-character form, such as the stress mark Russian textbooks put on a vowel, no
+  longer cuts a word either: the word is found as it is written without the mark. The Documents
   name filter, the AI Model search and the review's evidence filter now also find a name stored
   with separate accent marks, as macOS stores file names, by the letters you type. One case got
   worse: a word stored with a separate Cyrillic accent mark, which search found when you typed it
