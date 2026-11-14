@@ -3,6 +3,7 @@ import { t, UI_LANGUAGE_CODES, type MessageKey, type MessageParams } from '../..
 import {
   DISPLAY_MAP_KEYS,
   INTERPOLATED_MAP_KEYS,
+  classifyServerCopy,
   formatCitationLabel,
   localizeServerCopy,
   unsupportedTypeExt
@@ -237,6 +238,36 @@ describe('localizeServerCopy (D-L4)', () => {
     expect(localized).toContain('2.2') // String(value) interpolation — no locale reformat
     expect(localized).toContain('qwen3.6-27b-q4')
     expect(localized).not.toBe(persisted)
+  })
+})
+
+// #807: the classifier says whether the display map KNEW the raw text — every branch (the exact map,
+// each interpolated family incl. the legacy unsupported-type wording, the doc-task-busy substring)
+// is known; only the pass-through is not. A failed document row and the chat attach banner show
+// the not-known text under a translated lead, so a branch that loses its verdict shows the lead
+// over the app's own (translated) message, and one that gains it hides the lead from a parser error.
+describe('classifyServerCopy: which raw text the map knew (#807)', () => {
+  /** [branch, raw, the German display text]. */
+  const known: Array<[string, string, string]> = [
+    ...DISPLAY_MAP_KEYS.map((key): [string, string, string] => [`exact map: ${key}`, t('en', key), t('de', key)]),
+    ...INTERPOLATED_MAP_KEYS.map((key): [string, string, string] => [
+      `interpolated: ${key}`,
+      t('en', key, INTERPOLATED_PARAMS[key]),
+      t('de', key, INTERPOLATED_PARAMS[key])
+    ]),
+    ['legacy unsupported type', 'Unsupported file type: .heic', tDe('main.ingest.unsupportedType', { ext: '.heic' })],
+    ['doc-task busy, embedded', `Error: ${DOC_TASK_BUSY_MESSAGE}`, `Error: ${t('de', 'main.chat.docTaskBusy')}`]
+  ]
+  it.each(known)('%s is known', (_branch, raw, text) => {
+    expect(classifyServerCopy(tDe, raw)).toEqual({ text, recognized: true })
+  })
+
+  it.each([
+    ['a library error', 'Invalid PDF structure.', 'Invalid PDF structure.'],
+    // The pass-through still localizes a model answer's citation marker; it stays not known.
+    ['a model answer', 'See [S1].', 'See [Q1].']
+  ])('%s is not known, and passes through', (_what, raw, text) => {
+    expect(classifyServerCopy(tDe, raw)).toEqual({ text, recognized: false })
   })
 })
 

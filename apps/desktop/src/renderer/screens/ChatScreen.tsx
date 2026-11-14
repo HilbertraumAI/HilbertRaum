@@ -35,7 +35,7 @@ import {
   startSkillRun,
   subscribeSkillRuns
 } from '../lib/skillruns'
-import { localizeServerCopy } from '../lib/displayMap'
+import { classifyServerCopy, localizeServerCopy } from '../lib/displayMap'
 import { ocrRemedyKind } from '../lib/ocrRemedy'
 import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
@@ -230,6 +230,14 @@ const ATTACH_REMEDY_KEY: Record<AttachRemedy['kind'], MessageKey> = {
   photo: 'chat.attach.photoNeedsOcr'
 }
 
+/** The screen's one error banner (#570). #807: `detail` is a failed attachment's own text that the
+ *  display map does not know (a parser's words), shown under the translated lead in `message`. */
+interface ChatErrorState {
+  message: string
+  detail?: string
+  remedy?: AttachRemedy
+}
+
 export function ChatScreen({
   onNavigate,
   initialMode,
@@ -342,14 +350,14 @@ export function ChatScreen({
   const [skillInfoFor, setSkillInfoFor] = useState<string | null>(null)
   // #570: ONE state for the banner, so an attach failure's remedy (its copy + "Go to Documents")
   // can never outlive its message or ride along on an unrelated error set later.
-  const [errorState, setErrorState] = useState<{ message: string; remedy?: AttachRemedy } | null>(null)
+  const [errorState, setErrorState] = useState<ChatErrorState | null>(null)
   const error = errorState?.message ?? null
   const setError = useCallback((message: string | null): void => {
     setErrorState(message == null ? null : { message })
   }, [])
   // #570: an attach failure for a conversation the user has since left waits here, in memory, and
   // shows when they come back to it — never over another conversation.
-  const heldAttachFailureRef = useRef<{ convId: string; state: { message: string; remedy?: AttachRemedy } } | null>(null)
+  const heldAttachFailureRef = useRef<{ convId: string; state: ChatErrorState } | null>(null)
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
   const [docs, setDocs] = useState<DocumentInfo[]>([])
@@ -2193,7 +2201,8 @@ export function ChatScreen({
         if (!mountedRef.current) return // unmounted while the document list was loading (FE-1)
         setDocs(fresh)
         if (activeIdRef.current === convId) await refreshAttachments(convId)
-        // Per-file failure: show the friendly error (canonical English → display map). #570: the
+        // Per-file failure: show the friendly error (canonical English → display map); #807: a
+        // message the map does not know is the detail under the translated lead. #570: the
         // file whose fix is known leads — a scan, then a photo that needs the OCR files — read from
         // the structured flag, never the stored (localized) text; its copy points to Documents.
         if (job.failed > 0) {
@@ -2204,10 +2213,13 @@ export function ChatScreen({
             failedDocs[0]
           if (failed) {
             const kind = ocrRemedyKind(failed)
-            const state = {
-              message: failed.errorMessage
-                ? localizeServerCopy(t, failed.errorMessage)
-                : t('chat.attach.failed', { name: failed.title }),
+            const copy = failed.errorMessage ? classifyServerCopy(t, failed.errorMessage) : null
+            const state: ChatErrorState = {
+              ...(copy == null
+                ? { message: t('chat.attach.failed', { name: failed.title }) }
+                : copy.recognized
+                  ? { message: copy.text }
+                  : { message: t('docs.failed.lead'), detail: copy.text }),
               ...(kind ? { remedy: { kind, name: failed.title, conversationId: convId } } : {})
             }
             if (activeIdRef.current === convId) setErrorState(state)
@@ -2618,6 +2630,8 @@ export function ChatScreen({
           t={t}
           onDismiss={() => setError(null)}
         >
+          {/* #807: the attachment's own words, under the lead the message holds. */}
+          {errorState?.detail != null && <p>{errorState.detail}</p>}
           {/* #570: a scan (or a photo without the OCR files) is fixed in Documents. The button only
               navigates, so it is not labelled like the row action it leads to. */}
           {errorState?.remedy && (

@@ -739,6 +739,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.failed.remove': 'Entfernen',
   'docs.failed.removeTitle': 'Diesen fehlgeschlagenen Import aus der Liste entfernen',
   'docs.failed.retry': 'Erneut versuchen',
+  'docs.failed.lead': 'Diese Datei konnte nicht hinzugefügt werden.',
   // #573 — siehe en.ts.
   'docs.backToChat': 'Zurück zum Chat',
   'docs.failed.retryTitle': 'Diese Datei noch einmal einlesen und vorbereiten',

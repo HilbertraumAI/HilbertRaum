@@ -7,8 +7,10 @@ import { CITE_CODE_SPLIT_RE, CITE_MARKER_RE } from '@shared/citation-markers'
 // contracts — most importantly the `scanDetected` exact-match — never move. The
 // renderer translates them at display time via this exact-match reverse lookup from
 // the known English constants to their MessageKeys. Unknown strings (raw library
-// errors) render as-is. Messages that carry an interpolated value (the offending file
-// extension) are handled separately below — they can't be exact-matched.
+// errors) render as-is; a failed document row and the chat attach banner show them
+// under a translated lead (#807, `classifyServerCopy`). Messages that carry an
+// interpolated value (the offending file extension) are handled separately below —
+// they can't be exact-matched.
 //
 // Because the English catalog values are byte-identical to the pre-i18n literals
 // (D-L8), rows persisted BEFORE the i18n wave match too — switching language
@@ -170,32 +172,49 @@ export function formatCitationLabel(t: BoundT, label: string): string {
   return m ? t('chat.sources.marker', { n: m[1] }) : label
 }
 
+/** A server-origin string as the display map read it (#807). */
+export interface ServerCopy {
+  /** The display text: what `localizeServerCopy` returns. */
+  text: string
+  /** Whether `raw` was one of the app's own messages: the exact map, an interpolated family, or the
+   *  doc-task-busy substring. False only for the pass-through (a library's or the OS's own words),
+   *  which a failed row and the chat attach banner show under the translated `docs.failed.lead`. */
+  recognized: boolean
+}
+
+const known = (text: string): ServerCopy => ({ text, recognized: true })
+
 /**
- * Translate a server-origin string for display: exact-match against the known
- * persisted English constants, else pass through unchanged. DOC_TASK_BUSY_MESSAGE is
- * additionally matched as a substring — the chat banner recognizes it via
- * `error.includes` (transport prefixes may survive), so its display mapping must
- * tolerate the same embedding.
+ * Translate a server-origin string for display and say whether the display map knew it:
+ * exact-match against the known persisted English constants, then the interpolated families,
+ * else pass through unchanged (not recognized). DOC_TASK_BUSY_MESSAGE is additionally matched
+ * as a substring — the chat banner recognizes it via `error.includes` (transport prefixes may
+ * survive), so its display mapping must tolerate the same embedding.
  *
  * The persisted-constant branches carry no citation markers; a real model answer (the only text
  * that carries `[S{n}]`) falls through to the final return, where the marker is localized (D68).
  */
-export function localizeServerCopy(t: BoundT, raw: string): string {
+export function classifyServerCopy(t: BoundT, raw: string): ServerCopy {
   const key = KEY_BY_ENGLISH.get(raw)
-  if (key) return t(key)
+  if (key) return known(t(key))
   const ext = unsupportedTypeExt(raw)
-  if (ext != null) return t('main.ingest.unsupportedType', { ext })
+  if (ext != null) return known(t('main.ingest.unsupportedType', { ext }))
   const model = WARN_VERY_LOW_TOKENS_RE.exec(raw)?.[1]
-  if (model != null) return t('main.benchmark.warnVeryLowTokens', { model })
+  if (model != null) return known(t('main.benchmark.warnVeryLowTokens', { model }))
   const mbps = WARN_SLOW_READ_RE.exec(raw)?.[1]
-  if (mbps != null) return t('main.benchmark.warnSlowRead', { mbps })
+  if (mbps != null) return known(t('main.benchmark.warnSlowRead', { mbps }))
   const lowered = WARN_RECOMMENDATION_LOWERED_RE.exec(raw)
   if (lowered) {
-    return t('main.benchmark.warnRecommendationLowered', { tps: lowered[1], model: lowered[2] })
+    return known(t('main.benchmark.warnRecommendationLowered', { tps: lowered[1], model: lowered[2] }))
   }
   const library = ENGINE_LIBRARY_MISSING_RE.exec(raw)?.[1]
-  if (library != null) return t('main.ingest.engineLibraryMissing', { library })
+  if (library != null) return known(t('main.ingest.engineLibraryMissing', { library }))
   const busy = en['main.chat.docTaskBusy']
-  if (raw.includes(busy)) return raw.replace(busy, t('main.chat.docTaskBusy'))
-  return localizeCitationMarkers(t, raw)
+  if (raw.includes(busy)) return known(raw.replace(busy, t('main.chat.docTaskBusy')))
+  return { text: localizeCitationMarkers(t, raw), recognized: false }
+}
+
+/** The display text of a server-origin string (`classifyServerCopy` without the verdict). */
+export function localizeServerCopy(t: BoundT, raw: string): string {
+  return classifyServerCopy(t, raw).text
 }

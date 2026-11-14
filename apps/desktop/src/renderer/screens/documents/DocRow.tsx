@@ -9,7 +9,7 @@ import { Badge, Banner, Button, Chip, Icon, OcrInstallControl, Spinner, ocrFiles
 import type { DocumentInfo, DocumentLifecycle, OcrState } from '@shared/types'
 import { generatedStaleness } from '@shared/types'
 import { markDocTaskCancelRequested, type ActiveDocTask } from '../../lib/doctasks'
-import { localizeServerCopy } from '../../lib/displayMap'
+import { classifyServerCopy } from '../../lib/displayMap'
 import type { I18n } from '../../i18n'
 import type { UiLanguage } from '@shared/i18n'
 import {
@@ -164,6 +164,10 @@ export const DocRow = memo(function DocRow({
   // drive-setup path) and shows the install control under its banner; once OCR is available a
   // photo row says "Try again" will now read it. The stored error text itself never changes.
   const ocrRemedy = ocrRemedyKind(d)
+  // error_message is persisted canonical English; the D-L4 display map translates the known
+  // constants. #807: a message it does not know (a parser's or the OS's own words) renders as-is
+  // under a translated lead, so the row says what happened in the interface language.
+  const failure = d.status === 'failed' && d.errorMessage ? classifyServerCopy(t, d.errorMessage) : null
   const ocrFilesMissing = !ocrAvailable && (ocrState ?? 'missing') === 'missing'
   const ocrOffline = ocrInstall?.status?.available === false
   // The files are on the drive but the slot is still empty (copied by hand mid-session): the
@@ -266,11 +270,10 @@ export const DocRow = memo(function DocRow({
             {ocrFilesMissing && <> {t('docs.ocr.scannedPagesNeedsOcr')}</>}
           </p>
         )}
-        {d.status === 'failed' && d.errorMessage && (
+        {failure && (
           <Banner tone={d.scanDetected ? 'warning' : 'error'}>
-            {/* error_message is persisted canonical English; the D-L4 display map
-                translates the known constants — unknown strings render as-is. */}
-            {localizeServerCopy(t, d.errorMessage)}
+            {!failure.recognized && <p>{t('docs.failed.lead')}</p>}
+            {failure.text}
             {d.scanDetected && (
               <>
                 {' '}

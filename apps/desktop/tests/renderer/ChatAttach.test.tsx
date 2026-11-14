@@ -503,15 +503,20 @@ describe('ChatScreen — a file drag is refused while the chat is busy (#742)', 
 // (`ocrRemedyKind`), never the stored text; the banner belongs to the chat that received the file.
 describe('ChatScreen — a failed attachment points to Documents (#570)', () => {
   const SCAN_MESSAGE = en['main.ingest.pdfScanDetected']
-  function failedDoc(id: string, title: string, kind: 'scan' | 'photo' | 'other'): DocumentInfo {
+  const STORED: Record<'scan' | 'photo' | 'known' | 'other', string> = {
+    scan: SCAN_MESSAGE,
+    photo: en['main.ingest.imageNeedsOcr'],
+    known: en['main.ingest.parseTimeout'],
+    other: 'EIO: i/o error, read'
+  }
+  function failedDoc(id: string, title: string, kind: keyof typeof STORED): DocumentInfo {
     return makeDocumentInfo({
       id,
       title,
       lifecycle: 'temporary',
       status: 'failed',
       chunkCount: 0,
-      errorMessage:
-        kind === 'scan' ? SCAN_MESSAGE : kind === 'photo' ? en['main.ingest.imageNeedsOcr'] : 'EIO: i/o error, read',
+      errorMessage: STORED[kind],
       ...(kind === 'scan' ? { scanDetected: true } : {})
     })
   }
@@ -554,10 +559,19 @@ describe('ChatScreen — a failed attachment points to Documents (#570)', () => 
     expect(screen.getByRole('button', { name: 'Go to Documents' })).toBeInTheDocument()
   })
 
-  it('any other failure keeps its own message, with no button', async () => {
-    renderAttachBorn({ docs: [failedDoc('d1', 'broken.pdf', 'other')] })
+  // #807: a message the display map does not know (a parser's or the OS's own words) reads under the
+  // translated lead, its own text kept as the line below; a message the app knows reads as before.
+  it.each([
+    ['an unknown failure keeps its own words under the lead', 'other', true],
+    ['a failure the app knows keeps its message, with no lead', 'known', false]
+  ] as const)('%s, and no button', async (_failure, kind, lead) => {
+    renderAttachBorn({ docs: [failedDoc('d1', 'broken.pdf', kind)] })
     bridge.drop(chatMain(), 'broken.pdf', '/tmp/broken.pdf')
-    expect(await screen.findByText('EIO: i/o error, read')).toBeInTheDocument()
+    const own = await screen.findByText(STORED[kind])
+    const banner = own.closest('.banner-text') as HTMLElement
+    expect(banner.textContent).toBe(lead ? `${en['docs.failed.lead']}${STORED[kind]}` : STORED[kind])
+    // Under the lead, its own words are a line of their own rather than running on after it.
+    expect(own.tagName === 'P').toBe(lead)
     expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
   })
 

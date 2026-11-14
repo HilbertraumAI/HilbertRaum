@@ -760,6 +760,7 @@ export const pl: UiCatalog<'pl'> = {
   'docs.failed.remove': 'Usuń z listy',
   'docs.failed.removeTitle': 'Usuń ten nieudany import z listy',
   'docs.failed.retry': 'Spróbuj ponownie',
+  'docs.failed.lead': 'Nie udało się dodać tego pliku.',
   'docs.backToChat': 'Wróć do czatu',
   'docs.failed.retryTitle': 'Odczytaj i przygotuj ten plik ponownie',
   'docs.moreActions': 'Więcej działań dla dokumentu „{title}”',

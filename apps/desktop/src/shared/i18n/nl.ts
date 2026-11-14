@@ -689,6 +689,7 @@ export const nl: UiCatalog<'nl'> = {
   'docs.failed.remove': 'Verwijderen',
   'docs.failed.removeTitle': 'Deze mislukte import uit de lijst verwijderen',
   'docs.failed.retry': 'Opnieuw proberen',
+  'docs.failed.lead': 'Dit bestand kon niet worden toegevoegd.',
   'docs.backToChat': 'Terug naar de chat',
   'docs.failed.retryTitle': 'Dit bestand opnieuw lezen en voorbereiden',
   'docs.moreActions': 'Meer acties voor het document “{title}”',
