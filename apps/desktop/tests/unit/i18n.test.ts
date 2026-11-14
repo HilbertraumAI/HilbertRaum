@@ -279,7 +279,8 @@ function forbids(pattern: RegExp, title: string, message: string): TypographyRul
 /**
  * The unit symbols the formatters print (`shared/format.ts`, `unitJoin`), as a catalog writes them
  * after a figure: a symbol, then no letter and no apostrophe ("{n} s" is seconds, "{n} sezioni" is
- * not). French's list, which the seven other catalogs that write U+00A0 there share (#804, G-3).
+ * not). French's list, which the seven other catalogs that write U+00A0 there share (#804,
+ * open-issues wave owner call G-3).
  */
 const UNIT_SYMBOL = '(?:GB|MB|KB|B|MB/s|tok/s|ms|s)(?![\\p{L}’])'
 
@@ -1113,10 +1114,10 @@ describe('Turkish and Ukrainian typography — the suffix, letter and apostrophe
   })
 })
 
-// The figure-unit rule (#804, G-3) and the three no-break-space rules it relaxes, tried on samples:
-// every catalog that writes U+00A0 before a unit symbol refuses the plain space there, and Dutch,
-// Polish and Ukrainian allow U+00A0 in exactly that one position more. Read from TYPOGRAPHY_RULES
-// by title, like the rows above.
+// The figure-unit rule (#804, open-issues wave owner call G-3) and the three no-break-space rules
+// it relaxes, tried on samples: every catalog that writes U+00A0 before a unit symbol refuses the
+// plain space there, and Dutch, Polish and Ukrainian allow U+00A0 in exactly that one position
+// more. Read from TYPOGRAPHY_RULES by title, like the rows above.
 describe('figure and unit — the no-break space before a unit symbol, on samples (#804)', () => {
   const NBSP = String.fromCharCode(0xa0)
   const UNIT_RULE = 'joins a figure and its unit symbol with a no-break space'
@@ -1965,9 +1966,9 @@ const isPluralForm = (key: string): boolean => isPluralFormOf(PLURAL_BASES, key)
  * reason says what the translations other than English and German must do, it is a requirement
  * on every such catalog, today's and any added later. An English or German sentence that read
  * wrong at exactly 1 ("1 sections scanned", the kind the "(1 core)" fix corrected) now states its
- * count label-first too (#806, owner call G-5); LABEL_FIRST_AT_ONE below names those keys and the
- * row under it holds them to that shape. They stay listed here: they still show a number with no
- * plural pair.
+ * count label-first too (#806, open-issues wave owner call G-5); LABEL_FIRST_AT_ONE below names
+ * those keys and the row under it holds them to that shape. They stay listed here: they still show
+ * a number with no plural pair.
  */
 const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly MessageKey[] }>> = {
   parenthetical: {
@@ -2135,7 +2136,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       '("{tps} tok/s"). English and German keep the noun after the figure only where it cannot be 1 ' +
       '(the Performance and benchmark figures, a page count of at least 2); where it can, they put ' +
       'the noun first too ("Sections scanned: {scanned}", #806). One exception is left as it is ' +
-      '(#806, owner call G-5): chat.speed.line reads "1 tokens" after a one-token answer.',
+      '(#806, open-issues wave owner call G-5): chat.speed.line reads "1 tokens" after a one-token answer.',
     keys: [
       'chat.speed.line',
       // The count is at least 2 here (a single page has its own sentence, ocrNotes.ts), so en/de/fr/es/it
@@ -2230,11 +2231,12 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
 }
 
 /**
- * #806 (owner call G-5): the NON_GRAMMATICAL keys whose count can be exactly 1 and whose English and
- * German sentence used to put a word after it ("I read 1 transactions", "Read across 1 sections
- * scanned", "the other 1 document(s)"). Both catalogs now state these counts label-first, as the
- * other eight already did. Only these keys, not their whole groups: `chat.speed.line` ("{tokens}
- * tokens") stays as it is (G-5), and the rest never meet 1 (each group's reason says why).
+ * #806 (open-issues wave owner call G-5): the NON_GRAMMATICAL keys whose count can be exactly 1 and
+ * whose English and German sentence used to put a word after it ("I read 1 transactions", "Read
+ * across 1 sections scanned", "the other 1 document(s)"). Both catalogs now state these counts
+ * label-first, as the other eight already did. Only these keys, not their whole groups:
+ * `chat.speed.line` ("{tokens} tokens") stays as it is (open-issues wave G-5), and the rest never
+ * meet 1 (each group's reason says why).
  */
 const LABEL_FIRST_AT_ONE: readonly MessageKey[] = [
   'skills.bankAnalysis.count',

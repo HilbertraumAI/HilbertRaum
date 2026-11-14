@@ -47,10 +47,11 @@ export const englishBinding: LanguageBinding = {
 const READ_BY_SUPPORT: ReadonlySet<UiLanguage> = new Set<UiLanguage>(['en', 'de'])
 
 /**
- * A support report that a maintainer can read (#812, owner call G-7: one paste, both reports).
- * In English or German it is `build(binding)` alone. In any other interface language it is that
- * report, then one divider line naming English by its own name from the registry, then the same
- * report built in English. The divider is plain ASCII, so the paste stays plain text.
+ * A support report that a maintainer can read (#812, open-issues wave owner call G-7: one paste,
+ * both reports). In English or German it is `build(binding)` alone. In any other interface
+ * language it is that report, then one divider line naming English by its own name from the
+ * registry, then the same report built in English. The divider is plain ASCII, so the paste stays
+ * plain text.
  */
 export function withEnglishCopy(binding: LanguageBinding, build: (tr: LanguageBinding) => string): string {
   const report = build(binding)

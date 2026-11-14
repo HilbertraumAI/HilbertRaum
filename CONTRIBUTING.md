@@ -439,8 +439,33 @@ translations by hand, because nothing marks them as stale.
   section of `en.ts`; changing one of their English values breaks the match for rows already
   stored. A message the main process shows right away goes through `tMain(…)` (Rule 2). Prompts
   sent to the AI model stay English.
+- **Never join a label and a value, or a figure and its unit, in code.** French puts a no-break
+  space before a colon, Turkish writes the percent sign first, and eight languages join a figure
+  and its unit with a no-break space, so a `${label}: ${value}`, a `${pct}%` or a `${size} GB`
+  typed in code is wrong somewhere. Use `t('common.labelValue', { label, value })`, or
+  `tNodes(t, 'common.labelValue', { label: <strong>…</strong>, value })`
+  (`renderer/i18nNodes.tsx`) when a placeholder carries markup; `t('common.percent', { pct })`;
+  and `unitJoin(lang)` (`shared/format.ts`) between a figure and its unit (typecheck asks a new
+  language for its entry there). `tests/unit/label-value-joins.test.ts` fails on a label-value
+  join (a colon or a spaced dash) typed in renderer code. A join that has to stay, such as a
+  copied report's plain `": "`, which keeps a pasted report searchable, goes on its `ALLOWED`
+  list with the reason.
+- **A figure and its unit symbol in catalog text** (GB, MB, KB, B, MB/s, tok/s, ms, s) are joined
+  by a no-break space (U+00A0, written `\u00A0` in the source: `{size}\u00A0GB`) in Spanish,
+  French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian, and by a plain space in English
+  and German. The typography rules of those eight languages refuse a plain space there; the
+  Dutch, Polish and Ukrainian rules against a no-break space allow it in exactly that one position
+  more.
 - **A key that shows a number** is a `.one`/`.other` pair rendered with `tCount`, or it goes on
-  the reviewed `NON_GRAMMATICAL` list in `tests/unit/i18n.test.ts`; the test says which.
+  the reviewed `NON_GRAMMATICAL` list in `tests/unit/i18n.test.ts`; the test says which. A listed
+  key puts its count after a label ("Sections scanned: {scanned}", "Line items: **{count}**"), so
+  that no word has to agree with it, in every language; each group's reason in the list says what
+  its keys may do instead (a unit symbol, an impersonal form, the fixed form of a constant).
+  English and German may keep a noun after a figure that is never 1. The keys whose count can be
+  1 are listed in `LABEL_FIRST_AT_ONE` beside the list, and a row refuses, in their English and
+  German values, a count followed by a word (except "of"/"von" between two counts) and a
+  "(s)"-style plural. One English key is left as it is: `chat.speed.line` reads "1 tokens" after
+  a one-token answer.
 - **The bank-statement skill's two routed questions** (`chat.skill.summarize.question`,
   `chat.skill.categorize.breakdownQuestion`) are recognised by their exact text in every language
   (i18n record §3.3 Rule 3). Changing either wording, in any language, changes what the skill
@@ -455,7 +480,10 @@ translations by hand, because nothing marks them as stale.
   `tests/integration/repo-hygiene.test.ts` (all forms of a plural key on consecutive lines, in
   CLDR order), and `tests/unit/i18n-unused-keys.test.ts` (unused keys, and no interface language
   named in `src/` outside the registry and a reviewed list of sites, such as the two
-  `zim/tables.ts` checks for the HTML table-row tag `<tr>`, which spells the Turkish code).
+  `zim/tables.ts` checks for the HTML table-row tag `<tr>`, which spells the Turkish code, and
+  the `['en', 'de']` in `renderer/components/translator.ts`: the languages a maintainer reads a
+  copied support report in, which must not follow the registry, so that a newly added language
+  gets the report's English copy too).
 
 ### How a new translation is checked
 Translations are drafted from the language's style guide and glossary (its "microcopy" section),

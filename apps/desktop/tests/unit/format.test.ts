@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { fmtDiskGb, fmtDiskSize, fmtPackSize, unitJoin } from '../../src/shared/format'
 import { t, UI_LANGUAGE_CODES, type UiLanguage } from '../../src/shared/i18n'
 
-// The space a size built in code puts before its unit symbol (#804, G-3): a plain space in English
-// and German, whose output stays what it was, and U+00A0 in every other registered language, the
-// space each of those catalogs writes there (the figure-unit typography rule in i18n.test.ts). The
-// tiers and their rounding are documents-format.test.ts's rows (`formatSize`); these rows own the join.
+// The space a size built in code puts before its unit symbol (#804, open-issues wave G-3): a plain
+// space in English and German, whose output stays what it was, and U+00A0 in every other
+// registered language, the space each of those catalogs writes there (the figure-unit typography
+// rule in i18n.test.ts). The tiers and their rounding are documents-format.test.ts's rows
+// (`formatSize`); these rows own the join.
 
 const NBSP = String.fromCharCode(0xa0)
 /** `s` with each U+00A0 spelled out, so a row compares code points and a failure names the space. */

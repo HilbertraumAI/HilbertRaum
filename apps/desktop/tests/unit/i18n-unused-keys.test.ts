@@ -522,7 +522,7 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
     file: 'renderer/components/translator.ts',
     text: "['en', 'de']",
     reason:
-      'the languages support READS a copied report in (#812, owner call G-7: the maintainers read English and German), not a list of interface languages: a newly registered language must get the English half too, so it must not be derived from UI_LANGUAGES'
+      'the languages support READS a copied report in (#812, open-issues wave owner call G-7: the maintainers read English and German), not a list of interface languages: a newly registered language must get the English half too, so it must not be derived from UI_LANGUAGES'
   }
 ]
 

@@ -471,7 +471,7 @@ stays great" → «Выберите модель поменьше — качес
   numbers and dates from `Intl`. The machine-checkable part is enforced by `TYPOGRAPHY_RULES.ru`
   (`tests/unit/i18n.test.ts`), with look-arounds, because JavaScript's `\b` does not see Cyrillic.
 - **Units** stay the Latin symbols the formatters print (GB, MB, KB, B, s, ms, tok/s), never «ГБ»
-  or «сек».
+  or «сек», joined to the figure or the placeholder by U+00A0 (`{size}\u00A0GB`).
 - **Plurals:** one / few / many / other, on consecutive lines in that order. `one` also serves 21,
   31, 101…, so no form points back at the counted things with a singular pronoun. Every form shows
   `{count}` — also a `one` whose English form has none (`packs.addedToast`) — except
@@ -584,8 +584,9 @@ pequeño: la calidad sigue siendo excelente.").
   colon, a full stop, a comma or parentheses; a no-break space before `%` (`{pct}\u00A0%`);
   numbers and dates from `Intl`. The machine-checkable part is enforced by
   `TYPOGRAPHY_RULES.es`.
-- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s), with «de» before
-  what they measure («{min} GB de RAM»). `Intl` prints the Spain pattern («98.304», «4,3») for
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s), joined to the
+  figure or the placeholder by U+00A0, with «de» before what they measure
+  (`{min}\u00A0GB de RAM`). `Intl` prints the Spain pattern («98.304», «4,3») for
   every Spanish locale (a known limitation).
 - **Plurals:** one / many / other, on consecutive lines in that order. `one` is exactly 1, so a
   form uses the placeholders of the English form of its category (`packs.addedToast.one` has no
@@ -639,7 +640,8 @@ stays great" → «Scegli un modello più piccolo: la qualità resta ottima.»).
   spaced en dash « – » only between a label and its gloss; no space before `; : ! ?`; numbers and
   dates from `Intl`. The machine-checkable part is enforced by `TYPOGRAPHY_RULES.it`.
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, %); «unità» never
-  names a unit of measurement.
+  names a unit of measurement. A symbol other than % is joined to the figure or the placeholder
+  by U+00A0 (`{size}\u00A0GB`); `{pct}%` takes no space.
 - **Plurals:** one / many / other, on consecutive lines in that order. `one` is exactly 1, so a
   form uses the placeholders of the English form of its category (`packs.addedToast.one` has no
   `{count}`); `many` (exact millions) adds «di» where the figure stands right before the noun
@@ -698,15 +700,16 @@ In this section «…» marks Dutch examples; the copy itself quotes with “…
 - **Typography:** quotes “…” without nesting — ‘…’ is not used, because its closing mark is the
   apostrophe; ’ for the apostrophe («PDF’s», «foto’s», «’s avonds»); `…` attached to the word before
   it; no em dash — a colon or a new sentence, and the spaced en dash « – » between a label and its
-  gloss; no space before `: ; ? ! %`; no no-break space; no exclamation mark; compounds as one word
+  gloss; no space before `: ; ? ! %`; no no-break space except between a figure or a placeholder
+  and a unit symbol (Units, below); no exclamation mark; compounds as one word
   or with a hyphen («AI-model», «offlinemodus»); the diaeresis («geïndexeerd»); nothing glued to a
   placeholder; numbers and dates from `Intl`. `TYPOGRAPHY_RULES.nl` enforces the punctuation and
   placeholder rules and bans «u», «uw», «uzelf», «jullie» and «gij»; the rest of the form of
   address, the glossary and the spelling (compounds, the diaeresis) are checked in review (owner
   decision 2026-11-13).
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms, %), after a
-  plain space («{size} GB op schijf»); `{pct}%` without a space. `Intl` prints the Netherlands
-  date pattern for every Dutch locale (a known limitation).
+  no-break space, U+00A0 (`{size}\u00A0GB op schijf`); `{pct}%` without a space. `Intl` prints
+  the Netherlands date pattern for every Dutch locale (a known limitation).
 - **Plurals:** one / other, on consecutive lines in that order. `one` is exactly 1, so a form uses
   the placeholders of the English form of its category (`packs.addedToast.one` has no `{count}`).
   Participles and status words do not change with the number, so `.one` and `.other` may be the
@@ -763,14 +766,16 @@ stays great" → «Wybierz mniejszy model – jakość pozostanie bardzo dobra.�
 - **Typography:** quotes „…” — the closing mark is ” (U+201D), not the German “ — also around
   technical field names; inner «…» only inside them; no apostrophe (a noun before a foreign name
   instead of declining it); `…`; the spaced en dash « – », never the em dash; no space before `, ; :
-  ! ? .` or `%`; no no-break space except between the digit groups of a typed figure; numbers and
+  ! ? .` or `%`; no no-break space except between the digit groups of a typed figure and between a
+  figure or a placeholder and a unit symbol (Units, below); numbers and
   dates from `Intl` («8192», but «98 304» with U+00A0; «4,3»; «75%»). `TYPOGRAPHY_RULES.pl`
   enforces the punctuation and placeholder rules (the preposition before a name included) and bans
   «Pan», «Pani», «Państwo» and a capital «Ty» or «Twój» mid-sentence; the rest of the form of
   address (no gendered verb or adjective about the user), the glossary and the spelling are
   checked in review (owner decision 2026-11-13).
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms, %), never a
-  unit word after a figure.
+  unit word after a figure; a symbol other than % is joined to the figure or the placeholder by
+  U+00A0 (`{size}\u00A0GB`).
 - **Plurals:** one / few / many / other, on consecutive lines in that order. `one` is exactly 1,
   so a form uses the placeholders of the English form of its category (`packs.addedToast.one`
   has no `{count}`); `few` (2–4, 22–24) takes the nominative plural («2 dokumenty»), `many` (0,
@@ -840,7 +845,8 @@ only set the examples apart; the catalog quotes with “…”.
   «sen» and a capital «Siz» mid-sentence; the rest of the form of address, the capital «İ», the
   glossary and the spelling are checked in review (owner decision 2026-11-13).
 - **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, ms) after the
-  figure; the percent sign stands before it without a space («%75», in catalog text `%{pct}`).
+  figure, joined to it or to the placeholder by U+00A0 (`{size}\u00A0GB`); the percent sign
+  stands before it without a space («%75», in catalog text `%{pct}`).
 - **Plurals:** one / other, on consecutive lines in that order. `one` is exactly 1, so a form
   uses the placeholders of the English form of its category (`packs.addedToast.one` has no
   `{count}`). A noun stays singular after any number («5 belge»), so the two forms are often the
@@ -902,8 +908,10 @@ own right: no term, spelling or calque is taken from another Slavic catalog.
   apostrophe, the Russian letters, a Latin letter touching a Cyrillic one) but has no address-form
   rule, so the form of address, the glossary and the spelling (the 2019 orthography) are checked
   in review (owner decision 2026-11-13).
-- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, %), never «ГБ»;
-  `{pct}%` without a space; `Intl` groups from four digits up with a no-break space.
+- **Units:** the Latin symbols the formatters print (GB, MB, KB, B, tok/s, s, %), never «ГБ»; a
+  symbol other than % is joined to the figure or the placeholder by U+00A0 (`{size}\u00A0GB`);
+  `{pct}%` without a space; `Intl` groups from four digits up with a no-break space. A no-break
+  space appears in those two places only.
 - **Plurals:** one / few / many / other, on consecutive lines in that order: nominative singular
   («{count} документ»), nominative plural («документи»), genitive plural («документів»), and for
   fractions the genitive singular («документа»). `one` also serves 21, 31, 101, so every form

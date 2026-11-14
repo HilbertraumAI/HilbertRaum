@@ -3,11 +3,11 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import * as ts from 'typescript'
 
-// Label-value joins built in code (#804, owner call G-4). A ": " or a spaced dash typed between a
-// label and its value follows English typography in every interface language: French writes
-// U+00A0 before a colon, and Spanish, French, Italian, Dutch, Polish and Turkish do not use the
-// em dash there. The renderer joins with the catalog's `common.labelValue` instead (`t` for a
-// string, `tNodes` in renderer/i18nNodes.tsx when the label carries markup).
+// Label-value joins built in code (#804, open-issues wave owner call G-4). A ": " or a spaced dash
+// typed between a label and its value follows English typography in every interface language:
+// French writes U+00A0 before a colon, and Spanish, French, Italian, Dutch, Polish and Turkish do
+// not use the em dash there. The renderer joins with the catalog's `common.labelValue` instead (`t`
+// for a string, `tNodes` in renderer/i18nNodes.tsx when the label carries markup).
 //
 // A syntactic scan of src/renderer/**/*.tsx for the join shapes the renderer has used: a JSX colon
 // right after an expression or an element (`{label}: {value}`, `{label}:{' '}`,
@@ -103,22 +103,24 @@ const ALLOWED: ReadonlyArray<{ file: string; scope?: string; text?: string; reas
   {
     file: 'screens/PerformanceScreen.tsx',
     scope: 'buildReport',
-    reason: 'the Performance Copy report: its code-built joins stay a plain ": " so a pasted report is searchable (G-4)'
+    reason:
+      'the Performance Copy report: its code-built joins stay a plain ": " so a pasted report is searchable (open-issues wave G-4)'
   },
   {
     file: 'screens/settings/DiagnosticsTab.tsx',
     scope: 'buildAppRuntimeReport',
-    reason: 'the App & runtime Copy report: plain ": " joins, searchable when pasted (G-4)'
+    reason: 'the App & runtime Copy report: plain ": " joins, searchable when pasted (open-issues wave G-4)'
   },
   {
     file: 'screens/settings/DiagnosticsTab.tsx',
     scope: 'buildBenchmarkReport',
-    reason: 'the Hardware benchmark Copy report: plain ": " joins, searchable when pasted (G-4)'
+    reason: 'the Hardware benchmark Copy report: plain ": " joins, searchable when pasted (open-issues wave G-4)'
   },
   {
     file: 'App.tsx',
     text: "`HilbertRaum — ${t('nav.home')}`",
-    reason: 'the brand link’s tooltip and accessible name: the product name, then the screen it opens; left as is (G-4)'
+    reason:
+      'the brand link’s tooltip and accessible name: the product name, then the screen it opens; left as is (open-issues wave G-4)'
   },
   {
     file: 'screens/ReviewScreen.tsx',

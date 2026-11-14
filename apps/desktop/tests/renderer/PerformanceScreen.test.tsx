@@ -1828,10 +1828,10 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
   })
 })
 
-// #812 (owner call G-7): the maintainers read English and German. In any other interface language
-// Copy report pastes the report, one divider line naming English, then the same report built in
-// English. The English half is compared with what an English interface copies from the same
-// snapshot, never with typed text.
+// #812 (open-issues wave owner call G-7): the maintainers read English and German. In any other
+// interface language Copy report pastes the report, one divider line naming English, then the
+// same report built in English. The English half is compared with what an English interface
+// copies from the same snapshot, never with typed text.
 describe('PerformanceScreen: an English copy of the report for support (#812)', () => {
   const DIVIDER = '--- English ---'
   const OTHER_LANGUAGES = UI_LANGUAGE_CODES.filter((code) => code !== 'en' && code !== 'de')

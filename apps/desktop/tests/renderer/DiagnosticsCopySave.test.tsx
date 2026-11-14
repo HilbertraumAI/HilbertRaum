@@ -394,10 +394,10 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
   })
 })
 
-// #812 (owner call G-7): the maintainers read English and German. In any other interface language
-// each report's Copy pastes the report, one divider line naming English, then the same report built
-// in English, so a support request stays readable. The English half is compared with what an
-// English interface copies from the same data, never with typed text.
+// #812 (open-issues wave owner call G-7): the maintainers read English and German. In any other
+// interface language each report's Copy pastes the report, one divider line naming English, then
+// the same report built in English, so a support request stays readable. The English half is
+// compared with what an English interface copies from the same data, never with typed text.
 describe('Settings → Diagnostics (advanced) — an English copy for support (#812)', () => {
   const DIVIDER = '--- English ---'
   const OTHER_LANGUAGES = UI_LANGUAGE_CODES.filter((code) => code !== 'en' && code !== 'de')

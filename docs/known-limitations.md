@@ -1164,8 +1164,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   (H7).** When a document has been through the structured-extract
   pass (a manual, yielding background task like the deep index), a "list every / how many {X}"
   question is answered from precomputed data at **zero model calls** with per-item provenance and
-  an honest coverage line ("N sections scanned (k unparsed)"). It is **not** a guaranteed-complete
-  list: a small model can miss an item, very similar values are merged, an item split across the
+  an honest coverage line ("… sections scanned: N (k could not be read)"). It is **not** a
+  guaranteed-complete list: a small model can miss an item, very similar values are merged, an item split across the
   ~80-token section overlap can double-count, and a section whose reply was unparseable is counted
   as "unparsed" (its items may be missing) rather than dropped. Since STR-1 §5.1 (2026-07-20) the
   pass grammar-constrains the reply (D55 `responseSchema`), so unparsed sections should be RARE on
@@ -1462,7 +1462,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   Valuta second baseline, whose DESCRIPTION leads) and a money-less header are excluded — they carry figures
   but were never transactions, and counting them would falsely gate a correctly-read statement. When `> 0`
   the deterministic answer **replaces the "across the whole statement" / "the whole invoice" headline** with
-  an honest *"**N** read; **M** line(s) with figures I couldn't parse"* (`countPartial`, EN+DE du-form) —
+  an honest *"Transactions read: **N**. Lines with a figure I couldn't parse into a transaction: **M** …"*
+  (`countPartial`, the invoice's "Line items read"; EN+DE du-form) —
   **except** when the D56 balance PROOF holds (`status === 'complete'`: printed opening + Σ == closing ties
   out over the kept rows, so a dropped line provably did not move the balance and the read IS whole) — the
   proof outranks the parse-gap hedge and the plain whole-statement count stands. A D56-**contradicted**
@@ -2747,11 +2748,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   format can misread.
 - **Dutch dates use the Netherlands pattern** for every Dutch-speaking user, in Belgium too:
   13-11-2026, not the Belgian 13/11/2026.
-- **A few figures ignore the language's own way of writing them.** The context meter in the chat
-  and an audio file's transcribing badge on the Documents screen put the percent sign after the
-  figure ("15%"), where Turkish puts it first ("%15"). Sizes are written with an ordinary space
-  before GB or MB, so a line can break between a figure and its unit (seen in Ukrainian on a model
-  card: "23" at the end of one line, "GB" at the start of the next).
+- **Two texts still ignore the language's own way of writing them.** In Settings → Diagnostics →
+  Activity, every entry is written "time — type: message", with a dash that Spanish, French,
+  Italian, Dutch, Polish and Turkish don't use there. And the app's refusal to start a model that needs
+  more memory than the computer has is in English, with English figures ("… needs at least 16 GB
+  RAM; this computer has about 8 GB …"), in every interface language; the AI Model screen already
+  disables Start for such a model and says why in the interface language.
 - **With a Turkish interface, words shown in capitals follow Turkish rules, your own text
   included.** Some labels are shown in capital letters (section titles, the date groups and
   project names in the conversation list, the section headings in a document's preview). In a
@@ -2788,9 +2790,11 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   show no language as selected; pick the one you want. A later version that meets a language it
   doesn't know shows *System* in its list, and choosing *System* there changes nothing at first:
   choose another language, then *System*.
-- **Copy reports for support follow the interface language.** The reports the **Copy** buttons
-  make (Settings → Diagnostics, the Performance screen) are written in the language the app is
-  shown in, so a report from a Russian interface is in Russian.
+- **Copy reports for support come in the interface language, with an English copy.** The reports
+  the **Copy** buttons make (Settings → Diagnostics, the Performance screen) are written in the
+  language the app is shown in. In any interface language but English and German, the same paste
+  then holds a line "--- English ---" and the same report in English, so a report from a Russian
+  interface is in Russian and in English. An English or German interface copies one report.
 - **Two rare refusals when creating a workspace are always in English:** a workspace already
   exists there ("An encrypted workspace already exists here …", "A workspace already exists on
   this drive …"), or the drive's policy doesn't allow an unencrypted one ("Plaintext workspace is
@@ -2807,11 +2811,15 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   labels in the Diagnostics Activity panel are translated. Per the audit-log privacy rule the
   messages carry ids/filenames/counts, never content — a stable English diagnostic record was
   chosen over translated DB rows.
-- **Library-origin and other unmapped error strings render as-is in every interface language but
-  English.** The D-L4 display map covers the finite persist-canonical set (exact match, plus five
+- **Library-origin and other unmapped error strings are shown as written, usually in English.**
+  The D-L4 display map covers the finite persist-canonical set (exact match, plus five
   interpolated messages matched by their template), so anything else in
-  `documents.error_message`, such as a raw parser-library error (a pdfjs exception message),
-  shows English in every other interface language. Rare failure-path remnants, accepted.
+  `documents.error_message`, such as a raw parser-library error (a pdfjs exception message), is
+  shown as it was written. On a failed document's row and in the chat's banner for a failed
+  attachment, a line in the interface language ("This file couldn't be added.") stands above it.
+  The Documents banner for a failed summary, translation or text-recognition task, the file
+  translation's banner and the evidence-pack export error show such text on its own. Rare
+  failure-path remnants, accepted.
 - **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now**, whatever
   the interface language. Translating them is content work, tracked separately from UI i18n.
 - **A conversation transcript can legitimately mix languages.** Old answers, model output,
