@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { formatSize, friendlyMimeLabel, isRetryableFailure, metaLine } from '../../src/renderer/screens/documents/format'
+import {
+  badgeFor,
+  formatSize,
+  friendlyMimeLabel,
+  isRetryableFailure,
+  metaLine
+} from '../../src/renderer/screens/documents/format'
 import { t as translate, tCount } from '../../src/shared/i18n'
 import { makeDocumentInfo } from '../helpers/chat-fixtures'
+
+/** `s` with each U+00A0 spelled out, so a row compares code points and a failure shows which space. */
+const NBSP = String.fromCharCode(0xa0)
+const shown = (s: string): string => s.split(NBSP).join('<nbsp>')
 
 // The Documents screen's pure formatters (screens/documents/format.tsx, DX-3 split). Moved here from the
 // renderer suites (DocumentsScreen / DocumentsScreenPolish) so the screens test what the user sees.
@@ -59,7 +69,10 @@ describe('friendlyMimeLabel', () => {
 
   it('metaLine leads with the file kind in the row language', () => {
     const doc = makeDocumentInfo({ mimeType: 'text/plain', sizeBytes: 158, chunkCount: 1 })
-    expect(metaLine(doc, 'es', (key, count) => tCount('es', key, count))).toBe('Texto · 158 B · 1 sección')
+    // The size's unit after U+00A0, as the Spanish catalog writes it (#804).
+    expect(shown(metaLine(doc, 'es', (key, count) => tCount('es', key, count)))).toBe(
+      'Texto · 158<nbsp>B · 1 sección'
+    )
   })
 })
 
@@ -77,5 +90,19 @@ describe('formatSize — decimal units (#768) and the DR-9 GB tier', () => {
     [999_960_000, 'en', '1.0 GB']
   ] as const)('%d bytes read %s as %s', (bytes, lang, shown) => {
     expect(formatSize(bytes, lang)).toBe(shown)
+  })
+})
+
+describe('badgeFor — the transcribing percent in the language’s own pattern (#804)', () => {
+  // English keeps "Transcribing… 42%" (DocumentsScreen.test.tsx). German writes a space before the
+  // sign, French U+00A0, Turkish the sign first, as each catalog's `common.percent` does.
+  it.each([
+    ['de', '15 %'],
+    ['fr', '15<nbsp>%'],
+    ['tr', '%15']
+  ] as const)('%s reads %s', (lang, percent) => {
+    const doc = makeDocumentInfo({ mimeType: 'audio/mpeg', status: 'extracting', transcriptionProgress: 15 })
+    const { label } = badgeFor(doc, (key, params) => translate(lang, key, params))
+    expect(shown(label)).toBe(`${translate(lang, 'docs.status.transcribing')} ${percent}`)
   })
 })

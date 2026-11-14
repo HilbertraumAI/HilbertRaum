@@ -167,7 +167,7 @@ export const tr: UiCatalog<'tr'> = {
     'Modeliniz başlatılıyor; büyük modellerin yüklenmesi biraz zaman alır. Model hazır olduğunda ' +
     'bu ekran kendiliğinden devam eder.',
   'chat.noModel.startingProgress':
-    'Modeliniz başlatılıyor: model dosyası okunuyor ({gb} GB), şu ana kadar yaklaşık %{pct}. ' +
+    'Modeliniz başlatılıyor: model dosyası okunuyor ({gb}\u00A0GB), şu ana kadar yaklaşık %{pct}. ' +
     'Model hazır olduğunda bu ekran kendiliğinden devam eder.',
   'chat.noModel.open': 'Yapay zekâ modeli ekranına git',
   'chat.noModel.recheck': 'Yeniden kontrol et',
@@ -447,7 +447,7 @@ export const tr: UiCatalog<'tr'> = {
   'chat.truncated.hint.cap':
     'Belgelere dayalı bu yanıt, uygulamanın tek bir yanıt için izin verdiği sabit uzunluğa ' +
     'ulaştı. Modelden kaldığı yerden devam etmesini isteyin.',
-  'chat.speed.line': '{tps} tok/s · ilk token: {ttft} s · {tokens} token',
+  'chat.speed.line': '{tps}\u00A0tok/s · ilk token: {ttft}\u00A0s · {tokens} token',
   'chat.speed.hint':
     'Bu yanıtın ne kadar hızlı oluşturulduğu: yapay zekâ motorunun üretim hızı, ilk sözcüğe ' +
     'kadar geçen bekleme süresi ve üretilen token sayısı. Yalnızca bu oturumdaki yanıtlar için ' +
@@ -1243,12 +1243,12 @@ export const tr: UiCatalog<'tr'> = {
     'OCR dosyaları yerinde. Yeni dil dosyalarını kullanmak için HilbertRaum’u yeniden başlatın.',
   'ocr.install.outcome.unchanged':
     'OCR dosyaları yerinde. Metin tanıma hâlâ sunulmuyorsa HilbertRaum’u yeniden başlatın.',
-  'models.ram.needs': 'En az {min} GB RAM gerekir',
-  'models.ram.machine': ' (bu bilgisayarda yaklaşık {ram} GB var)',
+  'models.ram.needs': 'En az {min}\u00A0GB RAM gerekir',
+  'models.ram.machine': ' (bu bilgisayarda yaklaşık {ram}\u00A0GB var)',
   'models.ram.advice': '. Daha küçük bir model seçin: kalite yine çok iyi olur.',
   'models.badge.active': 'Etkin',
   'models.badge.recommended': 'Bu bilgisayar için önerilir',
-  'models.badge.ramNeeded': '≥{min} GB RAM gerekir',
+  'models.badge.ramNeeded': '≥{min}\u00A0GB RAM gerekir',
   'models.automatic.installed': 'Kurulu – otomatik olarak kullanılır. Başlatılacak bir şey yok.',
   'models.automatic.notInstalled':
     'Kurulduktan sonra otomatik olarak kullanılır; ek ayar gerekmez.',
@@ -1947,8 +1947,8 @@ export const tr: UiCatalog<'tr'> = {
   'perf.otherMachine':
     'Bu sonuç farklı bir bilgisayarda ölçüldü. Bu bilgisayarı ölçmek için “Yeniden kontrol et” ' +
     'düğmesini kullanın.',
-  'perf.report.otherComputer': 'Başka bir bilgisayar: {cpu}, {ram} GB RAM',
-  'perf.verdict.speed': '{model} yaklaşık {tps} tok/s hızında çalışıyor.',
+  'perf.report.otherComputer': 'Başka bir bilgisayar: {cpu}, {ram}\u00A0GB RAM',
+  'perf.verdict.speed': '{model} yaklaşık {tps}\u00A0tok/s hızında çalışıyor.',
   'perf.verdict.noSpeed':
     'Bu bilgisayara en uygun model: {model} (ölçüt: {basis}). Hız, bir model çalıştıktan sonra ' +
     'ölçülür.',
@@ -1975,46 +1975,47 @@ export const tr: UiCatalog<'tr'> = {
   'perf.tile.memory.unified': 'Birleşik bellek',
   'perf.tile.memory.unifiedSub': 'İşlemci ve grafik çekirdekleri tarafından paylaşılır',
   'perf.model.title': 'Modeliniz',
-  'perf.model.line.one': '{model} · sürücüde {size} GB · {context} token bağlam',
-  'perf.model.line.other': '{model} · sürücüde {size} GB · {context} token bağlam',
+  'perf.model.line.one': '{model} · sürücüde {size}\u00A0GB · {context} token bağlam',
+  'perf.model.line.other': '{model} · sürücüde {size}\u00A0GB · {context} token bağlam',
   'perf.model.none': 'Henüz model seçilmedi. Yapay zekâ modeli ekranında bir model seçin.',
-  'perf.model.need': 'Bu bağlamla {need} GB gerektirir.',
+  'perf.model.need': 'Bu bağlamla {need}\u00A0GB gerektirir.',
   'perf.model.needEstimate':
-    'Ağırlıklar için en az {need} GB gerekir; buna, ilk başlatmada ölçülen bağlam önbelleği ' +
+    'Ağırlıklar için en az {need}\u00A0GB gerekir; buna, ilk başlatmada ölçülen bağlam önbelleği ' +
     'eklenir.',
   'perf.model.gpu':
-    'Ekran kartı belleğine sığıyor ({budget} GB): {layers} katmanın tamamı GPU üzerinde.',
-  'perf.model.gpuEstimate': 'Ekran kartı belleğine sığması bekleniyor ({budget} GB).',
+    'Ekran kartı belleğine sığıyor ({budget}\u00A0GB): {layers} katmanın tamamı GPU üzerinde.',
+  'perf.model.gpuEstimate': 'Ekran kartı belleğine sığması bekleniyor ({budget}\u00A0GB).',
   'perf.model.partial':
-    'Ekran kartı belleği: {budget} GB. GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık ' +
-    '{spill} GB ise RAM üzerinden çalışıyor. Yanıtlar daha yavaş.',
+    'Ekran kartı belleği: {budget}\u00A0GB. GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık ' +
+    '{spill}\u00A0GB ise RAM üzerinden çalışıyor. Yanıtlar daha yavaş.',
   'perf.model.partialFree':
-    'GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık {spill} GB ise RAM üzerinden ' +
-    'çalışıyor: model başladığında kartın {budget} GB belleğinden yalnızca {free} GB boştu ve ' +
-    'yapay zekâ motoru {margin} GB güvenlik payı ayırıyor. Yanıtlar daha yavaş. Kart ' +
+    'GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık {spill}\u00A0GB ise RAM üzerinden ' +
+    'çalışıyor: model başladığında kartın {budget}\u00A0GB belleğinden yalnızca {free}\u00A0GB boştu ' +
+    've yapay zekâ motoru {margin}\u00A0GB güvenlik payı ayırıyor. Yanıtlar daha yavaş. Kart ' +
     'boşaldığında modeli yeniden başlatın.',
   'perf.model.partialMargin':
-    'GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık {spill} GB ise RAM üzerinden ' +
-    'çalışıyor. Kart boştu ({free} / {budget} GB boş), ancak yapay zekâ motoru ayrıca {working} ' +
-    'GB çalışma arabelleği ve {margin} GB güvenlik payı ayırır ve toplam sınıra yaklaştığında ' +
-    'katmanları bütün olarak karttan çıkarır. Yanıtlar daha yavaş.',
+    'GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık {spill}\u00A0GB ise RAM üzerinden ' +
+    'çalışıyor. Kart boştu ({free} / {budget}\u00A0GB boş), ancak yapay zekâ motoru ayrıca ' +
+    '{working}\u00A0GB çalışma arabelleği ve {margin}\u00A0GB güvenlik payı ayırır ve toplam sınıra ' +
+    'yaklaştığında katmanları bütün olarak karttan çıkarır. Yanıtlar daha yavaş.',
   'perf.model.partialMarginNoWorking':
-    'GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık {spill} GB ise RAM üzerinden ' +
-    'çalışıyor. Kart boştu ({free} / {budget} GB boş), ancak yapay zekâ motoru ayrıca çalışma ' +
-    'arabellekleri ve {margin} GB güvenlik payı ayırır ve toplam sınıra yaklaştığında katmanları ' +
-    'bütün olarak karttan çıkarır. Yanıtlar daha yavaş.',
+    'GPU üzerinde {gpuLayers} / {layers} katman var, yaklaşık {spill}\u00A0GB ise RAM üzerinden ' +
+    'çalışıyor. Kart boştu ({free} / {budget}\u00A0GB boş), ancak yapay zekâ motoru ayrıca çalışma ' +
+    'arabellekleri ve {margin}\u00A0GB güvenlik payı ayırır ve toplam sınıra yaklaştığında ' +
+    'katmanları bütün olarak karttan çıkarır. Yanıtlar daha yavaş.',
   'perf.model.partialEstimate':
-    'Ekran kartı belleği: {budget} GB; yaklaşık {spill} GB ise RAM üzerinden çalışacak. Yanıtlar ' +
-    'daha yavaş.',
-  'perf.model.cpu': 'İşlemcide RAM üzerinden çalışıyor ({budget} GB).',
-  'perf.model.cpuEstimate': 'İşlemcide RAM üzerinden çalışacak ({budget} GB).',
+    'Ekran kartı belleği: {budget}\u00A0GB; yaklaşık {spill}\u00A0GB ise RAM üzerinden çalışacak. ' +
+    'Yanıtlar daha yavaş.',
+  'perf.model.cpu': 'İşlemcide RAM üzerinden çalışıyor ({budget}\u00A0GB).',
+  'perf.model.cpuEstimate': 'İşlemcide RAM üzerinden çalışacak ({budget}\u00A0GB).',
   'perf.model.unified':
-    'Birleşik belleğe sığıyor ({ram} GB; modelin kullanabileceği en fazla bellek: {budget} GB).',
+    'Birleşik belleğe sığıyor ({ram}\u00A0GB; modelin kullanabileceği en fazla bellek: ' +
+    '{budget}\u00A0GB).',
   'perf.model.unifiedEstimate':
-    'Birleşik belleğe sığması bekleniyor ({ram} GB; modelin kullanabileceği en fazla bellek: ' +
-    '{budget} GB).',
+    'Birleşik belleğe sığması bekleniyor ({ram}\u00A0GB; modelin kullanabileceği en fazla bellek: ' +
+    '{budget}\u00A0GB).',
   'perf.model.tooLarge':
-    'Bu bilgisayar için fazla büyük (kullanılabilir bellek: {budget} GB). Daha küçük bir model ' +
+    'Bu bilgisayar için fazla büyük (kullanılabilir bellek: {budget}\u00A0GB). Daha küçük bir model ' +
     'seçin.',
   'perf.model.unknown': 'Modelin nereye yerleşeceği, bu bilgisayarda ilk kez başladığında ölçülür.',
   'perf.model.unknownObserved': 'Yapay zekâ motoru, modelin nereye yerleştiğini bildirmedi.',
@@ -2039,7 +2040,7 @@ export const tr: UiCatalog<'tr'> = {
   'perf.role.reranker': 'Belge arama (sıralama)',
   'perf.role.embeddings': 'Belge arama (dizin)',
   'perf.role.transcriber': 'Ses',
-  'perf.models.row': '{model} · {size} GB',
+  'perf.models.row': '{model} · {size}\u00A0GB',
   'perf.models.rowNoSize': '{model}',
   'perf.models.none': 'Bunun için kurulu model yok.',
   'perf.models.device.gpu': 'ekran kartı',
@@ -2052,15 +2053,16 @@ export const tr: UiCatalog<'tr'> = {
   'perf.models.lifetime.per-use': 'yalnızca iş sırasında çalışır',
   'perf.models.split': 'kartta {gpuLayers} / {layers} katman',
   'perf.models.card':
-    'Ekran kartı: sohbet {chat} GB + çeviri {translation} GB; kart belleği {vram} GB.',
-  'perf.models.cardReranker': 'Ekran kartı: sıralama {reranker} GB; kart belleği {vram} GB.',
+    'Ekran kartı: sohbet {chat}\u00A0GB + çeviri {translation}\u00A0GB; kart belleği {vram}\u00A0GB.',
+  'perf.models.cardReranker': 'Ekran kartı: sıralama {reranker}\u00A0GB; kart belleği {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'İkisi de şu anda kartta. İkinci başlayan, kalan belleği aldı ve daha yavaş çalışıyor; ' +
     'diğeri bellekten çıkarıldığında yavaş çalışan modeli durdurup yeniden başlatın.',
-  'perf.models.ram': 'Hepsi aynı anda yüklendiğinde yaklaşık {sum} GB gerekir (RAM: {ram} GB).',
+  'perf.models.ram':
+    'Hepsi aynı anda yüklendiğinde yaklaşık {sum}\u00A0GB gerekir (RAM: {ram}\u00A0GB).',
   'perf.models.memory':
-    'Hepsi aynı anda yüklendiğinde yaklaşık {sum} GB gerekir (modellerin kullanabileceği ' +
-    'birleşik bellek: {budget} GB).',
+    'Hepsi aynı anda yüklendiğinde yaklaşık {sum}\u00A0GB gerekir (modellerin kullanabileceği ' +
+    'birleşik bellek: {budget}\u00A0GB).',
   'perf.models.ramTooMuch': 'Aynı anda çok fazla',
   'perf.models.ramOk': 'Sığar',
   'perf.place.gpu': 'GPU’da',
@@ -2074,7 +2076,7 @@ export const tr: UiCatalog<'tr'> = {
   'perf.tile.graphics.engine':
     'Yapay zekâ motoru bu bilgisayarda çalışamıyor; bu yüzden ekran kartı kontrol edilemedi.',
   'perf.tile.graphics.off': 'GPU hızlandırması kapalı. Modeller işlemcide çalışır.',
-  'perf.tile.graphics.small': '{min} GB altında: modeller işlemcide çalışır.',
+  'perf.tile.graphics.small': '{min}\u00A0GB altında: modeller işlemcide çalışır.',
   'perf.tile.graphics.integrated': 'Tümleşik, paylaşılan bellek: modeller işlemcide çalışır.',
   'perf.tile.graphics.unitShared': 'GB paylaşılan bellek',
   'perf.tile.graphics.notRecorded': 'Bu kontrolde ekran kartı bilgisi kaydedilmedi.',
@@ -2084,11 +2086,11 @@ export const tr: UiCatalog<'tr'> = {
   'perf.rating.notRecorded': 'Kaydedilmedi',
   'perf.rating.none': 'Yok',
   'perf.rating.unknown': 'Bilinmiyor',
-  'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
+  'perf.others.subGpu': '{cpu}, {ram}\u00A0GB RAM, {vram}\u00A0GB VRAM · {when}',
   'perf.tile.drive': 'Sürücü',
   'perf.tile.drive.unit': 'MB/s okuma',
-  'perf.tile.drive.load': 'Model yüklemesinden ({when}); okunan: {gb} GB',
-  'perf.tile.drive.hash': 'Dosya kontrolünden ({when}); okunan: {gb} GB',
+  'perf.tile.drive.load': 'Model yüklemesinden ({when}); okunan: {gb}\u00A0GB',
+  'perf.tile.drive.hash': 'Dosya kontrolünden ({when}); okunan: {gb}\u00A0GB',
   'perf.tile.drive.none': 'Henüz ölçülmedi',
   'perf.tile.drive.noneHint': 'İlk model başlatmada veya dosya kontrolünde ölçülür',
   'perf.rating.good': 'İyi',
@@ -2129,12 +2131,12 @@ export const tr: UiCatalog<'tr'> = {
     'saklanır.',
   'perf.observed.none':
     'Bu oturumda henüz bir şey gözlemlenmedi. Modele bir şey sorun veya modeli başlatın.',
-  'perf.observed.answer': 'Son yanıt: {tps} tok/s, ilk token: {ttft} s',
+  'perf.observed.answer': 'Son yanıt: {tps}\u00A0tok/s, ilk token: {ttft}\u00A0s',
   'perf.observed.answerSub': '{model}, {when}, {tokens} token',
-  'perf.observed.load': 'Model başlatma: {seconds} s',
-  'perf.observed.loadSub': '{model}, bu sürücüden okunan: {gb} GB ({mbps} MB/s)',
-  'perf.observed.check': 'Dosya kontrolü: {seconds} s',
-  'perf.observed.checkSub': 'Tam dosya kontrolü: {model} ({when}), okunan: {gb} GB',
+  'perf.observed.load': 'Model başlatma: {seconds}\u00A0s',
+  'perf.observed.loadSub': '{model}, bu sürücüden okunan: {gb}\u00A0GB ({mbps}\u00A0MB/s)',
+  'perf.observed.check': 'Dosya kontrolü: {seconds}\u00A0s',
+  'perf.observed.checkSub': 'Tam dosya kontrolü: {model} ({when}), okunan: {gb}\u00A0GB',
   'perf.observed.oncePerModel': 'Model başına bir kez',
   'perf.others.title': 'Bu sürücünün kullanıldığı diğer bilgisayarlar',
   'perf.others.hint':
@@ -2142,11 +2144,11 @@ export const tr: UiCatalog<'tr'> = {
     'göre belirlenir.',
   'perf.others.none':
     'Henüz yok. Sürücüyü başka bir bilgisayara takın; kontrol kendiliğinden yapılır.',
-  'perf.others.row': '{model} ile {tps} tok/s',
+  'perf.others.row': '{model} ile {tps}\u00A0tok/s',
   'perf.others.rowNoSpeed': '{model} önerildi, hız ölçülmedi',
-  'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
-  'perf.others.load': 'model başlatma {seconds} s',
-  'perf.others.check': 'dosya kontrolü {seconds} s',
+  'perf.others.sub': '{cpu}, {ram}\u00A0GB RAM · {when}',
+  'perf.others.load': 'model başlatma {seconds}\u00A0s',
+  'perf.others.check': 'dosya kontrolü {seconds}\u00A0s',
   'perf.footer':
     'Tüm ham değerleri içeren tam teknik rapor, Ayarlar ekranının Tanılama sekmesinde yer alır.',
   'perf.footerLink': 'Tanılama sekmesini aç',
@@ -2171,8 +2173,8 @@ export const tr: UiCatalog<'tr'> = {
   'diag.bench.notDetected': 'algılanmadı',
   'diag.bench.effectiveRead': 'Ölçülen okuma hızı',
   'diag.bench.effectiveReadNone': 'henüz ölçülmedi; bir model başlatıldığında ölçülür',
-  'diag.bench.effectiveReadLoad': 'model yüklemesinden ({when}); okunan: {gb} GB',
-  'diag.bench.effectiveReadHash': 'dosya kontrolünden ({when}); okunan: {gb} GB',
+  'diag.bench.effectiveReadLoad': 'model yüklemesinden ({when}); okunan: {gb}\u00A0GB',
+  'diag.bench.effectiveReadHash': 'dosya kontrolünden ({when}); okunan: {gb}\u00A0GB',
   'diag.bench.driveWrite': 'Sürücü yazma hızı',
   'diag.bench.notMeasured': 'ölçülmedi',
   'diag.bench.tokens': 'Üretim hızı (tok/s)',
@@ -2230,6 +2232,8 @@ export const tr: UiCatalog<'tr'> = {
   'common.cancel': 'İptal',
   'common.remove': 'Kaldır',
   'common.apply': 'Uygula',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '%{pct}',
   'indicator.offline': 'Yerel · Çevrimdışı',
   'indicator.online': 'Yerel · İndirmeye izin verildi',
   'indicator.offlineDetail': 'Her şey bu sürücüde kalır. İnternet bağlantısı kullanılmaz.',
@@ -2383,16 +2387,15 @@ export const tr: UiCatalog<'tr'> = {
     'profil yalnızca RAM, CPU ve sürücü hızına dayanıyor; tam bir ölçüm için modeli başka hiçbir ' +
     'şey kullanmıyorken hız testini yeniden çalıştırın.',
   'main.benchmark.warnSlowRead':
-    'Bu sürücüden okuma hızı yaklaşık {mbps} MB/s olarak ölçüldü. Bir model başlatılırken ' +
+    'Bu sürücüden okuma hızı yaklaşık {mbps}\u00A0MB/s olarak ölçüldü. Bir model başlatılırken ' +
     'dosyasının tamamı bu hızla okunur; bu yüzden bu sürücüde model başlatma yavaş olacak.',
   'main.benchmark.warnVeryLowTokens':
     'Yüklü modelle ({model}) metin üretimi çok yavaştı; bu yüzden atanan profil bir düzey ' +
     'düşürüldü. Bu model önerilen modelden büyükse önerilen modeli başlatın ve hız testini ' +
     'yeniden çalıştırın.',
   'main.benchmark.warnRecommendationLowered':
-    'Yüklü modelle ({model}) metin üretimi yaklaşık {tps} tok/s olarak ölçüldü; bu yüzden ' +
-    'yanıtların bu bilgisayarda hızlı kalması için önerilen model bir boyut kademesi aşağı ' +
-    'indirildi.',
+    'Yüklü modelle ({model}) metin üretimi yaklaşık {tps}\u00A0tok/s olarak ölçüldü; bu yüzden ' +
+    'yanıtların bu bilgisayarda hızlı kalması için önerilen model bir boyut kademesi aşağı indirildi.',
   'main.benchmark.locked': 'Çalışma alanı kilitli. Hız testini çalıştırmak için kilidini açın.',
   'main.benchmark.lockedDuringRun':
     'Hız testi sürerken çalışma alanı kilitlendi; bu yüzden sonuç kaydedilmedi. Hız testini ' +

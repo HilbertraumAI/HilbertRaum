@@ -115,6 +115,18 @@ describe('ContextMeter — memory gauge, not a progress bar (#25, D69)', () => {
     expect(meter?.getAttribute('title')?.includes(t('en', 'chat.context.willSummarize'))).toBe(headsUp)
   })
 
+  // #804: the visible percent is the language's own pattern, as the tooltip beside it is: German a
+  // space before the sign, French U+00A0, Turkish the sign first. Compared by code point (U+00A0
+  // spelled out): testing-library's text matchers fold U+00A0 into a plain space.
+  it.each([
+    ['de', '15 %'],
+    ['fr', '15<nbsp>%'],
+    ['tr', '%15']
+  ] as const)('%s shows the percent as %s', (lang, percent) => {
+    const text = renderMeter(lang, usage(15)).querySelector('.context-meter-pct')?.textContent ?? ''
+    expect(text.split(String.fromCharCode(0xa0)).join('<nbsp>')).toBe(percent)
+  })
+
   it('renders nothing when the window is unknown (<= 0)', () => {
     const container = renderMeter('en', usage(10, 0))
     expect(container.querySelector('.context-meter')).toBeNull()

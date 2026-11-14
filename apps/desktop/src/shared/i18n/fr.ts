@@ -2503,6 +2503,8 @@ export const fr: UiCatalog<'fr'> = {
   'common.cancel': 'Annuler',
   'common.remove': 'Retirer',
   'common.apply': 'Appliquer',
+  'common.labelValue': '{label}\u00A0: {value}',
+  'common.percent': '{pct}\u00A0%',
   'indicator.offline': 'Local · Hors ligne',
   'indicator.online': 'Local · Téléchargements autorisés',
   'indicator.offlineDetail':

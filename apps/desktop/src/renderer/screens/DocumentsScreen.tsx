@@ -627,7 +627,7 @@ export function DocumentsScreen({
         showToast(t(kind === 'reindex' ? 'docs.reindexDone' : 'docs.deleteDone', { title: d.title }))
       }
     } catch (e) {
-      setError(`${d.title}: ${friendlyIpcError(e)}`)
+      setError(t('common.labelValue', { label: d.title, value: friendlyIpcError(e) }))
     } finally {
       setBusy(null)
     }
@@ -832,7 +832,7 @@ export function DocumentsScreen({
       // common cause (a stale stored path on a relocated drive) is fixed in the resolver and
       // the menu now disables the entry outright when the copy is genuinely gone, so what
       // reaches here is the race — the copy vanished between the list refresh and the click.
-      setError(`${d.title}: ${friendlyIpcError(e)}`)
+      setError(t('common.labelValue', { label: d.title, value: friendlyIpcError(e) }))
     }
   }
 

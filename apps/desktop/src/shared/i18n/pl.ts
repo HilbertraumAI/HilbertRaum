@@ -172,7 +172,7 @@ export const pl: UiCatalog<'pl'> = {
     'Twój model się uruchamia – wczytywanie dużych modeli chwilę trwa. Gdy model będzie gotowy, ' +
     'ten ekran przejdzie dalej automatycznie.',
   'chat.noModel.startingProgress':
-    'Twój model się uruchamia – trwa odczyt pliku modelu ({gb} GB), na razie około {pct}%. Gdy ' +
+    'Twój model się uruchamia – trwa odczyt pliku modelu ({gb}\u00A0GB), na razie około {pct}%. Gdy ' +
     'model będzie gotowy, ten ekran przejdzie dalej automatycznie.',
   'chat.noModel.open': 'Otwórz Model AI',
   'chat.noModel.recheck': 'Sprawdź ponownie',
@@ -521,7 +521,7 @@ export const pl: UiCatalog<'pl'> = {
   'chat.truncated.hint.cap':
     'Ta odpowiedź oparta na dokumentach osiągnęła stałą długość, na jaką aplikacja pozwala w ' +
     'jednej odpowiedzi. Poproś model o kontynuowanie od miejsca, w którym odpowiedź się urwała.',
-  'chat.speed.line': '{tps} tok/s · {ttft} s do pierwszego tokena · tokeny: {tokens}',
+  'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s do pierwszego tokena · tokeny: {tokens}',
   'chat.speed.hint':
     'Szybkość generowania tej odpowiedzi: szybkość dekodowania podawana przez silnik AI, czas ' +
     'oczekiwania na pierwsze słowo i liczba wygenerowanych tokenów. Wyświetlane tylko dla ' +
@@ -1370,12 +1370,12 @@ export const pl: UiCatalog<'pl'> = {
   'ocr.install.outcome.unchanged':
     'Pliki OCR są na miejscu. Jeśli rozpoznawanie tekstu nadal nie jest dostępne, uruchom ' +
     'ponownie aplikację HilbertRaum.',
-  'models.ram.needs': 'Wymaga co najmniej {min} GB pamięci RAM',
-  'models.ram.machine': ' – ten komputer ma około {ram} GB',
+  'models.ram.needs': 'Wymaga co najmniej {min}\u00A0GB pamięci RAM',
+  'models.ram.machine': ' – ten komputer ma około {ram}\u00A0GB',
   'models.ram.advice': '. Wybierz mniejszy model – jakość pozostanie bardzo dobra.',
   'models.badge.active': 'Aktywny',
   'models.badge.recommended': 'Zalecany dla tego komputera',
-  'models.badge.ramNeeded': 'Wymaga ≥{min} GB RAM',
+  'models.badge.ramNeeded': 'Wymaga ≥{min}\u00A0GB RAM',
   'models.automatic.installed':
     'Zainstalowany – używany automatycznie. Nie trzeba niczego uruchamiać.',
   'models.automatic.notInstalled':
@@ -2098,8 +2098,8 @@ export const pl: UiCatalog<'pl'> = {
   'perf.notChecked': 'Jeszcze nie sprawdzono',
   'perf.otherMachine':
     'Ten wynik zmierzono na innym komputerze. Sprawdź ponownie, aby zmierzyć ten komputer.',
-  'perf.report.otherComputer': 'Inny komputer: {cpu}, {ram} GB RAM',
-  'perf.verdict.speed': 'Na tym komputerze {model} działa z szybkością około {tps} tok/s.',
+  'perf.report.otherComputer': 'Inny komputer: {cpu}, {ram}\u00A0GB RAM',
+  'perf.verdict.speed': 'Na tym komputerze {model} działa z szybkością około {tps}\u00A0tok/s.',
   'perf.verdict.noSpeed':
     '{model} najlepiej pasuje do tego komputera (podstawa oceny: {basis}). Szybkość zostanie ' +
     'zmierzona po pierwszym uruchomieniu modelu.',
@@ -2128,47 +2128,49 @@ export const pl: UiCatalog<'pl'> = {
   'perf.tile.memory.unified': 'Pamięć zunifikowana',
   'perf.tile.memory.unifiedSub': 'Wspólna dla procesora i rdzeni graficznych',
   'perf.model.title': 'Twój model',
-  'perf.model.line.one': '{model} · {size} GB na dysku · kontekst: {context} token',
-  'perf.model.line.few': '{model} · {size} GB na dysku · kontekst: {context} tokeny',
-  'perf.model.line.many': '{model} · {size} GB na dysku · kontekst: {context} tokenów',
-  'perf.model.line.other': '{model} · {size} GB na dysku · kontekst: {context} tokena',
+  'perf.model.line.one': '{model} · {size}\u00A0GB na dysku · kontekst: {context} token',
+  'perf.model.line.few': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokeny',
+  'perf.model.line.many': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokenów',
+  'perf.model.line.other': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokena',
   'perf.model.none': 'Nie wybrano jeszcze modelu. Wybierz model na ekranie Model AI.',
-  'perf.model.need': 'Zajmuje {need} GB przy tym rozmiarze kontekstu.',
+  'perf.model.need': 'Zajmuje {need}\u00A0GB przy tym rozmiarze kontekstu.',
   'perf.model.needEstimate':
-    'Wymaga co najmniej {need} GB na wagi modelu oraz miejsca na pamięć podręczną kontekstu, ' +
+    'Wymaga co najmniej {need}\u00A0GB na wagi modelu oraz miejsca na pamięć podręczną kontekstu, ' +
     'którą zmierzy pierwsze uruchomienie.',
   'perf.model.gpu':
-    'Mieści się w pamięci karty graficznej ({budget} GB): na GPU są wszystkie warstwy ({layers}).',
-  'perf.model.gpuEstimate': 'Prawdopodobnie zmieści się w pamięci karty graficznej ({budget} GB).',
+    'Mieści się w pamięci karty graficznej ({budget}\u00A0GB): na GPU są wszystkie warstwy ' +
+    '({layers}).',
+  'perf.model.gpuEstimate': 'Prawdopodobnie zmieści się w pamięci karty graficznej ({budget}\u00A0GB).',
   'perf.model.partial':
-    'Pamięć karty graficznej mieści {budget} GB. Warstwy na GPU: {gpuLayers} z {layers}, w ' +
-    'pamięci RAM: około {spill} GB. Odpowiedzi są wolniejsze.',
+    'Pamięć karty graficznej mieści {budget}\u00A0GB. Warstwy na GPU: {gpuLayers} z {layers}, w ' +
+    'pamięci RAM: około {spill}\u00A0GB. Odpowiedzi są wolniejsze.',
   'perf.model.partialFree':
-    'Warstwy na GPU: {gpuLayers} z {layers}, w pamięci RAM: około {spill} GB. Przy uruchamianiu ' +
-    'modelu wolna pamięć karty wynosiła tylko {free} GB z {budget} GB, a silnik zachowuje ' +
-    '{margin} GB marginesu bezpieczeństwa. Odpowiedzi są wolniejsze. Uruchom model ponownie, gdy ' +
-    'karta będzie wolna.',
+    'Warstwy na GPU: {gpuLayers} z {layers}, w pamięci RAM: około {spill}\u00A0GB. Przy uruchamianiu ' +
+    'modelu wolna pamięć karty wynosiła tylko {free}\u00A0GB z {budget}\u00A0GB, a silnik zachowuje ' +
+    '{margin}\u00A0GB marginesu bezpieczeństwa. Odpowiedzi są wolniejsze. Uruchom model ponownie, ' +
+    'gdy karta będzie wolna.',
   'perf.model.partialMargin':
-    'Warstwy na GPU: {gpuLayers} z {layers}, w pamięci RAM: około {spill} GB. Karta była wolna ' +
-    '({free} z {budget} GB), ale silnik rezerwuje też {working} GB na bufory robocze i {margin} ' +
-    'GB marginesu bezpieczeństwa, a gdy suma zbliża się do limitu, przenosi całe warstwy z ' +
-    'karty. Odpowiedzi są wolniejsze.',
+    'Warstwy na GPU: {gpuLayers} z {layers}, w pamięci RAM: około {spill}\u00A0GB. Karta była wolna ' +
+    '({free} z {budget}\u00A0GB), ale silnik rezerwuje też {working}\u00A0GB na bufory robocze i ' +
+    '{margin}\u00A0GB marginesu bezpieczeństwa, a gdy suma zbliża się do limitu, przenosi całe ' +
+    'warstwy z karty. Odpowiedzi są wolniejsze.',
   'perf.model.partialMarginNoWorking':
-    'Warstwy na GPU: {gpuLayers} z {layers}, w pamięci RAM: około {spill} GB. Karta była wolna ' +
-    '({free} z {budget} GB), ale silnik rezerwuje też pamięć na bufory robocze i {margin} GB ' +
-    'marginesu bezpieczeństwa, a gdy suma zbliża się do limitu, przenosi całe warstwy z karty. ' +
-    'Odpowiedzi są wolniejsze.',
+    'Warstwy na GPU: {gpuLayers} z {layers}, w pamięci RAM: około {spill}\u00A0GB. Karta była wolna ' +
+    '({free} z {budget}\u00A0GB), ale silnik rezerwuje też pamięć na bufory robocze i ' +
+    '{margin}\u00A0GB marginesu bezpieczeństwa, a gdy suma zbliża się do limitu, przenosi całe ' +
+    'warstwy z karty. Odpowiedzi są wolniejsze.',
   'perf.model.partialEstimate':
-    'Pamięć karty graficznej mieści {budget} GB, więc część modelu (około {spill} GB) będzie ' +
-    'działać z pamięci RAM. Odpowiedzi będą wolniejsze.',
-  'perf.model.cpu': 'Działa na procesorze, z pamięci RAM ({budget} GB).',
-  'perf.model.cpuEstimate': 'Będzie działać na procesorze, z pamięci RAM ({budget} GB).',
+    'Pamięć karty graficznej mieści {budget}\u00A0GB, więc część modelu (około {spill}\u00A0GB) ' +
+    'będzie działać z pamięci RAM. Odpowiedzi będą wolniejsze.',
+  'perf.model.cpu': 'Działa na procesorze, z pamięci RAM ({budget}\u00A0GB).',
+  'perf.model.cpuEstimate': 'Będzie działać na procesorze, z pamięci RAM ({budget}\u00A0GB).',
   'perf.model.unified':
-    'Mieści się w pamięci zunifikowanej ({ram} GB, dla modelu dostępne: do {budget} GB).',
+    'Mieści się w pamięci zunifikowanej ({ram}\u00A0GB, dla modelu dostępne: do {budget}\u00A0GB).',
   'perf.model.unifiedEstimate':
-    'Prawdopodobnie zmieści się w pamięci zunifikowanej ({ram} GB, dla modelu dostępne: do ' +
-    '{budget} GB).',
-  'perf.model.tooLarge': 'Za duży na ten komputer (dostępne: {budget} GB). Wybierz mniejszy model.',
+    'Prawdopodobnie zmieści się w pamięci zunifikowanej ({ram}\u00A0GB, dla modelu dostępne: do ' +
+    '{budget}\u00A0GB).',
+  'perf.model.tooLarge':
+    'Za duży na ten komputer (dostępne: {budget}\u00A0GB). Wybierz mniejszy model.',
   'perf.model.unknown':
     'Rozmieszczenie modelu zostanie zmierzone przy jego pierwszym uruchomieniu na tym komputerze.',
   'perf.model.unknownObserved': 'Silnik nie podał, gdzie umieścił model.',
@@ -2199,7 +2201,7 @@ export const pl: UiCatalog<'pl'> = {
   'perf.role.reranker': 'Wyszukiwanie w dokumentach (ocena trafności)',
   'perf.role.embeddings': 'Wyszukiwanie w dokumentach (indeks)',
   'perf.role.transcriber': 'Mowa',
-  'perf.models.row': '{model} · {size} GB',
+  'perf.models.row': '{model} · {size}\u00A0GB',
   'perf.models.rowNoSize': '{model}',
   'perf.models.none': 'Brak zainstalowanego modelu do tego zadania.',
   'perf.models.device.gpu': 'karta graficzna',
@@ -2212,15 +2214,15 @@ export const pl: UiCatalog<'pl'> = {
   'perf.models.lifetime.per-use': 'działa tylko podczas pracy',
   'perf.models.split': 'warstwy na karcie: {gpuLayers} z {layers}',
   'perf.models.card':
-    'Karta graficzna: czat {chat} GB + tłumaczenie {translation} GB, z {vram} GB.',
-  'perf.models.cardReranker': 'Karta graficzna: ocena trafności {reranker} GB, z {vram} GB.',
+    'Karta graficzna: czat {chat}\u00A0GB + tłumaczenie {translation}\u00A0GB, z {vram}\u00A0GB.',
+  'perf.models.cardReranker': 'Karta graficzna: ocena trafności {reranker}\u00A0GB, z {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Oba modele są teraz na karcie. Model uruchomiony jako drugi dostał pozostałą pamięć i ' +
     'działa wolniej; zatrzymaj go i uruchom ponownie, gdy pierwszy zwolni pamięć.',
-  'perf.models.ram': 'Wszystko wczytane naraz wymaga około {sum} GB z {ram} GB pamięci RAM.',
+  'perf.models.ram': 'Wszystko wczytane naraz wymaga około {sum}\u00A0GB z {ram}\u00A0GB pamięci RAM.',
   'perf.models.memory':
-    'Wszystko wczytane naraz wymaga około {sum} GB z {budget} GB pamięci zunifikowanej dostępnej ' +
-    'dla modeli.',
+    'Wszystko wczytane naraz wymaga około {sum}\u00A0GB z {budget}\u00A0GB pamięci zunifikowanej ' +
+    'dostępnej dla modeli.',
   'perf.models.ramTooMuch': 'Za dużo naraz',
   'perf.models.ramOk': 'Pasuje',
   'perf.place.gpu': 'Na GPU',
@@ -2235,7 +2237,7 @@ export const pl: UiCatalog<'pl'> = {
   'perf.tile.graphics.engine':
     'Silnik AI nie może działać na tym komputerze, więc nie udało się sprawdzić karty graficznej.',
   'perf.tile.graphics.off': 'Akceleracja graficzna jest wyłączona. Modele działają na procesorze.',
-  'perf.tile.graphics.small': 'Poniżej {min} GB: modele działają na procesorze.',
+  'perf.tile.graphics.small': 'Poniżej {min}\u00A0GB: modele działają na procesorze.',
   'perf.tile.graphics.integrated':
     'Karta zintegrowana, pamięć współdzielona: modele działają na procesorze.',
   'perf.tile.graphics.unitShared': 'GB pamięci współdzielonej',
@@ -2247,11 +2249,11 @@ export const pl: UiCatalog<'pl'> = {
   'perf.rating.notRecorded': 'Nie zapisano',
   'perf.rating.none': 'Brak',
   'perf.rating.unknown': 'Nieznana',
-  'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
+  'perf.others.subGpu': '{cpu}, {ram}\u00A0GB RAM, {vram}\u00A0GB VRAM · {when}',
   'perf.tile.drive': 'Dysk',
   'perf.tile.drive.unit': 'MB/s odczytu',
-  'perf.tile.drive.load': 'Pomiar przy uruchomieniu modelu: {when}, odczytano {gb} GB',
-  'perf.tile.drive.hash': 'Pomiar przy sprawdzaniu pliku: {when}, odczytano {gb} GB',
+  'perf.tile.drive.load': 'Pomiar przy uruchomieniu modelu: {when}, odczytano {gb}\u00A0GB',
+  'perf.tile.drive.hash': 'Pomiar przy sprawdzaniu pliku: {when}, odczytano {gb}\u00A0GB',
   'perf.tile.drive.none': 'Jeszcze nie zmierzono',
   'perf.tile.drive.noneHint': 'Pomiar przy pierwszym uruchomieniu modelu lub sprawdzeniu pliku',
   'perf.rating.good': 'Dobrze',
@@ -2293,24 +2295,24 @@ export const pl: UiCatalog<'pl'> = {
     'powyżej.',
   'perf.observed.none':
     'W tej sesji niczego jeszcze nie zaobserwowano. Zadaj modelowi pytanie albo go uruchom.',
-  'perf.observed.answer': 'Ostatnia odpowiedź: {tps} tok/s, {ttft} s do pierwszego tokena',
+  'perf.observed.answer': 'Ostatnia odpowiedź: {tps}\u00A0tok/s, {ttft}\u00A0s do pierwszego tokena',
   'perf.observed.answerSub': '{model}, {when}, tokeny: {tokens}',
-  'perf.observed.load': 'Uruchomienie modelu: {seconds} s',
-  'perf.observed.loadSub': '{model}, odczytano {gb} GB z tego dysku z szybkością {mbps} MB/s',
-  'perf.observed.check': 'Sprawdzenie pliku: {seconds} s',
+  'perf.observed.load': 'Uruchomienie modelu: {seconds}\u00A0s',
+  'perf.observed.loadSub': '{model}, odczytano {gb}\u00A0GB z tego dysku z szybkością {mbps}\u00A0MB/s',
+  'perf.observed.check': 'Sprawdzenie pliku: {seconds}\u00A0s',
   'perf.observed.checkSub':
-    'Pełne sprawdzenie pliku (model: {model}, data: {when}), odczytano {gb} GB',
+    'Pełne sprawdzenie pliku (model: {model}, data: {when}), odczytano {gb}\u00A0GB',
   'perf.observed.oncePerModel': 'Raz na model',
   'perf.others.title': 'Inne komputery, na których używano tego dysku',
   'perf.others.hint':
     'Każdy komputer ma własny wynik, więc zalecany model zależy od komputera, a nie od dysku.',
   'perf.others.none':
     'Jeszcze brak. Podłącz dysk do innego komputera, a sprawdzenie uruchomi się samo.',
-  'perf.others.row': '{tps} tok/s (model: {model})',
+  'perf.others.row': '{tps}\u00A0tok/s (model: {model})',
   'perf.others.rowNoSpeed': 'Zalecany model: {model}, szybkość nie została zmierzona',
-  'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
-  'perf.others.load': 'uruchomienie modelu: {seconds} s',
-  'perf.others.check': 'sprawdzenie pliku: {seconds} s',
+  'perf.others.sub': '{cpu}, {ram}\u00A0GB RAM · {when}',
+  'perf.others.load': 'uruchomienie modelu: {seconds}\u00A0s',
+  'perf.others.check': 'sprawdzenie pliku: {seconds}\u00A0s',
   'perf.footer':
     'Pełny raport techniczny ze wszystkimi surowymi wynikami znajduje się w Ustawieniach, na ' +
     'karcie Diagnostyka.',
@@ -2338,8 +2340,8 @@ export const pl: UiCatalog<'pl'> = {
   'diag.bench.notDetected': 'nie wykryto',
   'diag.bench.effectiveRead': 'Zmierzona szybkość odczytu',
   'diag.bench.effectiveReadNone': 'jeszcze nie zmierzono – pomiar nastąpi przy uruchomieniu modelu',
-  'diag.bench.effectiveReadLoad': 'pomiar przy uruchomieniu modelu: {when}, odczytano {gb} GB',
-  'diag.bench.effectiveReadHash': 'pomiar przy sprawdzaniu pliku: {when}, odczytano {gb} GB',
+  'diag.bench.effectiveReadLoad': 'pomiar przy uruchomieniu modelu: {when}, odczytano {gb}\u00A0GB',
+  'diag.bench.effectiveReadHash': 'pomiar przy sprawdzaniu pliku: {when}, odczytano {gb}\u00A0GB',
   'diag.bench.driveWrite': 'Zapis na dysk',
   'diag.bench.notMeasured': 'nie zmierzono',
   'diag.bench.tokens': 'Szybkość dekodowania (tok/s)',
@@ -2400,6 +2402,8 @@ export const pl: UiCatalog<'pl'> = {
   'common.cancel': 'Anuluj',
   'common.remove': 'Usuń',
   'common.apply': 'Zastosuj',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}%',
   'indicator.offline': 'Lokalnie · Offline',
   'indicator.online': 'Lokalnie · Pobieranie dozwolone',
   'indicator.offlineDetail':
@@ -2557,15 +2561,15 @@ export const pl: UiCatalog<'pl'> = {
     'innym. Profil poniżej uwzględnia tylko pamięć RAM, procesor i szybkość dysku – aby uzyskać ' +
     'pełny pomiar, uruchom test wydajności ponownie, gdy nic innego nie korzysta z modelu.',
   'main.benchmark.warnSlowRead':
-    'Zmierzona szybkość odczytu z tego dysku: około {mbps} MB/s. Uruchomienie modelu wczytuje ' +
+    'Zmierzona szybkość odczytu z tego dysku: około {mbps}\u00A0MB/s. Uruchomienie modelu wczytuje ' +
     'cały jego plik z tą szybkością, więc modele będą się na tym dysku uruchamiać wolno.',
   'main.benchmark.warnVeryLowTokens':
     'Generowanie tekstu z wczytanym modelem ({model}) było bardzo wolne, więc przypisany profil ' +
     'obniżono o jeden poziom. Jeśli ten model jest większy od zalecanego, uruchom zalecany model ' +
     'i ponownie uruchom test wydajności.',
   'main.benchmark.warnRecommendationLowered':
-    'Zmierzona szybkość generowania tekstu z wczytanym modelem ({model}) wyniosła około {tps} ' +
-    'tok/s, więc zalecany model obniżono o jeden poziom rozmiaru, aby odpowiedzi na tym ' +
+    'Zmierzona szybkość generowania tekstu z wczytanym modelem ({model}) wyniosła około ' +
+    '{tps}\u00A0tok/s, więc zalecany model obniżono o jeden poziom rozmiaru, aby odpowiedzi na tym ' +
     'komputerze były szybkie.',
   'main.benchmark.locked':
     'Obszar roboczy jest zablokowany. Odblokuj go, aby uruchomić test wydajności.',

@@ -1,6 +1,7 @@
 import type { Db } from '../../db'
 import type { Citation } from '../../../../shared/types'
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
+import { mainUiLanguage } from '../../i18n'
 import { skillInstallId } from '../registry'
 import { routeMatch } from '../vocabulary'
 import {
@@ -535,7 +536,9 @@ export function buildInvoiceAnswer(
         totals.taxRatePercent !== undefined
           ? tr('skills.invoiceAnalysis.taxWithRate', {
               value: amountText(totals.taxTotal, currency),
-              rate: String(totals.taxRatePercent)
+              // The rate in the UI language's figures (#804): a 5.5 % rate reads "5,5" in German.
+              // `tr` is `tMain` in the app, so this is the language it writes in.
+              rate: totals.taxRatePercent.toLocaleString(mainUiLanguage())
             })
           : tr('skills.invoiceAnalysis.tax', { value: amountText(totals.taxTotal, currency) })
       )

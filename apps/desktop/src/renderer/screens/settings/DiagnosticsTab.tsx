@@ -1,9 +1,10 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Banner, Button, ErrorBanner, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
+import { tNodes } from '../../i18nNodes'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { runAndSurface } from '../../lib/errors'
-import { fmt1 } from '@shared/format'
+import { fmt1, unitJoin } from '@shared/format'
 import { formatSize } from '../documents/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import { engineProblemDiagKey, engineProblemTechnicalDetail } from '@shared/engine-problem'
@@ -265,12 +266,19 @@ function tokensPerSecondValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLang
  * Replaces the retired page-cache "(cached)" read figure (F-35), which was ~100×
  * inflated on slow media and carried no information. Shared by the card row and the
  * Copy text so the two can never disagree. Results persisted before the field existed
- * (and fresh installs with no load window yet) render the "not measured" state.
+ * (and fresh installs with no load window yet) render the "not measured" state. Only the space
+ * before "MB/s" differs: the card passes the language's `unitJoin`, the Copy text a plain space,
+ * so a pasted report stays searchable (#804).
  */
-function effectiveReadValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+function effectiveReadValue(
+  bench: BenchmarkResult,
+  t: I18n['t'],
+  lang: UiLanguage,
+  join: string
+): string {
   const sample = bench.effectiveRead
   if (!sample) return t('diag.bench.effectiveReadNone')
-  const value = `${fmtNum(sample.mbps, lang)} MB/s`
+  const value = `${fmtNum(sample.mbps, lang)}${join}MB/s`
   const gb = fmt1(sample.bytes / 1e9, lang)
   // The sample's own date, not the card's "Last run": `effectiveRead` is updated in
   // place between benchmark runs, so the row must carry its own freshness.
@@ -317,7 +325,7 @@ function buildBenchmarkReport(
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('diag.app.unknown')) + (bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : '')}`,
     `${t('diag.bench.osArch')}: ${bench.os || t('diag.app.unknown')} (${bench.arch || t('diag.app.unknown')})`,
     `${t('diag.bench.gpu')}: ${bench.gpu ?? t('diag.bench.notDetected')}`,
-    `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, t, lang)}`,
+    `${t('diag.bench.effectiveRead')}: ${effectiveReadValue(bench, t, lang, ' ')}`,
     `${t('diag.bench.driveWrite')}: ${bench.driveWriteMbps != null ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
     `${t('diag.bench.tokens')}: ${tokensPerSecondValue(bench, t, lang)}`,
     `${t('diag.bench.lastRun')}: ${lastRunValue(bench, t, lang)}`
@@ -620,7 +628,7 @@ export function DiagnosticsTab(): JSX.Element {
                 crowd the buttons. */}
             <dl className="kv mt-2">
               <dt>{t('diag.bench.ram')}</dt>
-              <dd>{bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} GB` : t('diag.app.unknown')}</dd>
+              <dd>{bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)}${unitJoin(lang)}GB` : t('diag.app.unknown')}</dd>
               <dt>{t('diag.bench.cpu')}</dt>
               <dd>
                 {bench.cpuModel || t('diag.app.unknown')}
@@ -633,11 +641,11 @@ export function DiagnosticsTab(): JSX.Element {
               <dt>{t('diag.bench.gpu')}</dt>
               <dd>{bench.gpu ?? t('diag.bench.notDetected')}</dd>
               <dt>{t('diag.bench.effectiveRead')}</dt>
-              <dd>{effectiveReadValue(bench, t, lang)}</dd>
+              <dd>{effectiveReadValue(bench, t, lang, unitJoin(lang))}</dd>
               <dt>{t('diag.bench.driveWrite')}</dt>
               <dd>
                 {bench.driveWriteMbps != null
-                  ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s`
+                  ? `${fmtNum(bench.driveWriteMbps, lang)}${unitJoin(lang)}MB/s`
                   : t('diag.bench.notMeasured')}
               </dd>
               <dt>{t('diag.bench.tokens')}</dt>
@@ -670,7 +678,7 @@ export function DiagnosticsTab(): JSX.Element {
             <dt>{t('diag.system.freeSpace')}</dt>
             <dd>
               {drive.freeBytes != null
-                ? `${fmt1(drive.freeBytes / 1e9, lang)} GB`
+                ? `${fmt1(drive.freeBytes / 1e9, lang)}${unitJoin(lang)}GB`
                 : t('diag.app.unknown')}
             </dd>
             {/* #122: the images/ history footprint — runaway growth here threatens the lock
@@ -763,7 +771,11 @@ export function DiagnosticsTab(): JSX.Element {
                       <span className="activity-time">
                         {new Date(ev.createdAt).toLocaleString(lang)}
                       </span>{' '}
-                      — <strong>{auditLabel(ev.type, t)}</strong>: {ev.message}
+                      —{' '}
+                      {tNodes(t, 'common.labelValue', {
+                        label: <strong>{auditLabel(ev.type, t)}</strong>,
+                        value: ev.message
+                      })}
                     </li>
                   ))}
               </ul>

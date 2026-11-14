@@ -692,7 +692,7 @@ const ReviewItemRow = memo(function ReviewItemRow({
                 <button
                   type="button"
                   className="chip-remove"
-                  aria-label={`${t('review.link.remove')}: ${title}`}
+                  aria-label={t('common.labelValue', { label: t('review.link.remove'), value: title })}
                   disabled={readOnly}
                   onClick={() => void unlinkEvidence(item.id, link.evidenceKey)}
                 >

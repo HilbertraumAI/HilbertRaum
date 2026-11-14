@@ -2410,6 +2410,8 @@ export const en = {
   'common.cancel': 'Cancel',
   'common.remove': 'Remove',
   'common.apply': 'Apply',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}%',
   'indicator.offline': 'Local · Offline',
   'indicator.online': 'Local · Downloads allowed',
   'indicator.offlineDetail': 'Everything stays on this drive. No internet connection is used.',

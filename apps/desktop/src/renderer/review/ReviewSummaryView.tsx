@@ -16,6 +16,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { exportReviewPack } from '../lib/reviewSession'
 import { DECISION_GLYPH, DECISION_ORDER, decisionLabelKey } from './DecisionControl'
 import type { I18n } from '../i18n'
+import { tNodes } from '../i18nNodes'
 
 // The review summary view (EP-1 plan §7.6, spec §10.4/§11.6): status, decision counts,
 // coverage + truncation honesty, source-integrity facts, generation metadata (absent =
@@ -123,8 +124,14 @@ export function ReviewSummaryView({
         <ul className="review-summary-counts">
           {DECISION_ORDER.map((d) => (
             <li key={d}>
-              <span aria-hidden="true">{DECISION_GLYPH[d]}</span> {t(decisionLabelKey(d))}:{' '}
-              {counts.get(d) ?? 0}
+              {tNodes(t, 'common.labelValue', {
+                label: (
+                  <>
+                    <span aria-hidden="true">{DECISION_GLYPH[d]}</span> {t(decisionLabelKey(d))}
+                  </>
+                ),
+                value: counts.get(d) ?? 0
+              })}
             </li>
           ))}
         </ul>
@@ -239,7 +246,7 @@ export function ReviewSummaryView({
                   <button
                     type="button"
                     className="msg-action"
-                    aria-label={`${t('review.export.copyHash')}: ${x.fileName}`}
+                    aria-label={t('common.labelValue', { label: t('review.export.copyHash'), value: x.fileName })}
                     onClick={() => {
                       void Promise.resolve(window.api?.copyToClipboard?.(x.fileSha256)).then(
                         (ok) => {

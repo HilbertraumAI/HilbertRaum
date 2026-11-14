@@ -2368,6 +2368,8 @@ export const de: Record<keyof typeof en, string> = {
   'common.cancel': 'Abbrechen',
   'common.remove': 'Entfernen',
   'common.apply': 'Übernehmen',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct} %',
   'indicator.offline': 'Lokal · Offline',
   'indicator.online': 'Lokal · Downloads erlaubt',
   'indicator.offlineDetail':

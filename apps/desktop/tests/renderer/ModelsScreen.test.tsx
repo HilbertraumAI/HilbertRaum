@@ -567,6 +567,27 @@ describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)'
     expect(screen.getByRole('button', { name: t('en', 'models.use') })).toBeDisabled()
   })
 
+  // #804: the RAM figure takes the UI language's decimal separator (it was passed raw, so a 5.5 GB
+  // minimum read "5.5" in every language), and the card's code-built size puts U+00A0 before "GB"
+  // (`fmtGbNum`: the Ukrainian walk saw «23 GB» break there). Compared by code point: the default
+  // normalizer folds U+00A0 into a plain space.
+  it('in Ukrainian, a fractional RAM minimum reads 5,5 in the badge and on the card, with U+00A0 before GB', async () => {
+    const NBSP = String.fromCharCode(0xa0)
+    try {
+      stub({ models: [model({ state: 'installed', insufficientRam: true, recommendedMinRamGb: 5.5 })] })
+      renderInLanguage(<ModelsScreen />, 'uk')
+      await screen.findByText('Qwen3 4B Instruct')
+      const badge = t('uk', 'models.badge.ramNeeded', { min: '5,5' })
+      expect(badge).toContain(`5,5${NBSP}GB`) // the catalog's own U+00A0, so the row below compares it
+      expect(screen.getByText(badge, { normalizer: getDefaultNormalizer({ collapseWhitespace: false }) })).toBeInTheDocument()
+      expect(document.querySelector('.model-sub')?.textContent).toContain(
+        t('uk', 'models.library.memory', { size: `5,5${NBSP}GB` })
+      )
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
+  })
+
   it('shows the disabled Starting… spinner for the in-flight model instead of the action', async () => {
     stub({ models: [model({ state: 'installed' })] })
     ;(window.api as unknown as { getRuntimeStatus: () => Promise<RuntimeStatus> }).getRuntimeStatus =

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge, Button, ErrorBanner, useToast } from '../components'
 import { useT, type I18n } from '../i18n'
+import { tNodes } from '../i18nNodes'
 import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '@shared/format'
@@ -928,13 +929,14 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           {p.models.map((r) => (
             <div className="perf-row" key={r.role}>
               <div className="perf-row-main">
-                <strong>{t(`perf.role.${r.role}`)}</strong>
-                {': '}
-                {r.modelId
-                  ? r.sizeOnDiskGb != null
-                    ? t('perf.models.row', { model: modelName(r.modelId, models, t), size: gbOf(r.sizeOnDiskGb) })
-                    : t('perf.models.rowNoSize', { model: modelName(r.modelId, models, t) })
-                  : t('perf.models.none')}
+                {tNodes(t, 'common.labelValue', {
+                  label: <strong>{t(`perf.role.${r.role}`)}</strong>,
+                  value: r.modelId
+                    ? r.sizeOnDiskGb != null
+                      ? t('perf.models.row', { model: modelName(r.modelId, models, t), size: gbOf(r.sizeOnDiskGb) })
+                      : t('perf.models.rowNoSize', { model: modelName(r.modelId, models, t) })
+                    : t('perf.models.none')
+                })}
               </div>
               <div className="perf-row-sub">
                 {[
@@ -1092,7 +1094,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             <p className="perf-verdict">{verdict()}</p>
             {atCheckTimeName && (
               <p className="hint">
-                {t('perf.recommendation.atCheckTime')}: {atCheckTimeName}
+                {t('common.labelValue', { label: t('perf.recommendation.atCheckTime'), value: atCheckTimeName })}
               </p>
             )}
             <div className="perf-tiles" style={unified ? { gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' } : undefined}>

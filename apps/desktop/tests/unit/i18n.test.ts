@@ -275,6 +275,24 @@ function forbids(pattern: RegExp, title: string, message: string): TypographyRul
   }
 }
 
+/**
+ * The unit symbols the formatters print (`shared/format.ts`, `unitJoin`), as a catalog writes them
+ * after a figure: a symbol, then no letter and no apostrophe ("{n} s" is seconds, "{n} sezioni" is
+ * not). French's list, which the seven other catalogs that write U+00A0 there share (#804, G-3).
+ */
+const UNIT_SYMBOL = '(?:GB|MB|KB|B|MB/s|tok/s|ms|s)(?![\\p{L}’])'
+
+/** A plain space between a figure or a {placeholder} and a unit symbol: the catalog must write
+ *  U+00A0 there, as `unitJoin` does for a size built in code, so the two never mix on a screen and
+ *  a size cannot wrap between "23" and "GB" (#804). */
+function joinsFigureAndUnit(language: string): TypographyRule {
+  return forbids(
+    new RegExp(`[}\\d] ${UNIT_SYMBOL}`, 'u'),
+    'joins a figure and its unit symbol with a no-break space',
+    `${language} values with a plain space between a figure and its unit — write \\u00A0`
+  )
+}
+
 // The rules run over the CATALOG VALUES only: a catalog file's own comments are not shipped
 // copy, and technical field names inside notes ("{field}", "language") legitimately keep
 // straight ASCII pairs. Typecheck makes every registered language list its rules here.
@@ -363,7 +381,8 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       /[^\u00A0]%/,
       'separates a figure from % with a no-break space',
       'Spanish values with % not preceded by U+00A0 — write {pct}\\u00A0%'
-    )
+    ),
+    joinsFigureAndUnit('Spanish')
   ],
   // French: the typography of design-guidelines §7 "French microcopy".
   fr: [
@@ -432,11 +451,7 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'writes the œ ligature',
       'French values with "oeu"/"oei" — write œ (cœur, œuvre, œil, nœud)'
     ),
-    forbids(
-      /[}\d] (?:GB|MB|KB|B|MB\/s|tok\/s|ms|s)(?![\p{L}’])/u,
-      'joins a figure and its unit symbol with a no-break space',
-      'French values with a plain space between a figure and its unit — write \\u00A0'
-    ),
+    joinsFigureAndUnit('French'),
     forbids(
       /[}\d][\u00A0 ](?:Go|Mo|Ko|octets?)(?!\p{L})/u,
       'keeps the Latin size symbols the formatters print',
@@ -520,7 +535,8 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       /[^\S\n][;:!?](?=\s|$)/u,
       'puts no space before ; : ! ?',
       'Italian values with a space before ; : ! or ? — that is the French convention'
-    )
+    ),
+    joinsFigureAndUnit('Italian')
   ],
   // Russian: the typography of design-guidelines §7 "Russian microcopy".
   ru: [
@@ -592,7 +608,8 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       /(?<![А-Яа-я])(?:[ГМКТ][Бб]|кБ|сек|мс)(?![А-Яа-я])/,
       'keeps the unit symbols the formatters print (GB, MB, KB, s, ms)',
       'a Cyrillic unit symbol next to the Latin ones the app prints'
-    )
+    ),
+    joinsFigureAndUnit('Russian')
   ],
   // Dutch: the typography of design-guidelines §7 "Dutch microcopy".
   nl: [
@@ -644,10 +661,12 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'Dutch values with a space before % — write {pct}% as Intl prints it'
     ),
     forbids(
-      /[\u00A0\u202F\u2009]/u,
-      'uses no no-break or thin space',
-      'Dutch values with U+00A0, U+202F or U+2009 — Dutch typography needs none; use a plain space'
+      new RegExp(`[\\u202F\\u2009]|(?<![}\\d])\\u00A0|\\u00A0(?!${UNIT_SYMBOL})`, 'u'),
+      'uses no no-break or thin space, but U+00A0 between a figure and its unit symbol',
+      'Dutch values with U+202F, U+2009, or U+00A0 anywhere but between a figure and its unit symbol ' +
+        '({size}\\u00A0GB) — Dutch typography needs none elsewhere; use a plain space'
     ),
+    joinsFigureAndUnit('Dutch'),
     forbids(
       /(?<![\p{L}\p{N}{’-])(?:u|uw|uzelf|jullie|gij)(?![\p{L}\p{N}}’-])/iu,
       'addresses the reader as je',
@@ -708,6 +727,7 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'writes the percent sign before the figure, without a space',
       'Turkish values with a figure before % or a space after % — write %{pct}'
     ),
+    joinsFigureAndUnit('Turkish'),
     forbids(
       /\.\.\.|\s…/u,
       'writes the ellipsis as one character, attached to the word before it',
@@ -816,10 +836,15 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'Polish values with a space before % — write {pct}% (Intl prints 75%)'
     ),
     forbids(
-      /(?<!\d)\u00A0|\u00A0(?!\d)|[\u202F\u2009\u00AD\u200B]/u,
-      'uses a no-break space only between the digit groups of a typed figure',
-      'Polish values with U+00A0 outside a typed figure (200\\u00A0000), or with U+202F, U+2009, U+00AD or U+200B — catalog text uses plain spaces'
+      new RegExp(
+        `(?<![}\\d])\\u00A0|(?<=\\})\\u00A0(?!${UNIT_SYMBOL})|(?<=\\d)\\u00A0(?!\\d|${UNIT_SYMBOL})|[\\u202F\\u2009\\u00AD\\u200B]`,
+        'u'
+      ),
+      'uses a no-break space only between the digit groups of a typed figure, or between a figure and its unit symbol',
+      'Polish values with U+00A0 outside a typed figure (200\\u00A0000) and not before a unit symbol ({size}\\u00A0GB), ' +
+        'or with U+202F, U+2009, U+00AD or U+200B — catalog text uses plain spaces'
     ),
+    joinsFigureAndUnit('Polish'),
     forbids(
       /\d[ ,.]\d{3}(?!\d)/u,
       'groups a typed figure with a no-break space',
@@ -933,10 +958,15 @@ const TYPOGRAPHY_RULES: { readonly [C in UiLanguage]: readonly TypographyRule[] 
       'Ukrainian values with ! — the copy is calm (design-guidelines §7); end the sentence with a full stop'
     ),
     forbids(
-      /(?<!\d)\u00A0|\u00A0(?!\d)|\u202F|\d \d{3}(?!\d)|\d,\d{3}(?!\d)/u,
-      'groups a typed figure with U+00A0 and uses no other no-break space',
-      'Ukrainian values with a no-break space outside a figure, a narrow no-break space, or a typed figure grouped with a plain space or a comma — write the group separator as \\u00A0, as Intl prints it'
+      new RegExp(
+        `(?<![}\\d])\\u00A0|(?<=\\})\\u00A0(?!${UNIT_SYMBOL})|(?<=\\d)\\u00A0(?!\\d|${UNIT_SYMBOL})|\\u202F|\\d \\d{3}(?!\\d)|\\d,\\d{3}(?!\\d)`,
+        'u'
+      ),
+      'groups a typed figure with U+00A0, joins a figure and its unit symbol with it, and uses no other no-break space',
+      'Ukrainian values with a no-break space outside a figure and not before a unit symbol ({size}\\u00A0GB), a narrow no-break space, ' +
+        'or a typed figure grouped with a plain space or a comma — write the group separator as \\u00A0, as Intl prints it'
     ),
+    joinsFigureAndUnit('Ukrainian'),
     forbids(
       /\}[\p{L}\u02BC]|\}-\p{Script=Cyrillic}/u,
       'glues no ending to a placeholder',
@@ -1079,6 +1109,89 @@ describe('Turkish and Ukrainian typography — the suffix, letter and apostrophe
     ['uk apostrophe place', 'U+02BC after a space', `слово ${UK_APOSTROPHE}я`]
   ])('the %s rule rejects %s', (rule, _label, sample) => {
     expect(flags(rule, sample)).toBe(true)
+  })
+})
+
+// The figure-unit rule (#804, G-3) and the three no-break-space rules it relaxes, tried on samples:
+// every catalog that writes U+00A0 before a unit symbol refuses the plain space there, and Dutch,
+// Polish and Ukrainian allow U+00A0 in exactly that one position more. Read from TYPOGRAPHY_RULES
+// by title, like the rows above.
+describe('figure and unit — the no-break space before a unit symbol, on samples (#804)', () => {
+  const NBSP = String.fromCharCode(0xa0)
+  const UNIT_RULE = 'joins a figure and its unit symbol with a no-break space'
+  const NBSP_RULES = {
+    nl: 'uses no no-break or thin space, but U+00A0 between a figure and its unit symbol',
+    pl: 'uses a no-break space only between the digit groups of a typed figure, or between a figure and its unit symbol',
+    uk: 'groups a typed figure with U+00A0, joins a figure and its unit symbol with it, and uses no other no-break space'
+  } as const
+  const flags = (code: UiLanguage, title: string, sample: string): boolean => {
+    const found = TYPOGRAPHY_RULES[code].find((r) => r.title === title)
+    if (found === undefined) throw new Error(`no ${code} typography rule titled ${title}`)
+    return found.offenders({ sample }).length > 0
+  }
+
+  it.each(['es', 'fr', 'it', 'nl', 'pl', 'tr', 'ru', 'uk'] as const)(
+    '%s refuses a plain space between a figure and its unit, and takes U+00A0 there',
+    (code) => {
+      expect(flags(code, UNIT_RULE, '{size} GB')).toBe(true)
+      expect(flags(code, UNIT_RULE, `{size}${NBSP}GB`)).toBe(false)
+    }
+  )
+
+  it.each([
+    ['a no-break space', `{size}${NBSP}GB`],
+    ['a word that begins with s', '{count} sezioni'],
+    ['a word that begins with B', '{count} Bytes'],
+    ['a word that begins with MB', '{count} MBit'],
+    ['a unit after a word', 'Speicher GB']
+  ])('the unit rule accepts %s', (_label, sample) => {
+    expect(flags('es', UNIT_RULE, sample)).toBe(false)
+  })
+
+  it.each([
+    ['GB after a placeholder', '{gb} GB'],
+    ['GB after a typed figure', '4,5 GB'],
+    ['MB', '{size} MB'],
+    ['KB', '2,0 KB'],
+    ['B', '512 B'],
+    ['MB/s', '{mbps} MB/s'],
+    ['tok/s', '{tps} tok/s'],
+    ['ms', '{ms} ms'],
+    ['s', '{ttft} s'],
+    ['s before a full stop', '{seconds} s.'],
+    ['a second unit in one value', `{tps}${NBSP}tok/s · {ttft} s`]
+  ])('the unit rule refuses a plain space before %s', (_label, sample) => {
+    expect(flags('es', UNIT_RULE, sample)).toBe(true)
+  })
+
+  it.each(
+    (['nl', 'pl', 'uk'] as const).flatMap((code) => [
+      [code, 'GB after a placeholder', `{size}${NBSP}GB`],
+      [code, 'MB/s after a typed figure', `5${NBSP}MB/s`],
+      [code, 's after a placeholder', `{ttft}${NBSP}s`]
+    ])
+  )('%s: the no-break-space rule allows U+00A0 before a unit symbol (%s)', (code, _label, sample) => {
+    expect(flags(code, NBSP_RULES[code], sample)).toBe(false)
+  })
+
+  it.each(
+    (['nl', 'pl', 'uk'] as const).flatMap((code) => [
+      [code, 'after a placeholder, before a word', `{name}${NBSP}model`],
+      [code, 'between two words', `a${NBSP}b`],
+      [code, 'before a word that begins with s', `{count}${NBSP}sekund`],
+      [code, 'before a unit, after a word', `Speicher${NBSP}GB`]
+    ])
+  )('%s: the no-break-space rule still refuses U+00A0 %s', (code, _label, sample) => {
+    expect(flags(code, NBSP_RULES[code], sample)).toBe(true)
+  })
+
+  // The digit groups of a typed figure keep their U+00A0 in Polish and Ukrainian; Dutch has none.
+  it.each([
+    ['pl', false],
+    ['uk', false],
+    ['nl', true]
+  ] as const)('%s: a typed figure grouped with U+00A0 is refused: %s', (code, refused) => {
+    expect(flags(code, NBSP_RULES[code], `200${NBSP}000`)).toBe(refused)
   })
 })
 
@@ -1851,7 +1964,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'skills.redactionRouting.scan',
       'models.library.showVariants',
       'models.library.hideVariants',
-      'main.dialog.openLink.truncated' // #236: "characters not shown: {hidden}."
+      'main.dialog.openLink.truncated', // #236: "characters not shown: {hidden}."
+      'common.labelValue' // #804: "{label}: {value}", a review decision's count after the colon
     ]
   },
   ratio: {
@@ -1909,6 +2023,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'models.ram.needs',
       'models.ram.machine',
       'models.badge.ramNeeded',
+      'common.percent',
       'perf.report.otherComputer',
       'perf.model.need',
       'perf.model.needEstimate',

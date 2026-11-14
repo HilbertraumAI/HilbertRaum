@@ -83,17 +83,17 @@ export function KnowledgePackToolsDialog({
         <dt>{t('models.confirm.license')}</dt>
         <dd>
           {family.license}
+          {/* Mirrors ModelsScreen's confirm dialog (#236, #804): the link on a line of its own, with
+              no separator before it, and the destination host shown. */}
           {license && (
-            <>
-              {' — '}
+            <div>
               <a href={license.href} target="_blank" rel="noreferrer">
                 {t('models.confirm.readLicense')}
               </a>
-              {/* Mirrors ModelsScreen's confirm dialog (#236): the destination host is shown. */}
               {' ('}
               <code>{license.host}</code>
               {')'}
-            </>
+            </div>
           )}
         </dd>
         <dt>{t('models.confirm.from')}</dt>

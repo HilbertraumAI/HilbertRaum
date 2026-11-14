@@ -164,7 +164,7 @@ export const nl: UiCatalog<'nl'> = {
     'Je model wordt gestart: grote modellen hebben wat tijd nodig om te laden. Dit scherm gaat ' +
     'automatisch verder zodra het model klaar is.',
   'chat.noModel.startingProgress':
-    'Je model wordt gestart: het modelbestand ({gb} GB) wordt gelezen, tot nu toe ongeveer ' +
+    'Je model wordt gestart: het modelbestand ({gb}\u00A0GB) wordt gelezen, tot nu toe ongeveer ' +
     '{pct}%. Dit scherm gaat automatisch verder zodra het model klaar is.',
   'chat.noModel.open': 'Naar AI-model',
   'chat.noModel.recheck': 'Opnieuw controleren',
@@ -465,7 +465,7 @@ export const nl: UiCatalog<'nl'> = {
   'chat.truncated.hint.cap':
     'Dit antwoord op basis van je documenten heeft de vaste lengte bereikt die de app voor één ' +
     'antwoord toestaat. Vraag het model om verder te gaan waar het is gestopt.',
-  'chat.speed.line': '{tps} tok/s · {ttft} s tot het eerste token · tokens: {tokens}',
+  'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s tot het eerste token · tokens: {tokens}',
   'chat.speed.hint':
     'Hoe snel dit antwoord is gegenereerd: de decodeersnelheid van de AI-engine, de wachttijd ' +
     'tot het eerste woord en het aantal gegenereerde tokens. Alleen zichtbaar bij antwoorden uit ' +
@@ -1294,12 +1294,12 @@ export const nl: UiCatalog<'nl'> = {
   'ocr.install.outcome.unchanged':
     'De OCR-bestanden staan klaar. Wordt tekstherkenning nog steeds niet aangeboden, start ' +
     'HilbertRaum dan opnieuw.',
-  'models.ram.needs': 'Heeft minstens {min} GB RAM nodig',
-  'models.ram.machine': ' – deze computer heeft ongeveer {ram} GB',
+  'models.ram.needs': 'Heeft minstens {min}\u00A0GB RAM nodig',
+  'models.ram.machine': ' – deze computer heeft ongeveer {ram}\u00A0GB',
   'models.ram.advice': '. Kies een kleiner model: de kwaliteit blijft uitstekend.',
   'models.badge.active': 'Actief',
   'models.badge.recommended': 'Aanbevolen voor deze computer',
-  'models.badge.ramNeeded': '≥{min} GB RAM nodig',
+  'models.badge.ramNeeded': '≥{min}\u00A0GB RAM nodig',
   'models.automatic.installed':
     'Geïnstalleerd: wordt automatisch gebruikt. Er is niets te starten.',
   'models.automatic.notInstalled':
@@ -2020,8 +2020,8 @@ export const nl: UiCatalog<'nl'> = {
   'perf.otherMachine':
     'Dit resultaat is op een andere computer gemeten. Kies “Opnieuw controleren” om deze ' +
     'computer te meten.',
-  'perf.report.otherComputer': 'Andere computer: {cpu}, {ram} GB RAM',
-  'perf.verdict.speed': 'Hier draait {model} met ongeveer {tps} tok/s.',
+  'perf.report.otherComputer': 'Andere computer: {cpu}, {ram}\u00A0GB RAM',
+  'perf.verdict.speed': 'Hier draait {model} met ongeveer {tps}\u00A0tok/s.',
   'perf.verdict.noSpeed':
     'Bij deze computer past {model} het best (op basis van: {basis}). De snelheid wordt gemeten ' +
     'zodra er een model heeft gedraaid.',
@@ -2050,47 +2050,47 @@ export const nl: UiCatalog<'nl'> = {
   'perf.tile.memory.unified': 'Gedeeld geheugen',
   'perf.tile.memory.unifiedSub': 'Gedeeld door de processor en de grafische kernen',
   'perf.model.title': 'Je model',
-  'perf.model.line.one': '{model} · {size} GB op schijf · context van {context} tokens',
-  'perf.model.line.other': '{model} · {size} GB op schijf · context van {context} tokens',
+  'perf.model.line.one': '{model} · {size}\u00A0GB op schijf · context van {context} tokens',
+  'perf.model.line.other': '{model} · {size}\u00A0GB op schijf · context van {context} tokens',
   'perf.model.none': 'Nog geen model geselecteerd. Kies er een op het scherm AI-model.',
-  'perf.model.need': 'Gebruikt {need} GB met deze context.',
+  'perf.model.need': 'Gebruikt {need}\u00A0GB met deze context.',
   'perf.model.needEstimate':
-    'Heeft minstens {need} GB nodig voor de modelgewichten, plus de contextcache, die bij de ' +
+    'Heeft minstens {need}\u00A0GB nodig voor de modelgewichten, plus de contextcache, die bij de ' +
     'eerste start wordt gemeten.',
   'perf.model.gpu':
-    'Past in het grafische geheugen ({budget} GB): alle lagen op de GPU ({layers}).',
-  'perf.model.gpuEstimate': 'Past waarschijnlijk in het grafische geheugen ({budget} GB).',
+    'Past in het grafische geheugen ({budget}\u00A0GB): alle lagen op de GPU ({layers}).',
+  'perf.model.gpuEstimate': 'Past waarschijnlijk in het grafische geheugen ({budget}\u00A0GB).',
   'perf.model.partial':
-    'Grafisch geheugen: {budget} GB. Lagen op de GPU: {gpuLayers} van {layers}; ongeveer {spill} ' +
-    'GB draait vanuit het RAM. Antwoorden zijn trager.',
+    'Grafisch geheugen: {budget}\u00A0GB. Lagen op de GPU: {gpuLayers} van {layers}; ongeveer ' +
+    '{spill}\u00A0GB draait vanuit het RAM. Antwoorden zijn trager.',
   'perf.model.partialFree':
-    'Lagen op de GPU: {gpuLayers} van {layers}; ongeveer {spill} GB draait vanuit het RAM. Toen ' +
-    'het model startte, was maar {free} GB van de {budget} GB op de kaart vrij, en de AI-engine ' +
-    'houdt een veiligheidsmarge van {margin} GB aan. Antwoorden zijn trager. Start het model ' +
-    'opnieuw zodra de kaart vrij is.',
+    'Lagen op de GPU: {gpuLayers} van {layers}; ongeveer {spill}\u00A0GB draait vanuit het RAM. Toen ' +
+    'het model startte, was maar {free}\u00A0GB van de {budget}\u00A0GB op de kaart vrij, en de ' +
+    'AI-engine houdt een veiligheidsmarge van {margin}\u00A0GB aan. Antwoorden zijn trager. Start ' +
+    'het model opnieuw zodra de kaart vrij is.',
   'perf.model.partialMargin':
-    'Lagen op de GPU: {gpuLayers} van {layers}; ongeveer {spill} GB draait vanuit het RAM. De ' +
-    'kaart was vrij ({free} van {budget} GB), maar de AI-engine reserveert ook {working} GB aan ' +
-    'werkbuffers en een veiligheidsmarge van {margin} GB, en verplaatst hele lagen van de kaart ' +
-    'zodra het totaal de grens nadert. Antwoorden zijn trager.',
+    'Lagen op de GPU: {gpuLayers} van {layers}; ongeveer {spill}\u00A0GB draait vanuit het RAM. De ' +
+    'kaart was vrij ({free} van {budget}\u00A0GB), maar de AI-engine reserveert ook ' +
+    '{working}\u00A0GB aan werkbuffers en een veiligheidsmarge van {margin}\u00A0GB, en verplaatst ' +
+    'hele lagen van de kaart zodra het totaal de grens nadert. Antwoorden zijn trager.',
   'perf.model.partialMarginNoWorking':
-    'Lagen op de GPU: {gpuLayers} van {layers}; ongeveer {spill} GB draait vanuit het RAM. De ' +
-    'kaart was vrij ({free} van {budget} GB), maar de AI-engine reserveert ook werkbuffers en ' +
-    'een veiligheidsmarge van {margin} GB, en verplaatst hele lagen van de kaart zodra het ' +
+    'Lagen op de GPU: {gpuLayers} van {layers}; ongeveer {spill}\u00A0GB draait vanuit het RAM. De ' +
+    'kaart was vrij ({free} van {budget}\u00A0GB), maar de AI-engine reserveert ook werkbuffers en ' +
+    'een veiligheidsmarge van {margin}\u00A0GB, en verplaatst hele lagen van de kaart zodra het ' +
     'totaal de grens nadert. Antwoorden zijn trager.',
   'perf.model.partialEstimate':
-    'Grafisch geheugen: {budget} GB. Ongeveer {spill} GB zal vanuit het RAM draaien. Antwoorden ' +
-    'zijn trager.',
-  'perf.model.cpu': 'Draait op de processor vanuit het RAM ({budget} GB).',
-  'perf.model.cpuEstimate': 'Zal op de processor draaien vanuit het RAM ({budget} GB).',
+    'Grafisch geheugen: {budget}\u00A0GB. Ongeveer {spill}\u00A0GB zal vanuit het RAM draaien. ' +
+    'Antwoorden zijn trager.',
+  'perf.model.cpu': 'Draait op de processor vanuit het RAM ({budget}\u00A0GB).',
+  'perf.model.cpuEstimate': 'Zal op de processor draaien vanuit het RAM ({budget}\u00A0GB).',
   'perf.model.unified':
-    'Past in het gedeelde geheugen ({ram} GB, waarvan maximaal {budget} GB beschikbaar is voor ' +
-    'het model).',
+    'Past in het gedeelde geheugen ({ram}\u00A0GB, waarvan maximaal {budget}\u00A0GB beschikbaar is ' +
+    'voor het model).',
   'perf.model.unifiedEstimate':
-    'Past waarschijnlijk in het gedeelde geheugen ({ram} GB, waarvan maximaal {budget} GB ' +
+    'Past waarschijnlijk in het gedeelde geheugen ({ram}\u00A0GB, waarvan maximaal {budget}\u00A0GB ' +
     'beschikbaar is voor het model).',
   'perf.model.tooLarge':
-    'Te groot voor deze computer ({budget} GB beschikbaar). Kies een kleiner model.',
+    'Te groot voor deze computer ({budget}\u00A0GB beschikbaar). Kies een kleiner model.',
   'perf.model.unknown':
     'Waar het model terechtkomt, wordt gemeten wanneer het voor het eerst op deze computer start.',
   'perf.model.unknownObserved': 'De AI-engine heeft niet gemeld waar het model terechtkwam.',
@@ -2115,7 +2115,7 @@ export const nl: UiCatalog<'nl'> = {
   'perf.role.reranker': 'Zoeken in documenten (rangschikking)',
   'perf.role.embeddings': 'Zoeken in documenten (index)',
   'perf.role.transcriber': 'Spraak',
-  'perf.models.row': '{model} · {size} GB',
+  'perf.models.row': '{model} · {size}\u00A0GB',
   'perf.models.rowNoSize': '{model}',
   'perf.models.none': 'Hiervoor is geen model geïnstalleerd.',
   'perf.models.device.gpu': 'grafische kaart',
@@ -2128,16 +2128,17 @@ export const nl: UiCatalog<'nl'> = {
   'perf.models.lifetime.per-use': 'draait alleen tijdens gebruik',
   'perf.models.split': 'lagen op de kaart: {gpuLayers} van {layers}',
   'perf.models.card':
-    'Grafische kaart: chat {chat} GB + vertaling {translation} GB, van {vram} GB.',
-  'perf.models.cardReranker': 'Grafische kaart: rangschikking {reranker} GB, van {vram} GB.',
+    'Grafische kaart: chat {chat}\u00A0GB + vertaling {translation}\u00A0GB, van {vram}\u00A0GB.',
+  'perf.models.cardReranker': 'Grafische kaart: rangschikking {reranker}\u00A0GB, van {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Beide staan op dit moment op de kaart. Het model dat als tweede startte, kreeg wat er over ' +
     'was en draait trager: stop en start dat model zodra het andere model uit het geheugen is ' +
     'gehaald.',
-  'perf.models.ram': 'Als alles tegelijk geladen is, is ongeveer {sum} GB van {ram} GB RAM nodig.',
+  'perf.models.ram':
+    'Als alles tegelijk geladen is, is ongeveer {sum}\u00A0GB van {ram}\u00A0GB RAM nodig.',
   'perf.models.memory':
-    'Als alles tegelijk geladen is, is ongeveer {sum} GB nodig; voor modellen is {budget} GB ' +
-    'gedeeld geheugen beschikbaar.',
+    'Als alles tegelijk geladen is, is ongeveer {sum}\u00A0GB nodig; voor modellen is ' +
+    '{budget}\u00A0GB gedeeld geheugen beschikbaar.',
   'perf.models.ramTooMuch': 'Te veel tegelijk',
   'perf.models.ramOk': 'Past',
   'perf.place.gpu': 'Op de GPU',
@@ -2152,7 +2153,7 @@ export const nl: UiCatalog<'nl'> = {
     'De AI-engine kan op deze computer niet draaien, dus de grafische kaart kon niet worden ' +
     'gecontroleerd.',
   'perf.tile.graphics.off': 'GPU-versnelling staat uit. Modellen draaien op de processor.',
-  'perf.tile.graphics.small': 'Minder dan {min} GB: modellen draaien op de processor.',
+  'perf.tile.graphics.small': 'Minder dan {min}\u00A0GB: modellen draaien op de processor.',
   'perf.tile.graphics.integrated':
     'Geïntegreerd, gedeeld geheugen: modellen draaien op de processor.',
   'perf.tile.graphics.unitShared': 'GB gedeeld',
@@ -2163,11 +2164,11 @@ export const nl: UiCatalog<'nl'> = {
   'perf.rating.notRecorded': 'Niet vastgelegd',
   'perf.rating.none': 'Geen',
   'perf.rating.unknown': 'Onbekend',
-  'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
+  'perf.others.subGpu': '{cpu}, {ram}\u00A0GB RAM, {vram}\u00A0GB VRAM · {when}',
   'perf.tile.drive': 'Schijf',
   'perf.tile.drive.unit': 'MB/s lezen',
-  'perf.tile.drive.load': 'Gemeten bij een modelstart op {when}: {gb} GB gelezen',
-  'perf.tile.drive.hash': 'Gemeten bij een bestandscontrole op {when}: {gb} GB gelezen',
+  'perf.tile.drive.load': 'Gemeten bij een modelstart op {when}: {gb}\u00A0GB gelezen',
+  'perf.tile.drive.hash': 'Gemeten bij een bestandscontrole op {when}: {gb}\u00A0GB gelezen',
   'perf.tile.drive.none': 'Nog niet gemeten',
   'perf.tile.drive.noneHint': 'Wordt gemeten bij de eerste modelstart of bestandscontrole',
   'perf.rating.good': 'Goed',
@@ -2209,12 +2210,12 @@ export const nl: UiCatalog<'nl'> = {
     'meetwaarden van de schijf hierboven.',
   'perf.observed.none':
     'Nog niets waargenomen in deze sessie. Stel het model een vraag, of start het model.',
-  'perf.observed.answer': 'Laatste antwoord: {tps} tok/s, eerste token na {ttft} s',
+  'perf.observed.answer': 'Laatste antwoord: {tps}\u00A0tok/s, eerste token na {ttft}\u00A0s',
   'perf.observed.answerSub': '{model}, {when}, tokens: {tokens}',
-  'perf.observed.load': 'Modelstart: {seconds} s',
-  'perf.observed.loadSub': '{model}, {gb} GB gelezen van deze schijf met {mbps} MB/s',
-  'perf.observed.check': 'Bestandscontrole: {seconds} s',
-  'perf.observed.checkSub': 'Volledige bestandscontrole van {model} op {when}: {gb} GB gelezen',
+  'perf.observed.load': 'Modelstart: {seconds}\u00A0s',
+  'perf.observed.loadSub': '{model}, {gb}\u00A0GB gelezen van deze schijf met {mbps}\u00A0MB/s',
+  'perf.observed.check': 'Bestandscontrole: {seconds}\u00A0s',
+  'perf.observed.checkSub': 'Volledige bestandscontrole van {model} op {when}: {gb}\u00A0GB gelezen',
   'perf.observed.oncePerModel': 'Eenmaal per model',
   'perf.others.title': 'Andere computers waarop deze schijf is gebruikt',
   'perf.others.hint':
@@ -2223,11 +2224,11 @@ export const nl: UiCatalog<'nl'> = {
   'perf.others.none':
     'Nog geen. Sluit de schijf aan op een andere computer, dan voert de app daar vanzelf een ' +
     'controle uit.',
-  'perf.others.row': '{tps} tok/s met {model}',
+  'perf.others.row': '{tps}\u00A0tok/s met {model}',
   'perf.others.rowNoSpeed': 'Aanbevolen: {model}; snelheid niet gemeten',
-  'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
-  'perf.others.load': 'modelstart {seconds} s',
-  'perf.others.check': 'bestandscontrole {seconds} s',
+  'perf.others.sub': '{cpu}, {ram}\u00A0GB RAM · {when}',
+  'perf.others.load': 'modelstart {seconds}\u00A0s',
+  'perf.others.check': 'bestandscontrole {seconds}\u00A0s',
   'perf.footer':
     'Het technische rapport met alle ruwe meetwaarden vind je in Instellingen → ' +
     'Diagnose.',
@@ -2253,8 +2254,8 @@ export const nl: UiCatalog<'nl'> = {
   'diag.bench.notDetected': 'niet gevonden',
   'diag.bench.effectiveRead': 'Gemeten leessnelheid',
   'diag.bench.effectiveReadNone': 'nog niet gemeten: wordt gemeten zodra je een model start',
-  'diag.bench.effectiveReadLoad': 'gemeten bij een modelstart op {when}: {gb} GB gelezen',
-  'diag.bench.effectiveReadHash': 'gemeten bij een bestandscontrole op {when}: {gb} GB gelezen',
+  'diag.bench.effectiveReadLoad': 'gemeten bij een modelstart op {when}: {gb}\u00A0GB gelezen',
+  'diag.bench.effectiveReadHash': 'gemeten bij een bestandscontrole op {when}: {gb}\u00A0GB gelezen',
   'diag.bench.driveWrite': 'Schrijfsnelheid van de schijf',
   'diag.bench.notMeasured': 'niet gemeten',
   'diag.bench.tokens': 'Generatiesnelheid (tokens per seconde)',
@@ -2315,6 +2316,8 @@ export const nl: UiCatalog<'nl'> = {
   'common.cancel': 'Annuleren',
   'common.remove': 'Verwijderen',
   'common.apply': 'Toepassen',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}%',
   'indicator.offline': 'Lokaal · Offline',
   'indicator.online': 'Lokaal · Downloads toegestaan',
   'indicator.offlineDetail':
@@ -2479,17 +2482,17 @@ export const nl: UiCatalog<'nl'> = {
     'schijf. Voer voor een volledige meting de prestatiecontrole opnieuw uit wanneer niets ' +
     'anders het model gebruikt.',
   'main.benchmark.warnSlowRead':
-    'De gemeten leessnelheid van deze schijf is ongeveer {mbps} MB/s. Bij het starten van een ' +
-    'model wordt het hele modelbestand met die snelheid gelezen, dus modellen starten traag ' +
-    'vanaf deze schijf.',
+    'De gemeten leessnelheid van deze schijf is ongeveer {mbps}\u00A0MB/s. Bij het starten van een ' +
+    'model wordt het hele modelbestand met die snelheid gelezen, dus modellen starten traag vanaf ' +
+    'deze schijf.',
   'main.benchmark.warnVeryLowTokens':
     'De tekstgeneratie was erg traag met het geladen model ({model}), dus het toegewezen profiel ' +
     'is één niveau verlaagd. Is dat model groter dan het aanbevolen model, start dan het ' +
     'aanbevolen model en voer de prestatiecontrole opnieuw uit.',
   'main.benchmark.warnRecommendationLowered':
-    'Bij de tekstgeneratie is ongeveer {tps} tok/s gemeten met het geladen model ({model}), dus ' +
-    'het aanbevolen model is één grootteklasse lager gezet, zodat antwoorden op deze computer ' +
-    'snel blijven.',
+    'Bij de tekstgeneratie is ongeveer {tps}\u00A0tok/s gemeten met het geladen model ({model}), dus ' +
+    'het aanbevolen model is één grootteklasse lager gezet, zodat antwoorden op deze computer snel ' +
+    'blijven.',
   'main.benchmark.locked':
     'De werkruimte is vergrendeld. Ontgrendel de werkruimte om de prestatiecontrole uit te ' +
     'voeren.',

@@ -158,8 +158,8 @@ export const ru: UiCatalog<'ru'> = {
     'Модель запускается — большим моделям нужно немного времени на загрузку. Как только она ' +
     'будет готова, чат откроется автоматически.',
   'chat.noModel.startingProgress':
-    'Модель запускается — идет чтение файла модели ({gb} GB), прочитано около {pct}%. Как только ' +
-    'она будет готова, чат откроется автоматически.',
+    'Модель запускается — идет чтение файла модели ({gb}\u00A0GB), прочитано около {pct}%. Как ' +
+    'только она будет готова, чат откроется автоматически.',
   'chat.noModel.open': 'Открыть «ИИ-модель»',
   'chat.noModel.recheck': 'Проверить снова',
   'chat.empty.title': 'Задайте вопрос — общий или по вашим документам.',
@@ -499,7 +499,7 @@ export const ru: UiCatalog<'ru'> = {
   'chat.truncated.hint.cap':
     'Этот ответ по документам достиг предельной длины, которую приложение допускает для одного ' +
     'ответа. Попросите модель продолжить с того места, где она остановилась.',
-  'chat.speed.line': '{tps} tok/s · {ttft} s до первого токена · токенов: {tokens}',
+  'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s до первого токена · токенов: {tokens}',
   'chat.speed.hint':
     'Насколько быстро сформирован этот ответ: скорость генерации ИИ-движка, ожидание до первого ' +
     'слова и число созданных токенов. Показывается только для ответов этого сеанса.',
@@ -1355,12 +1355,12 @@ export const ru: UiCatalog<'ru'> = {
   'ocr.install.outcome.unchanged':
     'Файлы OCR на месте. Если распознавание текста по-прежнему не предлагается, перезапустите ' +
     'приложение HilbertRaum.',
-  'models.ram.needs': 'Нужно не менее {min} GB оперативной памяти',
-  'models.ram.machine': ' — на этом компьютере около {ram} GB',
+  'models.ram.needs': 'Нужно не менее {min}\u00A0GB оперативной памяти',
+  'models.ram.machine': ' — на этом компьютере около {ram}\u00A0GB',
   'models.ram.advice': '. Выберите модель поменьше — качество останется отличным.',
   'models.badge.active': 'Активна',
   'models.badge.recommended': 'Рекомендуется для этого компьютера',
-  'models.badge.ramNeeded': 'Нужно ≥{min} GB памяти',
+  'models.badge.ramNeeded': 'Нужно ≥{min}\u00A0GB памяти',
   'models.automatic.installed':
     'Установлена — используется автоматически. Запускать ничего не нужно.',
   'models.automatic.notInstalled':
@@ -2085,8 +2085,8 @@ export const ru: UiCatalog<'ru'> = {
   'perf.notChecked': 'Еще не проверено',
   'perf.otherMachine':
     'Этот результат измерен на другом компьютере. Нажмите «Проверить снова», чтобы измерить этот.',
-  'perf.report.otherComputer': 'Другой компьютер: {cpu}, {ram} GB оперативной памяти',
-  'perf.verdict.speed': 'Модель {model} работает со скоростью около {tps} tok/s.',
+  'perf.report.otherComputer': 'Другой компьютер: {cpu}, {ram}\u00A0GB оперативной памяти',
+  'perf.verdict.speed': 'Модель {model} работает со скоростью около {tps}\u00A0tok/s.',
   'perf.verdict.noSpeed':
     'Модель {model} лучше всего подходит для этого компьютера по объему памяти ({basis}). ' +
     'Скорость измеряется после первого запуска модели.',
@@ -2115,48 +2115,50 @@ export const ru: UiCatalog<'ru'> = {
   'perf.tile.memory.unified': 'Общая память',
   'perf.tile.memory.unifiedSub': 'Общая для процессора и графических ядер',
   'perf.model.title': 'Ваша модель',
-  'perf.model.line.one': '{model} · {size} GB на диске · контекст: {context} токен',
-  'perf.model.line.few': '{model} · {size} GB на диске · контекст: {context} токена',
-  'perf.model.line.many': '{model} · {size} GB на диске · контекст: {context} токенов',
-  'perf.model.line.other': '{model} · {size} GB на диске · контекст: {context} токена',
+  'perf.model.line.one': '{model} · {size}\u00A0GB на диске · контекст: {context} токен',
+  'perf.model.line.few': '{model} · {size}\u00A0GB на диске · контекст: {context} токена',
+  'perf.model.line.many': '{model} · {size}\u00A0GB на диске · контекст: {context} токенов',
+  'perf.model.line.other': '{model} · {size}\u00A0GB на диске · контекст: {context} токена',
   'perf.model.none': 'Модель еще не выбрана. Выберите ее на экране «ИИ-модель».',
-  'perf.model.need': 'С этим размером контекста модель занимает {need} GB.',
+  'perf.model.need': 'С этим размером контекста модель занимает {need}\u00A0GB.',
   'perf.model.needEstimate':
-    'Нужно не менее {need} GB для весов модели, плюс кеш контекста, который измеряется при ' +
+    'Нужно не менее {need}\u00A0GB для весов модели, плюс кеш контекста, который измеряется при ' +
     'первом запуске.',
   'perf.model.gpu':
-    'Модель помещается в видеопамять ({budget} GB): все слои ({layers}) на видеокарте.',
-  'perf.model.gpuEstimate': 'Модель должна поместиться в видеопамять ({budget} GB).',
+    'Модель помещается в видеопамять ({budget}\u00A0GB): все слои ({layers}) на видеокарте.',
+  'perf.model.gpuEstimate': 'Модель должна поместиться в видеопамять ({budget}\u00A0GB).',
   'perf.model.partial':
-    'Видеопамять вмещает {budget} GB. Слоев на видеокарте: {gpuLayers} из {layers}, около ' +
-    '{spill} GB работает в оперативной памяти. Ответы приходят медленнее.',
+    'Видеопамять вмещает {budget}\u00A0GB. Слоев на видеокарте: {gpuLayers} из {layers}, около ' +
+    '{spill}\u00A0GB работает в оперативной памяти. Ответы приходят медленнее.',
   'perf.model.partialFree':
-    'Слоев на видеокарте: {gpuLayers} из {layers}, около {spill} GB работает в оперативной ' +
-    'памяти: при запуске модели на видеокарте было свободно только {free} GB из {budget} GB, а ' +
-    'движок держит страховочный резерв {margin} GB. Ответы приходят медленнее. Перезапустите ' +
-    'модель, когда видеокарта освободится.',
+    'Слоев на видеокарте: {gpuLayers} из {layers}, около {spill}\u00A0GB работает в оперативной ' +
+    'памяти: при запуске модели на видеокарте было свободно только {free}\u00A0GB из ' +
+    '{budget}\u00A0GB, а движок держит страховочный резерв {margin}\u00A0GB. Ответы приходят ' +
+    'медленнее. Перезапустите модель, когда видеокарта освободится.',
   'perf.model.partialMargin':
-    'Слоев на видеокарте: {gpuLayers} из {layers}, около {spill} GB работает в оперативной ' +
-    'памяти. Видеокарта была свободна (свободно {free} из {budget} GB), но движок дополнительно ' +
-    'отводит {working} GB под рабочие буферы и {margin} GB под страховочный резерв и переносит ' +
-    'целые слои с видеокарты, когда сумма подходит к пределу. Ответы приходят медленнее.',
+    'Слоев на видеокарте: {gpuLayers} из {layers}, около {spill}\u00A0GB работает в оперативной ' +
+    'памяти. Видеокарта была свободна (свободно {free} из {budget}\u00A0GB), но движок дополнительно ' +
+    'отводит {working}\u00A0GB под рабочие буферы и {margin}\u00A0GB под страховочный резерв и ' +
+    'переносит целые слои с видеокарты, когда сумма подходит к пределу. Ответы приходят медленнее.',
   'perf.model.partialMarginNoWorking':
-    'Слоев на видеокарте: {gpuLayers} из {layers}, около {spill} GB работает в оперативной ' +
-    'памяти. Видеокарта была свободна (свободно {free} из {budget} GB), но движок дополнительно ' +
-    'отводит память под рабочие буферы и {margin} GB под страховочный резерв и переносит целые ' +
+    'Слоев на видеокарте: {gpuLayers} из {layers}, около {spill}\u00A0GB работает в оперативной ' +
+    'памяти. Видеокарта была свободна (свободно {free} из {budget}\u00A0GB), но движок дополнительно ' +
+    'отводит память под рабочие буферы и {margin}\u00A0GB под страховочный резерв и переносит целые ' +
     'слои с видеокарты, когда сумма подходит к пределу. Ответы приходят медленнее.',
   'perf.model.partialEstimate':
-    'Видеопамять вмещает {budget} GB: около {spill} GB будет работать в оперативной памяти. ' +
-    'Ответы будут приходить медленнее.',
-  'perf.model.cpu': 'Модель работает на процессоре, в оперативной памяти ({budget} GB).',
+    'Видеопамять вмещает {budget}\u00A0GB: около {spill}\u00A0GB будет работать в оперативной ' +
+    'памяти. Ответы будут приходить медленнее.',
+  'perf.model.cpu': 'Модель работает на процессоре, в оперативной памяти ({budget}\u00A0GB).',
   'perf.model.cpuEstimate':
-    'Модель будет работать на процессоре, в оперативной памяти ({budget} GB).',
+    'Модель будет работать на процессоре, в оперативной памяти ({budget}\u00A0GB).',
   'perf.model.unified':
-    'Модель помещается в общую память ({ram} GB, для модели доступно до {budget} GB).',
+    'Модель помещается в общую память ({ram}\u00A0GB, для модели доступно до {budget}\u00A0GB).',
   'perf.model.unifiedEstimate':
-    'Модель должна поместиться в общую память ({ram} GB, для модели доступно до {budget} GB).',
+    'Модель должна поместиться в общую память ({ram}\u00A0GB, для модели доступно до ' +
+    '{budget}\u00A0GB).',
   'perf.model.tooLarge':
-    'Модель слишком велика для этого компьютера (доступно {budget} GB). Выберите модель поменьше.',
+    'Модель слишком велика для этого компьютера (доступно {budget}\u00A0GB). Выберите модель ' +
+    'поменьше.',
   'perf.model.unknown': 'Размещение модели измеряется при ее первом запуске на этом компьютере.',
   'perf.model.unknownObserved': 'Движок не сообщил, где разместилась модель.',
   'perf.model.perDrive':
@@ -2187,7 +2189,7 @@ export const ru: UiCatalog<'ru'> = {
   'perf.role.reranker': 'Поиск по документам (ранжирование)',
   'perf.role.embeddings': 'Поиск по документам (индекс)',
   'perf.role.transcriber': 'Распознавание речи',
-  'perf.models.row': '{model} · {size} GB',
+  'perf.models.row': '{model} · {size}\u00A0GB',
   'perf.models.rowNoSize': '{model}',
   'perf.models.none': 'Модель для этого не установлена.',
   'perf.models.device.gpu': 'видеокарта',
@@ -2199,16 +2201,17 @@ export const ru: UiCatalog<'ru'> = {
   'perf.models.lifetime.idle': 'выгружается при простое',
   'perf.models.lifetime.per-use': 'работает только во время задачи',
   'perf.models.split': 'слоев на видеокарте: {gpuLayers} из {layers}',
-  'perf.models.card': 'Видеокарта: чат {chat} GB + перевод {translation} GB, из {vram} GB.',
-  'perf.models.cardReranker': 'Видеокарта: ранжирование {reranker} GB из {vram} GB.',
+  'perf.models.card':
+    'Видеокарта: чат {chat}\u00A0GB + перевод {translation}\u00A0GB, из {vram}\u00A0GB.',
+  'perf.models.cardReranker': 'Видеокарта: ранжирование {reranker}\u00A0GB из {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Сейчас на видеокарте обе модели. Та, что запустилась второй, получила оставшуюся память и ' +
     'работает медленнее; остановите и снова запустите ее, когда другая выгрузится.',
   'perf.models.ram':
-    'Если загрузить все сразу, понадобится около {sum} GB из {ram} GB оперативной памяти.',
+    'Если загрузить все сразу, понадобится около {sum}\u00A0GB из {ram}\u00A0GB оперативной памяти.',
   'perf.models.memory':
-    'Если загрузить все сразу, понадобится около {sum} GB из {budget} GB общей памяти, доступной ' +
-    'моделям.',
+    'Если загрузить все сразу, понадобится около {sum}\u00A0GB из {budget}\u00A0GB общей памяти, ' +
+    'доступной моделям.',
   'perf.models.ramTooMuch': 'Слишком много сразу',
   'perf.models.ramOk': 'Хватает',
   'perf.place.gpu': 'На видеокарте',
@@ -2222,7 +2225,7 @@ export const ru: UiCatalog<'ru'> = {
   'perf.tile.graphics.engine':
     'ИИ-движок не может работать на этом компьютере, поэтому видеокарту проверить не удалось.',
   'perf.tile.graphics.off': 'Ускорение на видеокарте выключено. Модели работают на процессоре.',
-  'perf.tile.graphics.small': 'Меньше {min} GB: модели работают на процессоре.',
+  'perf.tile.graphics.small': 'Меньше {min}\u00A0GB: модели работают на процессоре.',
   'perf.tile.graphics.integrated':
     'Встроенная видеокарта, общая память: модели работают на процессоре.',
   'perf.tile.graphics.unitShared': 'GB общей памяти',
@@ -2233,11 +2236,11 @@ export const ru: UiCatalog<'ru'> = {
   'perf.rating.notRecorded': 'Нет данных',
   'perf.rating.none': 'Нет',
   'perf.rating.unknown': 'Неизвестно',
-  'perf.others.subGpu': '{cpu}, {ram} GB оперативной памяти, {vram} GB видеопамяти · {when}',
+  'perf.others.subGpu': '{cpu}, {ram}\u00A0GB оперативной памяти, {vram}\u00A0GB видеопамяти · {when}',
   'perf.tile.drive': 'Диск',
   'perf.tile.drive.unit': 'MB/s при чтении',
-  'perf.tile.drive.load': 'Запуск модели {when}, прочитано {gb} GB',
-  'perf.tile.drive.hash': 'Проверка файла {when}, прочитано {gb} GB',
+  'perf.tile.drive.load': 'Запуск модели {when}, прочитано {gb}\u00A0GB',
+  'perf.tile.drive.hash': 'Проверка файла {when}, прочитано {gb}\u00A0GB',
   'perf.tile.drive.none': 'Еще не измерено',
   'perf.tile.drive.noneHint': 'Измеряется при первом запуске модели или первой проверке файла',
   'perf.rating.good': 'Хорошо',
@@ -2279,23 +2282,24 @@ export const ru: UiCatalog<'ru'> = {
     'диска выше.',
   'perf.observed.none':
     'В этом сеансе пока нет наблюдений. Задайте модели вопрос или запустите ее.',
-  'perf.observed.answer': 'Последний ответ: {tps} tok/s, {ttft} s до первого токена',
+  'perf.observed.answer': 'Последний ответ: {tps}\u00A0tok/s, {ttft}\u00A0s до первого токена',
   'perf.observed.answerSub': '{model}, {when}, токенов: {tokens}',
-  'perf.observed.load': 'Запуск модели: {seconds} s',
-  'perf.observed.loadSub': '{model}, с этого диска прочитано {gb} GB со скоростью {mbps} MB/s',
-  'perf.observed.check': 'Проверка файла: {seconds} s',
-  'perf.observed.checkSub': 'Полная проверка файла модели {model} ({when}), прочитано {gb} GB',
+  'perf.observed.load': 'Запуск модели: {seconds}\u00A0s',
+  'perf.observed.loadSub':
+    '{model}, с этого диска прочитано {gb}\u00A0GB со скоростью {mbps}\u00A0MB/s',
+  'perf.observed.check': 'Проверка файла: {seconds}\u00A0s',
+  'perf.observed.checkSub': 'Полная проверка файла модели {model} ({when}), прочитано {gb}\u00A0GB',
   'perf.observed.oncePerModel': 'Один раз на модель',
   'perf.others.title': 'Другие компьютеры, на которых использовался этот диск',
   'perf.others.hint':
     'Каждый компьютер хранит собственный результат, поэтому рекомендуемая модель зависит от ' +
     'компьютера, а не от диска.',
   'perf.others.none': 'Пока нет. Подключите диск к другому компьютеру — проверка запустится сама.',
-  'perf.others.row': '{tps} tok/s с моделью {model}',
+  'perf.others.row': '{tps}\u00A0tok/s с моделью {model}',
   'perf.others.rowNoSpeed': 'Рекомендуется модель {model}, скорость не измерена',
-  'perf.others.sub': '{cpu}, {ram} GB оперативной памяти · {when}',
-  'perf.others.load': 'запуск модели {seconds} s',
-  'perf.others.check': 'проверка файла {seconds} s',
+  'perf.others.sub': '{cpu}, {ram}\u00A0GB оперативной памяти · {when}',
+  'perf.others.load': 'запуск модели {seconds}\u00A0s',
+  'perf.others.check': 'проверка файла {seconds}\u00A0s',
   'perf.footer':
     'Полный технический отчет со всеми исходными значениями находится на экране «Настройки» на ' +
     'вкладке «Диагностика».',
@@ -2322,8 +2326,8 @@ export const ru: UiCatalog<'ru'> = {
   'diag.bench.notDetected': 'не обнаружена',
   'diag.bench.effectiveRead': 'Измеренная скорость чтения',
   'diag.bench.effectiveReadNone': 'еще не измерена — измеряется при запуске модели',
-  'diag.bench.effectiveReadLoad': 'запуск модели {when}, прочитано {gb} GB',
-  'diag.bench.effectiveReadHash': 'проверка файла {when}, прочитано {gb} GB',
+  'diag.bench.effectiveReadLoad': 'запуск модели {when}, прочитано {gb}\u00A0GB',
+  'diag.bench.effectiveReadHash': 'проверка файла {when}, прочитано {gb}\u00A0GB',
   'diag.bench.driveWrite': 'Запись на диск',
   'diag.bench.notMeasured': 'не измерено',
   'diag.bench.tokens': 'Скорость генерации (tok/s)',
@@ -2383,6 +2387,8 @@ export const ru: UiCatalog<'ru'> = {
   'common.cancel': 'Отмена',
   'common.remove': 'Убрать',
   'common.apply': 'Применить',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}%',
   'indicator.offline': 'Локально · Офлайн',
   'indicator.online': 'Локально · Скачивание разрешено',
   'indicator.offlineDetail': 'Все остается на этом диске. Подключение к интернету не используется.',
@@ -2539,14 +2545,14 @@ export const ru: UiCatalog<'ru'> = {
     'задачей. Профиль ниже учитывает только оперативную память, процессор и скорость диска — для ' +
     'полного замера повторите проверку скорости, когда модель ничем не занята.',
   'main.benchmark.warnSlowRead':
-    'Скорость чтения с этого диска — около {mbps} MB/s. При запуске модели весь ее файл читается ' +
-    'с этой скоростью, поэтому модели с этого диска будут запускаться медленно.',
+    'Скорость чтения с этого диска — около {mbps}\u00A0MB/s. При запуске модели весь ее файл ' +
+    'читается с этой скоростью, поэтому модели с этого диска будут запускаться медленно.',
   'main.benchmark.warnVeryLowTokens':
     'С загруженной моделью ({model}) текст генерировался очень медленно, поэтому назначенный ' +
     'профиль понижен на один уровень. Если эта модель больше рекомендуемой, запустите ' +
     'рекомендуемую модель и повторите проверку скорости.',
   'main.benchmark.warnRecommendationLowered':
-    'С загруженной моделью ({model}) скорость генерации текста составила около {tps} tok/s, ' +
+    'С загруженной моделью ({model}) скорость генерации текста составила около {tps}\u00A0tok/s, ' +
     'поэтому теперь рекомендуется модель на одну ступень меньше, чтобы ответы на этом компьютере ' +
     'приходили быстро.',
   'main.benchmark.locked':

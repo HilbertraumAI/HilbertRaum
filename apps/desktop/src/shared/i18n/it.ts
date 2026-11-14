@@ -162,7 +162,7 @@ export const it: UiCatalog<'it'> = {
     'Il tuo modello si sta avviando: i modelli grandi richiedono un po’ di tempo per il ' +
     'caricamento. Questa schermata prosegue automaticamente non appena è pronto.',
   'chat.noModel.startingProgress':
-    'Il tuo modello si sta avviando: lettura del file del modello ({gb} GB), finora circa ' +
+    'Il tuo modello si sta avviando: lettura del file del modello ({gb}\u00A0GB), finora circa ' +
     '{pct}%. Questa schermata prosegue automaticamente non appena è pronto.',
   'chat.noModel.open': 'Vai a Modello IA',
   'chat.noModel.recheck': 'Controlla di nuovo',
@@ -493,7 +493,7 @@ export const it: UiCatalog<'it'> = {
   'chat.truncated.hint.cap':
     'Questa risposta basata sui documenti ha raggiunto la lunghezza massima che l’app consente ' +
     'per una singola risposta. Chiedi al modello di continuare da dove si è fermato.',
-  'chat.speed.line': '{tps} tok/s · {ttft} s al primo token · {tokens} token',
+  'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s al primo token · {tokens} token',
   'chat.speed.hint':
     'Quanto velocemente è stata generata questa risposta: velocità di decodifica del motore IA, ' +
     'attesa fino alla prima parola e numero di token prodotti. Visibile solo per le risposte di ' +
@@ -1356,12 +1356,12 @@ export const it: UiCatalog<'it'> = {
   'ocr.install.outcome.unchanged':
     'I file OCR sono al loro posto. Se il riconoscimento del testo continua a non essere ' +
     'disponibile, riavvia HilbertRaum.',
-  'models.ram.needs': 'Richiede almeno {min} GB di RAM',
-  'models.ram.machine': ' (questo computer ha circa {ram} GB)',
+  'models.ram.needs': 'Richiede almeno {min}\u00A0GB di RAM',
+  'models.ram.machine': ' (questo computer ha circa {ram}\u00A0GB)',
   'models.ram.advice': '. Scegli un modello più piccolo: la qualità resta ottima.',
   'models.badge.active': 'Attivo',
   'models.badge.recommended': 'Consigliato per questo computer',
-  'models.badge.ramNeeded': 'Richiede ≥{min} GB di RAM',
+  'models.badge.ramNeeded': 'Richiede ≥{min}\u00A0GB di RAM',
   'models.automatic.installed':
     'Installato – viene usato automaticamente. Non c’è nulla da avviare.',
   'models.automatic.notInstalled':
@@ -2103,8 +2103,8 @@ export const it: UiCatalog<'it'> = {
   'perf.otherMachine':
     'Questo risultato è stato misurato su un altro computer. Controlla di nuovo per misurare ' +
     'questo computer.',
-  'perf.report.otherComputer': 'Un altro computer: {cpu}, {ram} GB di RAM',
-  'perf.verdict.speed': 'Questo computer esegue {model} a circa {tps} tok/s.',
+  'perf.report.otherComputer': 'Un altro computer: {cpu}, {ram}\u00A0GB di RAM',
+  'perf.verdict.speed': 'Questo computer esegue {model} a circa {tps}\u00A0tok/s.',
   'perf.verdict.noSpeed':
     '{model} è il più adatto a questo computer (in base a: {basis}). La velocità viene misurata ' +
     'dopo che un modello è stato avviato.',
@@ -2132,47 +2132,49 @@ export const it: UiCatalog<'it'> = {
   'perf.tile.memory.unified': 'Memoria unificata',
   'perf.tile.memory.unifiedSub': 'Condivisa tra processore e core grafici',
   'perf.model.title': 'Il tuo modello',
-  'perf.model.line.one': '{model} · {size} GB sull’unità · contesto di {context} token',
-  'perf.model.line.many': '{model} · {size} GB sull’unità · contesto di {context} di token',
-  'perf.model.line.other': '{model} · {size} GB sull’unità · contesto di {context} token',
+  'perf.model.line.one': '{model} · {size}\u00A0GB sull’unità · contesto di {context} token',
+  'perf.model.line.many': '{model} · {size}\u00A0GB sull’unità · contesto di {context} di token',
+  'perf.model.line.other': '{model} · {size}\u00A0GB sull’unità · contesto di {context} token',
   'perf.model.none': 'Ancora nessun modello selezionato. Scegline uno nella schermata Modello IA.',
-  'perf.model.need': 'Occupa {need} GB con questo contesto.',
+  'perf.model.need': 'Occupa {need}\u00A0GB con questo contesto.',
   'perf.model.needEstimate':
-    'Richiede almeno {need} GB per i pesi, più la cache del contesto, che viene misurata al ' +
+    'Richiede almeno {need}\u00A0GB per i pesi, più la cache del contesto, che viene misurata al ' +
     'primo avvio.',
   'perf.model.gpu':
-    'Entra nella memoria grafica ({budget} GB): tutti i livelli ({layers}) sono sulla GPU.',
-  'perf.model.gpuEstimate': 'Dovrebbe entrare nella memoria grafica ({budget} GB).',
+    'Entra nella memoria grafica ({budget}\u00A0GB): tutti i livelli ({layers}) sono sulla GPU.',
+  'perf.model.gpuEstimate': 'Dovrebbe entrare nella memoria grafica ({budget}\u00A0GB).',
   'perf.model.partial':
-    'La memoria grafica dispone di {budget} GB. Livelli sulla GPU: {gpuLayers} su {layers}; ' +
-    'circa {spill} GB restano nella RAM. Risposte più lente.',
+    'La memoria grafica dispone di {budget}\u00A0GB. Livelli sulla GPU: {gpuLayers} su {layers}; ' +
+    'circa {spill}\u00A0GB restano nella RAM. Risposte più lente.',
   'perf.model.partialFree':
-    'Livelli sulla GPU: {gpuLayers} su {layers}; circa {spill} GB restano nella RAM. All’avvio ' +
-    'del modello la memoria libera sulla scheda era solo di {free} GB su {budget} GB, e il ' +
-    'motore IA tiene un margine di sicurezza di {margin} GB. Risposte più lente. Riavvia il ' +
+    'Livelli sulla GPU: {gpuLayers} su {layers}; circa {spill}\u00A0GB restano nella RAM. All’avvio ' +
+    'del modello la memoria libera sulla scheda era solo di {free}\u00A0GB su {budget}\u00A0GB, e il ' +
+    'motore IA tiene un margine di sicurezza di {margin}\u00A0GB. Risposte più lente. Riavvia il ' +
     'modello quando la scheda è libera.',
   'perf.model.partialMargin':
-    'Livelli sulla GPU: {gpuLayers} su {layers}; circa {spill} GB restano nella RAM. La scheda ' +
-    'era libera ({free} GB su {budget} GB), ma il motore IA riserva anche {working} GB di buffer ' +
-    'di lavoro e un margine di sicurezza di {margin} GB, e sposta interi livelli fuori dalla ' +
-    'scheda quando il totale si avvicina al limite. Risposte più lente.',
+    'Livelli sulla GPU: {gpuLayers} su {layers}; circa {spill}\u00A0GB restano nella RAM. La scheda ' +
+    'era libera ({free}\u00A0GB su {budget}\u00A0GB), ma il motore IA riserva anche ' +
+    '{working}\u00A0GB di buffer di lavoro e un margine di sicurezza di {margin}\u00A0GB, e sposta ' +
+    'interi livelli fuori dalla scheda quando il totale si avvicina al limite. Risposte più lente.',
   'perf.model.partialMarginNoWorking':
-    'Livelli sulla GPU: {gpuLayers} su {layers}; circa {spill} GB restano nella RAM. La scheda ' +
-    'era libera ({free} GB su {budget} GB), ma il motore IA riserva anche dei buffer di lavoro e ' +
-    'un margine di sicurezza di {margin} GB, e sposta interi livelli fuori dalla scheda quando ' +
-    'il totale si avvicina al limite. Risposte più lente.',
+    'Livelli sulla GPU: {gpuLayers} su {layers}; circa {spill}\u00A0GB restano nella RAM. La scheda ' +
+    'era libera ({free}\u00A0GB su {budget}\u00A0GB), ma il motore IA riserva anche dei buffer di ' +
+    'lavoro e un margine di sicurezza di {margin}\u00A0GB, e sposta interi livelli fuori dalla ' +
+    'scheda quando il totale si avvicina al limite. Risposte più lente.',
   'perf.model.partialEstimate':
-    'La memoria grafica dispone di {budget} GB: circa {spill} GB resteranno nella RAM. Risposte ' +
-    'più lente.',
-  'perf.model.cpu': 'Funziona sul processore e usa la RAM ({budget} GB).',
-  'perf.model.cpuEstimate': 'Funzionerà sul processore e userà la RAM ({budget} GB).',
+    'La memoria grafica dispone di {budget}\u00A0GB: circa {spill}\u00A0GB resteranno nella RAM. ' +
+    'Risposte più lente.',
+  'perf.model.cpu': 'Funziona sul processore e usa la RAM ({budget}\u00A0GB).',
+  'perf.model.cpuEstimate': 'Funzionerà sul processore e userà la RAM ({budget}\u00A0GB).',
   'perf.model.unified':
-    'Entra nella memoria unificata ({ram} GB; disponibili per il modello: fino a {budget} GB).',
+    'Entra nella memoria unificata ({ram}\u00A0GB; disponibili per il modello: fino a ' +
+    '{budget}\u00A0GB).',
   'perf.model.unifiedEstimate':
-    'Dovrebbe entrare nella memoria unificata ({ram} GB; disponibili per il modello: fino a ' +
-    '{budget} GB).',
+    'Dovrebbe entrare nella memoria unificata ({ram}\u00A0GB; disponibili per il modello: fino a ' +
+    '{budget}\u00A0GB).',
   'perf.model.tooLarge':
-    'Troppo grande per questo computer (disponibili: {budget} GB). Scegli un modello più piccolo.',
+    'Troppo grande per questo computer (disponibili: {budget}\u00A0GB). Scegli un modello più ' +
+    'piccolo.',
   'perf.model.unknown':
     'La collocazione del modello viene misurata la prima volta che si avvia su questo computer.',
   'perf.model.unknownObserved': 'Il motore IA non ha comunicato dove è stato collocato il modello.',
@@ -2200,7 +2202,7 @@ export const it: UiCatalog<'it'> = {
   'perf.role.reranker': 'Ricerca nei documenti (riordinamento)',
   'perf.role.embeddings': 'Ricerca nei documenti (indice)',
   'perf.role.transcriber': 'Voce',
-  'perf.models.row': '{model} · {size} GB',
+  'perf.models.row': '{model} · {size}\u00A0GB',
   'perf.models.rowNoSize': '{model}',
   'perf.models.none': 'Nessun modello installato per questa funzione.',
   'perf.models.device.gpu': 'scheda grafica',
@@ -2212,15 +2214,16 @@ export const it: UiCatalog<'it'> = {
   'perf.models.lifetime.idle': 'libera la memoria quando è inattivo',
   'perf.models.lifetime.per-use': 'attivo solo mentre lavora',
   'perf.models.split': 'livelli sulla scheda: {gpuLayers} su {layers}',
-  'perf.models.card': 'Scheda grafica: chat {chat} GB + traduzione {translation} GB, su {vram} GB.',
-  'perf.models.cardReranker': 'Scheda grafica: riordinamento {reranker} GB, su {vram} GB.',
+  'perf.models.card':
+    'Scheda grafica: chat {chat}\u00A0GB + traduzione {translation}\u00A0GB, su {vram}\u00A0GB.',
+  'perf.models.cardReranker': 'Scheda grafica: riordinamento {reranker}\u00A0GB, su {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'In questo momento entrambi i modelli sono sulla scheda. Quello avviato per secondo ha ' +
     'ricevuto lo spazio rimasto e funziona più lentamente: arrestalo e avvialo di nuovo quando ' +
     'l’altro avrà liberato la memoria.',
-  'perf.models.ram': 'Caricare tutto insieme richiede circa {sum} GB su {ram} GB di RAM.',
+  'perf.models.ram': 'Caricare tutto insieme richiede circa {sum}\u00A0GB su {ram}\u00A0GB di RAM.',
   'perf.models.memory':
-    'Caricare tutto insieme richiede circa {sum} GB su {budget} GB di memoria unificata ' +
+    'Caricare tutto insieme richiede circa {sum}\u00A0GB su {budget}\u00A0GB di memoria unificata ' +
     'disponibile per i modelli.',
   'perf.models.ramTooMuch': 'Troppo in una volta',
   'perf.models.ramOk': 'Rientra',
@@ -2238,7 +2241,7 @@ export const it: UiCatalog<'it'> = {
     'controllare la scheda grafica.',
   'perf.tile.graphics.off':
     'L’accelerazione grafica è disattivata. I modelli funzionano sul processore.',
-  'perf.tile.graphics.small': 'Meno di {min} GB: i modelli funzionano sul processore.',
+  'perf.tile.graphics.small': 'Meno di {min}\u00A0GB: i modelli funzionano sul processore.',
   'perf.tile.graphics.integrated':
     'Integrata, memoria condivisa: i modelli funzionano sul processore.',
   'perf.tile.graphics.unitShared': 'GB condivisi',
@@ -2249,11 +2252,11 @@ export const it: UiCatalog<'it'> = {
   'perf.rating.notRecorded': 'Non registrata',
   'perf.rating.none': 'Nessuna',
   'perf.rating.unknown': 'Sconosciuta',
-  'perf.others.subGpu': '{cpu}, {ram} GB di RAM, {vram} GB di VRAM · {when}',
+  'perf.others.subGpu': '{cpu}, {ram}\u00A0GB di RAM, {vram}\u00A0GB di VRAM · {when}',
   'perf.tile.drive': 'Unità',
   'perf.tile.drive.unit': 'MB/s in lettura',
-  'perf.tile.drive.load': 'Da un avvio del modello in data {when}, lettura di {gb} GB',
-  'perf.tile.drive.hash': 'Da un controllo dei file in data {when}, lettura di {gb} GB',
+  'perf.tile.drive.load': 'Da un avvio del modello in data {when}, lettura di {gb}\u00A0GB',
+  'perf.tile.drive.hash': 'Da un controllo dei file in data {when}, lettura di {gb}\u00A0GB',
   'perf.tile.drive.none': 'Non ancora misurata',
   'perf.tile.drive.noneHint':
     'Viene misurata al primo avvio di un modello o al primo controllo dei file',
@@ -2298,13 +2301,13 @@ export const it: UiCatalog<'it'> = {
   'perf.observed.none':
     'In questa sessione non è ancora stato rilevato nulla. Chiedi qualcosa al modello oppure ' +
     'avvialo.',
-  'perf.observed.answer': 'Ultima risposta: {tps} tok/s, primo token dopo {ttft} s',
+  'perf.observed.answer': 'Ultima risposta: {tps}\u00A0tok/s, primo token dopo {ttft}\u00A0s',
   'perf.observed.answerSub': '{model}, {when}, {tokens} token',
-  'perf.observed.load': 'Avvio del modello: {seconds} s',
-  'perf.observed.loadSub': '{model}, lettura di {gb} GB da questa unità a {mbps} MB/s',
-  'perf.observed.check': 'Controllo dei file: {seconds} s',
+  'perf.observed.load': 'Avvio del modello: {seconds}\u00A0s',
+  'perf.observed.loadSub': '{model}, lettura di {gb}\u00A0GB da questa unità a {mbps}\u00A0MB/s',
+  'perf.observed.check': 'Controllo dei file: {seconds}\u00A0s',
   'perf.observed.checkSub':
-    '{model}, controllo completo dei file in data {when}, lettura di {gb} GB',
+    '{model}, controllo completo dei file in data {when}, lettura di {gb}\u00A0GB',
   'perf.observed.oncePerModel': 'Una volta per modello',
   'perf.others.title': 'Altri computer su cui è stata usata questa unità',
   'perf.others.hint':
@@ -2312,11 +2315,11 @@ export const it: UiCatalog<'it'> = {
     'computer, non dall’unità.',
   'perf.others.none':
     'Ancora nessuno. Collega l’unità a un altro computer: farà il controllo da sola.',
-  'perf.others.row': '{tps} tok/s con {model}',
+  'perf.others.row': '{tps}\u00A0tok/s con {model}',
   'perf.others.rowNoSpeed': 'Consigliato: {model}; velocità non misurata',
-  'perf.others.sub': '{cpu}, {ram} GB di RAM · {when}',
-  'perf.others.load': 'avvio del modello {seconds} s',
-  'perf.others.check': 'controllo dei file {seconds} s',
+  'perf.others.sub': '{cpu}, {ram}\u00A0GB di RAM · {when}',
+  'perf.others.load': 'avvio del modello {seconds}\u00A0s',
+  'perf.others.check': 'controllo dei file {seconds}\u00A0s',
   'perf.footer':
     'Il rapporto tecnico completo, con tutti i valori grezzi, resta nelle Impostazioni, nella ' +
     'scheda Diagnostica.',
@@ -2343,8 +2346,8 @@ export const it: UiCatalog<'it'> = {
   'diag.bench.notDetected': 'non rilevata',
   'diag.bench.effectiveRead': 'Velocità di lettura misurata',
   'diag.bench.effectiveReadNone': 'non ancora misurata (viene misurata all’avvio di un modello)',
-  'diag.bench.effectiveReadLoad': 'da un avvio del modello in data {when}, lettura di {gb} GB',
-  'diag.bench.effectiveReadHash': 'da un controllo dei file in data {when}, lettura di {gb} GB',
+  'diag.bench.effectiveReadLoad': 'da un avvio del modello in data {when}, lettura di {gb}\u00A0GB',
+  'diag.bench.effectiveReadHash': 'da un controllo dei file in data {when}, lettura di {gb}\u00A0GB',
   'diag.bench.driveWrite': 'Scrittura sull’unità',
   'diag.bench.notMeasured': 'non misurata',
   'diag.bench.tokens': 'Velocità di generazione (tok/s)',
@@ -2406,6 +2409,8 @@ export const it: UiCatalog<'it'> = {
   'common.cancel': 'Annulla',
   'common.remove': 'Rimuovi',
   'common.apply': 'Applica',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}%',
   'indicator.offline': 'Locale · Offline',
   'indicator.online': 'Locale · Download consentiti',
   'indicator.offlineDetail':
@@ -2571,7 +2576,7 @@ export const it: UiCatalog<'it'> = {
     'velocità dell’unità: per una misurazione completa, esegui di nuovo il controllo delle ' +
     'prestazioni quando nient’altro sta usando il modello.',
   'main.benchmark.warnSlowRead':
-    'La lettura da questa unità è stata misurata a circa {mbps} MB/s. L’avvio di un modello ' +
+    'La lettura da questa unità è stata misurata a circa {mbps}\u00A0MB/s. L’avvio di un modello ' +
     'legge l’intero file a questa velocità, quindi su questa unità i modelli si avvieranno ' +
     'lentamente.',
   'main.benchmark.warnVeryLowTokens':
@@ -2579,9 +2584,9 @@ export const it: UiCatalog<'it'> = {
     'profilo assegnato è stato abbassato di un livello. Se quel modello è più grande di quello ' +
     'consigliato, avvia il modello consigliato ed esegui di nuovo il controllo delle prestazioni.',
   'main.benchmark.warnRecommendationLowered':
-    'Con il modello caricato ({model}) la generazione del testo è stata misurata a circa {tps} ' +
-    'tok/s, quindi il modello consigliato è sceso di una fascia di dimensioni, così le risposte ' +
-    'restano rapide su questo computer.',
+    'Con il modello caricato ({model}) la generazione del testo è stata misurata a circa ' +
+    '{tps}\u00A0tok/s, quindi il modello consigliato è sceso di una fascia di dimensioni, così le ' +
+    'risposte restano rapide su questo computer.',
   'main.benchmark.locked':
     'L’area di lavoro è bloccata. Sbloccala per eseguire il controllo delle prestazioni.',
   'main.benchmark.lockedDuringRun':

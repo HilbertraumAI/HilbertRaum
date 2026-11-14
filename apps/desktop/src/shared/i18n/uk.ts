@@ -170,7 +170,7 @@ export const uk: UiCatalog<'uk'> = {
     'Ваша модель запускається — великим моделям на запуск потрібно трохи часу. Щойно вона буде ' +
     'готова, екран оновиться автоматично.',
   'chat.noModel.startingProgress':
-    'Ваша модель запускається — триває читання файлу моделі ({gb} GB), уже прочитано близько ' +
+    'Ваша модель запускається — триває читання файлу моделі ({gb}\u00A0GB), уже прочитано близько ' +
     '{pct}%. Щойно модель буде готова, екран оновиться автоматично.',
   'chat.noModel.open': 'Відкрити ШІ-модель',
   'chat.noModel.recheck': 'Перевірити ще раз',
@@ -515,7 +515,7 @@ export const uk: UiCatalog<'uk'> = {
   'chat.truncated.hint.cap':
     'Ця відповідь на основі документів досягла фіксованої довжини, яку застосунок дозволяє для ' +
     'однієї відповіді. Попросіть модель продовжити з місця, де вона зупинилася.',
-  'chat.speed.line': '{tps} tok/s · {ttft} s до першого токена · токенів: {tokens}',
+  'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s до першого токена · токенів: {tokens}',
   'chat.speed.hint':
     'Як швидко згенеровано цю відповідь: швидкість декодування ШІ-рушія, час очікування до ' +
     'першого слова та кількість згенерованих токенів. Показується лише для відповідей з цього ' +
@@ -1377,12 +1377,12 @@ export const uk: UiCatalog<'uk'> = {
   'ocr.install.outcome.unchanged':
     'OCR-файли на місці. Якщо розпізнавання тексту й далі не пропонується, перезапустіть ' +
     'HilbertRaum.',
-  'models.ram.needs': 'Потрібно щонайменше {min} GB оперативної памʼяті',
-  'models.ram.machine': ' — цей компʼютер має близько {ram} GB',
+  'models.ram.needs': 'Потрібно щонайменше {min}\u00A0GB оперативної памʼяті',
+  'models.ram.machine': ' — цей компʼютер має близько {ram}\u00A0GB',
   'models.ram.advice': '. Виберіть меншу модель — якість залишиться високою.',
   'models.badge.active': 'Активна',
   'models.badge.recommended': 'Рекомендовано для цього компʼютера',
-  'models.badge.ramNeeded': 'Потрібно ≥{min} GB RAM',
+  'models.badge.ramNeeded': 'Потрібно ≥{min}\u00A0GB RAM',
   'models.automatic.installed':
     'Встановлено — використовується автоматично. Запускати нічого не потрібно.',
   'models.automatic.notInstalled':
@@ -2102,8 +2102,8 @@ export const uk: UiCatalog<'uk'> = {
   'perf.otherMachine':
     'Цей результат виміряно на іншому компʼютері. Перевірте ще раз, щоб отримати показники цього ' +
     'компʼютера.',
-  'perf.report.otherComputer': 'Інший компʼютер: {cpu}, {ram} GB RAM',
-  'perf.verdict.speed': 'Швидкість на цьому компʼютері: близько {tps} tok/s (модель: {model}).',
+  'perf.report.otherComputer': 'Інший компʼютер: {cpu}, {ram}\u00A0GB RAM',
+  'perf.verdict.speed': 'Швидкість на цьому компʼютері: близько {tps}\u00A0tok/s (модель: {model}).',
   'perf.verdict.noSpeed':
     '{model} найкраще підходить цьому компʼютеру (враховано: {basis}). Швидкість буде виміряно ' +
     'після запуску моделі.',
@@ -2133,46 +2133,46 @@ export const uk: UiCatalog<'uk'> = {
   'perf.tile.memory.unified': 'Обʼєднана памʼять',
   'perf.tile.memory.unifiedSub': 'Спільна для процесора та графічних ядер',
   'perf.model.title': 'Ваша модель',
-  'perf.model.line.one': '{model} · {size} GB на диску · контекст: {context} токен',
-  'perf.model.line.few': '{model} · {size} GB на диску · контекст: {context} токени',
-  'perf.model.line.many': '{model} · {size} GB на диску · контекст: {context} токенів',
-  'perf.model.line.other': '{model} · {size} GB на диску · контекст: {context} токена',
+  'perf.model.line.one': '{model} · {size}\u00A0GB на диску · контекст: {context} токен',
+  'perf.model.line.few': '{model} · {size}\u00A0GB на диску · контекст: {context} токени',
+  'perf.model.line.many': '{model} · {size}\u00A0GB на диску · контекст: {context} токенів',
+  'perf.model.line.other': '{model} · {size}\u00A0GB на диску · контекст: {context} токена',
   'perf.model.none': 'Модель ще не вибрано. Виберіть її на екрані «ШІ-модель».',
-  'perf.model.need': 'Із цим контекстом займає {need} GB.',
+  'perf.model.need': 'Із цим контекстом займає {need}\u00A0GB.',
   'perf.model.needEstimate':
-    'Потребує щонайменше {need} GB для ваг, а також памʼяті для кешу контексту — її обсяг буде ' +
+    'Потребує щонайменше {need}\u00A0GB для ваг, а також памʼяті для кешу контексту — її обсяг буде ' +
     'виміряно під час першого запуску.',
-  'perf.model.gpu': 'Вміщується у відеопамʼять ({budget} GB): усі шари ({layers}) на GPU.',
-  'perf.model.gpuEstimate': 'Має вміститися у відеопамʼять ({budget} GB).',
+  'perf.model.gpu': 'Вміщується у відеопамʼять ({budget}\u00A0GB): усі шари ({layers}) на GPU.',
+  'perf.model.gpuEstimate': 'Має вміститися у відеопамʼять ({budget}\u00A0GB).',
   'perf.model.partial':
-    'Відеопамʼять: {budget} GB. Шарів на GPU: {gpuLayers} з {layers}; близько {spill} GB працює ' +
-    'з оперативної памʼяті. Відповіді повільніші.',
+    'Відеопамʼять: {budget}\u00A0GB. Шарів на GPU: {gpuLayers} з {layers}; близько {spill}\u00A0GB ' +
+    'працює з оперативної памʼяті. Відповіді повільніші.',
   'perf.model.partialFree':
-    'Шарів на GPU: {gpuLayers} з {layers}; близько {spill} GB працює з оперативної памʼяті. Коли ' +
-    'модель запускалася, з {budget} GB памʼяті відеокарти було вільно лише {free} GB, а ' +
-    'середовище виконання залишає запас безпеки {margin} GB. Відповіді повільніші. Перезапустіть ' +
-    'модель, коли відеокарта звільниться.',
+    'Шарів на GPU: {gpuLayers} з {layers}; близько {spill}\u00A0GB працює з оперативної памʼяті. ' +
+    'Коли модель запускалася, з {budget}\u00A0GB памʼяті відеокарти було вільно лише {free}\u00A0GB, ' +
+    'а середовище виконання залишає запас безпеки {margin}\u00A0GB. Відповіді повільніші. ' +
+    'Перезапустіть модель, коли відеокарта звільниться.',
   'perf.model.partialMargin':
-    'Шарів на GPU: {gpuLayers} з {layers}; близько {spill} GB працює з оперативної памʼяті. ' +
-    'Відеокарта була вільна ({free} з {budget} GB), але середовище виконання також резервує ' +
-    '{working} GB для робочих буферів і запас безпеки {margin} GB, а коли сума наближається до ' +
-    'межі, переносить цілі шари з відеокарти. Відповіді повільніші.',
+    'Шарів на GPU: {gpuLayers} з {layers}; близько {spill}\u00A0GB працює з оперативної памʼяті. ' +
+    'Відеокарта була вільна ({free} з {budget}\u00A0GB), але середовище виконання також резервує ' +
+    '{working}\u00A0GB для робочих буферів і запас безпеки {margin}\u00A0GB, а коли сума ' +
+    'наближається до межі, переносить цілі шари з відеокарти. Відповіді повільніші.',
   'perf.model.partialMarginNoWorking':
-    'Шарів на GPU: {gpuLayers} з {layers}; близько {spill} GB працює з оперативної памʼяті. ' +
-    'Відеокарта була вільна ({free} з {budget} GB), але середовище виконання також резервує ' +
-    'памʼять для робочих буферів і запас безпеки {margin} GB, а коли сума наближається до межі, ' +
+    'Шарів на GPU: {gpuLayers} з {layers}; близько {spill}\u00A0GB працює з оперативної памʼяті. ' +
+    'Відеокарта була вільна ({free} з {budget}\u00A0GB), але середовище виконання також резервує ' +
+    'памʼять для робочих буферів і запас безпеки {margin}\u00A0GB, а коли сума наближається до межі, ' +
     'переносить цілі шари з відеокарти. Відповіді повільніші.',
   'perf.model.partialEstimate':
-    'Відеопамʼять: {budget} GB. Близько {spill} GB працюватиме з оперативної памʼяті. Відповіді ' +
-    'повільніші.',
-  'perf.model.cpu': 'Працює на процесорі з оперативної памʼяті ({budget} GB).',
-  'perf.model.cpuEstimate': 'Працюватиме на процесорі з оперативної памʼяті ({budget} GB).',
+    'Відеопамʼять: {budget}\u00A0GB. Близько {spill}\u00A0GB працюватиме з оперативної памʼяті. ' +
+    'Відповіді повільніші.',
+  'perf.model.cpu': 'Працює на процесорі з оперативної памʼяті ({budget}\u00A0GB).',
+  'perf.model.cpuEstimate': 'Працюватиме на процесорі з оперативної памʼяті ({budget}\u00A0GB).',
   'perf.model.unified':
-    'Вміщується в обʼєднану памʼять ({ram} GB, для моделі доступно до {budget} GB).',
+    'Вміщується в обʼєднану памʼять ({ram}\u00A0GB, для моделі доступно до {budget}\u00A0GB).',
   'perf.model.unifiedEstimate':
-    'Має вміститися в обʼєднану памʼять ({ram} GB, для моделі доступно до {budget} GB).',
+    'Має вміститися в обʼєднану памʼять ({ram}\u00A0GB, для моделі доступно до {budget}\u00A0GB).',
   'perf.model.tooLarge':
-    'Завелика для цього компʼютера (доступно {budget} GB). Виберіть меншу модель.',
+    'Завелика для цього компʼютера (доступно {budget}\u00A0GB). Виберіть меншу модель.',
   'perf.model.unknown':
     'Де розміститься модель, буде виміряно під час її першого запуску на цьому компʼютері.',
   'perf.model.unknownObserved': 'Середовище виконання не повідомило, де розмістилася модель.',
@@ -2203,7 +2203,7 @@ export const uk: UiCatalog<'uk'> = {
   'perf.role.reranker': 'Пошук у документах (переранжування)',
   'perf.role.embeddings': 'Пошук у документах (індекс)',
   'perf.role.transcriber': 'Мовлення',
-  'perf.models.row': '{model} · {size} GB',
+  'perf.models.row': '{model} · {size}\u00A0GB',
   'perf.models.rowNoSize': '{model}',
   'perf.models.none': 'Для цього не встановлено жодної моделі.',
   'perf.models.device.gpu': 'відеокарта',
@@ -2215,16 +2215,17 @@ export const uk: UiCatalog<'uk'> = {
   'perf.models.lifetime.idle': 'зупиняється під час простою',
   'perf.models.lifetime.per-use': 'запускається лише за потреби',
   'perf.models.split': 'шарів на відеокарті: {gpuLayers} з {layers}',
-  'perf.models.card': 'Відеокарта ({vram} GB): чат {chat} GB + переклад {translation} GB.',
-  'perf.models.cardReranker': 'Відеокарта ({vram} GB): переранжування {reranker} GB.',
+  'perf.models.card':
+    'Відеокарта ({vram}\u00A0GB): чат {chat}\u00A0GB + переклад {translation}\u00A0GB.',
+  'perf.models.cardReranker': 'Відеокарта ({vram}\u00A0GB): переранжування {reranker}\u00A0GB.',
   'perf.models.cardBoth':
     'Зараз обидві моделі на відеокарті. Та, що запустилася другою, отримала залишок памʼяті й ' +
     'працює повільніше; зупиніть і знову запустіть її, коли інша звільнить памʼять.',
   'perf.models.ram':
-    'Якщо все запущено одночасно, потрібно близько {sum} GB з {ram} GB оперативної памʼяті.',
+    'Якщо все запущено одночасно, потрібно близько {sum}\u00A0GB з {ram}\u00A0GB оперативної памʼяті.',
   'perf.models.memory':
-    'Якщо все запущено одночасно, потрібно близько {sum} GB з {budget} GB обʼєднаної памʼяті, ' +
-    'доступної для моделей.',
+    'Якщо все запущено одночасно, потрібно близько {sum}\u00A0GB з {budget}\u00A0GB обʼєднаної ' +
+    'памʼяті, доступної для моделей.',
   'perf.models.ramTooMuch': 'Забагато одночасно',
   'perf.models.ramOk': 'Вистачає',
   'perf.place.gpu': 'На GPU',
@@ -2238,7 +2239,7 @@ export const uk: UiCatalog<'uk'> = {
   'perf.tile.graphics.engine':
     'ШІ-рушій не може працювати на цьому компʼютері, тому відеокарту не вдалося перевірити.',
   'perf.tile.graphics.off': 'Графічне прискорення вимкнено. Моделі працюють на процесорі.',
-  'perf.tile.graphics.small': 'Менше ніж {min} GB: моделі працюють на процесорі.',
+  'perf.tile.graphics.small': 'Менше ніж {min}\u00A0GB: моделі працюють на процесорі.',
   'perf.tile.graphics.integrated':
     'Інтегрована, зі спільною памʼяттю: моделі працюють на процесорі.',
   'perf.tile.graphics.unitShared': 'GB спільної памʼяті',
@@ -2249,11 +2250,11 @@ export const uk: UiCatalog<'uk'> = {
   'perf.rating.notRecorded': 'Не зафіксовано',
   'perf.rating.none': 'Немає',
   'perf.rating.unknown': 'Невідомо',
-  'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
+  'perf.others.subGpu': '{cpu}, {ram}\u00A0GB RAM, {vram}\u00A0GB VRAM · {when}',
   'perf.tile.drive': 'Диск',
   'perf.tile.drive.unit': 'MB/s читання',
-  'perf.tile.drive.load': 'Запуск моделі {when}: прочитано {gb} GB',
-  'perf.tile.drive.hash': 'Перевірка файлів {when}: прочитано {gb} GB',
+  'perf.tile.drive.load': 'Запуск моделі {when}: прочитано {gb}\u00A0GB',
+  'perf.tile.drive.hash': 'Перевірка файлів {when}: прочитано {gb}\u00A0GB',
   'perf.tile.drive.none': 'Ще не виміряно',
   'perf.tile.drive.noneHint': 'Вимірюється під час першого запуску моделі або перевірки файлів',
   'perf.rating.good': 'Добре',
@@ -2294,12 +2295,13 @@ export const uk: UiCatalog<'uk'> = {
     'показниками диска вище.',
   'perf.observed.none':
     'Під час цього сеансу ще нічого не зафіксовано. Поставте моделі запитання або запустіть її.',
-  'perf.observed.answer': 'Остання відповідь: {tps} tok/s, перший токен через {ttft} s',
+  'perf.observed.answer': 'Остання відповідь: {tps}\u00A0tok/s, перший токен через {ttft}\u00A0s',
   'perf.observed.answerSub': '{model}, {when}, токенів: {tokens}',
-  'perf.observed.load': 'Запуск моделі: {seconds} s',
-  'perf.observed.loadSub': '{model}, прочитано {gb} GB з цього диска зі швидкістю {mbps} MB/s',
-  'perf.observed.check': 'Перевірка файлів: {seconds} s',
-  'perf.observed.checkSub': '{model}: повна перевірка файлів {when}, прочитано {gb} GB',
+  'perf.observed.load': 'Запуск моделі: {seconds}\u00A0s',
+  'perf.observed.loadSub':
+    '{model}, прочитано {gb}\u00A0GB з цього диска зі швидкістю {mbps}\u00A0MB/s',
+  'perf.observed.check': 'Перевірка файлів: {seconds}\u00A0s',
+  'perf.observed.checkSub': '{model}: повна перевірка файлів {when}, прочитано {gb}\u00A0GB',
   'perf.observed.oncePerModel': 'Раз на модель',
   'perf.others.title': 'Інші компʼютери, на яких використовували цей диск',
   'perf.others.hint':
@@ -2307,11 +2309,11 @@ export const uk: UiCatalog<'uk'> = {
     'від компʼютера, а не від диска.',
   'perf.others.none':
     'Поки що немає. Підключіть диск до іншого компʼютера, і тест запуститься автоматично.',
-  'perf.others.row': '{tps} tok/s (модель: {model})',
+  'perf.others.row': '{tps}\u00A0tok/s (модель: {model})',
   'perf.others.rowNoSpeed': 'Рекомендовано: {model}; швидкість не виміряно',
-  'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
-  'perf.others.load': 'запуск моделі: {seconds} s',
-  'perf.others.check': 'перевірка файлів: {seconds} s',
+  'perf.others.sub': '{cpu}, {ram}\u00A0GB RAM · {when}',
+  'perf.others.load': 'запуск моделі: {seconds}\u00A0s',
+  'perf.others.check': 'перевірка файлів: {seconds}\u00A0s',
   'perf.footer':
     'Повний технічний звіт з усіма необробленими показниками доступний тут: Параметри → ' +
     'Діагностика.',
@@ -2338,8 +2340,8 @@ export const uk: UiCatalog<'uk'> = {
   'diag.bench.notDetected': 'не виявлено',
   'diag.bench.effectiveRead': 'Виміряна швидкість читання',
   'diag.bench.effectiveReadNone': 'ще не виміряно — вимірюється під час запуску моделі',
-  'diag.bench.effectiveReadLoad': 'під час запуску моделі {when}, прочитано {gb} GB',
-  'diag.bench.effectiveReadHash': 'під час перевірки файлів {when}, прочитано {gb} GB',
+  'diag.bench.effectiveReadLoad': 'під час запуску моделі {when}, прочитано {gb}\u00A0GB',
+  'diag.bench.effectiveReadHash': 'під час перевірки файлів {when}, прочитано {gb}\u00A0GB',
   'diag.bench.driveWrite': 'Запис на диск',
   'diag.bench.notMeasured': 'не виміряно',
   'diag.bench.tokens': 'Швидкість декодування (токенів за секунду)',
@@ -2400,6 +2402,8 @@ export const uk: UiCatalog<'uk'> = {
   'common.cancel': 'Скасувати',
   'common.remove': 'Прибрати',
   'common.apply': 'Застосувати',
+  'common.labelValue': '{label}: {value}',
+  'common.percent': '{pct}%',
   'indicator.offline': 'Локально · Офлайн',
   'indicator.online': 'Локально · Завантаження дозволено',
   'indicator.offlineDetail':
@@ -2559,14 +2563,14 @@ export const uk: UiCatalog<'uk'> = {
     'нижче враховує лише оперативну памʼять, CPU і швидкість диска — запустіть тест ще раз, коли ' +
     'модель більше ніщо не використовуватиме, щоб отримати повні показники.',
   'main.benchmark.warnSlowRead':
-    'Виміряна швидкість читання з цього диска — близько {mbps} MB/s. Під час запуску моделі весь ' +
-    'її файл читається з такою швидкістю, тому на цьому диску моделі запускатимуться повільно.',
+    'Виміряна швидкість читання з цього диска — близько {mbps}\u00A0MB/s. Під час запуску моделі ' +
+    'весь її файл читається з такою швидкістю, тому на цьому диску моделі запускатимуться повільно.',
   'main.benchmark.warnVeryLowTokens':
     'Генерація тексту із запущеною моделлю ({model}) була дуже повільною, тому призначений ' +
     'профіль знижено на один рівень. Якщо ця модель більша за рекомендовану, запустіть ' +
     'рекомендовану модель і запустіть тест ще раз.',
   'main.benchmark.warnRecommendationLowered':
-    'Швидкість генерації тексту із запущеною моделлю ({model}) становила близько {tps} tok/s, ' +
+    'Швидкість генерації тексту із запущеною моделлю ({model}) становила близько {tps}\u00A0tok/s, ' +
     'тому рекомендовану модель знижено на один рівень розміру, щоб відповіді на цьому компʼютері ' +
     'залишалися швидкими.',
   'main.benchmark.locked': 'Робочий простір заблоковано. Розблокуйте його, щоб запустити тест.',
