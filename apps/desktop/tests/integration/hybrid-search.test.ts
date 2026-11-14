@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, VectorIndex, encodeVector } from '../../src/main/services/embeddings'
 import { buildFtsMatchQuery } from '../../src/main/services/fts'
@@ -17,6 +19,7 @@ import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import { legacyDbPath, openFreshDb } from '../helpers/db-fixtures'
 import { chunkIdsOf, seedEmbeddedDoc } from '../helpers/doc-fixtures'
+import { SEARCH_FOLD_CASES, SEARCH_FOLD_STORED, type SearchFoldLabel } from '../helpers/search-fold-cases'
 
 // Phase 21 (rag-design §11 keyword index): the FTS5 keyword index — the guarded migration's
 // backfill + sanitized MATCH queries + the embedder-visibility rule — RRF fusion, and the
@@ -77,6 +80,82 @@ describe('buildFtsMatchQuery', () => {
     expect(buildFtsMatchQuery('')).toBeNull()
     expect(buildFtsMatchQuery('?! …')).toBeNull()
   })
+
+  // #818 (open-issues wave owner call G-8). The letters are built from code points; the strings are
+  // compared whole, so a stray U+0307 or an uncomposed letter fails the row.
+  const DOTLESS_I = String.fromCharCode(0x0131)
+  const dotless = (spelled: string): string => spelled.replaceAll('1', DOTLESS_I) // "1s1" → ısı
+  const phrases = (match: string | null): string[] => (match ?? '').split(' OR ')
+
+  it('spells a word holding ı both ways: the typed words first, then the other spellings in a fixed order', () => {
+    expect(buildFtsMatchQuery(dotless('1s1 raporu'))).toBe(
+      dotless('"1s1" OR "raporu" OR "is1" OR "1si" OR "isi"')
+    )
+    // An extra spelling that is already in the query is not repeated.
+    expect(buildFtsMatchQuery(dotless('1s1 isi'))).toBe(dotless('"1s1" OR "isi" OR "is1" OR "1si"'))
+  })
+
+  it('a word with four ı gets all 16 spellings; one with five stays as typed', () => {
+    const four = dotless('1s1t1c1') // ısıtıcı (heater)
+    expect(phrases(buildFtsMatchQuery(four))).toHaveLength(16)
+    expect(phrases(buildFtsMatchQuery(four))[0]).toBe(`"${four}"`)
+    expect(phrases(buildFtsMatchQuery(four)).at(-1)).toBe('"isitici"')
+    const five = dotless('k1s1tlay1c1l1k') // kısıtlayıcılık
+    expect(buildFtsMatchQuery(five)).toBe(`"${five}"`)
+  })
+
+  it('stops at 32 phrases: the typed words are kept, the other spellings are cut', () => {
+    const words = Array.from({ length: 30 }, (_, i) => `w${i}`)
+    // 30 words + ısı = 31 typed words, so one other spelling fits.
+    expect(phrases(buildFtsMatchQuery([...words, dotless('1s1')].join(' ')))).toEqual([
+      ...words.map((w) => `"${w}"`),
+      dotless('"1s1"'),
+      dotless('"is1"')
+    ])
+    // ısıtıcı sınıfını ısı: the three typed words, ısıtıcı's 15 other spellings, then 14 of sınıfını's
+    // 15 fill the cap, and none of ısı's is left.
+    const full = phrases(buildFtsMatchQuery(dotless('1s1t1c1 s1n1f1n1 1s1')))
+    expect(full).toHaveLength(32)
+    expect(full.slice(0, 3)).toEqual(dotless('"1s1t1c1" "s1n1f1n1" "1s1"').split(' '))
+    expect(full.at(-1)).toBe(dotless('"s1nifini"')) // the 14th: every ı but the first as "i"
+    expect(full).not.toContain(dotless('"is1"'))
+    // 33 typed words: the query is the first 32 of them, as before, with no room for another spelling.
+    expect(phrases(buildFtsMatchQuery([...words, 'x', dotless('1s1'), 'y'].join(' ')))).toEqual([
+      ...words.map((w) => `"${w}"`),
+      '"x"',
+      dotless('"1s1"')
+    ])
+  })
+
+  it('composes the query and lowers a capital dotted İ to a plain "i" (no U+0307 left)', () => {
+    const acute = String.fromCharCode(0x0301)
+    const composedE = String.fromCharCode(0x00e9)
+    expect(buildFtsMatchQuery(`r${'e' + acute}sum${'e' + acute}`)).toBe(`"r${composedE}sum${composedE}"`)
+    expect(buildFtsMatchQuery(`${String.fromCharCode(0x0130)}stanbul`)).toBe('"istanbul"')
+    expect(buildFtsMatchQuery(`I${String.fromCharCode(0x0307)}STANBUL`)).toBe('"istanbul"')
+  })
+
+  // The MATCH builder as it was before #818, kept only as the reference for the guard row below.
+  function matchQueryBefore818(question: string): string | null {
+    const tokens = question.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+    if (tokens.length === 0) return null
+    return tokens
+      .slice(0, 32)
+      .map((t) => `"${t}"`)
+      .join(' OR ')
+  }
+
+  // The grounded-QA eval set (docs/model-benchmarks.md §2) has no ı, İ, separate mark or uncomposed
+  // letter, so #818 changes no eval question's query: a before/after run retrieves the same chunks
+  // by construction. Its questions carry ä, ö, ü, Ü, ß and the typographic apostrophe.
+  it('changes the MATCH string of no question in eval/rag_de_en.jsonl (#818)', () => {
+    const questions = readFileSync(join(__dirname, '../../../../eval/rag_de_en.jsonl'), 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => (JSON.parse(line) as { question: string }).question)
+    expect(questions.length).toBeGreaterThanOrEqual(100)
+    expect(questions.filter((q) => buildFtsMatchQuery(q) !== matchQueryBefore818(q))).toEqual([])
+  })
 })
 
 // ---- keywordSearchChunks ----------------------------------------------------------
@@ -132,6 +211,23 @@ describe('keywordSearchChunks', () => {
     await seedEmbeddedDoc(db, embedder, 'a.txt', ['alpha'])
     expect(keywordSearchChunks(db, '…', 10, { embeddingModelId: embedder.id })).toEqual([])
     expect(keywordSearchChunks(db, 'alpha', 0, { embeddingModelId: embedder.id })).toEqual([])
+  })
+
+  // #818 (open-issues wave owner call G-8): the same table as conversation search
+  // (`conversation-search.test.ts`), on chunks_fts; the index and its triggers are unchanged.
+  it.each(SEARCH_FOLD_CASES)('a typed $typed finds exactly $finds (#818)', async ({ query, finds }) => {
+    const db = openFreshDb('hybrid')
+    const embedder = new MockEmbedder()
+    const labels = Object.keys(SEARCH_FOLD_STORED) as SearchFoldLabel[]
+    const docId = await seedEmbeddedDoc(
+      db,
+      embedder,
+      'mixed.txt',
+      labels.map((label) => SEARCH_FOLD_STORED[label])
+    )
+    const labelOf = new Map(chunkIdsOf(db, docId).map((chunkId, index) => [chunkId, labels[index]]))
+    const hits = keywordSearchChunks(db, query, labels.length, { embeddingModelId: embedder.id })
+    expect(hits.map((h) => labelOf.get(h.chunkId)).sort()).toEqual([...finds].sort())
   })
 })
 

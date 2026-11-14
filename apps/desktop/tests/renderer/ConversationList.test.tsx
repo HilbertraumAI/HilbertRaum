@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConversationList, groupConversations, splitSnippet } from '../../src/renderer/chat/ConversationList'
-import { t } from '../../src/shared/i18n'
+import { t, type UiLanguage } from '../../src/shared/i18n'
 import {
   SEARCH_MARK_END,
   SEARCH_MARK_START,
@@ -13,6 +13,7 @@ import {
 } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { makeCollection, makeConversation } from '../helpers/chat-fixtures'
+import { renderInLanguage } from '../helpers/render-language'
 
 // The conversation list's pure helpers (`splitSnippet`, `groupConversations`), its project sections
 // (plan §13.4) and, Phase 31, its search box: typing swaps the column to full-text results (matched
@@ -37,9 +38,13 @@ function result(over: Partial<ConversationSearchResult> = {}): ConversationSearc
 
 function renderList(
   conversations: Conversation[],
-  { onSelect = () => {}, collections }: { onSelect?: (c: Conversation) => void; collections?: Collection[] } = {}
+  {
+    onSelect = () => {},
+    collections,
+    lang
+  }: { onSelect?: (c: Conversation) => void; collections?: Collection[]; lang?: UiLanguage } = {}
 ): void {
-  render(
+  const ui = (
     <ConversationList
       conversations={conversations}
       activeId={null}
@@ -52,6 +57,8 @@ function renderList(
       onCollapse={() => {}}
     />
   )
+  if (lang) renderInLanguage(ui, lang)
+  else render(ui)
 }
 
 afterEach(() => {
@@ -61,6 +68,8 @@ afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
     vi.useRealTimers()
+    // renderInLanguage's language mirror must not leak into the next row.
+    window.localStorage.clear()
   }
 })
 
@@ -146,6 +155,25 @@ describe('ConversationList — project sections (plan §13.4)', () => {
       ['Zeta', ['in zeta']],
       ['Other / Library', ['in the archived project', 'in the library', 'unanchored', 'dangling']]
     ])
+  })
+
+  // #818 (open-issues wave owner call G-8): project names sort in the interface language's order. A
+  // bare localeCompare() followed Chromium's locale (the OS or --lang), so a German or English system
+  // put Turkish «Çanta» before «Cuma» and Polish «Łódź» before «Lublin». The expected order comes from
+  // Intl.Collator, and each fixture sorts differently under 'en' (so the row can't pass without the
+  // interface language). Letters by code point.
+  const C = String.fromCharCode
+  it.each<[UiLanguage, string, string]>([
+    ['tr', `${C(0x00c7)}anta`, 'Cuma'],
+    ['pl', `${C(0x0141)}${C(0x00f3)}d${C(0x017a)}`, 'Lublin']
+  ])('orders the project sections by the interface language (%s)', (lang, first, second) => {
+    const inLanguage = [first, second].sort(new Intl.Collator(lang).compare)
+    expect(inLanguage).not.toEqual([first, second].sort(new Intl.Collator('en').compare))
+    renderList([chat('in first', 'p-first'), chat('in second', 'p-second')], {
+      collections: [project('p-first', first), project('p-second', second)],
+      lang
+    })
+    expect(sections().map(([name]) => name)).toEqual(inLanguage)
   })
 
   it('keeps the plain date groups when no chat is anchored to a live project', () => {

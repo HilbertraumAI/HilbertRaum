@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   SEARCH_MARK_END,
@@ -99,10 +99,14 @@ interface ProjectSection {
  * references a missing or archived project (or no anchor at all) lands in "Other / Library".
  * Returns null when NO conversation is anchored to a live project — the caller then falls
  * back to plain date grouping (the common, project-free case; keeps the existing UX intact).
+ * Projects are ordered by name with `compareNames`, the interface language's collation (open-issues
+ * wave owner call G-8, #818): a bare `localeCompare()` follows Chromium's locale (the OS or `--lang`),
+ * not the interface language, so Turkish «Çanta» sorted before «Cuma» on a German system.
  */
 function groupByProject(
   conversations: Conversation[],
-  collections: Collection[]
+  collections: Collection[],
+  compareNames: (a: string, b: string) => number
 ): ProjectSection[] | null {
   const liveProjects = new Map(
     collections.filter((c) => c.type === 'project' && c.archivedAt == null).map((c) => [c.id, c])
@@ -122,7 +126,7 @@ function groupByProject(
   }
   const sections: ProjectSection[] = [...byProject.entries()]
     .map(([id, convs]) => ({ project: liveProjects.get(id)!, conversations: convs }))
-    .sort((a, b) => a.project!.name.localeCompare(b.project!.name))
+    .sort((a, b) => compareNames(a.project!.name, b.project!.name))
   if (other.length > 0) sections.push({ project: null, conversations: other })
   return sections
 }
@@ -157,7 +161,9 @@ export const ConversationList = memo(function ConversationList({
   onDelete,
   onCollapse
 }: Props): JSX.Element {
-  const { t, tCount } = useT()
+  const { t, tCount, lang } = useT()
+  // One collator per interface language for the project sections' name order (`groupByProject`).
+  const compareNames = useMemo(() => new Intl.Collator(lang).compare, [lang])
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   // D-2 (EP-1 plan §7.6, spec §25.4): how many evidence reviews the delete would cascade
   // away. null = not fetched / none pending; 'unknown' = the count could not be read —
@@ -258,7 +264,7 @@ export const ConversationList = memo(function ConversationList({
 
   // Project sections when any conversation is anchored to a live project (plan §13.4/N8),
   // else null ⇒ plain date grouping (the common project-free case, unchanged UX).
-  const projectSections = groupByProject(conversations, collections)
+  const projectSections = groupByProject(conversations, collections, compareNames)
 
   return (
     <aside className="chat-sidebar" aria-label={t('chat.list.aria')}>
