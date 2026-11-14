@@ -767,6 +767,34 @@ migration in `openDatabase` (the `scope_json` precedent). Questions are sanitize
 quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax in user
 text never reaches MATCH raw; ranking is `bm25()`.
 
+**The query is composed and spells «ı» both ways; the index is unchanged (#818, open-issues wave
+owner call G-8).** `buildFtsMatchQuery` lowers the question with the shared `lowerCaseNfc`
+(`shared/text-fold.ts`): NFC first, so a word typed with separate accent marks is one token and
+is not cut at each mark (a combining mark is not a letter of the token pattern), then
+`toLowerCase()` without a locale, with the U+0307 it leaves after a capital «İ» dropped, so
+«İstanbul» is the token `istanbul` and no longer `i` OR `stanbul`. Both indexes (`chunks_fts` and
+conversation search's `messages_fts`) use FTS5's default `unicode61` tokenizer, which (measured
+on SQLite 3.50.4, the tests' Node 24, and on 3.53.4, Electron 43.8.6's) stores I, İ and
+i + U+0307 as `i`, keeps the dotless «ı», drops a Latin letter's accent whether it is stored
+composed or as a separate mark, keeps a composed Cyrillic «й», «ё» or «ї», and stores «и» + a
+separate breve as a bare `и`. So «Isı» is stored as `isı` and «ISI» as `isi`, and a token
+holding «ı» is also searched with each «ı» written as "i", in every combination (2^n spellings;
+a token with more than four «ı» stays as typed). The typed tokens come first, the first 32 as
+before, and the extra spellings fill the room left, so the query still holds at most 32
+phrases. A typed «ısı» finds «ısı», «Isı» and «ISI», and «İstanbul» finds «İSTANBUL», «İstanbul» and «istanbul» and no lone
+"I". Nothing adds an «ı», so a typed «isi», «Isı» or «ISI» misses a stored «ısı», and «kır»
+finds «kir» but «kir» misses «kır». A word stored with a separate Cyrillic mark is found by
+neither spelling (the tokenizer dropped the mark from the stored word; the composed query keeps
+it), while a Latin accent is dropped on both sides, so «résumé» is found however it was stored
+or typed. A question that is already composed and holds no «ı», «İ» or U+0307 gives the same
+MATCH string as before; every question of `eval/rag_de_en.jsonl` is checked by a row in
+`hybrid-search.test.ts`. The fold is query-side only: the index, its triggers and the stored text
+are unchanged. Folding in the index would need an app-defined SQL function inside the stored
+triggers, and the triggers live in the DB file, so an older build that opens the workspace (see
+the rolled-back-binary rule below), which has no such function, would fail every insert that
+fires one; `node:sqlite` also offers no custom tokenizer. The residuals are user-facing known
+limitations ([`known-limitations.md`](known-limitations.md) "Internationalization").
+
 **Trigger sync is rowid-targeted (full-audit 2026-07-11 CODE-4).** The original delete/update
 triggers removed FTS rows by `WHERE chunk_id = old.id` — FTS5 has no index on UNINDEXED
 columns, so every per-row firing full-scanned the `%_content` shadow table: O(K·N) for a K-chunk

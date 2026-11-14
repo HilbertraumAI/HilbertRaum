@@ -604,8 +604,10 @@ function smallTalkTokens(question: string): string[] {
  *  question whose EVERY token is one of these is pure chatter — it carries no document ask, so it opts OUT of
  *  the whole-doc engine. The lists of the eight (#809, open-issues wave owner call G-11) follow three rules,
  *  checked across all ten languages: no yes-word (a bare "sí" / "так" can answer the assistant's own offer), no
- *  bare "is it fine?" form ("¿está bien?", "va bene?", "все добре?" ask about the document), and an adjective
- *  or numeral that inflects with its noun ("buenos", "mille", "большое") only inside an exact form below. */
+ *  "is it fine?" phrase ("¿está bien?", "va bene?", "все добре?" ask about the document; a one-word "Bien?",
+ *  "Bene?", "Goed?", "Dobrze?", "Хорошо?" or "Добре?" still reads as small talk, as the German "Gut?" does), and
+ *  an adjective or numeral that inflects with its noun ("buenos", "mille", "большое") only inside an exact form
+ *  below. */
 const SMALL_TALK_WORDS = new Set<string>([
   // greetings
   'hi', 'hii', 'hiya', 'hey', 'heya', 'hello', 'yo', 'sup', 'howdy', 'there',

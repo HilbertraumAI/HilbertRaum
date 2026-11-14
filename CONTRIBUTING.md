@@ -472,6 +472,17 @@ translations by hand, because nothing marks them as stale.
   recognises: a conversation saved with the old wording then gets a model answer instead of the
   checked figures when it is regenerated in a language whose text the English and German word
   lists don't catch.
+- **The document chat's two example chips** (`chat.example.summarize`, `chat.example.indemnity`)
+  are recognised by the task router in every language (`analysis/router.ts`; i18n record §3.3
+  Rule 3): the summarize chip by its whole text, the every-mention chip by its frame, the text
+  around its quoted example word, whatever stands inside the quotes. Changing
+  `chat.example.summarize`, or the text around the quotes of `chat.example.indemnity`, in any
+  language changes how the router reads the chip: the old wording is then read like any other
+  question in that language, and in a language whose text the English and German word lists
+  don't catch it gets a plain answer instead of the summary or the labelled every-mention
+  answer. Keep the example word of `chat.example.indemnity` inside one of the quote pairs the
+  router knows ('…', „…“, „…”, «…», “…”): without quotes the chip is matched by its whole text
+  only, so a user who puts in their own word loses the route.
 - **Other checks that read the translations:** `tests/unit/i18n.test.ts` (each catalog has
   exactly English's keys, without `packExport.*` for a language that writes no evidence packs,
   plus its language's plural forms; no empty value, English's placeholders, and the typography
@@ -521,10 +532,20 @@ judgement. A catalog nobody has reviewed natively keeps `nativeReviewed: false` 
    (`tests/integration/skills-skillmd-parity.test.ts` checks every one), and its titles to the
    titles tables in [`docs/skills-overview.md`](docs/skills-overview.md): a column in the last
    table, or a new table once that one has as many languages as the first.
-6. Add a "<Language> microcopy" section to `docs/design-guidelines.md` §7.
-7. Check the layout in the running app: a word that doesn't fit a fixed-width surface such as the
+6. Add a small-talk block for the language to `SMALL_TALK_WORDS` and `SMALL_TALK_EXACT` in
+   `apps/desktop/src/main/services/skills/vocabulary.ts`: its short greetings, thanks and
+   closings, which keep a thank-you from starting a read of a whole document. These are language
+   data in code, not catalog values. Follow the three rules in the comment above the lists, and
+   check every new word against all the registered languages: a filler that is a content word in
+   another language makes a real question there read as small talk (English "a" and "lot" and
+   German "passt" were taken out for that). `tests/unit/skills-vocabulary.test.ts` holds a table
+   with three rows per language (a greeting, a thanks with an intensifier, an acknowledgement
+   with thanks) and a table of real questions that must not read as small talk; add the new
+   language to both.
+7. Add a "<Language> microcopy" section to `docs/design-guidelines.md` §7.
+8. Check the layout in the running app: a word that doesn't fit a fixed-width surface such as the
    navigation rail takes a shorter synonym from the glossary, never an abbreviation.
-8. Update the docs that list the languages: the language paragraph in
+9. Update the docs that list the languages: the language paragraph in
    [`docs/user-guide.md`](docs/user-guide.md) (Settings → General → Language), the
    "Internationalization" section of [`docs/known-limitations.md`](docs/known-limitations.md)
    (native-review status), the `uiLanguage` codes in
