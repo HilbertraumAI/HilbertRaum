@@ -72,14 +72,15 @@ describe('t — lookup and interpolation', () => {
 
   it('U1/ux-10: the extract coverage badge is softened from "Every match found" (overclaim) to "Read"', () => {
     // "Every match found" asserted the EXTRACTION was exhaustive — a small model / unusual layout can miss
-    // a match. The honest claim is that every section was READ, not that every match was captured.
+    // a match. The honest claim is that every section was READ (or scanned, the label-first
+    // "Sections scanned: 3" of #806), not that every match was captured.
     for (const key of ['coverage.extract.whole', 'coverage.extract.sections'] as MessageKey[]) {
       // Supply the {scanned} param so the REAL German renders — without it, a missing param makes `t('de')`
       // fall back to English, and the negative assertion would inspect English (vacuously passing).
       expect(t('en', key, { scanned: 3 })).not.toMatch(/every match/i)
-      expect(t('en', key, { scanned: 3 })).toMatch(/read/i)
+      expect(t('en', key, { scanned: 3 })).toMatch(/\b(read|scanned)\b/i)
       expect(t('de', key, { scanned: 3 })).not.toMatch(/jeder treffer/i)
-      expect(t('de', key, { scanned: 3 })).toMatch(/gelesen/i)
+      expect(t('de', key, { scanned: 3 })).toMatch(/gelesen|durchsucht/i)
     }
   })
 })
@@ -1962,9 +1963,11 @@ const isPluralForm = (key: string): boolean => isPluralFormOf(PLURAL_BASES, key)
 /**
  * Plain keys that show a number, grouped by what keeps them right in every language. Where a
  * reason says what the translations other than English and German must do, it is a requirement
- * on every such catalog, today's and any added later. "The English singular slip" is an English
- * or German sentence that reads wrong at exactly 1 ("1 sections scanned", the kind the "(1 core)"
- * fix corrected): left to a follow-up (owner call, 2026-11-12).
+ * on every such catalog, today's and any added later. An English or German sentence that read
+ * wrong at exactly 1 ("1 sections scanned", the kind the "(1 core)" fix corrected) now states its
+ * count label-first too (#806, owner call G-5); LABEL_FIRST_AT_ONE below names those keys and the
+ * row under it holds them to that shape. They stay listed here: they still show a number with no
+ * plural pair.
  */
 const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly MessageKey[] }>> = {
   parenthetical: {
@@ -2112,7 +2115,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       'Renders only inside an evidence pack, which is written in English or German (UI-languages owner ' +
       'call D-5 (b)); no other language carries packExport.* keys (UI-languages owner call D-14 (a)). ' +
-      'An English or German pack line that reads wrong at exactly 1 is the singular slip left to a follow-up.',
+      'Every pack line is a label ("Item {n}") or states its count after one ("Outstanding follow-ups: ' +
+      '{count}", "Required items decided: {decided} of {required}", #806), so nothing agrees with it at 1.',
     keys: [
       'packExport.meta.formatValue',
       'packExport.meta.formatValuePdf',
@@ -2128,8 +2132,10 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'A noun after the figure ("tokens", "sections", "layers") agrees with it in every language. The ' +
       'translations other than English and German must put the noun first as a label ' +
       '("Tokens: {tokens}"), or write a unit symbol where the figure has decimals ' +
-      '("{tps} tok/s"). English and German read wrong only where the figure can be exactly 1 ' +
-      '(the English singular slip left to a follow-up).',
+      '("{tps} tok/s"). English and German keep the noun after the figure only where it cannot be 1 ' +
+      '(the Performance and benchmark figures, a page count of at least 2); where it can, they put ' +
+      'the noun first too ("Sections scanned: {scanned}", #806). One exception is left as it is ' +
+      '(#806, owner call G-5): chat.speed.line reads "1 tokens" after a one-token answer.',
     keys: [
       'chat.speed.line',
       // The count is at least 2 here (a single page has its own sentence, ocrNotes.ts), so en/de/fr/es/it
@@ -2151,9 +2157,11 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
   labelFirstOf: {
     reason:
       '"{a} of {b} <noun>": the noun follows {b}. With b of at least 2 it is plural in en/de/fr/es/it, ' +
-      'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere ' +
-      '(in English and German, the singular slip left to a follow-up). The translations ' +
-      'other than English and German must put the noun first ("Sections: {covered} of {total}").',
+      'but Russian takes the genitive singular after 21, 31, …, and b = 1 needs the singular everywhere. ' +
+      'The translations other than English and German must put the noun first ("Sections: {covered} ' +
+      'of {total}"). English and German keep the noun after {b} only where b is at least 2 (a deep ' +
+      'index in progress, the OCR page counts, the layer counts); where b can be 1 they put it first ' +
+      'too ("Based on sections: {covered} of {total}", #806).',
     keys: [
       // #576/#538: these two render only when the total is at least 2 (ocrNotes.ts).
       'docs.previewModal.ocrInfoPartial',
@@ -2174,8 +2182,11 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     reason:
       'The count governs a noun, and often a verb, inside a sentence, which agrees with it in every ' +
       'language. The translations other than English and German must state the count label-first ' +
-      '("Transactions read: **{count}**"); where the English and German sentence can meet 1 ' +
-      '("I read 1 transactions"), that is the singular slip left to a follow-up.',
+      '("Transactions read: **{count}**"), and English and German do so too wherever the count can ' +
+      'be 1 (#806). Three keep the count inside the English and German sentence because it never ' +
+      'meets 1 there: skills.analysis.selectOne (two or more documents in scope), packs.addPartial ' +
+      '(a partial add has at least one added and one failed archive) and review.evidence.shownCount ' +
+      '(shown only while more sources remain).',
     keys: [
       'skills.bankAnalysis.count',
       'skills.bankAnalysis.countPartial',
@@ -2217,6 +2228,34 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
     ]
   }
 }
+
+/**
+ * #806 (owner call G-5): the NON_GRAMMATICAL keys whose count can be exactly 1 and whose English and
+ * German sentence used to put a word after it ("I read 1 transactions", "Read across 1 sections
+ * scanned", "the other 1 document(s)"). Both catalogs now state these counts label-first, as the
+ * other eight already did. Only these keys, not their whole groups: `chat.speed.line` ("{tokens}
+ * tokens") stays as it is (G-5), and the rest never meet 1 (each group's reason says why).
+ */
+const LABEL_FIRST_AT_ONE: readonly MessageKey[] = [
+  'skills.bankAnalysis.count',
+  'skills.bankAnalysis.countPartial',
+  'skills.bankAnalysis.countContradicted',
+  'skills.bankAnalysis.unverifiedCaveat',
+  'skills.invoiceAnalysis.count',
+  'skills.invoiceAnalysis.countPartial',
+  'skills.analysis.scopeNarrowed',
+  'skills.analysis.selectTwo',
+  'analysis.listing.coverageWhole',
+  'analysis.listing.coverageSections',
+  'analysis.listing.empty',
+  'coverage.extract.whole',
+  'coverage.extract.wholeUnparsed',
+  'coverage.extract.sections',
+  'coverage.extract.sectionsUnparsed',
+  'coverage.relevance.counted',
+  'packExport.summary.progress',
+  'packExport.coverage.inputStatement'
+]
 
 /** Listed keys the net cannot see, and how their number reaches them (reviewed by hand, 2026-11-12). */
 const SEEN_BY_HAND: Readonly<Partial<Record<MessageKey, string>>> = {
@@ -2355,6 +2394,35 @@ describe('CODE-8 net: a key that shows a number is a plural pair or on the revie
       expect(isPluralForm(key), `${key} is a plural form: take it off NON_GRAMMATICAL`).toBe(false)
       expect(placeholders(values[key]).length, `${key} shows no figure any more`).toBeGreaterThan(0)
     }
+  })
+
+  // #806: a count that can be 1 is followed by no word in English or German ("**1** transactions",
+  // "1 sections scanned"), except "of"/"von" between two figures ("{decided} of {required}"), and no
+  // word carries a plural crutch ("line(s)", "Dokument(e)", "Zeile(n)"). The lookahead keeps the
+  // figure after "of" unconsumed, so "{a} of {b} sections" is still caught at {b}.
+  it.each([
+    ['en', en, 'of'],
+    ['de', de, 'von']
+  ] as const)('%s: the keys that can show 1 state the count label-first (#806)', (code, catalog, of) => {
+    const values = catalog as Record<string, string>
+    const offenders: string[] = []
+    for (const key of LABEL_FIRST_AT_ONE) {
+      const value = values[key]
+      expect(value, `${code}: LABEL_FIRST_AT_ONE names ${key}, which is not in the catalog`).toBeDefined()
+      const counts = placeholders(value).filter((p) => NUMBER_PLACEHOLDERS.has(p.slice(1, -1)))
+      expect(counts.length, `${code}: ${key} shows no count: take it off LABEL_FIRST_AT_ONE`).toBeGreaterThan(0)
+      for (const m of value.matchAll(/\{(\w+)\}\**\s+(\p{L}+)(?=(\s+\**\{\w+\})?)/gu)) {
+        if (!NUMBER_PLACEHOLDERS.has(m[1]) || (m[2] === of && m[3] !== undefined)) continue
+        offenders.push(`${key}: “${m[0]}”`)
+      }
+      for (const m of value.matchAll(/\p{L}\((?:e?s|e?n|e)\)/gu)) offenders.push(`${key}: “${m[0]}”`)
+    }
+    expect(
+      offenders,
+      `${code}: a word after a count that can be 1 agrees with it ("1 sections"), and a plural crutch ` +
+        'reads wrong at every count. State the count label-first ("Line items: **{count}**", ' +
+        `"Sections scanned: {scanned}"); "${of}" may stand only between two figures.`
+    ).toEqual([])
   })
 
   it('the net finds every listed key except the reviewed hand-found ones', () => {

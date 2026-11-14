@@ -818,7 +818,7 @@ export const en = {
   'docs.deepIndex.readyTitle':
     'A whole-document deep index is ready — summaries and listing answers can cover everything',
   'coverage.relevance': 'Based on the most relevant passages — not the whole document',
-  'coverage.relevance.counted': 'Based on {covered} of {total} sections',
+  'coverage.relevance.counted': 'Based on sections: {covered} of {total}',
   'coverage.capped.whole': 'Covers the whole document',
   'coverage.capped.beginning': 'Covers the beginning of the document',
   'coverage.tree.whole': 'Covers the whole document (deeply indexed)',
@@ -839,12 +839,11 @@ export const en = {
   // U1 (audit §2.3 / ux-10): softened from "Every match found …", which overclaimed exhaustiveness of the
   // EXTRACTION (a small model / an unusual layout can miss a match). "Read across …" is the honest claim —
   // every section was READ; it does not assert every match was captured.
-  'coverage.extract.whole': 'Read across the whole document — {scanned} sections scanned',
+  'coverage.extract.whole': 'Read across the whole document — sections scanned: {scanned}',
   'coverage.extract.wholeUnparsed':
-    'Read across the whole document — {scanned} sections scanned, {unparsed} could not be read',
-  'coverage.extract.sections': 'Read across {scanned} sections scanned',
-  'coverage.extract.sectionsUnparsed':
-    'Read across {scanned} sections scanned, {unparsed} could not be read',
+    'Read across the whole document — sections scanned: {scanned}, could not be read: {unparsed}',
+  'coverage.extract.sections': 'Sections scanned: {scanned}',
+  'coverage.extract.sectionsUnparsed': 'Sections scanned: {scanned}, could not be read: {unparsed}',
 
   // ---- "List every X" answer (whole-document-analysis plan §4.2, Phase 3) ----
   // The deterministic listing answer (0 model calls). User words only — "sections", no
@@ -855,10 +854,10 @@ export const en = {
   'analysis.kind.party': 'parties',
   'analysis.kind.obligation': 'obligations',
   'analysis.listing.coverageWhole':
-    'Found {count} {kind} across the whole document — {scanned} sections scanned{unparsed}:',
+    'Searched the whole document — {kind} found: {count}; sections scanned: {scanned}{unparsed}:',
   'analysis.listing.coverageSections':
-    'Found {count} {kind} across {scanned} sections scanned{unparsed}:',
-  'analysis.listing.empty': 'No {kind} found across {scanned} sections scanned{unparsed}.',
+    'Search result — {kind} found: {count}; sections scanned: {scanned}{unparsed}:',
+  'analysis.listing.empty': 'No {kind} found — sections scanned: {scanned}{unparsed}.',
   'analysis.listing.unparsedSuffix': ' ({k} could not be read)',
   'analysis.listing.item': '- {value} (×{count})',
   'analysis.listing.caveat':
@@ -912,16 +911,16 @@ export const en = {
   // from the extracted transaction table (0 model calls). Honours SKILL.md: quote the printed
   // figures, lead with the count, surface unreconciled rows BEFORE the total, never invent a
   // number. Amounts/dates/currency are CONTENT and pass through verbatim as params.
-  'skills.bankAnalysis.count': 'I read **{count}** transactions across the whole statement.',
+  'skills.bankAnalysis.count': 'I read the whole statement. Transactions: **{count}**.',
   // U1 (audit §2.3): the honesty-gated headline. The extractor scanned every section but could not turn
   // **{dropped}** money-bearing line(s) into a transaction — so it must NOT claim these are every one.
   'skills.bankAnalysis.countPartial':
-    'I read **{count}** transactions. **{dropped}** line(s) carried a figure I couldn’t parse into a ' +
-    'transaction, so this may not be every transaction — check those lines against the document.',
+    'Transactions read: **{count}**. Lines with a figure I couldn’t parse into a transaction: ' +
+    '**{dropped}** — so this may not be every transaction. Check those lines against the document.',
   // U1 (audit §2.3): the CONTRADICTED-D56 headline — no "whole statement" claim over a body that says the
   // printed balances don’t reconcile (fixes the self-contradiction the old count line created).
   'skills.bankAnalysis.countContradicted':
-    'I read **{count}** transactions, but this statement’s printed balances don’t add up against them — ' +
+    'Transactions read: **{count}**. This statement’s printed balances don’t add up against them — ' +
     'so I can’t confirm these are all of them.',
   // U1 (audit §2.3 / ux-11): the empty read is no longer a dead end — blame the READER, not the document,
   // and name the next step (OCR a scan; otherwise the layout may not be machine-readable).
@@ -980,10 +979,10 @@ export const en = {
   // to confirm I read every row, but nothing CONTRADICTS what I read either. So I give a clearly LABELLED
   // sum of the rows read — NOT a verified statement total — rather than refuse a perfectly honest figure.
   'skills.bankAnalysis.unverifiedCaveat':
-    'These figures are a sum of the **{count}** transactions I read across the whole document. The ' +
-    'statement prints no opening or closing balance, so I can’t confirm those are every transaction — ' +
-    'treat them as a sum of the rows shown, not a verified statement total. Nothing here is added up ' +
-    'from prose or invented.',
+    'These figures are the sum of every transaction I read across the whole document (total: ' +
+    '**{count}**). The statement prints no opening or closing balance, so I can’t confirm those are ' +
+    'every transaction — treat them as a sum of the rows shown, not a verified statement total. ' +
+    'Nothing here is added up from prose or invented.',
   // R5 (audit §5.7): the one honest date caveat, appended only when the document gave no evidence of day-
   // vs month-first ordering and its dates were therefore read day-first (the de-AT default). Content-free.
   'skills.bankAnalysis.dateOrderCaveat':
@@ -1044,12 +1043,12 @@ export const en = {
   // extracted invoice (0 model calls). Honours SKILL.md: quote the printed figures, surface any
   // failed totals check BEFORE the headline gross, never invent a field the invoice doesn't state.
   // Amounts/dates/currency are CONTENT and pass through verbatim as params.
-  'skills.invoiceAnalysis.count': 'I read the whole invoice — **{count}** line items.',
+  'skills.invoiceAnalysis.count': 'I read the whole invoice. Line items: **{count}**.',
   // U1 (audit §2.3): the honesty-gated headline — the extractor scanned every section but could not parse
   // **{dropped}** money-bearing line(s), so it must NOT claim to have read the whole invoice exhaustively.
   'skills.invoiceAnalysis.countPartial':
-    'I read **{count}** line items. **{dropped}** line(s) carried a figure I couldn’t parse into a line ' +
-    'item, so this may not be every line — check those lines against the document.',
+    'Line items read: **{count}**. Lines with a figure I couldn’t parse into a line item: ' +
+    '**{dropped}** — so this may not be every line. Check those lines against the document.',
   // U1 (audit §2.3 / ux-11): the empty read names a next step instead of dead-ending. Blames the reader.
   'skills.invoiceAnalysis.empty':
     'I scanned the whole document but couldn’t parse any line items or totals from it. The figures may be in ' +
@@ -1152,15 +1151,16 @@ export const en = {
   // count, no document text), no model call.
   // Prepended to the answer when the scope was auto-narrowed to a single best-matching document.
   'skills.analysis.scopeNarrowed':
-    'I answered from **{title}** only — the other {count} document(s) in scope weren’t read. To analyse ' +
-    'a different one, select just that document (or name its file in your question) and ask again.',
+    'I answered from **{title}** only. Other documents in scope that I didn’t read: {count}. To ' +
+    'analyse a different one, select just that document (or name its file in your question) and ask ' +
+    'again.',
   // No single best match (0 or several candidates): ask the user to pick ONE document to analyse fully.
   'skills.analysis.selectOne':
     'To analyse this fully I need a single document — right now {count} are in scope, so I can only see ' +
     'a few passages across them. Select one document (or name its file in your question) and ask again.',
   // what-changed compare needs EXACTLY two documents; ask the user to select them (audit §3.4).
   'skills.analysis.selectTwo':
-    'To compare, select exactly **two** documents (or two versions) — {count} are in scope right now. ' +
+    'To compare, select exactly **two** documents (or two versions). In scope right now: {count}. ' +
     'Choose the two you want to compare and ask again.',
 
   // Redaction-routing answer: an ACTION skill points the user at its own run button instead of
@@ -3879,7 +3879,7 @@ export const en = {
   'packExport.summary.completed': 'Marked ready',
   'packExport.summary.lastExported': 'Previous export',
   'packExport.summary.decisions': 'Decisions',
-  'packExport.summary.progress': '{decided} of {required} required items decided',
+  'packExport.summary.progress': 'Required items decided: {decided} of {required}',
   'packExport.summary.followUps': 'Outstanding follow-ups: {count}',
   'packExport.summary.generalNote': 'General note',
   'packExport.summary.noGeneralNote': 'No general note was recorded.',
@@ -3933,7 +3933,7 @@ export const en = {
   'packExport.coverage.modeStructured':
     'This answer is a structured extraction produced deterministically from the source documents.',
   'packExport.coverage.inputStatement':
-    'Input coverage: {covered} of {total} indexed sections were available to the model.',
+    'Indexed sections available to the model (input coverage): {covered} of {total}.',
   'packExport.coverage.inputUnknown': 'No input-coverage information was recorded for this answer.',
   'packExport.coverage.noTruncationRecord': 'No output truncation was recorded for this answer.',
   'packExport.coverage.freshnessNote':

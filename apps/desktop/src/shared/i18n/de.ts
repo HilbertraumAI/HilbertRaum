@@ -822,7 +822,7 @@ export const de: Record<keyof typeof en, string> = {
     'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen und ' +
     'Listen-Antworten können alles abdecken',
   'coverage.relevance': 'Basiert auf den relevantesten Passagen — nicht auf dem ganzen Dokument',
-  'coverage.relevance.counted': 'Basiert auf {covered} von {total} Abschnitten',
+  'coverage.relevance.counted': 'Basiert auf Abschnitten: {covered} von {total}',
   'coverage.capped.whole': 'Deckt das ganze Dokument ab',
   'coverage.capped.beginning': 'Deckt den Anfang des Dokuments ab',
   'coverage.tree.whole': 'Deckt das ganze Dokument ab (tief indexiert)',
@@ -843,12 +843,11 @@ export const de: Record<keyof typeof en, string> = {
   // U1 (audit §2.3 / ux-10): entschärft von „Jeder Treffer …", das die Vollständigkeit der EXTRAKTION
   // überzeichnete. „Gelesen" ist die ehrliche Aussage — jeder Abschnitt wurde GELESEN, ohne zu behaupten,
   // jeder Treffer sei erfasst.
-  'coverage.extract.whole': 'Im ganzen Dokument gelesen — {scanned} Abschnitte durchsucht',
+  'coverage.extract.whole': 'Im ganzen Dokument gelesen — durchsuchte Abschnitte: {scanned}',
   'coverage.extract.wholeUnparsed':
-    'Im ganzen Dokument gelesen — {scanned} Abschnitte durchsucht, {unparsed} nicht lesbar',
-  'coverage.extract.sections': 'In {scanned} durchsuchten Abschnitten gelesen',
-  'coverage.extract.sectionsUnparsed':
-    'In {scanned} durchsuchten Abschnitten gelesen, {unparsed} nicht lesbar',
+    'Im ganzen Dokument gelesen — durchsuchte Abschnitte: {scanned}, nicht lesbar: {unparsed}',
+  'coverage.extract.sections': 'Durchsuchte Abschnitte: {scanned}',
+  'coverage.extract.sectionsUnparsed': 'Durchsuchte Abschnitte: {scanned}, nicht lesbar: {unparsed}',
 
   // ---- „Liste alle X"-Antwort (Phase 3) — D-L7-Review ausstehend ----
   'analysis.kind.generic': 'Einträge',
@@ -857,10 +856,11 @@ export const de: Record<keyof typeof en, string> = {
   'analysis.kind.party': 'Parteien',
   'analysis.kind.obligation': 'Pflichten',
   'analysis.listing.coverageWhole':
-    '{count} {kind} im ganzen Dokument gefunden — {scanned} Abschnitte durchsucht{unparsed}:',
+    'Das ganze Dokument durchsucht — gefundene {kind}: {count}; durchsuchte Abschnitte: ' +
+    '{scanned}{unparsed}:',
   'analysis.listing.coverageSections':
-    '{count} {kind} in {scanned} durchsuchten Abschnitten gefunden{unparsed}:',
-  'analysis.listing.empty': 'Keine {kind} in {scanned} durchsuchten Abschnitten gefunden{unparsed}.',
+    'Suchergebnis — gefundene {kind}: {count}; durchsuchte Abschnitte: {scanned}{unparsed}:',
+  'analysis.listing.empty': 'Keine {kind} gefunden — durchsuchte Abschnitte: {scanned}{unparsed}.',
   'analysis.listing.unparsedSuffix': ' ({k} nicht lesbar)',
   'analysis.listing.item': '- {value} (×{count})',
   'analysis.listing.caveat':
@@ -919,17 +919,18 @@ export const de: Record<keyof typeof en, string> = {
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
   // extrahierten Buchungstabelle erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt
   // und werden unverändert als Parameter durchgereicht.
-  'skills.bankAnalysis.count': 'Ich habe **{count}** Buchungen über den ganzen Auszug gelesen.',
+  'skills.bankAnalysis.count': 'Ich habe den ganzen Auszug gelesen. Buchungen: **{count}**.',
   // U1 (audit §2.3): die ehrlich abgesicherte Kopfzeile (du-Form). Jeder Abschnitt wurde gelesen, aber
   // **{dropped}** Zeile(n) mit einer Zahl ließen sich nicht als Buchung erfassen — also nicht zwingend alle.
   'skills.bankAnalysis.countPartial':
-    'Ich habe **{count}** Buchungen gelesen. Bei **{dropped}** Zeile(n) stand eine Zahl, die ich nicht als ' +
-    'Buchung erfassen konnte — es sind also vielleicht nicht alle Buchungen. Prüf diese Zeilen im Dokument.',
+    'Gelesene Buchungen: **{count}**. Zeilen mit einer Zahl, die ich nicht als Buchung erfassen ' +
+    'konnte: **{dropped}** — es sind also vielleicht nicht alle Buchungen. Prüf diese Zeilen im ' +
+    'Dokument.',
   // U1 (audit §2.3): die CONTRADICTED-D56-Kopfzeile — keine „ganzer Auszug"-Behauptung über einem Text, der
   // sagt, dass die aufgedruckten Salden nicht aufgehen (behebt den Selbstwiderspruch der alten Kopfzeile).
   'skills.bankAnalysis.countContradicted':
-    'Ich habe **{count}** Buchungen gelesen, aber die aufgedruckten Salden dieses Auszugs gehen damit nicht ' +
-    'auf — ich kann daher nicht bestätigen, dass das alle sind.',
+    'Gelesene Buchungen: **{count}**. Die aufgedruckten Salden dieses Auszugs gehen damit nicht auf ' +
+    '— ich kann daher nicht bestätigen, dass das alle sind.',
   // U1 (audit §2.3 / ux-11): der leere Fall ist keine Sackgasse mehr — es liegt am Leser, nicht am Dokument,
   // und der nächste Schritt wird genannt (OCR bei einem Scan; sonst ist das Layout evtl. nicht maschinenlesbar).
   'skills.bankAnalysis.empty':
@@ -986,10 +987,10 @@ export const de: Record<keyof typeof en, string> = {
   // bestätigt, dass ich jede Zeile erfasst habe, aber es WIDERSPRICHT dem Gelesenen auch nichts. Also gebe
   // ich eine klar GEKENNZEICHNETE Summe der gelesenen Zeilen an — keinen geprüften Auszugssaldo.
   'skills.bankAnalysis.unverifiedCaveat':
-    'Diese Zahlen sind die Summe der **{count}** Buchungen, die ich über das ganze Dokument gelesen habe. ' +
-    'Der Auszug enthält keinen Anfangs- und Endsaldo, daher kann ich nicht bestätigen, dass das alle ' +
-    'Buchungen sind — versteh sie als Summe der angezeigten Zeilen, nicht als geprüften Auszugssaldo. ' +
-    'Nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+    'Diese Zahlen sind die Summe aller Buchungen, die ich im ganzen Dokument gelesen habe ' +
+    '(insgesamt: **{count}**). Der Auszug enthält keinen Anfangs- und Endsaldo, daher kann ich nicht ' +
+    'bestätigen, dass das alle Buchungen sind — versteh sie als Summe der angezeigten Zeilen, nicht ' +
+    'als geprüften Auszugssaldo. Nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
   // R5 (Audit §5.7): der eine ehrliche Datumshinweis — nur angehängt, wenn das Dokument keinen Hinweis auf
   // tag- vs. monatszuerst gab und die Daten daher tagzuerst gelesen wurden (die de-AT-Voreinstellung).
   // Assistenzstimme in DU-Form (Plan §0). Inhaltsfrei.
@@ -1051,12 +1052,13 @@ export const de: Record<keyof typeof en, string> = {
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
   // extrahierten Rechnung erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt und werden
   // unverändert als Parameter durchgereicht.
-  'skills.invoiceAnalysis.count': 'Ich habe die ganze Rechnung gelesen — **{count}** Positionen.',
+  'skills.invoiceAnalysis.count': 'Ich habe die ganze Rechnung gelesen. Positionen: **{count}**.',
   // U1 (audit §2.3): die ehrlich abgesicherte Kopfzeile (du-Form) — jeder Abschnitt gelesen, aber
   // **{dropped}** Zeile(n) mit einer Zahl ließen sich nicht erfassen, also nicht zwingend die ganze Rechnung.
   'skills.invoiceAnalysis.countPartial':
-    'Ich habe **{count}** Positionen gelesen. Bei **{dropped}** Zeile(n) stand eine Zahl, die ich nicht als ' +
-    'Position erfassen konnte — es sind also vielleicht nicht alle Positionen. Prüf diese Zeilen im Dokument.',
+    'Gelesene Positionen: **{count}**. Zeilen mit einer Zahl, die ich nicht als Position erfassen ' +
+    'konnte: **{dropped}** — es sind also vielleicht nicht alle Positionen. Prüf diese Zeilen im ' +
+    'Dokument.',
   // U1 (audit §2.3 / ux-11): der leere Fall nennt einen nächsten Schritt statt in einer Sackgasse zu enden.
   'skills.invoiceAnalysis.empty':
     'Ich habe das ganze Dokument durchsucht, konnte aber keine Positionen oder Beträge daraus lesen. Die ' +
@@ -1157,8 +1159,8 @@ export const de: Record<keyof typeof en, string> = {
   // passende Dokument ein (mit dem ehrlichen `scopeNarrowed`-Hinweis) oder bittet dich zu wählen.
   // Deterministisch, inhaltsfrei (Titel + Anzahl, kein Dokumenttext), kein Modellaufruf. Du-Form.
   'skills.analysis.scopeNarrowed':
-    'Ich habe nur **{title}** ausgewertet — die übrigen {count} Dokument(e) im Bereich habe ich nicht ' +
-    'gelesen. Um ein anderes auszuwerten, wähle genau dieses Dokument aus (oder nenne die Datei in ' +
+    'Ich habe nur **{title}** ausgewertet. Weitere Dokumente im Bereich, die ich nicht gelesen habe: ' +
+    '{count}. Um ein anderes auszuwerten, wähle genau dieses Dokument aus (oder nenne die Datei in ' +
     'deiner Frage) und frage erneut.',
   // Kein eindeutig bestes Dokument (0 oder mehrere Treffer): bitte um die Auswahl EINES Dokuments.
   'skills.analysis.selectOne':
@@ -1167,8 +1169,8 @@ export const de: Record<keyof typeof en, string> = {
     'deiner Frage) und frage erneut.',
   // what-changed-Vergleich braucht GENAU zwei Dokumente; bitte um deren Auswahl (Audit §3.4).
   'skills.analysis.selectTwo':
-    'Für einen Vergleich wähle bitte genau **zwei** Dokumente (oder zwei Versionen) aus — im Moment ' +
-    'sind {count} im Bereich. Wähle die beiden zu vergleichenden aus und frage erneut.',
+    'Für einen Vergleich wähle bitte genau **zwei** Dokumente (oder zwei Versionen) aus. Im Moment ' +
+    'im Bereich: {count}. Wähle die beiden zu vergleichenden aus und frage erneut.',
 
   // Antwort der Schwärzungs-Weiterleitung: eine Aktions-Skill verweist auf ihre eigene Schaltfläche
   // statt eine Top-k-Antwort zu erzeugen. Deterministisch + inhaltsfrei (kein Modellaufruf, kein
@@ -3793,7 +3795,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.summary.completed': 'Abgeschlossen',
   'packExport.summary.lastExported': 'Vorheriger Export',
   'packExport.summary.decisions': 'Entscheidungen',
-  'packExport.summary.progress': '{decided} von {required} erforderlichen Punkten entschieden',
+  'packExport.summary.progress': 'Erforderliche Punkte entschieden: {decided} von {required}',
   'packExport.summary.followUps': 'Offene Nachprüfungen: {count}',
   'packExport.summary.generalNote': 'Allgemeine Notiz',
   'packExport.summary.noGeneralNote': 'Keine allgemeine Notiz aufgezeichnet.',
@@ -3850,7 +3852,7 @@ export const de: Record<keyof typeof en, string> = {
   'packExport.coverage.modeStructured':
     'Diese Antwort ist eine strukturierte Extraktion, die deterministisch aus den Quelldokumenten erzeugt wurde.',
   'packExport.coverage.inputStatement':
-    'Abdeckung der Eingabe: {covered} von {total} indexierten Abschnitten standen dem Modell zur Verfügung.',
+    'Dem Modell verfügbare indexierte Abschnitte (Abdeckung der Eingabe): {covered} von {total}.',
   'packExport.coverage.inputUnknown':
     'Zu dieser Antwort wurden keine Abdeckungsinformationen aufgezeichnet.',
   'packExport.coverage.noTruncationRecord':

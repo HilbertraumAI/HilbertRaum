@@ -9,6 +9,7 @@ import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { t } from '../../src/shared/i18n'
 import type { CoverageInfo, DocTaskStatus, DocumentCoverage, DocumentInfo } from '../../src/shared/types'
 import { makeCitations, makeMessage } from '../helpers/chat-fixtures'
+import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 import { renderTranscript } from '../helpers/transcript'
 
@@ -107,6 +108,53 @@ describe('CoverageMeter — breadth ≠ fidelity honesty (C1/L2)', () => {
       screen.getByText(t('en', 'coverage.extract.sectionsUnparsed', { scanned: 50, unparsed: 3 }))
     ).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'coverage.extract.whole', { scanned: 50 }))).not.toBeInTheDocument()
+  })
+
+  // #806: each counted badge reads right at 1 and at 2, in English and German ("Based on 1 of 1
+  // sections", "Read across 1 sections scanned" before).
+  const BADGES: Array<[string, (n: number) => CoverageInfo, Record<'en' | 'de', (n: number) => string>]> = [
+    [
+      'a counted relevance answer',
+      (n) => ({ mode: 'relevance', chunksCovered: 1, chunksTotal: n, fullyChunked: true }),
+      { en: (n) => `Based on sections: 1 of ${n}`, de: (n) => `Basiert auf Abschnitten: 1 von ${n}` }
+    ],
+    [
+      'an extract over the whole document',
+      (n) => ({ mode: 'extract', chunksCovered: n, chunksTotal: n, fullyChunked: true }),
+      {
+        en: (n) => `Read across the whole document — sections scanned: ${n}`,
+        de: (n) => `Im ganzen Dokument gelesen — durchsuchte Abschnitte: ${n}`
+      }
+    ],
+    [
+      'an extract over the whole document with an unreadable section',
+      (n) => ({ mode: 'extract', chunksCovered: n, chunksTotal: n, unparsedChunks: 1, fullyChunked: true }),
+      {
+        en: (n) => `Read across the whole document — sections scanned: ${n}, could not be read: 1`,
+        de: (n) => `Im ganzen Dokument gelesen — durchsuchte Abschnitte: ${n}, nicht lesbar: 1`
+      }
+    ],
+    [
+      'an extract over some sections',
+      (n) => ({ mode: 'extract', chunksCovered: n, chunksTotal: n, fullyChunked: false }),
+      { en: (n) => `Sections scanned: ${n}`, de: (n) => `Durchsuchte Abschnitte: ${n}` }
+    ],
+    [
+      'an extract over some sections with an unreadable one',
+      (n) => ({ mode: 'extract', chunksCovered: n, chunksTotal: n, unparsedChunks: 1, fullyChunked: false }),
+      {
+        en: (n) => `Sections scanned: ${n}, could not be read: 1`,
+        de: (n) => `Durchsuchte Abschnitte: ${n}, nicht lesbar: 1`
+      }
+    ]
+  ]
+  it.each(
+    (['en', 'de'] as const).flatMap((code) =>
+      BADGES.flatMap(([title, coverage, text]) => [1, 2].map((n) => [code, title, n, coverage, text] as const))
+    )
+  )('%s: %s at %i shows the count label-first (#806)', (code, _title, n, coverage, text) => {
+    renderInLanguage(<CoverageMeter coverage={coverage(n)} />, code)
+    expect(screen.getByText(text[code](n))).toBeInTheDocument()
   })
 })
 

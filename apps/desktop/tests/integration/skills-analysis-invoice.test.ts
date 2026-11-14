@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import type { Db } from '../../src/main/services/db'
 import {
+  buildInvoiceAnswer,
   INVOICE_INSTALL_ID,
   invoiceAnalysisHandler
 } from '../../src/main/services/skills/analysis/invoice'
+import { validateInvoiceTotals, type InvoiceInput } from '../../src/main/services/skills/tools/invoice'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { RetrievalScope } from '../../src/shared/types'
@@ -153,6 +155,43 @@ describe('invoice analysis handler — honest completeness gate (U1, §2.3)', ()
 
   // The plain "the whole invoice" count on a clean invoice (no false gate) is pinned by the exhaustive-figures
   // test below.
+
+  // #806: both count lines the answer builder writes read right at 1 and at 2, in English and German
+  // ("1 line items" and "1 line(s)" before). The count and the dropped figure differ in every row, so a
+  // swapped placeholder shows.
+  type InvoiceLine = 'count' | 'countPartial'
+  const INVOICE_LINES: Record<'en' | 'de', Record<InvoiceLine, (n: number, d: number) => string>> = {
+    en: {
+      count: (n) => `I read the whole invoice. Line items: **${n}**.`,
+      countPartial: (n, d) =>
+        `Line items read: **${n}**. Lines with a figure I couldn’t parse into a line item: **${d}** — so ` +
+        'this may not be every line. Check those lines against the document.'
+    },
+    de: {
+      count: (n) => `Ich habe die ganze Rechnung gelesen. Positionen: **${n}**.`,
+      countPartial: (n, d) =>
+        `Gelesene Positionen: **${n}**. Zeilen mit einer Zahl, die ich nicht als Position erfassen konnte: ` +
+        `**${d}** — es sind also vielleicht nicht alle Positionen. Prüf diese Zeilen im Dokument.`
+    }
+  }
+  it.each(
+    (['en', 'de'] as const).flatMap((code) =>
+      (['count', 'countPartial'] as const).flatMap((line) => [1, 2].map((n) => [code, line, n] as const))
+    )
+  )('%s: the %s line with %i read states the count label-first (#806)', (code, line, n) => {
+    const lineItems = [
+      { description: 'Widget', lineTotal: 100, currency: 'EUR' },
+      { description: 'Gadget', lineTotal: 20, currency: 'EUR' }
+    ].slice(0, n)
+    const invoice: InvoiceInput = { header: { currency: 'EUR' }, lineItems, totals: {} }
+    const d = 3 - n // 2 dropped beside 1 read, 1 beside 2
+    const answer = buildInvoiceAnswer((k, p) => t(code, k, p), {
+      invoice,
+      validation: validateInvoiceTotals(invoice),
+      droppedRowCount: line === 'countPartial' ? d : 0
+    })
+    expect(answer.split('\n')[0]).toBe(INVOICE_LINES[code][line](n, d))
+  })
 })
 
 describe('invoice analysis handler — run()', () => {
