@@ -77,7 +77,8 @@ following the grounded prompt. Each model is loaded at `-c 8192` and answers all
 | Column | Meaning | Better |
 |---|---|---|
 | `em_rate` | answer contains a gold span (over answerable) | higher |
-| `mean_f1` | token-F1 vs gold span (over answerable) | higher |
+| `mean_f1` | token-F1 vs gold span (over answerable) | higher, but only read beside `mean_answer_chars` (§5) |
+| `mean_answer_chars` | mean answer length in characters (over answerable, declined ones included) | neither: not a quality score; it shows whether an F1 gap is a length gap (§5) |
 | `citation_correct_rate` | cited the gold document (over answerable) | higher |
 | `grounded_rate` | gold span ∈ a cited chunk (over answerable) | higher |
 | `over_abstain_rate` | wrongly declined an answerable item | lower |
@@ -90,13 +91,30 @@ Abstention is detected by a curated DE/EN refusal-phrase list (heuristic — tha
 raw answer is dumped). Audit borderline unanswerable items in `…-items.jsonl` before trusting
 `abstain_rate_unans` / `hallucination_rate`.
 
+`mean_answer_chars` (#378, 2026-11-15) is the answer's `answer.length` (UTF-16 code units, set in
+`score.ts` `scoreItem`) averaged over the same answerable items `mean_f1` averages, so an
+answerable item the model declined counts with the length of its refusal. Lengths quoted
+elsewhere in this doc before #378 (§9's 125–215 and 87–93 characters) and in the issue are means
+over all 100 items, refusals on the unanswerable items included, so they are higher than this
+column: for the same models in `i9-9900X-vulkan` it gives 99–191 and 72–81. It comes right after
+`mean_f1` in `QA_CSV_HEADER`, so every new `…-quality.csv` carries it. The 31 `…-quality.csv`
+files already committed predate it (each is its run's raw output; the rescored file is the
+authoritative one, §6); the 17 committed `…-quality-rescored.csv` files carry it.
+
 **Re-scoring after a detector change (no model re-run):** when the abstention phrase list is
 improved, regenerate the numbers from the committed `…-items.jsonl` dumps:
 ```powershell
-node eval\rescore.mjs   # writes eval/results/<stem>-quality-rescored.csv from every dump
+node eval\rescore.mjs                  # writes eval/results/<stem>-quality-rescored.csv from every dump
+node eval\rescore.mjs --existing-only  # rewrites only the rescored CSVs that already exist
 ```
 `rescore.mjs` imports the SAME `text.mjs` the harness uses, so a re-score and a fresh run agree.
-This is exactly how the first run was corrected — see §6.
+This is exactly how the first run was corrected — see §6. It recomputes the answer length from
+each dump's `answer`, so dumps written before `mean_answer_chars` existed score the same as a
+fresh run. Use `--existing-only` after a scorer change that adds a column: there are more dumps
+than rescored CSVs (31 and 17 on 2026-11-15), and a plain run would also write a new rescored
+CSV, a new authoritative file, for every dump that never had one. That is how the 17 committed
+rescored CSVs gained `mean_answer_chars` (#378), with every other cell unchanged. Any other
+argument is refused (exit code 2).
 
 ---
 
@@ -157,7 +175,11 @@ em_rate, mean_f1, citation_correct_rate, grounded_rate, over_abstain_rate,
 abstain_rate_unans, hallucination_rate, em_rate_de, em_rate_en, f1_de, f1_en, notes
 ```
 The harness writes the QA half (`…-quality.csv`); paste the speed/RSS numbers alongside. Commit
-the combined CSVs + the per-item JSONL.
+the combined CSVs + the per-item JSONL. `node eval/combine.mjs` builds this join from each
+`…-quality-rescored.csv` and its `…-speed.csv`. It picks the columns by name (`OUT_COLS`,
+`eval/combine.mjs:22-27`), and that list leaves `mean_answer_chars` out on purpose: #378 did not
+regenerate the combined CSVs, and adding the column means regenerating them. Read the answer
+length from the `…-quality-rescored.csv`.
 
 **The decision rule** — a challenger earns `recommended_profiles` promotion (and a default-model
 challenge) at its tier when it either (a) beats the incumbent on the German RAG metrics AND
@@ -174,6 +196,32 @@ accumulate dead multi-GB downloads. Then update:
   `true` based on its Deep-mode quality numbers (it already honours `enable_thinking`; §7.3).
 
 (Both decisions were made — the outcomes are §6.1 and the §7 record.)
+
+**Reading `mean_f1` (#378, 2026-11-15): always beside `mean_answer_chars`.** On this harness EM
+no longer separates the models. In the 17 committed `…-quality-rescored.csv` files `em_rate` lies
+between 0.9412 and 0.9765, and 66 of the 80 model rows sit at 0.9765, which is 83 of the 85
+answerable items (issue #378 quotes about 0.83: the same 83 items counted over all 100). EM only
+checks that the answer contains the gold span, so once nearly every answer does, token-F1 against
+that short span mostly measures how short the answer is. In each of the seven runs with six or more
+models, `mean_answer_chars` and `mean_f1` correlate at r = −0.93 to −0.99, one point per model
+(the four-quant `i9-9900X-qwen38-vulkan` run has almost no spread, F1 .3500–.3523 at 80.3–81.1
+characters, and shows nothing either way). Example from one run, `i9-9900X-gemma4wave-vulkan`:
+`gemma4-e2b-it-qat-q4` answers in 76.2 characters on average at F1 .3373, `gemma4-e4b-it-qat-q4`
+in 95.5 at F1 .2999. So:
+- Read `mean_f1` (and `f1_de` / `f1_en`) as a verbosity indicator, not as a quality ranking on its
+  own: a lower F1 with longer answers can mean a fuller answer, not a worse one.
+- The quality axes that do vary between models are abstention on the 15 unanswerable items
+  (`abstain_rate_unans`) and `hallucination_rate`, each audited against the `…-items.jsonl` dump
+  (§6). `citation_correct_rate` is part of the rule above, but it is 0.9882 in every row of all
+  17 files: here it measures retrieval, not the model (§6).
+- Ranks already argued from an F1 delta stay as recorded; #378 adds the column and moves no rank.
+  The clearest ones, where an F1 delta is the stated quality basis of a current rank, are the
+  `gemma4-e4b-it-qat-q4` rank 0, the `gemma4-e2b-it-qat-q4` rank 3 (§9.3 decision table, §6.5 "#153 amendment") and the
+  `gemma4-26b-a4b-it-qat-q4` rank 2 (§9.3), and each carries a pointer back here. Re-reading them
+  with the answer length beside F1, on the axes above, is pending: an owner call.
+
+The column is regenerated from the committed dumps with `node eval/rescore.mjs --existing-only`
+(§2).
 
 ---
 
@@ -197,6 +245,9 @@ followed later the same day — **§6.1**. Authoritative QA numbers are the
   from the model's `[Sn]`), so this column is constant across chat models and cannot rank them.
   ⇒ In this architecture the decision rule's "citation-correctness" clause is a retrieval
   constant; lean the decision on EM/F1 + hallucination-resistance + speed/RAM (§6.1) instead.
+  *(#378, 2026-11-15: F1 is no firmer ground. With EM saturated it mostly measures answer
+  length, so it is read beside `mean_answer_chars` as a verbosity indicator (§5); the quality
+  axis that separates the models is abstention on the unanswerable items, the next bullet.)*
 - **The discriminating axis = abstention on the 15 unanswerable items.** Audited genuine
   hallucinations (manually confirmed against the raw dump):
 
@@ -487,7 +538,9 @@ note's "retune recommended_ram_gb" branch, executed). Consequences, all pinned: 
 → E2B (was rule-3 keep); 8 GB and ≥16 GB base picks unchanged. The §6.5 step-down was also
 exercised on real hardware for the first time during the #153 measurement: it correctly did
 NOT fire (all settled values ≥ 5 tok/s; recommendation stayed the 9B throughout). Deep 7/8
-flip-rule guidance for E2B stands (§9.3 thinking table).
+flip-rule guidance for E2B stands (§9.3 thinking table). *(#378, 2026-11-15: the quality half
+of "both axes" is an F1 delta; read it beside `mean_answer_chars`, re-read pending as an owner
+call, §5.)*
 
 **Single-step card-path semantics (2026-09-06 amendment, PR #308 audit).** §6.6's rule C reuses
 this section's step-down unchanged, with the destination filtered through the card's own
@@ -2018,10 +2071,10 @@ recorded next to the rank in its manifest:
 
 | Candidate | Decision | Basis (rescored numbers) |
 |---|---|---|
-| `gemma4-26b-a4b-it-qat-q4` | **rank 2** — ranked runner-up / MoE speed alternative | EM parity with the 24 GB pick `qwen3.6-27b-q4` (.9765 both), ZERO audited hallucinations (both), ~4× its decode (tg 155.8 vs 40.1 t/s vulkan; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick (both families share the terse house style, so the §9 length confound does not explain the gap). Never the auto-pick while a rank-3 model fits (pinned in `committed-catalog.test.ts`). |
+| `gemma4-26b-a4b-it-qat-q4` | **rank 2** — ranked runner-up / MoE speed alternative | EM parity with the 24 GB pick `qwen3.6-27b-q4` (.9765 both), ZERO audited hallucinations (both), ~4× its decode (tg 155.8 vs 40.1 t/s vulkan; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick (both families share the terse house style, so the §9 length confound does not explain the gap). Never the auto-pick while a rank-3 model fits (pinned in `committed-catalog.test.ts`). *(#378: the quality part of this basis is an F1 delta; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
 | `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). |
-| `gemma4-e4b-it-qat-q4` | **rank 0** — missed the 8B bar | F1 .2999 vs Ministral .3111 / `qwen3.5-9b` .3152 / `qwen3-8b` .3262; hallucination-honest after audit (1 real). |
-| `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint *(resolved 2026-08-09: the #153 leg landed and promoted it to **rank 3** — see §6.5 "#153 amendment")* | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). |
+| `gemma4-e4b-it-qat-q4` | **rank 0** — missed the 8B bar | F1 .2999 vs Ministral .3111 / `qwen3.5-9b` .3152 / `qwen3-8b` .3262; hallucination-honest after audit (1 real). *(#378: an F1-delta basis; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
+| `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint *(resolved 2026-08-09: the #153 leg landed and promoted it to **rank 3** — see §6.5 "#153 amendment")* | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). *(#378: the quality part of this basis is an F1 delta; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
 | `qwen3.5-35b-a3b-ud-q4kxl` *(§9's deferred-to-speed rank)* | **rank 1** — ranked MoE alternative | The §9 bar ("beat `qwen3-30b-a3b-q4` on speed OR quality by enough") is met on both axes: 0 real hallucinations vs the incumbent MoE's 2 at EM parity (quality), and the 3B-active speed case confirmed (tg 140.9 t/s vulkan / 12.1 cpu vs the dense 27B-Q4's 40.1 / 2.8). *(Residual settled: its §9.1 in-app smoke PASSED 2026-08-09 — see the smokes record below.)* |
 
 Nothing in the run contradicts the §6.4 promoted ranks — where the eval is clear it agrees at the
