@@ -225,10 +225,13 @@ describe.skipIf(!enabled)('Phase-29 model quality benchmark (manual, real RAG pa
               const citedTexts = (msg.citations ?? []).map((c) => c.snippet ?? '')
               const s = scoreItem(item, { answer: msg.content, citations, citedTexts })
               scores.push(s)
+              // `answerChars` stays out of the dump (#378): the committed dumps have no such key and
+              // eval/rescore.mjs recomputes the length from `answer`, so every dump keeps one shape.
+              const { answerChars: _answerChars, ...dumped } = s
               auditLines.push(
                 JSON.stringify({
                   model: model.id,
-                  ...s,
+                  ...dumped,
                   answer: msg.content,
                   citations: citations.map((c) => `${c.label}=${c.sourceTitle}`)
                 })

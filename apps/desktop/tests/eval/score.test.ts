@@ -1,4 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { REPO_ROOT } from '../helpers/repo-files'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import {
   normalizeText,
   tokenize,
@@ -16,7 +22,8 @@ import {
 
 // CI-safe unit tests for the Phase-29 deterministic scorer (model-benchmarks.md
 // §2). No model, no binary, no node:sqlite — pure string math, so the logic that decides
-// catalog promotions (§5.4) is covered without a benchmark run.
+// catalog promotions (§5.4) is covered without a benchmark run. The one exception is the
+// `eval/rescore.mjs` mirror block at the end, which runs that script under plain node.
 
 describe('normalizeText (German-aware)', () => {
   it('lowercases, strips punctuation, collapses whitespace', () => {
@@ -315,6 +322,9 @@ const unanswerable: EvalItem = {
   type: 'unanswerable'
 }
 
+/** A citation of `answerable`'s gold document. */
+const cited = [{ label: 'S1', sourceTitle: 'Acme Rahmenvertrag.pdf' }]
+
 describe('scoreItem', () => {
   it('answerable + correct + cited right doc → correct', () => {
     const out: ItemOutput = {
@@ -399,5 +409,130 @@ describe('aggregate + toCsvRow', () => {
     const cols = toCsvRow(a).split(',')
     expect(cols.length).toBe(QA_CSV_HEADER.length)
     expect(cols[0]).toBe('granite-4.1-8b-q4')
+  })
+})
+
+// #378: containment EM saturates, so mean_f1 mostly ranks terseness; the mean answer length is
+// reported beside it, over the same answerable items mean_f1 averages.
+describe('mean_answer_chars (#378)', () => {
+  // Answer lengths: 28 and 84 on the answerable items, 53 on the unanswerable one (a confident
+  // answer, so it is not filtered out as an abstention either). Answerable only: 56; all: 55.
+  const scores = [
+    scoreItem({ ...answerable, id: 'de-1' }, { answer: 'eine Million US-Dollar [S1].', citations: cited }),
+    scoreItem(
+      { ...answerable, id: 'en-1', lang: 'en', answer: ['one million US dollars'] },
+      { answer: 'The liability cap is one million US dollars under the Acme framework agreement [S1].', citations: cited }
+    ),
+    scoreItem(
+      { ...unanswerable, id: 'de-u1' },
+      { answer: 'Die Vertragsstrafe beträgt 5% des Auftragswerts [S1].', citations: cited }
+    )
+  ]
+
+  it('is the QA column right after mean_f1', () => {
+    expect(QA_CSV_HEADER.indexOf('mean_answer_chars')).toBe(QA_CSV_HEADER.indexOf('mean_f1') + 1)
+  })
+
+  it('averages over the answerable items only and lands in its own column', () => {
+    const a = aggregate('gemma4-e4b-it-qat-q4', scores)
+    expect(a.meanAnswerChars).toBe(56)
+    expect(toCsvRow(a).split(',')[QA_CSV_HEADER.indexOf('mean_answer_chars')]).toBe('56.0')
+  })
+})
+
+// `eval/rescore.mjs` re-aggregates the committed dumps under plain node, so its HEADER, its
+// aggregate and its row are a hand mirror of QA_CSV_HEADER / aggregate() / toCsvRow(). These
+// rows run the real script: a byte copy in a scratch tree laid out like the repo (it resolves
+// `results/` and `text.mjs` relative to its own path), over a dump in the line shape
+// `tests/manual/model-eval.test.ts` writes. Expected = score.ts on the same answers.
+describe('eval/rescore.mjs mirrors score.ts', () => {
+  const MODEL = 'gemma4-e4b-it-qat-q4'
+  // Every column gets a non-trivial value: hits and a miss, a wrong citation, an over-abstention,
+  // a correct abstention and a hallucination. The U+1F4C4 is two UTF-16 code units (the unit
+  // both scorers count), so a mirror counting code points instead goes red.
+  const answered: Array<[EvalItem, ItemOutput]> = [
+    [{ ...answerable, id: 'de-1' }, { answer: 'eine Million US-Dollar [S1].', citations: cited, citedTexts: ['eine Million US-Dollar'] }],
+    [
+      { ...answerable, id: 'en-1', lang: 'en', answer: ['one million US dollars'] },
+      { answer: 'The cap is one million US dollars [S1] \u{1F4C4}', citations: cited }
+    ],
+    [
+      { ...answerable, id: 'en-2', lang: 'en', answer: ['one million US dollars'] },
+      { answer: 'one million US dollars [S1].', citations: [{ label: 'S1', sourceTitle: 'Globex Invoice INV-2024-001.pdf' }] }
+    ],
+    [{ ...answerable, id: 'de-2' }, { answer: 'Das geht aus den Dokumenten nicht hervor.', citations: [] }],
+    [{ ...unanswerable, id: 'de-u1' }, { answer: 'Keine Informationen dazu.', citations: [] }],
+    [{ ...unanswerable, id: 'de-u2' }, { answer: 'Die Vertragsstrafe beträgt 5% des Auftragswerts [S1].', citations: cited }]
+  ]
+  const scores = answered.map(([item, out]) => scoreItem(item, out))
+  const expectedCsv = `${QA_CSV_HEADER.join(',')}\n${toCsvRow(aggregate(MODEL, scores))}\n`
+
+  let root: string
+  const results = (): string => join(root, 'eval', 'results')
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'hilbertraum-rescore-'))
+    mkdirSync(join(root, 'eval', 'results'), { recursive: true })
+    mkdirSync(join(root, 'apps', 'desktop', 'tests', 'eval'), { recursive: true })
+    copyFileSync(join(REPO_ROOT, 'eval', 'rescore.mjs'), join(root, 'eval', 'rescore.mjs'))
+    const textMjs = join('apps', 'desktop', 'tests', 'eval', 'text.mjs')
+    copyFileSync(join(REPO_ROOT, textMjs), join(root, textMjs))
+  })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  // Exactly the keys (and order) of a committed dump line. No `answerChars`: every committed dump
+  // predates it, so rescore.mjs must recompute the length from `answer`, never read the key.
+  const writeDump = (stem: string): void => {
+    const lines = answered.map(([, out], i) => {
+      const s = scores[i]
+      return JSON.stringify({
+        model: MODEL,
+        id: s.id,
+        lang: s.lang,
+        type: s.type,
+        unanswerable: s.unanswerable,
+        em: s.em,
+        f1: s.f1,
+        abstained: s.abstained,
+        citationPresent: s.citationPresent,
+        citationCorrect: s.citationCorrect,
+        grounded: s.grounded,
+        correct: s.correct,
+        answer: out.answer,
+        citations: out.citations.map((c) => `${c.label}=${c.sourceTitle}`)
+      })
+    })
+    writeFileSync(join(results(), `${stem}-items.jsonl`), lines.join('\n') + '\n', 'utf8')
+  }
+  const runRescore = (...args: string[]): ReturnType<typeof spawnSync> =>
+    spawnSync(process.execPath, [join(root, 'eval', 'rescore.mjs'), ...args], {
+      encoding: 'utf8',
+      timeout: hangBudgetMs(10_000)
+    })
+  const rescore = (...args: string[]): void => {
+    const run = runRescore(...args)
+    expect(run.status, String(run.stderr)).toBe(0)
+  }
+  const rescored = (stem: string): string => join(results(), `${stem}-quality-rescored.csv`)
+
+  it('writes the same header and row as QA_CSV_HEADER + toCsvRow(aggregate()) for the same answers', () => {
+    writeDump('run-a')
+    rescore()
+    expect(readFileSync(rescored('run-a'), 'utf8')).toBe(expectedCsv)
+  })
+
+  it('with --existing-only rewrites the rescored CSVs that exist and creates no new one', () => {
+    writeDump('run-a')
+    writeDump('run-b')
+    writeFileSync(rescored('run-a'), 'model,n\nstale,0\n', 'utf8')
+    rescore('--existing-only')
+    expect(readFileSync(rescored('run-a'), 'utf8')).toBe(expectedCsv)
+    expect(existsSync(rescored('run-b'))).toBe(false)
+  })
+
+  it('refuses an unknown argument with exit code 2 and writes nothing (a mistyped flag must not rescore every dump)', () => {
+    writeDump('run-a')
+    const run = runRescore('--existing')
+    expect(run.status).toBe(2)
+    expect(existsSync(rescored('run-a'))).toBe(false)
   })
 })
