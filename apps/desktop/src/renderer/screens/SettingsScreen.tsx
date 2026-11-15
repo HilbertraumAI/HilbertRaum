@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Banner,
   Button,
@@ -128,11 +128,12 @@ function GeneralTab(): JSX.Element {
   const [languageDraft, setLanguageDraft] = useState<UiLanguageSetting | null>(null)
   const pendingLanguageRef = useRef<UiLanguageSetting | null>(null)
   const languageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Counts choices, so a reply knows whether a newer one came after its own.
-  const languageChoicesRef = useRef(0)
-  const languageSavesInFlightRef = useRef(0)
+  // The value the store will hold once every sent save lands (null: no save unanswered, so the
+  // stored value), and a count of the sends, so a reply knows whether a newer send came after it.
+  const sentLanguageRef = useRef<UiLanguageSetting | null>(null)
+  const languageSendsRef = useRef(0)
   const settingsRef = useRef(settings)
-  settingsRef.current = settings
+  const tRef = useRef(t)
 
   function flushLanguage(): void {
     if (languageTimerRef.current !== null) clearTimeout(languageTimerRef.current)
@@ -140,44 +141,56 @@ function GeneralTab(): JSX.Element {
     const uiLanguage = pendingLanguageRef.current
     pendingLanguageRef.current = null
     if (uiLanguage === null) return
-    // A pick and back within the pause saves nothing and toasts nothing. Not while an earlier
-    // save is in flight: the stored value is about to change, so the choice must still be sent.
-    if (languageSavesInFlightRef.current === 0 && uiLanguage === settingsRef.current?.uiLanguage) {
-      if (mountedRef.current) setLanguageDraft(null)
+    // A pick and back within the pause saves nothing and toasts nothing: back to the value the
+    // store holds, or will hold once the unanswered saves land. In that second case the draft
+    // stays (it is that value) until the last reply drops it, so the select doesn't flash back.
+    if (uiLanguage === (sentLanguageRef.current ?? settingsRef.current?.uiLanguage)) {
+      if (mountedRef.current && sentLanguageRef.current === null) setLanguageDraft(null)
       return
     }
-    void saveLanguage(uiLanguage, languageChoicesRef.current)
+    void saveLanguage(uiLanguage)
   }
-  // Timer and unmount call the flush of the latest render (its `t`), not of the one they began in.
+  // The timer, the unmount cleanup and a late reply read the latest committed render's values (a
+  // refusal's toast its `t`), not those of the render they began in. Written after each commit, not
+  // during render; the unmount cleanup runs after the last of these.
   const flushLanguageRef = useRef(flushLanguage)
-  flushLanguageRef.current = flushLanguage
+  useLayoutEffect(() => {
+    settingsRef.current = settings
+    tRef.current = t
+    flushLanguageRef.current = flushLanguage
+  })
   useEffect(() => () => flushLanguageRef.current(), [])
 
-  async function saveLanguage(uiLanguage: UiLanguageSetting, choice: number): Promise<void> {
-    languageSavesInFlightRef.current++
-    // Drop the draft only for the newest choice: an older reply must not flash the select back
-    // while a newer choice waits for its own save.
-    const newest = (): boolean => languageChoicesRef.current === choice
+  async function saveLanguage(uiLanguage: UiLanguageSetting): Promise<void> {
+    sentLanguageRef.current = uiLanguage
+    const send = ++languageSendsRef.current
+    // The draft goes with the reply of the last send when no newer choice waits: an older reply
+    // must not flash the select back while a newer choice waits for, or is in, its own save.
+    const last = (): boolean => languageSendsRef.current === send
+    const dropDraft = (): void => {
+      if (last() && pendingLanguageRef.current === null) setLanguageDraft(null)
+    }
     try {
       const next = await window.api.updateSettings({ uiLanguage })
       settingsRef.current = next
+      if (last()) sentLanguageRef.current = null
       // Applied mounted or not (audit PA-4): the provider outlives this tab, so a save flushed by
       // the unmount still switches the app, `<html lang>` and the mirror. The saved value, not
       // the request.
       applyLanguageSetting(next.uiLanguage)
       if (!mountedRef.current) return
       setSettings(next)
-      if (newest()) setLanguageDraft(null)
+      dropDraft()
       // In the new language: this render's `t` is the language being left.
       toast(tCatalog(resolveUiLanguage(next.uiLanguage, navigator.language), 'settings.saved'))
     } catch {
-      // A refused save (the write gate on a locked workspace): the select shows the stored value
-      // again, and the failure toast is in the current language (CODE-7, as in `patch`).
+      // A refused save (the write gate on a locked workspace): the store keeps its value, the
+      // select shows it again, and the failure toast is in the language shown now (CODE-7, as in
+      // `patch`), which an older reply may have switched since this save was sent.
+      if (last()) sentLanguageRef.current = null
       if (!mountedRef.current) return
-      if (newest()) setLanguageDraft(null)
-      toast(t('settings.saveFailed'))
-    } finally {
-      languageSavesInFlightRef.current--
+      dropDraft()
+      toast(tRef.current('settings.saveFailed'))
     }
   }
 
@@ -186,7 +199,6 @@ function GeneralTab(): JSX.Element {
     if (!isUiLanguageSetting(value)) return
     setLanguageDraft(value)
     pendingLanguageRef.current = value
-    languageChoicesRef.current++
     if (languageTimerRef.current !== null) clearTimeout(languageTimerRef.current)
     languageTimerRef.current = setTimeout(() => flushLanguageRef.current(), LANGUAGE_SAVE_DELAY_MS)
   }

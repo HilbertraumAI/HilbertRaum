@@ -135,17 +135,33 @@ describe('I18nProvider — stable applyLanguageSetting identity (FE-5)', () => {
 })
 
 describe('Settings → General language picker', () => {
-  function stubSettings(initial: AppSettings) {
+  /**
+   * A settings store behind `window.api`. With `hold` (#808), every save waits for the test to
+   * settle it, in order: `release()` stores it and replies, `refuse()` rejects it (the write gate
+   * on a locked workspace).
+   */
+  function stubSettings(initial: AppSettings, { hold = false } = {}) {
     let current = initial
-    const updateSettings = vi.fn(async (patch: Partial<AppSettings>) => {
-      current = { ...current, ...patch }
-      return current
+    const held: Array<{ store: () => void; refuse: () => void }> = []
+    const updateSettings = vi.fn((patch: Partial<AppSettings>): Promise<AppSettings> => {
+      const store = (): AppSettings => (current = { ...current, ...patch })
+      if (!hold) return Promise.resolve(store())
+      const reply = deferred<AppSettings>()
+      held.push({
+        store: () => reply.resolve(store()),
+        refuse: () => reply.reject(new Error('The workspace is locked.'))
+      })
+      return reply.promise
     })
     stubApi({
       getSettings: vi.fn(async () => current),
       updateSettings
     })
-    return { updateSettings }
+    return {
+      updateSettings,
+      release: () => held.shift()?.store(),
+      refuse: () => held.shift()?.refuse()
+    }
   }
 
   /** The picker, found by its accessible name in the language the screen renders in. */
@@ -167,22 +183,6 @@ describe('Settings → General language picker', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
   })
-
-  /** Every save waits until the test releases it; releases settle the saves in order. */
-  function stubHeldSaves(initial: AppSettings) {
-    let current = initial
-    const held: Array<() => void> = []
-    const updateSettings = vi.fn((patch: Partial<AppSettings>) => {
-      const reply = deferred<AppSettings>()
-      held.push(() => {
-        current = { ...current, ...patch }
-        reply.resolve(current)
-      })
-      return reply.promise
-    })
-    stubApi({ getSettings: vi.fn(async () => current), updateSettings })
-    return { updateSettings, release: () => held.shift()?.() }
-  }
 
   /** The screen as App.tsx hosts it: inside the language provider and a toast host. */
   function renderWithToasts(): RenderResult {
@@ -450,23 +450,44 @@ describe('Settings → General language picker', () => {
   })
 
   it('shows the stored language again and the failure toast when the save is refused (#808)', async () => {
-    stubApi({
-      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
-      // The write gate on a locked workspace.
-      updateSettings: vi.fn(async () => {
-        throw new Error('The workspace is locked.')
-      })
-    })
+    const { updateSettings, refuse } = stubSettings({ ...DEFAULT_SETTINGS }, { hold: true })
     renderWithToasts()
     const picker = await pickerOnFakeClock()
     fireEvent.change(picker, { target: { value: 'de' } })
     await elapse(PAST_THE_PAUSE_MS)
+    refuse()
+    await elapse(0)
     expect(picker).toHaveValue('system')
     expect(toasts()).toEqual([t('en', 'settings.saveFailed')])
+
+    // The refused value was never stored: choosing it again sends it again.
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(2)
+    refuse()
+    await elapse(0)
+  })
+
+  // #808: the failure toast is in the language shown when the refusal lands, which an older save's
+  // reply may have switched since this save was sent.
+  it('toasts a refused save in the language an earlier reply switched to (#808)', async () => {
+    const { release, refuse } = stubSettings({ ...DEFAULT_SETTINGS }, { hold: true })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    fireEvent.change(picker, { target: { value: 'fr' } })
+    await elapse(PAST_THE_PAUSE_MS) // both saves sent from the English screen
+    release()
+    await elapse(0) // German stored: the screen is German now
+    refuse()
+    await elapse(0)
+    expect(toasts()).toEqual([t('de', 'settings.saved'), t('de', 'settings.saveFailed')])
+    expect(picker).toHaveValue('de') // the stored value again
   })
 
   it("keeps a newer choice on the select when an older save's reply lands (#808)", async () => {
-    const { updateSettings, release } = stubHeldSaves({ ...DEFAULT_SETTINGS })
+    const { updateSettings, release } = stubSettings({ ...DEFAULT_SETTINGS }, { hold: true })
     renderWithToasts()
     const picker = await pickerOnFakeClock()
     fireEvent.change(picker, { target: { value: 'de' } })
@@ -484,10 +505,10 @@ describe('Settings → General language picker', () => {
     expect(document.documentElement.lang).toBe('fr')
   })
 
-  // #808: "a pick and back saves nothing" compares with the stored value, which an unanswered save is
-  // about to change.
+  // #808: "a pick and back saves nothing" compares with the value the store holds once the
+  // unanswered saves land, not with the stored value they are about to change.
   it('still saves a choice back to the stored language while an earlier save is unanswered (#808)', async () => {
-    const { updateSettings, release } = stubHeldSaves({ ...DEFAULT_SETTINGS })
+    const { updateSettings, release } = stubSettings({ ...DEFAULT_SETTINGS }, { hold: true })
     renderWithToasts()
     const picker = await pickerOnFakeClock()
     fireEvent.change(picker, { target: { value: 'de' } })
@@ -497,9 +518,43 @@ describe('Settings → General language picker', () => {
     expect(updateSettings).toHaveBeenCalledTimes(2)
     expect(updateSettings).toHaveBeenLastCalledWith({ uiLanguage: 'system' })
     release()
+    await elapse(0)
+    expect(picker).toHaveValue('system') // German landed; the newer choice is still being saved
     release()
     await elapse(0)
     expect(document.documentElement.lang).toBe('en')
     expect(picker).toHaveValue('system')
+  })
+
+  it('saves nothing more for a pick and back to the language an unanswered save is storing (#808)', async () => {
+    const { updateSettings, release } = stubSettings({ ...DEFAULT_SETTINGS }, { hold: true })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS) // the German save is sent; its reply waits
+    fireEvent.change(picker, { target: { value: 'fr' } })
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(picker).toHaveValue('de') // no flash back to the stored System while German is saved
+    release()
+    await elapse(0)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    expect(toasts()).toEqual([t('de', 'settings.saved')])
+    expect(picker).toHaveValue('de')
+
+    // Two saves unanswered: when the older lands, the newer one's value is still the one to match.
+    fireEvent.change(picker, { target: { value: 'fr' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    fireEvent.change(picker, { target: { value: 'it' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    release() // French lands; Italian is still unanswered
+    await elapse(0)
+    fireEvent.change(picker, { target: { value: 'es' } })
+    fireEvent.change(picker, { target: { value: 'it' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(3)
+    release()
+    await elapse(0)
+    expect(picker).toHaveValue('it')
   })
 })
