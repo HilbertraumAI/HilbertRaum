@@ -16,7 +16,13 @@ import {
   stripThinkBlocks,
   type TurnSkill
 } from '../chat'
-import { approxPromptTokens, buildSkillFence, stripSkillFenceEcho, type SkillFenceMode } from '../skills/prompt'
+import {
+  approxPromptTokens,
+  buildSkillFence,
+  logSkillFenceReduction,
+  stripSkillFenceEcho,
+  type SkillFenceMode
+} from '../skills/prompt'
 import {
   documentChunkCount,
   documentLeafProvenance,
@@ -525,7 +531,10 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // The fence is built ONCE (full body — already capped at import validation — or paragraph 1 alone under
   // #632's `'first-paragraph'`) and applied at every step. Its token cost is reserved out of the per-window
   // input budget so a window + fence + output fits the launched context.
-  const skillFence = skill ? buildSkillFence({ title: skill.title, body: skill.body, mode: skillFenceMode }).text : null
+  const fence = skill ? buildSkillFence({ title: skill.title, body: skill.body, mode: skillFenceMode }) : null
+  // #632: no budget here, so only a first-paragraph cap logs (one info line, ids + mode only).
+  if (skill && fence) logSkillFenceReduction(skill.installId, fence, skillFenceMode)
+  const skillFence = fence?.text ?? null
   const fenceTokens = skillFence ? approxPromptTokens(skillFence) : 0
   const questionTokens = approxPromptTokens(question)
   const reserveWords = Math.ceil((fenceTokens + questionTokens + 200) / SUMMARY_TOKENS_PER_WORD)

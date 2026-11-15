@@ -82,6 +82,19 @@ describe('logSkillFenceReduction — U1 diagnosability (audit §3.6)', () => {
     // ids/counts only — the skill BODY never reaches the log (the no-content-in-logs rule).
     expect(tail.some((l) => l.includes('kept body'))).toBe(false)
   })
+
+  // #632 (owner round WB2-1): a turn that carried only paragraph 1 is visible in the log — an info line when the
+  // capped fence fit, the mode on the warning when the budget still omitted it. Ids + mode only, never the body.
+  it.each([
+    { id: 'app:capped-fence', result: { text: 'kept body', omitted: false, trimmed: false }, level: 'INFO' },
+    { id: 'app:capped-omitted', result: { text: null, omitted: true, trimmed: false }, level: 'WARN' }
+  ])("logs the 'first-paragraph' mode ($id)", ({ id, result, level }) => {
+    logSkillFenceReduction(id, result, 'first-paragraph')
+    const line = readLogTail(500).find((l) => l.includes(`"${id}"`)) ?? ''
+    expect(line).toContain(`[${level}]`)
+    expect(line).toContain('"mode":"first-paragraph"')
+    expect(line).not.toContain('kept body')
+  })
 })
 
 describe('buildSkillFence — budget (§11.3/§22-A6: whole units, never mid-instruction)', () => {
@@ -111,8 +124,8 @@ describe('buildSkillFence — budget (§11.3/§22-A6: whole units, never mid-ins
     expect(text).toContain('Third optional block.')
   })
 
-  // #632 (owner call G-1, option A): the 'first-paragraph' cap is the caller's choice, not a budget trim — so
-  // `logSkillFenceReduction` stays quiet on every compare fall-through turn — and the budget can still omit it.
+  // #632 (owner call G-1, option A): the 'first-paragraph' cap is the caller's choice, not a budget trim — so it
+  // never logs as a budget reduction (its own info line is above) — and the budget can still omit it.
   it.each([
     { budget: undefined, placed: true },
     { budget: 100000, placed: true },

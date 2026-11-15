@@ -1584,9 +1584,9 @@ export interface GroundedAnswerOptions {
   /**
    * How much of `skill`'s body its fence carries (`SkillFenceMode`), on every path this answer can take
    * (the single grounded turn and the whole-document map-reduce rescues). Absent ⇒ `'full'`.
-   * `'first-paragraph'` is set by `registerRagIpc` on a compare skill's fall-through turn: #632,
-   * open-issues wave owner call G-1 (option A). Only the fence text changes — the budgets still reserve
-   * the whole fence, and the stamp rule (fence placed + sections found) is the same.
+   * `'first-paragraph'` is set by `registerRagIpc` on the bundled compare skill's fall-through turn:
+   * #632, open-issues wave owner call G-1 (option A), owner round WB2-1. Only the fence text changes —
+   * the budgets still reserve the whole fence, and the stamp rule (fence placed + sections found) is the same.
    */
   skillFenceMode?: SkillFenceMode
   /**
@@ -2068,7 +2068,8 @@ export async function generateGroundedAnswer(
       budget
     )
     // U1 (audit §3.6): log a budget-driven trim/omit (ids/counts only) — was silently discarded before.
-    logSkillFenceReduction(opts.skill.installId, fence)
+    // #632: and a first-paragraph cap, so a turn that carried only the rules is visible in the log.
+    logSkillFenceReduction(opts.skill.installId, fence, opts.skillFenceMode)
     skillFence = fence.text
   }
   const grounded = skillFence

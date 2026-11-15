@@ -27,6 +27,7 @@ import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { readLogTail } from '../../src/main/services/logging'
 import type { Db } from '../../src/main/services/db'
 import { t } from '../../src/shared/i18n'
 import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
@@ -272,14 +273,16 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
   })
 })
 
-// ---- #632: a compare skill's fall-through turn (open-issues wave owner call G-1, option A) ----
-// With a compare skill picked, a question that is not a compare request at a scope of other than two
-// documents falls through to the ordinary grounded answer (a compare request gets "select exactly two"
-// instead: rag-skill-analysis.test.ts). The model sees ordinary passages there, with no A/B labels and no
-// diff, so the fence carries paragraph 1 only — the heading + honesty rules — and not the section format a 4B
-// followed even on "Wer ist der Mieter?". The answer stays stamped. Run on the COMMITTED SKILL.md bodies: the
-// shipped what-changed keeps "Produce the answer in this order" after paragraph 1. These rows prove "paragraph 1
-// only"; that paragraph 1 holds the honesty rules (SKA-15) is the skills-skillmd-parity suite's to pin.
+// ---- #632: a compare skill's fall-through turn (open-issues wave owner call G-1, option A; owner round WB2-1) ----
+// With What Changed? picked, a question that is not a compare request at a scope of other than two documents
+// falls through to the ordinary grounded answer (a compare request gets "select exactly two" instead:
+// rag-skill-analysis.test.ts). The model sees ordinary passages there, with no A/B labels and no diff, so the
+// fence carries paragraph 1 only — the heading + honesty rules — and not the section format a 4B followed even
+// on "Wer ist der Mieter?". The answer stays stamped. Bundled skills only: a user skill declaring
+// `analysis: compare` keeps its whole fence (its paragraph 1 is whatever its author wrote). Run on the COMMITTED
+// SKILL.md bodies: the shipped what-changed keeps "Produce the answer in this order" after paragraph 1. These
+// rows prove "paragraph 1 only"; that paragraph 1 holds the honesty rules (SKA-15) is the skills-skillmd-parity
+// suite's to pin.
 
 const USER_COMPARE_INSTALL_ID = 'user:version-check'
 const USER_COMPARE_BODY = [
@@ -364,6 +367,10 @@ function fenceBodies(rt: RecordingRuntime): string[] {
   })
 }
 
+/** The first-paragraph-cap lines (`logSkillFenceReduction`) the local log holds for this skill so far. */
+const capLogCount = (skillId: string): number =>
+  readLogTail(100_000).filter((l) => l.includes('capped to its first paragraph') && l.includes(`"skillId":"${skillId}"`)).length
+
 async function ask(h: FenceHarness, question: string, skillId: string): Promise<Message> {
   return (await invoke(handlers, IPC.askDocuments, h.conversationId, question, skillId)).result as Message
 }
@@ -374,20 +381,21 @@ const TENANT = 'Wer ist der Mieter?'
 // Two drafts that close with thanks, so top-k finds a passage for a thank-you and the model is called.
 const THANKING_DRAFTS = TWO_DRAFTS.map((d) => `${d}\nVielen Dank für Ihre Zusammenarbeit.`)
 
-describe("askDocuments — a compare skill's fall-through turn carries paragraph 1 of its fence (#632)", () => {
+describe("askDocuments — the bundled compare skill's fall-through turn carries paragraph 1 of its fence (#632)", () => {
   // Small talk over two documents falls through too (`applies()` opts small talk out of the compare engine), so
   // its top-k answer also gets paragraph 1: the one two-document prompt #632 changes.
   it.each([
     { name: 'what-changed over one document', skillId: WHAT_CHANGED_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },
     { name: 'what-changed over three documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: LEASE_DRAFTS, question: TENANT },
-    { name: 'a user skill declaring analysis: compare, one document', skillId: USER_COMPARE_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },
     { name: 'what-changed, small talk over two documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: THANKING_DRAFTS, question: 'Vielen Dank!' }
   ])('$name: the heading + honesty rules only, and the answer is still stamped', async ({ skillId, texts, question }) => {
     const h = await makeFenceHarness(texts)
+    const logged = capLogCount(skillId)
     const msg = await ask(h, question, skillId)
     expect(h.runtime.calls).toBe(1)
     expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId])[0]])
-    expect(JSON.stringify(h.runtime.turns)).not.toContain('Produce ')
+    expect(capLogCount(skillId) - logged).toBe(1)
+    expect(fenceBodies(h.runtime).join('\n')).not.toContain('Produce ')
     expect(msg.content).toBe('The tenant is Max Huber.')
     expect(msg.skillId).toBe(skillId)
   })
@@ -404,8 +412,10 @@ describe("askDocuments — a compare skill's fall-through turn carries paragraph
       summary: 'Summary: a lease with Max Huber.',
       sections: [section(1), section(2), section(3)]
     })
+    const logged = capLogCount(WHAT_CHANGED_INSTALL_ID)
     const msg = await ask(h, 'Fasse dieses Dokument zusammen', WHAT_CHANGED_INSTALL_ID)
     expect(msg.coverage?.mode).toBe('tree')
+    expect(capLogCount(WHAT_CHANGED_INSTALL_ID) - logged).toBe(1)
     expect(h.runtime.calls).toBeGreaterThanOrEqual(3)
     const firstParagraph = paragraphsOf(BODIES[WHAT_CHANGED_INSTALL_ID])[0]
     expect(fenceBodies(h.runtime)).toEqual(Array(h.runtime.calls).fill(firstParagraph))
@@ -430,14 +440,18 @@ describe("askDocuments — a compare skill's fall-through turn carries paragraph
     expect(msg.skillId).toBe(WHAT_CHANGED_INSTALL_ID)
   })
 
-  // A skill with a non-compare handler, and one with no handler at all (fence only).
+  // A skill with a non-compare handler, one with no handler at all (fence only), and a user compare skill: the
+  // reduction is for the bundled compare skill only (owner round WB2-1), so a user one keeps its whole fence.
   it.each([
     { name: 'contract-brief over three documents', skillId: 'app:contract-brief', texts: LEASE_DRAFTS, mode: 'relevance' },
+    { name: 'a user skill declaring analysis: compare, one document', skillId: USER_COMPARE_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped' },
     { name: 'a user skill with no analysis engine, one document', skillId: USER_PLAIN_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped' }
   ])("another skill's fall-through keeps its whole fence ($name)", async ({ skillId, texts, mode }) => {
     const h = await makeFenceHarness(texts)
+    const logged = capLogCount(skillId)
     const msg = await ask(h, TENANT, skillId)
     expect(msg.coverage?.mode).toBe(mode)
+    expect(capLogCount(skillId) - logged).toBe(0)
     expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId]).join('\n\n')])
     expect(msg.skillId).toBe(skillId)
   })

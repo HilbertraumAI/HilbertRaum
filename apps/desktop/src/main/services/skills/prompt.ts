@@ -80,8 +80,8 @@ export function approxPromptTokens(text: string): number {
  * How much of the body a fence may carry. `'full'` (the default) is the whole body, budget-trimmed by
  * whole paragraphs. `'first-paragraph'` caps it at the guaranteed minimum, paragraph 1 (the heading +
  * honesty rules, SKA-15), with the same omit-when-even-that-won't-fit rule: #632, open-issues wave
- * owner call G-1 (option A) — a compare skill's fall-through turn, where the compare engine did not
- * run, drops the section format but keeps the rules.
+ * owner call G-1 (option A) — the bundled compare skill's fall-through turn, where the compare engine
+ * did not run, drops the section format but keeps the rules (bundled only: owner round WB2-1).
  */
 export type SkillFenceMode = 'full' | 'first-paragraph'
 
@@ -190,14 +190,21 @@ export function buildSkillFence(input: SkillFenceInput, budgetTokens?: number): 
  * fully-placed fence, so a normal turn logs nothing. The SKILL.md bodies keep heading + honesty/safety
  * rules in their FIRST paragraph (U1 + SKA-15) — the paragraph the trim guarantees — so a trimmed fence
  * keeps the rules; this log is the diagnostic backstop.
+ * `mode` (#632, owner round WB2-1) is the fence mode the turn asked for: a `'first-paragraph'` cap is the
+ * caller's choice, not a budget squeeze, so a capped fence that fit logs one info line (ids + mode only)
+ * and a capped fence the budget still omitted carries the mode on its warning. `'full'` logs as before.
  */
-export function logSkillFenceReduction(skillId: string, result: SkillFenceResult): void {
-  if (!result.trimmed && !result.omitted) return
-  log.warn('skill fence reduced to fit context budget', {
-    skillId,
-    omitted: result.omitted,
-    trimmed: result.trimmed
-  })
+export function logSkillFenceReduction(skillId: string, result: SkillFenceResult, mode: SkillFenceMode = 'full'): void {
+  if (result.trimmed || result.omitted) {
+    log.warn('skill fence reduced to fit context budget', {
+      skillId,
+      omitted: result.omitted,
+      trimmed: result.trimmed,
+      ...(mode === 'full' ? {} : { mode })
+    })
+  } else if (mode === 'first-paragraph') {
+    log.info('skill fence capped to its first paragraph', { skillId, mode })
+  }
 }
 
 /**
