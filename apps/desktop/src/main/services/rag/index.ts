@@ -57,7 +57,8 @@ import {
   buildSkillFence,
   logSkillFenceReduction,
   skillFenceBudgetTokens,
-  stripSkillFenceEcho
+  stripSkillFenceEcho,
+  type SkillFenceMode
 } from '../skills/prompt'
 import { getSettings } from '../settings'
 import { scanRedactionCandidates, type RedactionCounts } from '../skills/tools/redaction'
@@ -773,6 +774,8 @@ export interface WholeDocChunksDeps {
   documentId: string
   question: string
   skill?: TurnSkill | null
+  /** How much of the skill body the fence carries (#632; absent ⇒ the whole body) — threaded to the core. */
+  skillFenceMode?: SkillFenceMode
   contextTokens: number
   signal?: AbortSignal
   onToken?: (token: string) => void
@@ -832,6 +835,7 @@ export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promis
     documentId: deps.documentId,
     question: deps.question,
     skill: deps.skill,
+    skillFenceMode: deps.skillFenceMode,
     contextTokens: deps.contextTokens,
     signal: deps.signal,
     onToken: deps.onToken,
@@ -1578,6 +1582,14 @@ export interface GroundedAnswerOptions {
    */
   skill?: TurnSkill | null
   /**
+   * How much of `skill`'s body its fence carries (`SkillFenceMode`), on every path this answer can take
+   * (the single grounded turn and the whole-document map-reduce rescues). Absent ⇒ `'full'`.
+   * `'first-paragraph'` is set by `registerRagIpc` on the bundled compare skill's fall-through turn:
+   * #632, open-issues wave owner call G-1 (option A), owner round WB2-1. Only the fence text changes —
+   * the budgets still reserve the whole fence, and the stamp rule (fence placed + sections found) is the same.
+   */
+  skillFenceMode?: SkillFenceMode
+  /**
    * Skill-aware WHOLE-DOCUMENT answer (skill-whole-doc engine, Wave 2). When set, the grounded
    * context is the named document read IN ORDER (not top-k retrieval), capped to the context
    * budget, and the persisted coverage is `capped` ("covers the whole document" / "covers the
@@ -1840,6 +1852,7 @@ export async function generateGroundedAnswer(
         documentId: opts.wholeDocument.documentId,
         question,
         skill: opts.skill,
+        skillFenceMode: opts.skillFenceMode,
         contextTokens,
         signal: opts.signal,
         onToken: opts.onToken,
@@ -1858,6 +1871,7 @@ export async function generateGroundedAnswer(
         documentId: opts.wholeDocument.documentId,
         question,
         skill: opts.skill,
+        skillFenceMode: opts.skillFenceMode,
         contextTokens,
         signal: opts.signal,
         onToken: opts.onToken,
@@ -2049,9 +2063,13 @@ export async function generateGroundedAnswer(
       reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
       fixedTokens
     })
-    const fence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget)
+    const fence = buildSkillFence(
+      { title: opts.skill.title, body: opts.skill.body, mode: opts.skillFenceMode },
+      budget
+    )
     // U1 (audit §3.6): log a budget-driven trim/omit (ids/counts only) — was silently discarded before.
-    logSkillFenceReduction(opts.skill.installId, fence)
+    // #632: and a first-paragraph cap, so a turn that carried only the rules is visible in the log.
+    logSkillFenceReduction(opts.skill.installId, fence, opts.skillFenceMode)
     skillFence = fence.text
   }
   const grounded = skillFence

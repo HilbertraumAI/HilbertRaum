@@ -442,7 +442,8 @@ export function registerRagIpc(ctx: AppContext): void {
       //      skill resolves to `undefined` here (it declares no analysis engine and runs no tools — SEC-1).
       // When neither yields a handler, or `applies()` is false (off-topic / multi-doc), this whole block is
       // skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
-      const analysisHandler = skill ? skillAnalysisHandler(skill.installId, getSkill(ctx.db, skill.installId)) : undefined
+      const turnSkillRecord = skill ? getSkill(ctx.db, skill.installId) : null
+      const analysisHandler = skill ? skillAnalysisHandler(skill.installId, turnSkillRecord) : undefined
 
       // W2 doc-count-fallthrough routing (audit §2.1/§3.4): a tool/whole-doc skill reads ONE document
       // (two, for compare) at a time, so a multi-document scope can't be analysed exhaustively. When the
@@ -485,7 +486,9 @@ export function registerRagIpc(ctx: AppContext): void {
         if (analysisHandler.mode === 'grounded-whole-doc-compare') {
           // what-changed at ≠ 2 docs (audit §3.4): ask for exactly two — the app owns the scope, so this
           // replaces the SKILL.md's ask-the-model policing (the model can't see the count). 0 docs stays
-          // on the ordinary relevance path (its own "no documents" honesty).
+          // on the ordinary relevance path (its own "no documents" honesty). Only the bundled what-changed
+          // gets here: a user skill declaring `analysis: compare` has no routing vocabulary, so its
+          // `intends()` is false and its compare requests at the wrong count fall through (#632 below).
           if (inScope.length >= 1) {
             return routeAnswer('Document compare routing', tMain('skills.analysis.selectTwo', { count: inScope.length }))
           }
@@ -559,6 +562,26 @@ export function registerRagIpc(ctx: AppContext): void {
         !isSmallTalk(text) &&
         allInScopeDocsFullyChunked(ctx.db, scope) &&
         analysisHandler.classMatches({ question: text, scope, db: ctx.db }, skill.installId)
+
+      // #632, open-issues wave owner call G-1 (option A), bundled skills only (owner round WB2-1): the ONE
+      // decision for the BUNDLED compare skill (an app skill, `source === 'app'`: What Changed?) whose engine
+      // does not engage this turn — `applies()` is false: the scope does not hold exactly two answerable
+      // documents, or the question is small talk. (Its compare REQUEST at the wrong count never gets this
+      // far: the W2 pre-pass above answers "select exactly two".) The turn falls through to the ordinary
+      // grounded answer below, where the model sees ordinary passages with no A/B labels and no diff. Its
+      // fence then carries paragraph 1 only — the heading + honesty rules, `buildSkillFence`'s guaranteed
+      // minimum, whose rule 1 says to simply answer the question — and not the compare section format, which
+      // a 4B model followed even there ("Wer ist der Mieter?" got an "Executive summary"). Bundled only,
+      // because only there is paragraph 1 KNOWN to be those rules (SKA-15, pinned by the SKILL.md parity
+      // test): a user skill declaring `analysis: compare` keeps its whole fence, as before #632 — its
+      // paragraph 1 is whatever its author wrote, and with no routing vocabulary its real compare requests
+      // fall through here too. Unchanged: the skill stamp on that answer (fence placed + sections found),
+      // the two-document compare path (it returns above and never reads this), every other skill's fence,
+      // and the budgets (they still reserve the whole fence; only the fence text is shorter).
+      const skillFenceMode =
+        turnSkillRecord?.source === 'app' && analysisHandler?.mode === 'grounded-whole-doc-compare' && !analysisApplies
+          ? ('first-paragraph' as const)
+          : undefined
 
       if (skill && analysisHandler && (analysisApplies || toolSkillInverts)) {
         const turnSkill = skill
@@ -983,6 +1006,8 @@ export function registerRagIpc(ctx: AppContext): void {
           // The turn's skill: its fence rides in the grounded user turn; the assistant row is
           // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
           skill,
+          // #632 (owner call G-1, option A): paragraph 1 only for a compare skill whose engine did not run.
+          skillFenceMode,
           // #643 / #642: the one document read whole (or through its ready deep index) instead
           // of top-k — `capped`/`tree` coverage; the pack arm and the notice below are top-k only.
           wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,

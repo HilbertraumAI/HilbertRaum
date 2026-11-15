@@ -150,25 +150,39 @@ export async function seedEmbeddedDoc(
 }
 
 /**
- * A ready single-level deep index, seeded by hand because a real build needs a model: one root holding `summary`, an
- * edge to each chunk in order, `tree_status` 'ready'. A blank `summary` is a ready tree with nothing to read; `modelId`
- * is the root's writer, which a Tier 1 summary reports.
+ * A ready deep index, seeded by hand because a real build needs a model: one root holding `summary`, an edge to each
+ * chunk in order, `tree_status` 'ready'. A blank `summary` is a ready tree with nothing to read; `modelId` is the
+ * root's writer, which a Tier 1 summary reports. `sections` makes it two-level instead: one level-1 node per entry
+ * (its summary, in order) under a level-2 root, the chunks split across them in order — the material a whole-document
+ * answer reads, so long sections span several map windows.
  */
 export function seedReadyTree(
   db: Db,
   docId: string,
   chunkIds: string[],
-  opts: { summary?: string; modelId?: string } = {}
+  opts: { summary?: string; modelId?: string; sections?: string[] } = {}
 ): void {
-  const rootId = randomUUID()
-  db.prepare(
+  const now = new Date().toISOString()
+  const node = db.prepare(
     `INSERT INTO tree_nodes
        (id, document_id, scope_key, level, ordinal, parent_id, is_root, summary_text,
         embedding_blob, dimensions, embedding_model_id, content_hash, model_id, created_at)
-     VALUES (?, ?, NULL, 1, 0, NULL, 1, ?, NULL, NULL, NULL, ?, ?, ?)`
-  ).run(rootId, docId, opts.summary ?? 'Summary.', `hash-${rootId}`, opts.modelId ?? 'mock', new Date().toISOString())
-  const edge = db.prepare('INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 1, ?)')
-  chunkIds.forEach((id, i) => edge.run(rootId, id, i))
+     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`
+  )
+  const edge = db.prepare('INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, ?, ?)')
+  const sections = opts.sections ?? []
+  const modelId = opts.modelId ?? 'mock'
+  const rootId = randomUUID()
+  node.run(rootId, docId, sections.length > 0 ? 2 : 1, 0, null, 1, opts.summary ?? 'Summary.', `hash-${rootId}`, modelId, now)
+  const parents = sections.map((summary, i) => {
+    const id = randomUUID()
+    node.run(id, docId, 1, i, rootId, 0, summary, `hash-${id}`, modelId, now)
+    edge.run(rootId, id, 0, i)
+    return id
+  })
+  chunkIds.forEach((id, i) =>
+    edge.run(parents.length > 0 ? parents[Math.floor((i * parents.length) / chunkIds.length)] : rootId, id, 1, i)
+  )
   db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(docId)
 }
 

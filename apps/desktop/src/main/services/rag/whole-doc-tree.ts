@@ -16,7 +16,13 @@ import {
   stripThinkBlocks,
   type TurnSkill
 } from '../chat'
-import { approxPromptTokens, buildSkillFence, stripSkillFenceEcho } from '../skills/prompt'
+import {
+  approxPromptTokens,
+  buildSkillFence,
+  logSkillFenceReduction,
+  stripSkillFenceEcho,
+  type SkillFenceMode
+} from '../skills/prompt'
 import {
   documentChunkCount,
   documentLeafProvenance,
@@ -428,6 +434,8 @@ export interface WholeDocTreeDeps {
   question: string
   /** The turn's skill — its fence is applied at every map/reduce step (the whole-doc engine invariant). */
   skill?: TurnSkill | null
+  /** How much of the skill body the fence carries (#632; absent ⇒ the whole body) — threaded to the core. */
+  skillFenceMode?: SkillFenceMode
   /** The REAL launched context window (§L0) — sizes the per-call window budget. */
   contextTokens: number
   signal?: AbortSignal
@@ -468,6 +476,8 @@ export interface WholeDocMapReduceInput {
   question: string
   /** The turn's skill — its fence rides in every map/reduce USER turn (the whole-doc engine invariant). */
   skill?: TurnSkill | null
+  /** How much of the skill body the fence carries (#632, `SkillFenceMode`; absent ⇒ the whole body). */
+  skillFenceMode?: SkillFenceMode
   /** The REAL launched context window (§L0) — sizes the per-call window budget. */
   contextTokens: number
   signal?: AbortSignal
@@ -502,6 +512,7 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     conversationId,
     question,
     skill,
+    skillFenceMode,
     contextTokens,
     signal,
     onToken,
@@ -517,10 +528,13 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     extraReduceBlock
   } = input
 
-  // The fence is built ONCE (full body — already capped at import validation) and applied at every
-  // step. Its token cost is reserved out of the per-window input budget so a window + fence + output
-  // fits the launched context.
-  const skillFence = skill ? buildSkillFence({ title: skill.title, body: skill.body }).text : null
+  // The fence is built ONCE (full body — already capped at import validation — or paragraph 1 alone under
+  // #632's `'first-paragraph'`) and applied at every step. Its token cost is reserved out of the per-window
+  // input budget so a window + fence + output fits the launched context.
+  const fence = skill ? buildSkillFence({ title: skill.title, body: skill.body, mode: skillFenceMode }) : null
+  // #632: no budget here, so only a first-paragraph cap logs (one info line, ids + mode only).
+  if (skill && fence) logSkillFenceReduction(skill.installId, fence, skillFenceMode)
+  const skillFence = fence?.text ?? null
   const fenceTokens = skillFence ? approxPromptTokens(skillFence) : 0
   const questionTokens = approxPromptTokens(question)
   const reserveWords = Math.ceil((fenceTokens + questionTokens + 200) / SUMMARY_TOKENS_PER_WORD)
@@ -780,6 +794,7 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     documentId,
     question,
     skill,
+    skillFenceMode,
     contextTokens,
     signal,
     onToken,
@@ -807,6 +822,7 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     documentId,
     question,
     skill,
+    skillFenceMode,
     contextTokens,
     signal,
     onToken,
