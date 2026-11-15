@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Badge, Button, ErrorBanner, useToast } from '../components'
 import { withEnglishCopy, type LanguageBinding } from '../components/translator'
 import { useT, type I18n } from '../i18n'
-import { tNodes } from '../i18nNodes'
+import { keepTogether, tNodes } from '../i18nNodes'
 import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '@shared/format'
@@ -315,7 +315,7 @@ interface TileProps {
   label: string
   value: string | null
   unit?: string
-  sub: string
+  sub: ReactNode
   pill: string
   tone: Tone
 }
@@ -687,15 +687,22 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const unified = snap?.placement.memoryClass === 'unified'
 
   function memoryTile(): JSX.Element {
-    const cpu = bench
-      ? (bench.cpuModel || t('perf.unknownCpu')) + (bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : '')
-      : ''
+    // "Unified memory · <processor> (12 cores)"; the core count never breaks inside (#805 S3).
+    const sub = bench ? (
+      <>
+        {unified ? `${t('perf.tile.memory.unifiedSub')} · ` : null}
+        {bench.cpuModel || t('perf.unknownCpu')}
+        {bench.cpuCores > 0 ? keepTogether(tCount('diag.bench.cores', bench.cpuCores)) : null}
+      </>
+    ) : (
+      t('perf.notChecked')
+    )
     return (
       <Tile
         label={unified ? t('perf.tile.memory.unified') : t('perf.tile.memory')}
         value={bench && bench.ramGb > 0 ? fmt1Safe(bench.ramGb, lang) : null}
         unit={t('perf.tile.memory.unit')}
-        sub={bench ? [unified ? t('perf.tile.memory.unifiedSub') : null, cpu].filter(Boolean).join(' · ') : t('perf.notChecked')}
+        sub={sub}
         pill={t(`perf.profile.${profileOf(bench?.profile)}`)}
         tone={bench ? profileTone(bench.profile) : 'neutral'}
       />

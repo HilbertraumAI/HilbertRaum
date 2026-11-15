@@ -223,6 +223,14 @@ describe('#803 layout at 880×600 — what the stylesheet cascade decides', () =
   })
 
   it("the composer footer moves a control that doesn't fit to the next row (owner round W5-3)", () => {
+  it('a `.nowrap` phrase does not break inside, on the Performance tile and the Diagnostics card (#805 S3, owner round W5-4)', () => {
+    // `keepTogether` puts "(12 cores)" in this span (the screens' rows pin that); both containers
+    // allow a break anywhere (`overflow-wrap: anywhere`), which a nowrap span leaves no opportunity for.
+    const onTile = el('span', 'nowrap', el('div', 'perf-tile-sub', el('div', 'perf-tile')))
+    const inCard = el('span', 'nowrap', el('dd', '', el('dl', 'kv')))
+    expect([inherited(onTile, 'white-space'), inherited(inCard, 'white-space')]).toEqual(['nowrap', 'nowrap'])
+  })
+
     // A 100-case live measurement (owner round W5-3) found a wrapping footer clean in every case,
     // where squeezing or capping the triggers drew text outside its box.
     const footer = renderFooter()

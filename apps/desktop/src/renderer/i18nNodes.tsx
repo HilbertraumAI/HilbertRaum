@@ -29,3 +29,18 @@ export function tNodes(
     </>
   )
 }
+
+/**
+ * A catalog value that must not break inside, such as the " (12 cores)" after a processor name
+ * (#805 S3, open-issues wave owner round W5-4): its leading spaces stay outside, so the line may
+ * still break before it, and the rest sits in one `.nowrap` span. The text is unchanged.
+ */
+export function keepTogether(text: string): JSX.Element {
+  const rest = text.trimStart()
+  return (
+    <>
+      {text.slice(0, text.length - rest.length)}
+      <span className="nowrap">{rest}</span>
+    </>
+  )
+}

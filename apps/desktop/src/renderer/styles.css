@@ -374,6 +374,9 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .hint-tight { margin: var(--space-1) 0 0; }
 .hint-lede { margin: var(--space-1) 0 var(--space-2); }
 .hint-block { display: block; }
+/* #805, open-issues wave owner round W5-4: a phrase that must not break inside, such as the
+   "(12 cores)" after a processor name (i18nNodes `keepTogether`); the line may break before it. */
+.nowrap { white-space: nowrap; }
 /* Buttons (guidelines §6): three levels — .btn = Secondary (default), .btn.primary,
    .btn.ghost. Screens use the Button component (components/Button.tsx). */
 .btn {

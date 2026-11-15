@@ -846,12 +846,20 @@ describe('PerformanceScreen: actions', () => {
 
   // UI-languages owner call D-11 (a): the core count picks its plural form on this screen too, on
   // the memory tile and in the copied report; until the UI languages wave one core read "(1 cores)".
-  it('names a single core in the singular, on the memory tile and in the copied report', async () => {
+  // #805 S3 (open-issues wave owner round W5-4): on the tile the count sits in one `.nowrap` span
+  // after the space, so "(1 core)" never breaks inside (the line may still break before it); the
+  // text reads exactly as before, and the copied report stays plain text.
+  it('names a single core in the singular, on the memory tile (kept on one line) and in the copied report', async () => {
     install(snapshot({ current: result({ cpuCores: 1 }) }))
     renderPerformanceScreen()
-    const cpu = `Intel Core i7-1260P${t('en', 'diag.bench.cores.one', { count: 1 })}`
-    await screen.findByText(cpu)
-    expect(within(tile('Memory')).getByText(cpu)).toBeInTheDocument()
+    const cores = t('en', 'diag.bench.cores.one', { count: 1 })
+    const cpu = `Intel Core i7-1260P${cores}`
+    const reads = (text: string) => (_: string, el: Element | null) => el?.textContent === text
+    await screen.findByText(reads(cpu))
+    const line = within(tile('Memory')).getByText(reads(cpu))
+    const kept = within(line).getByText(cores.trimStart())
+    expect(kept).toHaveClass('nowrap')
+    expect(kept.textContent).toBe(cores.trimStart()) // the space before it stays outside: a break may fall there
     expect(await copiedReport()).toContain(`${t('en', 'diag.bench.cpu')}: ${cpu}`)
   })
 
