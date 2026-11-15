@@ -7,7 +7,7 @@ import type {
   EvidenceSourceSnapshot
 } from '@shared/types'
 import { formatCitationLabel } from '../lib/displayMap'
-import { foldCase } from '../lib/textFold'
+import { foldCase } from '@shared/text-fold'
 import { PROVENANCE_CARD_CAP } from '../chat/SourcesDisclosure'
 import type { I18n } from '../i18n'
 

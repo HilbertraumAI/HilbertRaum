@@ -2717,16 +2717,24 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   Ukrainian are offered under Settings → General → Language. You can ask questions in any of
   them, but the rules that decide how a question is answered — whether it asks for a complete
   list, which notes lead the answer, when a skill is suggested or started, and how a knowledge
-  pack is searched — recognise English and German wording only. Cases you can run into: the
-  document chat's example question "Find every mention of …", asked over several documents or one
-  too large to read whole, gets the best-matching passages in every language, but only in English
-  and German does the answer say when it could not read every section; in a chat about one
-  document, a thank-you such as "Gracias", "Grazie", "Bedankt!", "Dziękuję!", "Teşekkürler!",
-  "Спасибо!" or "Дякую!" is taken for a question about it and can start a read of the whole
-  document (the check for small talk knows English and German words only, and drops letters such
-  as ę, ş and every Cyrillic letter); and the knowledge-pack search counts the Spanish word "es",
-  the French "des" and the Dutch "wie", "was", "die" and "man" as German words, so it can take a
-  Spanish, French or Dutch question for German ("Wie is de man op de foto?" counts as German).
+  pack is searched — recognise English and German wording only. Two kinds of message are
+  recognised in all ten languages: the document chat's two example questions ("Summarize this
+  document" and "Find every mention of …", also with your own word in the quotes), and short
+  greetings, thanks and goodbyes ("Gracias", "Dziękuję!", "Teşekkürler!", "Дякую!"). With two
+  documents in the chat, the French words for a difference ("différence", "différent",
+  "diffère") also ask for a comparison. Cases you can run into: a summary of a document too long
+  to read whole, asked in your own words, such as the French "Résume ce document", is answered
+  from the most relevant passages even when the document has a deep index, while the example
+  question "Résumez ce document" uses the deep index, like "Summarize this document" (a document
+  short enough to read at once is read whole either way); the Italian "alle" ("at the") and the
+  Dutch "alle" are read as the German "alle", and the Polish "list" ("letter") as the English
+  "list", so a question such as "Alle ore 10 cosa succede?" or "Kto musi podpisać list?" can get
+  the heads-up that the answer may miss items; in a chat about one document, a thank-you longer
+  than the app's short lists, such as "Gracias por todo" or "Спасибо за помощь", is taken for a
+  question about it and can start a read of the whole document; and the knowledge-pack search
+  counts the Spanish word "es", the French "des" and the Dutch "wie", "was", "die" and "man" as
+  German words, so it can take a Spanish, French or Dutch question for German ("Wie is de man op
+  de foto?" counts as German).
 - **Only the English and German interface has been reviewed by native speakers.** The Spanish,
   French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian text was machine-translated and
   checked by a second AI model; no native speaker has reviewed it yet. The app shows no notice
@@ -2769,26 +2777,30 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   right for Turkish words, but a project you named in English, or a document's own English
   heading, changes too ("Overview" reads "OVERVİEW"). The app can't know which language your own
   text is in. The lock screen's "HilbertRaum Lite" keeps its spelling.
-- **Search has trouble with the Turkish dotted and dotless I,** whatever the interface language.
-  In conversation search and the keyword part of document search, a word typed with the dotless
-  "ı" finds only text written with "ı" ("ısı" doesn't find "ISI"). A word typed with the capital
-  "İ" is split at that letter, and search looks for the pieces: "İstanbul" becomes "i" and
-  "stanbul", so it finds neither "İSTANBUL" nor "İstanbul", and it can list unrelated text that
-  holds a lone "I" or "i" ("I think this is fine"). Typed in small letters with a plain "i"
-  ("isi", "istanbul"), "ISI", "İSTANBUL" and "İstanbul" are all found. Document search also
-  compares meaning, which this doesn't affect, so a passage can still be found that way. The
-  filters on screen (the Documents name filter, the AI Model search and the review's evidence
-  filter) do match I, ı, İ and i.
-- **A letter typed with a separate accent mark may not match.** Most keyboards type an accented
-  letter such as "é", "ó", "ş" or "й" as one character, but text from some Mac and Linux sources
-  can hold the base letter followed by a separate accent mark, and the two look the same. The
-  filters on screen compare such text as it is, so the one form doesn't find the other; the
-  dotted capital "İ" is the exception, which they match in either form. Search cuts a word typed
-  that way at each separate accent mark and looks for the pieces, so it can find nothing or
-  unrelated text: "résumé" typed with separate marks looks for "re" and "sume" and can list a
-  message that starts "Re:". A word whose only accent is on its last letter, such as "café", is
-  still found when that letter is a Latin one, because search ignores the accents of Latin
-  letters; a Cyrillic word such as "мій" typed that way is not.
+- **Search finds the Turkish dotless "ı" only when you type it,** whatever the interface
+  language. In conversation search and the keyword part of document search, a word typed with
+  "ı" finds it in small letters and in capitals ("ısı" finds "ısı", "Isı" and "ISI"), and a word
+  typed with the capital "İ" finds the same word in small letters and in capitals ("İstanbul"
+  finds "İSTANBUL", "İstanbul" and "istanbul", and no unrelated "I think …"). Search never adds
+  an "ı" you didn't type, though: "isi", "Isı" or "ISI" typed doesn't find text written "ısı",
+  and "kir" doesn't find "kır", while "kır" finds "kir". To find every form, type the word in
+  small letters with "ı" where it belongs. Search looks for at most 32 words and spellings in
+  all, the words you typed first, so in a very long search the extra spellings can be left out.
+  Document search also compares meaning, which this doesn't affect, so a passage can still be
+  found that way. The filters on screen (the Documents name filter, the AI Model search and the
+  review's evidence filter) match I, ı, İ and i every way round.
+- **Search can't find a Cyrillic word stored with a separate accent mark.** Most keyboards type
+  an accented letter such as "é", "ş" or "й" as one character, but text from some Mac and Linux
+  sources can hold the base letter followed by a separate accent mark, and the two look the
+  same. Whichever way you type such a letter, the filters on screen and search take it as the
+  one letter, and the filters also find a name stored either way (macOS stores file names with
+  separate marks). Search has one gap: when a document or message holds a Cyrillic letter with a
+  separate mark, such as "й" written as "и" followed by a separate breve, search drops the mark
+  and records that word with a plain "и", so neither "й" typed as one character nor "й" typed
+  with a separate mark finds it. Typing the letter without its mark ("и" for "й") does find it.
+  Latin letters don't have this gap, because search ignores their accents either way: "résumé"
+  is found however it was stored or typed. Document search also compares meaning, so such a
+  passage can still be found that way.
 - **Two app versions on one computer can show the lock screen in another language.** The
   language you choose is stored in the workspace, but the lock screen's language is remembered by
   the computer. When an older HilbertRaum version opens a workspace set to a language it doesn't

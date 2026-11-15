@@ -28,6 +28,7 @@ import { SEARCH_MARK_END, SEARCH_MARK_START } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { legacyDbPath, openFreshDb } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { SEARCH_FOLD_CASES, SEARCH_FOLD_STORED, type SearchFoldLabel } from '../helpers/search-fold-cases'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -226,6 +227,24 @@ describe('search query sanitization', () => {
     expect(searchMessages(db, 'alpha', 0)).toEqual([])
     // SQLite reads a negative LIMIT as unlimited, so only the `limit <= 0` guard returns [] here.
     expect(searchMessages(db, 'alpha', -1)).toEqual([])
+  })
+})
+
+// ---- Turkish I and letters typed with separate marks (#818) ---------------------------
+
+// Open-issues wave owner call G-8: the query is composed, lowered and spelled both ways for ı;
+// messages_fts and its triggers are unchanged. The table is shared with chunks_fts
+// (`hybrid-search.test.ts`); each row seeds every stored text and checks exactly which ones a query finds.
+describe('search: the Turkish I and letters typed with separate marks (#818)', () => {
+  it.each(SEARCH_FOLD_CASES)('a typed $typed finds exactly $finds', ({ query, finds }) => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const labelOf = new Map<string, SearchFoldLabel>()
+    for (const [label, content] of Object.entries(SEARCH_FOLD_STORED) as Array<[SearchFoldLabel, string]>) {
+      labelOf.set(appendMessage(db, { conversationId: conv.id, role: 'user', content }).id, label)
+    }
+    const found = searchMessages(db, query).flatMap((r) => r.hits.map((h) => labelOf.get(h.messageId)))
+    expect(found.sort()).toEqual([...finds].sort())
   })
 })
 

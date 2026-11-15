@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { foldCase } from '../../src/renderer/lib/textFold'
+import { foldCase } from '../../src/shared/text-fold'
 
 // The shared case fold of the text filters (Documents name filter, AI Model search, review evidence
-// filter; second UI-languages wave owner call G-5, 2026-11-13). The Turkish letters are built from code
-// points so no editor or shell can swap them for their ASCII look-alikes.
+// filter; second UI-languages wave owner call G-5, 2026-11-13), NFC first since the open-issues wave
+// owner call G-8 (#818). The Turkish letters and every composed/decomposed pair are built from code
+// points so no editor or shell can swap them for their ASCII look-alikes or compose them.
 const DOTLESS_I = String.fromCharCode(0x0131) // ı
 const DOTTED_CAPITAL_I = String.fromCharCode(0x0130) // İ
 const COMBINING_DOT_ABOVE = String.fromCharCode(0x0307)
+const COMBINING_DIAERESIS = String.fromCharCode(0x0308)
+const COMPOSED_O_DIAERESIS = String.fromCharCode(0x00f6) // ö
 
 /** The filters' match: a substring of the folded text, both sides folded. */
 const finds = (text: string, query: string): boolean => foldCase(text).includes(foldCase(query))
@@ -26,7 +29,9 @@ describe('foldCase — the shared fold of the text filters', () => {
       'izmir ili'
     ],
     ['four dotless i in one word', `${DOTLESS_I}s${DOTLESS_I}t${DOTLESS_I}c${DOTLESS_I}`, 'isitici'],
-    ['a decomposed capital dotted I (I + U+0307)', `I${COMBINING_DOT_ABOVE}STANBUL`, 'istanbul']
+    ['a decomposed capital dotted I (I + U+0307)', `I${COMBINING_DOT_ABOVE}STANBUL`, 'istanbul'],
+    // #818: NFC composes "o" + U+0308 into the one code point U+00F6.
+    ['a decomposed o with diaeresis (O + U+0308)', `GRO${COMBINING_DIAERESIS}SSE`, `gr${COMPOSED_O_DIAERESIS}sse`]
   ])('folds %s', (_label, text, folded) => {
     expect(foldCase(text)).toBe(folded)
   })
@@ -39,6 +44,16 @@ describe('foldCase — the shared fold of the text filters', () => {
     // "İ" lowers to "i" + U+0307 without the fold, so a prefix of a mixed-case word missed.
     [`${DOTTED_CAPITAL_I}stanbul ofisi`, 'ist']
   ])('"%s" is found by a typed "%s"', (text, query) => {
+    expect(finds(text, query)).toBe(true)
+  })
+
+  // #818: a file name stored decomposed, as macOS stores it ("Gro" + U+0308 + "ße.pdf"), is found by
+  // the letters a keyboard types (composed "ö"), and a decomposed query finds a composed name. Without
+  // NFC the two spellings of "ö" are different strings and both searches miss.
+  it.each([
+    ['a decomposed name, a composed query', `Gro${COMBINING_DIAERESIS}ße.pdf`, `gr${COMPOSED_O_DIAERESIS}ß`],
+    ['a composed name, a decomposed capital query', `Gr${COMPOSED_O_DIAERESIS}ße.pdf`, `GRO${COMBINING_DIAERESIS}`]
+  ])('composes both sides first: %s', (_label, text, query) => {
     expect(finds(text, query)).toBe(true)
   })
 

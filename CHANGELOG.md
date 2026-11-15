@@ -107,6 +107,42 @@ from its first public `1.0.0` release onward.
   that message: "This file couldn't be processed." on the document's row on the Documents screen,
   and "Couldn't add report.pdf to this chat.", with the file's name, in the chat's banner for a
   failed attachment. Messages the app recognises read as before (#807).
+- **Search now finds Turkish words with "İ" and "ı", and words typed with separate accent
+  marks.** In conversation search and the keyword part of document search, a word typed with the
+  capital "İ" was cut at that letter: "İstanbul" looked for "i" and "stanbul", found neither
+  "İstanbul" nor "İSTANBUL", and could list unrelated text with a lone "I". It is now one word
+  and finds the word in small letters and in capitals. A word typed with "ı" now also finds it
+  in capitals ("ısı" finds "Isı" and "ISI"). A word typed with separate accent marks is searched
+  like the same word typed as one character, instead of being cut at each mark, and an accent
+  that has no one-character form, such as the stress mark Russian textbooks put on a vowel, no
+  longer cuts a word either: the word is found as it is written without the mark. The Documents
+  name filter, the AI Model search and the review's evidence filter now also find a name stored
+  with separate accent marks, as macOS stores file names, by the letters you type. One case got
+  worse: a word stored with a separate Cyrillic accent mark, which search found when you typed it
+  the same way, is now found by neither spelling; typing the letter without its mark ("и" for
+  "й") finds it. Search still doesn't add an "ı" you didn't type: "isi" doesn't find "ısı"
+  (#818).
+- **Projects in the conversation list are sorted the way your interface language sorts.** The
+  project sections followed the system's language instead, so in a Turkish interface on a German
+  system "Çanta" came before "Cuma" (#818).
+- **A thank-you or greeting in the new languages no longer starts a read of the whole
+  document.** In a chat about one document, a short thank-you, greeting or goodbye in Spanish,
+  French, Italian, Dutch, Polish, Turkish, Russian or Ukrainian ("Gracias", "Merci beaucoup",
+  "Bedankt!", "Dziękuję!", "Teşekkürler!", "Спасибо!", "Дякую!") was taken for a question about
+  the document. Such messages are now recognised in all ten languages. The other way round, a
+  short question such as the Polish "A lot?" ("and the flight?") or the German "Passt alles?" is
+  no longer taken for small talk (#809).
+- **The document chat's example questions now work in every language.** In Spanish, French,
+  Italian, Dutch, Polish, Turkish, Russian and Ukrainian, "Summarize this document", asked of a
+  document too long to read whole, was answered from the most relevant passages even when the
+  document had a deep index, and "Find every mention of …" never said that the answer may miss
+  items. Both now work as they do in English and German, also when you put your own word in the
+  quotes (#809).
+- **A French question about a dispute is no longer read as a comparison.** With two documents in
+  the chat, a question with "différend" (a dispute), "différé" (deferred) or "différer" (to
+  defer), "différemment" or "différentiel" was answered as a request to compare the documents.
+  Questions with "différence", "différent", "diffère" or "différencier" still compare them
+  (#809).
 
 ## [0.1.65] — 2026-11-11
 

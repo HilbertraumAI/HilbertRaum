@@ -1,3 +1,4 @@
+import { foldCase } from '../../../shared/text-fold'
 import { wordIncludes } from './tools/money'
 
 // W5 — the ONE canonical bilingual trigger vocabulary per app skill (audit §3.2/§4.1/§4.2/§8.3).
@@ -585,21 +586,37 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
 // via W1's in-prompt notice). Privacy: the question is CONTENT — matched here, NEVER logged.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Collapse a question to lowercase alnum(+German umlaut/ß) word tokens — the small-talk normalizer.
- *  Apostrophes are DROPPED (not split on) so a contraction stays one token ("how's" → "hows"). */
+/** Collapse a question to its word tokens — the small-talk normalizer. `foldCase` composes and lowers it
+ *  without a locale ("İYİ" → "iyi") and writes the dotless ı as "i", so Turkish typed in capitals or on a
+ *  keyboard without ı ("HOŞÇAKALIN", "nasil gidiyor") meets the lists, which are folded the same way
+ *  (`foldedSet`). A token is a run of letters and digits in any script (#809, open-issues wave owner call
+ *  G-11: «Дякую!» and «Dziękuję!» keep every letter). Apostrophes are DROPPED (not split on) so a contraction
+ *  stays one token ("how's" → "hows", "d'accord" → "daccord"); the Ukrainian apostrophe U+02BC is a letter and
+ *  stays inside its word. */
 function smallTalkTokens(question: string): string[] {
-  return question
-    .toLowerCase()
+  return foldCase(question)
     .replace(/['’‘´`]/g, '')
-    .replace(/[^a-z0-9äöüß]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .split(' ')
     .filter((t) => t.length > 0)
 }
 
-/** Greeting / thanks / closing / acknowledgement tokens (EN+DE). A question whose EVERY token is one of
- *  these is pure chatter — it carries no document ask, so it opts OUT of the whole-doc engine. */
-const SMALL_TALK_WORDS = new Set<string>([
+/** A small-talk list as `smallTalkTokens` reads a question: every entry through the same `foldCase` (the entries
+ *  stay written as the language writes them). */
+function foldedSet(entries: readonly string[]): ReadonlySet<string> {
+  return new Set(entries.map(foldCase))
+}
+
+/** Greeting / thanks / closing / acknowledgement tokens (EN+DE, then the other eight interface languages). A
+ *  question whose EVERY token is one of these is pure chatter — it carries no document ask, so it opts OUT of
+ *  the whole-doc engine. The lists of the eight (#809, open-issues wave owner call G-11) follow three rules,
+ *  checked across all ten languages: no yes-word (a bare "sí" / "так" can answer the assistant's own offer), no
+ *  "is it fine?" phrase ("¿está bien?", "va bene?", "все добре?" ask about the document; a one-word "Bien?",
+ *  "Bene?", "Goed?", "Dobrze?", "Хорошо?" or "Добре?" still reads as small talk, as the German "Gut?" does), and
+ *  an adjective or numeral that inflects with its noun ("buenos", "mille", "большое") only inside an exact form
+ *  below. */
+const SMALL_TALK_WORDS = foldedSet([
   // greetings
   'hi', 'hii', 'hiya', 'hey', 'heya', 'hello', 'yo', 'sup', 'howdy', 'there',
   'hallo', 'hallöchen', 'servus', 'moin', 'na',
@@ -609,25 +626,110 @@ const SMALL_TALK_WORDS = new Set<string>([
   'danke', 'dankeschön', 'merci', 'vielen', 'dank', 'bitte',
   // SKA-11 (W7, audit §3.3) — top-frequency thanks/ack INTENSIFIERS + acknowledgement fillers the detector
   // missed, each miss spending a full whole-document model read on a pleasantry ("thank you very much",
-  // "thanks a lot!", "danke dir!", "danke schön", "vielen lieben dank", "perfect, thanks", "sounds good",
-  // "all good, thanks!"). SAFE against the never-fires-on-real-questions invariant: a real document question
-  // always carries a non-filler content word, so no all-filler set here can swallow one ("ist das gut?" →
-  // 'ist'/'das' aren't fillers → not small talk). Verified by the extended guard test.
-  'very', 'much', 'so', 'a', 'lot', 'sounds', 'all', 'good', 'perfect', 'sure',
+  // "danke dir!", "danke schön", "vielen lieben dank", "perfect, thanks", "sounds good", "all good,
+  // thanks!"; "thanks a lot!" is an exact form below since #809). SAFE against the never-fires-on-real-questions
+  // invariant: a real document question always carries a non-filler content word, so no all-filler set here
+  // can swallow one ("ist das gut?" → 'ist'/'das' aren't fillers → not small talk). Verified by the extended
+  // guard test.
+  'very', 'much', 'so', 'sounds', 'all', 'good', 'perfect', 'sure',
   'dir', 'dich', 'schön', 'lieben', 'gut', 'sehr', 'genau', 'perfekt',
   // closings / acknowledgements
   'bye', 'goodbye', 'cya', 'ok', 'okay', 'okey', 'k', 'cool', 'great', 'nice', 'awesome', 'lol', 'haha',
-  'tschüss', 'tschau', 'ciao', 'passt', 'alles', 'klar', 'super'
+  'tschüss', 'tschau', 'ciao', 'alles', 'klar', 'super',
+  // Spanish: greetings, thanks, acknowledgements, closings (unaccented twins too: chat often drops accents)
+  'hola', 'gracias', 'muy', 'bien', 'genial', 'perfecto', 'estupendo', 'excelente', 'claro', 'listo', 'guay',
+  'chévere', 'chevere', 'saludos', 'adiós', 'adios', 'chao', 'chau', 'porfa', 'porfavor', 'oki', 'encantado',
+  'encantada', 'entendido',
+  // French: greetings, intensifiers, acknowledgements, closings ("merci" and "bien" are listed above)
+  'bonjour', 'bonsoir', 'salut', 'coucou', 'beaucoup', 'parfait', 'parfaitement', 'génial', 'très', 'excellent',
+  'daccord', 'entendu', 'impeccable', 'enchanté', 'enchante', 'tchao', 'adieu',
+  // Italian: greetings, thanks, intensifiers, acknowledgements, closings
+  'buongiorno', 'buonasera', 'buonanotte', 'buondì', 'buondi', 'grazie', 'prego', 'molto', 'bene', 'benissimo',
+  'ottimo', 'perfetto', 'fantastico', 'eccellente', 'esatto', 'certo', 'chiaro', 'capito', 'arrivederci',
+  // Dutch: greetings, thanks, intensifiers, acknowledgements, closings
+  'hoi', 'goedemorgen', 'goedemiddag', 'goedenavond', 'bedankt', 'dankjewel', 'dankuwel', 'doei', 'gedag',
+  'groetjes', 'hartelijk', 'hartstikke', 'oké', 'oke', 'mooi', 'fijn', 'goed', 'geweldig', 'duidelijk',
+  'begrepen', 'toppie', 'dankje',
+  // Polish: greetings, thanks, intensifiers, acknowledgements (with the twins typed without diacritics)
+  'cześć', 'hej', 'hejka', 'siema', 'witam', 'witaj', 'dobranoc', 'dziękuję', 'dziekuje', 'dzięki', 'dzieki',
+  'bardzo', 'serdecznie', 'świetnie', 'swietnie', 'dobrze', 'okej', 'spoko', 'jasne', 'rozumiem', 'doskonale',
+  'idealnie', 'proszę', 'prosze',
+  // Turkish: greetings, thanks, intensifiers, acknowledgements, closings (with the twins typed without ı, ş, ğ)
+  'merhaba', 'selam', 'günaydın', 'günaydin', 'teşekkürler', 'tesekkurler', 'sağol', 'sagol', 'sağolun',
+  'eyvallah', 'çok', 'görüşürüz', 'hoşçakal', 'tamam', 'tamamdır', 'tamamdir', 'harika', 'süper', 'mükemmel',
+  'güzel', 'iyi', 'anladım', 'anladim', 'nasılsın', 'nasilsin', 'naber', 'hoşçakalın',
+  // Russian and Ukrainian share five words (ок, окей, супер, прекрасно, круто), listed in both blocks: removing
+  // one from one block leaves it active through the other.
+  // Russian: greetings, thanks, intensifiers, acknowledgements, closings
+  'привет', 'приветик', 'здравствуйте', 'здравствуй', 'здрасте', 'спасибо', 'спс', 'благодарю', 'пожалуйста',
+  'очень', 'пока', 'хорошо', 'отлично', 'прекрасно', 'замечательно', 'супер', 'круто', 'ладно', 'ок', 'окей',
+  'ясно', 'понятно', 'здорово', 'тебе', 'понял', 'поняла',
+  // Ukrainian: greetings, thanks, intensifiers, acknowledgements, closings
+  'привіт', 'вітаю', 'дякую', 'дякуємо', 'дяка', 'спасибі', 'дуже', 'щиро', 'тобі', 'вам', 'бувай', 'бувайте',
+  'добраніч', 'добре', 'гаразд', 'окей', 'ок', 'чудово', 'супер', 'прекрасно', 'ідеально', 'зрозуміло', 'круто',
+  'зрозумів', 'зрозуміла'
 ])
 
-/** Whole-question chit-chat / assistant-meta forms (EN+DE), compared against the NORMALIZED full question
- *  (so "how are you going to fix X" — a real ask — never matches "how are you"). */
-const SMALL_TALK_EXACT = new Set<string>([
+/** Whole-question chit-chat / assistant-meta forms (EN+DE, then the other eight interface languages),
+ *  compared against the NORMALIZED full question (so "how are you going to fix X" — a real ask — never
+ *  matches "how are you"). */
+const SMALL_TALK_EXACT = foldedSet([
   'how are you', 'how are you doing', 'how are you today', 'how is it going', 'hows it going',
   'how do you do', 'whats up', 'who are you', 'what are you', 'what can you do',
   'what can you help with', 'what can you help me with', 'tell me a joke', 'nice to meet you', 'good bot',
   'wie gehts', 'wie geht es', 'wie geht es dir', 'wie geht es ihnen', 'wer bist du', 'was bist du',
-  'was kannst du', 'was kannst du tun', 'erzähl mir einen witz', 'schön dich kennenzulernen'
+  'was kannst du', 'was kannst du tun', 'erzähl mir einen witz', 'schön dich kennenzulernen',
+  // #809 (open-issues wave owner call G-11): "a", "lot" and "passt" are no fillers any more — «A lot?» asks
+  // Polish "and the flight?", «A Nice ?» French "in Nice?", «Passt alles?» / «Passt so?» whether it fits — so
+  // their thanks and acknowledgements are whole-question forms.
+  'thanks a lot', 'thank you a lot', 'ok thanks a lot', 'great thanks a lot', 'perfect thanks a lot', 'passt',
+  'passt danke', 'passt super', 'danke passt', 'vielen dank passt', 'ok passt', 'super passt',
+  // … and with a closing or another acknowledgement (owner call, 2026-11-14)
+  'thanks a lot bye', 'thank you a lot bye', 'ok thank you a lot',
+  'alles klar passt', 'klar passt', 'passt vielen dank', 'passt danke schön', 'passt danke dir',
+  // Spanish: greetings and thanks formulas, "vale" and its acknowledgements
+  'buenos días', 'buenos dias', 'buenas tardes', 'buenas noches', 'buenas', 'hola buenos días', 'qué tal',
+  'que tal', 'hola qué tal', 'hola que tal', 'cómo estás', 'como estas', 'muchas gracias', 'muchísimas gracias',
+  'mil gracias', 'quién eres', 'quien eres', 'qué puedes hacer', 'que puedes hacer', 'mucho gusto',
+  'hasta luego', 'vale', 'vale gracias', 'vale muchas gracias', 'ok vale', 'vale perfecto', 'vale genial',
+  'ok muchas gracias', 'perfecto muchas gracias', 'hola muchas gracias', 'hola buenas', 'hola buenas tardes',
+  'buen día', 'buen dia', 'de acuerdo', 'de acuerdo gracias',
+  // French: "how are you" forms, assistant-meta, wishes and closings
+  'comment ça va', 'comment ca va', 'salut ça va', 'salut ca va', 'comment vas tu', 'comment allez vous',
+  'qui es tu', 'qui êtes vous', 'que peux tu faire', 'que sais tu faire', 'raconte moi une blague', 'au revoir',
+  'à bientôt', 'a bientot', 'bonne journée', 'bonne soirée', 'bonne nuit', 'tres bien', 'merci à vous',
+  'merci à toi', 'bonjour ça va', 'bonjour ca va', 'ça va merci', 'ca va merci', 'ça va bien merci',
+  'ca va bien merci', 'merci bonne journée', 'merci beaucoup bonne journée',
+  // Italian: thanks formulas, "how are you" forms, assistant-meta, wishes and closings
+  'grazie mille', 'mille grazie', 'tante grazie', 'grazie tante', 'molte grazie', 'come stai', 'come va',
+  'ciao come stai', 'chi sei', 'cosa sei', 'cosa sai fare', 'cosa puoi fare', 'raccontami una barzelletta',
+  'piacere', 'piacere di conoscerti', 'a presto', 'buona giornata', 'buona serata', 'ok grazie mille',
+  'perfetto grazie mille', 'va bene grazie', 'ok va bene', 'salve', 'salve buongiorno',
+  // Dutch: thanks formulas, "how are you" forms, assistant-meta, wishes and closings
+  'dank je', 'dank je wel', 'dank u', 'dank u wel', 'heel erg bedankt', 'prima bedankt', 'hoe gaat het',
+  'hoe gaat het met je', 'hoe gaat het met u', 'hoe is het met je', 'wie ben jij', 'wie ben je', 'wat kun je',
+  'wat kun je doen', 'vertel me een grap', 'aangenaam', 'leuk je te ontmoeten', 'tot ziens', 'fijne dag',
+  'graag gedaan',
+  // Polish: greetings, "how are you" forms, assistant-meta, thanks formulas and closings
+  'czesc', 'pa', 'pa pa', 'dzień dobry', 'dzien dobry', 'dobry wieczór', 'jak się masz', 'jak sie masz',
+  'co słychać', 'co slychac', 'jak leci', 'kim jesteś', 'kim jestes', 'co potrafisz', 'opowiedz dowcip',
+  'miło mi', 'miło cię poznać', 'wielkie dzięki', 'wielkie dzieki', 'do widzenia', 'na razie',
+  // Turkish: two-word greetings, thanks and closings, assistant-meta, "peki" and its acknowledgements
+  'hoşça kal', 'hoşça kalın', 'güle güle', 'sağ ol', 'sağ olun', 'teşekkür ederim', 'çok teşekkür ederim',
+  'iyi günler', 'iyi akşamlar', 'iyi geceler', 'iyi çalışmalar', 'kolay gelsin', 'ne haber', 'nasıl gidiyor',
+  'nasılsınız', 'kimsin', 'sen kimsin', 'ne yapabilirsin', 'bana bir fıkra anlat', 'tanıştığıma memnun oldum',
+  'peki', 'peki tamam', 'tamam peki', 'peki teşekkürler', 'peki teşekkür ederim', 'tamam teşekkür ederim',
+  'tamam çok teşekkür ederim', 'tesekkur ederim', 'cok tesekkur ederim',
+  // Russian: greetings, "how are you" forms, assistant-meta, thanks formulas and closings
+  'добрый день', 'доброе утро', 'добрый вечер', 'спокойной ночи', 'как дела', 'привет как дела', 'как ты',
+  'как поживаешь', 'кто ты', 'что ты умеешь', 'что ты можешь', 'расскажи анекдот', 'приятно познакомиться',
+  'очень приятно', 'большое спасибо', 'спасибо большое', 'огромное спасибо', 'до свидания', 'всего доброго',
+  'всё понятно', 'все понятно', 'хорошо спасибо большое', 'ок спасибо большое', 'понятно спасибо большое',
+  // Ukrainian: "how are you" forms, assistant-meta, greetings, closings and thanks formulas
+  'як справи', 'як ти', 'як ся маєш', 'хто ти', 'хто ви', 'що ти таке', 'що ти вмієш', 'що ти можеш',
+  'розкажи анекдот', 'приємно познайомитися', 'добрий день', 'доброго дня', 'доброго ранку', 'добрий вечір',
+  'на добраніч', 'до побачення', 'до зустрічі', 'будь ласка', 'велике спасибі', 'відмінно', 'все добре дякую',
+  'все гаразд дякую', 'дякую все добре'
 ])
 
 /**

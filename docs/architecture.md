@@ -5983,11 +5983,13 @@ other names written in Latin letters in alphabetical order (Español, Français,
 Nederlands, Polski, Türkçe), then the Cyrillic ones (Русский, Українська) · G-4 (a): D-4 (c),
 D-5 (b), D-7 (a), D-10 (a), D-16 (a) and the Latin unit symbols carry over unchanged · G-5: the
 three text filters (Documents names, AI Model search, review evidence) fold case with one shared
-helper, `renderer/lib/textFold.ts` (§5) · G-6: the lock screen's edition line "HilbertRaum Lite"
-is marked `lang="en"`, so CSS capitals never give it a Turkish «İ» · G-7: user project names that
+helper, then `renderer/lib/textFold.ts`, since #818 `shared/text-fold.ts` (§5) · G-6: the lock
+screen's edition line "HilbertRaum Lite" is marked `lang="en"`, so CSS capitals never give it a
+Turkish «İ» · G-7: user project names that
 CSS shows in capitals take the interface language's casing (a known limitation) · G-10: so does a
 document's own section heading in the preview (recorded with G-7) · G-12: conversation search and
-keyword retrieval keep their plain lower-casing (`fts.ts`; a known limitation and a follow-up) ·
+keyword retrieval keep their plain lower-casing (`fts.ts`; a known limitation and a follow-up;
+changed 2026-11-14 by #818, open-issues wave owner call G-8) ·
 G-8, G-9, G-11: the real-app check's remaining layout and wording findings accepted as recorded,
 or collected for follow-up ("Second UI-languages wave QA" below).
 
@@ -6007,13 +6009,25 @@ the language's figures (the invoice tax rate excepted since the code review, bel
 reports keep their plain code-built joins and the units their Latin symbols, and the brand
 link's tooltip and the Spain pattern of Spanish figures stay as they are (§5) · G-5 (a): the English and German sentences that read wrong at exactly 1 put the count
 after a label, `chat.speed.line` excepted (§5) · G-7 (a): a support report copied in any language
-but English and German carries an English copy in the same paste (§5) · G-10 (a): the English and
-German copy fixes of #805, each changed sentence read by the owner before it was translated ·
-G-12 (a): one generic lead, "This file couldn’t be added.", above an unrecognised error on a
-failed document row and in the chat's attach banner (§3.3 Rule 1; amended at the code review,
-below).
-G-6, G-8, G-9 and G-11 decide the language select, search and sorting, layout, and how questions
-in the new languages are recognised; this legend records them when their changes land. Made
+but English and German carries an English copy in the same paste (§5) · G-8 (a): the keyword-search
+query is composed (NFC) and lowered without a locale, a capital «İ» to a plain "i" (`lowerCaseNfc`,
+`shared/text-fold.ts`), and a word holding «ı» is also searched with each «ı» written as "i"; the
+index, its triggers and the stored text stay as they were ([`rag-design.md`](rag-design.md) §11
+"Keyword index"); the filters' `foldCase` composes first; the conversation list orders its project
+sections with an `Intl.Collator` of the interface language instead of the system's locale
+(`ConversationList.tsx` `groupByProject`) (§5) · G-10 (a): the English and German copy fixes of
+#805, each changed sentence read by the owner before it was translated · G-11 (a): the small-talk
+check keeps every letter and digit of any script and knows short greeting, thanks and closing lists
+for Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian (`skills/vocabulary.ts`);
+the router recognises the document chat's two example chips in every catalog (§3.3 Rule 3); its
+English compare words are bounded by letters, digits and "_" instead of the ASCII word boundary, so
+«différend» (a dispute) no longer reads as "diff", and the French compare words are listed
+(`analysis/router.ts` `COMPARE_RE`); the Italian and Dutch "alle" and the Polish "list" partial
+labels and the knowledge-pack language detector stay as they are (known limitations) · G-12 (a):
+one generic lead, "This file couldn’t be added.", above an unrecognised error on a failed document
+row and in the chat's attach banner (§3.3 Rule 1; amended at the code review, below).
+G-6 and G-9 decide the language select and the layout; this legend records them when their
+changes land. Made
 while the catalog changes were built (2026-11-14): the Spanish review decision labels put the
 decision in parentheses («Revisado (respaldado)»), because the Spanish style guide has no spaced
 dash and a colon inside the label doubled the colon of the review summary's label-value join ·
@@ -6030,7 +6044,31 @@ figure again, with a dot like the amounts beside it, since a skill answer's figu
 dot in every language (§5) · the chat's attach banner leads with `chat.attach.failed`, which names
 the file, and `docs.failed.lead`, now "This file couldn’t be processed.", serves the failed
 document row alone (§3.3 Rule 1) · every German percent after a figure takes U+00A0, not only
-`common.percent`, and a German typography rule refuses `{x}%` and `{x} %` (§5).
+`common.percent`, and a German typography rule refuses `{x}%` and `{x} %` (§5). Made at the owner
+rounds while #818 and #809 were built (2026-11-14), amending G-8 and G-11: the search residuals
+are accepted as built: a typed «isi», «Isı» or «ISI» does not find «ısı», a typed «kır» finds
+«kir» but a typed «kir» does not find «kır» (the filters match both ways), and text stored with a
+separate Cyrillic mark is found by neither spelling (known limitations) · English "a" and "lot"
+and German "passt" are no single small-talk fillers any more, since «A lot?» is Polish for "and
+the flight?", «A Nice ?» French for "in Nice?" and «Passt alles?» asks whether everything is
+right; "thanks a lot" and its acknowledgements, and "passt", "passt danke", "passt super", "danke
+passt", "vielen dank passt", "ok passt" and "super passt", are whole-message forms, the bare
+question «Passt so?» is none, and «Alles gut?» and "all good?" stay small talk · the French
+compare family is listed: «différence(s)», «différent(e)(s)», «diffère(nt)» and «différencier»
+with its forms route to compare, while «différend», «différé(e)(s)», «différer», «différemment»
+and «différentiel(le)(s)» do not (`COMPARE_RE`). Made at the code review of #818 and #809
+(2026-11-14), amending G-8 and G-11: a search word holding «ı» gets only the spellings stored
+text can have, at most two (the first «ı» as "i" when the word starts with «ı», as a capital
+first letter is stored, and every «ı» as "i", as capitals are), not every mix, and with no limit
+on the number of «ı» · a search word keeps the marks inside it, so a mark with no one-character
+form, such as a Russian stress mark, no longer cuts it, and the index drops that mark from the
+stored text too ([`rag-design.md`](rag-design.md) §11 "Keyword index") · eight more English and
+German whole-message forms: "thanks a lot bye", "thank you a lot bye", "ok thank you a lot",
+"alles klar passt", "klar passt", "passt vielen dank", "passt danke schön" and "passt danke dir".
+Made with them, inside G-11: the small-talk check folds «ı» to "i" on both sides (`foldCase`), so
+Turkish typed in capitals is recognised; the router composes the question (NFC) once before
+every check; the two chips still count with a closing ".", "!", "?" or "…"; and the quote-frame
+reader passes over an opening quote that nothing closes.
 
 ### §3.1 The i18n module
 
@@ -6185,7 +6223,35 @@ build tree-shakes them).
   question French, Russian and Ukrainian, because the Spanish, Italian, Dutch, Polish and Turkish
   ones contain the stem `categor` or `kategor` (2026-11-13). A structured intent (the finished
   run's tool sent with the request) would need no text match; the exact match is the chosen fix
-  (owner call 2026-11-12).
+  (owner call 2026-11-12). Two more keys, added 2026-11-14 (#809, open-issues wave owner call
+  G-11), are read the same way: the document chat's example chips, which `ChatScreen.tsx` puts in
+  the composer in the UI language, while the task router's word lists (`analysis/router.ts`) are
+  English and German, the French compare words aside. The router reads `chat.example.summarize`
+  and `chat.example.indemnity` from every registered catalog when the module loads, never copied,
+  and compares them composed, lowered (`lowerCaseNfc`) and trimmed, as it does the question, both
+  without a closing ".", "!", "?" or "…" (`chipText`). The summarize chip, by its whole text, is a
+  summary ask (`isSummaryAsk`). The every-mention chip is
+  recognised by its frame: the text up to and including its opening quote and from its closing
+  quote on, with any text that isn't blank
+  inside the quotes, so a user who puts their own word in the quotes keeps the route. The quote
+  pairs it knows are '…', „…“, „…”, «…» and “…”; a quote right after a letter (the apostrophe in
+  "tenant's") opens none, and a value that quotes nothing would be matched by its whole text. The
+  chip gets the labelled answer (step 4b, `fallback: 'partial'`) the English and German chips get
+  by their own words. Proof `extract-router.test.ts`, one row per registered language (the
+  summarize chip as written and in capitals; the every-mention chip with its own word and with
+  another; in the eight other languages, that chip without its quotes, or followed by another
+  question, is a plain question).
+  Changing either chip's wording in any language, or the text around the indemnity chip's quotes,
+  changes what the router recognises, and the old wording is then read like any other question
+  in that language. Not a Rule-3 site: the small-talk check (`isSmallTalk`,
+  `skills/vocabulary.ts`), whose greetings, thanks and closings for the eight languages beyond
+  English and German are language data written in main for the check, not catalog values, so no
+  catalog edit changes them. They follow three rules, checked across all ten languages for a
+  filler that is a content word elsewhere: no yes-word (a bare «sí» or «так» can answer the
+  assistant's own offer), no "is it fine?" phrase («¿está bien?», «va bene?», «все добре?»; a
+  one-word «Bien?», «Bene?», «Goed?», «Dobrze?», «Хорошо?» or «Добре?» still reads as small talk,
+  as the German «Gut?» does), and an adjective or numeral that inflects with its noun only inside
+  a whole-message form ("muchas gracias", "большое спасибо").
 - The product name "HilbertRaum" is never translated; language names in the
   picker stay in their own language (each registry entry's `nativeName`: `English`, `Deutsch`,
   `Español`, `Français`, `Italiano`, `Nederlands`, `Polski`, `Türkçe`, `Русский`, `Українська`),
@@ -6390,18 +6456,27 @@ one, and each glossary is pinned on top of its catalog file.
   supplies it. The parity rule decides by probing the language's rule, so Spanish, Italian, Dutch,
   Polish and Turkish (`one` = 1 alone) get neither the licence nor the duty. No other placeholder
   may be added or dropped.
-- **A text filter folds case with `foldCase`** (`renderer/lib/textFold.ts`; second UI-languages
-  wave owner call G-5, 2026-11-13), on both sides: the query and the text. Its sites are the
-  Documents name filter, the AI Model search and the review evidence filter. Never call
-  `toLocaleLowerCase()` without a locale: it lowers in the runtime's default locale, not the UI
-  language, and a Turkish default locale lowers "Invoice" to "ınvoice" (shown in Node and jsdom;
-  `--lang=tr-TR` did not reproduce it in the app, §3.2, and a Turkish operating system was not
-  tested), so a typed "inv" would find nothing. `foldCase` lowers with `toLowerCase()`, which
-  reads no locale, and then turns the dotless «ı» and the «i» + U+0307 that «İ» lowers to into a
-  plain «i», so I, ı, İ and i match each other in every interface language and on every system.
-  Nothing else changes (no accent stripping, no Unicode normalization), so English and German
-  text folds exactly as `toLowerCase()` folds it. The main process's search does not use it
-  (`fts.ts`; second UI-languages wave owner call G-12).
+- **A text filter folds case with `foldCase`** (`shared/text-fold.ts`, moved from
+  `renderer/lib/textFold.ts` by #818; second UI-languages wave owner call G-5, 2026-11-13), on
+  both sides: the query and the text. Its sites are the Documents name filter, the AI Model
+  search and the review evidence filter. Never call `toLocaleLowerCase()` without a locale: it
+  lowers in the runtime's default locale, not the UI language, and a Turkish default locale
+  lowers "Invoice" to "ınvoice" (shown in Node and jsdom; `--lang=tr-TR` did not reproduce it in
+  the app, §3.2, and a Turkish operating system was not tested), so a typed "inv" would find
+  nothing. `foldCase` is `lowerCaseNfc` and then «ı» as a plain «i». `lowerCaseNfc` composes the
+  text first (NFC; open-issues wave owner call G-8), so a letter stored as a base letter and a
+  separate mark, as macOS stores file names, matches the same letter typed as one character, and
+  the other way round; it then lowers with `toLowerCase()`, which reads no locale, and turns the
+  «i» + U+0307 that «İ» lowers to into a plain «i». So I, ı, İ and i match each other in every
+  interface language and on every system. Nothing else changes (no accent stripping), and NFC
+  leaves already-composed text as it is, so English and German text as keyboards type it folds
+  exactly as `toLowerCase()` folds it. The main process lowers the same way: the keyword-search
+  query (`fts.ts` `buildFtsMatchQuery`) and the router's chip match call `lowerCaseNfc`, and the
+  small-talk check calls `foldCase` on the question and on its lists, so Turkish typed in
+  capitals meets them. The search keeps «ı» apart from «i», because the index does, and adds the
+  spellings the index stores a word holding «ı» under instead ([`rag-design.md`](rag-design.md)
+  §11 "Keyword index"; second UI-languages wave owner call G-12, changed by open-issues wave
+  owner call G-8).
 
 ### Phase-42 QA (as built)
 
@@ -6565,7 +6640,10 @@ first wave's code-built joins, now with one real break, a Ukrainian «23» and �
 two lines on a model card by the plain space the code puts before the unit (`shared/format.ts`,
 `ModelsScreen.tsx`), while Turkish shows «15%» in the context meter whose tooltip, from the
 catalog, reads «%15». Eight findings that are wrong in English too (layout at 880×600, a few
-English wordings) were collected for follow-up (owner call G-11).
+English wordings) were collected for follow-up (owner call G-11). Changed 2026-11-14 by #818
+(open-issues wave owner call G-8): the search query is now composed and lowered with
+`lowerCaseNfc`, so «İstanbul» is one word, and a word holding «ı» is also searched with each «ı»
+as "i", so «ısı» finds "ISI" (§5, the `foldCase` bullet).
 Native review is open for all eight machine-drafted catalogs (#813), with two words this check
 left for it: Turkish «Uygulanamaz» ("not applicable", which may read "cannot be applied or
 enforced") and Polish «Wolno» ("slow", which can also read "allowed").

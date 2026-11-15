@@ -1,6 +1,6 @@
 import type { ModelInfo } from '@shared/types'
 import { isModelInstalled, isModelOnDrive, isModelRunnableHere } from './modelAvailability'
-import { foldCase } from './textFold'
+import { foldCase } from '@shared/text-fold'
 
 export type ModelTask = 'chat' | 'documents' | 'translation' | 'vision' | 'transcriber'
 export type LibraryView = 'installed' | 'browse'
