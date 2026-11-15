@@ -10,6 +10,7 @@ import {
   EXACT_MATCH_SITES,
   SECURITY_TEXT,
   exactMatchSitesWithKeys,
+  exactMatchTwins,
   pluralCsv,
   pluralSheetFor,
   reviewCsv,
@@ -319,6 +320,17 @@ describe('the exact-match column (#813, i18n record §3.3 Rule 3)', () => {
       }
     }
     expect(sites.every(({ keys }) => keys.length > 0)).toBe(true)
+  })
+
+  // The code cannot tell a twin from the key it reads (same English text), so a translation that
+  // differs is a recognised text in one language and an unknown one in another (W6-2).
+  it.each(UI_LANGUAGE_CODES)('%s: every twin reads exactly like the key the code reads', (code) => {
+    const catalog = catalogOf(code)
+    const twins = [...exactMatchTwins()]
+    expect(twins.length).toBeGreaterThan(0)
+    expect(
+      twins.flatMap(([twin, readKeys]) => readKeys.filter((key) => catalog[key] !== catalog[twin]).map((key) => `${twin} != ${key}`))
+    ).toEqual([])
   })
 
   // Code that compares text with every catalog iterates the registry (Rule 3), so every read of

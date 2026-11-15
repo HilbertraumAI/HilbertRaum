@@ -279,22 +279,29 @@ export const exactMatchSitesWithKeys = once((): readonly { site: ExactMatchSite;
 })
 
 /**
- * Key → why it is marked: the reason of every site that reads it, then a `twinReason` for every key
- * a site reads whose English text is the same (the code compares text, so it cannot tell the two
- * apart: `translate.err.startFailed` passes the doc-task filter as `main.translation.startFailed`).
+ * The twins: key → the keys a site reads whose English text is the same as its own. The code compares
+ * text, so it cannot tell the two apart (`translate.err.startFailed` passes the doc-task filter as
+ * `main.translation.startFailed`), and the two translations have to stay identical.
  */
-const exactMatchReasons = once((): ReadonlyMap<string, readonly string[]> => {
+export const exactMatchTwins = once((): ReadonlyMap<string, readonly string[]> => {
   const english = catalogOf('en')
+  const read = [...new Set(exactMatchSitesWithKeys().flatMap(({ keys }) => keys))]
+  const twins = new Map<string, string[]>()
+  for (const key of Object.keys(english)) {
+    const of = read.filter((readKey) => readKey !== key && english[readKey] === english[key])
+    if (of.length > 0) twins.set(key, of)
+  }
+  return twins
+})
+
+/** Key → why it is marked: the reason of every site that reads it, then a `twinReason` per key it is a twin of. */
+const exactMatchReasons = once((): ReadonlyMap<string, readonly string[]> => {
   const reasons = new Map<string, string[]>()
   const add = (key: string, reason: string): void => {
     reasons.set(key, [...(reasons.get(key) ?? []), reason])
   }
-  const sites = exactMatchSitesWithKeys()
-  for (const { site, keys } of sites) for (const key of keys) add(key, site.reason)
-  const read = [...new Set(sites.flatMap(({ keys }) => keys))]
-  for (const key of Object.keys(english)) {
-    for (const readKey of read) if (readKey !== key && english[readKey] === english[key]) add(key, twinReason(readKey))
-  }
+  for (const { site, keys } of exactMatchSitesWithKeys()) for (const key of keys) add(key, site.reason)
+  for (const [key, readKeys] of exactMatchTwins()) for (const readKey of readKeys) add(key, twinReason(readKey))
   return reasons
 })
 

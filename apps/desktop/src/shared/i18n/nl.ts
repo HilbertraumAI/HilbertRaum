@@ -2627,8 +2627,8 @@ export const nl: UiCatalog<'nl'> = {
     'Voor dit gesprek wordt nog een antwoord gegenereerd. Stop dat antwoord eerst.',
   'main.chat.locked': 'De werkruimte is vergrendeld. Ontgrendel de werkruimte om te chatten.',
   'main.busy.chat':
-    'Er wordt op dit moment een antwoord geschreven. Wacht tot het klaar is (of stop het) en ' +
-    'probeer het dan opnieuw.',
+    'Er wordt nu een antwoord geschreven. Wacht tot het klaar is (of stop het) en probeer het dan ' +
+    'opnieuw.',
   'main.busy.docTask':
     'Een documenttaak gebruikt het model. Wacht tot de taak klaar is, of annuleer de taak, en ' +
     'probeer het dan opnieuw.',
