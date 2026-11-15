@@ -137,6 +137,32 @@ Where each existing control goes:
 | Code-block Copy / Save | Same quiet action style, but **per code block**: revealed on hover or keyboard focus of the block itself (not shown while the answer is streaming), each with an accessible name that names the file type it saves as ("Save this code block as a .html file"). |
 | Errors / notices | Inline, in context, dismissible, rare. Never stacked at the top. |
 
+**At narrow widths** (#803, 2026-11-15; open-issues wave owner call G-9 and the owner rounds in the
+`architecture.md` i18n legend). The chat column has no min-content floor
+(`.chat-main { min-width: 0 }`), so its `1fr` track shrinks to the window. Before, with the
+conversation list opened in a window narrower than about 967 px (the list collapses on its own at
+1,150 px and below, §12.1 item 8), the composer footer's min-content width held the track open and
+document mode ran Ask and the memory meter past the right edge, by about 30 px at the 880×600
+minimum window (§16). The composer footer wraps (`flex-wrap: wrap; row-gap: 4px`): a control that
+doesn't fit moves whole to the next row instead of squeezing the others, so every measured footer
+control stays on one line (the suggestion hint has no ellipsis: a suggested skill title longer than
+a whole footer row would wrap inside it; no bundled skill's title comes close). The "Skill: … ▾"
+trigger never wraps inside (`white-space: nowrap`) and wraps as one group with its ⓘ and ✕
+(`.skill-picker-group`, which doesn't shrink), so "Skill: No skill" keeps its full width; inside the
+group only a skill name longer than a whole footer row makes the trigger give way, and the name then
+ends in "…" (the button's accessible name keeps the full title) while ⓘ and ✕ keep their size. The
+suggestion hint is a footer item of its own. The cost is height: at 880×600 with the list open the
+footer takes one more row in the default case and up to three with a long skill title or the
+suggestion hint; maximized it takes one row, two with a long title and in French document mode. At
+880×600 the chat header's model line moves to a second line. Guard for the rules above:
+`tests/unit/min-window-layout.test.tsx`. The empty composer is one row, about 250 px wide there, and
+Chromium gives a textarea placeholder no ellipsis (measured), so a document-mode placeholder must
+fit that line: the French and Russian values are shorter for it (UI-languages owner call D-10 (a)).
+No test checks a placeholder's width; it was checked only in the running app, with Windows fonts
+(macOS and Linux not measured; Italian, Spanish and Ukrainian have 26 to 31 px to spare), so a
+translation that lengthens `chat.placeholder.documents` is checked at 880×600 with the conversation
+list open.
+
 **Empty state that teaches:** one friendly line ("Ask a question, or ask about your
 documents."), 3–4 example prompt chips ("Summarize this contract", "What are the payment
 terms?", "Find every mention of 'indemnity'") that fill the composer; if no documents yet,
@@ -2364,6 +2390,22 @@ backend/data-contract/IPC changes. Before/after eyeball captures lived in
      narrow-window breakpoints (≤760/≤520px) no longer shrink the column below this fit width
      (a single word can't wrap). Labels with a space or hyphen ("AI Model", "KI-Modell") may
      still wrap cleanly to two lines. Guard: `tests/unit/rail-labels.test.ts`.
+   - **The rail scrolls at short window heights** (#803, 2026-11-15; open-issues wave owner call
+     G-9). Its content is about 631 px tall on an encrypted workspace (571 px on a plaintext one,
+     which has no lock button), so below a window height of about 696 px (636; Turkish, with its
+     two-line «Yapay zekâ modeli», about 15 px more) its foot, Lock now and the network
+     indicator, sat under the window and the whole app scrolled to reach it. `.sidebar` now
+     scrolls on its own (`overflow-y: auto; min-height: 0`), by wheel and keyboard (Tab brings the
+     lock button and the indicator into view), with no visible scrollbar
+     (`scrollbar-width: none`): a classic bar takes about 15 px of the column, and the labels are
+     sized to the pixel (German «Einstellungen» has 0.3 px to spare). It never scrolls sideways
+     (`overflow-x: hidden`, owner round 2026-11-15): a label too wide for the column is clipped
+     at its edge. The rail's items never
+     shrink (`.sidebar > * { flex-shrink: 0 }`, after `.nav-list { flex: 1 }` on purpose): without
+     it the global `button { min-height: 24px }` let the brand, the lock button and the indicator
+     squeeze to 24 px before anything scrolled. On an encrypted workspace at 880×600 the lock
+     button shows only partly at the bottom edge, the one sign that the rail scrolls. Guard:
+     `tests/unit/min-window-layout.test.tsx`.
 2. **One privacy signal.** The duplicate lower-left sidebar `LocalIndicator` was removed; the
    ambient "Local · Offline" lived only in the chat header (the `variant="sidebar"` path +
    `.local-indicator-sidebar` CSS were dormant). The lock became a quiet rail button.
@@ -2711,3 +2753,39 @@ Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `li
 out of the screen so `modelLibrary` can share them without importing it back), `styles.css`, EN/DE
 catalogs. Behavioral coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`, the real-catalog
 grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*` preview cases.
+
+## 16. Minimum window — design record (2026-11-15, #803)
+
+The main window can't be made smaller than **880×600** (`minWidth` / `minHeight`,
+`main/index.ts`); on Windows that leaves 864×535 for the content. Every screen has to work there
+in every interface language. What #803 changed for it (open-issues wave owner call G-9 and the
+owner rounds in the `architecture.md` i18n legend):
+
+- **Chat:** the column shrinks to the window and the composer footer wraps (§3 "At narrow
+  widths").
+- **Rail:** it scrolls on its own at short heights, with no visible scrollbar (§12.1 item 1).
+- **Documents filter:** the search icon's 32 px left padding now wins over the `.text-input`
+  padding the box also carries (`.text-input.docs-filter-input`; with one class it lost to the
+  later `.text-input` rule by source order), so the placeholder and the typed text start after
+  the icon, at every size and in every language.
+- **"(12 cores)"** on the Performance tile and in Settings → Diagnostics: the core count after the
+  processor's name sits in a no-wrap span (`keepTogether`, `renderer/i18nNodes.tsx`; `.nowrap`),
+  so the line may break before "(" but not inside it. The Copy reports are plain text and
+  unchanged.
+
+**What was checked there:** the running app in all ten languages, at 880×600 and maximized, light
+and dark (40 states), by element rectangles and a screenshot review per language. Send or Ask and
+the memory meter stay inside the window (right edges at most 822 and 825 of 864 px at 880×600 with
+the conversation list open); no composer-footer control overlaps another, draws outside its box or
+takes two lines; the rail foot is reached by scrolling the rail, and the page itself never
+scrolls; every rail label fits its box on one line but the Turkish «Yapay zekâ modeli», two lines
+by design; the filter's text starts after its icon. The same check found "(12 cores)" broken after
+"(12" in all ten languages maximized and in Turkish at 880×600, the French and Russian
+document-mode placeholders wrapped onto a hidden second line, and in plain mode at 880×600 an
+active skill's ⓘ and ✕ wrapped alone onto the next footer row; the core-count span, the shorter
+placeholders and the skill group came from it, and the last two were measured in the running app
+before they were built. **Not changed:** the document rows, which squeeze the name at 880×600 and
+end short of the toolbar's right edge maximized, and the classic scrollbars of the conversation
+list and the message area (`architecture.md` i18n record, the two waves' QA paragraphs). Guard:
+`tests/unit/min-window-layout.test.tsx` reads the real `styles.css` and resolves which rule wins,
+since jsdom lays nothing out; the rectangles above are the behavioral proof.

@@ -6027,8 +6027,16 @@ query is composed (NFC) and lowered without a locale, a capital «İ» to a plai
 index, its triggers and the stored text stay as they were ([`rag-design.md`](rag-design.md) §11
 "Keyword index"); the filters' `foldCase` composes first; the conversation list orders its project
 sections with an `Intl.Collator` of the interface language instead of the system's locale
-(`ConversationList.tsx` `groupByProject`) (§5) · G-10 (a): the English and German copy fixes of
-#805, each changed sentence read by the owner before it was translated · G-11 (a): the small-talk
+(`ConversationList.tsx` `groupByProject`) (§5) · G-9 (a): three CSS rules for the 880×600 minimum
+window (#803), each written once its cause was confirmed in the running app: the Documents
+filter's icon padding wins over `.text-input` (`.text-input.docs-filter-input`), the chat column
+has no min-content floor (`.chat-main { min-width: 0 }`), and the rail scrolls with no visible
+scrollbar (`.sidebar { overflow-y: auto; min-height: 0; scrollbar-width: none }`); the dialog
+title's line height, the button font and the document rows stay out, and the composer footer did
+too until the owner rounds below ([`design-guidelines.md`](design-guidelines.md) §3, §12.1, §16) ·
+G-10 (a): the English and German copy fixes of #805, each changed sentence read by the owner
+before it was translated; its item S3, "(12 cores)" breaking inside, was left to #803's
+ten-language check and landed with it (below) · G-11 (a): the small-talk
 check keeps every letter and digit of any script and knows short greeting, thanks and closing lists
 for Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian (`skills/vocabulary.ts`);
 the router recognises the document chat's two example chips in every catalog (§3.3 Rule 3); its
@@ -6037,8 +6045,7 @@ English compare words are bounded by letters, digits and "_" instead of the ASCI
 (`analysis/router.ts` `COMPARE_RE`); the Italian and Dutch "alle" and the Polish "list" partial
 labels and the knowledge-pack language detector stay as they are (known limitations) · G-12 (a):
 one generic lead, "This file couldn’t be added.", above an unrecognised error on a failed document
-row and in the chat's attach banner (§3.3 Rule 1; amended at the code review, below).
-G-9 decides the layout; this legend records it when its change lands. Made
+row and in the chat's attach banner (§3.3 Rule 1; amended at the code review, below). Made
 while the catalog changes were built (2026-11-14): the Spanish review decision labels put the
 decision in parentheses («Revisado (respaldado)»), because the Spanish style guide has no spaced
 dash and a colon inside the label doubled the colon of the review summary's label-value join ·
@@ -6086,6 +6093,30 @@ review of #808 (2026-11-15), inside G-6: a choice equal, when its save would run
 language the store holds, or will hold once the saves still unanswered land, saves nothing and
 toasts nothing (a pick and back within the pause, or a pick again of a language whose save is
 still unanswered); and a refusal's toast is in the language shown when the refusal arrives.
+Made at the owner rounds while #803 was built (2026-11-15; code comments cite them as
+"open-issues wave owner round W5-1" to "W5-6"), widening G-9 and G-10: W5-1, the rail's items
+never shrink (`.sidebar > * { flex-shrink: 0 }`), since the global `button { min-height: 24px }`
+let the brand, the lock button and the indicator squeeze to 24 px before the rail scrolled, and
+the "Skill: … ▾" trigger stays on one line (`.skill-picker-trigger`, `SkillPicker.tsx`), since
+with the chat column's floor gone "Skill: No skill" wrapped to three · W5-2, a width cap with an
+ellipsis on that trigger, measured in the running app and replaced by W5-3, since no cap from 35
+to 50 % met every measured condition at 880×600 and the 45 % cap left text outside its box in 41
+of 60 cases · W5-3, the composer footer wraps (`flex-wrap: wrap; row-gap: 4px`), so a control
+that doesn't fit moves to the next row, and a skill name longer than a whole row ends in "…"
+(`.skill-picker-label`; the button's name keeps the full title) · W5-4, "(12 cores)" stays
+together on the Performance tile and in Settings → Diagnostics (`keepTogether`,
+`renderer/i18nNodes.tsx`, puts the core count in a `.nowrap` span; the Copy reports are
+unchanged), and the Turkish rail label «Yapay zekâ modeli» keeps its two lines · W5-5, the
+French and Russian document-mode placeholders (`chat.placeholder.documents`) are shorter, since
+at 880×600 with the conversation list open, once the chat column could shrink, they wrapped onto
+a hidden second line of the empty composer and Chromium gives a textarea placeholder no ellipsis,
+and the trigger wraps as one group with its ⓘ and ✕ (`.skill-picker-group`), the suggestion hint
+outside it · W5-6, the rail never scrolls sideways (`.sidebar { overflow-x: hidden }`), so a
+label too wide for the column is clipped at its edge. Made with them:
+inside G-9, the trigger may give way inside its group, so a name longer than a whole row still
+ends in "…" with ⓘ and ✕ inside the footer at their size; and the Russian value is «Вопрос по
+документам…», since the translation check found that «о документах» in the value the round
+named reads as a topic, where the glossary and the mode label say «по … документам».
 
 ### §3.1 The i18n module
 
@@ -6558,7 +6589,13 @@ open, document rows squeezing the name to nothing at 880×600, and the Documents
 covering the placeholder. Changed 2026-11-15 by #808 (open-issues wave owner call G-6): the
 language select saves about half a second after its last change, or at once when it loses focus
 or the tab is left, so stepping through it with the arrow keys switches and saves once, with one
-"Saved" toast in the new language (`SettingsScreen.tsx`).
+"Saved" toast in the new language (`SettingsScreen.tsx`). Changed 2026-11-15 by #803 (open-issues
+wave owner call G-9): the rail scrolls on its own, so its foot is in reach at 880×600 without the
+window scrolling; the document-mode chat stays inside the window with the conversation list open;
+the Documents filter's text starts after its icon; and the Spanish and French skill trigger stays
+on one line maximized too, the composer footer taking a second row in French document mode
+instead ([`design-guidelines.md`](design-guidelines.md) §3, §12.1, §16). The document rows still
+squeeze the name at 880×600; they were outside that change.
 
 Other legs: renderer and main plural categories equal the registry pins (the R-L1 note in §3.2);
 with the lock-screen language different from the OS, a wrong password shows the gate and its error
@@ -6665,7 +6702,16 @@ catalog, reads «%15». Eight findings that are wrong in English too (layout at 
 English wordings) were collected for follow-up (owner call G-11). Changed 2026-11-14 by #818
 (open-issues wave owner call G-8): the search query is now composed and lowered with
 `lowerCaseNfc`, so «İstanbul» is one word, and a word holding «ı» is also searched with each «ı»
-as "i", so «ısı» finds "ISI" (§5, the `foldCase` bullet).
+as "i", so «ısı» finds "ISI" (§5, the `foldCase` bullet). Changed 2026-11-15 by #803 (open-issues
+wave owner call G-9): of those layout findings, the Documents filter icon no longer covers the
+placeholder, the document-mode chat is no longer cut at the window's right edge, and no measured
+composer-footer control takes two lines (the footer moves a control that doesn't fit to the next
+row; only a suggestion hint naming a skill longer than a whole row would wrap inside it); the
+first-run starter step's two-line buttons, the knowledge-pack tools dialog's clipped title and the
+document rows' squeeze above are not changed. #803's ten-language check found two more, also not
+changed: the document rows end short of the toolbar's right edge when maximized, and the
+conversation list and the message area show classic scrollbars with arrow buttons, heavier than
+the rest of the interface.
 Native review is open for all eight machine-drafted catalogs (#813), with two words this check
 left for it: Turkish «Uygulanamaz» ("not applicable", which may read "cannot be applied or
 enforced") and Polish «Wolno» ("slow", which can also read "allowed").

@@ -83,6 +83,11 @@ from its first public `1.0.0` release onward.
 - **A computer with one processor core now reads "(1 core)".** The hardware details in Settings →
   Diagnostics and on the Performance screen, and the reports their Copy buttons make, said
   "(1 cores)" next to the processor on such a machine (German: "(1 Kerne)").
+- **The processor's core count no longer breaks across two lines.** On the Performance screen,
+  "(12 cores)" after the processor broke between the number and the word in a wide window,
+  leaving "(12" at the end of a line. It now stays together, and the line breaks before it when
+  it must. The same line in Settings → Diagnostics is kept together too. The reports the Copy
+  buttons make are unchanged (#805).
 - **Sizes, percentages and labels now follow each language's typography.** In Spanish, French,
   Italian, Dutch, Polish, Turkish, Russian and Ukrainian a size such as "23 GB" no longer breaks
   across two lines between the figure and the unit. The chat's context meter and an audio file's
@@ -145,6 +150,27 @@ from its first public `1.0.0` release onward.
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.
   Questions with "différence", "différent", "diffère" or "différencier" still compare them
   (#809).
+- **The Documents filter's search icon no longer covers the text.** The magnifier in the "Filter
+  by name…" box sat over the start of the placeholder and of what you typed, at every window
+  size and in every language. The text now starts after the icon (#803).
+- **The chat fits a narrow window with the conversation list open.** In a window narrower than
+  about 967 pixels, down to the smallest the app allows (880 × 600), opening the conversation
+  list in document mode pushed the Ask button and the Memory meter past the right edge of the
+  window. The chat now shrinks to fit. The controls under the message box move to a new row when
+  they don't fit, instead of squeezing each other, so each stays on one line (only a "Suggested:
+  …" hint naming a skill longer than a whole row would still wrap); the "Skill: …" control moves
+  together with its ⓘ and ✕ buttons, and a skill name longer than a whole row ends in "…". At the
+  smallest window the chat header shows the model's name on a second line. In French and
+  Russian, the placeholder of the empty message box in document mode is shorter («Interrogez vos
+  documents…», «Вопрос по документам…»), so it fits the narrower message box on one line
+  (#803).
+- **The navigation rail scrolls in a short window.** In a window less than about 696 pixels high
+  (636 for a workspace without encryption, which has no Lock now button; about 15 more in
+  Turkish, whose "AI Model" label takes two lines), the foot of the rail,
+  Lock now and the network indicator, sat below the window, and the whole window scrolled to
+  reach it. The rail now scrolls on its own, with the mouse wheel or by moving to its buttons
+  with the Tab key. It shows no scrollbar, so the labels keep their width, and its buttons keep
+  their size (#803).
 
 ## [0.1.65] — 2026-11-11
 
