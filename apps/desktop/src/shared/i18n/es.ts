@@ -2672,8 +2672,8 @@ export const es: UiCatalog<'es'> = {
     'Todavía se está generando una respuesta para esta conversación. Detenla primero.',
   'main.chat.locked': 'El espacio de trabajo está bloqueado. Desbloquéalo para chatear.',
   'main.busy.chat':
-    'Ahora mismo se está escribiendo una respuesta. Espera a que termine (o detenla) y luego ' +
-    'vuelve a intentarlo.',
+    'Ahora mismo se está escribiendo una respuesta. Espera a que termine (o detenla) y vuelve a ' +
+    'intentarlo.',
   'main.busy.docTask':
     'Una tarea de documentos está usando el modelo. Espera a que termine o cancélala, y luego ' +
     'vuelve a intentarlo.',

@@ -2699,7 +2699,7 @@ export const pl: UiCatalog<'pl'> = {
   'main.chat.stopFirst': 'Odpowiedź w tej rozmowie jest jeszcze generowana. Najpierw ją zatrzymaj.',
   'main.chat.locked': 'Obszar roboczy jest zablokowany. Odblokuj go, aby korzystać z czatu.',
   'main.busy.chat':
-    'Właśnie powstaje odpowiedź. Poczekaj, aż się zakończy (albo ją zatrzymaj), a potem spróbuj ' +
+    'Trwa generowanie odpowiedzi. Zaczekaj, aż się zakończy (albo ją zatrzymaj), a potem spróbuj ' +
     'ponownie.',
   'main.busy.docTask':
     'Zadanie dotyczące dokumentu korzysta z modelu. Poczekaj, aż się zakończy, albo je anuluj, a ' +

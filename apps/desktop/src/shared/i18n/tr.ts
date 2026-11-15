@@ -2517,7 +2517,8 @@ export const tr: UiCatalog<'tr'> = {
   'main.chat.stopFirst': 'Bu sohbet için hâlâ bir yanıt oluşturuluyor. Önce yanıtı durdurun.',
   'main.chat.locked': 'Çalışma alanı kilitli. Sohbet etmek için kilidini açın.',
   'main.busy.chat':
-    'Şu anda bir yanıt yazılıyor. Bitmesini bekleyin (veya durdurun), ardından yeniden deneyin.',
+    'Şu anda bir yanıt yazılıyor. Bitmesini bekleyin (veya yanıtı durdurun), ardından yeniden ' +
+    'deneyin.',
   'main.busy.docTask':
     'Bir belge görevi modeli kullanıyor. Bitmesini bekleyin veya görevi iptal edin, ardından ' +
     'yeniden deneyin.',
