@@ -6080,10 +6080,12 @@ Made with them, inside G-11: the small-talk check folds «ı» to "i" on both si
 Turkish typed in capitals is recognised; the router composes the question (NFC) once before
 every check; the two chips still count with a closing ".", "!", "?" or "…"; and the quote-frame
 reader passes over an opening quote that nothing closes. Made while #808 was built (2026-11-15),
-inside G-6: a choice equal to the stored language when its save would run (a pick and back
-within the pause) saves nothing and toasts nothing, unless an earlier save is still unanswered;
-a refused save shows the stored language again with the `settings.saveFailed` toast; and an
-older save's reply never takes a newer pending choice off the select.
+inside G-6: a refused save shows the stored language again with the `settings.saveFailed` toast,
+and an older save's reply never takes a newer pending choice off the select. Made at the code
+review of #808 (2026-11-15), inside G-6: a choice equal, when its save would run, to the
+language the store holds, or will hold once the saves still unanswered land, saves nothing and
+toasts nothing (a pick and back within the pause, or a pick again of a language whose save is
+still unanswered); and a refusal's toast is in the language shown when the refusal arrives.
 
 ### §3.1 The i18n module
 
