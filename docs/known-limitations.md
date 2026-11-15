@@ -2738,7 +2738,8 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **Only the English and German interface has been reviewed by native speakers.** The Spanish,
   French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian text was machine-translated and
   checked by a second AI model; no native speaker has reviewed it yet. The app shows no notice
-  about this.
+  about this. If one of these is your native language and you'd like to review it,
+  [CONTRIBUTING "Reviewing a translation"](../CONTRIBUTING.md#reviewing-a-translation) says how.
 - **Text recognition (OCR) reads German and English; speech was not tested in the new
   languages.** The OCR files the app installs cover German and English only, none of the other
   interface languages (#810), so a scan or photo in another language may be read with errors.

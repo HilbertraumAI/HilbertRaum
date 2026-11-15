@@ -510,6 +510,126 @@ text back into English and compares it with the original. Findings have three se
 S1 and S2 findings are fixed before the pull request merges; S3 findings at the translator's
 judgement. A catalog nobody has reviewed natively keeps `nativeReviewed: false` in the registry.
 
+### Reviewing a translation
+The Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian text was drafted by
+machine and checked by a second AI model, as above; no native speaker has reviewed it yet, so each
+of these languages keeps `nativeReviewed: false` in `apps/desktop/src/shared/i18n/languages.ts`.
+If one of them is your native language, your review is the help it needs most, and it takes no
+programming: you read a spreadsheet and report what reads wrong.
+
+**What to read, in order.** The review table lists the text in the order to read it:
+
+1. The privacy, password, lock-screen and workspace text (group `security`, the keys that start
+   with `privacy.`, `password.`, `gate.` or `main.workspace.`). A wrong word there tells someone
+   something false about their data, so check that the meaning is exact and that nothing is
+   softened or overstated.
+2. The review screen (group `review`, the keys that start with `review.`), where the wording is
+   close to legal text and has to be as precise.
+3. Everything else (group `other`): navigation, buttons, messages. A sentence that names a button
+   or a screen must use its exact label.
+
+Then read the plural sheet and the bundled skills' text (both below).
+
+**Getting the files.** The files are made from the catalogs in a copy of the repository, with the
+tools from "Dev setup" installed (Node.js, then `npm ci`). From `apps/desktop`, run this, naming a
+folder outside the repository:
+
+```bash
+HILBERTRAUM_I18N_REVIEW_EXPORT="$HOME/hilbertraum-review" npx vitest run tests/manual/i18n-review-export.test.ts
+```
+
+In Windows PowerShell (type `npx.cmd` if PowerShell refuses `npx`, see "Faster test iteration"):
+
+```powershell
+$env:HILBERTRAUM_I18N_REVIEW_EXPORT = "$HOME\hilbertraum-review"
+npx vitest run tests/manual/i18n-review-export.test.ts
+```
+
+For every language but English it writes two files: `<code>-review.csv`, the review table, and
+`<code>-plurals.csv`, the plural sheet (`pl-review.csv` and `pl-plurals.csv` for Polish). German's
+are written too, as a reference: its text has already been reviewed by a native speaker. In
+PowerShell the variable stays set until you close the window or run
+`Remove-Item Env:HILBERTRAUM_I18N_REVIEW_EXPORT`; while it is set, every test run writes the files
+again. If you'd rather not install anything, open an issue and ask for your language's two files.
+
+**The review table**, one row per text of your language, with these columns:
+
+- `group` and `section`: the group above, and the heading the text sits under in `en.ts`, which
+  often names the part of the app, such as "Settings → Privacy & data tab (PrivacyTab.tsx)", but
+  is sometimes a note for developers, as for much of the review screen and the error messages:
+  if it doesn't tell you where the text shows, copy it as it is.
+- `key`: the text's name in the code. Quote it when you report a finding.
+- `english`: the English text, which every translation follows. For a plural form English doesn't
+  have (Spanish, French and Italian `many`; Polish, Russian and Ukrainian `few` and `many`) it
+  shows English's `other` form.
+- `translation`: the text in your language, as the app shows it. A word in braces, such as
+  `{count}` or `{name}`, is filled in by the app: keep each one exactly as it is.
+- `exact_match` and `exact_match_reason`: `yes` when the code reads this text by its exact
+  wording, and what it does with it. These are the document chat's two example questions, the
+  bank-statement skill's two questions (both explained under "UI text" above) and some error
+  messages. A better wording for one is welcome, but the code that reads it has to be checked
+  before it changes, so say in your report that the key is marked. A few unmarked keys have the
+  same English text as a marked one (`translate.err.startFailed` and
+  `main.translation.startFailed`, for example): say so for those too.
+- `english_comment` and `translation_comment`: the note above the key in `en.ts` and in your
+  language's own file, such as where the text shows, what a placeholder holds, or why a word was
+  chosen. `translation_comment` is empty for most rows: today only German's file has such notes.
+
+**The plural sheet** shows every text that changes with a number, rendered by the app's own plural
+code at 0, 1, 2, 5, 21, 22, 25, 101 and 1,000,000. `category` is the form your language's rule
+picks for that count, and `key` is the form shown. Read every form at the edges: Polish 21 takes
+`many` while Russian and Ukrainian 21 and 101 take `one`, French 0 takes `one`, and in Spanish,
+French and Italian 1,000,000 takes `many`. In Polish, Russian and Ukrainian, `other` is the form
+only a fraction takes («1,5 dokumentu»), so the sheet adds a row at 1.5 for each text, with a
+note. `{count}` shows plain digits on the sheet ("1000000", "1.5"); some screens write the number
+the way your language does (1 000 000), so judge the words, not how the number is written.
+
+**Opening the files.** Both are UTF-8 text with a byte order mark, separated by commas. Import them
+rather than double-clicking them, choosing UTF-8, the comma as the separator and the type *Text*
+for every column: in LibreOffice Calc in the import dialog that opens with the file, in Excel
+through Data → From Text/CSV with data type detection turned off. Here is why: a double-clicked
+file is split by the list separator of your computer's regional settings, which is ";" in the
+settings of each of these languages (and of German, whose files are written too), so each whole
+row lands in one column. And once the rows are split
+but not read as text, a cell that starts with "+", such as "+ New chat", shows `#NAME?`, and the
+plural sheet's 1.5 turns into a date. A comment can run over several lines inside its cell.
+
+**Words the checks left for a native speaker:**
+
+- Turkish «Uygulanamaz» (`review.decision.not_applicable`, "Not applicable", a decision on the
+  review screen): does it read as "cannot be applied or enforced"?
+- Polish «Wolno» (`perf.rating.slow`, "Slow", a speed rating next to «Dobrze» and «Szybko»): on
+  its own, can it read as "allowed"?
+- Polish «Diagnostyka (zaawansowane)» (`settings.tab.diagnostics`, the Settings tab "Diagnostics
+  (advanced)"): does the adjective agree with the noun?
+- Ukrainian «Джерела» (`chat.scope.answeringFrom` «Джерела: …», where an answer comes from, and
+  `chat.sources.toggle` «Джерела (5)», the citations toggle): can one noun serve both?
+
+**Form of address and style.** Each language's rules are its "microcopy" section in
+[`docs/design-guidelines.md`](docs/design-guidelines.md) §7, and its glossary is also the comment
+at the top of its catalog file. The form of address: Spanish *tú*, French *vous*, Italian *tu*,
+Dutch *je*, Polish *ty* (with impersonal past forms, such as «Zapisano», in the app's messages
+about what happened, so that no verb shows a gender), Turkish *siz*, Russian *вы*, Ukrainian *ви*.
+Check too that each glossary term is used the same way throughout, and note any wording a native
+speaker wouldn't use.
+
+**The bundled skills.** A skill's title and description in your language are part of your
+language's text, but not in the files: they are the `localized.<code>` block of each
+`app-skills/*/SKILL.md` (`localized.pl` for Polish). The titles are also listed side by side in
+[`docs/skills-overview.md`](docs/skills-overview.md).
+
+**Reporting a finding.** Open an issue with the "Translation finding" template: the language, the
+key, the current text, your wording, the severity and where the text shows (the `section` column
+helps). The severities are S1 to S3, as in "How a new translation is checked" above. Or open a pull
+request that changes your language's catalog (`apps/desktop/src/shared/i18n/<code>.ts`) or a
+`SKILL.md`; a pull request needs the CLA, signed once (see "License and CLA").
+
+**What counts as reviewed.** Only a review of a language's whole catalog, every row of both files,
+sets its `nativeReviewed` to `true` in `languages.ts`. A partial review, such as the security text
+alone, is recorded in the review's tracking issue,
+[#813](https://github.com/HilbertraumAI/HilbertRaum/issues/813) (say there, or in your finding,
+which groups or sections you read), and the flag stays `false`.
+
 ### Adding a language
 1. Add its entry to `UI_LANGUAGES` in `apps/desktop/src/shared/i18n/languages.ts`. The order is
    the order in the language picker: English first (it is the fallback), then Deutsch, then the
