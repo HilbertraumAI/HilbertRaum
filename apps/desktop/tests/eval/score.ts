@@ -230,7 +230,11 @@ export function aggregate(model: string, scores: ItemScore[]): ModelAggregate {
   }
 }
 
-/** The QA columns of one `eval/results/<machine>-<backend>.csv` row (speed/RSS joined later). */
+/**
+ * The columns of one `eval/results/<stem>-quality.csv` row, and of `<stem>-quality-rescored.csv`
+ * (`eval/rescore.mjs` mirrors them). The combined `<stem>.csv` (`eval/combine.mjs`, speed/RSS
+ * joined) takes these by name, all but `mean_answer_chars`.
+ */
 export const QA_CSV_HEADER = [
   'model',
   'n',
@@ -251,6 +255,10 @@ export const QA_CSV_HEADER = [
 function num(x: number): string {
   return x.toFixed(4)
 }
+/** A mean character count, one decimal (`eval/rescore.mjs` `chars` is the same). */
+function chars(x: number): string {
+  return x.toFixed(1)
+}
 
 export function toCsvRow(a: ModelAggregate): string {
   return [
@@ -258,7 +266,7 @@ export function toCsvRow(a: ModelAggregate): string {
     String(a.n),
     num(a.emRate),
     num(a.meanF1),
-    num(a.meanAnswerChars),
+    chars(a.meanAnswerChars),
     num(a.citationCorrectRate),
     num(a.groundedRate),
     num(a.overAbstainRate),

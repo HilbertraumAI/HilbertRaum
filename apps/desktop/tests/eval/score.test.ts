@@ -322,6 +322,9 @@ const unanswerable: EvalItem = {
   type: 'unanswerable'
 }
 
+/** A citation of `answerable`'s gold document. */
+const cited = [{ label: 'S1', sourceTitle: 'Acme Rahmenvertrag.pdf' }]
+
 describe('scoreItem', () => {
   it('answerable + correct + cited right doc → correct', () => {
     const out: ItemOutput = {
@@ -412,7 +415,6 @@ describe('aggregate + toCsvRow', () => {
 // #378: containment EM saturates, so mean_f1 mostly ranks terseness; the mean answer length is
 // reported beside it, over the same answerable items mean_f1 averages.
 describe('mean_answer_chars (#378)', () => {
-  const cited = [{ label: 'S1', sourceTitle: 'Acme Rahmenvertrag.pdf' }]
   // Answer lengths: 28 and 84 on the answerable items, 53 on the unanswerable one (a confident
   // answer, so it is not filtered out as an abstention either). Answerable only: 56; all: 55.
   const scores = [
@@ -434,7 +436,7 @@ describe('mean_answer_chars (#378)', () => {
   it('averages over the answerable items only and lands in its own column', () => {
     const a = aggregate('gemma4-e4b-it-qat-q4', scores)
     expect(a.meanAnswerChars).toBe(56)
-    expect(toCsvRow(a).split(',')[QA_CSV_HEADER.indexOf('mean_answer_chars')]).toBe('56.0000')
+    expect(toCsvRow(a).split(',')[QA_CSV_HEADER.indexOf('mean_answer_chars')]).toBe('56.0')
   })
 })
 
@@ -445,7 +447,6 @@ describe('mean_answer_chars (#378)', () => {
 // `tests/manual/model-eval.test.ts` writes. Expected = score.ts on the same answers.
 describe('eval/rescore.mjs mirrors score.ts', () => {
   const MODEL = 'gemma4-e4b-it-qat-q4'
-  const cited = [{ label: 'S1', sourceTitle: 'Acme Rahmenvertrag.pdf' }]
   // Every column gets a non-trivial value: hits and a miss, a wrong citation, an over-abstention,
   // a correct abstention and a hallucination. The U+1F4C4 is two UTF-16 code units (the unit
   // both scorers count), so a mirror counting code points instead goes red.

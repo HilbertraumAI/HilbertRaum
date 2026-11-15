@@ -41,6 +41,7 @@ const HEADER = [
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0)
 const rate = (n, d) => (d ? n / d : 0)
 const f = (x) => x.toFixed(4)
+const chars = (x) => x.toFixed(1) // a mean character count, as score.ts `chars`
 
 function aggregate(model, scores) {
   const ans = scores.filter((s) => !s.unanswerable)
@@ -101,7 +102,7 @@ for (const file of dumps) {
   for (const [model, m] of byModel) {
     const a = aggregate(model, m.scores)
     csv.push([
-      a.model, a.n, f(a.em_rate), f(a.mean_f1), f(a.mean_answer_chars), f(a.citation_correct_rate),
+      a.model, a.n, f(a.em_rate), f(a.mean_f1), chars(a.mean_answer_chars), f(a.citation_correct_rate),
       f(a.grounded_rate), f(a.over_abstain_rate), f(a.abstain_rate_unans), f(a.hallucination_rate),
       f(a.em_rate_de), f(a.em_rate_en), f(a.f1_de), f(a.f1_en)
     ].join(','))
