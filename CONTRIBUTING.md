@@ -519,12 +519,14 @@ programming: you read a spreadsheet and report what reads wrong.
 
 **What to read, in order.** The review table lists the text in the order to read it:
 
-1. The privacy, password, lock-screen and workspace text (group `security`, the keys that start
-   with `privacy.`, `password.`, `gate.` or `main.workspace.`). A wrong word there tells someone
-   something false about their data, so check that the meaning is exact and that nothing is
-   softened or overstated.
-2. The review screen (group `review`, the keys that start with `review.`), where the wording is
-   close to legal text and has to be as precise.
+1. The security text (group `security`, about 210 rows): every key that makes a privacy,
+   security, encryption, lock, network or offline claim, such as the privacy settings, the
+   password and lock screens, the local API's consent, "stays on this device" and what a
+   redaction hid. The list is `SECURITY_TEXT` in `apps/desktop/tests/helpers/i18n-review-export.ts`.
+   A wrong word there tells someone something false about their data, so check that the meaning
+   is exact and that nothing is softened or overstated.
+2. The review screen (group `review`, the other keys that start with `review.`), where the
+   wording is close to legal text and has to be as precise.
 3. Everything else (group `other`): navigation, buttons, messages. A sentence that names a button
    or a screen must use its exact label.
 
@@ -568,12 +570,13 @@ again. If you'd rather not install anything, open an issue and ask for your lang
   wording, and what it does with it. These are the document chat's two example questions, the
   bank-statement skill's two questions (both explained under "UI text" above) and some error
   messages. A better wording for one is welcome, but the code that reads it has to be checked
-  before it changes, so say in your report that the key is marked. A few unmarked keys have the
-  same English text as a marked one (`translate.err.startFailed` and
-  `main.translation.startFailed`, for example): say so for those too.
+  before it changes, so say in your report that the key is marked. A key with the same English
+  text as one the code reads is marked too, and its reason names that key: keep the two
+  translations identical.
 - `english_comment` and `translation_comment`: the note above the key in `en.ts` and in your
   language's own file, such as where the text shows, what a placeholder holds, or why a word was
-  chosen. `translation_comment` is empty for most rows: today only German's file has such notes.
+  chosen. Every form of a text that changes with a number carries the note of the whole text.
+  `translation_comment` is empty for most rows: today only German's file has such notes.
 
 **The plural sheet** shows every text that changes with a number, rendered by the app's own plural
 code at 0, 1, 2, 5, 21, 22, 25, 101 and 1,000,000. `category` is the form your language's rule
@@ -590,9 +593,9 @@ for every column: in LibreOffice Calc in the import dialog that opens with the f
 through Data → From Text/CSV with data type detection turned off. Here is why: a double-clicked
 file is split by the list separator of your computer's regional settings, which is ";" in the
 settings of each of these languages (and of German, whose files are written too), so each whole
-row lands in one column. And once the rows are split
-but not read as text, a cell that starts with "+", such as "+ New chat", shows `#NAME?`, and the
-plural sheet's 1.5 turns into a date. A comment can run over several lines inside its cell.
+row lands in one column. And once the rows are split but not read as text, a cell that starts
+with "=", "+", "-" or "@" is read as a formula ("+ New chat" shows `#NAME?`), and the plural
+sheet's 1.5 turns into a date.
 
 **Words the checks left for a native speaker:**
 
@@ -611,7 +614,9 @@ at the top of its catalog file. The form of address: Spanish *tú*, French *vous
 Dutch *je*, Polish *ty* (with impersonal past forms, such as «Zapisano», in the app's messages
 about what happened, so that no verb shows a gender), Turkish *siz*, Russian *вы*, Ukrainian *ви*.
 Check too that each glossary term is used the same way throughout, and note any wording a native
-speaker wouldn't use.
+speaker wouldn't use. Two choices are deliberate, so they aren't findings: Spanish writes numbers
+the way Spain does (98.304, 4,3 GB) for every Spanish-speaking user, and Russian keeps the Latin
+unit symbols (GB, tok/s).
 
 **The bundled skills.** A skill's title and description in your language are part of your
 language's text, but not in the files: they are the `localized.<code>` block of each
@@ -624,8 +629,9 @@ helps). The severities are S1 to S3, as in "How a new translation is checked" ab
 request that changes your language's catalog (`apps/desktop/src/shared/i18n/<code>.ts`) or a
 `SKILL.md`; a pull request needs the CLA, signed once (see "License and CLA").
 
-**What counts as reviewed.** Only a review of a language's whole catalog, every row of both files,
-sets its `nativeReviewed` to `true` in `languages.ts`. A partial review, such as the security text
+**What counts as reviewed.** Only a review of a language's whole text, every row of both files
+and its `localized.<code>` blocks in the bundled skills' `SKILL.md` files, sets its
+`nativeReviewed` to `true` in `languages.ts`. A partial review, such as the security text
 alone, is recorded in the review's tracking issue,
 [#813](https://github.com/HilbertraumAI/HilbertRaum/issues/813) (say there, or in your finding,
 which groups or sections you read), and the flag stays `false`.
