@@ -2021,9 +2021,14 @@ code, pre, kbd { font-family: var(--font-mono); }
    the skill; it is never auto-applied. */
 .footer-menu-btn.skill-suggest-hint { color: var(--accent); }
 .footer-menu-btn.skill-suggest-hint:hover:not(:disabled) { color: var(--accent); background: var(--surface-hover); }
-/* #803, open-issues wave owner rounds W5-1…W5-3: the "Skill: … ▾" trigger keeps its width on one
-   line (it wrapped to three at 880px); the footer wraps it to the next row when it doesn't fit. */
-.footer-menu-btn.skill-picker-trigger { flex-shrink: 0; white-space: nowrap; }
+/* #803, open-issues wave owner rounds W5-1…W5-5: the "Skill: … ▾" trigger stays on one line (it
+   wrapped to three at 880px). Its group never shrinks, so the footer wraps the group to the next
+   row; only a name longer than that whole row makes the trigger give way and end in "…". */
+.footer-menu-btn.skill-picker-trigger { white-space: nowrap; }
+/* #803, open-issues wave owner round W5-5: the trigger and its ⓘ ✕ wrap as one (the 12px gap is
+   the footer's column gap, so one row looks as before); ⓘ ✕ keep their size beside a long name. */
+.skill-picker-group { display: inline-flex; align-items: center; gap: 12px; flex-shrink: 0; min-width: 0; max-width: 100%; }
+.skill-picker-group > .skill-info-btn, .skill-picker-group > .skill-chip-clear { flex-shrink: 0; }
 /* A name longer than a whole row (`.footer-menu-btn`'s max-width: 100%) ends in "…" (visual only:
    the button's name keeps the full text). The caret is not reset, so it keeps its width. */
 .skill-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

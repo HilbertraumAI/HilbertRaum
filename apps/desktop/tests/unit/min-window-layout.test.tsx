@@ -110,6 +110,7 @@ const SHORTHANDS: Record<string, Array<[string, (value: string) => string]>> = {
   'min-width': [['min-inline-size', (v) => v]],
   'min-height': [['min-block-size', (v) => v]],
   'row-gap': [['gap', (v) => v.split(/\s+/)[0]]],
+  'column-gap': [['gap', (v) => v.split(/\s+/).at(-1) ?? v]],
   'flex-wrap': [['flex-flow', (v) => v.split(/\s+/).find((word) => word.includes('wrap')) ?? 'nowrap']]
 }
 
@@ -222,7 +223,6 @@ describe('#803 layout at 880×600 — what the stylesheet cascade decides', () =
     )
   })
 
-  it("the composer footer moves a control that doesn't fit to the next row (owner round W5-3)", () => {
   it('a `.nowrap` phrase does not break inside, on the Performance tile and the Diagnostics card (#805 S3, owner round W5-4)', () => {
     // `keepTogether` puts "(12 cores)" in this span (the screens' rows pin that); both containers
     // allow a break anywhere (`overflow-wrap: anywhere`), which a nowrap span leaves no opportunity for.
@@ -231,6 +231,7 @@ describe('#803 layout at 880×600 — what the stylesheet cascade decides', () =
     expect([inherited(onTile, 'white-space'), inherited(inCard, 'white-space')]).toEqual(['nowrap', 'nowrap'])
   })
 
+  it("the composer footer moves a control that doesn't fit to the next row (owner round W5-3)", () => {
     // A 100-case live measurement (owner round W5-3) found a wrapping footer clean in every case,
     // where squeezing or capping the triggers drew text outside its box.
     const footer = renderFooter()
@@ -238,13 +239,15 @@ describe('#803 layout at 880×600 — what the stylesheet cascade decides', () =
     expect(cascaded(footer, 'row-gap')).toBe('4px')
   })
 
-  it('only the skill picker trigger keeps its width on one line; the other footer buttons may still shrink (owner rounds W5-1…W5-3)', () => {
+  it('the skill trigger stays on one line and past a whole row ends in "…"; ⓘ × keep their size (owner rounds W5-1…W5-5)', () => {
     const footer = renderFooter()
     const title = makeSkillInfo().title
-    // The trigger keeps `.footer-menu-btn`'s cap (100%: a whole footer row), so a name longer than
-    // a row still ends in "…" rather than running past the window.
+    // The trigger never wraps and keeps `.footer-menu-btn`'s cap (100%: a whole footer row). Its
+    // group never shrinks (the next row pins that), so the trigger gives way only when its name is
+    // longer than a whole row: then it shrinks beside ⓘ × (which don't) and its label ends in "…"
+    // (measured in Chromium: with the trigger rigid, ⓘ × ran 72 px past the footer).
     const held = (b: HTMLElement) => ({
-      noShrink: cascaded(b, 'flex-shrink') === '0',
+      shrinks: cascaded(b, 'flex-shrink') !== '0',
       noWrap: cascaded(b, 'white-space') === 'nowrap',
       maxWidth: cascaded(b, 'max-width')
     })
@@ -263,7 +266,7 @@ describe('#803 layout at 880×600 — what the stylesheet cascade decides', () =
     // No button the render produced is left unchecked.
     expect(footer.querySelectorAll('button')).toHaveLength(triggers.length + Object.keys(others).length)
     for (const { name, trigger } of triggers) {
-      expect(held(trigger)).toEqual({ noShrink: true, noWrap: true, maxWidth: '100%' })
+      expect(held(trigger)).toEqual({ shrinks: true, noWrap: true, maxWidth: '100%' })
       // Past the cap the element holding the text ellipsises (it inherits the trigger's nowrap).
       // The caret sits beside it, not inside it (inside, it would be clipped with the text), and
       // no rule resets its automatic minimum width, so it never shrinks.
@@ -280,9 +283,42 @@ describe('#803 layout at 880×600 — what the stylesheet cascade decides', () =
       expect(caret.parentElement).toBe(trigger)
       expect(cascaded(caret, 'min-width')).toBe('')
     }
+    const keepSize = new Set<HTMLElement>([others.info, others.clear])
     for (const [name, button] of Object.entries(others)) {
-      expect(held(button), name).toEqual({ noShrink: false, noWrap: false, maxWidth: '100%' })
+      expect(held(button), name).toEqual({ shrinks: !keepSize.has(button), noWrap: false, maxWidth: '100%' })
     }
+  })
+
+  it('the skill trigger and its ⓘ × wrap onto a new footer row as one; the hint stays outside (owner round W5-5)', () => {
+    const footer = renderFooter()
+    const title = makeSkillInfo().title
+    const active = screen.getByRole('button', { name: t('en', 'chat.skill.trigger', { label: title }) })
+    const idle = screen.getByRole('button', { name: t('en', 'chat.skill.trigger', { label: t('en', 'chat.skill.none') }) })
+    const info = screen.getByRole('button', { name: t('en', 'chat.skill.infoButton', { title }) })
+    const clear = screen.getByRole('button', { name: t('en', 'chat.skill.clear', { title }) })
+    const hint = screen.getByRole('button', { name: t('en', 'chat.skill.suggestedHint', { title }) })
+    // One footer item per picker: the active one holds its trigger, ⓘ and × in that order, the idle
+    // one its trigger alone; the hint (an alternative to an active trigger) is a footer item itself.
+    const groups = [
+      { group: active.parentElement!, members: [active, info, clear] },
+      { group: idle.parentElement!, members: [idle] }
+    ]
+    for (const { group, members } of groups) {
+      expect(group.parentElement).toBe(footer)
+      expect(group.children).toHaveLength(members.length)
+      members.forEach((member, i) => expect(group.children[i]).toBe(member))
+      // It lays them out 12 px apart, as the footer spaces its items, and never shrinks below its
+      // natural width up to a whole row: that is what holds "Skill: No skill" at full width now
+      // that the trigger itself may give way inside it.
+      expect({
+        display: cascaded(group, 'display'),
+        flexShrink: cascaded(group, 'flex-shrink'),
+        columnGap: cascaded(group, 'column-gap'),
+        maxWidth: cascaded(group, 'max-width')
+      }).toEqual({ display: 'inline-flex', flexShrink: '0', columnGap: '12px', maxWidth: '100%' })
+    }
+    expect(cascaded(footer, 'column-gap')).toBe('12px')
+    expect(hint.parentElement).toBe(footer)
   })
 })
 
