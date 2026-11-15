@@ -69,8 +69,8 @@ export function SkillPicker({
     <>
     <DropdownMenu.Root onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>
-        <button type="button" className="footer-menu-btn" disabled={disabled}>
-          {t('chat.skill.trigger', { label: triggerLabel })} <span aria-hidden="true">▾</span>
+        <button type="button" className="footer-menu-btn skill-picker-trigger" disabled={disabled}>
+          <span className="skill-picker-label">{t('chat.skill.trigger', { label: triggerLabel })}</span> <span aria-hidden="true">▾</span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>

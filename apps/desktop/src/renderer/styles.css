@@ -72,6 +72,11 @@ button { min-width: 24px; min-height: 24px; }
   align-items: stretch;
   padding: 12px 8px;
   gap: 4px;
+  /* #803, open-issues wave owner call G-9: below ~660px of height the rail foot (lock, indicator)
+     sat under the window; the rail scrolls instead, by wheel and Tab, with no bar taking label width. */
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: none;
 }
 
 /* Just the brand mark on the rail — the wordmark sits behind the tooltip/aria-label so
@@ -112,6 +117,10 @@ button { min-width: 24px; min-height: 24px; }
    the everyday work group above by the same hairline the utility group uses. Does not flex:
    the work group above takes the slack so the two lower groups stay pinned together. */
 .nav-list.nav-group { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 6px; margin-top: 6px; }
+/* #803, open-issues wave owner round W5-1: the rail scrolls before anything shrinks, else the
+   global `button { min-height: 24px }` let the brand, lock and indicator squeeze to 24px. After
+   `.nav-list { flex: 1 }` on purpose: same specificity, so the later rule holds the work group too. */
+.sidebar > * { flex-shrink: 0; }
 .nav-item, .lock-btn {
   width: 100%;
   display: flex;
@@ -787,7 +796,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .scope-attachment.failed { border-style: dashed; color: var(--text-muted); }
 .popover-reset { align-self: flex-start; }
 
-.chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; position: relative; }
+/* #803, open-issues wave owner call G-9: no min-content floor, so the `1fr` track fits the window;
+   with the conversation list open, document mode ran Send, attach and the meter past the right edge. */
+.chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; position: relative; min-width: 0; }
 /* Drag-drop intake target (plan §11.2): a calm dashed overlay while a file is dragged over
    the chat surface — never alarming, just "drop here". */
 .chat-drop-overlay {
@@ -1339,7 +1350,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Vertically center Send/Stop (and the mic) in the row — with a single-line textarea
    flex-end left them sitting low against the field's bottom edge. */
 .composer-row .btn { align-self: center; }
-.composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; padding: 0 4px; }
+/* #803, open-issues wave owner round W5-3: at narrow widths a control that doesn't fit moves to the
+   next row instead of squeezing the others. */
+.composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; padding: 0 4px; flex-wrap: wrap; row-gap: 4px; }
 /* Push the context-window meter to the right edge of the footer (context-compaction §5.1). */
 .composer-footer-spacer { margin-left: auto; display: inline-flex; align-items: center; }
 
@@ -1589,7 +1602,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .docs-select-all { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
 .docs-filter { position: relative; flex: 1 1 auto; min-width: 0; }
 .docs-filter-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
-.docs-filter-input { padding-left: 32px; min-height: 36px; }
+/* #803, open-issues wave owner call G-9: two classes, so the icon's padding survives the later
+   `.text-input { padding: 8px 10px }` the input also carries (it lost by source order). */
+.text-input.docs-filter-input { padding-left: 32px; min-height: 36px; }
 .docs-main { min-width: 0; }
 .docs-rail { display: flex; flex-direction: column; gap: 1px; position: sticky; top: 0; }
 /* Panel header: quiet title + the "«" collapse handle (mirrors the chat sidebar head). */
@@ -2003,6 +2018,12 @@ code, pre, kbd { font-family: var(--font-mono); }
    the skill; it is never auto-applied. */
 .footer-menu-btn.skill-suggest-hint { color: var(--accent); }
 .footer-menu-btn.skill-suggest-hint:hover:not(:disabled) { color: var(--accent); background: var(--surface-hover); }
+/* #803, open-issues wave owner rounds W5-1…W5-3: the "Skill: … ▾" trigger keeps its width on one
+   line (it wrapped to three at 880px); the footer wraps it to the next row when it doesn't fit. */
+.footer-menu-btn.skill-picker-trigger { flex-shrink: 0; white-space: nowrap; }
+/* A name longer than a whole row (`.footer-menu-btn`'s max-width: 100%) ends in "…" (visual only:
+   the button's name keeps the full text). The caret is not reset, so it keeps its width. */
+.skill-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* U3 (audit §4.3): the persistent composer chip's × — a quiet, compact clear button sitting right
    after the "Skill: … ▾" trigger, so the active per-turn skill is always visible AND one tap clears
    it (override + saved default). Muted like the other footer affordances; never alarming. */
