@@ -5960,7 +5960,8 @@ in this file. D-2 (a): every registered catalog is complete and typecheck-enforc
 address form per language (D-L7) · D-4 (c): a machine-drafted catalog ships with no in-app note ·
 D-5 (b): evidence packs stay English or German · D-6 (a): the language picker is a native
 `<select>`, *System* first and then the registered languages in registry order (English, Deutsch;
-then Español, Français, Italiano, Русский; since 2026-11-13 the order of G-3 below) · D-7 (a):
+then Español, Français, Italiano, Русский; since 2026-11-13 the order of G-3 below;
+since #808, 2026-11-15, it saves after a pause, open-issues wave owner call G-6 below) · D-7 (a):
 *System* follows the OS into any registered language · D-8 (a): English and German keep the
 exact `n === 1` plural rule · D-10 (a): a shorter
 synonym, never an abbreviation, where a fixed-width surface is too narrow · D-11 (a): "(1 core)" on
@@ -5993,9 +5994,9 @@ changed 2026-11-14 by #818, open-issues wave owner call G-8) ·
 G-8, G-9, G-11: the real-app check's remaining layout and wording findings accepted as recorded,
 or collected for follow-up ("Second UI-languages wave QA" below).
 
-**Open-issues wave owner calls (2026-11-13/14).** This record and code comments cite the decision
-gates of the open-issues wave (the i18n follow-ups the two language waves filed, and two older
-issues) as "open-issues wave owner call G-n", or "open-issues wave G-n" where a line is short;
+**Open-issues wave owner calls (2026-11-13 to 2026-11-15).** This record and code comments cite the
+decision gates of the open-issues wave (the i18n follow-ups the two language waves filed, and two
+older issues) as "open-issues wave owner call G-n", or "open-issues wave G-n" where a line is short;
 they are not the second UI-languages wave's G-numbers above. G-1, G-2: the wave's scope and the
 order of its pull requests, with #804, #805, #806, #807 and #812 in one · G-3 (a): in the
 Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian catalogs a figure or a
@@ -6008,7 +6009,18 @@ since the real-app check, below), the licence link sits on a line of its own, ra
 the language's figures (the invoice tax rate excepted since the code review, below), the copied
 reports keep their plain code-built joins and the units their Latin symbols, and the brand
 link's tooltip and the Spain pattern of Spanish figures stay as they are (§5) · G-5 (a): the English and German sentences that read wrong at exactly 1 put the count
-after a label, `chat.speed.line` excepted (§5) · G-7 (a): a support report copied in any language
+after a label, `chat.speed.line` excepted (§5) · G-6 (a): the language select in Settings →
+General saves about half a second after its last change (`LANGUAGE_SAVE_DELAY_MS`, 500 ms), at
+once when it loses focus and when the tab unmounts, with the last choice kept; every save that
+goes through applies the language, mounted or not, so a save flushed by leaving the tab still
+switches the app, `<html lang>` and the mirror (§3.2); one "Saved" toast, in the new language, and
+none once the tab is gone; a hidden, disabled first option with the *System* text and the value
+`''` is rendered only for a stored value this build does not register, so choosing the real
+*System* is a change and saves `'system'`, and nothing is written before a choice
+(`SettingsScreen.tsx`); by owner call (2026-11-15) the hint under the select
+(`settings.language.hint`) keeps its "Changes apply right away." sentence in all ten catalogs,
+since half a second reads as right away and the sentence's point is that no restart is needed ·
+G-7 (a): a support report copied in any language
 but English and German carries an English copy in the same paste (§5) · G-8 (a): the keyword-search
 query is composed (NFC) and lowered without a locale, a capital «İ» to a plain "i" (`lowerCaseNfc`,
 `shared/text-fold.ts`), and a word holding «ı» is also searched with each «ı» written as "i"; the
@@ -6026,8 +6038,7 @@ English compare words are bounded by letters, digits and "_" instead of the ASCI
 labels and the knowledge-pack language detector stay as they are (known limitations) · G-12 (a):
 one generic lead, "This file couldn’t be added.", above an unrecognised error on a failed document
 row and in the chat's attach banner (§3.3 Rule 1; amended at the code review, below).
-G-6 and G-9 decide the language select and the layout; this legend records them when their
-changes land. Made
+G-9 decides the layout; this legend records it when its change lands. Made
 while the catalog changes were built (2026-11-14): the Spanish review decision labels put the
 decision in parentheses («Revisado (respaldado)»), because the Spanish style guide has no spaced
 dash and a colon inside the label doubled the colon of the review summary's label-value join ·
@@ -6068,7 +6079,13 @@ German whole-message forms: "thanks a lot bye", "thank you a lot bye", "ok thank
 Made with them, inside G-11: the small-talk check folds «ı» to "i" on both sides (`foldCase`), so
 Turkish typed in capitals is recognised; the router composes the question (NFC) once before
 every check; the two chips still count with a closing ".", "!", "?" or "…"; and the quote-frame
-reader passes over an opening quote that nothing closes.
+reader passes over an opening quote that nothing closes. Made while #808 was built (2026-11-15),
+inside G-6: a refused save shows the stored language again with the `settings.saveFailed` toast,
+and an older save's reply never takes a newer pending choice off the select. Made at the code
+review of #808 (2026-11-15), inside G-6: a choice equal, when its save would run, to the
+language the store holds, or will hold once the saves still unanswered land, saves nothing and
+toasts nothing (a pick and back within the pause, or a pick again of a language whose save is
+still unanswered); and a refusal's toast is in the language shown when the refusal arrives.
 
 ### §3.1 The i18n module
 
@@ -6096,8 +6113,10 @@ build tree-shakes them).
 
 ### §3.2 The setting and its resolution
 
-- Renderer: `renderer/i18n.tsx` — `I18nProvider`/`useT()` re-resolve on settings
-  load/patch, set `document.documentElement.lang`, and mirror the **resolved** language to
+- Renderer: `renderer/i18n.tsx` — `I18nProvider`/`useT()` re-resolve when settings load and
+  when the Settings language select's save returns (since #808 its own delayed save, not the
+  shared settings patch; open-issues wave owner call G-6), set
+  `document.documentElement.lang`, and mirror the **resolved** language to
   `localStorage('hilbertraum.uiLanguage')` (written only when a real setting resolves, never from
   the pre-unlock guess). The gate reads the mirror, falling back to `navigator.language` —
   a first run on a German OS shows a German gate with zero stored state; a user who chose
@@ -6536,7 +6555,10 @@ language select switching, saving and toasting on every arrow key, with the toas
 being left; and layout that is wrong in English too: the rail foot below the window at 880×600,
 the document-mode chat pane running past the window edge at 880×600 with the conversation list
 open, document rows squeezing the name to nothing at 880×600, and the Documents filter icon
-covering the placeholder.
+covering the placeholder. Changed 2026-11-15 by #808 (open-issues wave owner call G-6): the
+language select saves about half a second after its last change, or at once when it loses focus
+or the tab is left, so stepping through it with the arrow keys switches and saves once, with one
+"Saved" toast in the new language (`SettingsScreen.tsx`).
 
 Other legs: renderer and main plural categories equal the registry pins (the R-L1 note in §3.2);
 with the lock-screen language different from the OS, a wrong password shows the gate and its error

@@ -2808,8 +2808,8 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   *System* choice gives and remembers that language for the lock screen. The newer version's next
   lock screen is then in that language until you unlock. In Settings, version 0.1.65 and earlier
   show no language as selected; pick the one you want. A later version that meets a language it
-  doesn't know shows *System* in its list, and choosing *System* there changes nothing at first:
-  choose another language, then *System*.
+  doesn't know shows *System* in its list with no language chosen, and saves nothing until you
+  choose one; choosing *System* there saves *System*.
 - **Copy reports for support come in the interface language, with an English copy.** The reports
   the **Copy** buttons make (Settings → Diagnostics, the Performance screen) are written in the
   language the app is shown in. In any interface language but English and German, the same paste

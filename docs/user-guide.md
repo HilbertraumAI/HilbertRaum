@@ -1318,7 +1318,11 @@ The interface language works the same way: choose it from the drop-down list und
 **Italiano**, **Nederlands**, **Polski**, **Türkçe**, **Русский**, or **Українська**. Each language
 is listed by its own name, so you can find yours even when the app shows a language you don't
 read. *System* follows your operating system's language when HilbertRaum offers it and uses
-English otherwise. A change applies right away, no restart.
+English otherwise. Your choice shows in the list at once. About half a second after your last
+change, or at once when you leave the list (press Tab, click elsewhere, or go to another tab or
+screen), the app switches to that language and saves it; no restart is needed. Stepping quickly
+through the list with the arrow keys therefore switches and saves once, for the language you stop
+on.
 Before you unlock, the lock screen uses the language you last used on this computer. The first
 time, it uses your operating system's language, and it does so once more after the update that
 moved the app's screens to their own address (#560), until you unlock.
