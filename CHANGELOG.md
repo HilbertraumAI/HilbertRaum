@@ -40,8 +40,10 @@ from its first public `1.0.0` release onward.
 
 - **You now choose the interface language from a drop-down list.** Settings → General → Language used to
   show System, English and Deutsch as three buttons side by side; it is now a list, with room for
-  more languages. The choices and how they work are unchanged, and a change still applies right
-  away.
+  more languages. The choices are unchanged. Your choice shows at once; the interface switches to
+  it and the choice is saved about half a second after your last change, or at once when you leave
+  the list (Tab, a click elsewhere, another tab or screen). Stepping quickly through the list with
+  the arrow keys therefore switches and saves once, with one "Saved" message, in the new language.
 - **The internet setting now names everything it allows.** In Settings, "Allow internet access for
   model downloads and updates" is now "Allow internet access for downloads and updates": the same
   switch also covers the AI engine, the knowledge-pack tools and the text-recognition (OCR) files.
