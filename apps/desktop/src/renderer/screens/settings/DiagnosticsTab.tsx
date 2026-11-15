@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Banner, Button, ErrorBanner, useToast } from '../../components'
 import { withEnglishCopy, type LanguageBinding } from '../../components/translator'
 import { useT, type I18n } from '../../i18n'
-import { tNodes } from '../../i18nNodes'
+import { keepTogether, tNodes } from '../../i18nNodes'
 import { localizeServerCopy } from '../../lib/displayMap'
 import { runAndSurface } from '../../lib/errors'
 import { fmt1, unitJoin } from '@shared/format'
@@ -630,7 +630,7 @@ export function DiagnosticsTab(): JSX.Element {
               <dt>{t('diag.bench.cpu')}</dt>
               <dd>
                 {bench.cpuModel || t('diag.app.unknown')}
-                {bench.cpuCores > 0 ? tCount('diag.bench.cores', bench.cpuCores) : ''}
+                {bench.cpuCores > 0 ? keepTogether(tCount('diag.bench.cores', bench.cpuCores)) : ''}
               </dd>
               <dt>{t('diag.bench.osArch')}</dt>
               <dd>

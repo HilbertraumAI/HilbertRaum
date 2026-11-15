@@ -211,7 +211,7 @@ export const fr: UiCatalog<'fr'> = {
     'réponses suivantes seront plus rapides.',
   'chat.scopeNotice': 'Réponse fondée uniquement sur ce que la question nomme\u00A0: {titles}',
   'chat.cancelDocTask': 'Annuler la tâche sur le document',
-  'chat.placeholder.documents': 'Posez une question sur vos documents…',
+  'chat.placeholder.documents': 'Interrogez vos documents…',
   'chat.placeholder.chat': 'Message…',
   'chat.send.ask': 'Interroger',
   'chat.send.send': 'Envoyer',

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
@@ -230,11 +230,17 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
 
   // UI-languages owner call D-11 (a): the core count picks its plural form here, not in the
   // catalog alone; until the UI languages wave one core read "(1 cores)".
-  it('names a single core in the singular, in the card and the copy', async () => {
+  // #805 S3 (open-issues wave owner round W5-4): in the card the count sits in one `.nowrap` span
+  // after the space, so "(1 core)" never breaks inside; the text reads exactly as before, and the
+  // copy stays plain text.
+  it('names a single core in the singular, in the card (kept on one line) and the copy', async () => {
     const user = userEvent.setup()
     stubDiagnostics({}, { ...benchmark, cpuCores: 1 })
     renderDiagnostics()
-    expect(await screen.findByText('Test CPU (1 core)')).toBeInTheDocument()
+    const line = await screen.findByText((_, el) => el?.textContent === 'Test CPU (1 core)')
+    const kept = within(line).getByText('(1 core)')
+    expect(kept).toHaveClass('nowrap')
+    expect(kept.textContent).toBe('(1 core)') // the space before it stays outside: a break may fall there
     await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
     expect(lastCopied).toContain('CPU: Test CPU (1 core)')
   })

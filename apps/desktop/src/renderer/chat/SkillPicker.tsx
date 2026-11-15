@@ -67,10 +67,13 @@ export function SkillPicker({
   const closedHintSkill = value == null && !suggestionDismissed ? offerSkill : null
   return (
     <>
+    {/* #803 (owner round W5-5): the trigger and its ⓘ ✕ wrap onto a new footer row as one; the
+        suggestion hint, an alternative to an active trigger, stays outside. */}
+    <span className="skill-picker-group">
     <DropdownMenu.Root onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>
-        <button type="button" className="footer-menu-btn" disabled={disabled}>
-          {t('chat.skill.trigger', { label: triggerLabel })} <span aria-hidden="true">▾</span>
+        <button type="button" className="footer-menu-btn skill-picker-trigger" disabled={disabled}>
+          <span className="skill-picker-label">{t('chat.skill.trigger', { label: triggerLabel })}</span> <span aria-hidden="true">▾</span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -167,6 +170,7 @@ export function SkillPicker({
         <span aria-hidden="true">✕</span>
       </button>
     )}
+    </span>
     {closedHintSkill && (
       <button
         type="button"
