@@ -1540,26 +1540,30 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
   can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
   needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
-  **The what-changed (compare) fence rides SKA-8 fall-through turns by design (skills-audit-2026-07-07
-  SK-3b, decision D-P2a — declined runtime change).** When the user has explicitly selected the
-  what-changed skill and asks a NON-compare question at a 1- or 3-doc scope, `intends()` is false so the
-  turn falls through to the ordinary top-k relevance path (one document that fits is read whole there
-  since #643; the fence rides either way, so #632 is unchanged by it) — but the user-chosen skill fence stays
-  attached (the per-message glyph shows the skill as applied). Suppressing the fence on that path was
-  **declined**: it would silently drop instructions the user deliberately selected, and the reworded
-  honesty rule 1 (`what-changed/SKILL.md` v1.1.0) is coherent on BOTH paths — it now discriminates on
-  what the model can actually see (A/B labels or an exact-changes block ⇒ compare; ordinary passages with
-  no diff ⇒ just answer), so a fence riding a non-compare turn no longer tells the model to invent a
-  comparison. Revisit only if the gold set later shows comparison-framed answers on non-compare
-  fall-through turns. What counts as a compare question is the skill's routing vocabulary. Until #582 a
+  **A compare skill's fall-through turn carries only the skill's rules (skills-audit-2026-07-07 SK-3b,
+  decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1).** With What Changed?
+  selected (or a user skill declaring `analysis: compare`), a turn the compare engine doesn't take falls
+  through to the ordinary answer, which reads top-k passages, or since #643 one document that fits whole.
+  The engine doesn't take small talk or a scope that doesn't hold exactly two documents; at such a count
+  What Changed? answers a compare request with "select exactly two" instead (below). D-P2a kept the whole
+  skill fence on a fall-through turn and relied on honesty rule 1 (`what-changed/SKILL.md`: ordinary
+  passages with no A/B labels and no diff ⇒ simply answer the question). Its revisit condition was met: on
+  a 4B model, most plain questions over one or three lease drafts, such as "Wer ist der Mieter?", got the
+  body's compare format (an "Executive summary" and the sections after it) instead of an answer, in the
+  real-app run for #582 (2026-10-07) and again on master when #632 was measured. Since #632 the fence on
+  such a turn carries only the skill's first paragraph, the heading and the honesty rules, which is also
+  the minimum the fence keeps when the context is tight (SKA-15); the section format is left out. The
+  answer still shows the skill as applied (the per-message glyph), so the selection isn't silently
+  dropped. The two-document compare turn (the exact changes, or both documents read whole when one is a
+  full rewrite) is unchanged, and so is every other skill's fence; small talk over two documents is the
+  one two-document turn whose fence is now the first paragraph. A user compare skill's first paragraph is
+  whatever its author put there. Measured on a 4B and a 9B model: [`architecture.md`](architecture.md)
+  §44 SK-3b. What counts as a compare question is the skill's routing vocabulary. Until #582 a
   compare request in one language could miss it while its translation matched: "summarize the
   differences" fell through while "Fasse die Unterschiede zusammen" got "select exactly two". The
   vocabulary now covers the compare and change words in both languages ([`architecture.md`](architecture.md)
   §18 "#582"). A question with any of them gets "select exactly two" at any count other than two,
-  including a Library chat with What-changed still selected. Seen in the #582 real-app run (a 4B model,
-  2026-10-07, not addressed there): on a fall-through turn, "Wer ist der Mieter?" over three lease drafts
-  got a comparison-framed "Executive summary", both on 0.1.59 and with #582. That is the revisit condition
-  above.
+  including a Library chat with What-changed still selected.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
   INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
   record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than

@@ -150,6 +150,12 @@ from its first public `1.0.0` release onward.
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.
   Questions with "différence", "différent", "diffère" or "différencier" still compare them
   (#809).
+- **With What Changed? selected, a question that isn't a comparison gets a plain answer.** With one
+  document in scope, or three or more, a question such as "Who is the tenant?" or "How do I change
+  the rent?" was often answered in the skill's comparison layout, an executive summary and then the
+  changes between versions, instead of with the fact you asked for. Such a question is now answered
+  plainly from the documents, and the answer still shows that the skill was applied. Comparing two
+  documents works as before (#632).
 - **The Documents filter's search icon no longer covers the text.** The magnifier in the "Filter
   by name…" box sat over the start of the placeholder and of what you typed, at every window
   size and in every language. The text now starts after the icon (#803).
