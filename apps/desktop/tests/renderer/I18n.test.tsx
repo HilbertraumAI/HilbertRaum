@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, within } from '@testing-library/react'
+import { act, render, screen, cleanup, within, fireEvent, type RenderResult } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
+import { ToastProvider } from '../../src/renderer/components'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import {
   I18nProvider,
@@ -19,6 +20,7 @@ import {
   type UiLanguageSetting
 } from '../../src/shared/i18n'
 import { appShellStubs } from '../helpers/app-shell'
+import { deferred } from '../helpers/deferred'
 import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
 
@@ -151,7 +153,68 @@ describe('Settings → General language picker', () => {
     return screen.findByRole('combobox', { name: t(lang, 'settings.language.aria') })
   }
 
-  it('is a drop-down list; choosing a language patches uiLanguage like theme and applies at once', async () => {
+  // #808 (open-issues wave owner call G-6): the select saves about 500 ms after its last change, at
+  // once on blur, and on unmount. Steps closer together than the pause; a wait well past it.
+  const STEP_MS = 200
+  const PAST_THE_PAUSE_MS = 1_000
+
+  // Runs before the file's afterEach (Vitest's stack order). A row that fails with a choice pending
+  // is unmounted here and its unmount save lands now, not after the file's afterEach has cleared the
+  // mirror (it would write it into the next rows). Then the real clock and `navigator.language`.
+  afterEach(async () => {
+    cleanup()
+    await act(async () => {})
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  /** Every save waits until the test releases it; releases settle the saves in order. */
+  function stubHeldSaves(initial: AppSettings) {
+    let current = initial
+    const held: Array<() => void> = []
+    const updateSettings = vi.fn((patch: Partial<AppSettings>) => {
+      const reply = deferred<AppSettings>()
+      held.push(() => {
+        current = { ...current, ...patch }
+        reply.resolve(current)
+      })
+      return reply.promise
+    })
+    stubApi({ getSettings: vi.fn(async () => current), updateSettings })
+    return { updateSettings, release: () => held.shift()?.() }
+  }
+
+  /** The screen as App.tsx hosts it: inside the language provider and a toast host. */
+  function renderWithToasts(): RenderResult {
+    return render(
+      <I18nProvider>
+        <ToastProvider>
+          <SettingsScreen />
+        </ToastProvider>
+      </I18nProvider>
+    )
+  }
+
+  /** The picker, found on the real clock; the clock is fake from here on (so no findBy after). */
+  async function pickerOnFakeClock(): Promise<HTMLSelectElement> {
+    const picker = (await findPicker()) as HTMLSelectElement
+    vi.useFakeTimers()
+    return picker
+  }
+
+  /** Moves the fake clock and lets the replies it releases land. */
+  async function elapse(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+  }
+
+  /** The toasts on screen, by text (the toast host is the one status region on this screen). */
+  function toasts(): string[] {
+    return Array.from(screen.getByRole('status').children, (el) => el.textContent ?? '')
+  }
+
+  it('is a drop-down list; choosing a language patches uiLanguage like theme and switches the UI live', async () => {
     const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
     render(
       <I18nProvider>
@@ -162,6 +225,7 @@ describe('Settings → General language picker', () => {
     expect(within(picker).getByRole('option', { name: 'English' })).toBeInTheDocument()
 
     await userEvent.selectOptions(picker, 'Deutsch')
+    await userEvent.tab() // leaving the select saves at once (#808), without waiting for the pause
     expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'de' })
     // The switch is live (no restart): the chrome re-renders in German…
     expect(await screen.findByRole('heading', { name: 'Einstellungen' })).toBeInTheDocument()
@@ -171,25 +235,31 @@ describe('Settings → General language picker', () => {
 
     // Back to English via the picker (its label stays untranslated in German).
     await userEvent.selectOptions(await findPicker('de'), 'English')
+    await userEvent.tab()
     expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'en' })
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()
     expect(window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('en')
   })
 
   it.each([
-    ['the saved language', 'de' as UiLanguageSetting, 'de', 'Deutsch'],
-    // A newer build's language on a shared drive resolves like System, so it shows System.
-    ['System for a language only a newer build registers', 'xx' as UiLanguageSetting, 'system', t('en', 'settings.language.system')]
-  ])('shows %s as the selected choice', async (_case, saved, value, label) => {
+    // The first option: [value, hidden, disabled].
+    ['the saved language', 'de' as UiLanguageSetting, 'de', 'Deutsch', ['system', false, false]],
+    // A newer build's language on a shared drive resolves like System, so it shows the System text,
+    // on a hidden, disabled placeholder (value ''), so that choosing the real System is a change and
+    // the list offers no second System entry (#808).
+    ['System for a language only a newer build registers', 'xx' as UiLanguageSetting, '', t('en', 'settings.language.system'), ['', true, true]]
+  ])('shows %s as the selected choice', async (_case, saved, value, label, first) => {
     stubSettings({ ...DEFAULT_SETTINGS, uiLanguage: saved })
     render(
       <I18nProvider>
         <SettingsScreen />
       </I18nProvider>
     )
-    const picker = await findPicker()
+    const picker = (await findPicker()) as HTMLSelectElement
     expect(picker).toHaveValue(value)
     expect(picker).toHaveDisplayValue(label)
+    const option = picker.options[0]
+    expect([option.value, option.hidden, option.disabled]).toEqual(first)
   })
 
   // UI-languages owner calls D-6 (a) and D-13 (a): System first, then the registry in order.
@@ -220,6 +290,7 @@ describe('Settings → General language picker', () => {
       </I18nProvider>
     )
     await userEvent.selectOptions(await findPicker(), 'Русский')
+    await userEvent.tab() // the blur saves at once (#808)
     expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'ru' })
     expect(await screen.findByRole('heading', { name: t('ru', 'settings.title') })).toBeInTheDocument()
     expect(window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('ru')
@@ -260,8 +331,175 @@ describe('Settings → General language picker', () => {
     // An option the registry doesn't know, added outside React. Main's write gate would drop
     // the value too, but only after the round trip and a "Saved" toast for nothing saved.
     picker.append(new Option('Klingon', 'xx'))
-    await userEvent.selectOptions(picker, 'xx')
+    // fireEvent, not user-event: RTL's asyncWrapper, which user-event runs every action through,
+    // waits on a setTimeout(0) that a fake clock never fires outside Jest.
+    vi.useFakeTimers()
+    fireEvent.change(picker, { target: { value: 'xx' } })
+    await elapse(PAST_THE_PAUSE_MS) // a draft would be saved by now (#808)
     expect(updateSettings).not.toHaveBeenCalled()
     expect(picker).toHaveValue('system') // still shows the saved choice
+  })
+
+  // #808: on Windows a closed select fires `change` for every arrow-key step. The steps here come
+  // closer together than the pause and last longer than it, so a pause counted from the first step
+  // would save in between.
+  it('saves once, after a pause, for several changes in a row, and toasts once in the new language', async () => {
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    for (const code of ['de', 'es', 'it', 'fr']) {
+      fireEvent.change(picker, { target: { value: code } })
+      expect(picker).toHaveValue(code) // the choice shows at once
+      await elapse(STEP_MS)
+      expect(updateSettings).not.toHaveBeenCalled()
+    }
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'fr' })
+    expect(screen.getByRole('heading', { name: t('fr', 'settings.title') })).toBeInTheDocument()
+    // Not in English, the language being left.
+    expect(toasts()).toEqual([t('fr', 'settings.saved')])
+  })
+
+  it('saves at once when the select loses focus (#808)', async () => {
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    fireEvent.blur(picker)
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'de' }) // the clock has not moved
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    expect(toasts()).toEqual([t('de', 'settings.saved')])
+  })
+
+  // #808, audit PA-4: the provider outlives the tab, so a choice saved by the unmount still switches
+  // the app. The screen goes; the language provider and the toast host stay, as in App.tsx.
+  it('saves a pending choice when the tab unmounts, and the app switches to it', async () => {
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
+    const { rerender } = renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    rerender(
+      <I18nProvider>
+        <ToastProvider>{null}</ToastProvider>
+      </I18nProvider>
+    )
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'de' })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    expect(document.documentElement.lang).toBe('de')
+    expect(window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('de')
+    expect(toasts()).toEqual([]) // none for a screen that is gone
+  })
+
+  // #808: the read path never rewrites the row (docs/data-contracts.md), so a newer build still finds
+  // the choice; only the user's choice writes.
+  it('writes nothing for a language only a newer build registers until the user chooses System (#808)', async () => {
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS, uiLanguage: 'xx' as UiLanguageSetting })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    expect(picker).toHaveValue('') // the placeholder, so choosing System is a change
+    const placeholder = picker.options[0]
+    expect([placeholder.value, placeholder.hidden, placeholder.disabled]).toEqual(['', true, true])
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).not.toHaveBeenCalled()
+
+    // By value: the placeholder has the same text, and user-event skips a disabled option.
+    fireEvent.change(picker, { target: { value: 'system' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'system' })
+    expect(picker).toHaveValue('system')
+  })
+
+  it('saves nothing and toasts nothing for a pick and back within the pause (#808)', async () => {
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    fireEvent.change(picker, { target: { value: 'system' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).not.toHaveBeenCalled()
+    expect(toasts()).toEqual([])
+    expect(picker).toHaveValue('system')
+
+    // After a save has landed, the same holds against the newly stored value.
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    fireEvent.change(picker, { target: { value: 'fr' } })
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    expect(toasts()).toEqual([t('de', 'settings.saved')])
+    expect(picker).toHaveValue('de')
+  })
+
+  // #808: System resolves through the OS language, so its toast is in that language, not in the
+  // language the screen rendered in.
+  it('toasts in the OS language when the choice is System (#808)', async () => {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('de-DE') // restored in afterEach
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en') // the screen renders in English
+    const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS, uiLanguage: 'en' })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'system' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'system' })
+    expect(toasts()).toEqual([t('de', 'settings.saved')])
+  })
+
+  it('shows the stored language again and the failure toast when the save is refused (#808)', async () => {
+    stubApi({
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS })),
+      // The write gate on a locked workspace.
+      updateSettings: vi.fn(async () => {
+        throw new Error('The workspace is locked.')
+      })
+    })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(picker).toHaveValue('system')
+    expect(toasts()).toEqual([t('en', 'settings.saveFailed')])
+  })
+
+  it("keeps a newer choice on the select when an older save's reply lands (#808)", async () => {
+    const { updateSettings, release } = stubHeldSaves({ ...DEFAULT_SETTINGS })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    fireEvent.change(picker, { target: { value: 'fr' } })
+    release() // the German reply lands while French waits for its pause
+    await elapse(0)
+    expect(picker).toHaveValue('fr')
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenLastCalledWith({ uiLanguage: 'fr' })
+    release()
+    await elapse(0)
+    expect(picker).toHaveValue('fr')
+    expect(document.documentElement.lang).toBe('fr')
+  })
+
+  // #808: "a pick and back saves nothing" compares with the stored value, which an unanswered save is
+  // about to change.
+  it('still saves a choice back to the stored language while an earlier save is unanswered (#808)', async () => {
+    const { updateSettings, release } = stubHeldSaves({ ...DEFAULT_SETTINGS })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    fireEvent.change(picker, { target: { value: 'system' } })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(2)
+    expect(updateSettings).toHaveBeenLastCalledWith({ uiLanguage: 'system' })
+    release()
+    release()
+    await elapse(0)
+    expect(document.documentElement.lang).toBe('en')
+    expect(picker).toHaveValue('system')
   })
 })

@@ -17,7 +17,14 @@ import { PrivacyTab } from './settings/PrivacyTab'
 import { DiagnosticsTab } from './settings/DiagnosticsTab'
 import { SkillsTab } from './settings/SkillsTab'
 import type { SettingsTab } from '../navigation'
-import { UI_LANGUAGES, isUiLanguageSetting, type MessageKey } from '@shared/i18n'
+import {
+  UI_LANGUAGES,
+  isUiLanguageSetting,
+  resolveUiLanguage,
+  t as tCatalog,
+  type MessageKey,
+  type UiLanguageSetting
+} from '@shared/i18n'
 import { MIN_PASSWORD_LENGTH, type AppSettings, type ThemeSetting } from '@shared/types'
 import { CPU_HI_MIN_THREADS } from '@shared/rerank-rules'
 
@@ -44,6 +51,10 @@ const THEME_CHOICES: Array<{ value: ThemeSetting; labelKey: MessageKey }> = [
   { value: 'light', labelKey: 'settings.appearance.light' },
   { value: 'dark', labelKey: 'settings.appearance.dark' }
 ]
+
+/** The language select saves this long after its last change (#808, open-issues wave owner
+ *  call G-6): a closed native select fires `change` for every arrow-key step on Windows. */
+const LANGUAGE_SAVE_DELAY_MS = 500
 
 export interface SettingsScreenProps {
   /** Controlled tab (App.tsx). Omitted → uncontrolled, starting on General. */
@@ -109,14 +120,85 @@ function GeneralTab(): JSX.Element {
     }
   }, [])
 
+  // The language select (#808, open-issues wave owner call G-6). `languageDraft` is the choice
+  // shown at once; `settings` stays the server's last-confirmed values. The save, and with it the
+  // language switch, waits LANGUAGE_SAVE_DELAY_MS after the last change, or runs at once on blur
+  // or unmount (the last choice is kept), so stepping through the closed select saves once. The
+  // refs let a flush from the timer, the blur or the unmount cleanup see the latest choice.
+  const [languageDraft, setLanguageDraft] = useState<UiLanguageSetting | null>(null)
+  const pendingLanguageRef = useRef<UiLanguageSetting | null>(null)
+  const languageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Counts choices, so a reply knows whether a newer one came after its own.
+  const languageChoicesRef = useRef(0)
+  const languageSavesInFlightRef = useRef(0)
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+
+  function flushLanguage(): void {
+    if (languageTimerRef.current !== null) clearTimeout(languageTimerRef.current)
+    languageTimerRef.current = null
+    const uiLanguage = pendingLanguageRef.current
+    pendingLanguageRef.current = null
+    if (uiLanguage === null) return
+    // A pick and back within the pause saves nothing and toasts nothing. Not while an earlier
+    // save is in flight: the stored value is about to change, so the choice must still be sent.
+    if (languageSavesInFlightRef.current === 0 && uiLanguage === settingsRef.current?.uiLanguage) {
+      if (mountedRef.current) setLanguageDraft(null)
+      return
+    }
+    void saveLanguage(uiLanguage, languageChoicesRef.current)
+  }
+  // Timer and unmount call the flush of the latest render (its `t`), not of the one they began in.
+  const flushLanguageRef = useRef(flushLanguage)
+  flushLanguageRef.current = flushLanguage
+  useEffect(() => () => flushLanguageRef.current(), [])
+
+  async function saveLanguage(uiLanguage: UiLanguageSetting, choice: number): Promise<void> {
+    languageSavesInFlightRef.current++
+    // Drop the draft only for the newest choice: an older reply must not flash the select back
+    // while a newer choice waits for its own save.
+    const newest = (): boolean => languageChoicesRef.current === choice
+    try {
+      const next = await window.api.updateSettings({ uiLanguage })
+      settingsRef.current = next
+      // Applied mounted or not (audit PA-4): the provider outlives this tab, so a save flushed by
+      // the unmount still switches the app, `<html lang>` and the mirror. The saved value, not
+      // the request.
+      applyLanguageSetting(next.uiLanguage)
+      if (!mountedRef.current) return
+      setSettings(next)
+      if (newest()) setLanguageDraft(null)
+      // In the new language: this render's `t` is the language being left.
+      toast(tCatalog(resolveUiLanguage(next.uiLanguage, navigator.language), 'settings.saved'))
+    } catch {
+      // A refused save (the write gate on a locked workspace): the select shows the stored value
+      // again, and the failure toast is in the current language (CODE-7, as in `patch`).
+      if (!mountedRef.current) return
+      if (newest()) setLanguageDraft(null)
+      toast(t('settings.saveFailed'))
+    } finally {
+      languageSavesInFlightRef.current--
+    }
+  }
+
+  function chooseLanguage(value: string): void {
+    // A <select>'s value is a plain string: only a registered setting becomes a draft.
+    if (!isUiLanguageSetting(value)) return
+    setLanguageDraft(value)
+    pendingLanguageRef.current = value
+    languageChoicesRef.current++
+    if (languageTimerRef.current !== null) clearTimeout(languageTimerRef.current)
+    languageTimerRef.current = setTimeout(() => flushLanguageRef.current(), LANGUAGE_SAVE_DELAY_MS)
+  }
+
   async function patch(p: Partial<AppSettings>): Promise<void> {
     try {
       const next = await window.api.updateSettings(p)
       if (!mountedRef.current) return
       setSettings(next)
-      // Appearance + language apply immediately — the saved value, not the request.
+      // Appearance applies immediately — the saved value, not the request. The language has its
+      // own delayed save (`flushLanguage`).
       if (p.theme !== undefined) setThemeSetting(next.theme)
-      if (p.uiLanguage !== undefined) applyLanguageSetting(next.uiLanguage)
       toast(t('settings.saved'))
     } catch {
       // full-audit 2026-07-11 CODE-7: a refused save (e.g. the BE-1 write gate on a locked
@@ -162,17 +244,26 @@ function GeneralTab(): JSX.Element {
             language is all it takes to offer it. Language names stay in their own language
             (i18n record §3.3, standard practice): someone stuck on a UI they can't read must
             still find their way back, the way a German speaker on an English UI recognizes
-            „Deutsch“. Only the *System* label is translated, because it names no language. */}
+            „Deutsch“. Only the *System* label is translated, because it names no language.
+            #808 (open-issues wave owner call G-6): a choice is a draft, saved after a pause, on
+            blur or on unmount, with one "Saved" toast in the new language (`chooseLanguage`,
+            `flushLanguage`). A stored language this build doesn't register (a newer build's)
+            shows a hidden, disabled placeholder with the *System* text, so choosing the real
+            *System* is a change; nothing is written until the user chooses. */}
         <select
           className="select"
           aria-label={t('settings.language.aria')}
-          value={settings.uiLanguage}
-          onChange={(e) => {
-            // A <select>'s value is a plain string: save only a registered setting.
-            const uiLanguage = e.target.value
-            if (isUiLanguageSetting(uiLanguage)) void patch({ uiLanguage })
-          }}
+          value={
+            languageDraft ?? (isUiLanguageSetting(settings.uiLanguage) ? settings.uiLanguage : '')
+          }
+          onChange={(e) => chooseLanguage(e.target.value)}
+          onBlur={flushLanguage}
         >
+          {!isUiLanguageSetting(settings.uiLanguage) && (
+            <option value="" disabled hidden>
+              {t('settings.language.system')}
+            </option>
+          )}
           <option value="system">{t('settings.language.system')}</option>
           {UI_LANGUAGES.map((info) => (
             <option key={info.code} value={info.code} lang={info.code}>
