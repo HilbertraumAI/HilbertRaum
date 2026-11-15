@@ -9,6 +9,10 @@
 // imports have no file extension, and no TypeScript loader is a dependency; plan S-W0-15), while
 // vitest loads them, the real `tCount` with them, and `catalogOf` (i18n-catalogs.ts). The
 // `tests/` tree typechecks (tsconfig.web.json) and is never part of the app build.
+//
+// No cell holds a line break: a spreadsheet's import can split a record at one even inside quotes.
+// Comments and headings are joined into one line, and a line break in a catalog value (none has
+// one today) is shown as the two characters `\n`.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as ts from 'typescript'
@@ -25,17 +29,128 @@ import { DESKTOP_ROOT } from './repo-files'
 
 type Catalog = Readonly<Record<string, string>>
 
+/** Computes `make()` on the first call and returns that value from then on. */
+function once<T>(make: () => T): () => T {
+  let value: { readonly made: T } | undefined
+  return () => (value ??= { made: make() }).made
+}
+
+/** `value` on one line: a line break shown as the two characters `\n`. */
+const oneLine = (value: string): string => value.replace(/\r\n|\r|\n/g, '\\n')
+
 // ---- Groups ------------------------------------------------------------------------------------
 
 /** The table's three groups, in table order (#813: the security text first, then the review screen). */
 const REVIEW_GROUPS = ['security', 'review', 'other'] as const
 export type ReviewGroup = (typeof REVIEW_GROUPS)[number]
 
-/** The privacy, password, lock-screen and workspace keys: a meaning error there is a safety error. */
-const SECURITY_PREFIXES: readonly string[] = ['privacy.', 'password.', 'gate.', 'main.workspace.']
+/**
+ * The privacy, security, encryption, password, lock and network/offline text, read first: a
+ * meaning error there is a safety error. An entry is a key or a key namespace and covers the key
+ * and every key under it (`settings.network` covers `settings.network.hint`, a plural base its
+ * forms). #813 named the first four; the others are the keys elsewhere whose English makes such a
+ * claim. Left out on purpose: labels and status lines that claim nothing ("Local API", "Port
+ * number", "Workspace"), the "Workspace is locked. Unlock it to …" refusals, which only report the
+ * state, and copy that only names an offline feature ("an offline Wikipedia").
+ */
+export const SECURITY_TEXT: readonly string[] = [
+  // #813's four: privacy settings, passwords, the lock screen, the workspace's own messages.
+  'privacy',
+  'password',
+  'gate',
+  'main.workspace',
+  // Locking and encryption.
+  'app.lockNow',
+  'app.lockNowTitle',
+  'home.workspace.encrypted',
+  'home.workspace.plaintext',
+  'home.workspace.badgeProtected',
+  'settings.workspace.modeEncrypted',
+  'settings.workspace.modePlaintext',
+  'settings.workspace.encryptedHint',
+  'settings.workspace.plaintextHint',
+  'settings.changePassword',
+  'settings.developer.toggle',
+  'settings.developer.hint',
+  'docs.exportOriginal.warning',
+  'review.export.encryptionWarning',
+  'packExport.privacy',
+  'packExport.integrity.hashNote',
+  'packExport.sources.pathNote',
+  'diag.audit.workspace_lock_failed',
+  // Network and offline.
+  'settings.tab.privacy',
+  'settings.network',
+  'indicator',
+  'models.confirm.hint',
+  'diag.audit.offline_guard_violation',
+  'skills.intro',
+  'skills.perm',
+  'ocr.install.confirm.explain',
+  'packs.tools.confirm.hint',
+  'packs.tools.confirm.explain',
+  // The local API: which programs can reach the model, and with what.
+  'settings.localApi.lead',
+  'settings.localApi.toggle',
+  'settings.localApi.hint',
+  'settings.localApi.confirm',
+  'settings.localApi.token',
+  'settings.localApi.connect.copiedKey',
+  'settings.localApi.connect.noKey',
+  'settings.localApi.error.portInUse',
+  // Where the user's data goes ("stays on this device", "nothing leaves this drive").
+  'home.lead',
+  'chat.noModel.hintAfter',
+  'chat.empty.lineChat',
+  'chat.actions.saveTitle',
+  'chat.actions.exportCsvTitle',
+  'chat.code.saveTitle',
+  'docs.lead',
+  'docs.empty.line',
+  'docs.compareBtnTitle',
+  'docs.previewTitle',
+  'docs.makeSearchableTitle',
+  'docs.translateModal.hint',
+  'images.empty.body',
+  'translate.lead',
+  'translate.avail.hint',
+  'models.lead',
+  'models.hint.translation',
+  'perf.lead',
+  'diag.localOnly',
+  'diag.activity.hint',
+  'diag.logs.hintBefore',
+  'diag.logs.hintAfter',
+  'diag.bench.hint',
+  'skills.redactionRouting.answer',
+  'skills.redactionRouting.answerMulti',
+  'skills.editRouting.answer',
+  'skills.editRouting.answerMulti',
+  // Redaction: what was hidden, and how sure that is.
+  'chat.skill.run.done.redacted',
+  'chat.skill.run.done.redactedClean',
+  'chat.skill.run.done.redactedFloor',
+  'chat.skill.run.done.redactedCleanFloor',
+  'chat.skill.run.done.redactedCapped',
+  'chat.skill.confirm.redactionScope',
+  'skills.redactionRouting.scan',
+  'skills.info.document-redaction.what',
+  'skills.info.share-safe-review.limits'
+]
+
+const isSecurityText = (key: string): boolean =>
+  SECURITY_TEXT.some((entry) => key === entry || key.startsWith(`${entry}.`))
+
+/** Throws when a `SECURITY_TEXT` entry covers no English key (renamed or removed). */
+const checkSecurityText = once((): true => {
+  const keys = Object.keys(catalogOf('en'))
+  const stale = SECURITY_TEXT.filter((entry) => !keys.some((key) => key === entry || key.startsWith(`${entry}.`)))
+  if (stale.length > 0) throw new Error(`SECURITY_TEXT covers no key any more: ${stale.join(', ')}`)
+  return true
+})
 
 function reviewGroupOf(key: string): ReviewGroup {
-  if (SECURITY_PREFIXES.some((prefix) => key.startsWith(prefix))) return 'security'
+  if (isSecurityText(key)) return 'security'
   return key.startsWith('review.') ? 'review' : 'other'
 }
 
@@ -55,7 +170,7 @@ export interface ExactMatchSite {
   /** The source file, relative to `apps/desktop`, with forward slashes. */
   file: string
   find: { array: string } | { calls: string; argument: number; within?: string }
-  /** What a reviewer needs to know about these keys, in plain words. */
+  /** What a reviewer needs to know about these keys, in plain words: one sentence. */
   reason: string
 }
 
@@ -91,6 +206,10 @@ export const EXACT_MATCH_SITES: readonly ExactMatchSite[] = [
   }
 ]
 
+/** The reason a key with the same English text as `readKey`, a key the code reads, is marked too. */
+export const twinReason = (readKey: string): string =>
+  `Same English text as ${readKey}, which the code reads by its text: keep the two translations identical.`
+
 /** `node` itself when it is a variable declaration named `name`, else undefined. */
 const declarationNamed = (node: ts.Node, name: string): ts.VariableDeclaration | undefined =>
   ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name ? node : undefined
@@ -102,53 +221,82 @@ function unwrapped(node: ts.Expression): ts.Expression {
   return value
 }
 
+/** The nodes `site` names a key with: the array's elements, or the argument of each matching call. */
+function siteKeyNodes(site: ExactMatchSite, source: ts.SourceFile, fail: (problem: string) => never): (ts.Node | undefined)[] {
+  const nodes: (ts.Node | undefined)[] = []
+  const find = site.find
+  if ('array' in find) {
+    const visit = (node: ts.Node): void => {
+      const declaration = declarationNamed(node, find.array)
+      if (declaration === undefined) return ts.forEachChild(node, visit)
+      const value = declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer)
+      if (value === undefined || !ts.isArrayLiteralExpression(value)) fail('not initialised with an array')
+      nodes.push(...value.elements)
+    }
+    visit(source)
+    return nodes
+  }
+  const visit = (node: ts.Node, inside: boolean): void => {
+    if (inside && ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === find.calls) {
+      nodes.push(node.arguments[find.argument])
+    }
+    const into = inside || (find.within !== undefined && declarationNamed(node, find.within) !== undefined)
+    ts.forEachChild(node, (child) => visit(child, into))
+  }
+  visit(source, find.within === undefined)
+  return nodes
+}
+
 /** The catalog keys `site` reads, from its source text, in source order. */
 function exactMatchSiteKeys(site: ExactMatchSite, sourceText: string, english: Catalog): string[] {
-  const source = ts.createSourceFile(site.file, sourceText, ts.ScriptTarget.Latest, true)
   const find = site.find
   const what =
     'array' in find
       ? `the array of const ${find.array}`
       : `argument ${find.argument} of ${find.calls}()${find.within === undefined ? '' : ` in const ${find.within}`}`
-  const fail = (problem: string): never => {
+  function fail(problem: string): never {
     throw new Error(`${site.file}: ${problem} (${what}); update EXACT_MATCH_SITES`)
   }
-  const keys: string[] = []
-  const take = (node: ts.Node | undefined): void => {
+  const source = ts.createSourceFile(site.file, sourceText, ts.ScriptTarget.Latest, true)
+  const keys = siteKeyNodes(site, source, fail).map((node) => {
     if (node === undefined || !(ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) {
       fail(`${node === undefined ? 'nothing' : `'${node.getText(source)}'`} is not a string literal`)
-      return
     }
     if (!Object.hasOwn(english, node.text)) fail(`'${node.text}' is not a catalog key`)
-    keys.push(node.text)
-  }
-  const visit = (node: ts.Node, inside: boolean): void => {
-    if ('array' in find) {
-      const declaration = declarationNamed(node, find.array)
-      if (declaration !== undefined) {
-        const value = declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer)
-        if (value === undefined || !ts.isArrayLiteralExpression(value)) fail('not initialised with an array')
-        else value.elements.forEach(take)
-      }
-    } else if (inside && ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === find.calls) {
-      take(node.arguments[find.argument])
-    }
-    const into = inside || ('calls' in find && find.within !== undefined && declarationNamed(node, find.within) !== undefined)
-    ts.forEachChild(node, (child) => visit(child, into))
-  }
-  visit(source, !('calls' in find) || find.within === undefined)
+    return node.text
+  })
   if (keys.length === 0) fail('no catalog key found')
   return [...new Set(keys)]
 }
 
-/** Every site with the keys it reads, from the committed source. */
-export function exactMatchSitesWithKeys(): { site: ExactMatchSite; keys: string[] }[] {
+/** Every site with the keys it reads, from the committed source (read once). */
+export const exactMatchSitesWithKeys = once((): readonly { site: ExactMatchSite; keys: readonly string[] }[] => {
   const english = catalogOf('en')
   return EXACT_MATCH_SITES.map((site) => ({
     site,
     keys: exactMatchSiteKeys(site, readFileSync(join(DESKTOP_ROOT, site.file), 'utf8'), english)
   }))
-}
+})
+
+/**
+ * Key → why it is marked: the reason of every site that reads it, then a `twinReason` for every key
+ * a site reads whose English text is the same (the code compares text, so it cannot tell the two
+ * apart: `translate.err.startFailed` passes the doc-task filter as `main.translation.startFailed`).
+ */
+const exactMatchReasons = once((): ReadonlyMap<string, readonly string[]> => {
+  const english = catalogOf('en')
+  const reasons = new Map<string, string[]>()
+  const add = (key: string, reason: string): void => {
+    reasons.set(key, [...(reasons.get(key) ?? []), reason])
+  }
+  const sites = exactMatchSitesWithKeys()
+  for (const { site, keys } of sites) for (const key of keys) add(key, site.reason)
+  const read = [...new Set(sites.flatMap(({ keys }) => keys))]
+  for (const key of Object.keys(english)) {
+    for (const readKey of read) if (readKey !== key && english[readKey] === english[key]) add(key, twinReason(readKey))
+  }
+  return reasons
+})
 
 // ---- Code comments --------------------------------------------------------------------------------
 
@@ -168,22 +316,12 @@ function commentLines(text: string, range: ts.CommentRange): string[] {
     .map((line) => line.replace(/^\s*\*?/, '').trim())
 }
 
-/** Comment lines read as prose: wrapped lines joined by a space, a blank line starting a paragraph. */
-function prose(lines: readonly string[]): string {
-  const paragraphs: string[][] = [[]]
-  for (const line of lines) {
-    if (line === '') paragraphs.push([])
-    else paragraphs[paragraphs.length - 1]!.push(line)
-  }
-  return paragraphs
-    .filter((paragraph) => paragraph.length > 0)
-    .map((paragraph) => paragraph.join(' '))
-    .join('\n')
-}
+/** Comment lines as one line of prose. */
+const prose = (lines: readonly string[]): string => lines.filter((line) => line !== '').join(' ')
 
 /** A section heading's text: `// ---- Home (HomeScreen.tsx) ----` gives `Home (HomeScreen.tsx)`. */
 const headingName = (lines: readonly string[]): string =>
-  lines.join(' ').replace(/^-+\s*/, '').replace(/\s*-+$/, '')
+  prose(lines).replace(/^-+\s*/, '').replace(/\s*-+$/, '')
 
 /**
  * The comments of every key of the catalog `exportName` in `sourceText`: the comments between the
@@ -204,28 +342,23 @@ function catalogComments(sourceText: string, exportName: string): Map<string, Ke
       throw new Error(`${exportName}.ts: a catalog entry that is not 'key': value at ${property.getStart()}`)
     }
     const lines: string[] = []
-    let previousEnd = -1
     let heading: string[] | null = null
     for (const range of ts.getLeadingCommentRanges(sourceText, property.getFullStart()) ?? []) {
       const text = commentLines(sourceText, range)
       if (heading === null && text[0]!.startsWith('----')) heading = []
-      if (heading !== null) {
-        heading.push(...text)
-        if (!/-{4}\s*$/.test(text[text.length - 1]!)) continue
-        const name = headingName(heading)
-        if (/—\s*END$/.test(name)) section = opened.pop() ?? section
-        else {
-          if (/—\s*BEGIN$/.test(name)) opened.push(section)
-          section = name.replace(/\s*—\s*BEGIN$/, '')
-        }
-        heading = null
-        if (lines.length > 0) lines.push('')
-        previousEnd = -1
+      if (heading === null) {
+        lines.push(...text)
         continue
       }
-      if (previousEnd !== -1 && /\n[ \t]*\r?\n/.test(sourceText.slice(previousEnd, range.pos))) lines.push('')
-      lines.push(...text)
-      previousEnd = range.end
+      heading.push(...text)
+      if (!/-{4}\s*$/.test(text[text.length - 1]!)) continue
+      const name = headingName(heading)
+      if (/—\s*END$/.test(name)) section = opened.pop() ?? section
+      else {
+        if (/—\s*BEGIN$/.test(name)) opened.push(section)
+        section = name.replace(/\s*—\s*BEGIN$/, '')
+      }
+      heading = null
     }
     if (heading !== null) section = headingName(heading)
     let after = property.end
@@ -254,6 +387,9 @@ function catalogLiteral(source: ts.SourceFile, name: string): ts.ObjectLiteralEx
 
 const catalogSource = (code: UiLanguage): string => readFileSync(join(I18N_DIR, `${code}.ts`), 'utf8')
 
+/** The comments of `en.ts` (read once). */
+const englishComments = once(() => catalogComments(catalogSource('en'), 'en'))
+
 // ---- The reviewer table -------------------------------------------------------------------------
 
 export interface ReviewRow {
@@ -264,9 +400,9 @@ export interface ReviewRow {
   /** English's text; for a plural form English does not have (`.few`, `.many`), English's `.other`. */
   english: string
   translation: string
-  /** Why the code reads this key by its text (several reasons on separate lines), or empty. */
-  exactMatch: string
-  /** The comment above the key in `en.ts`. */
+  /** Why the code reads this key by its text, one sentence each; empty when it does not. */
+  exactMatch: readonly string[]
+  /** The comment above the key in `en.ts`; for every form of a plural base, the base's note (above `.one` and `.other`). */
   englishComment: string
   /** The comment above the key in the language's own catalog file. */
   translationComment: string
@@ -283,26 +419,28 @@ interface ReviewTableInput {
 
 const PLURAL_FORM = /^(.*)\.(zero|one|two|few|many|other)$/
 
-/** The English key standing for `key`: itself, or for a plural form English lacks, `<base>.other`. */
-function englishKeyFor(english: Catalog, key: string): string {
-  if (Object.hasOwn(english, key)) return key
-  const form = PLURAL_FORM.exec(key)
-  return form !== null ? `${form[1]}.other` : key
+/** The plural base `key` is a form of in `english` (both `<base>.one` and `<base>.other` exist), or null. */
+function pluralBaseOf(english: Catalog, key: string): string | null {
+  const base = PLURAL_FORM.exec(key)?.[1]
+  return base !== undefined && Object.hasOwn(english, `${base}.one`) && Object.hasOwn(english, `${base}.other`)
+    ? base
+    : null
 }
 
-/** One row per key of `catalog`: the security keys first, then `review.*`, then the rest, each in catalog order. */
+/** One row per key of `catalog`: the security text first, then `review.*`, then the rest, each in catalog order. */
 function buildReviewTable(input: ReviewTableInput): ReviewRow[] {
-  const keys = Object.keys(input.catalog)
-  const rows = keys.map((key): ReviewRow => {
-    const englishKey = englishKeyFor(input.english, key)
+  const commentOf = (key: string): string => input.englishComments.get(key)?.comment ?? ''
+  const rows = Object.keys(input.catalog).map((key): ReviewRow => {
+    const base = pluralBaseOf(input.english, key)
+    const englishKey = base !== null && !Object.hasOwn(input.english, key) ? `${base}.other` : key
     return {
       group: reviewGroupOf(key),
       section: input.englishComments.get(englishKey)?.section ?? '',
       key,
-      english: input.english[englishKey] ?? '',
-      translation: input.catalog[key]!,
-      exactMatch: (input.exactMatch.get(key) ?? []).join('\n'),
-      englishComment: input.englishComments.get(key)?.comment ?? '',
+      english: oneLine(input.english[englishKey] ?? ''),
+      translation: oneLine(input.catalog[key]!),
+      exactMatch: input.exactMatch.get(key) ?? [],
+      englishComment: base === null ? commentOf(key) : prose([commentOf(`${base}.one`), commentOf(`${base}.other`)]),
       translationComment: input.comments.get(key)?.comment ?? ''
     }
   })
@@ -311,16 +449,13 @@ function buildReviewTable(input: ReviewTableInput): ReviewRow[] {
 
 /** The reviewer table of a registered language, from the committed catalogs and sources. */
 export function reviewTableFor(code: UiLanguage): ReviewRow[] {
-  const exactMatch = new Map<string, string[]>()
-  for (const { site, keys } of exactMatchSitesWithKeys()) {
-    for (const key of keys) exactMatch.set(key, [...(exactMatch.get(key) ?? []), site.reason])
-  }
+  checkSecurityText()
   return buildReviewTable({
     english: catalogOf('en'),
-    englishComments: catalogComments(catalogSource('en'), 'en'),
+    englishComments: englishComments(),
     catalog: catalogOf(code),
     comments: code === 'en' ? new Map() : catalogComments(catalogSource(code), code),
-    exactMatch
+    exactMatch: exactMatchReasons()
   })
 }
 
@@ -355,17 +490,19 @@ function pluralBasesOf(catalog: Catalog): string[] {
     .map((key) => key.slice(0, -'.one'.length))
 }
 
-/** Every `{name}` placeholder of `base`'s forms in `catalogs`, except `{count}`. */
-function otherPlaceholders(base: string, catalogs: readonly Catalog[]): string[] {
-  const names = new Set<string>()
+/** Plural base → the `{name}` placeholders of its forms in `catalogs`, `{count}` left out; one pass per catalog. */
+function placeholdersByBase(catalogs: readonly Catalog[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>()
   for (const catalog of catalogs) {
     for (const [key, value] of Object.entries(catalog)) {
-      if (PLURAL_FORM.exec(key)?.[1] !== base) continue
-      for (const match of value.matchAll(/\{(\w+)\}/g)) names.add(match[1]!)
+      const base = PLURAL_FORM.exec(key)?.[1]
+      if (base === undefined) continue
+      const names = out.get(base) ?? new Set<string>()
+      for (const match of value.matchAll(/\{(\w+)\}/g)) if (match[1] !== 'count') names.add(match[1]!)
+      out.set(base, names)
     }
   }
-  names.delete('count')
-  return [...names]
+  return out
 }
 
 /**
@@ -376,7 +513,6 @@ function otherPlaceholders(base: string, catalogs: readonly Catalog[]): string[]
 export function pluralSheetFor(code: UiLanguage): PluralRow[] {
   const info = uiLanguageInfo(code)
   const catalog = catalogOf(code)
-  const english = catalogOf('en')
   const counts = [...PLURAL_EDGE_COUNTS]
   const notes = new Map<number, string>()
   for (const category of info.pluralCategories) {
@@ -386,20 +522,21 @@ export function pluralSheetFor(code: UiLanguage): PluralRow[] {
     counts.push(extra)
     notes.set(extra, `No edge count takes the "${category}" form; a fraction does.`)
   }
+  const placeholders = placeholdersByBase([catalog, catalogOf('en')])
   return pluralBasesOf(catalog).flatMap((base) => {
-    const params = Object.fromEntries(otherPlaceholders(base, [catalog, english]).map((name) => [name, `{${name}}`]))
+    const params = Object.fromEntries([...(placeholders.get(base) ?? [])].map((name) => [name, `{${name}}`]))
     const keyBase = base as CountMessageKey
-    return counts.map((count): PluralRow => {
-      return {
+    return counts.map(
+      (count): PluralRow => ({
         base,
         count,
         category: info.plural(count),
         key: pluralKeyFor(info, base, count, (key) => Object.hasOwn(catalog, key)),
-        translation: tCount(code, keyBase, count, params),
-        english: tCount('en', keyBase, count, params),
+        translation: oneLine(tCount(code, keyBase, count, params)),
+        english: oneLine(tCount('en', keyBase, count, params)),
         note: notes.get(count) ?? ''
-      }
-    })
+      })
+    )
   })
 }
 
@@ -430,6 +567,7 @@ const REVIEW_CSV_HEADER: readonly string[] = [
   'translation_comment'
 ]
 
+/** The review table as CSV; several exact-match reasons are sentences, joined by a space. */
 export function reviewCsv(rows: readonly ReviewRow[]): string {
   return toCsv([
     REVIEW_CSV_HEADER,
@@ -439,8 +577,8 @@ export function reviewCsv(rows: readonly ReviewRow[]): string {
       row.key,
       row.english,
       row.translation,
-      row.exactMatch === '' ? '' : 'yes',
-      row.exactMatch,
+      row.exactMatch.length === 0 ? '' : 'yes',
+      row.exactMatch.join(' '),
       row.englishComment,
       row.translationComment
     ])

@@ -8,12 +8,14 @@ import { isFriendlyTaskError } from '../../src/main/services/doctasks/manager'
 import { I18N_DIR, catalogOf } from '../helpers/i18n-catalogs'
 import {
   EXACT_MATCH_SITES,
+  SECURITY_TEXT,
   exactMatchSitesWithKeys,
   pluralCsv,
   pluralSheetFor,
   reviewCsv,
   reviewTableFor,
   toCsv,
+  twinReason,
   type PluralRow,
   type ReviewRow
 } from '../helpers/i18n-review-export'
@@ -30,6 +32,8 @@ const tableOf = (code: UiLanguage): ReviewRow[] => {
   return tables.get(code)!
 }
 const english = catalogOf('en')
+/** A value as a cell shows it: a line break as the two characters `\n` (no catalog value has one today). */
+const shown = (value: string): string => value.replace(/\r\n|\r|\n/g, '\\n')
 
 /** A strict RFC 4180 reader (CRLF records, quoted fields, doubled quotes); throws on anything else. */
 function readCsv(text: string): string[][] {
@@ -69,9 +73,10 @@ function readCsv(text: string): string[][] {
 }
 
 describe('the reviewer table (#813)', () => {
-  // #813's order: the privacy, password, lock-screen and workspace text, then the review screen.
+  // #813's order: the privacy, security and lock text first (an entry of SECURITY_TEXT covers the
+  // key and every key under it), then the review screen.
   const security = (key: string): boolean =>
-    ['privacy.', 'password.', 'gate.', 'main.workspace.'].some((prefix) => key.startsWith(prefix))
+    SECURITY_TEXT.some((entry) => key === entry || key.startsWith(`${entry}.`))
   const review = (key: string): boolean => !security(key) && key.startsWith('review.')
 
   it.each(UI_LANGUAGE_CODES)('%s: every catalog key once, the security keys first, then review.*, each group in catalog order', (code) => {
@@ -89,9 +94,31 @@ describe('the reviewer table (#813)', () => {
     )
     expect(rows.some((row) => row.group === 'security') && rows.some((row) => row.group === 'review')).toBe(true)
     for (const row of rows) {
-      expect(row.translation).toBe(catalog[row.key])
+      expect(row.translation).toBe(shown(catalog[row.key]!))
       // A form English lacks (Russian `.few`) shows English's plural.
-      expect(row.english).toBe(english[row.key] ?? english[row.key.replace(/\.[a-z]+$/, '.other')])
+      expect(row.english).toBe(shown(english[row.key] ?? english[row.key.replace(/\.[a-z]+$/, '.other')]!))
+    }
+  })
+
+  it('reads #813\'s four prefixes, and the privacy, security and lock text outside them, first', () => {
+    // One key of each of #813's four prefixes, and a few of the keys the widened group exists for.
+    const first = [
+      'privacy.offlineOn',
+      'password.mismatch',
+      'gate.passwordPlaceholder',
+      'main.workspace.wrongPassword',
+      'settings.localApi.confirm.boundary',
+      'settings.changePassword.hint',
+      'settings.network.hint',
+      'settings.workspace.encryptedHint',
+      'home.workspace.encrypted',
+      'app.lockNow',
+      'indicator.offlineDetail',
+      'review.export.encryptionWarning'
+    ]
+    for (const code of UI_LANGUAGE_CODES) {
+      const groups = new Map(tableOf(code).map((row) => [row.key, row.group]))
+      expect(first.map((key) => groups.get(key))).toEqual(first.map(() => 'security'))
     }
   })
 
@@ -122,20 +149,42 @@ describe('the reviewer table (#813)', () => {
     return out
   }
 
+  /** The plural base `key` is a form of (English has `<base>.one` and `<base>.other`), or null. */
+  const pluralBase = (key: string): string | null => {
+    const base = /^(.*)\.(zero|one|two|few|many|other)$/.exec(key)?.[1]
+    return base !== undefined && `${base}.one` in english && `${base}.other` in english ? base : null
+  }
+  /** The en.ts comment lines a row's English comment holds: a plural form gets its base's (above `.one` and `.other`). */
+  const englishLinesOf = (lines: ReadonlyMap<string, string[]>, key: string): string[] => {
+    const base = pluralBase(key)
+    if (base === null) return lines.get(key) ?? []
+    return [...(lines.get(`${base}.one`) ?? []), ...(lines.get(`${base}.other`) ?? [])]
+  }
+  const expectLinesOnly = (cell: string, lines: readonly string[], key: string): void => {
+    for (const line of lines) expect(cell, key).toContain(line)
+    if (lines.length === 0) expect(cell, key).toBe('')
+  }
+
   it.each(UI_LANGUAGE_CODES)('%s: every comment line of the catalog file is on the row of the key below it, and only there', (code) => {
-    const fromFile = commentLinesByKey(code)
+    const englishLines = commentLinesByKey('en')
+    const ownLines = commentLinesByKey(code)
     const rows = tableOf(code)
-    const commentOf = (row: ReviewRow): string => (code === 'en' ? row.englishComment : row.translationComment)
     for (const row of rows) {
-      const lines = fromFile.get(row.key) ?? []
-      for (const line of lines) expect(commentOf(row), row.key).toContain(line)
-      if (lines.length === 0) expect(commentOf(row), row.key).toBe('')
-    }
-    if (code !== 'en') {
-      const englishLines = commentLinesByKey('en')
-      for (const row of rows) for (const line of englishLines.get(row.key) ?? []) expect(row.englishComment).toContain(line)
+      expectLinesOnly(row.englishComment, englishLinesOf(englishLines, row.key), row.key)
+      if (code !== 'en') expectLinesOnly(row.translationComment, ownLines.get(row.key) ?? [], row.key)
     }
     expect(rows.every((row) => row.section !== '')).toBe(true)
+  })
+
+  it('a form English lacks carries the note English keeps above the base\'s .one form', () => {
+    const lines = commentLinesByKey('en')
+    const many = Object.keys(catalogOf('fr')).filter((key) => key.endsWith('.many'))
+    const key = many.find((form) => (lines.get(`${form.slice(0, -'.many'.length)}.one`) ?? []).length > 0)!
+    const note = lines.get(`${key.slice(0, -'.many'.length)}.one`)!
+    for (const code of ['fr', 'ru'] as const) {
+      const row = tableOf(code).find((candidate) => candidate.key === key)!
+      for (const line of note) expect(row.englishComment).toContain(line)
+    }
   })
 
   it('en: the section is the en.ts heading above the key; after an "— END" heading, the one its "— BEGIN" left', () => {
@@ -172,9 +221,9 @@ describe('the plural-edge sheet (#813)', () => {
         expect(row.category).toBe(info.plural(row.count))
         expect(row.key).toBe(`${base}.${row.category}`)
         // The language's own form, its other placeholders left visible (no English fallback).
-        expect(row.translation).toBe(catalog[row.key]!.replaceAll('{count}', String(row.count)))
+        expect(row.translation).toBe(shown(catalog[row.key]!.replaceAll('{count}', String(row.count))))
         const englishForm = `${base}.${row.count === 1 ? 'one' : 'other'}`
-        expect(row.english).toBe(english[englishForm]!.replaceAll('{count}', String(row.count)))
+        expect(row.english).toBe(shown(english[englishForm]!.replaceAll('{count}', String(row.count))))
         expect(row.note === '').toBe(index < EDGES.length)
       })
     }
@@ -199,8 +248,8 @@ describe('the CSV files (#813)', () => {
     ['key', (row) => row.key],
     ['english', (row) => row.english],
     ['translation', (row) => row.translation],
-    ['exact_match', (row) => (row.exactMatch === '' ? '' : 'yes')],
-    ['exact_match_reason', (row) => row.exactMatch],
+    ['exact_match', (row) => (row.exactMatch.length === 0 ? '' : 'yes')],
+    ['exact_match_reason', (row) => row.exactMatch.join(' ')],
     ['english_comment', (row) => row.englishComment],
     ['translation_comment', (row) => row.translationComment]
   ]
@@ -226,30 +275,47 @@ describe('the CSV files (#813)', () => {
       ...plurals.map((row) => PLURAL_COLUMNS.map(([, cell]) => cell(row)))
     ])
   })
+
+  // A spreadsheet's import can split a record at a line break even inside quotes.
+  it.each(UI_LANGUAGE_CODES.filter((code) => code !== 'en'))('%s: no cell of either file holds a line break', (code) => {
+    const cells = [
+      ...readCsv(reviewCsv(tableOf(code)).slice(1)),
+      ...readCsv(pluralCsv(pluralSheetFor(code)).slice(1))
+    ].flat()
+    expect(cells.filter((cell) => /[\r\n]/.test(cell))).toEqual([])
+  })
 })
 
 describe('the exact-match column (#813, i18n record §3.3 Rule 3)', () => {
   const sites = exactMatchSitesWithKeys()
+  const read = [...new Set(sites.flatMap(({ keys }) => keys))]
   const marked = (reason: string): string[] =>
     tableOf('en')
-      .filter((row) => row.exactMatch.split('\n').includes(reason))
+      .filter((row) => row.exactMatch.includes(reason))
       .map((row) => row.key)
 
-  it('marks exactly the keys whose text the doc-task filter passes through', () => {
-    const friendly = EXACT_MATCH_SITES.find((site) => site.file.endsWith('doctasks/manager.ts'))!
+  it('marks exactly the keys whose text the doc-task filter passes through: its own keys, and their twins', () => {
+    const friendly = sites.find(({ site }) => site.file.endsWith('doctasks/manager.ts'))!
     const passed = Object.keys(english).filter((key) => isFriendlyTaskError(english[key]!))
-    const keys = marked(friendly.reason)
-    // The filter sees text, not keys: a key whose English text is a marked key's (the Images and
-    // Translate copies of "cannot run") passes too, without the code reading that key.
-    expect(keys.filter((key) => !passed.includes(key))).toEqual([])
-    expect(passed.filter((key) => !keys.some((own) => english[own] === english[key]))).toEqual([])
+    // The filter sees text, not keys: a key with a read key's English text (the Images and
+    // Translate copies of "cannot run") passes too, so it is marked as that key's twin.
+    const own = marked(friendly.site.reason)
+    const twins = Object.keys(english).filter((key) =>
+      tableOf('en').find((row) => row.key === key)!.exactMatch.some((reason) => friendly.keys.map(twinReason).includes(reason))
+    )
+    expect(own.filter((key) => !passed.includes(key))).toEqual([])
+    expect(twins.length).toBeGreaterThan(0)
+    expect([...new Set([...own, ...twins])].sort()).toEqual([...passed].sort())
   })
 
-  it('marks each site\'s keys with its reason in every language, and no other key', () => {
+  it('marks each site\'s keys with its reason, and each twin of a read key, in every language, and no other key', () => {
     for (const code of UI_LANGUAGE_CODES) {
       for (const row of tableOf(code)) {
-        const reasons = sites.filter(({ keys }) => keys.includes(row.key)).map(({ site }) => site.reason)
-        expect(row.exactMatch.split('\n').filter((reason) => reason !== '')).toEqual(reasons)
+        const reasons = [
+          ...sites.filter(({ keys }) => keys.includes(row.key)).map(({ site }) => site.reason),
+          ...read.filter((key) => key !== row.key && row.key in english && english[key] === english[row.key]).map(twinReason)
+        ]
+        expect(row.exactMatch).toEqual(reasons)
       }
     }
     expect(sites.every(({ keys }) => keys.length > 0)).toBe(true)

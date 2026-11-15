@@ -12,8 +12,8 @@ import { pluralCsv, pluralSheetFor, reviewCsv, reviewTableFor } from '../helpers
 // the variable is set. For every registered language except English (the source text, which is a
 // column of every file) it writes two UTF-8 CSV files that a spreadsheet app opens:
 //
-//   <code>-review.csv   one row per key of the language's catalog: the privacy, password,
-//                       lock-screen and workspace text first, then the review screen, then the
+//   <code>-review.csv   one row per key of the language's catalog: the privacy, security,
+//                       password, lock and offline text first, then the review screen, then the
 //                       rest; English, the translation, whether the code reads the key by its exact
 //                       text (and why), and the code comments above the key in en.ts and in the
 //                       language's own file.
@@ -39,8 +39,9 @@ describe.skipIf(OUT === '')('HILBERTRAUM_I18N_REVIEW_EXPORT — the native-revie
       expect(plurals.length).toBeGreaterThan(0)
       writeFileSync(join(dir, `${code}-review.csv`), reviewCsv(table), 'utf8')
       writeFileSync(join(dir, `${code}-plurals.csv`), pluralCsv(plurals), 'utf8')
-      const exact = table.filter((row) => row.exactMatch !== '').length
-      written.push(`${code}: ${table.length} keys (${exact} read by exact text), ${plurals.length} plural rows`)
+      const exact = table.filter((row) => row.exactMatch.length > 0).length
+      const security = table.filter((row) => row.group === 'security').length
+      written.push(`${code}: ${table.length} keys (${security} security, ${exact} exact match), ${plurals.length} plural rows`)
     }
     console.log(`[i18n review export] ${dir}\n  ${written.join('\n  ')}`)
   })
