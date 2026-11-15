@@ -18,6 +18,7 @@ const readCsv = (p) => {
 }
 const id = (m) => m.replace(/\.gguf$/, '')
 
+// Columns by name: an unlisted QA column (#378's mean_answer_chars, not added yet) is dropped.
 const OUT_COLS = [
   'model', 'backend',
   'pp512_tps', 'pp2048_tps', 'pp8192_tps', 'tg_tps', 'peak_rss_gib', 'suggested_min_ram_gb',

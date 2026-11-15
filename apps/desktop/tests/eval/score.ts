@@ -69,6 +69,14 @@ export interface ItemScore {
   grounded: boolean
   /** Overall verdict (drives the §5.4 decision rule). See `scoreItem` for the definition. */
   correct: boolean
+  /**
+   * The answer's length in UTF-16 code units (`answer.length`, the unit the #378 reproduction
+   * used; equal to the code-point count for text without astral characters). Not a quality
+   * metric: it sits beside `mean_f1` because containment EM saturates, so token-F1 mostly
+   * measures terseness (#378). `eval/rescore.mjs` recomputes it from the dumped `answer` with
+   * the same expression, so dumps written before this field score the same.
+   */
+  answerChars: number
 }
 
 // --- Token metrics (German-aware via the shared `normalizeText`) ------------------------
@@ -162,7 +170,8 @@ export function scoreItem(item: EvalItem, out: ItemOutput): ItemScore {
     citationPresent,
     citationCorrect,
     grounded,
-    correct
+    correct,
+    answerChars: out.answer.length
   }
 }
 
@@ -174,6 +183,7 @@ export interface ModelAggregate {
   answerable: number
   emRate: number // EM over answerable
   meanF1: number // mean token-F1 over answerable
+  meanAnswerChars: number // mean `answerChars` over the same answerable items as meanF1 (#378)
   citationCorrectRate: number // over answerable
   groundedRate: number // over answerable
   overAbstainRate: number // answerable items the model wrongly declined
@@ -206,6 +216,7 @@ export function aggregate(model: string, scores: ItemScore[]): ModelAggregate {
     answerable: ans.length,
     emRate: rate(ans.filter((s) => s.em === 1).length, ans.length),
     meanF1: mean(ans.map((s) => s.f1)),
+    meanAnswerChars: mean(ans.map((s) => s.answerChars)),
     citationCorrectRate: rate(ans.filter((s) => s.citationCorrect).length, ans.length),
     groundedRate: rate(ans.filter((s) => s.grounded).length, ans.length),
     overAbstainRate: rate(ans.filter((s) => s.abstained && s.em === 0).length, ans.length),
@@ -225,6 +236,7 @@ export const QA_CSV_HEADER = [
   'n',
   'em_rate',
   'mean_f1',
+  'mean_answer_chars',
   'citation_correct_rate',
   'grounded_rate',
   'over_abstain_rate',
@@ -246,6 +258,7 @@ export function toCsvRow(a: ModelAggregate): string {
     String(a.n),
     num(a.emRate),
     num(a.meanF1),
+    num(a.meanAnswerChars),
     num(a.citationCorrectRate),
     num(a.groundedRate),
     num(a.overAbstainRate),
