@@ -1,0 +1,89 @@
+name: Translation finding
+description: A word or sentence in the interface that is wrong, inconsistent or awkward in your language.
+title: "Translation: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reviewing. The interface text of every language but English and German is
+        machine-drafted and checked, and a native speaker's eye is what it still needs. How a review works, the review table
+        and the plural sheet, the severity scale and the keys the code reads by their exact text
+        are in
+        [CONTRIBUTING "Reviewing a translation"](https://github.com/HilbertraumAI/HilbertRaum/blob/master/CONTRIBUTING.md#reviewing-a-translation).
+        One finding per issue is easiest to fix; several findings in one language are fine in
+        one issue too, one per line.
+
+        **Please keep personal data out of the report.** We do not want your documents, your
+        chat content, or a screenshot or path with your name in it. The text and the key are
+        enough.
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options:
+        - English (en)
+        - Deutsch (de)
+        - Español (es)
+        - Français (fr)
+        - Italiano (it)
+        - Nederlands (nl)
+        - Polski (pl)
+        - Türkçe (tr)
+        - Русский (ru)
+        - Українська (uk)
+    validations:
+      required: true
+
+  - type: input
+    id: keys
+    attributes:
+      label: Key or keys
+      description: The key column of the review table, such as `privacy.offlineOn`. Several keys are fine, separated by commas.
+      placeholder: review.decision.not_applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current text
+      description: The text as the app shows it now, copied from the app or the review table.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested text
+      description: |
+        Your wording. Keep every placeholder in braces, such as `{count}` or `{name}`, as it is.
+        If the review table's `exact_match` column says `yes` for the key, say so: the code reads
+        that text, so a new wording changes what the code recognises.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "S1, meaning or safety: says something different from English, or a placeholder is lost or changed"
+        - "S2, consistency: a glossary term, the form of address, a button or screen name that doesn't match its label, or untranslated text"
+        - "S3, style: correct but awkward, too long, or a better word exists"
+    validations:
+      required: true
+
+  - type: input
+    id: where
+    attributes:
+      label: Where does it show? (if you know)
+      description: Optional. The screen, tab or dialog, or the message it belongs to.
+      placeholder: Settings → Privacy & data
+
+  - type: textarea
+    id: note
+    attributes:
+      label: Anything else?
+      description: Optional. Why the current text reads wrong, or another place that uses the same word.
