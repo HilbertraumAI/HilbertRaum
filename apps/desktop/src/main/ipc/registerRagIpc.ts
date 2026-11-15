@@ -560,6 +560,20 @@ export function registerRagIpc(ctx: AppContext): void {
         allInScopeDocsFullyChunked(ctx.db, scope) &&
         analysisHandler.classMatches({ question: text, scope, db: ctx.db }, skill.installId)
 
+      // #632, open-issues wave owner call G-1 (option A): the ONE decision for a COMPARE skill (the bundled
+      // what-changed, or a user skill declaring `analysis: compare`) whose engine does not engage this turn —
+      // `applies()` is false: the scope does not hold exactly two answerable documents, or the question is
+      // small talk. (A compare REQUEST at the wrong count never gets this far: the W2 pre-pass above answers
+      // "select exactly two".) The turn falls through to the ordinary grounded answer below, where the model
+      // sees ordinary passages with no A/B labels and no diff. Its fence then carries paragraph 1 only — the
+      // heading + honesty rules, `buildSkillFence`'s guaranteed minimum, whose rule 1 says to simply answer
+      // the question — and not the compare section format, which a 4B model followed even there ("Wer ist
+      // der Mieter?" got an "Executive summary"). Unchanged: the skill stamp on that answer (fence placed +
+      // sections found), the two-document compare path (it returns above and never reads this), every other
+      // skill's fence, and the budgets (they still reserve the whole fence; only the fence text is shorter).
+      const skillFenceMode =
+        analysisHandler?.mode === 'grounded-whole-doc-compare' && !analysisApplies ? ('first-paragraph' as const) : undefined
+
       if (skill && analysisHandler && (analysisApplies || toolSkillInverts)) {
         const turnSkill = skill
         // The D45/R4 exhaustiveness refusal (fixed localized message + the Re-index affordance, no model,
@@ -983,6 +997,8 @@ export function registerRagIpc(ctx: AppContext): void {
           // The turn's skill: its fence rides in the grounded user turn; the assistant row is
           // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
           skill,
+          // #632 (owner call G-1, option A): paragraph 1 only for a compare skill whose engine did not run.
+          skillFenceMode,
           // #643 / #642: the one document read whole (or through its ready deep index) instead
           // of top-k — `capped`/`tree` coverage; the pack arm and the notice below are top-k only.
           wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,

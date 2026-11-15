@@ -76,10 +76,21 @@ export function approxPromptTokens(text: string): number {
   return Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
 }
 
+/**
+ * How much of the body a fence may carry. `'full'` (the default) is the whole body, budget-trimmed by
+ * whole paragraphs. `'first-paragraph'` caps it at the guaranteed minimum, paragraph 1 (the heading +
+ * honesty rules, SKA-15), with the same omit-when-even-that-won't-fit rule: #632, open-issues wave
+ * owner call G-1 (option A) — a compare skill's fall-through turn, where the compare engine did not
+ * run, drops the section format but keeps the rules.
+ */
+export type SkillFenceMode = 'full' | 'first-paragraph'
+
 export interface SkillFenceInput {
   title: string
   /** The SKILL.md body — the injected instructions (already validated/capped upstream). */
   body: string
+  /** Absent ⇒ `'full'`. */
+  mode?: SkillFenceMode
 }
 
 export interface SkillFenceResult {
@@ -135,10 +146,13 @@ function assemble(title: string, body: string): string {
  * heading + honesty-rules block into that one paragraph (SKA-15) — parity-test-pinned, so a
  * budget-squeezed turn can never ship a rules intro with the rules trimmed away.
  * `budgetTokens` omitted ⇒ no trimming (the pure builder, for tests / the unbounded path).
+ * `input.mode === 'first-paragraph'` (#632) keeps paragraph[0] only — a cap the caller chose, so it is
+ * not reported as `trimmed`; the budget can still omit it.
  */
 export function buildSkillFence(input: SkillFenceInput, budgetTokens?: number): SkillFenceResult {
   const title = input.title.trim()
-  const paragraphs = splitParagraphs(input.body)
+  const all = splitParagraphs(input.body)
+  const paragraphs = input.mode === 'first-paragraph' ? all.slice(0, 1) : all
   // An empty body still yields a valid (instruction-less) fence — the framing names the skill.
   if (paragraphs.length === 0) {
     if (budgetTokens != null && approxPromptTokens(assemble(title, '')) > budgetTokens) {

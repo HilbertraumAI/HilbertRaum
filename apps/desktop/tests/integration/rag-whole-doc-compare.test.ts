@@ -4,7 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // routes a compare-shaped question for the `grounded-whole-doc-compare` skill (what-changed) to a
 // MODEL answer over BOTH documents read whole (budget split, capped coverage, fence applied), REFUSES
 // when either doc is not fully chunked (a 1- or 3-doc scope gets the "select exactly two" answer in
-// rag-skill-analysis.test.ts).
+// rag-skill-analysis.test.ts). #632: any other question at a 1- or 3-doc scope falls through to the
+// ordinary grounded answer with paragraph 1 of the compare skill's fence only (the last describe below).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -17,16 +18,20 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
+import { cpSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { IPC } from '../../src/shared/ipc'
 import type { Message } from '../../src/shared/types'
+import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { Db } from '../../src/main/services/db'
 import { t } from '../../src/shared/i18n'
+import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
-import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { REPO_APP_SKILLS_DIR, writeSkillPackage } from '../helpers/skill-fixtures'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 
@@ -264,5 +269,176 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     // Honest coverage: truncated because a half overflowed.
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(true)
+  })
+})
+
+// ---- #632: a compare skill's fall-through turn (open-issues wave owner call G-1, option A) ----
+// With a compare skill picked, a question that is not a compare request at a scope of other than two
+// documents falls through to the ordinary grounded answer (a compare request gets "select exactly two"
+// instead: rag-skill-analysis.test.ts). The model sees ordinary passages there, with no A/B labels and no
+// diff, so the fence carries paragraph 1 only — the heading + honesty rules — and not the section format a 4B
+// followed even on "Wer ist der Mieter?". The answer stays stamped. Run on the COMMITTED SKILL.md bodies: the
+// shipped what-changed keeps "Produce the answer in this order" after paragraph 1. These rows prove "paragraph 1
+// only"; that paragraph 1 holds the honesty rules (SKA-15) is the skills-skillmd-parity suite's to pin.
+
+const USER_COMPARE_INSTALL_ID = 'user:version-check'
+const USER_COMPARE_BODY = [
+  '# Version check\nRules: answer only from the documents.',
+  'Produce a table of every change.',
+  'End with the open questions.'
+].join('\n\n')
+/** A user instruction skill with NO analysis engine (no `analysis:`): fence-only, no handler at all. */
+const USER_PLAIN_INSTALL_ID = 'user:plain-notes'
+const USER_PLAIN_BODY = ['# Plain notes\nRules: quote the documents.', 'Produce three bullet points.', 'End with a question.'].join(
+  '\n\n'
+)
+
+const lease = (version: number, months: number, rent: string): string =>
+  [
+    `Draft version ${version}`,
+    'Lease agreement between Anna Berger (landlord) and Max Huber (tenant).',
+    `Term: ${months} months.`,
+    `Monthly rent: EUR ${rent}.`,
+    'Notice period: three months.'
+  ].join('\n')
+const LEASE_DRAFTS = [lease(1, 24, '2,400'), lease(2, 36, '2,550'), lease(3, 36, '2,500')]
+
+/** A skill body's paragraphs, split as the fence counts them (blank-line separated). */
+const paragraphsOf = (body: string): string[] =>
+  body
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+
+const committedBody = (id: string): string =>
+  parseSkillMarkdown(readFileSync(join(REPO_APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8')).body!
+const BODIES: Record<string, string> = {
+  [WHAT_CHANGED_INSTALL_ID]: committedBody('what-changed'),
+  'app:contract-brief': committedBody('contract-brief'),
+  [USER_COMPARE_INSTALL_ID]: USER_COMPARE_BODY,
+  [USER_PLAIN_INSTALL_ID]: USER_PLAIN_BODY
+}
+
+interface FenceHarness {
+  db: Db
+  conversationId: string
+  docIds: string[]
+  runtime: RecordingRuntime
+}
+
+async function makeFenceHarness(texts: string[], contextWindow = 8192): Promise<FenceHarness> {
+  const w = makeSkillsWorld('compare632', {
+    seedApp: (d) => {
+      for (const id of ['what-changed', 'contract-brief']) cpSync(join(REPO_APP_SKILLS_DIR, id), join(d, id), { recursive: true })
+    },
+    seedUser: (d) => {
+      writeSkillPackage(d, {
+        id: 'version-check',
+        title: 'Version check',
+        kind: 'instruction',
+        analysis: 'compare',
+        body: USER_COMPARE_BODY
+      })
+      writeSkillPackage(d, { id: 'plain-notes', title: 'Plain notes', kind: 'instruction', body: USER_PLAIN_BODY })
+    },
+    // No appVersion: the committed SKILL.md files declare a minAppVersion the test version would fail.
+    reconcile: true
+  })
+  // A user skill is reconciled disabled until its import warning is acknowledged; the engine is under test here.
+  w.db.prepare("UPDATE skills SET enabled = 1 WHERE source = 'user'").run()
+  const docIds: string[] = []
+  for (const [i, text] of texts.entries()) docIds.push(await ingestTextFile(w, `lease-draft-${i + 1}.txt`, text))
+  const runtime = recordingRuntime('The tenant is Max Huber.', { contextWindow })
+  registerBuiltinSkillAnalysisHandlers()
+  registerRagIpc(makeRagAskContext(w, runtime).ctx)
+  const conv = createConversation(w.db, { mode: 'documents', scope: { collectionIds: [], documentIds: docIds } })
+  return { db: w.db, conversationId: conv.id, docIds, runtime }
+}
+
+/** The skill instructions each model call saw (between the fence's label and its END line), call by call. */
+function fenceBodies(rt: RecordingRuntime): string[] {
+  return rt.turns.map((turn) => {
+    const user = turn.filter((m) => m.role === 'user').at(-1)?.content ?? ''
+    const match = user.match(/\nSkill instructions:\n([\s\S]*?)\n--- END LOCAL SKILL ---/)
+    return match ? match[1] : '(no fence)'
+  })
+}
+
+async function ask(h: FenceHarness, question: string, skillId: string): Promise<Message> {
+  return (await invoke(handlers, IPC.askDocuments, h.conversationId, question, skillId)).result as Message
+}
+
+const ONE_DRAFT = LEASE_DRAFTS.slice(0, 1)
+const TWO_DRAFTS = LEASE_DRAFTS.slice(0, 2)
+const TENANT = 'Wer ist der Mieter?'
+// Two drafts that close with thanks, so top-k finds a passage for a thank-you and the model is called.
+const THANKING_DRAFTS = TWO_DRAFTS.map((d) => `${d}\nVielen Dank für Ihre Zusammenarbeit.`)
+
+describe("askDocuments — a compare skill's fall-through turn carries paragraph 1 of its fence (#632)", () => {
+  // Small talk over two documents falls through too (`applies()` opts small talk out of the compare engine), so
+  // its top-k answer also gets paragraph 1: the one two-document prompt #632 changes.
+  it.each([
+    { name: 'what-changed over one document', skillId: WHAT_CHANGED_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },
+    { name: 'what-changed over three documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: LEASE_DRAFTS, question: TENANT },
+    { name: 'a user skill declaring analysis: compare, one document', skillId: USER_COMPARE_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },
+    { name: 'what-changed, small talk over two documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: THANKING_DRAFTS, question: 'Vielen Dank!' }
+  ])('$name: the heading + honesty rules only, and the answer is still stamped', async ({ skillId, texts, question }) => {
+    const h = await makeFenceHarness(texts)
+    const msg = await ask(h, question, skillId)
+    expect(h.runtime.calls).toBe(1)
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId])[0]])
+    expect(JSON.stringify(h.runtime.turns)).not.toContain('Produce ')
+    expect(msg.content).toBe('The tenant is Max Huber.')
+    expect(msg.skillId).toBe(skillId)
+  })
+
+  // The other place a fall-through answer builds the fence: a summary ask over one document too large to read
+  // whole, whose deep index is ready, is answered by the tree map-reduce (#642). Three long sections span
+  // several windows at this size, so map calls run before the reduce. (A fold needs more windows than the map
+  // ceiling and long notes; it reads the same `skillFence` the map and reduce calls read.)
+  it('a summary from a ready deep index: every map call and the reduce carry paragraph 1 only', async () => {
+    const big = Array.from({ length: 700 }, (_, i) => `Clause ${i + 1}: the tenant Max Huber pays EUR 2,400.`).join('\n')
+    const h = await makeFenceHarness([big], 4096)
+    const section = (n: number): string => `Section ${n}: ${'the tenant Max Huber pays the rent on time '.repeat(130)}`
+    seedReadyTree(h.db, h.docIds[0], chunkIdsOf(h.db, h.docIds[0]), {
+      summary: 'Summary: a lease with Max Huber.',
+      sections: [section(1), section(2), section(3)]
+    })
+    const msg = await ask(h, 'Fasse dieses Dokument zusammen', WHAT_CHANGED_INSTALL_ID)
+    expect(msg.coverage?.mode).toBe('tree')
+    expect(h.runtime.calls).toBeGreaterThanOrEqual(3)
+    const firstParagraph = paragraphsOf(BODIES[WHAT_CHANGED_INSTALL_ID])[0]
+    expect(fenceBodies(h.runtime)).toEqual(Array(h.runtime.calls).fill(firstParagraph))
+    expect(msg.skillId).toBe(WHAT_CHANGED_INSTALL_ID)
+  })
+
+  // Two documents: the compare engine runs for any question but small talk (A3), with the whole fence, on the
+  // diff path and on the labelled whole-document read of a rewrite — the prompts #632 leaves byte-identical
+  // (checked once against master's capture when it landed).
+  it.each([
+    { name: 'the diff of two drafts, "Was hat sich geändert?"', texts: TWO_DRAFTS, question: 'Was hat sich geändert?', diff: true },
+    { name: 'the diff of two drafts, "Wer ist der Mieter?"', texts: TWO_DRAFTS, question: TENANT, diff: true },
+    { name: 'a rewrite, read whole and labelled', texts: [REWRITE_A, REWRITE_B], question: 'Was hat sich geändert?', diff: false }
+  ])('two documents ($name): the compare engine, with the whole fence', async ({ texts, question, diff }) => {
+    const h = await makeFenceHarness(texts)
+    const msg = await ask(h, question, WHAT_CHANGED_INSTALL_ID)
+    expect(h.runtime.calls).toBe(1)
+    const prompt = JSON.stringify(h.runtime.turns)
+    expect(prompt).toContain('Document A: \\"lease-draft-')
+    expect(prompt.includes('deterministic word-level comparison')).toBe(diff)
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[WHAT_CHANGED_INSTALL_ID]).join('\n\n')])
+    expect(msg.skillId).toBe(WHAT_CHANGED_INSTALL_ID)
+  })
+
+  // A skill with a non-compare handler, and one with no handler at all (fence only).
+  it.each([
+    { name: 'contract-brief over three documents', skillId: 'app:contract-brief', texts: LEASE_DRAFTS, mode: 'relevance' },
+    { name: 'a user skill with no analysis engine, one document', skillId: USER_PLAIN_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped' }
+  ])("another skill's fall-through keeps its whole fence ($name)", async ({ skillId, texts, mode }) => {
+    const h = await makeFenceHarness(texts)
+    const msg = await ask(h, TENANT, skillId)
+    expect(msg.coverage?.mode).toBe(mode)
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId]).join('\n\n')])
+    expect(msg.skillId).toBe(skillId)
   })
 })

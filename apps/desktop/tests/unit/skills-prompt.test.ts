@@ -110,6 +110,21 @@ describe('buildSkillFence — budget (§11.3/§22-A6: whole units, never mid-ins
     expect(trimmed).toBe(false)
     expect(text).toContain('Third optional block.')
   })
+
+  // #632 (owner call G-1, option A): the 'first-paragraph' cap is the caller's choice, not a budget trim — so
+  // `logSkillFenceReduction` stays quiet on every compare fall-through turn — and the budget can still omit it.
+  it.each([
+    { budget: undefined, placed: true },
+    { budget: 100000, placed: true },
+    { budget: 5, placed: false }
+  ])("mode 'first-paragraph' keeps the first block only (budget $budget)", ({ budget, placed }) => {
+    const { text, trimmed, omitted } = buildSkillFence({ title: 'T', body: BODY_3, mode: 'first-paragraph' }, budget)
+    expect(trimmed).toBe(false)
+    expect(omitted).toBe(!placed)
+    if (!placed) return expect(text).toBeNull()
+    expect(text).toContain('First instruction block.\n--- END LOCAL SKILL ---')
+    expect(text).not.toContain('Second block of guidance.')
+  })
 })
 
 describe('skillFenceBudgetTokens', () => {
