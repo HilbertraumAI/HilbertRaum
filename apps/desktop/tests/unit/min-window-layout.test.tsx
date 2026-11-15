@@ -205,6 +205,13 @@ describe('#803 layout at 880×600 — what the stylesheet cascade decides', () =
     expect(cascaded(rail, 'scrollbar-width')).toBe('none')
   })
 
+  it('the rail never scrolls sideways: a label wider than the column clips at its edge (owner round W5-6)', () => {
+    // With `overflow-y: auto` alone the x axis computes to `auto` too, so a too-wide label would
+    // let the rail scroll sideways with no visible bar.
+    const rail = el('nav', 'sidebar', el('div', 'app-shell'))
+    expect({ x: cascaded(rail, 'overflow-x'), y: cascaded(rail, 'overflow-y') }).toEqual({ x: 'hidden', y: 'auto' })
+  })
+
   it("none of the rail's children shrinks, so the rail scrolls instead (owner round W5-1)", () => {
     // The rail's children as App.tsx renders them (the lock button only in an encrypted
     // workspace). Without this the global `button { min-height: 24px }` let the brand, the lock

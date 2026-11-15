@@ -72,9 +72,12 @@ button { min-width: 24px; min-height: 24px; }
   align-items: stretch;
   padding: 12px 8px;
   gap: 4px;
-  /* #803, open-issues wave owner call G-9: below ~660px of height the rail foot (lock, indicator)
-     sat under the window; the rail scrolls instead, by wheel and Tab, with no bar taking label width. */
+  /* #803, open-issues wave owner call G-9: at the 880px minimum width the rail foot (lock, indicator)
+     fell under the window below ~696px of window height (~636px on a plaintext workspace); the rail
+     scrolls instead, by wheel and Tab, with no bar taking label width. Owner round W5-6: never
+     sideways (`overflow-y: auto` alone made x `auto` too), so a too-wide label clips at the edge. */
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
   scrollbar-width: none;
 }
