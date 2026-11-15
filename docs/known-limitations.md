@@ -1540,24 +1540,26 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
   can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
   needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
-  **A compare skill's fall-through turn carries only the skill's rules (skills-audit-2026-07-07 SK-3b,
+  **What Changed?'s fall-through turn carries only the skill's rules (skills-audit-2026-07-07 SK-3b,
   decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1).** With What Changed?
-  selected (or a user skill declaring `analysis: compare`), a turn the compare engine doesn't take falls
-  through to the ordinary answer, which reads top-k passages, or since #643 one document that fits whole.
-  The engine doesn't take small talk or a scope that doesn't hold exactly two documents; at such a count
-  What Changed? answers a compare request with "select exactly two" instead (below). D-P2a kept the whole
-  skill fence on a fall-through turn and relied on honesty rule 1 (`what-changed/SKILL.md`: ordinary
-  passages with no A/B labels and no diff ⇒ simply answer the question). Its revisit condition was met: on
-  a 4B model, most plain questions over one or three lease drafts, such as "Wer ist der Mieter?", got the
-  body's compare format (an "Executive summary" and the sections after it) instead of an answer, in the
-  real-app run for #582 (2026-10-07) and again on master when #632 was measured. Since #632 the fence on
-  such a turn carries only the skill's first paragraph, the heading and the honesty rules, which is also
-  the minimum the fence keeps when the context is tight (SKA-15); the section format is left out. The
-  answer still shows the skill as applied (the per-message glyph), so the selection isn't silently
-  dropped. The two-document compare turn (the exact changes, or both documents read whole when one is a
-  full rewrite) is unchanged, and so is every other skill's fence; small talk over two documents is the
-  one two-document turn whose fence is now the first paragraph. A user compare skill's first paragraph is
-  whatever its author put there. Measured on a 4B and a 9B model: [`architecture.md`](architecture.md)
+  selected, a turn the compare engine doesn't take falls through to the ordinary answer, which reads
+  top-k passages, or since #643 one document that fits whole. The engine doesn't take small talk or a
+  scope that doesn't hold exactly two documents; at such a count What Changed? answers a compare request
+  with "select exactly two" instead (below). D-P2a kept the whole skill fence on a fall-through turn and
+  relied on honesty rule 1 (`what-changed/SKILL.md`: ordinary passages with no A/B labels and no diff ⇒
+  simply answer the question). Its revisit condition was met: on a 4B model, most plain questions over
+  one or three lease drafts, such as "Wer ist der Mieter?", got the body's compare format (an "Executive
+  summary" and the sections after it) instead of an answer, in the real-app run for #582 (2026-10-07) and
+  again on master when #632 was measured. Since #632 the fence on such a turn carries only the skill's
+  first paragraph, the heading and the honesty rules, which is also the minimum the fence keeps when the
+  context is tight (SKA-15); the section format is left out, and the app log records the cap (skill id
+  and mode, never the body). The answer still shows the skill as applied (the per-message glyph), so the
+  selection isn't silently dropped. The two-document compare turn (the exact changes, or both documents
+  read whole when one is a full rewrite) is unchanged, and so is every other skill's fence; small talk
+  over two documents is the one two-document turn whose fence is now the first paragraph. A user-imported
+  skill declaring `analysis: compare` keeps its whole fence on such a turn, as before #632: only a bundled
+  body is known to lead with its rules (SKA-15), and a user skill has no compare vocabulary, so its real
+  compare requests fall through too. Measured on a 4B and a 9B model: [`architecture.md`](architecture.md)
   §44 SK-3b. What counts as a compare question is the skill's routing vocabulary. Until #582 a
   compare request in one language could miss it while its translation matched: "summarize the
   differences" fell through while "Fasse die Unterschiede zusammen" got "select exactly two". The
