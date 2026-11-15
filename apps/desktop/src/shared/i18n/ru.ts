@@ -200,7 +200,7 @@ export const ru: UiCatalog<'ru'> = {
     'будут быстрее.',
   'chat.scopeNotice': 'Ответ только по документам: {titles}',
   'chat.cancelDocTask': 'Отменить задачу по документу',
-  'chat.placeholder.documents': 'Задайте вопрос по вашим документам…',
+  'chat.placeholder.documents': 'Вопрос по документам…',
   'chat.placeholder.chat': 'Сообщение…',
   'chat.send.ask': 'Спросить',
   'chat.send.send': 'Отправить',
