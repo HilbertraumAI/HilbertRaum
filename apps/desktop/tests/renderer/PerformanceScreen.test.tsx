@@ -507,6 +507,10 @@ describe('PerformanceScreen: the Your-model row', () => {
     expect(await screen.findByText('Unified memory')).toBeInTheDocument()
     expect(screen.queryByText('Graphics memory')).not.toBeInTheDocument()
     expect(screen.getByText(/Should fit in unified memory \(48\.0 GB, up to 36\.0 GB available to the model\)/)).toBeInTheDocument()
+    // The tile's line names the shared memory, then the processor, joined by " · ": exactly the text
+    // it read before #805 S3 split the core count into its own span.
+    const line = `${t('en', 'perf.tile.memory.unifiedSub')} · Intel Core i7-1260P${tCount('en', 'diag.bench.cores', 12)}`
+    expect(within(tile('Unified memory')).getByText((_, el) => el?.textContent === line)).toBeInTheDocument()
   })
 
   it('a model that cannot fit gets "Too large" and a way to a smaller model', async () => {
