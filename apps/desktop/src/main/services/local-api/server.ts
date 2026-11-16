@@ -107,8 +107,14 @@ export class LocalApiServer {
   private externalActive = 0
   /** When an in-app turn last pre-empted an external request (D8), epoch ms. */
   private lastPreemptedAt: number | null = null
-  /** Distinguishes teardown aborts from D8 pre-emption in the client-facing error code. */
+  /** True from a stop, disable or re-port until a start queued AFTER the last stop request runs.
+   *  It gates admission (a request arriving meanwhile gets 503 `server_stopped`) and labels every
+   *  request that ends meanwhile `server_stopped`, not a "retry shortly" `preempted_by_user`. #859:
+   *  `stopRequests` keeps a task queued before a stop from clearing it early. */
   private stopping = false
+  /** #859: counts stop requests (`stop()`, a disabling `applySettings`), so a start or a
+   *  same-port re-apply queued BEFORE a stop cannot lift the gate that stop closed. */
+  private stopRequests = 0
   /**
    * Serializes start/stop/applySettings (the RuntimeManager `op` pattern): a disable
    * racing the fire-and-forget post-unlock start, or two rapid settings changes, would
@@ -147,14 +153,16 @@ export class LocalApiServer {
    *  without IPv6 degrades to v4-only (logged) — `::1` failing with EADDRINUSE still
    *  refuses, because half-bound would mislead `localhost`-configured clients. */
   async start(): Promise<void> {
+    const stopsSeen = this.stopRequests
     return this.enqueue(async () => {
       if (this.servers.length > 0) return
-      await this.doStart()
+      await this.doStart(stopsSeen)
     })
   }
 
-  private async doStart(): Promise<void> {
-    this.stopping = false
+  /** `stopsSeen`: the stop-request count when the caller queued this start (#859). */
+  private async doStart(stopsSeen: number): Promise<void> {
+    if (this.stopRequests === stopsSeen) this.stopping = false
     this.lastError = null
     const port = this.deps.getSettings().localApiPort
     const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
@@ -224,8 +232,10 @@ export class LocalApiServer {
 
   /** Abort active/queued requests, close the listeners. Idempotent; safe pre-start.
    *  `stopping` is set SYNCHRONOUSLY so in-flight handlers label their teardown frames
-   *  `server_stopped` even while an earlier queued operation is still settling. */
+   *  `server_stopped`, and no new request is admitted, even while an earlier queued operation is
+   *  still settling (#859: that operation can no longer clear the flag). */
   async stop(): Promise<void> {
+    this.stopRequests++
     this.stopping = true
     return this.enqueue(() => this.doStop())
   }
@@ -275,7 +285,11 @@ export class LocalApiServer {
    *  precedent). Caller decides WHETHER the endpoint should run (policy ∧ setting).
    *  Serialized with start/stop, so a toggle landing mid-bind acts on the SETTLED state. */
   async applySettings(next: { shouldRun: boolean }): Promise<void> {
-    if (!next.shouldRun) this.stopping = true
+    if (!next.shouldRun) {
+      this.stopRequests++
+      this.stopping = true
+    }
+    const stopsSeen = this.stopRequests
     return this.enqueue(async () => {
       if (!next.shouldRun) {
         await this.doStop()
@@ -283,11 +297,16 @@ export class LocalApiServer {
       }
       const wantPort = this.deps.getSettings().localApiPort
       if (this.servers.length > 0 && this.port === wantPort) {
-        this.stopping = false
+        if (this.stopRequests === stopsSeen) this.stopping = false
         return
       }
-      if (this.servers.length > 0) await this.doStop()
-      await this.doStart()
+      if (this.servers.length > 0) {
+        // The old listener drains: it refuses new requests (503 server_stopped) instead of
+        // admitting one its close is about to cut off.
+        this.stopping = true
+        await this.doStop()
+      }
+      await this.doStart(stopsSeen)
     })
   }
 
@@ -443,6 +462,11 @@ export class LocalApiServer {
     res.end(payload)
   }
 
+  /** 503 `server_stopped`: the endpoint is shutting down or moving to another port. */
+  private rejectStopped(res: http.ServerResponse): void {
+    this.reject(res, 503, errorBody('The endpoint is stopping or moving to another port', 'unavailable_error', 'server_stopped'))
+  }
+
   /** The one 429-busy refusal (message + code + Retry-After) — three call paths, one
    *  contract clients key retry logic on. */
   private rejectBusy(res: http.ServerResponse): void {
@@ -483,6 +507,8 @@ export class LocalApiServer {
     const clientGone = new AbortController()
     res.once('close', () => clientGone.abort(new DOMException('client disconnected', 'AbortError')))
 
+    // #859: a stop, disable or re-port is pending or running: say so, not "workspace locked".
+    if (this.stopping) return this.rejectStopped(res)
     const outcome = this.admission.tryAdmit(randomUUID(), clientGone.signal)
     if (outcome === 'aborted') {
       res.destroy()
@@ -503,6 +529,10 @@ export class LocalApiServer {
           const e = this.modelUnavailable(change)
           return this.reject(res, e.status, e.body, e.headers)
         }
+        // #859: a waiter refused while the endpoint stops (by the teardown, or at promotion because
+        // the gate is closed) learns that; "busy" with a Retry-After would send it back to a listener
+        // that is going away.
+        if (this.stopping) return this.rejectStopped(res)
         return this.rejectBusy(res)
       }
       // Re-resolve runtime + status now that the slot is held: a queued waiter promoted
@@ -679,9 +709,7 @@ export class LocalApiServer {
       const e = this.modelUnavailable(change)
       return this.reject(res, e.status, e.body, e.headers)
     }
-    if (this.stopping) {
-      return this.reject(res, 503, errorBody('HilbertRaum is shutting down', 'unavailable_error', 'server_stopped'))
-    }
+    if (this.stopping) return this.rejectStopped(res)
     this.reject(
       res,
       429,
