@@ -27,8 +27,9 @@ function rawExec(path: string, sql: string): void {
   }
 }
 
+/** The file's stamp, read through a READ-ONLY handle: the check can neither create the file nor write to it. */
 function readVersion(path: string): number {
-  const raw = openRawDb(path)
+  const raw = openRawDb(path, { readOnly: true })
   try {
     return (raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
   } finally {

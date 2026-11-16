@@ -1580,9 +1580,12 @@ that is not exempt must refuse with its module's copy, so a first guard that goe
 `isUnlocked()` turns that module's row red. `lock-admission-race.test.ts` drives a real lock parked
 mid-teardown and refuses the work that would respawn a sidecar or write: a translation doc task, a
 Translate-view start, an image analyze, an import, and the password change (which answers a
-refusal instead of throwing; the descriptor is untouched). Two guards have no row of their own:
-dictation's (its suite checks a locked workspace only) and `DocTaskManager.startDocTask`'s (its
-non-IPC callers rely on it, but every row reaches it through the IPC guard, which refuses first).
+refusal instead of throwing; the descriptor is untouched). Three guards have no row of their own:
+dictation's (its suite checks a locked workspace only), `DocTaskManager.startDocTask`'s and
+`VisionService.analyze`'s (`vision/index.ts`; non-IPC callers rely on both service guards, but every
+row reaches them through the IPC guard, which refuses first). The third service guard,
+`TranslateJobService.start`'s, has its own row: `translate-ipc.test.ts` "#163 (T-1): the
+SERVICE-level isWorkspaceLocking refusal (the non-IPC callers' guard)".
 
 Clearing rules: **cleared** whenever the handler leaves the teardown by a throw *while the
 workspace is still open* (the failed re-encrypt — realistically ENOSPC — restores the controller

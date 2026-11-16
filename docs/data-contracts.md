@@ -374,10 +374,11 @@ updated in the same change whenever anything below moves):**
 then `::1` on the same port, are pinned by `local-api-server.test.ts` "listens on 127.0.0.1 AND
 ::1, never 0.0.0.0; the two listeners share the port"), default port **4980** (O1).
 Every response carries `Server: HilbertRaum/<version>`. Pipeline order (security contract):
-Host (loopback names only; absent ⇒ 403) → Origin (`http(s)` non-loopback + literal `null` ⇒
-403; absent/custom app schemes pass; OPTIONS ⇒ 403; **no CORS header is ever emitted**) →
-content-type (POST = `application/json`, charset tolerated; else 415) → Bearer auth
-(constant-time; when token NOT required a present Authorization is IGNORED; both routes gated).
+Host (loopback names only; absent ⇒ 403) → OPTIONS ⇒ 403 `no_cors` (before the Origin check;
+**no CORS header is ever emitted**) → Origin (`http(s)` non-loopback + literal `null` ⇒ 403;
+absent/custom app schemes pass) → content-type (POST = `application/json`, charset tolerated; else
+415) → Bearer auth (constant-time; when token NOT required a present Authorization is IGNORED; both
+routes gated) → route.
 Routes (D6 — nothing else): **GET `/v1/models`** → `{object:'list', data:[{id, object:'model',
 owned_by:'hilbertraum', context_window}]}`; never consumes an admission slot; distinct probe
 outcomes: 200 running · 503 `model_starting` + Retry-After · 503 `model_not_loaded`.

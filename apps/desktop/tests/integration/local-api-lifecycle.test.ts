@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import http from 'node:http'
 import net from 'node:net'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, updateSettings } from '../../src/main/services/settings'
@@ -13,6 +12,7 @@ import {
   maybeStartLocalApi
 } from '../../src/main/services/local-api/lifecycle'
 import type { AppContext } from '../../src/main/services/context'
+import { tempRoot } from '../helpers/db-fixtures'
 
 // Local-API lifecycle pins (local-api wave P3): DEFAULT OFF means a fresh workspace opens
 // ZERO listeners (the outbound-only test gap — the policy suite pins outbound calls, this
@@ -28,7 +28,7 @@ afterEach(async () => {
 })
 
 function makeCtx(opts?: { unlocked?: boolean; locking?: boolean; policyJson?: string; isDev?: boolean }): AppContext {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-lapi-life-'))
+  const dir = tempRoot('lapi-life')
   if (opts?.policyJson) writeFileSync(join(dir, 'policy.json'), opts.policyJson)
   const db = openDatabase(join(dir, 'test.sqlite'))
   seedSettings(db)
@@ -59,13 +59,31 @@ function makeCtx(opts?: { unlocked?: boolean; locking?: boolean; policyJson?: st
 
 const dbOf = (ctx: AppContext): Db => (ctx as { db: Db }).db
 
-/** A port nothing listens on right now (bound and released by the OS's ephemeral allocator). */
-async function freePort(): Promise<number> {
+/** Bind `host:port` (0 = ephemeral) and release it again: the port it got, or the bind's error code. */
+async function probeBind(host: string, port: number): Promise<number | string> {
   const probe = net.createServer()
-  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve))
-  const { port } = probe.address() as net.AddressInfo
-  await new Promise<void>((resolve) => probe.close(() => resolve()))
-  return port
+  const bound = await new Promise<number | string>((resolve) => {
+    probe.once('error', (err: NodeJS.ErrnoException) => resolve(err.code ?? String(err)))
+    probe.listen(port, host, () => resolve((probe.address() as net.AddressInfo).port))
+  })
+  if (typeof bound === 'number') await new Promise<void>((resolve) => probe.close(() => resolve()))
+  return bound
+}
+
+/**
+ * A port nothing listens on right now on EITHER loopback the server binds: 127.0.0.1 from the OS's ephemeral
+ * allocator, then the same port on ::1, where a taken port is fatal to the server's start (PortInUseError) exactly as
+ * on v4. Any other ::1 bind error (a host without IPv6 loopback) is the one the server degrades to v4-only on, so the
+ * port is good.
+ */
+async function freePort(): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const port = await probeBind('127.0.0.1', 0)
+    if (typeof port !== 'number') throw new Error(`no free 127.0.0.1 port: ${port}`)
+    const v6 = await probeBind('::1', port)
+    if (v6 !== 'EADDRINUSE') return port
+  }
+  throw new Error('no port free on both 127.0.0.1 and ::1 in 20 tries')
 }
 
 /**

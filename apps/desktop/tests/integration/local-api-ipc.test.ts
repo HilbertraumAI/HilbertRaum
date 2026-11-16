@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdirSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Local-API wave P4 — the three access-key IPC channels + the AppStatus surface.
@@ -40,6 +39,7 @@ import { readToken } from '../../src/main/services/local-api/token'
 import type { AppContext } from '../../src/main/services/context'
 import type { AppStatus, LocalApiConnectionInfo, LocalApiStatus } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
+import { tempRoot } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { localApiStatus } from '../helpers/status'
 
@@ -53,7 +53,7 @@ interface Harness {
 }
 
 function makeHarness(opts: { unlocked?: boolean; locking?: boolean; localApi?: boolean } = {}): Harness {
-  const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-localapi-ipc-'))
+  const rootPath = tempRoot('localapi-ipc')
   const workspacePath = join(rootPath, 'workspace')
   const configPath = join(rootPath, 'config')
   mkdirSync(workspacePath, { recursive: true })

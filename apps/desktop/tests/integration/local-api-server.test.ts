@@ -36,6 +36,16 @@ function httpBinds(listen: { mock: { calls: unknown[][]; contexts: unknown[] } }
   return listen.mock.calls.filter((_, i) => listen.mock.contexts[i] instanceof http.Server).map((args) => args.slice(0, 2))
 }
 
+/**
+ * Whether the `setTimeout` call whose stack this is came from local-api/server.ts itself. Called from a spy
+ * implementation: frame 0 is that implementation, the spy's own frames (node_modules) follow, then the caller.
+ */
+function armedByServer(stack: string | undefined): boolean {
+  const frames = (stack ?? '').split('\n').filter((line) => line.trimStart().startsWith('at '))
+  const caller = frames.slice(1).find((frame) => !/[\\/]node_modules[\\/]/.test(frame))
+  return caller !== undefined && /[\\/]services[\\/]local-api[\\/]server\.ts:\d/.test(caller)
+}
+
 describe('LocalApiServer — bind posture (D2/O5)', () => {
   it('listens on 127.0.0.1 AND ::1, never 0.0.0.0; the two listeners share the port', async () => {
     // The bind targets are literals in server.ts: read them off the listen calls themselves.
@@ -257,6 +267,10 @@ describe('LocalApiServer — key rotation mid-request (SEC-F6)', () => {
     expect(answer).toMatch(/^HTTP\/1\.1 401 /)
     expect(answer).toContain('invalid_api_key')
     expect(h.tokenCalls()).toBe(2) // the second check is the one after the body
+    // …and nothing was generated for it (the echo runtime records every chatStream call's options): it was refused
+    // before it even asked for admission, so it never held the one external slot.
+    expect(h.lastOptions()).toBeUndefined()
+    expect(h.admitChecks()).toBe(0)
   })
 })
 
@@ -609,9 +623,18 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
 describe('LocalApiServer — the shipped limits and timeouts (docs/local-api.md §6.7)', () => {
   it('serves with the published bounds', async () => {
     const listen = vi.spyOn(net.Server.prototype, 'listen')
-    const timers = vi.spyOn(globalThis, 'setTimeout')
+    // The delay of every setTimeout server.ts arms ITSELF (the spy's caller frame is server.ts), so a timer of the
+    // same length armed anywhere else cannot stand in for a bound: the two decoys below are armed by this row.
+    const realSetTimeout = globalThis.setTimeout
+    const serverDelays: unknown[] = []
+    const timers = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+      if (armedByServer(new Error().stack)) serverDelays.push(args[1])
+      return realSetTimeout(...args)
+    }) as typeof setTimeout)
     const bodyIdle = vi.spyOn(http.IncomingMessage.prototype, 'setTimeout')
+    const decoys = [120_000, 15_000].map((ms) => setTimeout(() => {}, ms))
     onTestFinished(() => {
+      for (const decoy of decoys) clearTimeout(decoy)
       listen.mockRestore()
       timers.mockRestore()
       bodyIdle.mockRestore()
@@ -628,14 +651,13 @@ describe('LocalApiServer — the shipped limits and timeouts (docs/local-api.md 
     const res = await resPromise
     expect(res.status).toBe(200)
     await res.text()
-    const armed = timers.mock.calls.map((call) => call[1])
     const bounds: Array<[string, unknown, unknown]> = [
       ['header phase 10 s', servers.map((s) => s.headersTimeout), servers.map(() => 10_000)],
       ['generation: no timeout', servers.map((s) => s.requestTimeout), servers.map(() => 0)],
       ['concurrent connections 16', servers.map((s) => s.maxConnections), servers.map(() => 16)],
       ['body idle 30 s', bodyIdle.mock.calls[0]?.[0], 30_000],
-      ['body total 120 s', armed.includes(120_000), true],
-      ['SSE reader stall 15 s', armed.includes(15_000), true]
+      ['body total 120 s', serverDelays.includes(120_000), true],
+      ['SSE reader stall 15 s', serverDelays.includes(15_000), true]
     ]
     for (const [bound, actual, expected] of bounds) expect(actual, bound).toEqual(expected)
     // Request body 1 MB, counted as bytes arrive: exactly the cap is read (and is not JSON), one byte more is refused.

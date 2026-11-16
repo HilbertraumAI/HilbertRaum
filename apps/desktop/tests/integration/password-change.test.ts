@@ -43,6 +43,7 @@ import {
   unlockedController,
   type FreshVaultPaths
 } from '../helpers/vault-fixtures'
+import { filesUnder } from '../helpers/repo-files'
 
 // Phase 32 — vault password change (wave-3 plan §5, decision D24): the v2 envelope
 // descriptor (random data key wrapped by the password-derived KEK), the O(1) re-wrap on
@@ -247,13 +248,6 @@ describe('changePassword — document-work race guard (Phase 32)', () => {
 // ---- nothing secret ever touches the disk ---------------------------------------------
 
 describe('descriptor/.enc scan — passwords and keys stay memory-only (extended)', () => {
-  /** Every file under `dir`, recursively. */
-  function filesUnder(dir: string): string[] {
-    return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)]
-    )
-  }
-
   it('neither password nor the unwrapped data key appears in any on-disk artifact', () => {
     const OLD = 'super-secret-old-passphrase-3k9q'
     const NEW = 'super-secret-new-passphrase-7w1z'
@@ -273,7 +267,7 @@ describe('descriptor/.enc scan — passwords and keys stay memory-only (extended
 
     // Every file under the vault's root while it is open: the descriptor and `.enc`, the working DB and its WAL, the
     // document sidecars, and any `.tmp`, `.bak`, `.corrupt` or new sidecar a later change would add.
-    const artifacts = filesUnder(vp.root)
+    const artifacts = filesUnder(vp.root, /./)
     expect(artifacts).toEqual(expect.arrayContaining([vp.descriptorPath, vp.encPath, enc]))
     const secrets = [
       Buffer.from(OLD),

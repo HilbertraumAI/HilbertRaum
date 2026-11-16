@@ -56,7 +56,10 @@ export const DEFAULT_KDF: KdfParams = {
   keyLen: 32
 }
 
-/** Legacy scrypt parameters (still supported for unlocking older vaults). */
+/**
+ * The former default scrypt parameters. Nothing reads this constant: a vault created under them still unlocks, but
+ * from the KDF params its own descriptor records, never from here.
+ */
 export const SCRYPT_KDF: KdfParams = {
   algo: 'scrypt',
   N: 32768,

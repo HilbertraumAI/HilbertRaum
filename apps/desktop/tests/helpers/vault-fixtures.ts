@@ -184,7 +184,8 @@ export interface WorkspaceIpcCtxOptions {
   stopVision?: () => Promise<void>
   /**
    * More context members (`translator`, `ocrEngine`, `docTasks`, `skillRuns`, `cancelBenchmark`, a whole `runtime` or
-   * `embedder`, …), set after the defaults above. Never `db`: it is the controller's getter (the helper throws).
+   * `embedder`, …), set after the defaults above. Never `db`: it is the controller's getter; never `paths`: it would
+   * wake the post-unlock steps (see `workspaceIpcCtx`). The helper throws on either.
    */
   extra?: Record<string, unknown>
 }
@@ -199,10 +200,17 @@ export interface WorkspaceIpcCtxOptions {
  * - never spread the result: `{ ...workspaceIpcCtx(ctrl), db }` reads the getter once and pins a static db (the
  *   blind spot this getter closes); pass members through `extra`, or set them on the returned object;
  * - `ctx.db` has no setter: assigning it throws;
- * - with a real `db`, a SUCCESSFUL unlock or create through the IPC runs the post-unlock seams (UI language from the
- *   stored setting, the engine-state heal, the first-run benchmark decision) against this DB; the old `ctxWith` had
- *   no `db`, so each threw into its own catch at once. They still end in their own catches (this ctx has no `paths`
- *   and no `runtime.isShutdown`) and only log, e.g. a "GPU probe failed" warning.
+ * - the live `db` makes every SUCCESSFUL unlock or create through the IPC run the real post-unlock steps against this
+ *   DB, some of them in the background after the handler has answered: the UI language, the engine-state heal, the
+ *   first-run benchmark decision and its GPU probe, the model auto-start, the scheduled first-run measurement, the
+ *   local API start and the knowledge-pack session. (The old `ctxWith` had no `db`, so each threw into its own catch
+ *   at once.) They stay inert only through what this ctx LACKS, so keep these keys out of `extra` and off the result:
+ *   `paths` (without it the probe throws into its catch and stores an empty `gpuProbe`, on a fresh workspace the one
+ *   write these steps make; with it the probe would resolve the drive's engine binary; the helper throws on it),
+ *   `runtime.isShutdown` / `runtime.beginStartRequest` (the measurement and an auto-start fail into their catches; a
+ *   whole `runtime` in `extra` replaces the stub, so leave those two off it), `localApi` and `zim` (those steps return
+ *   at once without them; a row that adds one for its lock teardown also wakes that step after each of its unlocks).
+ *   Each of these steps only logs on the way out, e.g. a "GPU probe failed" warning.
  *
  * The workspace is `ctrl` itself, so `isLocking()` is the controller's own: false until a lock is under way. The
  * helper never stubs it (a stub would blind the AUD-02 latch). A stand-in cast to `WorkspaceController` works while no
@@ -224,6 +232,9 @@ export function workspaceIpcCtx(ctrl: WorkspaceController, opts: WorkspaceIpcCtx
   }
   for (const [key, value] of Object.entries(opts.extra ?? {})) {
     if (key === 'db') throw new Error('workspaceIpcCtx: ctx.db is the controller getter; do not pass `db` in `extra`')
+    if (key === 'paths') {
+      throw new Error('workspaceIpcCtx: `paths` would let the post-unlock steps reach the drive; do not pass it in `extra`')
+    }
     ctx[key] = value
   }
   return ctx as unknown as AppContext

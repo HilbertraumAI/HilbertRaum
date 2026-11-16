@@ -211,8 +211,9 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **A lock-latch proof arms the teardown latch, not only a locked workspace.** "Lock now" keeps the
   database open for its whole teardown, so a guard reverted to a bare `isUnlocked()` still refuses a
   locked workspace and admits the call mid-lock. local-api-ipc's key-channel row and the lifecycle's
-  start refusal stayed green with that revert. Drive `{ isUnlocked: () => true, isLocking: () => true }`
-  too, or park a real lock as `lock-admission-race.test.ts` does.
+  start refusal stayed green with that revert (both arm the latch now). Drive
+  `{ isUnlocked: () => true, isLocking: () => true }` too, or park a real lock as
+  `lock-admission-race.test.ts` does.
 - **An IPC copy of a service guard needs an IPC-specific risk** (routing, a sender check, the lock
   gate, error mapping). doctasks-ipc re-proved the manager's "refuse while chat streams" and
   "exactly two documents" checks through a handler that forwards them unchanged, while the one IPC

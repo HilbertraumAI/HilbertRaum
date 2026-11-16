@@ -50,11 +50,12 @@ export interface LocalApiHarnessOptions {
    */
   runtime?: 'echo' | 'manual' | { answer: string }
   /**
-   * More server deps, spread last (the timeout seams, `estimateBusySeconds`, …). Trap: overriding `getToken`,
-   * `admitsWork`, `hasActiveDocTask`, `getSettings` or `log` bypasses `tokenCalls()`, `setAdmitsWork`/`admitChecks()`,
-   * `setDocTask`, `tokenRequired`, `setToken` or `logged`. With `headersTimeoutMs` set and no
-   * `connectionsCheckIntervalMs`, the harness sweeps every 100 ms (Node only checks header deadlines on its sweep,
-   * every 30 s by default), as the hardening harness did.
+   * More server deps, spread last (the timeout seams, `estimateBusySeconds`, …). Never one the harness observes:
+   * `getToken`, `admitsWork`, `hasActiveDocTask`, `getSettings` or `log` would silently replace `tokenCalls()`/
+   * `setToken`, `setAdmitsWork`/`admitChecks()`, `setDocTask`, `tokenRequired` or `logged`, so the harness throws on
+   * them (use those options instead). With `headersTimeoutMs` set and no `connectionsCheckIntervalMs`, the harness
+   * sweeps every 100 ms (Node only checks header deadlines on its sweep, every 30 s by default), as the hardening
+   * harness did.
    */
   deps?: Partial<LocalApiServerDeps>
 }
@@ -92,12 +93,21 @@ export interface LocalApiHarness {
   stopAll: () => Promise<void>
 }
 
+/** The deps `localApiHarness` wires to its own observers and switches; `deps` may not carry them. */
+const OBSERVED_DEPS = ['getToken', 'admitsWork', 'hasActiveDocTask', 'getSettings', 'log'] as const
+
 /**
  * Start a `LocalApiServer` on an ephemeral port over a real `RuntimeManager` (see the options). The harness stops it
  * when the test finishes (`onTestFinished`, which also runs on failure), so call it inside a test body. It injects a
  * `log` sink (`logged`); console output is not captured: a row that greps the console installs its own spies.
  */
 export async function localApiHarness(opts: LocalApiHarnessOptions = {}): Promise<LocalApiHarness> {
+  const extra = opts.deps ?? {}
+  for (const key of OBSERVED_DEPS) {
+    if (key in extra) {
+      throw new Error(`localApiHarness: deps.${key} would replace the harness's own observer; use its option`)
+    }
+  }
   const sources: ManualSource[] = []
   const optionsSeen: RuntimeChatOptions[] = []
   const kind = opts.runtime ?? 'echo'
@@ -136,7 +146,6 @@ export async function localApiHarness(opts: LocalApiHarnessOptions = {}): Promis
   const record = (msg: string, meta?: unknown): void => {
     logged.push(`${msg} ${JSON.stringify(meta ?? null)}`)
   }
-  const extra = opts.deps ?? {}
   const server = new LocalApiServer(
     localApiDeps(mgr, {
       getSettings: () => ({ localApiPort: 0, localApiTokenRequired: opts.tokenRequired ?? true }),

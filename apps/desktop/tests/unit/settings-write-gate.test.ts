@@ -69,6 +69,18 @@ describe('settings write gate — benchmarkHistory (the one array-of-objects set
     updateSettings(db, { benchmarkHistory: null as unknown as History })
     expect(getSettings(db).benchmarkHistory.map((e) => e.cpuModel)).toEqual(['keep'])
   })
+
+  // The history is addressed by machine (`machineKey`): the write files ONE record per machine, the newest. Read off
+  // the stored row, since `getSettings` re-applies the same dedup on read and would hide a write that stored both.
+  it('drops an entry with no machine identity, and keeps one record per machine', () => {
+    const db = freshDb()
+    const older = { ...entry('same'), ranAt: '2026-01-01T00:00:00Z', tokensPerSecond: 1 } as History[number]
+    const newer = { ...entry('same'), ranAt: '2026-09-05T00:00:00Z', tokensPerSecond: 9 } as History[number]
+    updateSettings(db, { benchmarkHistory: [LEGACY_BENCH, older, newer, entry('other')] })
+    const stored = rawSetting(db, 'benchmarkHistory') as History
+    expect(stored.map((e) => e.cpuModel)).toEqual(['same', 'other'])
+    expect(stored[0].tokensPerSecond).toBe(9)
+  })
 })
 
 describe('settings write gate — modelPlacements (object map, never an array)', () => {
