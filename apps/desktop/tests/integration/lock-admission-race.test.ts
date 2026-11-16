@@ -966,7 +966,11 @@ describe('plaintext operations across the lock boundary (#237)', () => {
 })
 
 describe('plaintext operations across the QUIT boundary (#237)', () => {
-  // As on the lock path, this parser honours the abort; the settle's wait is the lock-path row's proof.
+  // As on the lock path, this parser honours the abort. The quit path waits on its own settle call
+  // (shutdown.ts `awaitPlaintextOpsSettled`), which the lock-path rows never run: its proof is
+  // tests/unit/shutdown.test.ts "aborts, settles and sweeps the plaintext operations — abort before the
+  // sidecars, sweep before lock (#237)" (settle before the sweep, by call order), plus the next row's
+  // settle-outcome count.
   it('performShutdown aborts a parked preview — no transient left for app.exit', async () => {
     const ocr = gatedOcrEngine({ honoursSignal: true })
     const h = await harness({ ocrEngine: ocr })

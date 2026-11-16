@@ -129,8 +129,9 @@ export function failedLockState(vp: VaultPaths, marker = 7171, password = 'pw'):
 /**
  * #208's on-disk state on the existing vault at `vp` (created under `password`): the password verifies and `.enc`
  * authenticates, but it holds the app's own encryption of `noiseBytes` random bytes under the real key, not a
- * database. No default size ON PURPOSE: workspace-vault-destruction's row asserts `.enc` stays larger than its
- * 483,328 bytes, workspace-ipc used 64 KiB. The noise source stays on disk at `<dbPath>.noise-src`, as in both copies.
+ * database. No default size ON PURPOSE: workspace-vault-destruction's #208 row reproduces the reporter's 483,328 bytes
+ * (and asserts `.enc` is left byte for byte), workspace-ipc uses 64 KiB. The noise source stays on disk at
+ * `<dbPath>.noise-src`, as in both copies.
  */
 export function damagedVault<T extends VaultPaths>(vp: T, password: string, noiseBytes: number): T {
   const { db, key } = unlockEncryptedVault(vp, password)

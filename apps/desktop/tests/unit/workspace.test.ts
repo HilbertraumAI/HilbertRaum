@@ -84,6 +84,7 @@ describe('workspace initialization', () => {
     const status = await buildDriveStatus(paths)
     expect(status.rootPath).toBe(root)
     expect(status.writable).toBe(true)
+    expect(status.platform).toBe(process.platform)
     expect(status.isPreparedDrive).toBe(false)
   })
 })

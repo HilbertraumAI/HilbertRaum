@@ -492,18 +492,18 @@ describe('changePassword — every vault-key ciphertext class survives the v1→
 // locked still rests consistent. `'every staged file'` swaps all of them: the crash between the last swap and the
 // journal clear, where recovery runs with nothing left staged and only the journal's deletions to do.
 type SwapClass = 'db' | 'document' | 'image' | 'outside'
-const CUTS: Array<{ cut: string; committed: boolean; swapped: SwapClass[] | 'every staged file' }> = [
-  { cut: 'after staging, before the commit', committed: false, swapped: [] },
-  { cut: 'after the commit, before any swap', committed: true, swapped: [] },
-  { cut: 'mid-swap: only the DB swapped', committed: true, swapped: ['db'] },
-  { cut: 'mid-swap: only the document swapped', committed: true, swapped: ['document'] },
-  { cut: 'mid-swap: only one image swapped', committed: true, swapped: ['image'] },
-  { cut: 'mid-swap: only the out-of-store copy swapped', committed: true, swapped: ['outside'] },
-  { cut: 'after every swap, before the journal is cleared', committed: true, swapped: 'every staged file' }
+const CUTS: Array<[string, { committed: boolean; swapped: SwapClass[] | 'every staged file' }]> = [
+  ['after staging, before the commit', { committed: false, swapped: [] }],
+  ['after the commit, before any swap', { committed: true, swapped: [] }],
+  ['mid-swap: only the DB swapped', { committed: true, swapped: ['db'] }],
+  ['mid-swap: only the document swapped', { committed: true, swapped: ['document'] }],
+  ['mid-swap: only one image swapped', { committed: true, swapped: ['image'] }],
+  ['mid-swap: only the out-of-store copy swapped', { committed: true, swapped: ['outside'] }],
+  ['after every swap, before the journal is cleared', { committed: true, swapped: 'every staged file' }]
 ]
 
 describe('changePassword — crash at every journal cut, every ciphertext class (#241)', () => {
-  it.each(CUTS)('$cut', async ({ committed, swapped }) => {
+  it.each(CUTS)('%s', async (_cut, { committed, swapped }) => {
     const f = await v1VaultWithEveryClass()
     f.ctl.lock()
     const { db, key } = unlockEncryptedVault(f.vp, 'old-password')

@@ -66,19 +66,22 @@ describe('deriveKey', () => {
   // One row per bound, every other param cheap and in range, so each row reaches one clause of
   // the bounds check: with that clause deleted the value reaches the library, which either
   // derives (a hang-sized `t`, a 17-lane `p`) or fails with its own, different message.
+  // The `< 1` floors take -1, not 0: the truthiness check (`!t`) refuses a 0 as well, so a 0 row
+  // stays green with its floor deleted. No row isolates the truthiness checks: the one value they
+  // refuse and the floors let through is NaN (a missing param fails earlier), and JSON cannot carry it.
   it.each<[string, KdfParams, RegExp]>([
     ['argon2id m above the 2 GiB ceiling', { ...FAST_ARGON, m: 2_000_000_000 }, /out of bounds/],
     ['argon2id m below the floor of 8', { ...FAST_ARGON, m: 7 }, /out of bounds/],
-    ['argon2id t of 0', { ...FAST_ARGON, t: 0 }, /out of bounds/],
+    ['argon2id t below the floor of 1', { ...FAST_ARGON, t: -1 }, /out of bounds/],
     ['argon2id t above 64', { ...FAST_ARGON, t: 65 }, /out of bounds/],
-    ['argon2id p of 0', { ...FAST_ARGON, p: 0 }, /out of bounds/],
+    ['argon2id p below the floor of 1', { ...FAST_ARGON, p: -1 }, /out of bounds/],
     ['argon2id p above 16', { ...FAST_ARGON, p: 17 }, /out of bounds/],
     ['scrypt N below the 1024 floor', { ...FAST_SCRYPT, N: 512 }, /out of bounds/],
     ['scrypt N that is not a power of two', { ...FAST_SCRYPT, N: 1536 }, /out of bounds/],
     ['scrypt N above 2^22', { ...FAST_SCRYPT, N: 2 ** 23 }, /out of bounds/],
-    ['scrypt r of 0', { ...FAST_SCRYPT, r: 0 }, /out of bounds/],
+    ['scrypt r below the floor of 1', { ...FAST_SCRYPT, r: -1 }, /out of bounds/],
     ['scrypt r above 32', { ...FAST_SCRYPT, r: 33 }, /out of bounds/],
-    ['scrypt p of 0', { ...FAST_SCRYPT, p: 0 }, /out of bounds/],
+    ['scrypt p below the floor of 1', { ...FAST_SCRYPT, p: -1 }, /out of bounds/],
     ['scrypt p above 16', { ...FAST_SCRYPT, p: 17 }, /out of bounds/],
     ['keyLen other than 32', { ...FAST_SCRYPT, keyLen: 64 }, /keyLen must be 32/]
   ])('rejects an out-of-bounds %s from a tampered descriptor', (_bound, params, error) => {

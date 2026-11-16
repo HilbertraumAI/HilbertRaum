@@ -417,12 +417,17 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     await until(() => h.sources.length === 1, 'the in-app generation reaching the model')
     h.sources[0].push('tok')
     await pull
+    // The admission side's own read: the generation gate answers the same 429 through
+    // ExternalGenerationBusyError, so the status alone cannot show that the fail-closed busy predicate
+    // counts an in-flight generation.
+    expect(h.mgr.isExternallyBusy()).toBe(true)
     const res = await post(h, { messages: [{ role: 'user', content: 'x' }] })
     expect(res.status).toBe(429)
     expect(res.headers.get('retry-after')).toBe('42')
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('busy')
     h.sources[0].end()
     await inApp.return()
+    expect(h.mgr.isExternallyBusy()).toBe(false)
     // The lane is idle again: the next request is admitted and served, not refused.
     const next = post(h, { messages: [{ role: 'user', content: 'again' }] })
     await until(() => h.sources.length === 2, 'the next request reaching the model')

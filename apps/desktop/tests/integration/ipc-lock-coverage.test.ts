@@ -13,10 +13,12 @@ import { join } from 'node:path'
 // not covered by an enumerating test (so a future unguarded handler would slip the net).
 //
 // This is the GENERALIZED structural test: it drives each DB-touching register*Ipc module
-// against a LOCKED ctx and asserts EVERY non-exempt handler refuses with the friendly copy
-// ("Workspace is locked." — note the PERIOD; the raw vault-getter string has " — unlock it
-// first."). It also asserts the read-only / in-memory channels (getLogTail, getRuntimeStatus)
-// STILL resolve when locked (pre-unlock diagnostics + runtime status must work at the gate).
+// in two postures (`POSTURES`): a LOCKED ctx, and an open workspace mid-lock (`isUnlocked()`
+// still true, the AUD-02 `isLocking()` latch set). In each it asserts EVERY non-exempt handler
+// refuses with the friendly copy ("Workspace is locked." — note the PERIOD; the raw
+// vault-getter string has " — unlock it first."). It also asserts the read-only / in-memory
+// channels (getLogTail, getRuntimeStatus) STILL resolve when locked (pre-unlock diagnostics +
+// runtime status must work at the gate).
 //
 // Modules with their own dedicated locked-vault rejection tests (translate, dictation) and the
 // pre-unlock modules are listed in COVERED_ELSEWHERE below, each with its

@@ -223,6 +223,18 @@ describe('settings write gate — object-valued size cap + array rejection (CODE
     updateSettings(db, { checksumCache: bloat })
     expect(getSettings(db).checksumCache['/w.gguf']?.sha256).toBe('abc') // unchanged; the bloat was dropped
     expect(getSettings(db).checksumCache['/weight-0.gguf']).toBeUndefined()
+    // One character over the cap is dropped and exactly at it is stored, so the pinned value holds
+    // the bound from both sides (the bloat above overshoots it by up to one entry).
+    const padded = (pad: number): Record<string, { size: number; mtimeMs: number; sha256: string }> => ({
+      '/w.gguf': { size: 1, mtimeMs: 2, sha256: 'a'.repeat(pad) }
+    })
+    const fill = MAX_OBJECT_BYTES - JSON.stringify(padded(0)).length
+    const atCap = padded(fill)
+    expect(JSON.stringify(atCap)).toHaveLength(MAX_OBJECT_BYTES)
+    updateSettings(db, { checksumCache: padded(fill + 1) })
+    expect(rawSetting(db, 'checksumCache')).toEqual({ '/w.gguf': { size: 1, mtimeMs: 2, sha256: 'abc' } })
+    updateSettings(db, { checksumCache: atCap })
+    expect(rawSetting(db, 'checksumCache')).toEqual(atCap)
   })
 
   it('gpuProbe honours the same serialized-size cap', () => {
