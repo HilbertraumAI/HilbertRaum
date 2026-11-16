@@ -1,6 +1,7 @@
 import type {
   AppStatus,
   DriveStatus,
+  LocalApiStatus,
   ModelsPolicy,
   NetworkPolicy,
   PerformanceSnapshot,
@@ -45,6 +46,26 @@ export function appStatus(over: Partial<AppStatus> = {}): AppStatus {
  */
 export function runtimeStatus(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
   return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', warmedUp: true, ...over }
+}
+
+/**
+ * A running local API endpoint (`AppStatus.localApi`) on the default port 4980 with the key required, which has served
+ * and refused nothing, is idle and was never pre-empted. A status literal only: nothing binds the port. Override per
+ * test; a row that forwards the status and wants the counters to show passes non-zero `requestsServed` /
+ * `rejectedCount`.
+ */
+export function localApiStatus(over: Partial<LocalApiStatus> = {}): LocalApiStatus {
+  return {
+    running: true,
+    port: 4980,
+    tokenRequired: true,
+    requestsServed: 0,
+    rejectedCount: 0,
+    lastError: null,
+    externalActive: false,
+    lastPreemptedAt: null,
+    ...over
+  }
 }
 
 /** A healthy drive's launch preflight; override per test (`problems`, `slowDriveWarning`). */

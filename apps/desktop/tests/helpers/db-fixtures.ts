@@ -46,6 +46,17 @@ export function openRawDb(path: string): DatabaseSync {
 }
 
 /**
+ * The STORED value of setting `key`: its `value_json` row parsed, `undefined` when there is no row. Read straight from
+ * the table, past `getSettings`, which re-normalizes what it reads: a row about what the WRITE path persisted must look
+ * here, since a read-back through `getSettings` passes even when the write stored junk. Trap: a planted row that is not
+ * JSON throws here (read it with SQL instead). Replaces settings-write-gate's `rowFor` and db-settings' raw reads.
+ */
+export function rawSetting(db: Db, key: string): unknown {
+  const row = db.prepare('SELECT value_json FROM settings WHERE key = ?').get(key) as { value_json: string } | undefined
+  return row === undefined ? undefined : JSON.parse(row.value_json)
+}
+
+/**
  * The path of a workspace DB an OLDER schema wrote: `build` runs against a raw handle (no migrations), which is
  * closed before the path is returned. `openDatabase(path)` then runs the upgrade under test.
  */
