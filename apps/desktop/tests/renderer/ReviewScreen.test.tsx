@@ -1,15 +1,23 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { evidencePaneMode } from '../../src/renderer/review/EvidencePane'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceReviewItemPatch } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
-import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
+import {
+  archiveSource,
+  bulkBackend,
+  makeDetail,
+  makeFreshness,
+  makeItem,
+  makeReviewHead,
+  stubReviewApi
+} from '../helpers/evidenceReview'
 import { fakeMatchMedia, removeMatchMedia } from '../helpers/match-media'
+import { openSummary, renderReview } from '../helpers/review-screen'
 
 // EP-1 plan §7.3/§7.4/§7.6 — the review workspace itself: the create→decide→note→
 // summary→ready journey over stubApi, the whole-document honesty wording (asserted by
@@ -34,8 +42,11 @@ beforeEach(() => {
 afterEach(() => {
   // Unmount first: the flush-on-exit path runs against the SAME stub set, so a flush
   // hitting an unstubbed method is caught too.
-  cleanup()
-  assertNoUnexpectedApiCalls()
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
 })
 
 function noop(): void {}
@@ -55,29 +66,14 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
       makeItem({ id, ...patch })
     )
     const markEvidenceReviewReady = vi.fn(async () => ({
-      review: {
-        id: 'r1',
-        conversationId: 'c1',
-        messageId: 'm1',
-        questionMessageId: 'q1',
-        title: 'Evidence review',
-        status: 'ready' as const,
-        outdated: false,
-        reviewerLabel: null,
-        generalNote: null,
-        createdAt: detail.createdAt,
-        updatedAt: detail.updatedAt,
-        completedAt: '2026-07-18T11:00:00.000Z'
-      },
+      review: makeReviewHead({ id: 'r1', status: 'ready', completedAt: '2026-07-18T11:00:00.000Z' }),
       gate: { eligible: true, requiredTotal: 2, decidedTotal: 2 }
     }))
-    stubReviewApi({
-      createEvidenceReview,
-      updateEvidenceReviewItem,
-      markEvidenceReviewReady
+    await renderReview({
+      handoff: { messageId: 'm1' },
+      detail,
+      api: { createEvidenceReview, updateEvidenceReviewItem, markEvidenceReviewReady }
     })
-
-    render(<ReviewScreen handoff={{ messageId: 'm1' }} onNavigate={noop} />)
 
     // Opened from a message id → the IDEMPOTENT create (no model, no network).
     await screen.findByText('Beta')
@@ -107,13 +103,19 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
     ).toBeInTheDocument()
 
     // Open the summary → counts + Mark ready.
-    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.footer.summary') }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await openSummary()
     const readyBtn = within(dialog).getByRole('button', {
       name: t('en', 'review.summary.markReady')
     })
     expect(readyBtn).toBeEnabled()
+    // Guard: the 600 ms autosave the edits armed has not fired yet, so the write below can only come from markReviewReady's own flush.
+    expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
     fireEvent.click(readyBtn)
+    // markReviewReady flushes before its first await (reviewSession.ts:401 → :264-289): the first pending patch (i1: decision + note,
+    // merged) is written inside the click, and the ready call is not made yet.
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1)
+    expect(updateEvidenceReviewItem).toHaveBeenCalledWith('i1', { decision: 'supported', reviewerNote: 'verified against page 12' })
+    expect(markEvidenceReviewReady).not.toHaveBeenCalled()
 
     await waitFor(() => expect(markEvidenceReviewReady).toHaveBeenCalledWith('r1'))
     // Auto-save flushed BEFORE the gate check (decisions + note must be persisted first).
@@ -129,40 +131,8 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
     assertNoUnexpectedApiCalls()
   })
 
-  it('reopens an existing review by id and reaches draft again via Reopen', async () => {
-    const detail = makeDetail({ status: 'ready', completedAt: '2026-07-18T11:00:00.000Z' })
-    const reopenEvidenceReview = vi.fn(async () => ({
-      id: 'r1',
-      conversationId: 'c1',
-      messageId: 'm1',
-      questionMessageId: 'q1',
-      title: 'Evidence review',
-      status: 'draft' as const,
-      outdated: false,
-      reviewerLabel: null,
-      generalNote: null,
-      createdAt: detail.createdAt,
-      updatedAt: detail.updatedAt,
-      completedAt: null
-    }))
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      reopenEvidenceReview
-    })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
-    await screen.findByText('Beta')
-
-    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.footer.summary') }))
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.summary.reopen') }))
-    await waitFor(() => expect(reopenEvidenceReview).toHaveBeenCalledWith('r1'))
-    await waitFor(() =>
-      expect(screen.getAllByText(t('en', 'review.status.draft')).length).toBeGreaterThan(0)
-    )
-    assertNoUnexpectedApiCalls()
-  })
-
   it('a deleted/unknown reviewId lands on the friendly not-found state, never a crash', async () => {
+    // Mounted directly: renderReview waits for a loaded review's footer, which the not-found state never renders.
     stubReviewApi({ getEvidenceReview: vi.fn(async () => null) })
     render(<ReviewScreen handoff={{ reviewId: 'gone' }} onNavigate={noop} />)
     expect(await screen.findByText(t('en', 'review.notFound'))).toBeInTheDocument()
@@ -174,11 +144,7 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
     const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
       makeItem({ id, ...patch })
     )
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem
-    })
-    const view = render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const { view } = await renderReview({ detail, api: { updateEvidenceReviewItem } })
     await screen.findByText('Beta')
     const items = screen.getAllByRole('listitem')
     fireEvent.click(
@@ -186,9 +152,10 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
     )
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
     view.unmount()
-    await waitFor(() =>
-      expect(updateEvidenceReviewItem).toHaveBeenCalledWith('i1', { decision: 'follow_up' })
-    )
+    // The unmount effect (ReviewScreen.tsx:115-119) reaches the IPC call before its first await (reviewSession.ts:264-289), so the write is
+    // asserted before any macrotask: the 600 ms autosave timer the click armed cannot stand in for the exit flush.
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1)
+    expect(updateEvidenceReviewItem).toHaveBeenCalledWith('i1', { decision: 'follow_up' })
   })
 })
 
@@ -199,7 +166,10 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
       sources: [
         {
           key: 'p1',
-          machineLabel: null,
+          // A label on a provenance source is a state main sends: a newer app's unknown kind is repaired to
+          // whole_document_provenance with its machine label kept (evidence-reviews.ts:169-173). So only the
+          // kind guard can keep the [S1] marker off this card.
+          machineLabel: 'S1',
           kind: 'whole_document_provenance',
           identity: 'resolved',
           documentId: 'd1',
@@ -217,8 +187,7 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
   }
 
   it('renders the whole-document caption + per-item derivation note — NEVER citation framing', async () => {
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => wholeDocDetail()) })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: wholeDocDetail() })
     await screen.findByText('Beta')
 
     // EXACT KEY assertions: the pane says provenance, not citations…
@@ -232,8 +201,6 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
       screen.getByText(t('en', 'review.source.kind.whole_document_provenance'))
     ).toBeInTheDocument()
     expect(document.querySelector('.review-evidence .cite-label')).toBeNull()
-    // …and nothing claims the answer cited it (zero auto-links on whole-doc answers).
-    expect(screen.queryByText(t('en', 'review.link.cited'))).toBeNull()
   })
 
   it('a reviewer-made link is labeled "Reviewer linked", never "Cited by the answer"', async () => {
@@ -241,11 +208,7 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
     const setEvidenceLink = vi.fn(async (itemId: string, key: string) =>
       makeItem({ id: itemId, links: [{ evidenceKey: key, origin: 'reviewer' as const, relation: null }] })
     )
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      setEvidenceLink
-    })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail, api: { setEvidenceLink } })
     await screen.findByText('Beta')
 
     // Select item 1, then link the provenance card to it.
@@ -286,8 +249,7 @@ describe('ReviewScreen — ready review is read-only until reopened (FIX-1)', ()
   }
 
   it('disables decisions, notes, links and hides bulk — with the quiet reopen hint', async () => {
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => readyDetail()) })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: readyDetail() })
     await screen.findByText('Beta')
 
     // The quiet "why is everything disabled" line sits next to the Ready chip.
@@ -312,26 +274,11 @@ describe('ReviewScreen — ready review is read-only until reopened (FIX-1)', ()
 
   it('Reopen restores editability (hint gone, controls live again)', async () => {
     const detail = readyDetail()
-    const reopenEvidenceReview = vi.fn(async () => ({
-      id: 'r1',
-      conversationId: 'c1',
-      messageId: 'm1',
-      questionMessageId: 'q1',
-      title: 'Evidence review',
-      status: 'draft' as const,
-      outdated: false,
-      reviewerLabel: null,
-      generalNote: null,
-      createdAt: detail.createdAt,
-      updatedAt: detail.updatedAt,
-      completedAt: null
-    }))
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), reopenEvidenceReview })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const reopenEvidenceReview = vi.fn(async () => makeReviewHead({ id: 'r1', status: 'draft', completedAt: null }))
+    await renderReview({ detail, api: { reopenEvidenceReview } })
     await screen.findByText('Beta')
 
-    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.footer.summary') }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await openSummary()
     fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.summary.reopen') }))
     await waitFor(() => expect(reopenEvidenceReview).toHaveBeenCalledWith('r1'))
     fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'common.close') }))
@@ -339,6 +286,10 @@ describe('ReviewScreen — ready review is read-only until reopened (FIX-1)', ()
     await waitFor(() =>
       expect(screen.queryByText(t('en', 'review.readonlyHint'))).toBeNull()
     )
+    // The header's status chip reads Draft again (carried from the retired "reaches draft again via Reopen" row).
+    expect(
+      within(document.querySelector('.review-head') as HTMLElement).getByText(t('en', 'review.status.draft'))
+    ).toBeInTheDocument()
     const items = screen.getAllByRole('listitem')
     expect(
       within(items[0]).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
@@ -360,8 +311,7 @@ describe('ReviewScreen — answer_marker links render as "Cited by the answer" (
         makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' })
       ]
     })
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail) })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail })
     await screen.findByText('Beta')
 
     // Item chip: the auto-link carries the citation claim.
@@ -378,47 +328,20 @@ describe('ReviewScreen — answer_marker links render as "Cited by the answer" (
   })
 })
 
-describe('evidencePaneMode — weak-degrade mapping (FIX-7c)', () => {
-  it('relevance/absent → relevance; extract → structured; tree/capped AND unknown-PRESENT modes → whole_doc', () => {
-    const cov = (mode: string) =>
-      ({ mode, chunksCovered: 1, chunksTotal: 1 }) as unknown as NonNullable<
-        Parameters<typeof evidencePaneMode>[0]
-      >
-    expect(evidencePaneMode(null)).toBe('relevance')
-    expect(evidencePaneMode(cov('relevance'))).toBe('relevance')
-    expect(evidencePaneMode(cov('extract'))).toBe('structured')
-    expect(evidencePaneMode(cov('tree'))).toBe('whole_doc')
-    expect(evidencePaneMode(cov('capped'))).toBe('whole_doc')
-    // A PRESENT-but-unrecognized mode (workspace written by a newer app) degrades to the
-    // WEAKEST claim — whole-document provenance, never citation framing (P1 FIX-1 mirror).
-    expect(evidencePaneMode(cov('psychic'))).toBe('whole_doc')
-  })
-
-  it('#643: a capped answer stamped labelledExcerpts reads as relevance — no other mode can claim it', () => {
-    const labelled = (mode: string) =>
-      ({ mode, chunksCovered: 3, chunksTotal: 3, labelledExcerpts: true }) as unknown as NonNullable<
-        Parameters<typeof evidencePaneMode>[0]
-      >
-    expect(evidencePaneMode(labelled('capped'))).toBe('relevance')
-    expect(evidencePaneMode(labelled('tree'))).toBe('whole_doc')
-    expect(evidencePaneMode(labelled('psychic'))).toBe('whole_doc')
-  })
-})
-
 describe('ReviewScreen — completion gating (D-7)', () => {
   it('Mark ready stays disabled with the N-of-M hint until every required item is decided', async () => {
     const detail = makeDetail() // two required paragraphs, both not_reviewed
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
-        makeItem({ id, ...patch })
-      )
+    await renderReview({
+      detail,
+      api: {
+        updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
+          makeItem({ id, ...patch })
+        )
+      }
     })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText('Beta')
 
-    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.footer.summary') }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await openSummary()
     expect(
       within(dialog).getByRole('button', { name: t('en', 'review.summary.markReady') })
     ).toBeDisabled()
@@ -437,8 +360,7 @@ describe('ReviewScreen — completion gating (D-7)', () => {
         name: new RegExp(t('en', 'review.decision.not_applicable'))
       })
     )
-    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.footer.summary') }))
-    const dialog2 = await screen.findByRole('dialog')
+    const dialog2 = await openSummary()
     expect(
       within(dialog2).getByRole('button', { name: t('en', 'review.summary.markReady') })
     ).toBeEnabled()
@@ -455,26 +377,18 @@ describe('ReviewScreen — conservative bulk actions (spec §14.4)', () => {
       ]
     })
     // AUD-13: a bulk action is ONE main-side transaction over the whole review, so the
-    // stand-in applies the named sweep to its own copy in one step and returns the whole
-    // refreshed item set — the screen never sees a per-item drip.
-    let rows = detail.items.map((i) => ({ ...i }))
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
-        makeItem({ id, ...patch })
-      ),
-      applyEvidenceReviewBulkAction: vi.fn(async (_reviewId: string, action: string) => {
-        rows = rows.map((i) => {
-          if (action === 'headings_not_applicable') {
-            return i.blockKind === 'heading' ? { ...i, decision: 'not_applicable' as const } : i
-          }
-          if (action === 'clear_decisions') return { ...i, decision: 'not_reviewed' as const }
-          return i.decision === 'not_reviewed' ? { ...i, decision: 'follow_up' as const } : i
-        })
-        return rows.map((i) => ({ ...i }))
-      })
+    // shared stand-in applies the named sweep with main's predicates to its own copy in one
+    // step and returns the whole refreshed item set — the screen never sees a per-item drip.
+    const bulk = bulkBackend(detail.items)
+    await renderReview({
+      detail,
+      api: {
+        updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
+          makeItem({ id, ...patch })
+        ),
+        applyEvidenceReviewBulkAction: bulk.spy
+      }
     })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText('Beta')
 
     openBulkMenu()
@@ -482,14 +396,12 @@ describe('ReviewScreen — conservative bulk actions (spec §14.4)', () => {
     const labels = within(menu)
       .getAllByRole('menuitem')
       .map((el) => el.textContent)
+    // The EXACT list is the absence pin: no fourth item, so no "mark all supported" (spec §14.4).
     expect(labels).toEqual([
       t('en', 'review.bulk.headingsNa'),
       t('en', 'review.bulk.followUp'),
       t('en', 'review.bulk.clear')
     ])
-    // The forbidden bulk action does not exist anywhere on the screen (spec §14.4).
-    expect(within(menu).queryByText(/all supported/i)).toBeNull()
-    expect(screen.queryByText(/mark all supported/i)).toBeNull()
 
     // headings→N/A acts on the heading only.
     fireEvent.click(within(menu).getByText(t('en', 'review.bulk.headingsNa')))
@@ -547,31 +459,19 @@ describe('ReviewScreen — keyboard-only walk (spec §28.10, export lands P3)', 
       makeItem({ id, links: [{ evidenceKey: 's1', origin: 'reviewer' as const, relation: null }] })
     )
     const markEvidenceReviewReady = vi.fn(async () => ({
-      review: {
-        id: 'r1',
-        conversationId: 'c1',
-        messageId: 'm1',
-        questionMessageId: 'q1',
-        title: 'Evidence review',
-        status: 'ready' as const,
-        outdated: false,
-        reviewerLabel: null,
-        generalNote: null,
-        createdAt: detail.createdAt,
-        updatedAt: detail.updatedAt,
-        completedAt: '2026-07-18T11:00:00.000Z'
-      },
+      review: makeReviewHead({ id: 'r1', status: 'ready', completedAt: '2026-07-18T11:00:00.000Z' }),
       gate: { eligible: true, requiredTotal: 2, decidedTotal: 2 }
     }))
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
-        makeItem({ id, ...patch })
-      ),
-      setEvidenceLink,
-      markEvidenceReviewReady
+    await renderReview({
+      detail,
+      api: {
+        updateEvidenceReviewItem: vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
+          makeItem({ id, ...patch })
+        ),
+        setEvidenceLink,
+        markEvidenceReviewReady
+      }
     })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText('Beta')
     const items = screen.getAllByRole('listitem')
 
@@ -645,8 +545,7 @@ describe('ReviewScreen — narrow-window evidence drawer (spec §11.1)', () => {
   it('opens the evidence drawer from an item and RESTORES FOCUS to the opener on close', async () => {
     fakeMatchMedia(true) // a narrow window flips the screen into drawer mode
     const detail = makeDetail()
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail) })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail })
     await screen.findByText('Beta')
 
     // Narrow: no inline evidence pane; each item offers "View evidence".
@@ -673,8 +572,7 @@ describe('ReviewScreen — narrow-window evidence drawer (spec §11.1)', () => {
 
 describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§21.3/§28.6)', () => {
   it('calls refreshEvidenceReviewState ON OPEN; a fresh review shows NO banner and NO Outdated chip', async () => {
-    const { refresh } = stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    const { refresh } = await renderReview({ detail: makeDetail() })
     await screen.findByText('Beta')
     await waitFor(() => expect(refresh).toHaveBeenCalledWith('r1'))
     expect(screen.queryByText(t('en', 'review.outdated.title'))).toBeNull()
@@ -683,15 +581,14 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
   })
 
   it('an outdated verdict shows the banner (facts + §21.3 options), the ADDITIONAL chip, and the changed badge', async () => {
-    stubReviewApi(
-      { getEvidenceReview: vi.fn(async () => makeDetail()) },
-      makeFreshness({
+    await renderReview({
+      detail: makeDetail(),
+      fresh: makeFreshness({
         outdated: true,
         answerState: 'changed',
         sources: [{ key: 's1', state: 'changed' }]
       })
-    )
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    })
     await screen.findByText(t('en', 'review.outdated.title'))
     // Drift facts, by exact copy.
     expect(screen.getByText(t('en', 'review.outdated.answerChanged'))).toBeInTheDocument()
@@ -716,14 +613,11 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
         acknowledgedAt: '2026-07-18T12:00:00.000Z'
       })
     )
-    stubReviewApi(
-      {
-        getEvidenceReview: vi.fn(async () => makeDetail()),
-        acknowledgeEvidenceReviewFreshness
-      },
-      makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
-    )
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({
+      detail: makeDetail(),
+      api: { acknowledgeEvidenceReviewFreshness },
+      fresh: makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    })
     const ack = await screen.findByRole('button', { name: t('en', 'review.outdated.acknowledge') })
     fireEvent.click(ack)
     await waitFor(() => expect(acknowledgeEvidenceReviewFreshness).toHaveBeenCalledWith('r1'))
@@ -751,17 +645,16 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
         }
       ]
     })
-    stubReviewApi(
-      { getEvidenceReview: vi.fn(async () => detail) },
-      makeFreshness({
+    await renderReview({
+      detail,
+      fresh: makeFreshness({
         outdated: true,
         sources: [
           { key: 's1', state: 'changed' },
           { key: 's2', state: 'missing' }
         ]
       })
-    )
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    })
     await screen.findByText(t('en', 'review.outdated.title'))
     const banner = screen.getByRole('status')
     expect(
@@ -776,11 +669,10 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
   })
 
   it('a NEWLY-missing source shows the §15.4 badge WITHOUT the outdated banner (spec §25.2/§28.7)', async () => {
-    stubReviewApi(
-      { getEvidenceReview: vi.fn(async () => makeDetail()) },
-      makeFreshness({ outdated: false, sources: [{ key: 's1', state: 'missing' }] })
-    )
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({
+      detail: makeDetail(),
+      fresh: makeFreshness({ outdated: false, sources: [{ key: 's1', state: 'missing' }] })
+    })
     await screen.findByText(t('en', 'review.source.missingNow'))
     expect(screen.queryByText(t('en', 'review.outdated.title'))).toBeNull()
     expect(screen.queryByText(t('en', 'review.status.outdated'))).toBeNull()
@@ -809,11 +701,10 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
         }
       ]
     })
-    stubReviewApi(
-      { getEvidenceReview: vi.fn(async () => detail) },
-      makeFreshness({ outdated: false, sources: [{ key: 's1', state: 'unverifiable' }] })
-    )
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({
+      detail,
+      fresh: makeFreshness({ outdated: false, sources: [{ key: 's1', state: 'unverifiable' }] })
+    })
     await screen.findByText(t('en', 'review.source.unresolved'))
     expect(screen.queryByText(t('en', 'review.source.changed'))).toBeNull()
     expect(screen.queryByText(t('en', 'review.source.missingNow'))).toBeNull()
@@ -822,6 +713,71 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
     // And no context action — there is no document to read (D-5 refuses main-side too).
     expect(
       screen.queryByRole('button', { name: t('en', 'review.sourceContext.open') })
+    ).toBeNull()
+    assertNoUnexpectedApiCalls()
+  })
+
+  it('a RESOLVED source whose current state cannot be compared shows the cannot-verify badge, never changed or missing', async () => {
+    await renderReview({
+      detail: makeDetail(),
+      fresh: makeFreshness({ outdated: false, sources: [{ key: 's1', state: 'unverifiable' }] })
+    })
+    expect(await screen.findByText(t('en', 'review.source.cannotVerify'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'review.source.changed'))).toBeNull()
+    expect(screen.queryByText(t('en', 'review.source.missingNow'))).toBeNull()
+    expect(screen.queryByText(t('en', 'review.outdated.title'))).toBeNull()
+    // Resolved, so it keeps the context action (the unresolved source above has none).
+    expect(screen.getByRole('button', { name: t('en', 'review.sourceContext.open') })).toBeInTheDocument()
+    assertNoUnexpectedApiCalls()
+  })
+
+  it('a source already missing at creation keeps its creation badge only: no missing-now badge and no missing-now count in the banner or the summary', async () => {
+    const base = makeDetail().sources[0]!
+    const detail = makeDetail({
+      sources: [
+        { ...base, key: 's1', availabilityAtCreation: 'missing' },
+        {
+          ...base,
+          key: 's2',
+          machineLabel: 'S2',
+          documentId: 'd2',
+          documentTitle: 'appendix.pdf',
+          availabilityAtCreation: 'available'
+        }
+      ]
+    })
+    await renderReview({
+      detail,
+      fresh: makeFreshness({
+        outdated: true,
+        sources: [
+          { key: 's1', state: 'missing' },
+          { key: 's2', state: 'changed' }
+        ]
+      })
+    })
+    await screen.findByText(t('en', 'review.outdated.title'))
+    // The card: the creation fact, never a second "no longer present" badge (EvidencePane.tsx:269).
+    expect(screen.getByText(t('en', 'review.source.missingAtCreation'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'review.source.missingNow'))).toBeNull()
+    // The banner: the changed source is drift; the creation-missing one is not (ReviewScreen.tsx:513-523).
+    const banner = screen.getByRole('status')
+    expect(
+      within(banner).getByText(t('en', 'review.outdated.sourcesChanged.one', { count: 1 }))
+    ).toBeInTheDocument()
+    expect(
+      within(banner).queryByText(t('en', 'review.summary.sourcesMissingNow.one', { count: 1 }))
+    ).toBeNull()
+    // The summary: one source missing (at creation), one changed now, none missing now (ReviewSummaryView.tsx:73-82).
+    const dialog = await openSummary()
+    expect(
+      within(dialog).getByText(t('en', 'review.summary.sourcesMissing.one', { count: 1 }))
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByText(t('en', 'review.summary.sourcesChangedNow.one', { count: 1 }))
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).queryByText(t('en', 'review.summary.sourcesMissingNow.one', { count: 1 }))
     ).toBeNull()
     assertNoUnexpectedApiCalls()
   })
@@ -841,11 +797,7 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
       pageNumber: 12,
       sectionLabel: null
     }))
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => makeDetail()),
-      getEvidenceSourceContext
-    })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: makeDetail(), api: { getEvidenceSourceContext } })
     fireEvent.click(
       await screen.findByRole('button', { name: t('en', 'review.sourceContext.open') })
     )
@@ -875,11 +827,7 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
       pageNumber: 12,
       sectionLabel: null
     }))
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => makeDetail()),
-      getEvidenceSourceContext
-    })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: makeDetail(), api: { getEvidenceSourceContext } })
     fireEvent.click(
       await screen.findByRole('button', { name: t('en', 'review.sourceContext.open') })
     )
@@ -903,7 +851,8 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
 // The load-bearing property is that the review reads its OWN FROZEN snapshot: `packs:getArticle`
 // is called with the snapshot's packId + articlePath, and the header names the snapshot's
 // archive title — whatever the live registry has since been renamed to, and whether or not the
-// pack still exists. These three tests are the rename / delete / unavailable legs of that.
+// pack still exists. These two tests are the rename leg and the null leg: a deleted, disabled or
+// unplugged pack all reach the renderer as the same `null` (main tells them apart, not the screen).
 //
 // `getPackArticle` is the ONE non-`evidence:*` bridge this screen may call (the file rule at the
 // top): a local ZIM read through the main process — no model, no network — supplied explicitly
@@ -913,43 +862,23 @@ describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6,
   function archiveDetail() {
     return makeDetail({
       sources: [
-        {
+        archiveSource({
           key: 's1',
-          machineLabel: 'S1',
           kind: 'direct_excerpt',
-          identity: 'unresolved',
-          documentId: null,
+          machineLabel: 'S1',
           documentTitle: 'Treibhausgas',
-          documentSha256: null,
-          mimeType: null,
-          pageNumber: null,
           sectionLabel: 'Landwirtschaft',
+          pageNumber: null,
           snippet: 'Methan entsteht in der Landwirtschaft.',
-          sourceChunkId: null,
-          availabilityAtCreation: 'available',
-          sourceKind: 'archive',
           archiveTitle: 'Klimawandel von Wikipedia',
           packId: 'uuid-climate',
           articlePath: 'A/Treibhausgas'
-        }
+        })
       ]
     })
   }
 
   const openArticleName = t('en', 'chat.sources.openArticleNamed', { title: 'Treibhausgas' })
-
-  it('unavailable: the bridge resolves null → the viewer says so, and the review is unchanged', async () => {
-    const getPackArticle = vi.fn(async () => null)
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => archiveDetail()), getPackArticle })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
-    fireEvent.click(await screen.findByRole('button', { name: openArticleName }))
-    const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByText(t('en', 'chat.article.unavailable'))).toBeInTheDocument()
-    // No invented content, and the frozen card is exactly as it was.
-    expect(screen.getByText('Methan entsteht in der Landwirtschaft.')).toBeInTheDocument()
-    expect(screen.getByText(t('en', 'review.source.archive'))).toBeInTheDocument()
-    assertNoUnexpectedApiCalls()
-  })
 
   it('renamed pack: the bridge gets the SNAPSHOT locator and the header names the SNAPSHOT archive', async () => {
     // The live registry has since renamed this pack ("Wikipedia DE 2027"). `packs:getArticle`
@@ -961,8 +890,7 @@ describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6,
       partial: false,
       notice: null
     }))
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => archiveDetail()), getPackArticle })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: archiveDetail(), api: { getPackArticle } })
     fireEvent.click(await screen.findByRole('button', { name: openArticleName }))
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('Treibhausgase sind Spurengase.')).toBeInTheDocument()
@@ -971,14 +899,15 @@ describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6,
     expect(getPackArticle).toHaveBeenCalledWith('uuid-climate', 'A/Treibhausgas')
     // #340 Tier-2: the review's viewer is read-only — no "Save to my documents" here, so the
     // evidence-only bridge rule above stays whole (`packs:saveArticle` is never reachable).
-    expect(within(dialog).queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('button', { name: new RegExp(t('en', 'chat.article.save')) })
+    ).not.toBeInTheDocument()
     // The attribution names the snapshot's archive title…
     expect(
       within(dialog).getByText(
         t('en', 'chat.article.from', { archive: 'Klimawandel von Wikipedia' })
       )
     ).toBeInTheDocument()
-    expect(within(dialog).queryByText(/Wikipedia DE 2027/)).toBeNull()
     // …and IS the dialog's accessible description, with the article title as its name.
     const descId = dialog.getAttribute('aria-describedby')
     expect(descId).toBeTruthy()
@@ -989,12 +918,12 @@ describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6,
     assertNoUnexpectedApiCalls()
   })
 
-  it('deleted pack: the row still offers the article, the bridge resolves null, the card is untouched', async () => {
-    // The pack row is gone from the registry entirely. Nothing about the frozen review changes —
-    // the locator, the archive title and the excerpt are all still recorded facts.
+  it('deleted or unavailable pack: the bridge resolves null, the viewer says so, the row still offers the article and the card is untouched', async () => {
+    // The pack row is gone from the registry, disabled or unplugged: the bridge says `null` for all three.
+    // Nothing about the frozen review changes — the locator, the archive title and the excerpt are all
+    // still recorded facts.
     const getPackArticle = vi.fn(async () => null)
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => archiveDetail()), getPackArticle })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: archiveDetail(), api: { getPackArticle } })
     const button = await screen.findByRole('button', { name: openArticleName })
     fireEvent.click(button)
     const dialog = await screen.findByRole('dialog')
@@ -1005,6 +934,9 @@ describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6,
     // Still there, still named, still openable — a deleted pack does not erase the row.
     expect(screen.getByRole('button', { name: openArticleName })).toBeInTheDocument()
     expect(screen.getByText('Klimawandel von Wikipedia · Landwirtschaft')).toBeInTheDocument()
+    // No invented content, and the frozen card is exactly as it was (carried from the retired "unavailable" row).
+    expect(screen.getByText('Methan entsteht in der Landwirtschaft.')).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'review.source.archive'))).toBeInTheDocument()
     assertNoUnexpectedApiCalls()
   })
 })

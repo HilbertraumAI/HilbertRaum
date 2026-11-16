@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
-import { EvidencePane } from '../../src/renderer/review/EvidencePane'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { screen, cleanup, fireEvent } from '@testing-library/react'
 import { PROVENANCE_CARD_CAP } from '../../src/renderer/chat/SourcesDisclosure'
 import {
   t,
@@ -11,56 +10,53 @@ import {
   type MessageParams
 } from '../../src/shared/i18n'
 import type { EvidenceSourceSnapshot } from '../../src/shared/types'
-import { makeDetail } from '../helpers/evidenceReview'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { archiveSource, makeDetail, makeSourceSnapshots } from '../helpers/evidenceReview'
+import { renderEvidencePane } from '../helpers/review-screen'
 
 // EP-1 P5 (plan §10, spec §25.6/§26) — the evidence pane's large-set navigation: filter +
 // STEPPED reveal over the PROVENANCE_CARD_CAP'd list. The measurement backing the
 // no-virtualization decision is structural and pinned here: the mounted card count never
 // exceeds `revealed` (cap-sized batches), so a 200-source set mounts 24 cards until the
 // user asks for more — the spec's 24-card open-time norm is the initial render's ceiling
-// by construction. (EvidencePane is pure — no window.api surface, so no stub set; the
+// by construction. (EvidencePane is pure; an empty stub set plus the check makes that
+// structural: an optional-chained `window.api?.x?.()` would otherwise pass silently. The
 // screen-level flows keep their structural tripwire in the ReviewScreen/Selections files.)
 
-afterEach(cleanup)
+beforeEach(() => {
+  stubApi({})
+})
+
+afterEach(() => {
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
+})
 
 const tEn = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 const tCountEn = (key: CountMessageKey, count: number, params?: MessageParams): string =>
   tCount('en', key, count, params)
 
-function makeSources(n: number): EvidenceSourceSnapshot[] {
-  const base = makeDetail().sources[0]
-  return Array.from({ length: n }, (_, i) => ({
-    ...base,
+// The rows read these exact titles and snippets; every page is 12 and no source has a section label
+// (the single matches below depend on that).
+const makeSources = (n: number): EvidenceSourceSnapshot[] =>
+  makeSourceSnapshots(n, (i) => ({
     key: `s${i + 1}`,
     machineLabel: `S${i + 1}`,
     documentTitle: `doc-${i + 1}.pdf`,
-    snippet: `Snippet number ${i + 1}`
+    snippet: `Snippet number ${i + 1}`,
+    pageNumber: 12,
+    sectionLabel: null
   }))
-}
-
-function renderPane(sources: EvidenceSourceSnapshot[]): void {
-  render(
-    <EvidencePane
-      sources={sources}
-      coverage={{ mode: 'relevance', chunksCovered: 2, chunksTotal: 9 }}
-      selectedItem={null}
-      readOnly={false}
-      freshness={null}
-      onLink={vi.fn()}
-      onUnlink={vi.fn()}
-      onSetRelation={vi.fn()}
-      t={tEn}
-      tCount={tCountEn}
-    />
-  )
-}
 
 const cardTitles = (): string[] =>
   Array.from(document.querySelectorAll('.source-card-title')).map((el) => el.textContent ?? '')
 
 describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
   it('small sets: every card mounts, no filter input, no reveal button', () => {
-    renderPane(makeSources(5))
+    renderEvidencePane({ sources: makeSources(5) })
     expect(cardTitles()).toHaveLength(5)
     expect(
       screen.queryByLabelText(tEn('review.evidence.filterLabel'))
@@ -69,7 +65,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
   })
 
   it('large sets: initial mount is CAPPED; reveal adds one cap-sized batch per click', () => {
-    renderPane(makeSources(60))
+    renderEvidencePane({ sources: makeSources(60) })
     // The no-virtualization measurement: 60 persisted sources, exactly 24 mounted cards.
     expect(cardTitles()).toHaveLength(PROVENANCE_CARD_CAP)
     expect(
@@ -89,7 +85,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
 
   it('filter matches title/snippet case-insensitively — including sources beyond the cap', () => {
     const sources = makeSources(30)
-    renderPane(sources)
+    renderEvidencePane({ sources })
     // 'doc-29' sits past the 24-card cap; the filter must still find it.
     const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))
     fireEvent.change(input, { target: { value: 'DOC-29' } })
@@ -115,7 +111,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     const sources = makeSources(30)
     sources[25] = { ...sources[25]!, documentTitle: istanbul }
     sources[27] = { ...sources[27]!, snippet: `${dotless}s${dotless} yal${dotless}t${dotless}m${dotless}` }
-    renderPane(sources)
+    renderEvidencePane({ sources })
     const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))
     fireEvent.change(input, { target: { value: 'istanbul' } })
     expect(cardTitles()).toEqual([istanbul])
@@ -141,7 +137,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
   ])('the filter folds a «İ» in the %s: «istanbul» finds its card', (_field, facts) => {
     const sources = makeSources(30)
     sources[26] = { ...sources[26]!, ...facts }
-    renderPane(sources)
+    renderEvidencePane({ sources })
     fireEvent.change(screen.getByLabelText(tEn('review.evidence.filterLabel')), {
       target: { value: 'istanbul' }
     })
@@ -149,7 +145,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
   })
 
   it('no match → honest empty state, zero cards', () => {
-    renderPane(makeSources(30))
+    renderEvidencePane({ sources: makeSources(30) })
     fireEvent.change(screen.getByLabelText(tEn('review.evidence.filterLabel')), {
       target: { value: 'zzz-no-such-source' }
     })
@@ -159,21 +155,12 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
 
   it('selected item: visible context line IS the region\'s programmatic description (spec §23, FIX-3)', () => {
     const detail = makeDetail()
-    render(
-      <EvidencePane
-        sources={detail.sources}
-        coverage={detail.coverageSnapshot}
-        selectedItem={detail.items[1]}
-        selectedItemNumber={2}
-        readOnly={false}
-        freshness={null}
-        onLink={vi.fn()}
-        onUnlink={vi.fn()}
-        onSetRelation={vi.fn()}
-        t={tEn}
-        tCount={tCountEn}
-      />
-    )
+    renderEvidencePane({
+      sources: detail.sources,
+      coverage: detail.coverageSnapshot,
+      selectedItem: detail.items[1],
+      selectedItemNumber: 2
+    })
     expect(
       screen.getByText(tEn('review.evidence.linkingItem', { n: 2 }))
     ).toBeInTheDocument()
@@ -190,30 +177,14 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
   })
 
   it('no selected item → no dangling aria-describedby on the region (FIX-3)', () => {
-    renderPane(makeSources(3))
+    renderEvidencePane({ sources: makeSources(3) })
     const region = screen.getByRole('region', { name: tEn('review.evidence.title') })
     expect(region).not.toHaveAttribute('aria-describedby')
   })
 
   it('DE: the filter matches the DISPLAYED [Qn] marker, not only the machine label (FIX-2)', () => {
-    const tDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
-    const tCountDe = (key: CountMessageKey, count: number, params?: MessageParams): string =>
-      tCount('de', key, count, params)
-    render(
-      <EvidencePane
-        sources={makeSources(30)}
-        coverage={{ mode: 'relevance', chunksCovered: 2, chunksTotal: 9 }}
-        selectedItem={null}
-        readOnly={false}
-        freshness={null}
-        onLink={vi.fn()}
-        onUnlink={vi.fn()}
-        onSetRelation={vi.fn()}
-        t={tDe}
-        tCount={tCountDe}
-      />
-    )
-    const input = screen.getByLabelText(tDe('review.evidence.filterLabel'))
+    renderEvidencePane({ sources: makeSources(30) }, 'de')
+    const input = screen.getByLabelText(t('de', 'review.evidence.filterLabel'))
     // The DE card displays [Q3]; typing what the card SHOWS must match source S3.
     fireEvent.change(input, { target: { value: 'Q3' } })
     expect(cardTitles()).toContain('doc-3.pdf')
@@ -223,64 +194,32 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
   })
 
   it('ZIM wave (#294 review M11): archive card shows its own badge + where-line, no unresolved badge and no "Open source in context" button (EN + DE)', () => {
-    const archiveSource: EvidenceSourceSnapshot = {
-      ...makeDetail().sources[0]!,
+    const archiveCard = archiveSource({
       key: 'sArchive',
       machineLabel: 'S2',
-      identity: 'unresolved',
-      documentId: null,
-      documentSha256: null,
-      mimeType: null,
       documentTitle: 'Klimawandel',
       sectionLabel: 'Übersicht',
       pageNumber: null,
-      sourceKind: 'archive',
       archiveTitle: 'Wikipedia (DE)',
       packId: 'pack-uuid-1',
       articlePath: 'A/Klimawandel'
+    })
+    const archivePane = {
+      sources: [archiveCard],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 } as const,
+      onOpenContext: vi.fn()
     }
-    render(
-      <EvidencePane
-        sources={[archiveSource]}
-        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
-        selectedItem={null}
-        readOnly={false}
-        freshness={null}
-        onLink={vi.fn()}
-        onUnlink={vi.fn()}
-        onSetRelation={vi.fn()}
-        onOpenContext={vi.fn()}
-        t={tEn}
-        tCount={tCountEn}
-      />
-    )
+    renderEvidencePane(archivePane)
     expect(screen.getByText(tEn('review.source.archive'))).toBeInTheDocument()
     expect(screen.queryByText(tEn('review.source.unresolved'))).not.toBeInTheDocument()
     expect(screen.getByText('Wikipedia (DE) · Übersicht')).toBeInTheDocument()
     expect(screen.queryByText(tEn('review.sourceContext.open'))).not.toBeInTheDocument()
 
     cleanup()
-    const tDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
-    const tCountDe = (key: CountMessageKey, count: number, params?: MessageParams): string =>
-      tCount('de', key, count, params)
-    render(
-      <EvidencePane
-        sources={[archiveSource]}
-        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
-        selectedItem={null}
-        readOnly={false}
-        freshness={null}
-        onLink={vi.fn()}
-        onUnlink={vi.fn()}
-        onSetRelation={vi.fn()}
-        onOpenContext={vi.fn()}
-        t={tDe}
-        tCount={tCountDe}
-      />
-    )
-    expect(screen.getByText(tDe('review.source.archive'))).toBeInTheDocument()
-    expect(screen.queryByText(tDe('review.source.unresolved'))).not.toBeInTheDocument()
-    expect(screen.queryByText(tDe('review.sourceContext.open'))).not.toBeInTheDocument()
+    renderEvidencePane(archivePane, 'de')
+    expect(screen.getByText(t('de', 'review.source.archive'))).toBeInTheDocument()
+    expect(screen.queryByText(t('de', 'review.source.unresolved'))).not.toBeInTheDocument()
+    expect(screen.queryByText(t('de', 'review.sourceContext.open'))).not.toBeInTheDocument()
   })
 
   // ---- "Open article" from an archive review row (#301 P6, plan §9.23 (c)2) ---------------
@@ -288,50 +227,34 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
   // (the viewer bridge waited on P3b's locator contract). It exists now, and the row opens it
   // from its OWN frozen snapshot — never a live registry lookup.
 
-  const archiveSnapshot = (over: Partial<EvidenceSourceSnapshot> = {}): EvidenceSourceSnapshot => ({
-    ...makeDetail().sources[0]!,
-    key: 'sArchive',
-    machineLabel: 'S2',
-    identity: 'unresolved',
-    documentId: null,
-    documentSha256: null,
-    mimeType: null,
-    documentTitle: 'Treibhausgas',
-    sectionLabel: 'Landwirtschaft',
-    pageNumber: null,
-    sourceKind: 'archive',
-    archiveTitle: 'Klimawandel von Wikipedia',
-    packId: 'pack-uuid-1',
-    articlePath: 'A/Treibhausgas',
-    ...over
-  })
-
-  function renderArchive(
+  const archiveSnapshot = (over: Partial<EvidenceSourceSnapshot> = {}): EvidenceSourceSnapshot =>
+    archiveSource({
+      key: 'sArchive',
+      machineLabel: 'S2',
+      documentTitle: 'Treibhausgas',
+      sectionLabel: 'Landwirtschaft',
+      pageNumber: null,
+      archiveTitle: 'Klimawandel von Wikipedia',
+      packId: 'pack-uuid-1',
+      articlePath: 'A/Treibhausgas',
+      ...over
+    })
+  /** One card with the context handler wired (so a missing context button is the row's own guard), plus
+   *  `onOpenArticle` when given: the props these rows rendered EvidencePane with before the shared helper. */
+  const oneCard = (
     source: EvidenceSourceSnapshot,
     onOpenArticle?: (s: EvidenceSourceSnapshot) => void
-  ): void {
-    render(
-      <EvidencePane
-        sources={[source]}
-        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
-        selectedItem={null}
-        readOnly={false}
-        freshness={null}
-        onLink={vi.fn()}
-        onUnlink={vi.fn()}
-        onSetRelation={vi.fn()}
-        onOpenContext={vi.fn()}
-        onOpenArticle={onOpenArticle}
-        t={tEn}
-        tCount={tCountEn}
-      />
-    )
-  }
+  ) => ({
+    sources: [source],
+    coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 } as const,
+    onOpenContext: vi.fn(),
+    onOpenArticle
+  })
 
   it('#301 P6: an archive row offers a NAMED "Open article" and hands back its own frozen snapshot', () => {
     const onOpenArticle = vi.fn()
     const source = archiveSnapshot()
-    renderArchive(source, onOpenArticle)
+    renderEvidencePane(oneCard(source, onOpenArticle))
     // The accessible name carries the article title (§9.23 (b)6); the visible word pair does not.
     const button = screen.getByRole('button', {
       name: tEn('chat.sources.openArticleNamed', { title: 'Treibhausgas' })
@@ -355,53 +278,27 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     // A snapshot frozen before the locator fields existed cannot be opened — offering a
     // control that can only fail is worse than not offering it.
     const onOpenArticle = vi.fn()
-    renderArchive(archiveSnapshot({ packId: null, articlePath: 'A/Treibhausgas' }), onOpenArticle)
+    renderEvidencePane(
+      oneCard(archiveSnapshot({ packId: null, articlePath: 'A/Treibhausgas' }), onOpenArticle)
+    )
     expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
     cleanup()
-    renderArchive(archiveSnapshot({ packId: 'pack-uuid-1', articlePath: null }), onOpenArticle)
+    renderEvidencePane(
+      oneCard(archiveSnapshot({ packId: 'pack-uuid-1', articlePath: null }), onOpenArticle)
+    )
     expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
     // …and a caller that passes no handler at all gets no button either (callback gating).
     cleanup()
-    renderArchive(archiveSnapshot())
+    renderEvidencePane(oneCard(archiveSnapshot()))
     expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
     expect(onOpenArticle).not.toHaveBeenCalled()
   })
 
   it('#301 P6: a DOCUMENT row never offers "Open article" (it keeps "Open source in context")', () => {
     const onOpenArticle = vi.fn()
-    render(
-      <EvidencePane
-        sources={[makeDetail().sources[0]!]}
-        coverage={{ mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }}
-        selectedItem={null}
-        readOnly={false}
-        freshness={null}
-        onLink={vi.fn()}
-        onUnlink={vi.fn()}
-        onSetRelation={vi.fn()}
-        onOpenContext={vi.fn()}
-        onOpenArticle={onOpenArticle}
-        t={tEn}
-        tCount={tCountEn}
-      />
-    )
+    renderEvidencePane(oneCard(makeDetail().sources[0]!, onOpenArticle))
     expect(screen.getByText(tEn('review.sourceContext.open'))).toBeInTheDocument()
     expect(screen.queryByText(tEn('chat.sources.openArticle'))).not.toBeInTheDocument()
-  })
-
-  it('ZIM wave (#294 review M11): the filter matches the archive title too', () => {
-    const sources = makeSources(30)
-    const archived: EvidenceSourceSnapshot = {
-      ...sources[5]!,
-      sourceKind: 'archive',
-      archiveTitle: 'UNIQUE_PACK_TITLE',
-      packId: 'p1',
-      articlePath: 'A/x'
-    }
-    renderPane([...sources.slice(0, 5), archived, ...sources.slice(6)])
-    const input = screen.getByLabelText(tEn('review.evidence.filterLabel'))
-    fireEvent.change(input, { target: { value: 'unique_pack_title' } })
-    expect(cardTitles()).toEqual([archived.documentTitle])
   })
 
   it('ZIM wave (#294 review M11): a document card is unchanged — unresolved badge stays, no archive badge', () => {
@@ -411,7 +308,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
       identity: 'unresolved',
       documentId: null
     }
-    renderPane([documentSource])
+    renderEvidencePane({ sources: [documentSource] })
     expect(screen.getByText(tEn('review.source.unresolved'))).toBeInTheDocument()
     expect(screen.queryByText(tEn('review.source.archive'))).not.toBeInTheDocument()
   })
@@ -420,7 +317,7 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     const sources = makeSources(60).map((s, i) =>
       i === 40 ? { ...s, sectionLabel: 'Anhang B', pageNumber: 77 } : s
     )
-    renderPane(sources)
+    renderEvidencePane({ sources })
     // Reveal out to 48 first…
     fireEvent.click(screen.getByRole('button', { name: tCountEn('review.evidence.more', 24) }))
     expect(cardTitles()).toHaveLength(48)

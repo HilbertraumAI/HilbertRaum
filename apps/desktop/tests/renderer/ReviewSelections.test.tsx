@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
-import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
+import { screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
-import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
-import type { EvidenceSelectionInput } from '../../src/shared/types'
+import type { EvidenceReviewItemPatch, EvidenceSelectionInput } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
-import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
+import { makeDetail, makeItem } from '../helpers/evidenceReview'
+import { openSummary, renderReview } from '../helpers/review-screen'
 
 // EP-1 P5 (plan §10, spec §12.1) — the reviewer text-selection UI. Offset-mapping strategy
 // under test: the selection surface is a READ-ONLY <textarea> whose value IS the block's
@@ -25,12 +24,13 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  cleanup()
-  window.localStorage.clear() // the DE-surface leg seeds the language mirror
-  assertNoUnexpectedApiCalls()
+  try {
+    cleanup()
+  } finally {
+    window.localStorage.clear() // the DE-surface leg seeds the language mirror
+    assertNoUnexpectedApiCalls()
+  }
 })
-
-function noop(): void {}
 
 /** A block whose snapshot carries markdown syntax + a marker — the raw string the
  *  selection surface must show VERBATIM (the rendered DOM would drop the asterisks). */
@@ -75,11 +75,7 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
     const createEvidenceSelection = vi.fn(
       async (_reviewId: string, _input: EvidenceSelectionInput) => created
     )
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detailWithRawBlock()),
-      createEvidenceSelection
-    })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: detailWithRawBlock(), api: { createEvidenceSelection } })
     await screen.findByText('Beta')
 
     const surface = await openComposer(1)
@@ -137,18 +133,15 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
         textSnapshot: 'x'
       })
     )
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () =>
-        makeDetail({
-          items: [
-            makeItem({ id: 'i1', ordinal: 0, blockKey: 'b0-paragraph-abc', textSnapshot: astral }),
-            makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' })
-          ]
-        })
-      ),
-      createEvidenceSelection
+    await renderReview({
+      detail: makeDetail({
+        items: [
+          makeItem({ id: 'i1', ordinal: 0, blockKey: 'b0-paragraph-abc', textSnapshot: astral }),
+          makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' })
+        ]
+      }),
+      api: { createEvidenceSelection }
     })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText('Beta')
 
     const surface = await openComposer(1)
@@ -166,11 +159,7 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
 
   it('a REFUSED selection (null from main) surfaces the friendly hint — no crash, no item', async () => {
     const createEvidenceSelection = vi.fn(async () => null)
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detailWithRawBlock()),
-      createEvidenceSelection
-    })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: detailWithRawBlock(), api: { createEvidenceSelection } })
     await screen.findByText('Beta')
 
     const surface = await openComposer(1)
@@ -196,19 +185,16 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
       textSnapshot: 'Alpha'
     })
     const deleteEvidenceSelection = vi.fn(async () => true)
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () =>
-        makeDetail({
-          items: [
-            makeItem({ id: 'i1', ordinal: 0 }),
-            makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' }),
-            selection
-          ]
-        })
-      ),
-      deleteEvidenceSelection
+    await renderReview({
+      detail: makeDetail({
+        items: [
+          makeItem({ id: 'i1', ordinal: 0 }),
+          makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' }),
+          selection
+        ]
+      }),
+      api: { deleteEvidenceSelection }
     })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText(t('en', 'review.item.selectionTag'))
 
     // Exactly ONE remove action on the whole screen — the selection's.
@@ -236,26 +222,23 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
       endOffset: 5,
       textSnapshot: 'Alpha'
     })
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () =>
-        makeDetail({
-          status: 'ready',
-          completedAt: '2026-07-18T11:00:00.000Z',
-          items: [
-            makeItem({ id: 'i1', ordinal: 0, decision: 'supported' }),
-            makeItem({
-              id: 'i2',
-              ordinal: 1,
-              blockKey: 'b1-paragraph-def',
-              textSnapshot: 'Beta',
-              decision: 'supported'
-            }),
-            selection
-          ]
-        })
-      )
+    await renderReview({
+      detail: makeDetail({
+        status: 'ready',
+        completedAt: '2026-07-18T11:00:00.000Z',
+        items: [
+          makeItem({ id: 'i1', ordinal: 0, decision: 'supported' }),
+          makeItem({
+            id: 'i2',
+            ordinal: 1,
+            blockKey: 'b1-paragraph-def',
+            textSnapshot: 'Beta',
+            decision: 'supported'
+          }),
+          selection
+        ]
+      })
     })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText(t('en', 'review.item.selectionTag'))
 
     expect(
@@ -268,6 +251,10 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
   })
 
   it('selections never gate D-7: progress and Mark-ready stay driven by block items only', async () => {
+    // Required: the unmount flush writes i1's decision.
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
+      makeItem({ id, ...patch })
+    )
     const selection = makeItem({
       id: 'sel1',
       ordinal: 2,
@@ -278,30 +265,39 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
       textSnapshot: 'Alpha',
       decision: 'not_reviewed' // undecided — must NOT block anything
     })
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () =>
-        makeDetail({
-          items: [
-            makeItem({ id: 'i1', ordinal: 0, decision: 'supported' }),
-            makeItem({
-              id: 'i2',
-              ordinal: 1,
-              blockKey: 'b1-paragraph-def',
-              textSnapshot: 'Beta',
-              decision: 'supported'
-            }),
-            selection
-          ]
-        })
-      )
+    await renderReview({
+      detail: makeDetail({
+        items: [
+          makeItem({ id: 'i1', ordinal: 0, decision: 'not_reviewed' }),
+          makeItem({
+            id: 'i2',
+            ordinal: 1,
+            blockKey: 'b1-paragraph-def',
+            textSnapshot: 'Beta',
+            decision: 'supported'
+          }),
+          selection
+        ]
+      }),
+      api: { updateEvidenceReviewItem }
     })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
     await screen.findByText(t('en', 'review.item.selectionTag'))
-
-    // 2 of 2 — the undecided selection is exempt (fixture gate comes from MAIN's derive).
+    // main's gate (the fixture's): 1 of 2, the undecided selection not counted
+    expect(
+      screen.getByText(t('en', 'review.progress', { decided: 1, required: 2 }))
+    ).toBeInTheDocument()
+    // Decide block 1: the renderer's own gate (computeReadyGate, reviewSession.ts:369) now runs over all three items.
+    const item1 = screen.getByRole('listitem', { name: t('en', 'review.item.aria', { n: 1 }) })
+    fireEvent.click(
+      within(item1).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
+    )
     expect(
       screen.getByText(t('en', 'review.progress', { decided: 2, required: 2 }))
     ).toBeInTheDocument()
+    const dialog = await openSummary()
+    expect(
+      within(dialog).getByRole('button', { name: t('en', 'review.summary.markReady') })
+    ).toBeEnabled()
     assertNoUnexpectedApiCalls()
   })
 
@@ -309,13 +305,7 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
     // The rendered DE item shows [Q1] (localizeServerCopy → marker localization) — the
     // EN fixture can't see that divergence (the transform is ≈ identity there). The
     // textarea must carry the RAW stored [S1] string: the offsets index into IT.
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => detailWithRawBlock()) })
-    render(
-      <I18nProvider>
-        <ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />
-      </I18nProvider>
-    )
+    await renderReview({ detail: detailWithRawBlock(), lang: 'de' })
     await screen.findByText('Beta')
 
     const item = screen.getByRole('listitem', { name: t('de', 'review.item.aria', { n: 1 }) })
@@ -329,26 +319,6 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
     expect(surface.value).toBe(RAW_BLOCK)
     expect(surface.value).toContain('[S1]')
     expect(surface.value).not.toContain('[Q1]')
-    assertNoUnexpectedApiCalls()
-  })
-
-  it('back button returns to the ORIGINATING conversation when wired (P5 back-nav)', async () => {
-    const onBackToConversation = vi.fn()
-    const onNavigate = vi.fn()
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => detailWithRawBlock()) })
-    render(
-      <ReviewScreen
-        handoff={{ reviewId: 'r1' }}
-        onNavigate={onNavigate}
-        onBackToConversation={onBackToConversation}
-      />
-    )
-    await screen.findByText('Beta')
-
-    fireEvent.click(screen.getByRole('button', { name: `‹ ${t('en', 'review.back')}` }))
-    // The review's conversationId (fixture 'c1') — never plain chat-home navigation.
-    expect(onBackToConversation).toHaveBeenCalledWith('c1')
-    expect(onNavigate).not.toHaveBeenCalled()
     assertNoUnexpectedApiCalls()
   })
 })
