@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { WorkspaceGate } from '../../src/renderer/screens/WorkspaceGate'
 import type { WorkspaceStateInfo, WorkspaceActionResult, ModelInfo } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 
 // F20 (audit full-audit-2026-06-29 postmerge): the CREATE flow swaps the whole card per
 // `phase` (welcome → password → finishing → starter). A keyboard / screen-reader user who
@@ -34,7 +34,14 @@ async function submitValidPassword(user: ReturnType<typeof userEvent.setup>): Pr
   await user.click(screen.getByRole('button', { name: /create workspace/i }))
 }
 
-afterEach(cleanup)
+// #832: a window.api call no row stubbed fails that row (cleanup first, so one failure cannot cascade).
+afterEach(() => {
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
+})
 
 describe('WorkspaceGate — F20 phase-change focus management (WCAG 2.4.3)', () => {
   it('moves focus to the password field on welcome → password', async () => {
@@ -49,9 +56,10 @@ describe('WorkspaceGate — F20 phase-change focus management (WCAG 2.4.3)', () 
 
   it('moves focus to the Skip control on password → finishing (it had none before)', async () => {
     const user = userEvent.setup()
-    // listModels parks → the gate stays on the 'finishing' step so focus is observable.
+    // listModels parks → the gate stays on the 'finishing' step so focus is observable. After a successful create the
+    // gate subscribes to first-run verify progress (the preload returns an unsubscribe), as in the next row.
     const listModels = vi.fn(() => new Promise<ModelInfo[]>(() => {}))
-    stubApi({ createWorkspace: okCreate(), listModels })
+    stubApi({ createWorkspace: okCreate(), listModels, onModelVerifyProgress: vi.fn(() => () => {}) })
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
 
     await submitValidPassword(user)
@@ -61,7 +69,11 @@ describe('WorkspaceGate — F20 phase-change focus management (WCAG 2.4.3)', () 
 
   it('moves focus to the primary action on finishing → starter (no model installed)', async () => {
     const user = userEvent.setup()
-    stubApi({ createWorkspace: okCreate(), listModels: vi.fn(async (): Promise<ModelInfo[]> => []) })
+    stubApi({
+      createWorkspace: okCreate(),
+      listModels: vi.fn(async (): Promise<ModelInfo[]> => []),
+      onModelVerifyProgress: vi.fn(() => () => {})
+    })
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
 
     await submitValidPassword(user)
@@ -82,7 +94,7 @@ describe('WorkspaceGate — failed unlock: focus + announcement (SH-2/SH-12)', (
     encryptionRequired: true
   }
 
-  it('re-focuses the password field after a wrong password (SH-12)', async () => {
+  it('re-focuses the password field after a wrong password (SH-12), the error in the always-mounted alert region (SH-2)', async () => {
     const user = userEvent.setup()
     const unlockWorkspace = vi.fn(
       async (): Promise<WorkspaceActionResult> => ({
@@ -95,23 +107,20 @@ describe('WorkspaceGate — failed unlock: focus + announcement (SH-2/SH-12)', (
     render(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />)
 
     const pw = await screen.findByPlaceholderText('Password')
+    // The alert region is there, empty, BEFORE any failure: that makes the first message a text swap inside a live
+    // region (announced) instead of a freshly inserted, pre-filled alert (missed by many screen readers).
+    const region = screen.getByRole('alert')
+    expect(region).toBeEmptyDOMElement()
     await user.type(pw, 'nope')
     await user.click(screen.getByRole('button', { name: /unlock/i }))
 
-    // The field emptied, the error shows, and focus is back ON the field for the retry
+    // The field emptied, the error shows in that same region, and focus is back ON the field for the retry
     // (pre-fix it stayed on the now-disabled submit button — a keyboard dead end).
     // The gate shows its own copy for the reason, not main's `message` (UI-languages owner call D-17 (a)).
     await screen.findByText(t('en', 'main.workspace.wrongPassword'))
+    expect(screen.getByRole('alert')).toBe(region)
+    expect(region).toHaveTextContent(t('en', 'main.workspace.wrongPassword'))
     expect((pw as HTMLInputElement).value).toBe('')
     await waitFor(() => expect(document.activeElement).toBe(pw))
-  })
-
-  it('the unlock error lives in an always-mounted alert region (SH-2)', async () => {
-    stubApi({})
-    render(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />)
-    await screen.findByPlaceholderText('Password')
-    // The region is present BEFORE any failure — that is what makes the first message a
-    // text-swap inside a live region (announced) instead of a fresh pre-filled alert (missed).
-    expect(document.querySelector('.error-banner-region')).not.toBeNull()
   })
 })
